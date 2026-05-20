@@ -50,6 +50,18 @@ const QUERY = `query GetNetworkStatus {
     healthyNodes
     updatedAt
   }
+  orchestratorVantages {
+    orchAddr
+    resolvedIp
+    gatewayId
+    gatewayRegion
+    latitude
+    longitude
+    geoSource
+    latestLatencyMs
+    score
+    dialedRecently
+  }
 }`;
 
 const POLL_INTERVAL = 30_000;
@@ -84,7 +96,10 @@ export function useNetworkStatus() {
         if (!active) return;
 
         if (json.data?.networkStatus) {
-          setData(json.data.networkStatus);
+          setData({
+            ...json.data.networkStatus,
+            orchestratorVantages: json.data.orchestratorVantages ?? [],
+          });
           setError(null);
         } else {
           throw new Error(json.errors?.[0]?.message || "No data");

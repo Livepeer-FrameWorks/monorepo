@@ -28,7 +28,6 @@ const NETWORK_STATUS_COLORS = {
 
 const ASSIGNMENT_COLOR = "rgba(168, 85, 247, 0.7)";
 const FEDERATION_COLOR = "rgba(59, 130, 246, 0.7)";
-const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
 const MEMBERSHIP_COLORS = {
   core: "rgba(249, 115, 22, 0.3)",
   edge: "rgba(59, 130, 246, 0.3)",
@@ -37,6 +36,7 @@ const MEMBERSHIP_COLORS = {
   livepeer: "rgba(34, 197, 94, 0.3)",
   "livepeer-gateway": "rgba(34, 197, 94, 0.3)",
 };
+const UNKNOWN_GEO_ANCHOR = [-42, -145];
 
 function escapeHtml(s) {
   return s
@@ -90,8 +90,42 @@ function roleColor(role, status) {
   return ROLE_COLORS[(role || "").toLowerCase()] || ROLE_COLORS.default;
 }
 
+function serviceRole(services) {
+  if (!services?.length) return undefined;
+  if (services.some((s) => s === "livepeer-gateway" || s.startsWith("livepeer-"))) {
+    return "compute";
+  }
+  return undefined;
+}
+
+function nodeRole(node, services) {
+  return serviceRole(services) || node.nodeType || "default";
+}
+
 function withAlpha(rgb, alpha) {
   return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
+}
+
+function hashString(value) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function unknownGeoLatLng(key) {
+  const h = hashString(key);
+  return [UNKNOWN_GEO_ANCHOR[0] + (h % 700) / 100, UNKNOWN_GEO_ANCHOR[1] + ((h >> 4) % 1000) / 100];
+}
+
+function vantageLatLng(v) {
+  const lat = Number(v.latitude ?? 0);
+  const lng = Number(v.longitude ?? 0);
+  if (Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0)) {
+    return [lat, lng];
+  }
+  return unknownGeoLatLng(`${v.orchAddr}:${v.resolvedIp}:${v.gatewayId}`);
 }
 
 function markerLatLng(marker, fallback) {
@@ -154,24 +188,51 @@ function nodePopupHtml(node, services) {
   return html + "</div>";
 }
 
-// Draws all layers onto the Leaflet map
+function orchestratorPopupHtml(vantage) {
+  const hasGeo = Number(vantage.latitude) !== 0 || Number(vantage.longitude) !== 0;
+  const rows =
+    popupRow("Instance IP", escapeHtml(vantage.resolvedIp || "unknown")) +
+    popupRow("Gateway", escapeHtml(vantage.gatewayId || "unknown")) +
+    popupRow("Region", escapeHtml(vantage.gatewayRegion || "unknown")) +
+    popupRow("Latency", `${Number(vantage.latestLatencyMs || 0).toFixed(0)}ms`) +
+    popupRow("Score", `${Number(vantage.score || 0).toFixed(2)}`) +
+    popupRow("Geo", hasGeo ? escapeHtml(vantage.geoSource || "mmdb") : "unknown");
+  return (
+    `<div class="map-popup"><div class="map-popup__title">${escapeHtml(vantage.orchAddr || "Orchestrator")}</div>` +
+    `<table class="map-popup__table">${rows}</table>` +
+    (!hasGeo
+      ? `<div class="map-popup__desc">Unknown geo: check gateway GeoIP and DNS resolution.</div>`
+      : "") +
+    "</div>"
+  );
+}
+
+function orchestratorColor(vantage) {
+  if (!vantage.dialedRecently) return ROLE_COLORS.default;
+  const latency = Number(vantage.latestLatencyMs || 0);
+  if (latency >= 1000) return "rgb(239, 68, 68)";
+  if (latency >= 250) return "rgb(234, 179, 8)";
+  return ROLE_COLORS.compute;
+}
+
 function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   const {
     membership: memberLayer,
     clusters: clusterLayer,
     connections: connLayer,
     nodes: nodeLayer,
+    orchestrators: orchestratorLayer,
     pulses: pulseLayer,
   } = layersRef.current;
-  if (!clusterLayer || !connLayer || !nodeLayer || !pulseLayer) return;
+  if (!clusterLayer || !connLayer || !nodeLayer || !orchestratorLayer || !pulseLayer) return;
 
-  // Clear everything
   pulseTimersRef.current.forEach(clearInterval);
   pulseTimersRef.current = [];
   memberLayer?.clearLayers();
   clusterLayer.clearLayers();
   connLayer.clearLayers();
   nodeLayer.clearLayers();
+  orchestratorLayer.clearLayers();
   pulseLayer.clearLayers();
   spreadablesRef.current.nodes = [];
   spreadablesRef.current.clusters = [];
@@ -183,60 +244,11 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   const nodeMarkersById = {};
   const clusterMarkersById = {};
 
-  // Index nodes by nodeId for service instance placement
   const nodeMap = {};
   (data.nodes || []).forEach((n) => {
     nodeMap[n.nodeId] = n;
   });
 
-  // 0. Node-to-cluster membership lines
-  if (memberLayer) {
-    (data.nodes || []).forEach((node) => {
-      if (!node.latitude && !node.longitude) return;
-      const cluster = clusterMap[node.clusterId];
-      if (!cluster) return;
-      const from = [node.latitude, node.longitude];
-      const to = [cluster.latitude, cluster.longitude];
-      if (from[0] === to[0] && from[1] === to[1]) return;
-
-      const nodeKind = (node.nodeType || "").toLowerCase();
-      const lineColor = MEMBERSHIP_COLORS[nodeKind] || MEMBERSHIP_COLOR;
-
-      L.polyline([from, to], {
-        color: lineColor,
-        weight: 1.5,
-        opacity: 0.6,
-        smoothFactor: 1,
-        interactive: false,
-      }).addTo(memberLayer);
-    });
-  }
-
-  // 1. Peer connection lines — styled by connection type
-  data.peerConnections.forEach((pc) => {
-    const src = clusterMap[pc.sourceCluster];
-    const tgt = clusterMap[pc.targetCluster];
-    if (!src || !tgt) return;
-
-    const from = [src.latitude, src.longitude];
-    const to = [tgt.latitude, tgt.longitude];
-    const isFederation = pc.connectionType === "federation";
-
-    L.polyline([from, to], {
-      color: isFederation ? FEDERATION_COLOR : ASSIGNMENT_COLOR,
-      weight: isFederation ? 2 : 1.5,
-      opacity: pc.connected ? 0.8 : 0.4,
-      dashArray: isFederation ? "8 4" : "12 6",
-      smoothFactor: 1,
-    }).addTo(connLayer);
-
-    if (pc.connected) {
-      const pulseColor = isFederation ? "rgb(125, 207, 255)" : "rgb(192, 132, 252)";
-      startPulse(L, pulseLayer, pulseTimersRef, from, to, pulseColor);
-    }
-  });
-
-  // Build per-node service list from service instances
   const servicesByNode = {};
   (data.serviceInstances || []).forEach((si) => {
     if (!si.nodeId) return;
@@ -247,7 +259,6 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   });
   Object.values(servicesByNode).forEach((svcs) => svcs.sort());
 
-  // Build per-cluster service list and node type counts from node ownership
   const servicesByCluster = {};
   const nodeTypeCountByCluster = {};
   (data.nodes || []).forEach((node) => {
@@ -265,11 +276,11 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   });
   Object.values(servicesByCluster).forEach((svcs) => svcs.sort());
 
-  // 2. Individual nodes
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
 
-    const color = roleColor(node.nodeType, node.status);
+    const nodeSvcs = servicesByNode[node.nodeId];
+    const color = roleColor(nodeRole(node, nodeSvcs), node.status);
     const isEdge = (node.nodeType || "").toLowerCase() === "edge";
     const size = isEdge ? 10 : 14;
     const glow = isEdge ? "6px" : "12px";
@@ -280,8 +291,6 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
     });
-
-    const nodeSvcs = servicesByNode[node.nodeId];
 
     const nodeMarker = L.marker([node.latitude, node.longitude], { icon, interactive: true })
       .bindPopup(nodePopupHtml(node, nodeSvcs), {
@@ -294,7 +303,6 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
     spreadablesRef.current.nodes.push({ marker: nodeMarker, iconRadius: size / 2 });
   });
 
-  // 3. Cluster markers (on top) — core vs edge visual distinction
   data.clusters.forEach((cluster) => {
     const color = roleColor(cluster.clusterType, cluster.status);
     const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
@@ -333,6 +341,25 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
       .addTo(clusterLayer);
     clusterMarkersById[cluster.clusterId] = clusterMarker;
     spreadablesRef.current.clusters.push({ marker: clusterMarker, iconRadius: radius });
+  });
+
+  (data.orchestratorVantages || []).forEach((vantage) => {
+    const [lat, lng] = vantageLatLng(vantage);
+    const color = orchestratorColor(vantage);
+    L.circleMarker([lat, lng], {
+      radius: 7,
+      fillColor: color,
+      fillOpacity: 0.9,
+      color: withAlpha(color, 0.7),
+      weight: 2,
+      interactive: true,
+    })
+      .bindPopup(orchestratorPopupHtml(vantage), {
+        className: "network-viz__popup",
+        maxWidth: 420,
+        minWidth: 240,
+      })
+      .addTo(orchestratorLayer);
   });
 
   spreadOverlappingMarkers(map, [
@@ -410,6 +437,14 @@ function redrawNetworkLines(
   data.clusters.forEach((c) => {
     clusterMap[c.clusterId] = c;
   });
+  const servicesByNode = {};
+  (data.serviceInstances || []).forEach((si) => {
+    if (!si.nodeId) return;
+    if (!servicesByNode[si.nodeId]) servicesByNode[si.nodeId] = [];
+    if (!servicesByNode[si.nodeId].includes(si.serviceId)) {
+      servicesByNode[si.nodeId].push(si.serviceId);
+    }
+  });
 
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
@@ -423,9 +458,8 @@ function redrawNetworkLines(
     ]);
     if (!Number.isFinite(to[0]) || !Number.isFinite(to[1])) return;
     if (from[0] === to[0] && from[1] === to[1]) return;
-    const nodeKind = (node.nodeType || "").toLowerCase();
-    const lineColor =
-      MEMBERSHIP_COLORS[nodeKind] || withAlpha(roleColor(node.nodeType, node.status), 0.3);
+    const role = nodeRole(node, servicesByNode[node.nodeId]);
+    const lineColor = MEMBERSHIP_COLORS[role] || withAlpha(roleColor(role, node.status), 0.3);
     L.polyline([from, to], {
       color: lineColor,
       weight: 1.5,
@@ -475,6 +509,7 @@ function NetworkMapInner({ data }) {
     clusters: null,
     connections: null,
     nodes: null,
+    orchestrators: null,
     pulses: null,
   });
   const pulseTimersRef = useRef([]);
@@ -520,12 +555,12 @@ function NetworkMapInner({ data }) {
         { passive: false }
       );
 
-      // Layer order: membership → connections → nodes → pulses → clusters (on top)
       layersRef.current.membership = L.layerGroup().addTo(map);
       layersRef.current.connections = L.layerGroup().addTo(map);
       layersRef.current.nodes = L.layerGroup().addTo(map);
       layersRef.current.pulses = L.layerGroup().addTo(map);
       layersRef.current.clusters = L.layerGroup().addTo(map);
+      layersRef.current.orchestrators = L.layerGroup().addTo(map);
 
       map.on("zoomend", () =>
         drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, dataRef.current)

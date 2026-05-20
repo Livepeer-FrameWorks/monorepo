@@ -127,6 +127,7 @@ func TestIsAllowlistedQuery(t *testing.T) {
 		{name: "fragment with non-allowlisted field blocked", body: `{"query":"query { ...Q } fragment Q on Query { resolveViewerEndpoint(contentId:\"x\"){streamName} me { id } }"}`, expected: false},
 		{name: "invalid JSON rejected", body: "not json", expected: false},
 		{name: "networkStatus allowed", body: `{"query":"query { networkStatus { clusters } }","operationName":"NetworkStatus"}`, expected: true},
+		{name: "network topology with orchestrators allowed", body: `{"query":"query { networkStatus { clusters } orchestratorVantages { orchAddr resolvedIp } }"}`, expected: true},
 	}
 
 	for _, tc := range cases {

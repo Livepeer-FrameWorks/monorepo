@@ -35,9 +35,6 @@
   const trafficStore = new GetClusterTrafficMatrixStore();
   const summaryStore = new GetFederationSummaryStore();
   const eventsStore = new GetFederationEventsStore();
-  // Orchestrator stores: vantage list drives the map layer; the detail
-  // store fills the side panel on click. Refreshed alongside the rest of
-  // the federation data on the same poll cadence.
   const orchVantagesStore = new GetOrchestratorVantagesStore();
   const orchDetailStore = new GetOrchestratorStore();
   const orchPerformanceStore = new GetOrchestratorPerformanceSeriesStore();
@@ -78,17 +75,8 @@
     $eventsStore.data?.analytics?.infra?.federationEventsConnection?.edges?.map((e) => e.node) ?? []
   );
 
-  // Orchestrator vantage rows. One row per (gateway, resolved IP); multi-IP /
-  // multi-region orchs surface as multiple rows and the side panel groups
-  // them by orch. We keep rows with missing geo (lat=lng=0) — they're folded
-  // onto an "unknown" off-map cluster so unresolved/failed MMDB lookups stay
-  // visible in the side panel rather than disappearing silently.
   let orchestratorVantageRows = $derived($orchVantagesStore.data?.orchestratorVantages ?? []);
 
-  // Count instances per orch_addr from the vantage list (each unique
-  // resolved_ip per orch is a candidate instance). Used for the multi-IP
-  // badge on the map pin. Real instance state comes from the side-panel
-  // detail query.
   let instanceCountByOrch = $derived.by(() => {
     const m = new SvelteMap<string, SvelteSet<string>>();
     for (const v of orchestratorVantageRows as Array<{ orchAddr: string; resolvedIp: string }>) {
@@ -126,7 +114,6 @@
     }))
   );
 
-  // Side-panel detail fetched on demand when a pin is clicked.
   let selectedOrchestrator = $derived($orchDetailStore.data?.orchestrator ?? null);
   let selectedOrchestratorPerformance = $derived(
     $orchPerformanceStore.data?.orchestratorPerformanceSeries ?? []
@@ -321,8 +308,7 @@
       const range = resolveTimeRange(timeRange);
       const timeRangeInput = { start: range.start, end: range.end };
 
-      // Public topology can always load without tenant context.
-      await networkStore.fetch();
+      await Promise.all([networkStore.fetch(), orchVantagesStore.fetch()]);
 
       // Tenant-scoped analytics should only run after auth is present.
       if (!isAuthenticated) {
@@ -334,17 +320,18 @@
           trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
           summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
           eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 50 } }),
-          orchVantagesStore.fetch(),
         ]);
       }
 
       if (
         $networkStore.errors?.length ||
+        $orchVantagesStore.errors?.length ||
         $trafficStore.errors?.length ||
         $summaryStore.errors?.length
       ) {
         console.error("Failed to load federation data:", [
           ...($networkStore.errors ?? []),
+          ...($orchVantagesStore.errors ?? []),
           ...($trafficStore.errors ?? []),
           ...($summaryStore.errors ?? []),
         ]);

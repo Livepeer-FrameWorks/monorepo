@@ -177,6 +177,7 @@
   let clusterMarkersByID: Record<string, Marker> = {};
   let renderedNodes: NodeLocation[] = [];
   let renderedRelationships: RelationshipLine[] = [];
+  let renderedServicesByNode: Record<string, string[]> = {};
   let zoomHandlerAttached = false;
 
   const ROLE_COLORS: Record<string, string> = {
@@ -345,6 +346,31 @@
     if (status === "offline" || status === "down") return "rgb(100, 116, 139)";
     const normalized = (role ?? "").toLowerCase();
     return ROLE_COLORS[normalized] ?? ROLE_COLORS.default;
+  }
+
+  function serviceRole(services: string[] | undefined): string | undefined {
+    if (!services?.length) return undefined;
+    if (services.some((s) => s === "livepeer-gateway" || s.startsWith("livepeer-"))) {
+      return "compute";
+    }
+    return undefined;
+  }
+
+  function nodeRole(node: NodeLocation, services: string[] | undefined): string {
+    return serviceRole(services) ?? node.nodeType ?? "default";
+  }
+
+  function aggregateRole(
+    nodesInGroup: NodeLocation[],
+    servicesByNode: Record<string, string[]>
+  ): string {
+    if (nodesInGroup.some((node) => serviceRole(servicesByNode[node.id]) === "compute")) {
+      return "compute";
+    }
+    if (nodesInGroup.some((node) => (node.nodeType ?? "").toLowerCase() === "core")) {
+      return "core";
+    }
+    return "media";
   }
 
   function withAlpha(rgb: string, alpha: number): string {
@@ -526,6 +552,7 @@
       pushUniqueService(servicesByNode, si.nodeId, si.serviceId);
     });
     Object.values(servicesByNode).forEach((svcs) => svcs.sort());
+    renderedServicesByNode = servicesByNode;
 
     const aggregateNodes = shouldAggregateNodes();
     const nodesByCluster: Record<string, NodeLocation[]> = {};
@@ -561,7 +588,10 @@
           (node) => (node.status ?? "active") === "active"
         ).length;
         const size = Math.max(24, Math.min(42, 18 + nodesInGroup.length * 3));
-        const color = roleColor("media", activeCount === 0 ? "offline" : "active");
+        const color = roleColor(
+          aggregateRole(nodesInGroup, servicesByNode),
+          activeCount === 0 ? "offline" : "active"
+        );
         const icon = leaflet.divIcon({
           className: "node-dot-marker",
           html: `<div style="background-color: color-mix(in srgb, ${color} 20%, rgb(15, 23, 42)); width: ${size}px; height: ${size}px; border-radius: 8px; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; color: ${color}; font-size: 11px; font-weight: 700; box-shadow: 0 0 10px color-mix(in srgb, ${color} 35%, transparent);">${nodesInGroup.length}</div>`,
@@ -587,7 +617,8 @@
     currentNodes.forEach((node) => {
       if (collapsedNodeIDs[node.id]) return;
 
-      const color = roleColor(node.nodeType, node.status);
+      const nodeSvcs = servicesByNode[node.id];
+      const color = roleColor(nodeRole(node, nodeSvcs), node.status);
       const isEdge = (node.nodeType ?? "").toLowerCase() === "edge";
       const size = isEdge ? 10 : 14;
       const glow = isEdge ? "6px" : "12px";
@@ -599,7 +630,6 @@
         iconAnchor: [size / 2, size / 2],
       });
 
-      const nodeSvcs = servicesByNode[node.id];
       let nodePopup =
         `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
         `<table class="map-popup__table">${nodePopupRows(node, nodeSvcs)}</table>`;
@@ -787,7 +817,10 @@
       const to = markerLatLng(clusterMarker, from);
       if (from[0] === to[0] && from[1] === to[1]) return;
 
-      const color = withAlpha(roleColor(node.nodeType, node.status), aggregateMarker ? 0.42 : 0.3);
+      const color = withAlpha(
+        roleColor(nodeRole(node, renderedServicesByNode[node.id]), node.status),
+        aggregateMarker ? 0.42 : 0.3
+      );
       leaflet
         .polyline([from, to], {
           color,

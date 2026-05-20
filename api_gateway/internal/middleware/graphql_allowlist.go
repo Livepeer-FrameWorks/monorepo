@@ -8,7 +8,17 @@ import (
 	"github.com/vektah/gqlparser/v2/parser"
 )
 
-var allowlistedOperations = []string{"serviceinstanceshealth", "resolveviewerendpoint", "resolveingestendpoint", "networkstatus"}
+var allowlistedOperations = []string{
+	"serviceinstanceshealth",
+	"resolveviewerendpoint",
+	"resolveingestendpoint",
+	"networkstatus",
+	"orchestrator",
+	"orchestratorinstances",
+	"orchestratorperformanceseries",
+	"orchestratorsconnection",
+	"orchestratorvantages",
+}
 
 // allowlistedMutationOperations is the set of write fields that may be
 // invoked without a JWT. Each entry needs its own per-call credential —
