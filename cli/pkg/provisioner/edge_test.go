@@ -53,6 +53,27 @@ func TestEdgeProvisionConfig_VerificationDomain(t *testing.T) {
 	}
 }
 
+func TestEdgeProvisionConfig_ShouldVerifyPublicHTTPS(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  EdgeProvisionConfig
+		want bool
+	}{
+		{"cert and key staged", EdgeProvisionConfig{CertPEM: "cert", KeyPEM: "key"}, true},
+		{"missing cert", EdgeProvisionConfig{KeyPEM: "key"}, false},
+		{"missing key", EdgeProvisionConfig{CertPEM: "cert"}, false},
+		{"configseed delivered", EdgeProvisionConfig{}, false},
+		{"trims whitespace", EdgeProvisionConfig{CertPEM: " cert ", KeyPEM: " key "}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.shouldVerifyPublicHTTPS(); got != tt.want {
+				t.Errorf("shouldVerifyPublicHTTPS() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEdgeProvisionConfig_ResolvedMode(t *testing.T) {
 	tests := []struct {
 		name string

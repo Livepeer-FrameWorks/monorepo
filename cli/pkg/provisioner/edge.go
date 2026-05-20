@@ -29,8 +29,10 @@ const (
 
 // EdgeProvisioner drives the edge provisioning pipeline. Install / configure /
 // service / validate are delegated to the frameworks.infra.edge Ansible role
-// (see edge_role.go). Preflight and post-apply HTTPS verification stay
-// Go-side so operators see them in the same command output as the role run.
+// (see edge_role.go). Preflight stays Go-side so operators see fast-fail
+// messages before the role runs. Public HTTPS verification only runs when this
+// invocation stages TLS material directly; ConfigSeed-delivered TLS activates
+// asynchronously after Helmsman connects to Foghorn.
 type EdgeProvisioner struct {
 	*BaseProvisioner
 }
@@ -101,6 +103,10 @@ func (c *EdgeProvisionConfig) verificationDomain() string {
 	return c.primaryDomain()
 }
 
+func (c *EdgeProvisionConfig) shouldVerifyPublicHTTPS() bool {
+	return strings.TrimSpace(c.CertPEM) != "" && strings.TrimSpace(c.KeyPEM) != ""
+}
+
 func (c *EdgeProvisionConfig) resolvedMode() string {
 	if c.Mode == "" {
 		return "docker"
@@ -115,7 +121,7 @@ func (c *EdgeProvisionConfig) resolvedMode() string {
 //	[3] registration / enrollment hook (after host readiness, before install)
 //	[4] certs   (post-enrollment via ConfigSeed — no-op here)
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
-//	[7] HTTPS verify (direct HTTP probe of /health)
+//	[7] public HTTPS verify when certs were staged by this invocation
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
 	mode := config.resolvedMode()
 	if strings.TrimSpace(config.FoghornGRPCAddr) == "" {
@@ -189,7 +195,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	}
 
 	domain := config.verificationDomain()
-	if domain != "" {
+	if domain != "" && config.shouldVerifyPublicHTTPS() {
 		fmt.Printf("[7/7] Verifying HTTPS readiness at %s...\n", domain)
 		timeout := config.Timeout
 		if timeout == 0 {
@@ -198,6 +204,8 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		if err := e.verifyHTTPS(domain, host.ExternalIP, timeout); err != nil {
 			return fmt.Errorf("HTTPS verification failed: %w", err)
 		}
+	} else if domain != "" {
+		fmt.Printf("[7/7] Public TLS for %s is ConfigSeed-delivered; skipping immediate HTTPS verification\n", domain)
 	} else {
 		fmt.Println("[7/7] No domain set, skipping HTTPS verification")
 	}
