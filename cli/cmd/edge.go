@@ -1124,11 +1124,19 @@ func edgeFoghornUsesInternalCA(addr string) bool {
 	if host == "" {
 		return false
 	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
+	port := ""
+	if h, p, err := net.SplitHostPort(host); err == nil {
 		host = h
+		port = strings.TrimSpace(p)
 	}
 	host = strings.Trim(strings.TrimSpace(host), "[]")
-	return host == "foghorn.internal" || strings.HasSuffix(host, ".internal")
+	if host == "foghorn.internal" || strings.HasSuffix(host, ".internal") || host == "foghorn" {
+		return true
+	}
+	if strings.HasPrefix(host, "foghorn.") {
+		return port == "" || port == fmt.Sprintf("%d", defaultGRPCPort("foghorn"))
+	}
+	return false
 }
 
 func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
