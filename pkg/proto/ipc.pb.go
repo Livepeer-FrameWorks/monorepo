@@ -14014,6 +14014,7 @@ type TLSCertBundle struct {
 	// Examples:
 	//
 	//	["*.media-us-1.frameworks.network"]
+	//	["media-us-1.frameworks.network", "*.media-us-1.frameworks.network"]
 	//	["acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"]
 	SiteAddresses []string `protobuf:"bytes,6,rep,name=site_addresses,json=siteAddresses,proto3" json:"site_addresses,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -14105,8 +14106,8 @@ type ConfigSeed struct {
 	Processing *ProcessingConfig `protobuf:"bytes,11,opt,name=processing,proto3" json:"processing,omitempty"`
 	// Authoritative operational mode set by Foghorn. Helmsman must apply this.
 	OperationalMode NodeOperationalMode `protobuf:"varint,12,opt,name=operational_mode,json=operationalMode,proto3,enum=helmsmancontrol.NodeOperationalMode" json:"operational_mode,omitempty"`
-	// Single cluster wildcard bundle. Kept populated with the cluster
-	// wildcard while tls_bundles carries the full SNI set.
+	// Single cluster bundle. Kept populated with the cluster wildcard site
+	// address while tls_bundles carries the full SNI set.
 	Tls *TLSCertBundle `protobuf:"bytes,20,opt,name=tls,proto3" json:"tls,omitempty"`
 	// Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
 	Site *SiteConfig `protobuf:"bytes,21,opt,name=site,proto3" json:"site,omitempty"`

@@ -49,7 +49,7 @@ const caddyfileTmpl = `{
   }
   encode @compressible zstd gzip
 
-  headers {
+  header {
     Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
     X-Content-Type-Options "nosniff"
     X-Frame-Options "SAMEORIGIN"

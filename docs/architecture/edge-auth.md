@@ -4,18 +4,21 @@ Edge nodes authenticate to Foghorn over the public internet using three layers:
 transport encryption via TLS, identity enrollment through Quartermaster-validated
 tokens, and service-to-service authorization via a shared static token.
 
-## Transport: TLS with Navigator-Backed Wildcard Cert
+## Transport: TLS with Navigator-Backed Cluster Bundle
 
 Foghorn auto-detects TLS configuration using three fallback sources:
 
 1. **File-based certificates** (`GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`)
-2. **Navigator wildcard certificate** for `*.{cluster_slug}.{root_domain}` with
+2. **Navigator cluster TLS bundle** (`cluster:{cluster_slug}`) for
+   `{cluster_slug}.{root_domain}` and `*.{cluster_slug}.{root_domain}` with
    hot-reload via `tls.Config.GetCertificate` and `atomic.Value` storage
 3. **Insecure fallback** (local dev only)
 
 The server checks for file-based env vars first, then queries Navigator if
-available. Navigator returns the cluster wildcard cert which Foghorn stores
-atomically and rotates at runtime without restart.
+available. Navigator returns the cluster bundle which Foghorn stores atomically
+and rotates at runtime without restart. The apex SAN covers the cluster-level
+Bunny record; the wildcard SAN covers `foghorn.{cluster}`, service labels, and
+per-node edge hostnames.
 
 Client-side TLS is auto-detected in Helmsman. TLS is used whenever the Foghorn
 address is an FQDN, trust material is provided via `GRPC_TLS_*`, or

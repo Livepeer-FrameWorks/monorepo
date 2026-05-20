@@ -207,16 +207,17 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 			r.logger.WithError(zoneErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure media cluster DNS zone")
 			continue
 		}
-		cert, certErr := r.certManager.EnsureClusterWildcardCertificate(ctx, clusterSlug, r.rootDomain, r.acmeEmail)
+		bundle, certErr := r.certManager.EnsureClusterWildcardCertificate(ctx, clusterSlug, r.rootDomain, r.acmeEmail)
 		if certErr != nil {
-			r.logger.WithError(certErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure cluster wildcard certificate")
+			r.logger.WithError(certErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure cluster TLS bundle")
 			continue
 		}
 		r.logger.WithFields(logging.Fields{
 			"cluster":    cluster.GetClusterId(),
-			"domain":     cert.Domain,
-			"expires_at": cert.ExpiresAt,
-		}).Debug("Ensured cluster wildcard certificate")
+			"bundle_id":  bundle.BundleID,
+			"domains":    bundle.Domains,
+			"expires_at": bundle.ExpiresAt,
+		}).Debug("Ensured cluster TLS bundle")
 	}
 }
 

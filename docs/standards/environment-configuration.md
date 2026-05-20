@@ -141,7 +141,7 @@ These are outputs and should not be treated as first-class editable config:
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)
 
-> Foghorn's HTTP balancer base (the value MistServer's `balance:<base>` source consumes on every edge) is not an environment variable on Helmsman. Foghorn derives it from the edge node's resolved cluster as `https://foghorn.<cluster>.<root-domain>` and ships it to every connected edge over the gRPC `ConfigSeed` stream. `FOGHORN_PUBLIC_BASE` / `FOGHORN_HOST` are fallback escape hatches for deployments without managed cluster DNS.
+> Foghorn's HTTP balancer base (the value MistServer's `balance:<base>` source consumes on every edge) is not an environment variable on Helmsman. Foghorn derives it from the edge node's resolved cluster as `https://foghorn.<cluster>.<root-domain>` and ships it to every connected edge over the gRPC `ConfigSeed` stream. Navigator backs that name with the `cluster:<cluster>` TLS bundle, which covers both `<cluster>.<root-domain>` and `*.<cluster>.<root-domain>` so Bunny's cluster apex, `foghorn.<cluster>`, per-service records, and per-node edge records share one refreshed certificate source. `FOGHORN_PUBLIC_BASE` / `FOGHORN_HOST` are fallback escape hatches for deployments without managed cluster DNS.
 
 ### Canonical environment selectors
 

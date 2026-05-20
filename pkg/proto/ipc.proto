@@ -1983,6 +1983,7 @@ message TLSCertBundle {
   // renders one Caddy site block per bundle covering these addresses.
   // Examples:
   //   ["*.media-us-1.frameworks.network"]
+  //   ["media-us-1.frameworks.network", "*.media-us-1.frameworks.network"]
   //   ["acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"]
   repeated string site_addresses = 6;
 }
@@ -1999,8 +2000,8 @@ message ConfigSeed {
   ProcessingConfig processing = 11;
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
-  // Single cluster wildcard bundle. Kept populated with the cluster
-  // wildcard while tls_bundles carries the full SNI set.
+  // Single cluster bundle. Kept populated with the cluster wildcard site
+  // address while tls_bundles carries the full SNI set.
   TLSCertBundle tls = 20;
   // Public site configuration for Helmsman Caddyfile rendering (populated by Foghorn)
   SiteConfig site = 21;

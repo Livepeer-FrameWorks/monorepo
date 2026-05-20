@@ -190,7 +190,7 @@ var navigatorClient *navclient.Client
 var serverCert serverCertHolder
 
 // serverCertHolder stores the current server TLS certificate, updated atomically
-// by the CertRefreshLoop when Navigator renews the cluster wildcard cert.
+// by the CertRefreshLoop when Navigator renews the cluster TLS bundle.
 type serverCertHolder struct {
 	cert atomic.Pointer[tls.Certificate]
 }
@@ -797,7 +797,7 @@ func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string
 	return clusterID
 }
 
-// SetNavigatorClient sets the Navigator client used for cluster wildcard certificate retrieval.
+// SetNavigatorClient sets the Navigator client used for cluster TLS bundle retrieval.
 func SetNavigatorClient(c *navclient.Client) { navigatorClient = c }
 
 // SetGeoIPCache sets the GeoIP cache for cached lookup usage.
@@ -1646,13 +1646,9 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 		}).Info("gRPC server TLS: file-based")
 	} else if navigatorClient != nil {
 		rootDomain := platformRootDomain()
-		wildcardDomain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: wildcardDomain})
-		cancel()
-		if certErr == nil && certResp != nil && certResp.GetFound() {
-			cert, err := tls.X509KeyPair([]byte(certResp.GetCertPem()), []byte(certResp.GetKeyPem()))
+		bundle, found, certErr := fetchClusterTLSBundleByClusterID(localClusterID, rootDomain)
+		if certErr == nil && found && bundle != nil {
+			cert, err := tls.X509KeyPair([]byte(bundle.GetCertPem()), []byte(bundle.GetKeyPem()))
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse Navigator certificate: %w", err)
 			}
@@ -1662,8 +1658,9 @@ func StartGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, e
 			})
 			opts = append(opts, grpc.Creds(creds))
 			cfg.Logger.WithFields(logging.Fields{
-				"domain":     wildcardDomain,
-				"expires_at": certResp.GetExpiresAt(),
+				"bundle_id":  bundle.GetBundleId(),
+				"domain":     bundle.GetDomain(),
+				"expires_at": bundle.GetExpiresAt(),
 			}).Info("gRPC server TLS: Navigator-backed")
 		} else {
 			if !allowInsecureControlGRPC() {
@@ -2348,21 +2345,8 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			AcmeEmail:   os.Getenv("ACME_EMAIL"),
 		}
 
-		if navigatorClient != nil {
-			wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
-			certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			certResp, certErr := navigatorClient.GetCertificate(certCtx, &pb.GetCertificateRequest{Domain: wildcardDomain})
-			certCancel()
-			if certErr == nil && certResp != nil && certResp.GetFound() {
-				tlsBundle = &pb.TLSCertBundle{
-					CertPem:       certResp.GetCertPem(),
-					KeyPem:        certResp.GetKeyPem(),
-					Domain:        certResp.GetDomain(),
-					ExpiresAt:     certResp.GetExpiresAt(),
-					BundleId:      "cluster:" + slug,
-					SiteAddresses: []string{wildcardDomain},
-				}
-			}
+		if bundle, found, bundleErr := fetchClusterTLSBundleByClusterID(resolvedClusterID, rootDomain); bundleErr == nil && found {
+			tlsBundle = bundle
 		}
 
 		// Resolve cluster kind to decide whether to distribute the
@@ -5873,16 +5857,12 @@ func refreshTLSBundles(log logging.Logger) {
 	// Refresh the server's own TLS certificate if Navigator-backed
 	if navigatorClient != nil && serverCert.cert.Load() != nil {
 		rootDomain := platformRootDomain()
-		domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(localClusterID), rootDomain)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
-		cancel()
-		if certErr == nil && certResp != nil && certResp.GetFound() {
-			cert, err := tls.X509KeyPair([]byte(certResp.GetCertPem()), []byte(certResp.GetKeyPem()))
+		bundle, found, certErr := fetchClusterTLSBundleByClusterID(localClusterID, rootDomain)
+		if certErr == nil && found && bundle != nil {
+			cert, err := tls.X509KeyPair([]byte(bundle.GetCertPem()), []byte(bundle.GetKeyPem()))
 			if err == nil {
 				serverCert.cert.Store(&cert)
-				log.WithField("domain", domain).Debug("Refreshed server TLS certificate from Navigator")
+				log.WithField("bundle_id", bundle.GetBundleId()).WithField("domain", bundle.GetDomain()).Debug("Refreshed server TLS certificate from Navigator")
 			}
 		}
 	}
@@ -5914,14 +5894,14 @@ func refreshTLSBundles(log logging.Logger) {
 
 	for _, n := range nodes {
 		// composeConfigSeed resolves the FULL bundle set:
-		//   - cluster wildcard (from fetchClusterTLSBundle internally)
+		//   - cluster TLS bundle (from fetchClusterTLSBundle internally)
 		//   - platform-edge / pool-assigned multi-SAN (when applicable)
 		//   - per-tenant *.{tenant}.cdn.{root} bundles (from
 		//     fetchTenantBundles)
-		// Fingerprinting on JUST the cluster wildcard would mask tenant
+		// Fingerprinting on JUST the cluster bundle would mask tenant
 		// bundle changes; adding/removing a paying tenant's cluster
 		// subscription would never trigger a push until the cluster
-		// wildcard itself rotated. Fingerprint the full set instead.
+		// bundle itself rotated. Fingerprint the full set instead.
 		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
 		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
 		stripWildcardSiteWithoutTLS(seed)
@@ -6078,9 +6058,21 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 	}
 
 	rootDomain := platformRootDomain()
-	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
+	return fetchClusterTLSBundleByClusterID(node.GetClusterId(), rootDomain)
+}
 
-	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
+func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCertBundle, bool, error) {
+	if navigatorClient == nil {
+		return nil, false, nil
+	}
+	bundleID, wildcardDomain, ok := clusterTLSBundleLookup(clusterID, rootDomain)
+	if !ok {
+		return nil, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	certResp, certErr := navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{BundleId: bundleID})
 	if certErr != nil {
 		return nil, false, certErr
 	}
@@ -6091,16 +6083,38 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 		return nil, false, nil
 	}
 
-	slug := pkgdns.SanitizeLabel(node.GetClusterId())
-	wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
 	return &pb.TLSCertBundle{
 		CertPem:       certResp.GetCertPem(),
 		KeyPem:        certResp.GetKeyPem(),
-		Domain:        certResp.GetDomain(),
+		Domain:        wildcardDomain,
 		ExpiresAt:     certResp.GetExpiresAt(),
-		BundleId:      "cluster:" + slug,
+		BundleId:      bundleID,
 		SiteAddresses: []string{wildcardDomain},
 	}, true, nil
+}
+
+func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool) {
+	rootDomain = strings.Trim(strings.TrimSpace(rootDomain), ".")
+	if rootDomain == "" {
+		return "", "", false
+	}
+
+	clusterName := ""
+	if getClusterFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cluster, err := getClusterFn(ctx, strings.TrimSpace(clusterID))
+		cancel()
+		if err == nil && cluster != nil {
+			clusterName = cluster.GetClusterName()
+		}
+	}
+
+	slug := pkgdns.ClusterSlug(clusterID, clusterName)
+	if slug == "" || slug == "default" {
+		return "", "", false
+	}
+	wildcardDomain := fmt.Sprintf("*.%s.%s", slug, rootDomain)
+	return "cluster:" + slug, wildcardDomain, true
 }
 
 func tlsBundleState(bundle *pb.TLSCertBundle) string {

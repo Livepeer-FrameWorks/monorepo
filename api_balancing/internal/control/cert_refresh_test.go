@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -276,6 +277,26 @@ func TestResolveClusterTLSBundle_NilClients(t *testing.T) {
 	bundle := resolveClusterTLSBundle("any-node")
 	if bundle != nil {
 		t.Fatal("expected nil bundle when clients are nil")
+	}
+}
+
+func TestClusterTLSBundleLookupMatchesNavigatorClusterSlug(t *testing.T) {
+	oldGetCluster := getClusterFn
+	defer func() { getClusterFn = oldGetCluster }()
+
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		return &pb.InfrastructureCluster{ClusterName: "Media EU 1"}, nil
+	}
+
+	bundleID, wildcard, ok := clusterTLSBundleLookup("!!!", "frameworks.network")
+	if !ok {
+		t.Fatal("expected lookup to resolve from cluster name fallback")
+	}
+	if bundleID != "cluster:media-eu-1" {
+		t.Fatalf("bundle ID = %q, want cluster:media-eu-1", bundleID)
+	}
+	if wildcard != "*.media-eu-1.frameworks.network" {
+		t.Fatalf("wildcard = %q, want *.media-eu-1.frameworks.network", wildcard)
 	}
 }
 

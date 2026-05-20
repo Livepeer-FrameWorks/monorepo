@@ -715,13 +715,23 @@ func (m *CertManager) GetCertificate(ctx context.Context, tenantID, domain strin
 	return m.store.GetCertificate(ctx, tenantID, domain)
 }
 
-// HasClusterWildcardCert returns true if the cluster has a valid (non-expired)
-// wildcard TLS certificate. Implements the CertChecker interface used by DNSManager
-// to gate granular edge service subdomains.
+// HasClusterWildcardCert returns true if the cluster has a valid cluster TLS
+// bundle containing the wildcard name needed by granular edge service DNS.
 func (m *CertManager) HasClusterWildcardCert(ctx context.Context, clusterSlug, rootDomain string) bool {
-	domain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
-	cert, err := m.GetCertificate(ctx, platformCertTenantID, domain)
-	return err == nil && cert != nil && cert.ExpiresAt.After(time.Now())
+	apex, wildcard := clusterCertificateDomains(clusterSlug, rootDomain)
+	if apex == "" || wildcard == "" {
+		return false
+	}
+	bundle, err := m.GetTLSBundle(ctx, clusterBundleID(clusterSlug))
+	if err != nil || bundle == nil || !bundle.ExpiresAt.After(time.Now()) {
+		return false
+	}
+	domains := make(map[string]struct{}, len(bundle.Domains))
+	for _, domain := range bundle.Domains {
+		domains[strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))] = struct{}{}
+	}
+	_, hasWildcard := domains[wildcard]
+	return hasWildcard
 }
 
 // Bundle IDs for the global platform multi-SAN certs. These match the
@@ -813,19 +823,26 @@ func (m *CertManager) EnsurePlatformEdgeGlobalCertificate(ctx context.Context, r
 	return m.EnsureTLSBundle(ctx, BundleIDPlatformEdgeGlobal, domains, email)
 }
 
-func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clusterSlug, rootDomain, email string) (*store.Certificate, error) {
-	clusterSlug = strings.TrimSpace(clusterSlug)
-	rootDomain = strings.TrimSpace(rootDomain)
-	if clusterSlug == "" || rootDomain == "" {
+func clusterBundleID(clusterSlug string) string {
+	return "cluster:" + pkgdns.SanitizeLabel(clusterSlug)
+}
+
+func clusterCertificateDomains(clusterSlug, rootDomain string) (string, string) {
+	clusterSlug = pkgdns.SanitizeLabel(strings.TrimSpace(clusterSlug))
+	rootDomain = strings.Trim(strings.TrimSpace(strings.ToLower(rootDomain)), ".")
+	if clusterSlug == "" || clusterSlug == "default" || rootDomain == "" {
+		return "", ""
+	}
+	apex := fmt.Sprintf("%s.%s", clusterSlug, rootDomain)
+	return apex, "*." + apex
+}
+
+func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clusterSlug, rootDomain, email string) (*store.TLSBundle, error) {
+	apex, wildcard := clusterCertificateDomains(clusterSlug, rootDomain)
+	if apex == "" || wildcard == "" {
 		return nil, fmt.Errorf("cluster slug and root domain are required")
 	}
-	domain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
-
-	if _, _, _, err := m.IssueCertificate(ctx, platformCertTenantID, domain, email); err != nil {
-		return nil, err
-	}
-
-	return m.GetCertificate(ctx, platformCertTenantID, domain)
+	return m.EnsureTLSBundle(ctx, clusterBundleID(clusterSlug), []string{apex, wildcard}, email)
 }
 
 func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email string, ca CAProvider) (*ACMEUser, error) {

@@ -15,6 +15,9 @@ Automates public DNS records, TLS certificate issuance, and internal service cer
 - Cloudflare root/global load balancers are split into one pool per Quartermaster cluster and use proximity steering when at least two pools have coordinates
 - Bunny media records are A-record sets under `<cluster>.<root>` zones with geolocation Smart Routing when node coordinates are available
 - Foghorn is published at both `foghorn.<cluster>.<root>` and the zone apex `<cluster>.<root>` so the cluster domain remains the default playback/routing entrypoint
+- Each Bunny media cluster gets a `cluster:<cluster>` TLS bundle for `<cluster>.<root>` and `*.<cluster>.<root>`. Foghorn loads the same bundle for public/control TLS and distributes the wildcard site address to connected edges via ConfigSeed.
+- Global Bunny entrypoints use two platform TLS bundles: `platform:pool-multi` for `foghorn/chandler/livepeer.<root>` and `platform:edge-multi` for `edge*.<root>`.
+- Tenant aliases under `cdn.<root>` use `tenant:<tenant_id>` bundles covering `<tenant>.cdn.<root>`, `*.<tenant>.cdn.<root>`, and verified custom domains.
 - Issues TLS certificates via Let's Encrypt DNS-01 challenges using Cloudflare or Bunny based on the delegated zone
 - Issues and stores internal gRPC certificates from Navigator's internal CA
 - Auto-renewal via background worker

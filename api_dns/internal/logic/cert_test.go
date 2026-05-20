@@ -265,6 +265,93 @@ func TestIssueCertificateSetsUpAndCleansUpChallenges(t *testing.T) {
 	require.Equal(t, 1, fakeStore.saveCertCalled)
 }
 
+func TestEnsureClusterWildcardCertificateCreatesApexAndWildcardBundle(t *testing.T) {
+	ctx := context.Background()
+	notAfter := time.Now().Add(48 * time.Hour)
+	certPEM, keyPEM := buildTestCert(t, notAfter)
+
+	provider := &fakeDNSProvider{}
+	acme := &fakeACMEClient{
+		resource: &certificate.Resource{
+			Certificate: certPEM,
+			PrivateKey:  keyPEM,
+		},
+	}
+
+	var saved *store.TLSBundle
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			return nil, store.ErrNotFound
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			require.Equal(t, "cluster:media-eu-1", bundleID)
+			return nil, store.ErrNotFound
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			saved = bundle
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	manager.acmeClientFactory = func(config *lego.Config) (acmeClient, error) {
+		return acme, nil
+	}
+	manager.dnsProviderFactory = func() (challenge.Provider, error) {
+		return provider, nil
+	}
+
+	bundle, err := manager.EnsureClusterWildcardCertificate(ctx, "media-eu-1", "frameworks.network", "ops@frameworks.network")
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	require.Equal(t, "cluster:media-eu-1", bundle.BundleID)
+	require.Equal(t, []string{"*.media-eu-1.frameworks.network", "media-eu-1.frameworks.network"}, bundle.Domains)
+	require.Equal(t, bundle, saved)
+	require.Equal(t, []string{"*.media-eu-1.frameworks.network", "media-eu-1.frameworks.network"}, acme.obtainedDomains)
+}
+
+func TestHasClusterWildcardCertChecksClusterBundle(t *testing.T) {
+	ctx := context.Background()
+	fakeStore := &fakeStore{
+		getCertFunc: func(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+			t.Fatalf("HasClusterWildcardCert should not read legacy single-domain certificates")
+			return nil, nil
+		},
+		saveCertFunc: func(ctx context.Context, tenantID string, cert *store.Certificate) error {
+			return nil
+		},
+		getTLSBundleFunc: func(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
+			require.Equal(t, "cluster:media-eu-1", bundleID)
+			return &store.TLSBundle{
+				BundleID:  bundleID,
+				Domains:   []string{"media-eu-1.frameworks.network", "*.media-eu-1.frameworks.network"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+		saveTLSBundleFunc: func(ctx context.Context, bundle *store.TLSBundle) error {
+			return nil
+		},
+		getAccountFunc: func(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error) {
+			return nil, store.ErrNotFound
+		},
+		saveAccountFunc: func(ctx context.Context, tenantID string, acc *store.ACMEAccount) error {
+			return nil
+		},
+	}
+
+	manager := NewCertManager(fakeStore)
+	require.True(t, manager.HasClusterWildcardCert(ctx, "media-eu-1", "frameworks.network"))
+}
+
 func TestIssueCertificateFailureDoesNotPersistCertificate(t *testing.T) {
 	ctx := context.Background()
 	provider := &fakeDNSProvider{}

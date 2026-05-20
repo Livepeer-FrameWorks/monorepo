@@ -26,6 +26,7 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: "{{ edge_cert_dir }}", owner: frameworks, group: caddy, mode: "2770" }
+    - { path: "{{ edge_cert_dir }}/bundles", owner: frameworks, group: caddy, mode: "2770" }
     - { path: "{{ edge_conf_dir }}/pki", owner: frameworks, group: frameworks, mode: "0750" }
 
 - name: Ensure caddy directories

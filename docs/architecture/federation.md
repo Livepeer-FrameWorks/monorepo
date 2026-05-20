@@ -70,7 +70,7 @@ PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
 
 1. **Demand-driven** (fast): Stream validation (ValidateStreamKey, ResolvePlaybackID) returns `cluster_peers[]` from Quartermaster. PeerManager.NotifyPeers registers addresses and opens PeerChannel connections (leader only).
 2. **Reconciliation** (5-min polling): PeerManager.refreshPeers calls `Quartermaster.ListPeers(cluster_id)` to catch topology changes.
-3. Federation address convention: `foghorn.{cluster_slug}.{base_url}:18019`
+3. Federation address convention: `foghorn.{cluster_slug}.{base_url}:18019`. Navigator publishes this name in the Bunny cluster zone and issues the matching `cluster:{cluster_slug}` TLS bundle with both the cluster apex and wildcard SANs.
 
 ### Peer Lifecycle Types
 

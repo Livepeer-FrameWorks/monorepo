@@ -165,6 +165,7 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 		"acme.cdn.frameworks.network *.acme.cdn.frameworks.network {",
 		"tls /etc/frameworks/certs/bundles/cluster_media-us-1.crt /etc/frameworks/certs/bundles/cluster_media-us-1.key",
 		"tls /etc/frameworks/certs/bundles/tenant_acme.crt /etc/frameworks/certs/bundles/tenant_acme.key",
+		"header {",
 		"import common_handlers",
 		"reverse_proxy mistserver:8080",
 	}
@@ -172,6 +173,9 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 		if !contains(out, want) {
 			t.Errorf("rendered Caddyfile missing %q:\n%s", want, out)
 		}
+	}
+	if contains(out, "headers {") {
+		t.Fatalf("rendered Caddyfile uses invalid Caddy directive \"headers\":\n%s", out)
 	}
 }
 

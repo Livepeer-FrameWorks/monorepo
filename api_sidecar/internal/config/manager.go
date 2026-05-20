@@ -458,7 +458,7 @@ func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleAp
 	anyChanged := false
 
 	dir := edgeBundleDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o2770); err != nil {
 		m.logger.WithError(err).Warn("Failed to create TLS bundle directory")
 		// Surface the failure per-bundle so Foghorn ACK reflects it.
 		for _, b := range bundles {
@@ -469,6 +469,9 @@ func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleAp
 			})
 		}
 		return false, results
+	}
+	if err := os.Chmod(dir, 0o2770); err != nil {
+		m.logger.WithError(err).WithField("path", dir).Warn("Failed to set TLS bundle directory mode")
 	}
 
 	keepFiles := make(map[string]struct{}, len(bundles)*2)
