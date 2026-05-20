@@ -24,7 +24,13 @@ import (
 )
 
 // testSharedSecrets provides the required shared platform secrets for test env files.
-const testSharedSecrets = "SERVICE_TOKEN=test-token\nJWT_SECRET=test-jwt\nPASSWORD_RESET_SECRET=test-reset\nFIELD_ENCRYPTION_KEY=test-enc\nUSAGE_HASH_SECRET=test-hash\n"
+const testSharedSecrets = "SERVICE_TOKEN=test-token\n" +
+	"JWT_SECRET=test-jwt\n" +
+	"PASSWORD_RESET_SECRET=test-reset\n" +
+	"FIELD_ENCRYPTION_KEY=test-enc\n" +
+	"USAGE_HASH_SECRET=test-hash\n" +
+	"LISTMONK_API_USERNAME=frameworks-api\n" +
+	"LISTMONK_API_TOKEN=listmonk-api-token\n"
 
 type fakeFoghornClusterAssigner struct {
 	calls     []*pb.AssignServiceToClusterRequest
@@ -1951,7 +1957,9 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			"livepeer-gateway": {Enabled: true, Host: "central-eu-1", Cluster: "core-central-primary"},
 			"deckhand":         {Enabled: true, Host: "central-eu-1"},
 			"skipper":          {Enabled: true, Host: "central-eu-1"},
+			"steward":          {Enabled: true, Host: "central-eu-1"},
 			"chatwoot":         {Enabled: true, Host: "central-eu-1", Port: 18092},
+			"listmonk":         {Enabled: true, Host: "central-eu-1", Port: 9001},
 		},
 	}
 
@@ -1990,8 +1998,9 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002",
 				"PURSER_GRPC_ADDR":        "purser.internal:19003",
 				"DECKLOG_GRPC_ADDR":       "decklog.internal:18006",
+				"LISTMONK_URL":            "http://central-eu-1.internal:9001",
 			},
-			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "PASSWORD_RESET_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+			keys: []string{"DATABASE_URL", "SERVICE_TOKEN", "JWT_SECRET", "PASSWORD_RESET_SECRET", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH", "LISTMONK_API_USERNAME", "LISTMONK_API_TOKEN"},
 		},
 		{
 			serviceID: "purser",
@@ -2055,6 +2064,11 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				"GATEWAY_MCP_URLS": "http://central-eu-1.internal:18000/mcp",
 			},
 			keys: []string{"DATABASE_URL", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "GATEWAY_PUBLIC_URL", "GATEWAY_MCP_URL", "GATEWAY_MCP_URLS", "GRPC_TLS_CERT_PATH", "GRPC_TLS_KEY_PATH"},
+		},
+		{
+			serviceID: "steward",
+			want:      map[string]string{"LISTMONK_URL": "http://central-eu-1.internal:9001"},
+			keys:      []string{"LISTMONK_API_USERNAME", "LISTMONK_API_TOKEN"},
 		},
 	}
 

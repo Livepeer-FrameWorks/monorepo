@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 
 	"frameworks/api_control/internal/clusterurls"
 	commodoregrpc "frameworks/api_control/internal/grpc"
@@ -170,13 +171,17 @@ func main() {
 	var listmonkClient *listmonk.Client
 	defaultMailingListID := 1
 	if listmonkURL := os.Getenv("LISTMONK_URL"); listmonkURL != "" {
-		listmonkUser := os.Getenv("LISTMONK_USERNAME")
-		listmonkPass := os.Getenv("LISTMONK_PASSWORD")
-		listmonkClient = listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
+		listmonkUser := strings.TrimSpace(os.Getenv("LISTMONK_API_USERNAME"))
+		listmonkToken := strings.TrimSpace(os.Getenv("LISTMONK_API_TOKEN"))
+		if listmonkUser == "" || listmonkToken == "" {
+			logger.Warn("LISTMONK_URL is set but LISTMONK_API_USERNAME or LISTMONK_API_TOKEN is missing; newsletter integration disabled")
+		} else {
+			listmonkClient = listmonk.NewClient(listmonkURL, listmonkUser, listmonkToken)
+			logger.WithField("url", listmonkURL).Info("Listmonk client configured")
+		}
 		if id, err := strconv.Atoi(os.Getenv("DEFAULT_MAILING_LIST_ID")); err == nil {
 			defaultMailingListID = id
 		}
-		logger.WithField("url", listmonkURL).Info("Listmonk client configured")
 	}
 
 	// Expose health and metrics over HTTP; product APIs are served over gRPC.

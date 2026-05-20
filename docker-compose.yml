@@ -592,6 +592,10 @@ services:
       CHANDLER_BASE_URL: ${CHANDLER_BASE_URL:-http://localhost:18090}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
+      LISTMONK_URL: http://listmonk:9000
+      LISTMONK_API_USERNAME: ${LISTMONK_API_USERNAME}
+      LISTMONK_API_TOKEN: ${LISTMONK_API_TOKEN}
+      DEFAULT_MAILING_LIST_ID: ${DEFAULT_MAILING_LIST_ID:-1}
       CLUSTER_ID: central-primary
       NODE_ID: central-node-1
     ports:
@@ -1034,8 +1038,8 @@ services:
       TO_EMAIL: ${TO_EMAIL}
       # Listmonk Integration
       LISTMONK_URL: http://listmonk:9000
-      LISTMONK_USERNAME: ${LISTMONK_USERNAME:-admin}
-      LISTMONK_PASSWORD: ${LISTMONK_PASSWORD:-admin}
+      LISTMONK_API_USERNAME: ${LISTMONK_API_USERNAME}
+      LISTMONK_API_TOKEN: ${LISTMONK_API_TOKEN}
       DEFAULT_MAILING_LIST_ID: ${DEFAULT_MAILING_LIST_ID:-1}
     restart: unless-stopped
     networks:
@@ -1300,6 +1304,8 @@ services:
       LISTMONK_db__password: ${POSTGRES_PASSWORD}
       LISTMONK_db__database: listmonk
       LISTMONK_db__ssl_mode: disable
+      LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER}
+      LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD}
       # SMTP Configuration
       LISTMONK_app__smtp__host: ${SMTP_HOST}
       LISTMONK_app__smtp__port: ${SMTP_PORT}

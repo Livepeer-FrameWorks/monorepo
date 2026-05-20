@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"strconv"
+	"strings"
 )
 
 func main() {
@@ -75,14 +76,18 @@ func main() {
 	// Listmonk Integration (optional)
 	listmonkURL := config.GetEnv("LISTMONK_URL", "")
 	if listmonkURL != "" {
-		listmonkUser := config.GetEnv("LISTMONK_USERNAME", "admin")
-		listmonkPass := config.GetEnv("LISTMONK_PASSWORD", "admin")
+		listmonkUser := strings.TrimSpace(config.GetEnv("LISTMONK_API_USERNAME", ""))
+		listmonkToken := strings.TrimSpace(config.GetEnv("LISTMONK_API_TOKEN", ""))
 		listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")
 		listID, _ := strconv.Atoi(listIDStr)
 
-		lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
-		subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
-		app.POST("/api/subscribe", subHandler.Handle)
+		if listmonkUser == "" || listmonkToken == "" {
+			logger.Warn("LISTMONK_URL is set but LISTMONK_API_USERNAME or LISTMONK_API_TOKEN is missing, subscribe endpoint disabled")
+		} else {
+			lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkToken)
+			subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
+			app.POST("/api/subscribe", subHandler.Handle)
+		}
 	} else {
 		logger.Info("LISTMONK_URL not set, subscribe endpoint disabled")
 	}

@@ -39,8 +39,8 @@ func TestNavigatorRequiresExplicitACMEEmail(t *testing.T) {
 func TestListmonkRequiresAdminCredsFromGitOps(t *testing.T) {
 	required := RequiredExternalEnv("listmonk")
 	want := map[string]bool{
-		"LISTMONK_USERNAME": false,
-		"LISTMONK_PASSWORD": false,
+		"LISTMONK_ADMIN_USER":     false,
+		"LISTMONK_ADMIN_PASSWORD": false,
 	}
 	for _, req := range required {
 		if _, ok := want[req.Key]; ok {

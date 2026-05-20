@@ -45,9 +45,9 @@ func listmonkRoleDetect(_ context.Context, _ inventory.Host, _ RoleBuildHelpers)
 // present even if empty so Listmonk's config parse is total.
 //
 // LISTMONK_ADMIN_USER / LISTMONK_ADMIN_PASSWORD are read by `--install` to
-// create the Super Admin on first run; they must match the values FrameWorks
-// services use to authenticate against Listmonk (LISTMONK_USERNAME /
-// LISTMONK_PASSWORD).
+// create the Super Admin on first run. FrameWorks services authenticate with
+// Listmonk API-user credentials (LISTMONK_API_USERNAME / LISTMONK_API_TOKEN);
+// admin login credentials are intentionally not reused for API calls.
 func listmonkEnvMap(config ServiceConfig) map[string]any {
 	dbUser := orElse(config.EnvVars["DATABASE_USER"], "postgres")
 	dbHost := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_HOST", "POSTGRES_SUPPORT_HOST", "POSTGRES_CHATWOOT_HOST", "DATABASE_HOST")
@@ -61,8 +61,8 @@ func listmonkEnvMap(config ServiceConfig) map[string]any {
 		"LISTMONK_db__password":   dbPassword,
 		"LISTMONK_db__database":   "listmonk",
 		"LISTMONK_db__ssl_mode":   "disable",
-		"LISTMONK_ADMIN_USER":     config.EnvVars["LISTMONK_USERNAME"],
-		"LISTMONK_ADMIN_PASSWORD": config.EnvVars["LISTMONK_PASSWORD"],
+		"LISTMONK_ADMIN_USER":     config.EnvVars["LISTMONK_ADMIN_USER"],
+		"LISTMONK_ADMIN_PASSWORD": config.EnvVars["LISTMONK_ADMIN_PASSWORD"],
 	}
 	if v := firstNonEmptyEnv(config.EnvVars, "LISTMONK_FRONTEND_URL", "LISTMONK_PUBLIC_URL"); v != "" {
 		env["LISTMONK_app__root"] = v

@@ -163,8 +163,8 @@ var requiredExternalEnv = map[string][]RequiredEnvVar{
 	},
 	"listmonk": {
 		{Key: "DATABASE_HOST", SetupGuide: "Enable postgres in infrastructure config"},
-		{Key: "LISTMONK_USERNAME", SetupGuide: "Set LISTMONK_USERNAME in gitops config (e.g. gitops/config/production.env)"},
-		{Key: "LISTMONK_PASSWORD", SetupGuide: "Set LISTMONK_PASSWORD in gitops secrets via gitops/scripts/sops-env.sh set secrets/production.env LISTMONK_PASSWORD <value>"},
+		{Key: "LISTMONK_ADMIN_USER", SetupGuide: "Set LISTMONK_ADMIN_USER in gitops config (e.g. gitops/config/production.env)"},
+		{Key: "LISTMONK_ADMIN_PASSWORD", SetupGuide: "Set LISTMONK_ADMIN_PASSWORD in gitops secrets via gitops/scripts/sops-env.sh set secrets/production.env LISTMONK_ADMIN_PASSWORD <value>"},
 	},
 	"livepeer-gateway": {
 		{Key: "eth_url", SetupGuide: "Set the network RPC in shared env files (for example ARBITRUM_RPC_ENDPOINT or LIVEPEER_ETH_URL)"},

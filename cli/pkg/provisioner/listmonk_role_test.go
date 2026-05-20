@@ -17,17 +17,17 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 			"POSTGRES_SUPPORT_HOST":     "127.0.0.1",
 			"POSTGRES_SUPPORT_PORT":     "5432",
 			"POSTGRES_SUPPORT_PASSWORD": "support-secret",
-			"LISTMONK_USERNAME":         "admin",
-			"LISTMONK_PASSWORD":         "from-sops",
+			"LISTMONK_ADMIN_USER":       "admin",
+			"LISTMONK_ADMIN_PASSWORD":   "from-sops",
 			"LISTMONK_FRONTEND_URL":     "https://listmonk.frameworks.network",
 		},
 	})
 
 	if got := env["LISTMONK_ADMIN_USER"]; got != "admin" {
-		t.Fatalf("LISTMONK_ADMIN_USER = %v, want %q (sourced from LISTMONK_USERNAME)", got, "admin")
+		t.Fatalf("LISTMONK_ADMIN_USER = %v, want %q", got, "admin")
 	}
 	if got := env["LISTMONK_ADMIN_PASSWORD"]; got != "from-sops" {
-		t.Fatalf("LISTMONK_ADMIN_PASSWORD = %v, want %q (sourced from LISTMONK_PASSWORD)", got, "from-sops")
+		t.Fatalf("LISTMONK_ADMIN_PASSWORD = %v, want %q", got, "from-sops")
 	}
 	if got := env["LISTMONK_db__host"]; got != "host.docker.internal" {
 		t.Fatalf("LISTMONK_db__host = %v, want host.docker.internal", got)
