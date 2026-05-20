@@ -6,25 +6,36 @@ import "leaflet/dist/leaflet.css";
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 
-const CLUSTER_STATUS_COLORS = {
-  healthy: "rgb(34, 197, 94)",
-  degraded: "rgb(234, 179, 8)",
-  unhealthy: "rgb(234, 179, 8)",
-  down: "rgb(239, 68, 68)",
-  unknown: "rgb(148, 163, 184)",
+const ROLE_COLORS = {
+  core: "rgb(249, 115, 22)",
+  central: "rgb(249, 115, 22)",
+  media: "rgb(59, 130, 246)",
+  edge: "rgb(59, 130, 246)",
+  compute: "rgb(34, 197, 94)",
+  worker: "rgb(34, 197, 94)",
+  livepeer: "rgb(34, 197, 94)",
+  "livepeer-gateway": "rgb(34, 197, 94)",
+  orchestrator: "rgb(34, 197, 94)",
+  default: "rgb(148, 163, 184)",
 };
 
-const NODE_STATUS_COLORS = {
-  active: "rgb(59, 130, 246)",
-  offline: "rgb(100, 116, 139)",
+const NETWORK_STATUS_COLORS = {
+  healthy: "rgb(34, 197, 94)",
+  degraded: "rgb(234, 179, 8)",
+  down: "rgb(239, 68, 68)",
+  unknown: "rgb(148, 163, 184)",
 };
 
 const ASSIGNMENT_COLOR = "rgba(168, 85, 247, 0.7)";
 const FEDERATION_COLOR = "rgba(59, 130, 246, 0.7)";
 const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
 const MEMBERSHIP_COLORS = {
-  core: "rgba(59, 130, 246, 0.3)",
-  edge: "rgba(34, 197, 94, 0.3)",
+  core: "rgba(249, 115, 22, 0.3)",
+  edge: "rgba(59, 130, 246, 0.3)",
+  media: "rgba(59, 130, 246, 0.3)",
+  compute: "rgba(34, 197, 94, 0.3)",
+  livepeer: "rgba(34, 197, 94, 0.3)",
+  "livepeer-gateway": "rgba(34, 197, 94, 0.3)",
 };
 
 function escapeHtml(s) {
@@ -72,6 +83,21 @@ function popupRow(label, value) {
 
 function popupSection(title, rows) {
   return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
+}
+
+function roleColor(role, status) {
+  if (status === "offline" || status === "down") return "rgb(100, 116, 139)";
+  return ROLE_COLORS[(role || "").toLowerCase()] || ROLE_COLORS.default;
+}
+
+function withAlpha(rgb, alpha) {
+  return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
+}
+
+function markerLatLng(marker, fallback) {
+  if (!marker) return fallback;
+  const ll = marker.getLatLng();
+  return [ll.lat, ll.lng];
 }
 
 function clusterPopupHtml(cluster, nodeTypeCounts, clusterServices) {
@@ -154,6 +180,8 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   data.clusters.forEach((c) => {
     clusterMap[c.clusterId] = c;
   });
+  const nodeMarkersById = {};
+  const clusterMarkersById = {};
 
   // Index nodes by nodeId for service instance placement
   const nodeMap = {};
@@ -241,7 +269,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
   (data.nodes || []).forEach((node) => {
     if (!node.latitude && !node.longitude) return;
 
-    const color = NODE_STATUS_COLORS[node.status] || NODE_STATUS_COLORS.offline;
+    const color = roleColor(node.nodeType, node.status);
     const isEdge = (node.nodeType || "").toLowerCase() === "edge";
     const size = isEdge ? 10 : 14;
     const glow = isEdge ? "6px" : "12px";
@@ -262,12 +290,13 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
         minWidth: 200,
       })
       .addTo(nodeLayer);
+    nodeMarkersById[node.nodeId] = nodeMarker;
     spreadablesRef.current.nodes.push({ marker: nodeMarker, iconRadius: size / 2 });
   });
 
   // 3. Cluster markers (on top) — core vs edge visual distinction
   data.clusters.forEach((cluster) => {
-    const color = CLUSTER_STATUS_COLORS[cluster.status] || CLUSTER_STATUS_COLORS.unknown;
+    const color = roleColor(cluster.clusterType, cluster.status);
     const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
     const ct = (cluster.clusterType || "").toLowerCase();
     const isCore = ct === "central" || ct === "core";
@@ -302,6 +331,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
         { className: "network-viz__popup", maxWidth: 400, minWidth: 220 }
       )
       .addTo(clusterLayer);
+    clusterMarkersById[cluster.clusterId] = clusterMarker;
     spreadablesRef.current.clusters.push({ marker: clusterMarker, iconRadius: radius });
   });
 
@@ -309,6 +339,7 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data) {
     ...spreadablesRef.current.nodes,
     ...spreadablesRef.current.clusters,
   ]);
+  redrawNetworkLines(L, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
 }
 
 function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
@@ -357,6 +388,78 @@ function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 2
   createPulse(1500);
 }
 
+function redrawNetworkLines(
+  L,
+  layersRef,
+  pulseTimersRef,
+  data,
+  nodeMarkersById,
+  clusterMarkersById
+) {
+  const { membership: memberLayer, connections: connLayer, pulses: pulseLayer } = layersRef.current;
+  if (!memberLayer || !connLayer || !pulseLayer) return;
+
+  pulseTimersRef.current.forEach(clearInterval);
+  pulseTimersRef.current.forEach(clearTimeout);
+  pulseTimersRef.current = [];
+  memberLayer.clearLayers();
+  connLayer.clearLayers();
+  pulseLayer.clearLayers();
+
+  const clusterMap = {};
+  data.clusters.forEach((c) => {
+    clusterMap[c.clusterId] = c;
+  });
+
+  (data.nodes || []).forEach((node) => {
+    if (!node.latitude && !node.longitude) return;
+    const nodeMarker = nodeMarkersById[node.nodeId];
+    const clusterMarker = clusterMarkersById[node.clusterId];
+    if (!nodeMarker || !clusterMarker) return;
+    const from = markerLatLng(nodeMarker, [node.latitude, node.longitude]);
+    const to = markerLatLng(clusterMarker, [
+      clusterMap[node.clusterId]?.latitude,
+      clusterMap[node.clusterId]?.longitude,
+    ]);
+    if (!Number.isFinite(to[0]) || !Number.isFinite(to[1])) return;
+    if (from[0] === to[0] && from[1] === to[1]) return;
+    const nodeKind = (node.nodeType || "").toLowerCase();
+    const lineColor =
+      MEMBERSHIP_COLORS[nodeKind] || withAlpha(roleColor(node.nodeType, node.status), 0.3);
+    L.polyline([from, to], {
+      color: lineColor,
+      weight: 1.5,
+      opacity: 0.65,
+      smoothFactor: 1,
+      interactive: false,
+    }).addTo(memberLayer);
+  });
+
+  data.peerConnections.forEach((pc) => {
+    const src = clusterMap[pc.sourceCluster];
+    const tgt = clusterMap[pc.targetCluster];
+    const srcMarker = clusterMarkersById[pc.sourceCluster];
+    const tgtMarker = clusterMarkersById[pc.targetCluster];
+    if (!src || !tgt || !srcMarker || !tgtMarker) return;
+    const from = markerLatLng(srcMarker, [src.latitude, src.longitude]);
+    const to = markerLatLng(tgtMarker, [tgt.latitude, tgt.longitude]);
+    const isFederation = pc.connectionType === "federation";
+
+    L.polyline([from, to], {
+      color: isFederation ? FEDERATION_COLOR : ASSIGNMENT_COLOR,
+      weight: isFederation ? 2 : 1.5,
+      opacity: pc.connected ? 0.8 : 0.4,
+      dashArray: isFederation ? "8 4" : "12 6",
+      smoothFactor: 1,
+    }).addTo(connLayer);
+
+    if (pc.connected) {
+      const pulseColor = isFederation ? "rgb(125, 207, 255)" : "rgb(192, 132, 252)";
+      startPulse(L, pulseLayer, pulseTimersRef, from, to, pulseColor);
+    }
+  });
+}
+
 const ICON_MAXIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 const ICON_MINIMIZE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`;
 const ICON_HOME = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`;
@@ -366,6 +469,7 @@ function NetworkMapInner({ data }) {
   const wrapperRef = useRef(null);
   const mapRef = useRef(null);
   const leafletRef = useRef(null);
+  const dataRef = useRef(data);
   const layersRef = useRef({
     membership: null,
     clusters: null,
@@ -423,12 +527,9 @@ function NetworkMapInner({ data }) {
       layersRef.current.pulses = L.layerGroup().addTo(map);
       layersRef.current.clusters = L.layerGroup().addTo(map);
 
-      map.on("zoomend", () => {
-        spreadOverlappingMarkers(map, [
-          ...spreadablesRef.current.nodes,
-          ...spreadablesRef.current.clusters,
-        ]);
-      });
+      map.on("zoomend", () =>
+        drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, dataRef.current)
+      );
 
       leafletRef.current = L;
       mapRef.current = map;
@@ -448,6 +549,7 @@ function NetworkMapInner({ data }) {
 
   // Redraw when data changes or map becomes ready
   useEffect(() => {
+    dataRef.current = data;
     const L = leafletRef.current;
     if (!L || !mapRef.current) return;
     drawLayers(L, mapRef.current, layersRef, pulseTimersRef, spreadablesRef, data);
@@ -504,7 +606,7 @@ export function NetworkMap() {
   if (loading || !data) return null;
 
   const status = overallStatus(data.clusters);
-  const color = CLUSTER_STATUS_COLORS[status] || CLUSTER_STATUS_COLORS.unknown;
+  const color = NETWORK_STATUS_COLORS[status] || NETWORK_STATUS_COLORS.unknown;
 
   return (
     <motion.div

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import type { Map, LayerGroup, Marker } from "leaflet";
+  import type { Map as LeafletMap, LayerGroup, Marker } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
   import { spreadOverlappingMarkers, type Spreadable } from "./spreadOverlap";
   import "leaflet/dist/leaflet.css";
@@ -86,9 +86,11 @@
   }
 
   interface RelationshipLine {
+    sourceClusterId?: string;
+    targetClusterId?: string;
     from: [number, number];
     to: [number, number];
-    type: "peering" | "traffic" | "replication";
+    type: "peering" | "traffic" | "replication" | "assignment";
     active: boolean;
     weight?: number;
     metrics?: {
@@ -158,7 +160,7 @@
 
   let mapContainer = $state<HTMLElement>();
   let mapWrapper = $state<HTMLElement>();
-  let map: Map | null = null;
+  let map: LeafletMap | null = null;
   let layerGroup: LayerGroup | null = null;
   let bucketLayer: LayerGroup | null = null;
   let flowLayer: LayerGroup | null = null;
@@ -170,12 +172,24 @@
   let pulseTimers: number[] = [];
   let nodeSpreadables: Spreadable[] = [];
   let clusterSpreadables: Spreadable[] = [];
+  let nodeMarkersByID: Record<string, Marker> = {};
+  let aggregateNodeMarkersByClusterID: Record<string, Marker> = {};
+  let clusterMarkersByID: Record<string, Marker> = {};
+  let renderedNodes: NodeLocation[] = [];
+  let renderedRelationships: RelationshipLine[] = [];
   let zoomHandlerAttached = false;
 
-  const MEMBERSHIP_COLOR = "rgba(148, 163, 184, 0.35)";
-  const NODE_STATUS_COLORS: Record<string, string> = {
-    active: "rgb(59, 130, 246)",
-    offline: "rgb(100, 116, 139)",
+  const ROLE_COLORS: Record<string, string> = {
+    core: "rgb(249, 115, 22)",
+    central: "rgb(249, 115, 22)",
+    media: "rgb(59, 130, 246)",
+    edge: "rgb(59, 130, 246)",
+    compute: "rgb(34, 197, 94)",
+    worker: "rgb(34, 197, 94)",
+    livepeer: "rgb(34, 197, 94)",
+    "livepeer-gateway": "rgb(34, 197, 94)",
+    orchestrator: "rgb(34, 197, 94)",
+    default: "rgb(148, 163, 184)",
   };
 
   // UX state
@@ -281,6 +295,69 @@
     return `<div class="map-popup__section-title">${escapeHtml(title)}</div><table class="map-popup__table">${rows}</table>`;
   }
 
+  function stopPulseTimers(): void {
+    pulseTimers.forEach(clearInterval);
+    pulseTimers.forEach(clearTimeout);
+    pulseTimers = [];
+  }
+
+  function shouldAggregateNodes(): boolean {
+    return (map?.getZoom() ?? zoom) <= 3;
+  }
+
+  function nodePopupRows(node: NodeLocation, services: string[] | undefined): string {
+    let rows =
+      popupRow("Type", escapeHtml(node.nodeType || "node")) +
+      popupRow("Status", escapeHtml(node.status || "active"));
+    if (node.clusterId) rows += popupRow("Cluster", escapeHtml(node.clusterId));
+    if (services?.length) rows += popupRow("Services", escapeHtml(services.join(", ")));
+    return rows;
+  }
+
+  function aggregateNodePopup(
+    nodesInGroup: NodeLocation[],
+    servicesByNode: Record<string, string[]>
+  ): string {
+    const sorted = [...nodesInGroup].sort((a, b) => a.name.localeCompare(b.name));
+    const rows = sorted
+      .map((node) => {
+        const services = servicesByNode[node.id];
+        const meta = [
+          node.nodeType || "node",
+          node.status || "active",
+          services?.length ? services.join(", ") : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        return `<tr><td class="map-popup__label">${escapeHtml(node.name)}</td><td class="map-popup__value">${escapeHtml(meta)}</td></tr>`;
+      })
+      .join("");
+    return `<div class="map-popup"><div class="map-popup__title">${nodesInGroup.length} nodes</div><table class="map-popup__table">${rows}</table></div>`;
+  }
+
+  function markerLatLng(marker: Marker | undefined, fallback: [number, number]): [number, number] {
+    if (!marker) return fallback;
+    const ll = marker.getLatLng();
+    return [ll.lat, ll.lng];
+  }
+
+  function roleColor(role: string | undefined, status?: string): string {
+    if (status === "offline" || status === "down") return "rgb(100, 116, 139)";
+    const normalized = (role ?? "").toLowerCase();
+    return ROLE_COLORS[normalized] ?? ROLE_COLORS.default;
+  }
+
+  function withAlpha(rgb: string, alpha: number): string {
+    return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
+  }
+
+  function relationshipColor(type: RelationshipLine["type"]): string {
+    if (type === "traffic") return "rgba(34, 197, 94, 0.6)";
+    if (type === "assignment") return "rgba(168, 85, 247, 0.72)";
+    if (type === "replication") return "rgba(168, 85, 247, 0.7)";
+    return "rgba(125, 207, 255, 0.72)";
+  }
+
   function startPulse(
     from: [number, number],
     to: [number, number],
@@ -344,11 +421,14 @@
     if (!map || !L) return;
     const leaflet = L;
 
-    // Clean up pulse timers
-    pulseTimers.forEach(clearInterval);
-    pulseTimers = [];
+    stopPulseTimers();
     nodeSpreadables = [];
     clusterSpreadables = [];
+    nodeMarkersByID = {};
+    aggregateNodeMarkersByClusterID = {};
+    clusterMarkersByID = {};
+    renderedNodes = currentNodes;
+    renderedRelationships = currentRelationships;
 
     // Remove old layer groups from map entirely
     if (bucketLayer) map.removeLayer(bucketLayer);
@@ -429,33 +509,6 @@
       clusterMap[c.id] = c;
     });
 
-    // 0b. Node-to-cluster membership lines
-    const MEMBERSHIP_COLORS: Record<string, string> = {
-      core: "rgba(59, 130, 246, 0.3)",
-      edge: "rgba(34, 197, 94, 0.3)",
-    };
-    currentNodes.forEach((node) => {
-      if (!node.clusterId) return;
-      const cluster = clusterMap[node.clusterId];
-      if (!cluster) return;
-      const from: [number, number] = [node.lat, node.lng];
-      const to: [number, number] = [cluster.lat, cluster.lng];
-      if (from[0] === to[0] && from[1] === to[1]) return;
-
-      const nodeKind = (node.nodeType ?? "").toLowerCase();
-      const lineColor = MEMBERSHIP_COLORS[nodeKind] || MEMBERSHIP_COLOR;
-
-      leaflet
-        .polyline([from, to], {
-          color: lineColor,
-          weight: 1.5,
-          opacity: 0.6,
-          smoothFactor: 1,
-          interactive: false,
-        })
-        .addTo(membershipLayer!);
-    });
-
     // Build per-node service list (populated when serviceInstances prop is provided)
     const servicesByNode: Record<string, string[]> = {};
     const pushUniqueService = (
@@ -474,6 +527,9 @@
     });
     Object.values(servicesByNode).forEach((svcs) => svcs.sort());
 
+    const aggregateNodes = shouldAggregateNodes();
+    const nodesByCluster: Record<string, NodeLocation[]> = {};
+
     // 1. Draw Infrastructure Nodes
     const nodeMap: Record<string, NodeLocation> = {};
     const nodeTypeCountByCluster: Record<string, { core: number; edge: number; other: number }> =
@@ -489,9 +545,49 @@
         if (normalizedType === "core") nodeTypeCountByCluster[clusterID].core++;
         else if (normalizedType === "edge") nodeTypeCountByCluster[clusterID].edge++;
         else nodeTypeCountByCluster[clusterID].other++;
+        const group = nodesByCluster[clusterID] ?? [];
+        group.push(node);
+        nodesByCluster[clusterID] = group;
       }
+    });
 
-      const color = NODE_STATUS_COLORS[node.status ?? "active"] || NODE_STATUS_COLORS.active;
+    const collapsedNodeIDs: Record<string, true> = {};
+    if (aggregateNodes) {
+      Object.entries(nodesByCluster).forEach(([clusterID, nodesInGroup]) => {
+        if (nodesInGroup.length < 4) return;
+        const avgLat = nodesInGroup.reduce((sum, node) => sum + node.lat, 0) / nodesInGroup.length;
+        const avgLng = nodesInGroup.reduce((sum, node) => sum + node.lng, 0) / nodesInGroup.length;
+        const activeCount = nodesInGroup.filter(
+          (node) => (node.status ?? "active") === "active"
+        ).length;
+        const size = Math.max(24, Math.min(42, 18 + nodesInGroup.length * 3));
+        const color = roleColor("media", activeCount === 0 ? "offline" : "active");
+        const icon = leaflet.divIcon({
+          className: "node-dot-marker",
+          html: `<div style="background-color: color-mix(in srgb, ${color} 20%, rgb(15, 23, 42)); width: ${size}px; height: ${size}px; border-radius: 8px; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; color: ${color}; font-size: 11px; font-weight: 700; box-shadow: 0 0 10px color-mix(in srgb, ${color} 35%, transparent);">${nodesInGroup.length}</div>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        });
+        const marker = leaflet
+          .marker([avgLat, avgLng], { icon })
+          .bindPopup(aggregateNodePopup(nodesInGroup, servicesByNode), {
+            className: "dark-popup",
+            maxWidth: 520,
+            minWidth: 260,
+          })
+          .addTo(layerGroup!);
+        aggregateNodeMarkersByClusterID[clusterID] = marker;
+        nodeSpreadables.push({ marker, iconRadius: size / 2 });
+        nodesInGroup.forEach((node) => {
+          collapsedNodeIDs[node.id] = true;
+        });
+      });
+    }
+
+    currentNodes.forEach((node) => {
+      if (collapsedNodeIDs[node.id]) return;
+
+      const color = roleColor(node.nodeType, node.status);
       const isEdge = (node.nodeType ?? "").toLowerCase() === "edge";
       const size = isEdge ? 10 : 14;
       const glow = isEdge ? "6px" : "12px";
@@ -504,13 +600,9 @@
       });
 
       const nodeSvcs = servicesByNode[node.id];
-      let rows =
-        popupRow("Type", escapeHtml(node.nodeType || "node")) +
-        popupRow("Status", escapeHtml(node.status || "active"));
-      if (node.clusterId) rows += popupRow("Cluster", escapeHtml(node.clusterId));
       let nodePopup =
         `<div class="map-popup"><div class="map-popup__title">${escapeHtml(node.name)}</div>` +
-        `<table class="map-popup__table">${rows}</table>`;
+        `<table class="map-popup__table">${nodePopupRows(node, nodeSvcs)}</table>`;
       if (nodeSvcs?.length) {
         nodePopup += `<div class="map-popup__tags">${nodeSvcs.map((s) => `<span class="map-popup__tag">${escapeHtml(s)}</span>`).join("")}</div>`;
       }
@@ -520,6 +612,7 @@
         .marker([node.lat, node.lng], { icon: nodeIcon })
         .bindPopup(nodePopup, { className: "dark-popup", maxWidth: 400, minWidth: 200 })
         .addTo(layerGroup!);
+      nodeMarkersByID[node.id] = nodeMarker;
       nodeSpreadables.push({ marker: nodeMarker, iconRadius: size / 2 });
     });
 
@@ -581,68 +674,9 @@
         .addTo(layerGroup!);
     });
 
-    // 3. Draw relationship lines between clusters
-    currentRelationships.forEach((rel) => {
-      const colorMap = {
-        peering: "rgba(59, 130, 246, 0.7)",
-        traffic: "rgba(34, 197, 94, 0.6)",
-        replication: "rgba(168, 85, 247, 0.7)",
-      };
-      const lineColor = colorMap[rel.type] || "rgba(148, 163, 184, 0.4)";
-      const lineWeight = rel.active ? Math.max(2, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1.5;
-
-      const dashMap: Record<string, string | undefined> = {
-        peering: "8 4",
-        replication: "12 6",
-      };
-
-      const line = leaflet.polyline([rel.from, rel.to], {
-        color: lineColor,
-        weight: lineWeight,
-        opacity: rel.active ? 0.8 : 0.4,
-        dashArray: dashMap[rel.type],
-        smoothFactor: 1,
-      });
-
-      if (rel.metrics) {
-        let rows = "";
-        if (rel.metrics.eventCount != null)
-          rows += popupRow("Events", rel.metrics.eventCount.toLocaleString());
-        if (rel.metrics.avgLatencyMs != null)
-          rows += popupRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
-        if (rel.metrics.successRate != null)
-          rows += popupRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`);
-        if (rows) {
-          line.bindPopup(
-            `<div class="map-popup"><table class="map-popup__table">${rows}</table></div>`,
-            {
-              className: "dark-popup",
-              maxWidth: 280,
-              minWidth: 160,
-            }
-          );
-        }
-      }
-
-      line.addTo(relationshipLayer!);
-
-      // Directional pulse animation on active peering and assignment lines
-      if (rel.active && (rel.type === "peering" || rel.type === "replication")) {
-        const pulseColor = rel.type === "replication" ? "rgb(192, 132, 252)" : "rgb(125, 207, 255)";
-        startPulse(rel.from, rel.to, pulseColor);
-      }
-    });
-
     // 4. Draw cluster markers
-    const statusColors: Record<string, string> = {
-      healthy: "rgb(34, 197, 94)",
-      operational: "rgb(34, 197, 94)",
-      degraded: "rgb(234, 179, 8)",
-      down: "rgb(239, 68, 68)",
-    };
-
     currentClusters.forEach((cluster) => {
-      const color = statusColors[cluster.status] || "rgb(148, 163, 184)";
+      const color = roleColor(cluster.clusterType, cluster.status);
       const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
       const ct = (cluster.clusterType ?? "").toLowerCase();
       const isCore = ct === "central" || ct === "core";
@@ -707,20 +741,112 @@
         .marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
         .bindPopup(popup, { className: "dark-popup", maxWidth: 400, minWidth: 220 })
         .addTo(clusterLayer!);
+      clusterMarkersByID[cluster.id] = clusterMarker;
       clusterSpreadables.push({ marker: clusterMarker, iconRadius: radius });
     });
 
     applySpread();
 
     if (!zoomHandlerAttached && map) {
-      map.on("zoomend", applySpread);
+      map.on("zoomend", () => drawMap(routes, nodes, buckets, flows, clusters, relationships));
       zoomHandlerAttached = true;
     }
   }
 
   function applySpread() {
-    if (!map) return;
+    if (!map || !L) return;
     spreadOverlappingMarkers(map, [...nodeSpreadables, ...clusterSpreadables]);
+    drawTopologyLines(renderedNodes, renderedRelationships);
+  }
+
+  function drawTopologyLines(
+    currentNodes: NodeLocation[],
+    currentRelationships: RelationshipLine[]
+  ): void {
+    if (!L || !membershipLayer || !relationshipLayer) return;
+    const leaflet = L;
+    stopPulseTimers();
+    membershipLayer.clearLayers();
+    relationshipLayer.clearLayers();
+
+    const aggregateMembershipDrawn: Record<string, true> = {};
+    currentNodes.forEach((node) => {
+      if (!node.clusterId) return;
+      const clusterMarker = clusterMarkersByID[node.clusterId];
+      if (!clusterMarker) return;
+
+      const aggregateMarker = aggregateNodeMarkersByClusterID[node.clusterId];
+      if (aggregateMarker) {
+        if (aggregateMembershipDrawn[node.clusterId]) return;
+        aggregateMembershipDrawn[node.clusterId] = true;
+      }
+      const nodeMarker = aggregateMarker ?? nodeMarkersByID[node.id];
+      if (!nodeMarker) return;
+
+      const from = markerLatLng(nodeMarker, [node.lat, node.lng]);
+      const to = markerLatLng(clusterMarker, from);
+      if (from[0] === to[0] && from[1] === to[1]) return;
+
+      const color = withAlpha(roleColor(node.nodeType, node.status), aggregateMarker ? 0.42 : 0.3);
+      leaflet
+        .polyline([from, to], {
+          color,
+          weight: aggregateMarker ? 2 : 1.4,
+          opacity: 0.7,
+          smoothFactor: 1,
+          interactive: false,
+        })
+        .addTo(membershipLayer!);
+    });
+
+    currentRelationships.forEach((rel) => {
+      const from = rel.sourceClusterId
+        ? markerLatLng(clusterMarkersByID[rel.sourceClusterId], rel.from)
+        : rel.from;
+      const to = rel.targetClusterId
+        ? markerLatLng(clusterMarkersByID[rel.targetClusterId], rel.to)
+        : rel.to;
+      const lineWeight = rel.active ? Math.max(2, Math.min(4, (rel.weight ?? 1) * 0.5)) : 1.5;
+      const dashMap: Record<RelationshipLine["type"], string | undefined> = {
+        peering: "8 4",
+        assignment: "12 6",
+        replication: "12 6",
+        traffic: undefined,
+      };
+
+      const line = leaflet.polyline([from, to], {
+        color: relationshipColor(rel.type),
+        weight: lineWeight,
+        opacity: rel.active ? 0.8 : 0.4,
+        dashArray: dashMap[rel.type],
+        smoothFactor: 1,
+      });
+
+      let rows = popupRow("Type", escapeHtml(rel.type));
+      if (rel.metrics?.eventCount != null)
+        rows += popupRow("Events", rel.metrics.eventCount.toLocaleString());
+      if (rel.metrics?.avgLatencyMs != null)
+        rows += popupRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`);
+      if (rel.metrics?.successRate != null)
+        rows += popupRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`);
+      line.bindPopup(
+        `<div class="map-popup"><table class="map-popup__table">${rows}</table></div>`,
+        {
+          className: "dark-popup",
+          maxWidth: 280,
+          minWidth: 160,
+        }
+      );
+      line.addTo(relationshipLayer!);
+
+      if (
+        rel.active &&
+        (rel.type === "peering" || rel.type === "assignment" || rel.type === "replication")
+      ) {
+        const pulseColor = rel.type === "peering" ? "rgb(125, 207, 255)" : "rgb(192, 132, 252)";
+        startPulse(from, to, pulseColor);
+      }
+    });
   }
 
   let drawTrigger = $derived({
@@ -807,11 +933,8 @@
     return "rgb(74, 222, 128)"; // green — healthy
   }
 
-  // Off-map anchor for vantages with no resolved geo. Below the equator and
-  // far enough west to render in the Pacific gutter without overlapping
-  // real clusters; renders as a small "unknown" cluster the operator can
-  // click into instead of disappearing silently.
-  const UNKNOWN_GEO_ANCHOR: [number, number] = [-78, -160];
+  // Visible Pacific gutter for vantages without resolved geo.
+  const UNKNOWN_GEO_ANCHOR: [number, number] = [-42, -145];
 
   function drawOrchestrators(vantages: OrchestratorVantagePin[]): void {
     if (!L || !orchestratorLayer || !map) return;

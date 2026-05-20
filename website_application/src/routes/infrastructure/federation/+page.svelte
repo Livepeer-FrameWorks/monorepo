@@ -225,9 +225,11 @@
   // Transform peer connections + traffic into RelationshipLine format
   let mapRelationships = $derived.by(() => {
     const lines: Array<{
+      sourceClusterId?: string;
+      targetClusterId?: string;
       from: [number, number];
       to: [number, number];
-      type: "peering" | "traffic" | "replication";
+      type: "peering" | "traffic" | "replication" | "assignment";
       active: boolean;
       weight?: number;
       metrics?: { eventCount?: number; avgLatencyMs?: number; successRate?: number };
@@ -240,9 +242,11 @@
       if (src && tgt) {
         const isAssignment = pc.connectionType === "assignment";
         lines.push({
+          sourceClusterId: pc.sourceCluster,
+          targetClusterId: pc.targetCluster,
           from: [src.lat, src.lng],
           to: [tgt.lat, tgt.lng],
-          type: isAssignment ? "replication" : "peering",
+          type: isAssignment ? "assignment" : "peering",
           active: pc.connected,
         });
       }
@@ -268,6 +272,8 @@
         );
         if (!hasPeering) {
           lines.push({
+            sourceClusterId: t.clusterId,
+            targetClusterId: t.remoteClusterId,
             from: [src.lat, src.lng],
             to: [tgt.lat, tgt.lng],
             type: "traffic",
