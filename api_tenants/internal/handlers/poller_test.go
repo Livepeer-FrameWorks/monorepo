@@ -61,3 +61,19 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghorn(t *testing.T) {
 		t.Fatalf("ca file = %q, want system roots", caFile)
 	}
 }
+
+func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghornEvenWithGlobalServerName(t *testing.T) {
+	inst := serviceInstance{
+		serviceID:         "foghorn",
+		assignedClusterID: "media-us-1",
+		assignedBaseURL:   "frameworks.network",
+	}
+
+	serverName, caFile := grpcHealthTLSConfig(inst, "/etc/frameworks/pki/ca.crt", "foghorn.internal")
+	if serverName != "foghorn.media-us-1.frameworks.network" {
+		t.Fatalf("server name = %q", serverName)
+	}
+	if caFile != "" {
+		t.Fatalf("ca file = %q, want system roots", caFile)
+	}
+}

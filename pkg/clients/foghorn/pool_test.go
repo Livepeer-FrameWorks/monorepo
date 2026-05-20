@@ -30,10 +30,16 @@ func TestFoghornPoolServerNameForManagedTLS(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "explicit server name wins",
+			name: "explicit server name wins for internal address",
 			cfg:  PoolConfig{CACertFile: "/etc/frameworks/pki/ca.crt", ServerName: "custom.internal"},
-			addr: "foghorn.media-us-1.frameworks.network:18019",
+			addr: "10.88.1.10:18019",
 			want: "custom.internal",
+		},
+		{
+			name: "cluster fqdn ignores leaked internal override",
+			cfg:  PoolConfig{CACertFile: "/etc/frameworks/pki/ca.crt", ServerName: "foghorn.internal"},
+			addr: "foghorn.media-us-1.frameworks.network:18019",
+			want: "",
 		},
 		{
 			name: "insecure does not default",

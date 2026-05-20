@@ -127,13 +127,16 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 }
 
 func (p *FoghornPool) serverName(addr string) string {
-	if p.config.ServerName != "" || p.config.AllowInsecure {
+	if p.config.AllowInsecure {
+		return p.config.ServerName
+	}
+	if grpcutil.AddrIsFQDN(addr) && !isInternalFoghornAddr(addr) {
+		return ""
+	}
+	if p.config.ServerName != "" {
 		return p.config.ServerName
 	}
 	if p.config.UseTLS || p.config.CACertFile != "" {
-		if grpcutil.AddrIsFQDN(addr) && !isInternalFoghornAddr(addr) {
-			return ""
-		}
 		return defaultInternalServerName
 	}
 	return ""
