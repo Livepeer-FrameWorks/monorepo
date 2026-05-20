@@ -211,13 +211,12 @@ export function getIngestUrls(streamKey: string): Partial<IngestUrls> {
   const ep = resolveEndpoints();
   if (!ep.ingestHostname) return {};
 
-  const rtmpProto = ep.ingestUseTls ? "rtmps" : "rtmp";
   const httpProto = ep.ingestUseTls ? "https" : "http";
   const ingestPortPart = parseStreamingUrl(rawConfig.ingestUrl).port;
   const whipPort = ingestPortPart ? `:${ingestPortPart}` : "";
 
   return {
-    rtmp: `${rtmpProto}://${ep.ingestHostname}:${ep.rtmpPort}${config.rtmpPath}/${streamKey}`,
+    rtmp: `rtmp://${ep.ingestHostname}:${ep.rtmpPort}${config.rtmpPath}/${streamKey}`,
     srt: `srt://${ep.ingestHostname}:${ep.srtPort}?streamid=${streamKey}&latency=200&mode=caller`,
     whip: `${httpProto}://${ep.ingestHostname}${whipPort}${config.webrtcPath}/${streamKey}`,
   };
@@ -339,7 +338,6 @@ export function getContentDeliveryUrls(
   const playPortPart = config.playPort ? `:${config.playPort}` : "";
   const playBase = `${playProto}://${ep.playHostname}${playPortPart}`;
 
-  const secureSuffix = ep.edgeUseTls ? "s" : "";
   const wsProto = ep.edgeUseTls ? "wss" : "ws";
 
   // Primary protocols — HTTP via Foghorn (307 redirects), non-HTTP direct to edge
@@ -351,13 +349,13 @@ export function getContentDeliveryUrls(
     webrtc: `${playBase}/play/${contentId}/webrtc`,
     mp4: `${playBase}/play/${contentId}.mp4`,
     webm: `${playBase}/play/${contentId}.webm`,
-    srt: `srt${secureSuffix}://${ep.edgeHostname}:${ep.srtPort}?streamid=${contentId}`,
+    srt: `srt://${ep.edgeHostname}:${ep.srtPort}?streamid=${contentId}`,
   };
 
   // Additional protocols — HTTP via Foghorn, non-HTTP direct to edge
   const additional: AdditionalProtocolUrls = {
-    rtsp: `rtsp${secureSuffix}://${ep.edgeHostname}:${config.edgePort || "554"}/play/${contentId}`,
-    rtmp: `rtmp${secureSuffix}://${ep.edgeHostname}:${ep.rtmpPort}/play/${contentId}`,
+    rtsp: `rtsp://${ep.edgeHostname}:${config.edgePort || "554"}/play/${contentId}`,
+    rtmp: `rtmp://${ep.edgeHostname}:${ep.rtmpPort}/play/${contentId}`,
     ts: `${playBase}/play/${contentId}.ts`,
     flv: `${playBase}/play/${contentId}.flv`,
     mkv: `${playBase}/play/${contentId}.mkv`,
@@ -368,7 +366,7 @@ export function getContentDeliveryUrls(
     rawH264: `${playBase}/play/${contentId}.h264`,
     wsmp4: `${wsProto}://${ep.edgeHostname}:${config.edgePort || "8080"}/play/${contentId}.mp4`,
     wsWebrtc: `${wsProto}://${ep.edgeHostname}:${config.edgePort || "8080"}/play/webrtc/${contentId}`,
-    dtsc: `dtsc${secureSuffix}://${ep.edgeHostname}:${config.edgePort || "4200"}/play/${contentId}`,
+    dtsc: `dtsc://${ep.edgeHostname}:${config.edgePort || "4200"}/play/${contentId}`,
   };
 
   const embed = getEmbedCodeForContent(contentId, contentType);
@@ -539,8 +537,7 @@ export const PROTOCOL_INFO: ProtocolInfo[] = [
 export function getRtmpServerUrl(): string {
   const ep = resolveEndpoints();
   if (!ep.ingestHostname) return "";
-  const proto = ep.ingestUseTls ? "rtmps" : "rtmp";
-  return `${proto}://${ep.ingestHostname}:${ep.rtmpPort}${config.rtmpPath}`;
+  return `rtmp://${ep.ingestHostname}:${ep.rtmpPort}${config.rtmpPath}`;
 }
 
 export function getIngestUrl(streamKey: string): string {
