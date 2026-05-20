@@ -566,6 +566,9 @@ LEFT JOIN quartermaster.services svc ON svc.service_id = si.service_id
 LEFT JOIN quartermaster.service_cluster_assignments sca
        ON sca.service_instance_id = si.id
       AND sca.is_active = true
-WHERE COALESCE(svc.type, si.service_id) IN ('foghorn', 'chandler', 'livepeer-gateway', 'signalman', 'decklog', 'navigator')
+WHERE COALESCE(svc.type, si.service_id) IN (
+    'edge-egress', 'edge-ingest', 'edge-storage', 'edge-processing',
+    'foghorn', 'chandler', 'livepeer-gateway', 'signalman', 'decklog', 'navigator'
+)
 ORDER BY service_type, si.instance_id, assigned_cluster NULLS LAST;`
 }

@@ -63,6 +63,14 @@ The common gRPC TLS config pattern that exists today is:
 - `GRPC_TLS_SERVER_NAME=service.internal.example`
 - `GRPC_ALLOW_INSECURE=true|false`
 
+`GRPC_TLS_SERVER_NAME` is only a default for mesh/internal endpoints. Endpoint
+resolution must own the full tuple: dial address, TLS server name, and trust
+roots. If a client dials a public media FQDN such as
+`foghorn.media-eu-1.frameworks.network`, it must verify that FQDN with public
+roots, not a leaked internal value such as `foghorn.internal`. If a client dials
+a direct WireGuard address or IP, the resolver must provide the matching DNS
+name from the certificate SANs.
+
 Future mTLS work would need additional client certificate settings and server-side
 client cert verification.
 

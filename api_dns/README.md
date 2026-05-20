@@ -22,6 +22,22 @@ Automates public DNS records, TLS certificate issuance, and internal service cer
 - Issues and stores internal gRPC certificates from Navigator's internal CA
 - Auto-renewal via background worker
 
+## DNS and TLS Contract
+
+Navigator publishes three public media DNS scopes:
+
+- Cluster zones: `<cluster>.<root>` plus service labels such as `foghorn.<cluster>.<root>`, `chandler.<cluster>.<root>`, `livepeer.<cluster>.<root>`, `edge.<cluster>.<root>`, and edge capability labels.
+- Root media entrypoint zones: `foghorn.<root>`, `chandler.<root>`, `livepeer.<root>`, `edge.<root>`, `edge-ingest.<root>`, `edge-egress.<root>`, `edge-storage.<root>`, and `edge-processing.<root>`.
+- Tenant alias zone: `<tenant>.cdn.<root>`, `*.<tenant>.cdn.<root>`, and verified custom hostnames.
+
+The name a client dials must match the trust domain it verifies:
+
+- Mesh-only service traffic dials `service.internal` and verifies the internal CA name `service.internal`.
+- Public or federation traffic dials `service.<cluster>.<root>` or the root media entrypoint and verifies that public DNS name with public roots.
+- Direct WireGuard or IP dialing is only valid when the client separately supplies a DNS server name covered by the presented certificate.
+
+Do not apply `GRPC_TLS_SERVER_NAME` blindly to every downstream client. A public FQDN endpoint must not be forced to verify `service.internal`; that produces the recurring x509 failures where the certificate is valid for a cluster wildcard but the client verifies the internal service name.
+
 ## Run (dev)
 
 - Start the full stack from repo root: `docker-compose up -d`
