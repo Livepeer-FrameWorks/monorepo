@@ -54,6 +54,62 @@ func TestEffectiveGeoIPServices_DefaultFiltersAbsent(t *testing.T) {
 	}
 }
 
+func TestEffectiveGeoIPServices_DefaultIncludesAliasedLivepeerGateway(t *testing.T) {
+	m := &inventory.Manifest{
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {Enabled: true, Deploy: "livepeer-gateway"},
+		},
+	}
+
+	got := effectiveGeoIPServices(m, nil)
+	want := []string{"livepeer-gateway"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("default with aliased gateway = %v, want %v", got, want)
+	}
+}
+
+func TestGeoIPTargetHostsExpandsDeploySlugAliases(t *testing.T) {
+	m := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {},
+			"regional-us-1": {},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"regional-eu-1"}},
+			"livepeer-gateway-us": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"regional-us-1"}},
+		},
+	}
+
+	got, err := geoIPTargetHosts(m, []string{"livepeer-gateway"})
+	if err != nil {
+		t.Fatalf("geoIPTargetHosts returned error: %v", err)
+	}
+	want := []string{"regional-eu-1", "regional-us-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deploy target hosts = %v, want %v", got, want)
+	}
+}
+
+func TestGeoIPTargetHostsAcceptsAliasedServiceName(t *testing.T) {
+	m := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"regional-eu-1"}},
+		},
+	}
+
+	got, err := geoIPTargetHosts(m, []string{"livepeer-gateway-eu"})
+	if err != nil {
+		t.Fatalf("geoIPTargetHosts returned error: %v", err)
+	}
+	want := []string{"regional-eu-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("aliased target hosts = %v, want %v", got, want)
+	}
+}
+
 // TestGeoIPEnvAndUploadSetsAligned pins the invariant that any service
 // receiving GEOIP_MMDB_PATH from cluster_provision.go is also a default
 // upload target — otherwise provision configures a path whose MMDB it never

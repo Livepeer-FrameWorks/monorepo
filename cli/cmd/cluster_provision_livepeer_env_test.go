@@ -39,6 +39,37 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsInjectsGeoIPForAliasedLivepeerGateway(t *testing.T) {
+	manifest := &inventory.Manifest{
+		GeoIP: &inventory.GeoIPConfig{
+			Enabled:    true,
+			RemotePath: "/usr/share/GeoIP/GeoLite2-City.mmdb",
+			Services:   []string{"livepeer-gateway-eu"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {
+				Enabled: true,
+				Deploy:  "livepeer-gateway",
+				Hosts:   []string{"regional-eu-1"},
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway@regional-eu-1",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway-eu",
+		Host:      "regional-eu-1",
+	}, manifest, map[string]interface{}{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["GEOIP_MMDB_PATH"]; got != "/usr/share/GeoIP/GeoLite2-City.mmdb" {
+		t.Fatalf("GEOIP_MMDB_PATH = %q, want /usr/share/GeoIP/GeoLite2-City.mmdb", got)
+	}
+}
+
 func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 	envFile := writeTestEnvFile(t, "ARBITRUM_RPC_ENDPOINT=https://arb.example\n")
 

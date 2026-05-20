@@ -5712,13 +5712,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Env-injection set must match the upload set: any service that receives
-	// GEOIP_MMDB_PATH here must also be a target of effectiveGeoIPServices,
-	// otherwise we configure a path whose MMDB never gets uploaded. Single
-	// source of truth — including for explicit manifest.GeoIP.Services
-	// overrides that omit livepeer-gateway.
 	if manifest.GeoIP != nil && manifest.GeoIP.Enabled {
-		if slices.Contains(effectiveGeoIPServices(manifest, nil), baseName) {
+		geoIPServices, err := geoIPTargetServiceNames(manifest, effectiveGeoIPServices(manifest, nil))
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(geoIPServices, task.ServiceID) {
 			if env["GEOIP_MMDB_PATH"] == "" {
 				env["GEOIP_MMDB_PATH"] = effectiveGeoIPRemotePath(manifest, "")
 			}
@@ -5774,6 +5773,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			decklogPort = decklogSvc.GRPCPort
 		}
 		env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("decklog.internal:%d", decklogPort)
+		if env["GRPC_TLS_SERVER_NAME"] == "" {
+			env["GRPC_TLS_SERVER_NAME"] = "decklog.internal"
+		}
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
 			if _, ok := manifest.Services["navigator"]; ok {
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"

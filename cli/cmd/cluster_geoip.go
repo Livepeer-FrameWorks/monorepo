@@ -167,23 +167,32 @@ func effectiveGeoIPServices(manifest *inventory.Manifest, services []string) []s
 	if manifest != nil && manifest.GeoIP != nil && len(manifest.GeoIP.Services) > 0 {
 		return append([]string{}, manifest.GeoIP.Services...)
 	}
-	// Default set must match the env-injection set in cluster_provision.go: any
-	// service that gets GEOIP_MMDB_PATH injected must also have its host in
-	// the upload target list, otherwise provision configures a path whose MMDB
-	// it never uploaded. Filter to services the manifest actually declares so
-	// clusters that don't run e.g. livepeer-gateway don't fail on
-	// geoIPTargetHosts' missing-service check.
 	candidates := []string{"foghorn", "quartermaster", "livepeer-gateway"}
 	if manifest == nil {
 		return candidates
 	}
 	out := make([]string, 0, len(candidates))
 	for _, name := range candidates {
-		if _, ok := manifest.Services[name]; ok {
+		if geoIPTargetExists(manifest, name) {
 			out = append(out, name)
 		}
 	}
 	return out
+}
+
+func geoIPTargetExists(manifest *inventory.Manifest, target string) bool {
+	if manifest == nil {
+		return false
+	}
+	if _, ok := manifest.Services[target]; ok {
+		return true
+	}
+	for name, svc := range manifest.Services {
+		if serviceDeployMatches(name, svc, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveGeoIPMMDBPath(ctx context.Context, source, filePath, licenseKey string) (string, func(), error) {
@@ -376,16 +385,13 @@ func geoIPTargetHosts(manifest *inventory.Manifest, services []string) ([]string
 	if manifest == nil {
 		return nil, fmt.Errorf("manifest is required")
 	}
+	serviceNames, err := geoIPTargetServiceNames(manifest, services)
+	if err != nil {
+		return nil, err
+	}
 	hostSet := make(map[string]struct{})
-	for _, serviceName := range services {
-		name := strings.TrimSpace(serviceName)
-		if name == "" {
-			continue
-		}
-		svc, ok := manifest.Services[name]
-		if !ok {
-			return nil, fmt.Errorf("geoip target service %q not found in manifest services", name)
-		}
+	for _, name := range serviceNames {
+		svc := manifest.Services[name]
 		if !svc.Enabled {
 			continue
 		}
@@ -406,4 +412,38 @@ func geoIPTargetHosts(manifest *inventory.Manifest, services []string) ([]string
 	}
 	sort.Strings(hosts)
 	return hosts, nil
+}
+
+func geoIPTargetServiceNames(manifest *inventory.Manifest, services []string) ([]string, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("manifest is required")
+	}
+	serviceSet := make(map[string]struct{})
+	for _, serviceName := range services {
+		target := strings.TrimSpace(serviceName)
+		if target == "" {
+			continue
+		}
+		if _, ok := manifest.Services[target]; ok {
+			serviceSet[target] = struct{}{}
+			continue
+		}
+		matched := false
+		for name, svc := range manifest.Services {
+			if serviceDeployMatches(name, svc, target) {
+				serviceSet[name] = struct{}{}
+				matched = true
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("geoip target service %q not found in manifest services", target)
+		}
+	}
+
+	names := make([]string, 0, len(serviceSet))
+	for name := range serviceSet {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
