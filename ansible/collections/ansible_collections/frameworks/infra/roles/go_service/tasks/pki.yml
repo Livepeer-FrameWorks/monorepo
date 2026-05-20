@@ -59,9 +59,14 @@
 
 - name: Check existing internal gRPC certificate/key pair
   ansible.builtin.shell: |
-    set -eu
-    cert_hash="$(openssl x509 -in {{ go_service_internal_tls_cert_path | quote }} -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
-    key_hash="$(openssl pkey -in {{ go_service_internal_tls_key_path | quote }} -pubout -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    set -euo pipefail
+    cert_hash="$(openssl x509 -in {{ go_service_internal_tls_cert_path | quote }} -pubkey -noout 2>/dev/null \
+      | openssl pkey -pubin -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
+    key_hash="$(openssl pkey -in {{ go_service_internal_tls_key_path | quote }} -pubout -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
     test -n "$cert_hash"
     test "$cert_hash" = "$key_hash"
   args:
@@ -140,12 +145,17 @@
     install -d -o privateer -g {{ go_service_group | quote }} -m 2750 "$cert_dir"
     (
       flock -x 9
-      install -o privateer -g {{ go_service_group | quote }} -m 0644 {{ go_service_internal_tls_temp_cert.path | quote }} {{ go_service_internal_tls_cert_path | quote }}
-      install -o privateer -g {{ go_service_group | quote }} -m 0640 {{ go_service_internal_tls_temp_key.path | quote }} {{ go_service_internal_tls_key_path | quote }}
+      install -o privateer -g {{ go_service_group | quote }} -m 0644 \
+        {{ go_service_internal_tls_temp_cert.path | quote }} \
+        {{ go_service_internal_tls_cert_path | quote }}
+      install -o privateer -g {{ go_service_group | quote }} -m 0640 \
+        {{ go_service_internal_tls_temp_key.path | quote }} \
+        {{ go_service_internal_tls_key_path | quote }}
     ) 9>"$lock_path"
     rm -f {{ go_service_internal_tls_temp_cert.path | quote }} {{ go_service_internal_tls_temp_key.path | quote }}
   args:
     executable: /bin/bash
+  changed_when: true
   notify: go_service restart
   when:
     - not ansible_check_mode
@@ -177,9 +187,14 @@
 
 - name: Verify internal gRPC certificate/key pair
   ansible.builtin.shell: |
-    set -eu
-    cert_hash="$(openssl x509 -in {{ go_service_env.GRPC_TLS_CERT_PATH | quote }} -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
-    key_hash="$(openssl pkey -in {{ go_service_env.GRPC_TLS_KEY_PATH | quote }} -pubout -outform der 2>/dev/null | sha256sum | awk '{print $1}')"
+    set -euo pipefail
+    cert_hash="$(openssl x509 -in {{ go_service_env.GRPC_TLS_CERT_PATH | quote }} -pubkey -noout 2>/dev/null \
+      | openssl pkey -pubin -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
+    key_hash="$(openssl pkey -in {{ go_service_env.GRPC_TLS_KEY_PATH | quote }} -pubout -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
     test -n "$cert_hash"
     test "$cert_hash" = "$key_hash"
   args:
