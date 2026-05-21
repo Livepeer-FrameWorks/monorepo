@@ -14,9 +14,13 @@ import (
 // postgresRoleVars turns the manifest shape into the variable surface the
 // frameworks.infra.postgres role (wrapping geerlingguy.postgresql) expects.
 func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	version := postgresMajorVersion(firstNonEmpty(config.Version, metaString(config.Metadata, "version")))
+	resolvedVersion, err := infrastructureVersion("postgresql", config)
+	if err != nil {
+		return nil, fmt.Errorf("resolve postgresql version: %w", err)
+	}
+	version := postgresMajorVersion(firstNonEmpty(resolvedVersion, metaString(config.Metadata, "version")))
 	if version == "" {
-		version = "16"
+		return nil, fmt.Errorf("postgres: release manifest has no postgresql version")
 	}
 	port := config.Port
 	if port == 0 {
@@ -49,6 +53,7 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
 		list := make([]map[string]any, 0, len(dbs))
+		needsPGVector := false
 		for _, db := range dbs {
 			name := db["name"]
 			entry := map[string]any{"name": name}
@@ -59,11 +64,15 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 				entry["password"] = password
 			}
 			if name == "chatwoot" {
-				entry["extensions"] = []string{"pg_stat_statements"}
+				entry["extensions"] = []string{"pg_stat_statements", "vector"}
+				needsPGVector = true
 			}
 			list = append(list, entry)
 		}
 		vars["postgres_databases"] = list
+		if needsPGVector {
+			vars["postgres_pgvector_enabled"] = true
+		}
 	}
 	if items, ok := config.Metadata["postgres_seed_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["postgres_seed_items"] = items

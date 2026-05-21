@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -55,5 +56,28 @@ infrastructure:
 	}
 	if got := vars["chatwoot_image"]; got != "chatwoot/chatwoot:v4.13.0@sha256:chatwootdigest" {
 		t.Fatalf("chatwoot_image = %v", got)
+	}
+}
+
+func TestChatwootComposePrecreatesSettingsColumnBeforeV4Migration(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/chatwoot/templates/compose.yml.j2")
+	for _, want := range []string{
+		`ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS settings jsonb DEFAULT ''{}''::jsonb`,
+		`INSERT INTO public.schema_migrations (version) VALUES (''20250421082927'') ON CONFLICT DO NOTHING`,
+		`to_regclass('public.accounts') IS NOT NULL`,
+		`to_regclass('public.schema_migrations') IS NOT NULL`,
+		`information_schema.columns`,
+		"bundle exec rails db:chatwoot_prepare",
+		`\gexec`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("chatwoot compose should precreate settings before v4 migration; missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Index(content, "ADD COLUMN IF NOT EXISTS settings") > strings.Index(content, "bundle exec rails db:chatwoot_prepare") {
+		t.Fatalf("chatwoot settings preflight must run before db:chatwoot_prepare:\n%s", content)
+	}
+	if strings.Index(content, "20250421082927") > strings.Index(content, "bundle exec rails db:chatwoot_prepare") {
+		t.Fatalf("chatwoot settings migration must be recorded before db:chatwoot_prepare:\n%s", content)
 	}
 }

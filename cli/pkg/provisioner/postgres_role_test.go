@@ -73,6 +73,48 @@ func TestPostgresRoleCreatesRequestedDatabaseExtensions(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleInstallsPGVectorFromAUROnArch(t *testing.T) {
+	defaults := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/defaults/main.yml")
+	for _, want := range []string{
+		"postgres_extension_packages_by_family:",
+		`"postgresql-{{ postgres_version }}-pgvector"`,
+		"postgres_pgvector_aur_package: pgvector",
+		"postgres_pgvector_aur_repo: https://aur.archlinux.org/pgvector.git",
+		"postgres_pgvector_arch_build_packages:",
+	} {
+		if !strings.Contains(defaults, want) {
+			t.Fatalf("postgres defaults should define pgvector install inputs; missing %q:\n%s", want, defaults)
+		}
+	}
+	fakeArchPackage := "postgresql-" + "pgvector"
+	if strings.Contains(defaults, fakeArchPackage) {
+		t.Fatalf("postgres defaults should not use the fake Arch package name %s:\n%s", fakeArchPackage, defaults)
+	}
+
+	install := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/install.yml")
+	for _, want := range []string{
+		"Postgres | install extension packages",
+		"frameworks_postgres_extension_packages",
+		"postgres_extension_packages_by_family[ansible_facts.os_family]",
+		"Postgres | check Arch pgvector AUR package state",
+		"pacman -Q {{ postgres_pgvector_aur_package }}",
+		"Postgres | fetch pgvector AUR package recipe",
+		"Postgres | build pgvector AUR package",
+		"Postgres | install built pgvector package",
+		"makepkg --noconfirm --cleanbuild --force",
+		`repo: "{{ postgres_pgvector_aur_repo }}"`,
+		`ansible_facts.os_family == "Archlinux"`,
+		"frameworks_postgres_pgvector_installed.rc != 0",
+	} {
+		if !strings.Contains(install, want) {
+			t.Fatalf("postgres install should install pgvector via distro-appropriate path; missing %q:\n%s", want, install)
+		}
+	}
+	if strings.Contains(install, fakeArchPackage) {
+		t.Fatalf("postgres install should not call pacman with fake package %s:\n%s", fakeArchPackage, install)
+	}
+}
+
 func TestPostgresRoleCreatesOwnerRolesWithPerDatabasePassword(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/init.yml")
 	want := `password: "{{ item.password | default(postgres_admin_password) }}"`
@@ -84,6 +126,7 @@ func TestPostgresRoleCreatesOwnerRolesWithPerDatabasePassword(t *testing.T) {
 func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		DeployName: "postgres-support",
+		Version:    "18.4",
 		Port:       5432,
 		Metadata: map[string]any{
 			"postgres_password": "secret",
@@ -112,8 +155,35 @@ func TestPostgresRoleVarsUsesMajorPackageVersion(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleVarsResolvesVersionFromReleaseManifest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: postgresql
+    version: "18.4"
+    image: pgvector/pgvector:pg18
+    digest: sha256:pgdigest
+`)
+
+	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "stable",
+		Metadata: map[string]any{
+			"postgres_password": "secret",
+			"gitops_repository": repo,
+			"platform_channel":  "stable",
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("postgresRoleVars: %v", err)
+	}
+	if got := vars["postgres_version"]; got != "18" {
+		t.Fatalf("postgres_version = %v, want 18", got)
+	}
+}
+
 func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
 		Metadata: map[string]any{
 			"postgres_password": "secret",
 			"databases": []map[string]string{
@@ -129,13 +199,17 @@ func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
 		t.Fatalf("postgres_databases = %#v, want one database", vars["postgres_databases"])
 	}
 	extensions, ok := dbs[0]["extensions"].([]string)
-	if !ok || len(extensions) != 1 || extensions[0] != "pg_stat_statements" {
-		t.Fatalf("chatwoot extensions = %#v, want [pg_stat_statements]", dbs[0]["extensions"])
+	if !ok || len(extensions) != 2 || extensions[0] != "pg_stat_statements" || extensions[1] != "vector" {
+		t.Fatalf("chatwoot extensions = %#v, want [pg_stat_statements vector]", dbs[0]["extensions"])
+	}
+	if got := vars["postgres_pgvector_enabled"]; got != true {
+		t.Fatalf("postgres_pgvector_enabled = %v, want true", got)
 	}
 }
 
 func TestPostgresRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
 		Metadata: map[string]any{
 			"postgres_password": "admin-secret",
 			"databases": []map[string]string{

@@ -11,6 +11,26 @@ services:
           echo "Waiting for Redis at ${REDIS_URL}"
           sleep 2
         done
+        PGPASSWORD="${POSTGRES_PASSWORD}" psql -v ON_ERROR_STOP=1 \
+          -h "${POSTGRES_HOST}" \
+          -p "${POSTGRES_PORT}" \
+          -U "${POSTGRES_USERNAME}" \
+          -d "${POSTGRES_DATABASE}" <<'SQL'
+        SELECT 'ALTER TABLE public.accounts ADD COLUMN IF NOT EXISTS settings jsonb DEFAULT ''{}''::jsonb'
+        WHERE to_regclass('public.accounts') IS NOT NULL
+        \gexec
+        SELECT 'INSERT INTO public.schema_migrations (version) VALUES (''20250421082927'') ON CONFLICT DO NOTHING'
+        WHERE to_regclass('public.accounts') IS NOT NULL
+          AND to_regclass('public.schema_migrations') IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'accounts'
+              AND column_name = 'settings'
+          )
+        \gexec
+        SQL
         bundle exec rails db:chatwoot_prepare
         bundle exec rails runner "Redis::Alfred.set(Redis::Alfred::CHATWOOT_INSTALLATION_ONBOARDING, true) if User.count.zero? && Account.count.zero?"
         exec bundle exec rails s -p 3000 -b '0.0.0.0'

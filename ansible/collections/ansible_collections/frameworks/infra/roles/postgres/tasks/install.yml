@@ -96,6 +96,106 @@
       - name: Postgres
         password: "{{ postgres_admin_password }}"
 
+- name: Postgres | compute extension package list
+  ansible.builtin.set_fact:
+    frameworks_postgres_extension_packages: "{{ postgres_extension_packages_by_family[ansible_facts.os_family] | default([]) }}"
+
+- name: Postgres | install extension packages
+  ansible.builtin.package:
+    name: "{{ frameworks_postgres_extension_packages }}"
+    state: present
+  when: frameworks_postgres_extension_packages | length > 0
+
+- name: Postgres | check Arch pgvector AUR package state
+  ansible.builtin.command:
+    cmd: "pacman -Q {{ postgres_pgvector_aur_package }}"
+  register: frameworks_postgres_pgvector_installed
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+
+- name: Postgres | install Arch build dependencies for pgvector
+  community.general.pacman:
+    name: "{{ postgres_pgvector_arch_build_packages }}"
+    state: present
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | ensure AUR build user exists for pgvector
+  ansible.builtin.user:
+    name: "{{ postgres_pgvector_aur_build_user }}"
+    home: /var/lib/frameworks-aur
+    shell: /bin/bash
+    create_home: true
+    system: true
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | ensure AUR build directory parent exists for pgvector
+  ansible.builtin.file:
+    path: "{{ postgres_pgvector_aur_build_dir | dirname }}"
+    state: directory
+    owner: "{{ postgres_pgvector_aur_build_user }}"
+    group: "{{ postgres_pgvector_aur_build_user }}"
+    mode: "0755"
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | fetch pgvector AUR package recipe
+  ansible.builtin.git:
+    repo: "{{ postgres_pgvector_aur_repo }}"
+    dest: "{{ postgres_pgvector_aur_build_dir }}"
+    version: master
+    update: true
+  become: true
+  become_user: "{{ postgres_pgvector_aur_build_user }}"
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | build pgvector AUR package
+  ansible.builtin.command:
+    cmd: makepkg --noconfirm --cleanbuild --force
+    chdir: "{{ postgres_pgvector_aur_build_dir }}"
+  become: true
+  become_user: "{{ postgres_pgvector_aur_build_user }}"
+  register: frameworks_postgres_pgvector_makepkg
+  changed_when: "'Finished making:' in frameworks_postgres_pgvector_makepkg.stdout"
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | find built pgvector package
+  ansible.builtin.find:
+    paths: "{{ postgres_pgvector_aur_build_dir }}"
+    patterns: "{{ postgres_pgvector_aur_package }}-*.pkg.tar.zst"
+    file_type: file
+  register: frameworks_postgres_pgvector_packages
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+
+- name: Postgres | install built pgvector package
+  community.general.pacman:
+    name: "{{ (frameworks_postgres_pgvector_packages.files | sort(attribute='mtime') | last).path }}"
+    state: present
+  when:
+    - ansible_facts.os_family == "Archlinux"
+    - postgres_pgvector_enabled | bool
+    - frameworks_postgres_pgvector_installed.rc != 0
+    - frameworks_postgres_pgvector_packages.matched | int > 0
+
 - name: Enforce postgres superuser password (rotation-safe)
   community.postgresql.postgresql_user:
     name: postgres

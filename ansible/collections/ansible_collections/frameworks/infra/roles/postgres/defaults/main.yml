@@ -24,6 +24,22 @@ postgres_admin_password: ""
 # defaults to the database name; role resolution handles that downstream.
 postgres_databases: []
 
+postgres_extension_packages_by_family:
+  Debian:
+    - "postgresql-{{ postgres_version }}-pgvector"
+
+postgres_pgvector_enabled: false
+postgres_pgvector_aur_package: pgvector
+postgres_pgvector_aur_repo: https://aur.archlinux.org/pgvector.git
+postgres_pgvector_aur_build_user: frameworks-aur
+postgres_pgvector_aur_build_dir: "/var/cache/frameworks/aur/{{ postgres_pgvector_aur_package }}"
+postgres_pgvector_arch_build_packages:
+  - base-devel
+  - git
+  - clang
+  - llvm
+  - compiler-rt
+
 # pg_hba entries rendered into Postgres's client auth file. Defaults allow
 # local peer auth for the postgres superuser plus scram-sha-256 password auth
 # from loopback and Docker bridge networks used by colocated compose apps.
