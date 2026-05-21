@@ -232,11 +232,15 @@ var prepaidAllowlist = map[string]bool{
 	"mcp:resources/read:billing://transactions": true,
 
 	// Account essentials (must be able to see/manage account)
-	"me":            true,
-	"logout":        true,
-	"tenant":        true,
-	"linkEmail":     true,
-	"promoteToPaid": true,
+	"me":                        true,
+	"logout":                    true,
+	"tenant":                    true,
+	"linkEmail":                 true,
+	"promoteToPaid":             true,
+	"developerTokensConnection": true,
+	"createDeveloperToken":      true,
+	"revokeDeveloperToken":      true,
+	"CreateAPIToken":            true,
 
 	// Introspection (for tooling)
 	"__schema": true,

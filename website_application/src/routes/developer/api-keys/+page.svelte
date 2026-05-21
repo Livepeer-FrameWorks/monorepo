@@ -81,6 +81,11 @@
         },
       });
 
+      if (result.errors?.length) {
+        toast.error(result.errors[0]?.message || "Failed to create token");
+        return;
+      }
+
       const data = result.data?.createDeveloperToken;
       if (data && data.__typename === "DeveloperToken") {
         newlyCreatedToken = {

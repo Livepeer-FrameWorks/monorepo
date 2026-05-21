@@ -236,15 +236,19 @@ func TestEvaluateAccessPrepaidAllowlistBypassesBalance(t *testing.T) {
 	getLimits := func(string) (int, int) { return 5, 1 }
 	billing := fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}
 
-	decision := EvaluateAccess(context.Background(), AccessRequest{
-		TenantID:      "tenant-1",
-		ClientIP:      "10.0.0.1",
-		Path:          "/graphql",
-		OperationName: "billingStatus",
-	}, rl, getLimits, billing, nil, nil, nil, nil)
+	for _, operation := range []string{"billingStatus", "createDeveloperToken", "developerTokensConnection", "CreateAPIToken"} {
+		t.Run(operation, func(t *testing.T) {
+			decision := EvaluateAccess(context.Background(), AccessRequest{
+				TenantID:      "tenant-1",
+				ClientIP:      "10.0.0.1",
+				Path:          "/graphql",
+				OperationName: operation,
+			}, rl, getLimits, billing, nil, nil, nil, nil)
 
-	if !decision.Allowed {
-		t.Fatalf("expected allowlisted prepaid request to be allowed, got status %d", decision.Status)
+			if !decision.Allowed {
+				t.Fatalf("expected allowlisted prepaid request to be allowed, got status %d", decision.Status)
+			}
+		})
 	}
 }
 

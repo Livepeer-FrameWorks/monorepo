@@ -1,5 +1,5 @@
 import { HoudiniClient, type ClientPlugin } from "$houdini";
-import { subscription } from "$houdini/plugins";
+import { fetch as houdiniFetch, subscription, type RequestHandlerArgs } from "$houdini/plugins";
 import { createClient } from "graphql-ws";
 import { browser } from "$app/environment";
 
@@ -11,6 +11,72 @@ type Session = {
   token: string | null;
   tenantId: string | null;
 };
+
+type X402ResponseBody = {
+  accepts?: unknown;
+  code?: string;
+  error?: string;
+  message?: string;
+  operation?: string;
+  topup_url?: string;
+  x402Version?: number;
+};
+
+async function graphQLFetch({ fetch, name, text, variables, session }: RequestHandlerArgs) {
+  const sess = session as Session | null;
+  const headers: Record<string, string> = {
+    Accept: "application/graphql+json, application/json",
+    "Content-Type": "application/json",
+  };
+
+  if (!browser && sess?.token) {
+    headers["Authorization"] = `Bearer ${sess.token}`;
+  }
+  if (!browser && sess?.tenantId) {
+    headers["X-Tenant-ID"] = sess.tenantId;
+  }
+
+  const response = await fetch(GRAPHQL_HTTP_URL, {
+    method: "POST",
+    credentials: "include",
+    headers,
+    body: JSON.stringify({ operationName: name, query: text, variables }),
+  });
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const isJSON =
+    contentType.startsWith("application/json") ||
+    contentType.startsWith("application/graphql+json");
+
+  if (!isJSON) {
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch: server returned invalid response with error ${response.status}: ${response.statusText}`
+      );
+    }
+    return response.json();
+  }
+
+  const payload = await response.json();
+
+  if (response.status === 402) {
+    const body = payload as X402ResponseBody;
+    return {
+      data: null,
+      errors: [
+        {
+          message: body.message || "Payment required",
+        },
+      ],
+    };
+  }
+
+  if (!response.ok && !("errors" in payload)) {
+    throw new Error(`Failed to fetch: server returned ${response.status}: ${response.statusText}`);
+  }
+
+  return payload;
+}
 
 export default new HoudiniClient({
   url: GRAPHQL_HTTP_URL,
@@ -92,6 +158,7 @@ export default new HoudiniClient({
             },
           });
         }) as ClientPlugin,
+        houdiniFetch(graphQLFetch) as ClientPlugin,
       ]
     : [],
 });
