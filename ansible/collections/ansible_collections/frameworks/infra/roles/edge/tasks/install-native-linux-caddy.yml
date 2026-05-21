@@ -29,6 +29,53 @@
     - { path: "{{ edge_cert_dir }}/bundles", owner: frameworks, group: caddy, mode: "2770" }
     - { path: "{{ edge_conf_dir }}/pki", owner: frameworks, group: frameworks, mode: "0750" }
 
+- name: Check ConfigSeed gRPC CA bundle
+  ansible.builtin.stat:
+    path: "{{ edge_ca_path }}"
+  register: edge_grpc_ca_bundle_stat
+
+- name: Repair ConfigSeed gRPC CA bundle ownership
+  ansible.builtin.file:
+    path: "{{ edge_ca_path }}"
+    owner: frameworks
+    group: frameworks
+    mode: "0644"
+  when: edge_grpc_ca_bundle_stat.stat.exists
+
+- name: Find ConfigSeed TLS bundle certs
+  ansible.builtin.find:
+    paths: "{{ edge_cert_dir }}/bundles"
+    patterns: "*.crt"
+    file_type: file
+  register: edge_tls_bundle_certs
+
+- name: Repair ConfigSeed TLS bundle cert permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: frameworks
+    group: caddy
+    mode: "0644"
+  loop: "{{ edge_tls_bundle_certs.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Find ConfigSeed TLS bundle keys
+  ansible.builtin.find:
+    paths: "{{ edge_cert_dir }}/bundles"
+    patterns: "*.key"
+    file_type: file
+  register: edge_tls_bundle_keys
+
+- name: Repair ConfigSeed TLS bundle key permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: frameworks
+    group: caddy
+    mode: "0640"
+  loop: "{{ edge_tls_bundle_keys.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 - name: Ensure caddy directories
   ansible.builtin.file:
     path: "{{ item.path }}"

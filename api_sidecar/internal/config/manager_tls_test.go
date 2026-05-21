@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -200,6 +202,36 @@ func TestCaddyfileAdminAddrKeepsUnixSocket(t *testing.T) {
 	t.Setenv("CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
 	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock" {
 		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock", got)
+	}
+}
+
+func TestReloadCaddyAcceptsEmptyOKResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/load" {
+			t.Fatalf("path = %s, want /load", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	m := &Manager{logger: logging.NewLogger()}
+	if !m.reloadCaddy([]byte("edge.example { respond ok }")) {
+		t.Fatal("reloadCaddy returned false for empty 200 response")
+	}
+}
+
+func TestReloadCaddyRejectsErrorBodyOnOKResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("loading config: permission denied"))
+	}))
+	defer srv.Close()
+
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	m := &Manager{logger: logging.NewLogger()}
+	if m.reloadCaddy([]byte("edge.example { respond ok }")) {
+		t.Fatal("reloadCaddy returned true for 200 response with error body")
 	}
 }
 

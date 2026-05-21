@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -160,8 +161,14 @@ func (m *Manager) reconcile() {
 	caddyReloadOK := true
 	if site := seed.GetSite(); site != nil || len(seed.GetTlsBundles()) > 0 {
 		caddyReloadOK = m.activateCaddy(seed, certChanged)
+		if !caddyReloadOK {
+			m.scheduleRetry()
+		}
 	} else if certChanged {
 		caddyReloadOK = m.reloadCaddy(nil)
+		if !caddyReloadOK {
+			m.scheduleRetry()
+		}
 	}
 
 	// Send ConfigSeedApplyResult ACK when this seed carries the
@@ -434,10 +441,18 @@ func (m *Manager) applyCABundle(bundle []byte) bool {
 	if existing, err := os.ReadFile(caPath); err == nil && bytes.Equal(existing, bundle) {
 		return false
 	}
-	if err := os.WriteFile(caPath, bundle, 0o600); err != nil {
-		m.logger.WithError(err).Warn("Failed to write gRPC CA bundle")
+
+	caTmp, err := writeManagedFileTemp(caPath, bundle, 0o644)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to stage gRPC CA bundle")
 		return false
 	}
+	defer func() { removeIfNotEmpty(caTmp) }()
+	if err := os.Rename(caTmp, caPath); err != nil {
+		m.logger.WithError(err).Warn("Failed to install gRPC CA bundle")
+		return false
+	}
+	caTmp = ""
 	m.logger.WithField("path", caPath).Info("Applied gRPC CA bundle from ConfigSeed")
 	return true
 }
@@ -781,6 +796,7 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 	}
 	if site := seed.GetSite(); site != nil {
 		params.AcmeEmail = site.GetAcmeEmail()
+		params.EdgeDomain = site.GetEdgeDomain()
 	}
 	// Strip http:// prefix for Caddy reverse_proxy upstream
 	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
@@ -923,13 +939,27 @@ func (m *Manager) reloadCaddy(content []byte) bool {
 		return false
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		m.logger.Info("Caddy configuration reloaded")
-		return true
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		m.logger.WithError(readErr).Warn("Failed to read Caddy reload response body")
+		return false
 	}
-	m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
-	return false
+	bodyText := strings.TrimSpace(string(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		fields := logging.Fields{"status": resp.StatusCode}
+		if bodyText != "" {
+			fields["response"] = bodyText
+		}
+		m.logger.WithFields(fields).Warn("Caddy reload returned non-200")
+		return false
+	}
+	if bodyText != "" {
+		m.logger.WithField("response", bodyText).Warn("Caddy reload returned an error body")
+		return false
+	}
+	m.logger.Info("Caddy configuration reloaded")
+	return true
 }
 
 func (m *Manager) ensureProtocols(current map[string]any) error {
