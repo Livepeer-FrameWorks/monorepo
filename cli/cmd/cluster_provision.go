@@ -5942,11 +5942,36 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	if owner != "" {
 		env["DATABASE_USER"] = owner
 	}
-	if password := strings.TrimSpace(env[prefix+"_PASSWORD"]); password != "" {
-		env["DATABASE_PASSWORD"] = password
-	} else if password := strings.TrimSpace(inst.Password); password != "" {
+	for _, key := range declaredPostgresPasswordEnvKeys(prefix, db.Name, owner) {
+		if password := strings.TrimSpace(env[key]); password != "" {
+			env["DATABASE_PASSWORD"] = password
+			return
+		}
+	}
+	if password := strings.TrimSpace(inst.Password); password != "" {
 		env["DATABASE_PASSWORD"] = password
 	}
+}
+
+func declaredPostgresPasswordEnvKeys(instancePrefix, dbName, owner string) []string {
+	keys := []string{}
+	seen := map[string]struct{}{}
+	for _, prefix := range []string{
+		"POSTGRES_" + envNameToken(dbName),
+		"POSTGRES_" + envNameToken(owner),
+		instancePrefix,
+	} {
+		if prefix == "POSTGRES_" {
+			continue
+		}
+		key := prefix + "_PASSWORD"
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func declaredPostgresDatabaseForService(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) (*inventory.PostgresInstance, inventory.DatabaseConfig, bool) {

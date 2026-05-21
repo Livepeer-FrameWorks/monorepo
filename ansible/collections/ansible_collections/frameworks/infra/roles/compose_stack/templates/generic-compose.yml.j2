@@ -3,6 +3,16 @@ services:
     image: {{ compose_stack_service.image }}
     container_name: frameworks-{{ compose_stack_name }}
     restart: always
+{% if compose_stack_env | default({}) | length > 0 %}
+    env_file:
+      - .env
+{% endif %}
+{% if compose_stack_service.extra_hosts | default([]) | length > 0 %}
+    extra_hosts:
+{% for extra_host in compose_stack_service.extra_hosts %}
+      - "{{ extra_host }}"
+{% endfor %}
+{% endif %}
 {% if compose_stack_service.port | default(0) | int > 0 %}
 {% set container_port = compose_stack_service.container_port | default(compose_stack_service.port) %}
     ports:

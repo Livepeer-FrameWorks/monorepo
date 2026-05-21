@@ -152,11 +152,19 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	envMap := buildServiceEnvMap(config)
 	composeFiles := map[string]string{}
 	composeVolumes := []string{}
+	composeExtraHosts := []string{}
 	if cfg.ServiceName == "skipper" {
 		var err error
 		composeFiles, composeVolumes, err = skipperComposeSourceFiles(envMap)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if cfg.ServiceName == "metabase" {
+		applyMetabaseComposeDefaults(envMap)
+		composeVolumes = append(composeVolumes, "./metabase-data:/metabase-data")
+		if metabaseUsesDockerHostGateway(envMap) {
+			composeExtraHosts = append(composeExtraHosts, "host.docker.internal:host-gateway")
 		}
 	}
 	envAny := make(map[string]any, len(envMap))
@@ -179,10 +187,36 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			"container_port": containerPort,
 			"health_path":    healthPath,
 			"volumes":        composeVolumes,
+			"extra_hosts":    composeExtraHosts,
 		},
 		"compose_stack_env":                    envAny,
 		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
 	}, nil
+}
+
+func applyMetabaseComposeDefaults(env map[string]string) {
+	if env["MB_DB_TYPE"] == "" {
+		env["MB_DB_TYPE"] = "postgres"
+	}
+	if env["MB_DB_HOST"] == "" {
+		env["MB_DB_HOST"] = rewriteLoopbackForDockerHost(firstNonEmpty(env["DATABASE_HOST"], "127.0.0.1"))
+	}
+	if env["MB_DB_PORT"] == "" {
+		env["MB_DB_PORT"] = firstNonEmpty(env["DATABASE_PORT"], "5432")
+	}
+	if env["MB_DB_DBNAME"] == "" {
+		env["MB_DB_DBNAME"] = firstNonEmpty(env["DATABASE_NAME"], "metabase")
+	}
+	if env["MB_DB_USER"] == "" {
+		env["MB_DB_USER"] = firstNonEmpty(env["DATABASE_USER"], "metabase")
+	}
+	if env["MB_DB_PASS"] == "" {
+		env["MB_DB_PASS"] = env["DATABASE_PASSWORD"]
+	}
+}
+
+func metabaseUsesDockerHostGateway(env map[string]string) bool {
+	return env["MB_DB_HOST"] == "host.docker.internal" || strings.HasPrefix(env["MB_DB_HOST"], "host.docker.internal:")
 }
 
 func composeRegistryAuthFromEnv(env map[string]string, image string) map[string]any {

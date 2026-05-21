@@ -82,6 +82,52 @@ func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) 
 	}
 }
 
+func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:   "metabase",
+		DefaultPort:   3001,
+		ContainerPort: 3000,
+		HealthPath:    "/api/health",
+		DefaultImage:  "metabase/metabase:v0.59.1",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode: "docker",
+		EnvVars: map[string]string{
+			"DATABASE_HOST":     "127.0.0.1",
+			"DATABASE_PORT":     "5432",
+			"DATABASE_NAME":     "metabase",
+			"DATABASE_USER":     "metabase",
+			"DATABASE_PASSWORD": "metabase-secret",
+		},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	env, ok := vars["compose_stack_env"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_env got %T, want map[string]any", vars["compose_stack_env"])
+	}
+	for key, want := range map[string]any{
+		"MB_DB_TYPE":   "postgres",
+		"MB_DB_HOST":   "host.docker.internal",
+		"MB_DB_PORT":   "5432",
+		"MB_DB_DBNAME": "metabase",
+		"MB_DB_USER":   "metabase",
+		"MB_DB_PASS":   "metabase-secret",
+	} {
+		if got := env[key]; got != want {
+			t.Fatalf("%s got %v, want %v", key, got, want)
+		}
+	}
+	service, ok := vars["compose_stack_service"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
+	}
+	assertStringSlice(t, service["volumes"], []string{"./metabase-data:/metabase-data"})
+	assertStringSlice(t, service["extra_hosts"], []string{"host.docker.internal:host-gateway"})
+}
+
 func TestServiceComposeVarsPassesRegistryAuthForGHCRImages(t *testing.T) {
 	clearRegistryAuthEnv(t)
 

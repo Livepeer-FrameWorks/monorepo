@@ -1670,6 +1670,62 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 	}
 }
 
+func TestBuildServiceEnvVarsPrefersDeclaredDatabasePassword(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Instances: []inventory.PostgresInstance{
+					{
+						Name: "support",
+						Host: "central-eu-1",
+						Port: 5432,
+						Databases: []inventory.DatabaseConfig{
+							{Name: "metabase", Owner: "metabase"},
+						},
+					},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"metabase": {
+				Enabled: true,
+				Mode:    "docker",
+				Host:    "central-eu-1",
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "metabase@central-eu-1",
+		Type:      "metabase",
+		ServiceID: "metabase",
+		Host:      "central-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "", map[string]string{
+		"POSTGRES_SUPPORT_PASSWORD":  "support-secret",
+		"POSTGRES_METABASE_PASSWORD": "metabase-secret",
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["DATABASE_HOST"]; got != "127.0.0.1" {
+		t.Fatalf("DATABASE_HOST = %q, want 127.0.0.1", got)
+	}
+	if got := env["DATABASE_PASSWORD"]; got != "metabase-secret" {
+		t.Fatalf("DATABASE_PASSWORD = %q, want metabase-secret", got)
+	}
+	if !strings.Contains(env["DATABASE_URL"], "metabase:metabase-secret@127.0.0.1:5432/metabase") {
+		t.Fatalf("DATABASE_URL did not use declared database credentials: %q", env["DATABASE_URL"])
+	}
+}
+
 func TestYugabyteDatabaseMetadataUsesClusterPasswordForServiceDatabase(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Services: map[string]inventory.ServiceConfig{
