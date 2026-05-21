@@ -97,6 +97,21 @@ func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	}
 }
 
+func TestPostgresRoleVarsUsesMajorPackageVersion(t *testing.T) {
+	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
+		Metadata: map[string]any{
+			"postgres_password": "secret",
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("postgresRoleVars: %v", err)
+	}
+	if got := vars["postgres_version"]; got != "18" {
+		t.Fatalf("postgres_version = %v, want 18", got)
+	}
+}
+
 func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		Metadata: map[string]any{

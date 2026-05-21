@@ -194,6 +194,21 @@ func TestRenderCaddyfileSupportsTLSAndPathPrefixes(t *testing.T) {
 	}
 }
 
+func TestRenderCaddyfileRewritesHostForHTTPSUpstreams(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains:  []string{"secure.example.com"},
+		Upstream: "https://127.0.0.1:18443",
+	}})
+	for _, want := range []string{
+		"reverse_proxy https://127.0.0.1:18443 {",
+		"header_up Host {upstream_hostport}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Caddyfile missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestNativeNginxTemplatesOwnRootConfigAndRouteProfiles(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/frameworks.conf.j2")
 	for _, want := range []string{

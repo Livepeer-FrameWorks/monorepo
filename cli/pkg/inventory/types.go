@@ -194,7 +194,6 @@ type WireGuardPeer struct {
 type InfrastructureConfig struct {
 	Postgres   *PostgresConfig   `yaml:"postgres,omitempty"`
 	Redis      *RedisConfig      `yaml:"redis,omitempty"`
-	Zookeeper  *ZookeeperConfig  `yaml:"zookeeper,omitempty"`
 	Kafka      *KafkaConfig      `yaml:"kafka,omitempty"`
 	ClickHouse *ClickHouseConfig `yaml:"clickhouse,omitempty"`
 }
@@ -302,21 +301,6 @@ func (pg *PostgresConfig) EffectiveReplicationFactor() int {
 type DatabaseConfig struct {
 	Name  string `yaml:"name"`
 	Owner string `yaml:"owner"`
-}
-
-// ZookeeperConfig represents Zookeeper ensemble configuration
-type ZookeeperConfig struct {
-	Enabled  bool            `yaml:"enabled"`
-	Mode     string          `yaml:"mode"` // native
-	Version  string          `yaml:"version"`
-	Ensemble []ZookeeperNode `yaml:"ensemble,omitempty"`
-}
-
-// ZookeeperNode represents a single Zookeeper node
-type ZookeeperNode struct {
-	Host string `yaml:"host"` // Host name from Hosts map
-	ID   int    `yaml:"id"`
-	Port int    `yaml:"port"`
 }
 
 // KafkaConfig declares a Kafka cluster (KRaft-only, no ZooKeeper). The
@@ -462,23 +446,31 @@ type RedisSentinelNode struct {
 
 // ServiceConfig represents a FrameWorks application or interface service
 type ServiceConfig struct {
-	Enabled   bool              `yaml:"enabled"`
-	Mode      string            `yaml:"mode"` // docker | native
-	Version   string            `yaml:"version"`
-	Image     string            `yaml:"image,omitempty"`      // For docker mode
-	BinaryURL string            `yaml:"binary_url,omitempty"` // For native mode
-	Deploy    string            `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
-	Cluster   string            `yaml:"cluster,omitempty"`    // Explicit cluster assignment (singular shorthand for Clusters[0])
-	Clusters  []string          `yaml:"clusters,omitempty"`   // Logical cluster assignments for cluster-scoped media services (M:N)
-	Host      string            `yaml:"host,omitempty"`       // Single host
-	Hosts     []string          `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
-	Port      int               `yaml:"port,omitempty"`
-	GRPCPort  int               `yaml:"grpc_port,omitempty"`
-	Replicas  int               `yaml:"replicas,omitempty"`
-	EnvFile   string            `yaml:"env_file,omitempty"`
-	DependsOn []string          `yaml:"depends_on,omitempty"`
-	Public    bool              `yaml:"public,omitempty"` // Has public-facing endpoint
-	Config    map[string]string `yaml:"config,omitempty"` // Service-specific config
+	Enabled        bool                  `yaml:"enabled"`
+	Mode           string                `yaml:"mode"` // docker | native
+	Version        string                `yaml:"version"`
+	Image          string                `yaml:"image,omitempty"`      // For docker mode
+	BinaryURL      string                `yaml:"binary_url,omitempty"` // For native mode
+	Deploy         string                `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
+	Cluster        string                `yaml:"cluster,omitempty"`    // Explicit cluster assignment (singular shorthand for Clusters[0])
+	Clusters       []string              `yaml:"clusters,omitempty"`   // Logical cluster assignments for cluster-scoped media services (M:N)
+	Host           string                `yaml:"host,omitempty"`       // Single host
+	Hosts          []string              `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
+	Port           int                   `yaml:"port,omitempty"`
+	GRPCPort       int                   `yaml:"grpc_port,omitempty"`
+	Replicas       int                   `yaml:"replicas,omitempty"`
+	EnvFile        string                `yaml:"env_file,omitempty"`
+	DependsOn      []string              `yaml:"depends_on,omitempty"`
+	Public         bool                  `yaml:"public,omitempty"`          // Has public-facing endpoint
+	Config         map[string]string     `yaml:"config,omitempty"`          // Service-specific config
+	UpdateStrategy *UpdateStrategyConfig `yaml:"update_strategy,omitempty"` // Optional cluster apply rollout override
+}
+
+type UpdateStrategyConfig struct {
+	MaxUnavailable *int  `yaml:"max_unavailable,omitempty"`
+	Canary         *int  `yaml:"canary,omitempty"`
+	RegionStagger  *bool `yaml:"region_stagger,omitempty"`
+	PrimaryLast    *bool `yaml:"primary_last,omitempty"`
 }
 
 // EdgeManifest represents edge node deployment configuration (edges.yaml)

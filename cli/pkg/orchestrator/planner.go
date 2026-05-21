@@ -369,7 +369,7 @@ func (p *Planner) addMeshTasks(graph *DependencyGraph) error {
 	if !ok {
 		return fmt.Errorf("unknown service id: privateer")
 	}
-	privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+	privateerHosts := EffectivePrivateerHostsForManifest(svc, p.manifest)
 	for _, hostName := range privateerHosts {
 		task := NewServiceTask(deploy, "privateer", hostName, hostName, PhaseMesh)
 		task.Name = "privateer-mesh-" + hostName
@@ -388,7 +388,7 @@ func (p *Planner) meshBarrierDeps() []string {
 	if !ok || !svc.Enabled {
 		return nil
 	}
-	privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+	privateerHosts := EffectivePrivateerHostsForManifest(svc, p.manifest)
 	deps := make([]string, 0, len(privateerHosts))
 	for _, h := range privateerHosts {
 		deps = append(deps, "privateer-mesh-"+h)
@@ -476,15 +476,6 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 				}
 				graph.AddTask(sentinel)
 			}
-		}
-	}
-
-	// Add Zookeeper
-	if p.manifest.Infrastructure.Zookeeper != nil && p.manifest.Infrastructure.Zookeeper.Enabled {
-		for _, node := range p.manifest.Infrastructure.Zookeeper.Ensemble {
-			task := NewTask("zookeeper", "zookeeper", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
-			task.DependsOn = withMesh(task.DependsOn)
-			graph.AddTask(task)
 		}
 	}
 
@@ -603,7 +594,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	// current graph.
 	coreDeps := appendIfInGraph(nil, "quartermaster")
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
-		privateerHosts := EffectivePrivateerHosts(svc, p.manifest.Hosts)
+		privateerHosts := EffectivePrivateerHostsForManifest(svc, p.manifest)
 		for _, h := range privateerHosts {
 			coreDeps = appendIfInGraph(coreDeps, "privateer-mesh-"+h)
 		}
@@ -677,15 +668,79 @@ func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inven
 	return result
 }
 
+func EffectivePrivateerHostsForManifest(svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, hostName := range EffectivePrivateerHosts(svc, manifest.Hosts) {
+		if hostName != "" {
+			seen[hostName] = struct{}{}
+		}
+	}
+	if vmagent, ok := manifest.Observability["vmagent"]; ok && vmagent.Enabled {
+		for _, hostName := range EffectiveVMAgentHosts(vmagent, manifest) {
+			if hostName != "" {
+				seen[hostName] = struct{}{}
+			}
+		}
+	}
+	if vmauth, ok := manifest.Observability["vmauth"]; ok && vmauth.Enabled {
+		for _, hostName := range resolveHosts(vmauth) {
+			if hostName != "" {
+				seen[hostName] = struct{}{}
+			}
+		}
+	}
+	if vm, ok := manifest.Observability["victoriametrics"]; ok && vm.Enabled {
+		for _, hostName := range resolveHosts(vm) {
+			if hostName != "" {
+				seen[hostName] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for hostName := range seen {
+		result = append(result, hostName)
+	}
+	sort.Strings(result)
+	return result
+}
+
 // EffectiveVMAgentHosts returns the hosts that should run vmagent.
-// Uses explicit hosts if specified, otherwise all manifest hosts.
-func EffectiveVMAgentHosts(svc inventory.ServiceConfig, hosts map[string]inventory.Host) []string {
+// Uses explicit hosts if specified, otherwise all manifest hosts. Native
+// metrics infrastructure is additive so operators don't have to manually keep
+// vmagent placement in sync with Yugabyte/ClickHouse placement.
+func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
 	explicit := resolveHosts(svc)
 	if len(explicit) > 0 {
-		return explicit
+		for _, name := range explicit {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				seen[name] = struct{}{}
+			}
+		}
+	} else {
+		for name := range manifest.Hosts {
+			seen[name] = struct{}{}
+		}
 	}
-	var result []string
-	for name := range hosts {
+	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+		for _, node := range pg.Nodes {
+			if node.Host != "" {
+				seen[node.Host] = struct{}{}
+			}
+		}
+	}
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host != "" {
+		seen[ch.Host] = struct{}{}
+	}
+	result := make([]string, 0, len(seen))
+	for name := range seen {
 		result = append(result, name)
 	}
 	sort.Strings(result)
@@ -704,7 +759,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 		hosts := resolveHosts(svc)
 		if name == "privateer" && len(hosts) == 0 {
-			hosts = EffectivePrivateerHosts(svc, p.manifest.Hosts)
+			hosts = EffectivePrivateerHostsForManifest(svc, p.manifest)
 		}
 		if len(hosts) > 1 {
 			for _, h := range hosts {
@@ -752,8 +807,8 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		}
 
 		hosts := resolveHosts(obs)
-		if name == "vmagent" && len(hosts) == 0 {
-			hosts = EffectiveVMAgentHosts(obs, p.manifest.Hosts)
+		if name == "vmagent" {
+			hosts = EffectiveVMAgentHosts(obs, p.manifest)
 		}
 		for _, hostName := range hosts {
 			instanceID := ""

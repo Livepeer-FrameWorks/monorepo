@@ -65,7 +65,7 @@ func newClusterProvisionCmd() *cobra.Command {
 		Long: `Provision cluster infrastructure and services from manifest:
 
 Phase Options (--only):
-  infrastructure  - Provision Postgres, Redis, Kafka, Zookeeper, ClickHouse
+  infrastructure  - Provision Postgres, Redis, Kafka, ClickHouse
   applications    - Provision FrameWorks services
   interfaces      - Provision Nginx/Caddy, Chartroom, Foredeck, Logbook
   all             - Provision everything (default)
@@ -193,6 +193,9 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	} else if valErr := credentials.ValidateShared(sharedEnv); valErr != nil {
 		return valErr
 	}
+	if topologyErr := validateEdgeTelemetryTopology(manifest, sharedEnv); topologyErr != nil {
+		return fmt.Errorf("invalid manifest: %w", topologyErr)
+	}
 
 	planner := orchestrator.NewPlanner(manifest)
 	plan, err := planner.Plan(ctx, orchestrator.ProvisionOptions{
@@ -316,7 +319,7 @@ func validateProvisionMeshIdentity(manifest *inventory.Manifest, remediation str
 	if !ok || !svc.Enabled {
 		return nil
 	}
-	hosts := orchestrator.EffectivePrivateerHosts(svc, manifest.Hosts)
+	hosts := orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
 	if err := meshutil.ValidateIdentity(manifest, hosts); err != nil {
 		return fmt.Errorf("%w\n\n%s\nThen commit cluster.yaml and hosts inventory changes before provisioning", err, remediation)
 	}
@@ -547,10 +550,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		return err
 	}
 
-	// Pre-generate edge telemetry keypair so all foghorn/vmauth tasks in
-	// parallel batches share the same key material.
-	if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
-		return fmt.Errorf("pre-generate edge telemetry keypair: %w", err)
+	if edgeTelemetryJWTRequired(manifest) {
+		if err := ensureEdgeTelemetryJWTKeypair(runtimeData, sharedEnv); err != nil {
+			return fmt.Errorf("load edge telemetry jwt keypair: %w", err)
+		}
 	}
 	if pkiRequired := internalPKIBootstrapRequired(manifest); pkiRequired {
 		pki, err := loadInternalPKIBootstrap(sharedEnv, manifestDir)
@@ -794,7 +797,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		if batchContainsPrivateer(batch) && batchNum+1 < len(plan.Batches) {
 			fmt.Fprintln(cmd.OutOrStdout(), "")
 			privateerSvc := manifest.Services["privateer"]
-			meshHosts := orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts)
+			meshHosts := orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)
 			if err := verifyMeshHealth(ctx, cmd, manifest, sshPool, meshHosts); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Mesh verification failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on mesh DNS for discovery.")
@@ -1362,33 +1365,148 @@ func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData m
 	return serviceToken, fmt.Sprintf("%s:%d", host.ExternalIP, grpcPort), nil
 }
 
-func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]any) error {
+func ensureEdgeTelemetryJWTKeypair(runtimeData map[string]any, env map[string]string) error {
 	if runtimeData == nil {
 		return fmt.Errorf("runtime data is nil")
 	}
-	priv, privOK := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string)
-	pub, pubOK := runtimeData["edge_telemetry_jwt_public_key_pem_b64"].(string)
-	if privOK && pubOK && strings.TrimSpace(priv) != "" && strings.TrimSpace(pub) != "" {
-		return nil
+	privateB64 := firstNonEmpty(
+		runtimeString(runtimeData, "edge_telemetry_jwt_private_key_pem_b64"),
+		env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"],
+	)
+	if privateB64 == "" {
+		return fmt.Errorf("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 is required in shared env_files when edge telemetry is enabled")
 	}
+	privateKey, err := parseEdgeTelemetryPrivateKeyB64(privateB64)
+	if err != nil {
+		return fmt.Errorf("parse EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64: %w", err)
+	}
+	publicB64 := firstNonEmpty(
+		runtimeString(runtimeData, "edge_telemetry_jwt_public_key_pem_b64"),
+		env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"],
+		env["VMAUTH_EDGE_JWT_PUBLIC_KEY_PEM_B64"],
+	)
+	if publicB64 != "" {
+		publicKey, parseErr := parseEdgeTelemetryPublicKeyB64(publicB64)
+		if parseErr != nil {
+			return fmt.Errorf("parse edge telemetry public key: %w", parseErr)
+		}
+		if !privateKey.PublicKey.Equal(publicKey) {
+			return fmt.Errorf("edge telemetry public key does not match EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64")
+		}
+	} else {
+		derivedPublicB64, deriveErr := edgeTelemetryPublicKeyB64(privateKey)
+		if deriveErr != nil {
+			return deriveErr
+		}
+		publicB64 = derivedPublicB64
+	}
+	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = strings.TrimSpace(privateB64)
+	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = strings.TrimSpace(publicB64)
+	if env != nil {
+		if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"]) == "" {
+			env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] = strings.TrimSpace(privateB64)
+		}
+		if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
+			env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] = strings.TrimSpace(publicB64)
+		}
+	}
+	return nil
+}
 
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate edge telemetry signing key: %w", err)
+func runtimeString(runtimeData map[string]any, key string) string {
+	if runtimeData == nil {
+		return ""
 	}
-	privateDER, err := x509.MarshalECPrivateKey(privateKey)
+	value, ok := runtimeData[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func parseEdgeTelemetryPrivateKeyB64(value string) (*ecdsa.PrivateKey, error) {
+	keyPEM, err := decodeB64PEM(value, "edge telemetry private key")
 	if err != nil {
-		return fmt.Errorf("marshal edge telemetry private key: %w", err)
+		return nil, err
+	}
+	return parseECPrivateKeyPEM(keyPEM)
+}
+
+func parseEdgeTelemetryPublicKeyB64(value string) (*ecdsa.PublicKey, error) {
+	publicPEM, err := decodeB64PEM(value, "edge telemetry public key")
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode([]byte(publicPEM))
+	if block == nil {
+		return nil, fmt.Errorf("missing pem block")
+	}
+	raw, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	publicKey, ok := raw.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("public key is not ECDSA")
+	}
+	return publicKey, nil
+}
+
+func edgeTelemetryPublicKeyB64(privateKey *ecdsa.PrivateKey) (string, error) {
+	if privateKey == nil {
+		return "", fmt.Errorf("edge telemetry private key is nil")
 	}
 	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		return fmt.Errorf("marshal edge telemetry public key: %w", err)
+		return "", fmt.Errorf("marshal edge telemetry public key: %w", err)
 	}
-
-	privatePEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateDER})
 	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
-	runtimeData["edge_telemetry_jwt_private_key_pem_b64"] = base64.StdEncoding.EncodeToString(privatePEM)
-	runtimeData["edge_telemetry_jwt_public_key_pem_b64"] = base64.StdEncoding.EncodeToString(publicPEM)
+	return base64.StdEncoding.EncodeToString(publicPEM), nil
+}
+
+func edgeTelemetryJWTMaterialPresent(runtimeData map[string]any, env map[string]string) bool {
+	return runtimeString(runtimeData, "edge_telemetry_jwt_private_key_pem_b64") != "" ||
+		runtimeString(runtimeData, "edge_telemetry_jwt_public_key_pem_b64") != "" ||
+		strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"]) != "" ||
+		strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) != "" ||
+		strings.TrimSpace(env["VMAUTH_EDGE_JWT_PUBLIC_KEY_PEM_B64"]) != ""
+}
+
+func edgeTelemetryJWTRequired(manifest *inventory.Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	vmauth, ok := manifest.Observability["vmauth"]
+	if !ok || !vmauth.Enabled {
+		return false
+	}
+	for _, svc := range servicesByDeploy(manifest, "foghorn") {
+		if svc.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func validateEdgeTelemetryTopology(manifest *inventory.Manifest, sharedEnv map[string]string) error {
+	if !edgeTelemetryJWTRequired(manifest) {
+		return nil
+	}
+	if strings.TrimSpace(sharedEnv["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"]) == "" {
+		return fmt.Errorf("edge telemetry requires EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 in shared env_files so Foghorn and vmauth use the same durable signing key")
+	}
+	if err := ensureEdgeTelemetryJWTKeypair(map[string]any{}, sharedEnv); err != nil {
+		return err
+	}
+	vmauthHosts := sortedUniqueStrings(serviceHosts(manifest.Observability["vmauth"]))
+	caddy, ok := manifest.Interfaces["caddy"]
+	if !ok || !caddy.Enabled {
+		return fmt.Errorf("edge telemetry requires caddy to publish telemetry.<cluster> to vmauth")
+	}
+	caddyHosts := sortedUniqueStrings(serviceHosts(caddy))
+	if len(vmauthHosts) == 0 || len(caddyHosts) == 0 || !slices.Equal(vmauthHosts, caddyHosts) {
+		return fmt.Errorf("edge telemetry requires caddy and vmauth to be co-located on the same host set; got caddy=%v vmauth=%v", caddyHosts, vmauthHosts)
+	}
 	return nil
 }
 
@@ -2215,11 +2333,11 @@ func desiredPlacementHosts(manifest *inventory.Manifest, serviceName string, svc
 		return desired
 	}
 	hosts := serviceHosts(svc)
-	if serviceName == "privateer" && len(hosts) == 0 {
-		hosts = orchestrator.EffectivePrivateerHosts(svc, manifest.Hosts)
+	if serviceName == "privateer" {
+		hosts = orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
 	}
-	if serviceName == "vmagent" && len(hosts) == 0 {
-		hosts = orchestrator.EffectiveVMAgentHosts(svc, manifest.Hosts)
+	if serviceName == "vmagent" {
+		hosts = orchestrator.EffectiveVMAgentHosts(svc, manifest)
 	}
 	for _, host := range hosts {
 		host = strings.TrimSpace(host)
@@ -2568,26 +2686,6 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 				}
 			}
-		case "zookeeper":
-			if manifest.Infrastructure.Zookeeper != nil {
-				if manifest.Infrastructure.Zookeeper.Mode != "" {
-					config.Mode = manifest.Infrastructure.Zookeeper.Mode
-				}
-				if manifest.Infrastructure.Zookeeper.Version != "" {
-					config.Version = manifest.Infrastructure.Zookeeper.Version
-				}
-				if nodeConfig := resolveZookeeperNodeByID(task.InstanceID, manifest); nodeConfig != nil {
-					if nodeConfig.Port != 0 {
-						config.Port = nodeConfig.Port
-					}
-					if nodeConfig.ServerID != 0 {
-						config.Metadata["server_id"] = nodeConfig.ServerID
-					}
-					if len(nodeConfig.Servers) > 0 {
-						config.Metadata["servers"] = nodeConfig.Servers
-					}
-				}
-			}
 		case "redis":
 			if manifest.Infrastructure.Redis != nil {
 				if manifest.Infrastructure.Redis.Mode != "" {
@@ -2688,14 +2786,14 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	switch task.Type {
-	case "kafka", "kafka-controller", "yugabyte", "zookeeper", "clickhouse":
+	case "kafka", "kafka-controller", "yugabyte", "clickhouse":
 		if task.Host != "" {
 			config.Metadata["advertised_host"] = manifest.MeshAddress(task.Host)
 		}
 	}
 
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
-	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" && task.Type != "redis" {
+	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "redis" {
 		config.Mode = "native"
 		// Keep manifest-specified version for infra with explicit native version
 		// semantics; only fall back to "latest" for the remaining legacy cases.
@@ -3032,8 +3130,13 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	if manifest == nil || hostName == "" {
 		return nil
 	}
-	metricsCapableServices := map[string]struct{}{
+	type metricsScrapeSpec struct {
+		path string
+		port int
+	}
+	metricsCapableServices := map[string]metricsScrapeSpec{
 		"bridge":           {},
+		"caddy":            {port: 2019},
 		"chandler":         {},
 		"commodore":        {},
 		"deckhand":         {},
@@ -3042,6 +3145,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"helmsman":         {},
 		"livepeer-gateway": {},
 		"livepeer-signer":  {},
+		"mistserver":       {},
 		"navigator":        {},
 		"periscope-ingest": {},
 		"periscope-query":  {},
@@ -3053,21 +3157,44 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"steward":          {},
 		"victoriametrics":  {},
 		"vmagent":          {},
+		"vmauth":           {},
 	}
 
 	type target struct {
-		name   string
-		port   int
-		path   string
-		labels map[string]string
+		name    string
+		address string
+		path    string
+		labels  map[string]string
 	}
 
 	var targets []target
-	addTarget := func(name string, svc inventory.ServiceConfig, source string) {
+	addTarget := func(name, address string, port int, path string, labels map[string]string) {
+		if port == 0 {
+			return
+		}
+		if address == "" {
+			address = "127.0.0.1"
+		}
+		if path == "" {
+			path = "/metrics"
+		}
+		targets = append(targets, target{
+			name:    name,
+			address: fmt.Sprintf("%s:%d", address, port),
+			path:    path,
+			labels:  labels,
+		})
+	}
+	addServiceTarget := func(name string, svc inventory.ServiceConfig, source string) {
 		if !svc.Enabled {
 			return
 		}
-		if _, ok := metricsCapableServices[name]; !ok {
+		serviceID := strings.TrimSpace(svc.Deploy)
+		if serviceID == "" {
+			serviceID = name
+		}
+		spec, ok := metricsCapableServices[serviceID]
+		if !ok {
 			return
 		}
 		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
@@ -3077,33 +3204,61 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		if err != nil || port == 0 {
 			return
 		}
-		path := "/metrics"
-		if name == "victoriametrics" {
-			path = "/metrics"
+		if spec.port != 0 {
+			port = spec.port
 		}
-		targets = append(targets, target{
-			name: name,
-			port: port,
-			path: path,
-			labels: map[string]string{
-				"frameworks_service": name,
-				"frameworks_source":  source,
-				"node_id":            hostName,
-			},
-		})
+		labels := map[string]string{
+			"frameworks_service": serviceID,
+			"frameworks_source":  source,
+			"node_id":            hostName,
+		}
+		if serviceID != name {
+			labels["frameworks_instance"] = name
+		}
+		addTarget(name, "127.0.0.1", port, spec.path, labels)
 	}
 
 	for name, svc := range manifest.Services {
-		addTarget(name, svc, "services")
+		addServiceTarget(name, svc, "services")
 	}
 	for name, svc := range manifest.Interfaces {
-		addTarget(name, svc, "interfaces")
+		addServiceTarget(name, svc, "interfaces")
 	}
 	for name, svc := range manifest.Observability {
 		if name == "grafana" {
 			continue
 		}
-		addTarget(name, svc, "observability")
+		addServiceTarget(name, svc, "observability")
+	}
+
+	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+		for _, node := range pg.Nodes {
+			if node.Host != hostName {
+				continue
+			}
+			address := manifestMeshHostname(manifest, hostName)
+			if address == "" {
+				address = "127.0.0.1"
+			}
+			baseLabels := map[string]string{
+				"frameworks_service": "yugabyte",
+				"frameworks_source":  "infrastructure",
+				"node_id":            hostName,
+			}
+			masterLabels := maps.Clone(baseLabels)
+			masterLabels["port"] = "master"
+			addTarget("yugabyte", address, 7000, "/prometheus-metrics", masterLabels)
+			tserverLabels := maps.Clone(baseLabels)
+			tserverLabels["port"] = "tserver"
+			addTarget("yugabyte", address, 11000, "/prometheus-metrics", tserverLabels)
+		}
+	}
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host == hostName {
+		addTarget("clickhouse", "127.0.0.1", 9363, "/metrics", map[string]string{
+			"frameworks_service": "clickhouse",
+			"frameworks_source":  "infrastructure",
+			"node_id":            hostName,
+		})
 	}
 
 	if len(targets) == 0 {
@@ -3112,7 +3267,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 
 	sort.Slice(targets, func(i, j int) bool {
 		if targets[i].name == targets[j].name {
-			return targets[i].port < targets[j].port
+			return targets[i].address < targets[j].address
 		}
 		return targets[i].name < targets[j].name
 	})
@@ -3121,7 +3276,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	for _, tgt := range targets {
 		result = append(result, map[string]any{
 			"job_name": tgt.name,
-			"targets":  []string{fmt.Sprintf("127.0.0.1:%d", tgt.port)},
+			"targets":  []string{tgt.address},
 			"path":     tgt.path,
 			"labels":   tgt.labels,
 		})
@@ -3153,11 +3308,39 @@ func defaultVictoriaMetricsHost(manifest *inventory.Manifest) (string, int) {
 }
 
 func defaultVictoriaMetricsWriteURL(manifest *inventory.Manifest) string {
-	host, port := defaultVictoriaMetricsHost(manifest)
-	if host == "" || port == 0 {
+	if manifest == nil {
 		return ""
 	}
-	return fmt.Sprintf("http://%s:%d/api/v1/write", host, port)
+	obs, ok := manifest.Observability["victoriametrics"]
+	if !ok || !obs.Enabled {
+		return ""
+	}
+	port, err := resolvePort("victoriametrics", obs)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["victoriametrics"]
+	}
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://victoriametrics.internal:%d/api/v1/write", port)
+}
+
+func defaultVMAUTHWriteURL(manifest *inventory.Manifest) string {
+	if manifest == nil {
+		return ""
+	}
+	obs, ok := manifest.Observability["vmauth"]
+	if !ok || !obs.Enabled {
+		return ""
+	}
+	port, err := resolvePort("vmauth", obs)
+	if err != nil || port == 0 {
+		port = provisioner.ServicePorts["vmauth"]
+	}
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://vmauth.internal:%d/api/v1/write", port)
 }
 
 func defaultVictoriaMetricsDatasourceURL(manifest *inventory.Manifest) string {
@@ -3328,7 +3511,7 @@ func privateerLocalServiceIDs(manifest *inventory.Manifest, selfHostName string)
 	seen := map[string]struct{}{}
 	addServices := func(services map[string]inventory.ServiceConfig) {
 		for name, svc := range services {
-			if !svc.Enabled || !slices.Contains(serviceHosts(svc), selfHostName) {
+			if !svc.Enabled || !slices.Contains(effectiveServiceHostsForPrivateer(manifest, name, svc), selfHostName) {
 				continue
 			}
 			serviceID := name
@@ -3529,7 +3712,7 @@ func forEachLocalService(manifest *inventory.Manifest, selfHostName string, fn f
 	}
 	walk := func(services map[string]inventory.ServiceConfig) {
 		for name, svc := range services {
-			if svc.Enabled && slices.Contains(serviceHosts(svc), selfHostName) {
+			if svc.Enabled && slices.Contains(effectiveServiceHostsForPrivateer(manifest, name, svc), selfHostName) {
 				fn(name, svc)
 			}
 		}
@@ -3537,6 +3720,13 @@ func forEachLocalService(manifest *inventory.Manifest, selfHostName string, fn f
 	walk(manifest.Services)
 	walk(manifest.Interfaces)
 	walk(manifest.Observability)
+}
+
+func effectiveServiceHostsForPrivateer(manifest *inventory.Manifest, serviceName string, svc inventory.ServiceConfig) []string {
+	if serviceName == "vmagent" {
+		return orchestrator.EffectiveVMAgentHosts(svc, manifest)
+	}
+	return serviceHosts(svc)
 }
 
 func privateerHostRegion(manifest *inventory.Manifest, hostName string) string {
@@ -4183,46 +4373,6 @@ func addLocalProxyRoutes(routes map[string]any, hostName string, services map[st
 			continue
 		}
 		routes[name] = port
-	}
-}
-
-type zookeeperNodeConfig struct {
-	ServerID int
-	Port     int
-	Servers  []string
-}
-
-func resolveZookeeperNodeByID(instanceID string, manifest *inventory.Manifest) *zookeeperNodeConfig {
-	if manifest.Infrastructure.Zookeeper == nil || instanceID == "" {
-		return nil
-	}
-
-	id, err := strconv.Atoi(instanceID)
-	if err != nil {
-		return nil
-	}
-
-	var targetNode *inventory.ZookeeperNode
-	for i := range manifest.Infrastructure.Zookeeper.Ensemble {
-		node := &manifest.Infrastructure.Zookeeper.Ensemble[i]
-		if node.ID == id {
-			targetNode = node
-			break
-		}
-	}
-	if targetNode == nil {
-		return nil
-	}
-
-	servers := []string{}
-	for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
-		servers = append(servers, fmt.Sprintf("server.%d=%s:2888:3888", node.ID, manifest.MeshAddress(node.Host)))
-	}
-
-	return &zookeeperNodeConfig{
-		ServerID: targetNode.ID,
-		Port:     targetNode.Port,
-		Servers:  servers,
 	}
 }
 
@@ -5711,8 +5861,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 	if baseName == "foghorn" || baseName == "vmauth" {
-		if err := ensureEdgeTelemetryJWTKeypair(runtimeData); err != nil {
-			return nil, err
+		if edgeTelemetryJWTRequired(manifest) || edgeTelemetryJWTMaterialPresent(runtimeData, env) {
+			if err := ensureEdgeTelemetryJWTKeypair(runtimeData, env); err != nil {
+				return nil, err
+			}
 		}
 		if env["EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64"] == "" {
 			if value, ok := runtimeData["edge_telemetry_jwt_private_key_pem_b64"].(string); ok {
@@ -5833,7 +5985,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 
 	if baseName == "vmagent" {
 		if env["VMAGENT_REMOTE_WRITE_URL"] == "" {
-			if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
+			// Backend agents write through vmauth when present; Privateer DNS
+			// resolves the service aliases on every generated vmagent host.
+			if url := defaultVMAUTHWriteURL(manifest); url != "" {
+				env["VMAGENT_REMOTE_WRITE_URL"] = url
+			} else if url := defaultVictoriaMetricsWriteURL(manifest); url != "" {
 				env["VMAGENT_REMOTE_WRITE_URL"] = url
 			}
 		}
@@ -6138,9 +6294,14 @@ func missingRequiredGeneratedEnv(manifest *inventory.Manifest, serviceID string,
 }
 
 func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string) bool {
-	for _, svc := range servicesByDeploy(manifest, deploy) {
-		if svc.Enabled {
-			return true
+	if manifest == nil || deploy == "" {
+		return false
+	}
+	for _, configs := range []map[string]inventory.ServiceConfig{manifest.Services, manifest.Interfaces, manifest.Observability} {
+		for name, svc := range configs {
+			if serviceDeployMatches(name, svc, deploy) && svc.Enabled {
+				return true
+			}
 		}
 	}
 	return false
@@ -6509,7 +6670,7 @@ func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
 	}
 
 	privateerHosts := make(map[string]struct{})
-	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+	for _, hostName := range orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest) {
 		privateerHosts[hostName] = struct{}{}
 	}
 
@@ -6558,7 +6719,7 @@ func validateInternalGRPCTLSCoverage(manifest *inventory.Manifest) error {
 	}
 
 	privateerHosts := make(map[string]struct{})
-	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+	for _, hostName := range orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest) {
 		privateerHosts[hostName] = struct{}{}
 	}
 
@@ -6911,10 +7072,10 @@ func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command
 		qmPort = qmSvc.GRPCPort
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability on %d privateer host(s)...\n", len(orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts)))
+	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability on %d privateer host(s)...\n", len(orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)))
 	base := provisioner.NewBaseProvisioner("quartermaster-mesh-verify", pool)
 	var failures []string
-	for _, hostName := range orchestrator.EffectivePrivateerHosts(privateerSvc, manifest.Hosts) {
+	for _, hostName := range orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest) {
 		hostInfo, ok := manifest.Hosts[hostName]
 		if !ok {
 			failures = append(failures, fmt.Sprintf("%s: not found in manifest", hostName))

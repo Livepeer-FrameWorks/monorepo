@@ -259,18 +259,32 @@ func renderNginxConfig(port int, sites []proxySite) string {
 func writeCaddyProxyDirectives(b *strings.Builder, site proxySite) {
 	paths := site.PathPrefixes
 	if len(paths) == 0 {
-		b.WriteString("    reverse_proxy ")
-		b.WriteString(site.Upstream)
-		b.WriteString("\n")
+		writeCaddyReverseProxy(b, "", site.Upstream)
 		return
 	}
 	for _, path := range paths {
-		b.WriteString("    reverse_proxy ")
-		b.WriteString(path)
-		b.WriteString(" ")
-		b.WriteString(site.Upstream)
-		b.WriteString("\n")
+		writeCaddyReverseProxy(b, path, site.Upstream)
 	}
+}
+
+func writeCaddyReverseProxy(b *strings.Builder, matcher, upstream string) {
+	b.WriteString("    reverse_proxy ")
+	if matcher != "" {
+		b.WriteString(matcher)
+		b.WriteString(" ")
+	}
+	b.WriteString(upstream)
+	if caddyHTTPSUpstreamNeedsHostRewrite(upstream) {
+		b.WriteString(" {\n")
+		b.WriteString("        header_up Host {upstream_hostport}\n")
+		b.WriteString("    }\n")
+		return
+	}
+	b.WriteString("\n")
+}
+
+func caddyHTTPSUpstreamNeedsHostRewrite(upstream string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(upstream)), "https://")
 }
 
 func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site proxySite) {

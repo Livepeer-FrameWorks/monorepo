@@ -206,7 +206,7 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 	}
 
 	// Infrastructure. Each component keeps one target per physical host so
-	// multi-node clusters (yugabyte, zookeeper, kafka, redis) stay
+	// multi-node clusters (yugabyte, kafka, redis) stay
 	// reportable per-instance. Deploy names must match provisioner
 	// BaseProvisioner registrations in cli/pkg/provisioner/*.go — Kafka
 	// controllers and Redis instances have distinct names from the family.
@@ -239,14 +239,6 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 			targets = append(targets, clusterDriftTarget{
 				Host: co.Host, Display: "kafka:controller", Deploy: "kafka-controller",
 				DesiredMode: kf.Mode, PinnedVersion: kf.Version,
-			})
-		}
-	}
-	if zk := manifest.Infrastructure.Zookeeper; zk != nil && zk.Enabled {
-		for _, node := range zk.Ensemble {
-			targets = append(targets, clusterDriftTarget{
-				Host: node.Host, Display: "zookeeper", Deploy: "zookeeper",
-				DesiredMode: zk.Mode, PinnedVersion: zk.Version,
 			})
 		}
 	}

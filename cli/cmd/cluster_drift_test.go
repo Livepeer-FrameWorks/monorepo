@@ -173,7 +173,6 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 		Hosts: map[string]inventory.Host{
 			"pg-1": {Name: "pg-1"}, "pg-2": {Name: "pg-2"},
 			"kf-1": {Name: "kf-1"}, "kc-1": {Name: "kc-1"},
-			"zk-1": {Name: "zk-1"},
 			"ch-1": {Name: "ch-1"},
 			"rd-1": {Name: "rd-1"}, "rd-2": {Name: "rd-2"},
 		},
@@ -187,10 +186,6 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 				Enabled: true, Mode: "native", Version: "3.7.0",
 				Brokers:     []inventory.KafkaBroker{{Host: "kf-1"}},
 				Controllers: []inventory.KafkaController{{Host: "kc-1"}},
-			},
-			Zookeeper: &inventory.ZookeeperConfig{
-				Enabled: true, Mode: "native", Version: "3.9.0",
-				Ensemble: []inventory.ZookeeperNode{{Host: "zk-1"}},
 			},
 			Redis: &inventory.RedisConfig{
 				Enabled: true, Mode: "native", Version: "7.2",
@@ -214,7 +209,6 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 		{"ch-1", "clickhouse", "clickhouse"},
 		{"kf-1", "kafka:broker", "kafka"},
 		{"kc-1", "kafka:controller", "kafka-controller"},
-		{"zk-1", "zookeeper", "zookeeper"},
 		{"rd-1", "redis:platform", "redis-platform"},
 		{"rd-2", "redis:foghorn", "redis-foghorn"},
 	}

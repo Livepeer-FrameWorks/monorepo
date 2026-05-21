@@ -30,7 +30,7 @@ func newClusterCmd() *cobra.Command {
 		Use:   "cluster",
 		Short: "Cluster infrastructure management (central/regional control planes)",
 		Long: `Manage central and regional FrameWorks clusters including:
-  - Infrastructure tier (Postgres, Kafka, Zookeeper, ClickHouse)
+  - Infrastructure tier (Postgres, Kafka, ClickHouse)
   - Application services (Quartermaster, Commodore, Bridge, Periscope, etc.)
   - Interface services (Nginx/Caddy, Chartroom, Foredeck, Logbook)
 
@@ -54,6 +54,8 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterDoctorCmd())
 	cluster.AddCommand(newClusterStatusCmd())
 	cluster.AddCommand(newClusterDriftCmd())
+	cluster.AddCommand(newClusterDiffCmd())
+	cluster.AddCommand(newClusterApplyCmd())
 	cluster.AddCommand(newClusterProvisionCmd())
 	cluster.AddCommand(newClusterInitCmd())
 	cluster.AddCommand(newClusterLogsCmd())
@@ -451,7 +453,7 @@ func newClusterDoctorCmd() *cobra.Command {
 		Long: `Health check for the cluster's infrastructure and application services.
 
 Default mode (read-only, no SOPS decryption):
-  - Infrastructure reachability: Postgres/Yugabyte, Kafka, Zookeeper, ClickHouse,
+  - Infrastructure reachability: Postgres/Yugabyte, Kafka, ClickHouse,
     Redis — port/connection probes only, not query performance or replication state.
   - Application services: HTTP /health endpoints.
   - Database migrations: embedded SQL migrations are compared against the
@@ -513,13 +515,6 @@ func runDetect(cmd *cobra.Command, manifest *inventory.Manifest, manifestPath st
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			serviceName := fmt.Sprintf("kafka-broker-%d", broker.ID)
 			detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, "kafka", broker.Host)
-		}
-	}
-
-	if manifest.Infrastructure.Zookeeper != nil && manifest.Infrastructure.Zookeeper.Enabled {
-		for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
-			serviceName := fmt.Sprintf("zookeeper-%d", node.ID)
-			detectServiceWithTimeout(cmd, sshPool, manifest, serviceName, "zookeeper", node.Host)
 		}
 	}
 
@@ -1088,11 +1083,6 @@ func doctorServiceRemediation(serviceName string) ux.NextStep {
 		return ux.NextStep{
 			Cmd: "frameworks cluster logs clickhouse",
 			Why: "Inspect ClickHouse for startup/credential errors.",
-		}
-	case strings.HasPrefix(n, "zookeeper"):
-		return ux.NextStep{
-			Cmd: "frameworks cluster logs zookeeper-1",
-			Why: "Zookeeper quorum issues usually show in its logs.",
 		}
 	case strings.HasPrefix(n, "redis"):
 		return ux.NextStep{

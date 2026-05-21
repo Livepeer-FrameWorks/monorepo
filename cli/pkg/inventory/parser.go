@@ -305,14 +305,6 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
-	if m.Infrastructure.Zookeeper != nil && m.Infrastructure.Zookeeper.Enabled {
-		for _, node := range m.Infrastructure.Zookeeper.Ensemble {
-			if _, ok := m.Hosts[node.Host]; !ok {
-				return fmt.Errorf("zookeeper.ensemble host '%s' not found in hosts", node.Host)
-			}
-		}
-	}
-
 	if m.Infrastructure.Kafka != nil && m.Infrastructure.Kafka.Enabled {
 		for _, broker := range m.Infrastructure.Kafka.Brokers {
 			if _, ok := m.Hosts[broker.Host]; !ok {

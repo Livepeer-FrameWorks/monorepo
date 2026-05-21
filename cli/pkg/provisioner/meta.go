@@ -13,6 +13,27 @@ func metaString(m map[string]any, key string) string {
 	return ""
 }
 
+func metaStringSlice(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch items := v.(type) {
+	case []string:
+		return items
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 // metaIntOr returns an int from Metadata, falling back to def when absent
 // or of the wrong type.
 func metaIntOr(m map[string]any, key string, def int) int {

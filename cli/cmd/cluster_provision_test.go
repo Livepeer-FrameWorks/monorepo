@@ -3,6 +3,12 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"net/url"
 	"os"
@@ -32,6 +38,20 @@ const testSharedSecrets = "SERVICE_TOKEN=test-token\n" +
 	"USAGE_HASH_SECRET=test-hash\n" +
 	"LISTMONK_API_USERNAME=frameworks-api\n" +
 	"LISTMONK_API_TOKEN=listmonk-api-token\n"
+
+func testEdgeTelemetryPrivateKeyB64(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		t.Fatalf("generate telemetry test key: %v", err)
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal telemetry test key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	return base64.StdEncoding.EncodeToString(pemBytes)
+}
 
 type fakeFoghornClusterAssigner struct {
 	calls     []*pb.AssignServiceToClusterRequest
@@ -2648,6 +2668,369 @@ func TestBuildTaskConfigSetsObservabilityComponent(t *testing.T) {
 	}
 }
 
+func TestBuildVMAgentScrapeTargetsUsesDeployAlias(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {
+				Enabled: true,
+				Deploy:  "foghorn",
+				Host:    "regional-eu-1",
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "regional-eu-1")
+	target := findScrapeTarget(t, targets, "foghorn-eu", "127.0.0.1:18008")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+	labels := scrapeTargetLabels(t, target)
+	if got := labels["frameworks_service"]; got != "foghorn" {
+		t.Fatalf("frameworks_service = %q, want foghorn", got)
+	}
+	if got := labels["frameworks_instance"]; got != "foghorn-eu" {
+		t.Fatalf("frameworks_instance = %q, want foghorn-eu", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesVMAUTH(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {
+				Enabled: true,
+				Host:    "regional-eu-1",
+				Port:    8427,
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "regional-eu-1")
+	target := findScrapeTarget(t, targets, "vmauth", "127.0.0.1:8427")
+	labels := scrapeTargetLabels(t, target)
+	if got := labels["frameworks_source"]; got != "observability" {
+		t.Fatalf("frameworks_source = %q, want observability", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"yuga-1": {ExternalIP: "10.0.0.10"},
+			"yuga-2": {ExternalIP: "10.0.0.11"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes: []inventory.PostgresNode{
+					{Host: "yuga-1", ID: 1},
+					{Host: "yuga-2", ID: 2},
+				},
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "yuga-1")
+	master := findScrapeTarget(t, targets, "yugabyte", "yuga-1.internal:7000")
+	if got := master["path"]; got != "/prometheus-metrics" {
+		t.Fatalf("master path = %v, want /prometheus-metrics", got)
+	}
+	if got := scrapeTargetLabels(t, master)["port"]; got != "master" {
+		t.Fatalf("master port label = %q, want master", got)
+	}
+	tserver := findScrapeTarget(t, targets, "yugabyte", "yuga-1.internal:11000")
+	if got := tserver["path"]; got != "/prometheus-metrics" {
+		t.Fatalf("tserver path = %v, want /prometheus-metrics", got)
+	}
+	if got := scrapeTargetLabels(t, tserver)["port"]; got != "tserver" {
+		t.Fatalf("tserver port label = %q, want tserver", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesClickHouse(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"clickhouse-1": {ExternalIP: "10.0.0.10"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Host:    "clickhouse-1",
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "clickhouse-1")
+	target := findScrapeTarget(t, targets, "clickhouse", "127.0.0.1:9363")
+	labels := scrapeTargetLabels(t, target)
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+	if got := labels["frameworks_source"]; got != "infrastructure" {
+		t.Fatalf("frameworks_source = %q, want infrastructure", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesCaddyAdminMetrics(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"edge-router-1": {ExternalIP: "10.0.0.10"},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"caddy": {
+				Enabled: true,
+				Host:    "edge-router-1",
+				Port:    18090,
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "edge-router-1")
+	target := findScrapeTarget(t, targets, "caddy", "127.0.0.1:2019")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+	if got := scrapeTargetLabels(t, target)["frameworks_source"]; got != "interfaces" {
+		t.Fatalf("frameworks_source = %q, want interfaces", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsIncludesMistServer(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"mistserver": {
+				Enabled: true,
+				Host:    "edge-1",
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "edge-1")
+	target := findScrapeTarget(t, targets, "mistserver", "127.0.0.1:8080")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+	if got := scrapeTargetLabels(t, target)["frameworks_service"]; got != "mistserver" {
+		t.Fatalf("frameworks_service = %q, want mistserver", got)
+	}
+}
+
+func TestBuildServiceEnvVarsVMAgentPrefersVMAUTHWriteURL(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-1":  {ExternalIP: "10.0.0.10"},
+			"regional-1": {ExternalIP: "10.0.0.11"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {
+				Enabled: true,
+				Host:    "central-1",
+				Port:    8428,
+				Config: map[string]string{
+					"VM_HTTP_AUTH_USERNAME": "telemetry",
+					"VM_HTTP_AUTH_PASSWORD": "secret",
+				},
+			},
+			"vmauth": {
+				Enabled: true,
+				Host:    "central-1",
+				Port:    8427,
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Type:      "vmagent",
+		ServiceID: "vmagent",
+		Host:      "regional-1",
+	}, manifest, map[string]any{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars vmagent: %v", err)
+	}
+	if got := env["VMAGENT_REMOTE_WRITE_URL"]; got != "http://vmauth.internal:8427/api/v1/write" {
+		t.Fatalf("VMAGENT_REMOTE_WRITE_URL = %q, want vmauth write URL", got)
+	}
+	if got := env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME"]; got != "telemetry" {
+		t.Fatalf("VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME = %q, want telemetry", got)
+	}
+	if got := env["VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD"]; got != "secret" {
+		t.Fatalf("VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD = %q, want secret", got)
+	}
+}
+
+func TestBuildServiceEnvVarsVMAgentFallsBackToVictoriaMetricsAlias(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-1":  {ExternalIP: "10.0.0.10"},
+			"regional-1": {ExternalIP: "10.0.0.11"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {
+				Enabled: true,
+				Host:    "central-1",
+				Port:    8428,
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Type:      "vmagent",
+		ServiceID: "vmagent",
+		Host:      "regional-1",
+	}, manifest, map[string]any{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars vmagent: %v", err)
+	}
+	if got := env["VMAGENT_REMOTE_WRITE_URL"]; got != "http://victoriametrics.internal:8428/api/v1/write" {
+		t.Fatalf("VMAGENT_REMOTE_WRITE_URL = %q, want victoriametrics alias write URL", got)
+	}
+}
+
+func TestBuildServiceEnvVarsVMAUTHUpstreamUsesVictoriaMetricsAlias(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.10"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {
+				Enabled: true,
+				Host:    "central-1",
+				Port:    8428,
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Type:      "vmauth",
+		ServiceID: "vmauth",
+		Host:      "central-1",
+	}, manifest, map[string]any{}, "", "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars vmauth: %v", err)
+	}
+	if got := env["VMAUTH_UPSTREAM_WRITE_URL"]; got != "http://victoriametrics.internal:8428/api/v1/write" {
+		t.Fatalf("VMAUTH_UPSTREAM_WRITE_URL = %q, want victoriametrics alias write URL", got)
+	}
+}
+
+func TestEnsureEdgeTelemetryJWTKeypairRequiresDurablePrivateKey(t *testing.T) {
+	err := ensureEdgeTelemetryJWTKeypair(map[string]any{}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64 is required") {
+		t.Fatalf("ensureEdgeTelemetryJWTKeypair error = %v, want durable private key requirement", err)
+	}
+}
+
+func TestEnsureEdgeTelemetryJWTKeypairDerivesPublicKey(t *testing.T) {
+	env := map[string]string{
+		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
+	}
+	runtimeData := map[string]any{}
+	if err := ensureEdgeTelemetryJWTKeypair(runtimeData, env); err != nil {
+		t.Fatalf("ensureEdgeTelemetryJWTKeypair: %v", err)
+	}
+	if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
+		t.Fatal("EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64 should be derived")
+	}
+	if got := runtimeData["edge_telemetry_jwt_public_key_pem_b64"]; got != env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"] {
+		t.Fatalf("runtime public key = %v, want derived env public key", got)
+	}
+}
+
+func TestValidateEdgeTelemetryTopologyRequiresCaddyVMAUTHCoLocation(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"control-1": {ExternalIP: "10.0.0.10"},
+			"router-1":  {ExternalIP: "10.0.0.11"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "control-1"},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"caddy": {Enabled: true, Host: "router-1"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "control-1"},
+		},
+	}
+	err := validateEdgeTelemetryTopology(manifest, map[string]string{
+		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
+	})
+	if err == nil || !strings.Contains(err.Error(), "co-located") {
+		t.Fatalf("validateEdgeTelemetryTopology error = %v, want co-location failure", err)
+	}
+}
+
+func TestValidateEdgeTelemetryTopologyAcceptsDurableKeyAndCoLocation(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"control-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "control-1"},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"caddy": {Enabled: true, Host: "control-1"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "control-1"},
+		},
+	}
+	env := map[string]string{
+		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
+	}
+	if err := validateEdgeTelemetryTopology(manifest, env); err != nil {
+		t.Fatalf("validateEdgeTelemetryTopology: %v", err)
+	}
+	if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
+		t.Fatal("shared env should receive derived public key for the provision run")
+	}
+}
+
+func findScrapeTarget(t *testing.T, targets []map[string]any, jobName, address string) map[string]any {
+	t.Helper()
+	for _, target := range targets {
+		if target["job_name"] != jobName {
+			continue
+		}
+		addresses, ok := target["targets"].([]string)
+		if !ok {
+			t.Fatalf("target %s has invalid targets: %#v", jobName, target["targets"])
+		}
+		if slices.Contains(addresses, address) {
+			return target
+		}
+	}
+	t.Fatalf("scrape target %s/%s not found in %#v", jobName, address, targets)
+	return nil
+}
+
+func scrapeTargetLabels(t *testing.T, target map[string]any) map[string]string {
+	t.Helper()
+	labels, ok := target["labels"].(map[string]string)
+	if !ok {
+		t.Fatalf("target has invalid labels: %#v", target["labels"])
+	}
+	return labels
+}
+
 func TestBuildTaskConfigBuildsProxySitesForReverseProxy(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "dev",
@@ -3216,6 +3599,38 @@ func TestPrivateerSeedDNSIncludesGlobalSkipperBridgeAlias(t *testing.T) {
 		if _, ok := reciprocal["central-1"]; !ok {
 			t.Fatalf("%s privateer peers missing central-1 in %v", bridgeHost, sortedKeys(reciprocal))
 		}
+	}
+}
+
+func TestPrivateerSeedDNSIncludesMetricsAliasesForEffectiveVMAgentHost(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1": {WireguardIP: "10.88.0.10", WireguardPublicKey: "central-key"},
+			"yuga-1":    {WireguardIP: "10.88.0.20", WireguardPublicKey: "yuga-key"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"privateer": {Enabled: true, Hosts: []string{"central-1"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"victoriametrics": {Enabled: true, Host: "central-1"},
+			"vmauth":          {Enabled: true, Host: "central-1"},
+			"vmagent":         {Enabled: true, Hosts: []string{"central-1"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes:   []inventory.PostgresNode{{Host: "yuga-1"}},
+			},
+		},
+	}
+
+	dns := buildPrivateerSeedDNS(manifest, "yuga-1")
+	if got, want := dns["vmauth"], []string{"10.88.0.10"}; !slices.Equal(got, want) {
+		t.Fatalf("vmauth DNS = %v, want %v", got, want)
+	}
+	if got, want := dns["victoriametrics"], []string{"10.88.0.10"}; !slices.Equal(got, want) {
+		t.Fatalf("victoriametrics DNS = %v, want %v", got, want)
 	}
 }
 

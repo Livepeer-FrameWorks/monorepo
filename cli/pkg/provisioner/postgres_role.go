@@ -14,7 +14,7 @@ import (
 // postgresRoleVars turns the manifest shape into the variable surface the
 // frameworks.infra.postgres role (wrapping geerlingguy.postgresql) expects.
 func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	version := firstNonEmpty(config.Version, metaString(config.Metadata, "version"))
+	version := postgresMajorVersion(firstNonEmpty(config.Version, metaString(config.Metadata, "version")))
 	if version == "" {
 		version = "16"
 	}
@@ -75,6 +75,14 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		vars["postgres_migrate_items"] = items
 	}
 	return vars, nil
+}
+
+func postgresMajorVersion(version string) string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if dot := strings.IndexByte(version, '.'); dot > 0 {
+		return version[:dot]
+	}
+	return version
 }
 
 func sanitizePostgresInstanceName(value string) string {

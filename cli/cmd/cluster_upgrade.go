@@ -393,10 +393,6 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
 			host, found = manifest.GetHost(k.Controllers[0].Host)
 		}
-	case "zookeeper":
-		if z := manifest.Infrastructure.Zookeeper; z != nil && z.Enabled && len(z.Ensemble) > 0 {
-			host, found = manifest.GetHost(z.Ensemble[0].Host)
-		}
 	case "clickhouse":
 		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
 			host, found = manifest.GetHost(ch.Host)

@@ -11,7 +11,7 @@ type Phase string
 
 const (
 	PhaseMesh           Phase = "mesh"           // Privateer startup substrate (WG up before any infra)
-	PhaseInfrastructure Phase = "infrastructure" // Postgres, Kafka, ZK, ClickHouse
+	PhaseInfrastructure Phase = "infrastructure" // Postgres, Kafka, ClickHouse
 	PhaseApplications   Phase = "applications"   // FrameWorks services
 	PhaseInterfaces     Phase = "interfaces"     // Caddy, chartroom, foredeck
 	PhaseAll            Phase = "all"            // All phases
@@ -99,6 +99,37 @@ type ProvisionOptions struct {
 	Parallel     bool     // Run tasks within a batch in parallel
 	OnlyHosts    []string // Only provision these hosts
 	OnlyServices []string // Only provision these services
+}
+
+// UpdateStrategy describes how a service's hosts are partitioned into
+// rolling-update waves. The existing ExecutionPlan / Batches model is
+// unchanged and continues to drive `cluster provision`; `cluster apply`
+// composes RolloutPlans from the diff classifier's filtered task set.
+//
+// Zero-values mean "default to safest": MaxUnavailable=0 is treated as
+// "one host at a time" inside BuildWaves so a missing strategy can't
+// accidentally roll a whole tier at once.
+type UpdateStrategy struct {
+	// MaxUnavailable is the upper bound on hosts being rolled at once
+	// within a single wave. 0 means "one host at a time" — the safe
+	// default. A typical stateless tier sets this to ceil(N/3).
+	MaxUnavailable int
+
+	// Canary, if non-zero, makes the first wave contain at most Canary
+	// hosts before the normal MaxUnavailable cadence resumes. Soaks one
+	// host (or a small group) before rolling the rest.
+	Canary int
+
+	// RegionStagger when true forces hosts in different regions into
+	// distinct waves: roll all of region A, then all of region B. Paired
+	// regional tiers (Foghorn EU vs US) use this to keep one region fully
+	// healthy at all times.
+	RegionStagger bool
+
+	// PrimaryLast when true holds tasks with Role=="primary" until after
+	// every non-primary task has run. For Redis: replicas roll first,
+	// sentinel-triggered failover happens, then the old primary rolls.
+	PrimaryLast bool
 }
 
 // Orchestrator coordinates multi-phase provisioning

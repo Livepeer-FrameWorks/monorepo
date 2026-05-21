@@ -76,6 +76,92 @@ func TestEffectivePrivateerHosts_AllCoreWhenNoEdge(t *testing.T) {
 	}
 }
 
+func TestEffectivePrivateerHostsForManifestAddsMetricsHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"mesh-1":    {ExternalIP: "10.0.0.1"},
+			"metrics-1": {ExternalIP: "10.0.0.2"},
+			"yuga-1":    {ExternalIP: "10.0.0.3"},
+			"ch-1":      {ExternalIP: "10.0.0.4"},
+			"vm-1":      {ExternalIP: "10.0.0.5"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"privateer": {Enabled: true, Hosts: []string{"mesh-1"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmagent": {Enabled: true, Hosts: []string{"metrics-1"}},
+			"vmauth":  {Enabled: true, Host: "mesh-1"},
+			"victoriametrics": {
+				Enabled: true,
+				Host:    "vm-1",
+			},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes:   []inventory.PostgresNode{{Host: "yuga-1"}},
+			},
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Host:    "ch-1",
+			},
+		},
+	}
+
+	got := EffectivePrivateerHostsForManifest(manifest.Services["privateer"], manifest)
+	want := []string{"ch-1", "mesh-1", "metrics-1", "vm-1", "yuga-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("EffectivePrivateerHostsForManifest = %v, want %v", got, want)
+	}
+}
+
+func TestEffectiveVMAgentHostsAddsMetricsInfrastructureToExplicitHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.1"},
+			"yuga-1":    {ExternalIP: "10.0.0.2"},
+			"yuga-2":    {ExternalIP: "10.0.0.3"},
+			"ch-1":      {ExternalIP: "10.0.0.4"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes: []inventory.PostgresNode{
+					{Host: "yuga-1"},
+					{Host: "yuga-2"},
+				},
+			},
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Host:    "ch-1",
+			},
+		},
+	}
+
+	got := EffectiveVMAgentHosts(inventory.ServiceConfig{Hosts: []string{"central-1"}}, manifest)
+	want := []string{"central-1", "ch-1", "yuga-1", "yuga-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("EffectiveVMAgentHosts = %v, want %v", got, want)
+	}
+}
+
+func TestEffectiveVMAgentHostsDefaultsToAllHosts(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1":  {ExternalIP: "10.0.0.1"},
+			"regional-1": {ExternalIP: "10.0.0.2"},
+		},
+	}
+
+	got := EffectiveVMAgentHosts(inventory.ServiceConfig{}, manifest)
+	want := []string{"central-1", "regional-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("EffectiveVMAgentHosts = %v, want %v", got, want)
+	}
+}
+
 func TestPlan_RedisDuplicateNamesAreClusterScoped(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

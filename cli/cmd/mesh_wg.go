@@ -465,7 +465,7 @@ func meshCheckHostNames(manifest *inventory.Manifest) []string {
 		return nil
 	}
 	if svc, ok := manifest.Services["privateer"]; ok && svc.Enabled {
-		return orchestrator.EffectivePrivateerHosts(svc, manifest.Hosts)
+		return orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
 	}
 	if manifest.WireGuard == nil || !manifest.WireGuard.Enabled {
 		return nil

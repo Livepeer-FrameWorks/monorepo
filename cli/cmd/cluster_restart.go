@@ -166,10 +166,6 @@ func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inven
 		if k := manifest.Infrastructure.Kafka; k != nil && k.Enabled && len(k.Controllers) > 0 {
 			return manifest.GetHost(k.Controllers[0].Host)
 		}
-	case "zookeeper":
-		if z := manifest.Infrastructure.Zookeeper; z != nil && z.Enabled && len(z.Ensemble) > 0 {
-			return manifest.GetHost(z.Ensemble[0].Host)
-		}
 	case "clickhouse":
 		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
 			return manifest.GetHost(ch.Host)
