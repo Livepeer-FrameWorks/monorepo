@@ -249,10 +249,14 @@
   }
 
   /* Hollow ring used for compute (Livepeer) nodes. Border + dark fill reads
-     as "open" vs the solid filled circle for media/edge nodes. */
-  .network-viz__node-dot--compute-ring {
+     as "open" vs the solid filled circle for media/edge nodes. Specificity
+     bumped (.network-viz prefix) so Tailwind v4 preflight's `border: 0 solid`
+     can't strip the width via cascade ordering. */
+  .network-viz .network-viz__node-dot--compute-ring {
     background-color: rgba(15, 23, 42, 0.85);
-    border: 2px solid var(--node-dot-color);
+    border-width: 2px;
+    border-style: solid;
+    border-color: var(--node-dot-color);
   }
 
   /* Wrapper that hosts the drop-shadow glow for clip-path shapes. */
@@ -281,10 +285,14 @@
     font-weight: 600;
     color: var(--cluster-color);
   }
-  .network-viz__cluster--core {
+  /* Specificity bumped (.network-viz prefix) + border longhand so Tailwind v4
+     preflight's `border: 0 solid` can't strip the width via cascade ordering. */
+  .network-viz .network-viz__cluster--core {
     border-radius: 10px;
     background: color-mix(in srgb, var(--cluster-color) 22%, rgba(15, 23, 42, 0.85));
-    border: 2px solid var(--cluster-color);
+    border-width: 2px;
+    border-style: solid;
+    border-color: var(--cluster-color);
     box-shadow: 0 0 12px color-mix(in srgb, var(--cluster-color) 40%, transparent);
   }
   .network-viz__cluster--edge {
