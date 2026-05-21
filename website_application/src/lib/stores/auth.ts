@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { browser } from "$app/environment";
 import { authAPI } from "$lib/authAPI.js";
 import { initializeWebSocket, disconnectWebSocket } from "./realtime.js";
 
@@ -51,6 +52,60 @@ function createAuthStore() {
     initialized: false,
   });
   let checkAuthPromise: Promise<void> | null = null;
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  function stopRefreshLoop() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
+  function startRefreshLoop() {
+    if (!browser || refreshTimer) return;
+    refreshTimer = setInterval(
+      () => {
+        void refreshSession({ restartSocket: false });
+      },
+      10 * 60 * 1000
+    );
+  }
+
+  async function refreshSession({ restartSocket = true } = {}): Promise<boolean> {
+    try {
+      const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
+      const { user } = refreshResponse.data;
+
+      localStorage.setItem("user", JSON.stringify(user));
+
+      set({
+        isAuthenticated: true,
+        user,
+        loading: false,
+        error: null,
+        initialized: true,
+      });
+
+      startRefreshLoop();
+      if (restartSocket) {
+        initializeWebSocket();
+      }
+      return true;
+    } catch {
+      stopRefreshLoop();
+      disconnectWebSocket();
+      localStorage.removeItem("user");
+
+      set({
+        isAuthenticated: false,
+        user: null,
+        loading: false,
+        error: null,
+        initialized: true,
+      });
+      return false;
+    }
+  }
 
   return {
     subscribe,
@@ -86,6 +141,7 @@ function createAuthStore() {
         });
 
         // Initialize WebSocket - will use session from Houdini (populated from cookies)
+        startRefreshLoop();
         initializeWebSocket();
 
         return { success: true };
@@ -154,7 +210,7 @@ function createAuthStore() {
       }
     },
 
-    async checkAuth() {
+    async checkAuth(force = false) {
       if (checkAuthPromise) {
         return checkAuthPromise;
       }
@@ -172,7 +228,7 @@ function createAuthStore() {
         });
         unsubscribe();
 
-        if (currentState.initialized && !currentState.loading) {
+        if (!force && currentState.initialized && !currentState.loading) {
           return;
         }
 
@@ -194,36 +250,13 @@ function createAuthStore() {
             initialized: true,
           });
 
-          initializeWebSocket();
+          startRefreshLoop();
+          if (!currentState.isAuthenticated) {
+            initializeWebSocket();
+          }
         } catch {
           // Not authenticated or token expired - try refresh
-          try {
-            const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
-            const { user } = refreshResponse.data;
-
-            localStorage.setItem("user", JSON.stringify(user));
-
-            set({
-              isAuthenticated: true,
-              user,
-              loading: false,
-              error: null,
-              initialized: true,
-            });
-
-            initializeWebSocket();
-          } catch {
-            // Refresh failed - user is not authenticated
-            localStorage.removeItem("user");
-
-            set({
-              isAuthenticated: false,
-              user: null,
-              loading: false,
-              error: null,
-              initialized: true,
-            });
-          }
+          await refreshSession();
         }
       })();
 
@@ -242,6 +275,7 @@ function createAuthStore() {
         // Ignore errors - clear local state anyway
       }
 
+      stopRefreshLoop();
       disconnectWebSocket();
       localStorage.removeItem("user");
 

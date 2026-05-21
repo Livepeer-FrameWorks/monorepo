@@ -55,10 +55,24 @@ export default new HoudiniClient({
               }
               return params;
             },
-            retryAttempts: 3,
+            retryAttempts: Number.POSITIVE_INFINITY,
+            retryWait: async (retries) => {
+              const delayMs = Math.min(30_000, 1_000 * 2 ** retries);
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            },
             shouldRetry: () => true,
             // Handle connection errors gracefully (logged, not thrown to global error handler)
             on: {
+              connecting: (isRetry) => {
+                if (isRetry) {
+                  console.info("[WebSocket] Reconnecting");
+                }
+              },
+              connected: (_socket, _payload, wasRetry) => {
+                if (wasRetry) {
+                  console.info("[WebSocket] Reconnected");
+                }
+              },
               error: (error) => {
                 console.warn("[WebSocket] Connection error:", error);
               },

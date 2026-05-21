@@ -120,9 +120,23 @@
     }
   });
 
-  onMount(async () => {
-    await auth.checkAuth();
-    loadStreamingConfig();
+  onMount(() => {
+    void (async () => {
+      await auth.checkAuth();
+      loadStreamingConfig();
+    })();
+    const revalidateAuth = () => {
+      if (document.visibilityState === "visible") {
+        void auth.checkAuth(true);
+      }
+    };
+    window.addEventListener("focus", revalidateAuth);
+    document.addEventListener("visibilitychange", revalidateAuth);
+
+    return () => {
+      window.removeEventListener("focus", revalidateAuth);
+      document.removeEventListener("visibilitychange", revalidateAuth);
+    };
   });
 
   onDestroy(() => {

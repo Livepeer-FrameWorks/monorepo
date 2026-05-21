@@ -39,6 +39,7 @@ describe("auth store", () => {
     };
 
     vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
     vi.doMock("./realtime.js", () => ({
       initializeWebSocket: vi.fn(),
       disconnectWebSocket: vi.fn(),
