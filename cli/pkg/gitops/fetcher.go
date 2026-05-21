@@ -152,12 +152,16 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	// Check cache first
 	cached, cachedAt, cacheErr := f.loadFromCache(channel, version)
 	if cacheErr == nil {
-		age := time.Since(cachedAt)
-		if age <= ttl {
-			return cached, nil
-		}
-		if f.offline && age <= maxStale {
-			return cached, nil
+		if validationErr := cached.ValidateServiceCohorts(); validationErr != nil {
+			cacheErr = validationErr
+		} else {
+			age := time.Since(cachedAt)
+			if age <= ttl {
+				return cached, nil
+			}
+			if f.offline && age <= maxStale {
+				return cached, nil
+			}
 		}
 	}
 
@@ -175,6 +179,9 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 			}
 			return nil, fmt.Errorf("failed to fetch from local path: %w", errFetch)
 		}
+		if err := manifest.ValidateServiceCohorts(); err != nil {
+			return nil, fmt.Errorf("invalid local release manifest: %w", err)
+		}
 		if err := f.saveToCache(channel, version, manifest); err != nil {
 			fmt.Printf("Warning: failed to cache manifest: %v\n", err)
 		}
@@ -189,6 +196,9 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 			return cached, nil
 		}
 		return nil, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+	if err := manifest.ValidateServiceCohorts(); err != nil {
+		return nil, fmt.Errorf("invalid release manifest: %w", err)
 	}
 
 	// Save to cache

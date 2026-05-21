@@ -1,6 +1,11 @@
 package gitops
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Manifest represents a release manifest from the gitops repo (actual CI/CD format)
 type Manifest struct {
@@ -125,6 +130,101 @@ type ServiceInfo struct {
 	Images    map[string]RegistryImage
 	Binaries  map[string]Artifact
 	FullImage string
+}
+
+// ValidateServiceCohorts rejects manifests that split the core control-plane
+// cohort across different service versions. Those services exchange Foghorn
+// routing/control RPCs during provisioning and request handling, so a manifest
+// that carries only part of the cohort forward is not deployable.
+func (m *Manifest) ValidateServiceCohorts() error {
+	if m == nil {
+		return nil
+	}
+	if !supportsCoreCohortValidation(m.PlatformVersion) {
+		return nil
+	}
+	for _, cohort := range [][]string{{"bridge", "commodore", "foghorn", "quartermaster"}} {
+		versions := make(map[string]string, len(cohort))
+		for _, name := range cohort {
+			version, ok := m.serviceVersion(name)
+			if !ok {
+				versions = nil
+				break
+			}
+			versions[name] = version
+		}
+		if len(versions) == 0 {
+			continue
+		}
+
+		expected := versions[cohort[0]]
+		for _, name := range cohort[1:] {
+			if versions[name] == expected {
+				continue
+			}
+			return fmt.Errorf("release manifest %s splits core control-plane service versions: %s=%s, %s=%s", m.PlatformVersion, cohort[0], expected, name, versions[name])
+		}
+		for _, name := range cohort {
+			if err := m.validateNativeBinaryVersion(name, versions[name]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func supportsCoreCohortValidation(version string) bool {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	parts := strings.Split(version, ".")
+	if len(parts) < 3 {
+		return true
+	}
+	major, majorErr := strconv.Atoi(parts[0])
+	minor, minorErr := strconv.Atoi(parts[1])
+	patch, patchErr := strconv.Atoi(parts[2])
+	if majorErr != nil || minorErr != nil || patchErr != nil {
+		return true
+	}
+	if major != 0 {
+		return major > 0
+	}
+	if minor != 2 {
+		return minor > 2
+	}
+	return patch >= 40
+}
+
+func (m *Manifest) serviceVersion(name string) (string, bool) {
+	for _, svc := range m.Services {
+		if svc.Name != name {
+			continue
+		}
+		version := strings.TrimSpace(svc.ServiceVersion)
+		if version == "" {
+			version = strings.TrimSpace(m.PlatformVersion)
+		}
+		return version, true
+	}
+	return "", false
+}
+
+func (m *Manifest) validateNativeBinaryVersion(name, version string) error {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil
+	}
+	for _, nb := range m.NativeBinaries {
+		if nb.Name != name {
+			continue
+		}
+		for _, artifact := range nb.Artifacts {
+			if artifact.URL == "" || strings.Contains(artifact.URL, version) {
+				continue
+			}
+			return fmt.Errorf("release manifest %s has %s native artifact %s outside service version %s", m.PlatformVersion, name, artifact.URL, version)
+		}
+	}
+	return nil
 }
 
 // GetExternalDependency looks up an external dependency by name (e.g., "mistserver", "caddy").

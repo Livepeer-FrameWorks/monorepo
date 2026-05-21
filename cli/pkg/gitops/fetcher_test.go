@@ -443,6 +443,78 @@ func TestGetServiceInfoFallsBackToPlatformVersionWhenServiceVersionEmpty(t *test
 	}
 }
 
+func TestValidateServiceCohortsRejectsCoreControlPlaneSkew(t *testing.T) {
+	m := &Manifest{
+		PlatformVersion: "v0.2.59",
+		Services: []ServiceEntry{
+			{Name: "bridge", ServiceVersion: "v0.2.57"},
+			{Name: "commodore", ServiceVersion: "v0.2.59"},
+			{Name: "foghorn", ServiceVersion: "v0.2.57"},
+			{Name: "quartermaster", ServiceVersion: "v0.2.59"},
+		},
+	}
+	if err := m.ValidateServiceCohorts(); err == nil {
+		t.Fatal("ValidateServiceCohorts accepted split core control-plane versions")
+	}
+}
+
+func TestValidateServiceCohortsRejectsNativeBinaryVersionDrift(t *testing.T) {
+	m := &Manifest{
+		PlatformVersion: "v0.2.60",
+		Services: []ServiceEntry{
+			{Name: "bridge", ServiceVersion: "v0.2.60"},
+			{Name: "commodore", ServiceVersion: "v0.2.60"},
+			{Name: "foghorn", ServiceVersion: "v0.2.60"},
+			{Name: "quartermaster", ServiceVersion: "v0.2.60"},
+		},
+		NativeBinaries: []NativeBinary{
+			{
+				Name: "bridge",
+				Artifacts: []Artifact{
+					{Arch: "linux-amd64", URL: "https://example.test/releases/v0.2.57/frameworks-bridge-v0.2.57-linux-amd64.tar.gz"},
+				},
+			},
+		},
+	}
+	if err := m.ValidateServiceCohorts(); err == nil {
+		t.Fatal("ValidateServiceCohorts accepted native binary URL outside service version")
+	}
+}
+
+func TestFetcherRejectsSkewedLocalManifest(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "channels"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "channels", "stable.yaml"), []byte("platform_version: v0.2.59\nmanifest: releases/v0.2.59.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `platform_version: v0.2.59
+services:
+  - name: bridge
+    service_version: v0.2.57
+  - name: commodore
+    service_version: v0.2.59
+  - name: foghorn
+    service_version: v0.2.57
+  - name: quartermaster
+    service_version: v0.2.59
+`
+	if err := os.WriteFile(filepath.Join(repo, "releases", "v0.2.59.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fetcher, err := NewFetcher(FetchOptions{Repository: repo, CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetcher.Fetch("stable", "latest"); err == nil {
+		t.Fatal("Fetch accepted skewed local release manifest")
+	}
+}
+
 func TestFetchUsesNormalizedVersionCacheKey(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,8 +214,8 @@ func TestPlanRebuildsWhenSourceChanged(t *testing.T) {
 
 	components, _ := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
 	gitopsDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	// Record baseline hash from current source tree.
 	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
@@ -249,6 +250,87 @@ services:
 	}
 	if d.BaselineSourceHash == "" || d.BaselineSourceHash == d.SourceHash {
 		t.Fatalf("expected differing baseline_source_hash, got baseline=%q current=%q", d.BaselineSourceHash, d.SourceHash)
+	}
+}
+
+func TestPlanBuildsControlPlaneCohortWhenOneMemberChanges(t *testing.T) {
+	componentsJSON := `{"services":[
+		{"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false,"darwin_binary":true},
+		{"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true,"darwin_binary":false},
+		{"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false,"darwin_binary":true},
+		{"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true,"darwin_binary":false},
+		{"name":"toy","context":"toy","cmd":"./cmd/toy","cgo":false,"darwin_binary":true}
+	]}`
+	files := map[string]string{
+		".github/release-components.json":    componentsJSON,
+		".go-version":                        "1.26.2",
+		".github/workflows/release.yml":      "name: release\n",
+		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
+		"tools/release-plan/release-plan.go": "package main // stub for HashWorkflowFiles\n",
+	}
+	for _, svc := range []struct {
+		context string
+		cmd     string
+	}{
+		{context: "api_gateway", cmd: "bridge"},
+		{context: "api_tenants", cmd: "quartermaster"},
+		{context: "api_control", cmd: "commodore"},
+		{context: "api_balancing", cmd: "foghorn"},
+		{context: "toy", cmd: "toy"},
+	} {
+		files[filepath.Join(svc.context, "go.mod")] = "module example.com/" + svc.context + "\n\ngo 1.26.2\n\nrequire github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0\n\nreplace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg\n"
+		files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = "package main\nfunc main() {}\n"
+	}
+	monorepo := writeFakeMonorepo(t, files)
+
+	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitopsDir := t.TempDir()
+	if mkdirErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var baseline strings.Builder
+	baseline.WriteString("platform_version: v0.2.39\nservices:\n")
+	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn", "toy"} {
+		hash := plan1.Decisions[name].SourceHash
+		fmt.Fprintf(&baseline, "  - name: %s\n    service_version: v0.2.39\n    image: example.com/frameworks-%s:v0.2.39\n    digest: sha256:%s\n    source_hash: %s\n", name, name, name, hash)
+	}
+	if writeErr := os.WriteFile(filepath.Join(gitopsDir, "releases", "v0.2.39.yaml"), []byte(baseline.String()), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(monorepo, "api_control", "cmd", "commodore", "main.go"), []byte("package main\nfunc main() { _ = 1 }\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	plan2, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn"} {
+		d := plan2.Decisions[name]
+		if d.Action != ActionBuild {
+			t.Fatalf("%s action = %s, want build", name, d.Action)
+		}
+		if d.CarriedService != nil || d.CarriedNativeBinary != nil {
+			t.Fatalf("%s carried stale release identity after cohort build: service=%+v native=%+v", name, d.CarriedService, d.CarriedNativeBinary)
+		}
+	}
+	if d := plan2.Decisions["toy"]; d.Action != ActionCarryForward {
+		t.Fatalf("toy action = %s, want carry_forward", d.Action)
+	}
+	if plan2.Summary.BuildCount != 4 || plan2.Summary.CarryForwardCount != 1 {
+		t.Fatalf("summary = %+v, want build=4 carry=1", plan2.Summary)
+	}
+	if len(plan2.Notes) == 0 || !strings.Contains(plan2.Notes[0], "forced build cohort") {
+		t.Fatalf("notes = %+v, want forced cohort note", plan2.Notes)
 	}
 }
 
