@@ -58,16 +58,21 @@
 - name: Read desired Helmsman binary checksum
   ansible.builtin.shell: |
     set -e
-    if ls "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* >/dev/null 2>&1; then
-      sha256sum "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* | awk '{print $1}'
-    elif [ -f "{{ helmsman_verify_dir.path }}/frameworks" ]; then
-      sha256sum "{{ helmsman_verify_dir.path }}/frameworks" | awk '{print $1}'
-    elif [ -f "{{ helmsman_verify_dir.path }}/helmsman" ]; then
-      sha256sum "{{ helmsman_verify_dir.path }}/helmsman" | awk '{print $1}'
-    else
+    desired_binary=""
+    for candidate in \
+      "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* \
+      "{{ helmsman_verify_dir.path }}/frameworks" \
+      "{{ helmsman_verify_dir.path }}/helmsman"; do
+      if [ -f "$candidate" ]; then
+        desired_binary="$candidate"
+        break
+      fi
+    done
+    if [ -z "$desired_binary" ]; then
       echo "missing helmsman binary in artifact" >&2
       exit 1
     fi
+    sha256sum "$desired_binary"
   args:
     executable: /bin/sh
   register: helmsman_desired_binary_checksum
@@ -91,7 +96,8 @@
   when:
     - not ansible_check_mode
     - helmsman_installed_binary_checksum.rc != 0
-      or ((helmsman_installed_binary_checksum.stdout.split() | first) | default('')) != (helmsman_desired_binary_checksum.stdout | trim)
+      or ((helmsman_installed_binary_checksum.stdout.split() | first) | default(''))
+      != ((helmsman_desired_binary_checksum.stdout.split() | first) | default(''))
 
 - name: Remove Helmsman artifact verification directory
   ansible.builtin.file:
