@@ -2529,12 +2529,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					if inst.Mode != "" {
 						config.Mode = inst.Mode
 					}
-					config.Version = manifest.Infrastructure.Postgres.Version
+					if manifest.Infrastructure.Postgres.Version != "" {
+						config.Version = manifest.Infrastructure.Postgres.Version
+					}
 					if inst.Version != "" {
 						config.Version = inst.Version
-					}
-					if config.Version == "" {
-						config.Version = "16"
 					}
 					config.Port = postgresInstancePort(inst)
 					config.Metadata["instance"] = inst.Name
@@ -2812,7 +2811,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		case "yugabyte":
 			if pg := manifest.Infrastructure.Postgres; pg != nil {
 				config.Port = pg.EffectivePort()
-				config.Version = pg.Version
+				if pg.Version != "" {
+					config.Version = pg.Version
+				}
 				config.Metadata["master_addresses"] = pg.MasterAddresses(manifest.MeshAddress)
 				config.Metadata["replication_factor"] = pg.EffectiveReplicationFactor()
 				if task.InstanceID != "" {
@@ -2837,12 +2838,6 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
 	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "redis" {
 		config.Mode = "native"
-		// Keep manifest-specified version for infra with explicit native version
-		// semantics; only fall back to "latest" for the remaining legacy cases.
-		keepVersion := task.Type == "yugabyte" || task.Type == "postgres" || task.Type == "kafka" || task.Type == "kafka-controller" || task.Type == "clickhouse"
-		if !keepVersion || config.Version == "" {
-			config.Version = "latest"
-		}
 	}
 
 	// Native override for Privateer + inject mesh node identity

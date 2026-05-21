@@ -37,6 +37,7 @@ func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {
 
 func TestClickHouseRoleVarsDefaultsListenHostsToLocalAndMesh(t *testing.T) {
 	config := ServiceConfig{
+		Version: "26.3.10.62",
 		Metadata: map[string]any{
 			"advertised_host": "10.66.0.12",
 		},
@@ -63,6 +64,7 @@ func TestClickHouseRoleVarsDefaultsListenHostsToLocalAndMesh(t *testing.T) {
 
 func TestClickHouseRoleVarsRespectsExplicitListenHost(t *testing.T) {
 	config := ServiceConfig{
+		Version: "26.3.10.62",
 		Metadata: map[string]any{
 			"advertised_host": "10.66.0.12",
 			"listen_host":     "::",

@@ -26,6 +26,33 @@ func resolvePinnedImage(serviceName string, config ServiceConfig) (string, error
 	return image, nil
 }
 
+func releaseVersion(configured, resolved string) string {
+	if isReleaseChannel(configured) {
+		return resolved
+	}
+	return configured
+}
+
+func isReleaseChannel(version string) bool {
+	switch version {
+	case "", "stable", "latest":
+		return true
+	default:
+		return false
+	}
+}
+
+func infrastructureVersion(name string, config ServiceConfig) (string, error) {
+	if !isReleaseChannel(config.Version) {
+		return config.Version, nil
+	}
+	infra, _, _, err := fetchInfraEntry(name, platformChannelFromMetadata(config.Metadata), config.Metadata)
+	if err != nil {
+		return "", err
+	}
+	return infra.Version, nil
+}
+
 // dbSet turns a database name list into a set for O(1) membership checks.
 // Used by the seed helpers to skip databases not present in the manifest.
 func dbSet(names []string) map[string]struct{} {

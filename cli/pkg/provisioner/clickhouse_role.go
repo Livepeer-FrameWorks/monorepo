@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -14,9 +15,9 @@ import (
 // clickhouseRoleVars translates the manifest's clickhouse.* config into the
 // role's variable surface, which in turn feeds idealista.clickhouse.
 func clickhouseRoleVars(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	version := firstNonEmpty(config.Version, metaString(config.Metadata, "version"))
-	if version == "" || version == "latest" || version == "stable" {
-		version = "24.8"
+	version, err := infrastructureVersion("clickhouse", config)
+	if err != nil {
+		return nil, fmt.Errorf("resolve clickhouse version: %w", err)
 	}
 	port := config.Port
 	if port == 0 {

@@ -34,13 +34,13 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 			if art, err := helpers.ResolveArtifact("victoriametrics", archKey, channel, config.Metadata); err == nil {
 				vars["victoriametrics_artifact_url"] = art.URL
 				vars["victoriametrics_artifact_checksum"] = art.Checksum
-				vars["victoriametrics_version"] = firstNonEmpty(config.Version, art.Version)
+				vars["victoriametrics_version"] = releaseVersion(config.Version, art.Version)
 			}
 		case "vmagent":
 			if art, err := helpers.ResolveArtifact("vmagent", archKey, channel, config.Metadata); err == nil {
 				vars["vmagent_artifact_url"] = art.URL
 				vars["vmagent_artifact_checksum"] = art.Checksum
-				vars["vmagent_version"] = firstNonEmpty(config.Version, art.Version)
+				vars["vmagent_version"] = releaseVersion(config.Version, art.Version)
 			}
 			if targets, ok := config.Metadata["scrape_targets"]; ok {
 				vars["vmagent_scrape_targets"] = targets
@@ -64,7 +64,7 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 			if art, err := helpers.ResolveArtifact("vmauth", archKey, channel, config.Metadata); err == nil {
 				vars["vmauth_artifact_url"] = art.URL
 				vars["vmauth_artifact_checksum"] = art.Checksum
-				vars["vmauth_version"] = firstNonEmpty(config.Version, art.Version)
+				vars["vmauth_version"] = releaseVersion(config.Version, art.Version)
 			}
 			if username := strings.TrimSpace(config.EnvVars["VM_HTTP_AUTH_USERNAME"]); username != "" {
 				vars["vmauth_username"] = username
@@ -82,7 +82,7 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 				vars["vmauth_edge_jwt_public_key_pem_b64"] = strings.TrimSpace(publicKey)
 			}
 		case "prometheus":
-			if v := firstNonEmpty(config.Version, metaString(config.Metadata, "version")); v != "" {
+			if v := releaseVersion(config.Version, metaString(config.Metadata, "version")); v != "" {
 				vars["prometheus_version"] = v
 			}
 		}

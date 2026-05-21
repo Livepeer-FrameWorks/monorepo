@@ -28,7 +28,7 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 	vars := map[string]any{
 		"kafka_mm_artifact_url":      art.URL,
 		"kafka_mm_artifact_checksum": art.Checksum,
-		"kafka_mm_version":           firstNonEmpty(config.Version, art.Version),
+		"kafka_mm_version":           releaseVersion(config.Version, art.Version),
 		"kafka_mm_heap_opts":         "-Xmx1G -Xms1G",
 		"kafka_mm_rest_port":         8083,
 		"kafka_mm_task_count":        2,

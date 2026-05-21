@@ -30,7 +30,7 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		vars := map[string]any{
 			"kafka_artifact_url":      art.URL,
 			"kafka_artifact_checksum": art.Checksum,
-			"kafka_version":           firstNonEmpty(config.Version, art.Version),
+			"kafka_version":           releaseVersion(config.Version, art.Version),
 			"kafka_role":              role,
 			"kafka_node_id":           nodeID,
 			"kafka_cluster_id":        clusterID,

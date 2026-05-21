@@ -41,7 +41,7 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	vars := map[string]any{
 		"yugabyte_artifact_url":       artifact.URL,
 		"yugabyte_artifact_checksum":  artifact.Checksum,
-		"yugabyte_version":            firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
+		"yugabyte_version":            releaseVersion(config.Version, artifact.Version),
 		"yugabyte_node_address":       meshOrExternal(config.Metadata, host),
 		"yugabyte_master_addresses":   masterAddresses,
 		"yugabyte_replication_factor": rf,
