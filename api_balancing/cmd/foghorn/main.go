@@ -594,7 +594,7 @@ func main() {
 		if qmClient == nil || tenantID == "" {
 			return nil
 		}
-		v, ok, cacheErr := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+		v, ok, cacheErr := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (any, bool, error) {
 			rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
 			defer cancel()
 			resp, qErr := qmClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
@@ -1151,6 +1151,7 @@ func main() {
 
 	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("foghorn", "18008")
+	server.RegisterEnvFileReload("foghorn", logger)
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
@@ -1203,8 +1204,8 @@ func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
 func controlPortFromBindAddr(bindAddr string, fallback int) int {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
 	if err != nil {
-		if strings.HasPrefix(bindAddr, ":") {
-			port = strings.TrimPrefix(bindAddr, ":")
+		if trimmed, ok := strings.CutPrefix(bindAddr, ":"); ok {
+			port = trimmed
 		} else {
 			return fallback
 		}

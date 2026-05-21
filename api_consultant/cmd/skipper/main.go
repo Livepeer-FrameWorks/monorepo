@@ -820,6 +820,7 @@ func main() {
 		}
 	}()
 
+	server.RegisterEnvFileReload("skipper", logger)
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}

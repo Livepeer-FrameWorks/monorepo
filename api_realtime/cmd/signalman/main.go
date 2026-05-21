@@ -427,6 +427,7 @@ func main() {
 		}
 	}()
 
+	server.RegisterEnvFileReload("signalman", logger)
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("HTTP server startup failed")
 	}

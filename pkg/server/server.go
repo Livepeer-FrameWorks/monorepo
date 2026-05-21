@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +18,77 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
+
+// ReloadCallback is fired when Start receives SIGHUP. Callbacks re-read
+// file-based config or rotate TLS material; they must not block (run any
+// work in a goroutine) and should return any error for logging. Returning
+// an error does not abort subsequent callbacks — every registered hook
+// runs on every SIGHUP.
+type ReloadCallback func() error
+
+var (
+	reloadMu  sync.Mutex
+	reloadFns []ReloadCallback
+)
+
+// RegisterReload appends a callback that fires whenever the process
+// receives SIGHUP while Start is running. Registration order is preserved;
+// callbacks run sequentially. Safe to call from init() or from goroutines
+// after Start blocks on its quit channel.
+//
+// Even when no callback is registered, Start still installs a SIGHUP
+// listener — that's what neuters Go's default-terminate disposition for
+// the signal cluster-wide, so `systemctl reload <service>` is a true
+// no-op rather than a kill for every Go service.
+func RegisterReload(fn ReloadCallback) {
+	if fn == nil {
+		return
+	}
+	reloadMu.Lock()
+	reloadFns = append(reloadFns, fn)
+	reloadMu.Unlock()
+}
+
+// snapshotReloadFns returns a copy of the current callback list so the
+// reload loop can iterate without holding the mutex.
+func snapshotReloadFns() []ReloadCallback {
+	reloadMu.Lock()
+	defer reloadMu.Unlock()
+	out := make([]ReloadCallback, len(reloadFns))
+	copy(out, reloadFns)
+	return out
+}
+
+// startReloadListener installs a SIGHUP handler that dispatches every
+// signal to the current snapshot of registered ReloadCallbacks. Callbacks
+// run sequentially in registration order; a returned error is logged and
+// does not abort the remaining callbacks for that signal.
+//
+// Returns a stop function that detaches the signal handler and waits for
+// the dispatch goroutine to drain. Safe to call from tests directly so the
+// SIGHUP-doesn't-terminate property can be verified without spinning up a
+// real HTTP server.
+func startReloadListener(logger logging.Logger, serviceName string) func() {
+	reloadCh := make(chan os.Signal, 1)
+	signal.Notify(reloadCh, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range reloadCh {
+			for _, fn := range snapshotReloadFns() {
+				if err := fn(); err != nil {
+					logger.WithError(err).WithField("service", serviceName).
+						Warn("reload callback returned error")
+				}
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(reloadCh)
+		close(reloadCh)
+		<-done
+	}
+}
 
 // Config represents server configuration
 type Config struct {
@@ -82,6 +154,13 @@ func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
 		}
 	}()
 
+	// Reload listener — SIGHUP fires every registered ReloadCallback.
+	// Installing the listener also neuters Go's default-terminate
+	// disposition for SIGHUP: with no callbacks registered, the signal
+	// is silently consumed and the process keeps running.
+	stopReload := startReloadListener(logger, cfg.ServiceName)
+	defer stopReload()
+
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -119,7 +198,7 @@ func SetupServiceRouter(
 	// Parse CORS allowed origins from environment
 	var allowedOrigins []string
 	if originsStr := config.GetEnv("ALLOWED_ORIGINS", ""); originsStr != "" {
-		for _, o := range strings.Split(originsStr, ",") {
+		for o := range strings.SplitSeq(originsStr, ",") {
 			if trimmed := strings.TrimSpace(o); trimmed != "" {
 				allowedOrigins = append(allowedOrigins, trimmed)
 			}

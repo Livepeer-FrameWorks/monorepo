@@ -163,6 +163,33 @@ func main() {
 		}
 	}()
 
+	// Handle SIGHUP env-file reload. decklog runs its own gRPC + HTTP
+	// listeners (no pkg/server.Start) so we install the listener here.
+	// Installing it also neuters Go's default-terminate disposition for
+	// SIGHUP even before any callback is registered — matches the
+	// guarantee pkg/server.Start gives every other Go service.
+	go func() {
+		hupCh := make(chan os.Signal, 1)
+		signal.Notify(hupCh, syscall.SIGHUP)
+		envPath := server.EnvFilePathFor("decklog")
+		for range hupCh {
+			res, err := config.ReloadFromFile(envPath)
+			if err != nil {
+				logger.WithError(err).WithField("env_file", envPath).Warn("env-file reload failed")
+				continue
+			}
+			if res.Empty() {
+				logger.Debug("env-file reload: no changes")
+				continue
+			}
+			logger.WithFields(logging.Fields{
+				"added":   res.Added,
+				"changed": res.Changed,
+				"removed": res.Removed,
+			}).Info("env-file reload applied")
+		}
+	}()
+
 	// Handle graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)

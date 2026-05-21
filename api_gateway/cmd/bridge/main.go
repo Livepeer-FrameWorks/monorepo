@@ -640,6 +640,7 @@ func main() {
 	}()
 
 	// Start server with standard graceful shutdown handling
+	server.RegisterEnvFileReload("bridge", logger)
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.Fatal("Failed to start server: " + err.Error())
 	}

@@ -358,6 +358,7 @@ func main() {
 		}
 	}()
 
+	server.RegisterEnvFileReload("navigator", logger)
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Navigator HTTP server failed")
 	}

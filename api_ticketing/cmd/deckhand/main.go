@@ -293,6 +293,7 @@ func main() {
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("deckhand", httpPort)
+	server.RegisterEnvFileReload("deckhand", logger)
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("HTTP server failed")
 	}

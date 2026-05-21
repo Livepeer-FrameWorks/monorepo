@@ -271,6 +271,7 @@ func main() {
 		}
 	}()
 
+	server.RegisterEnvFileReload("commodore", logger)
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}

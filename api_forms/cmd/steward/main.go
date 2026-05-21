@@ -93,6 +93,7 @@ func main() {
 	}
 
 	serverConfig := server.DefaultConfig("steward", port)
+	server.RegisterEnvFileReload("steward", logger)
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.Fatal(err.Error())
 	}

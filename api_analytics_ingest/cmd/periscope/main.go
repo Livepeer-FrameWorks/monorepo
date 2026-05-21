@@ -338,6 +338,7 @@ func startHealthServer(healthChecker *monitoring.HealthChecker, metricsCollector
 	router := server.SetupServiceRouter(logger, "periscope-ingest", healthChecker, metricsCollector)
 
 	serverConfig := server.DefaultConfig("periscope-ingest", "18005")
+	server.RegisterEnvFileReload("periscope-ingest", logger)
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Error("Health server error")
 	}
