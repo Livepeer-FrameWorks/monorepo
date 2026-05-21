@@ -72,6 +72,25 @@ func TestLogicalServiceClusterIDsDefaultsBunnyServicesToDefaultMediaCluster(t *t
 	}
 }
 
+func TestLogicalServiceClusterIDsDefaultsTelemetryToAllMediaClusters(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {Cluster: "regional-eu"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu": {Name: "Regional EU", Type: "regional"},
+			"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}},
+			"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+		},
+	}
+
+	got := LogicalServiceClusterIDs("vmauth", inventory.ServiceConfig{Enabled: true, Host: "regional-eu-1"}, manifest)
+	want := []string{"media-eu-1", "media-us-1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("vmauth telemetry clusters = %q, want %q", got, want)
+	}
+}
+
 func TestLogicalServiceClusterIDsHonorsExplicitClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

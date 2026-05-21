@@ -1498,16 +1498,58 @@ func validateEdgeTelemetryTopology(manifest *inventory.Manifest, sharedEnv map[s
 	if err := ensureEdgeTelemetryJWTKeypair(map[string]any{}, sharedEnv); err != nil {
 		return err
 	}
-	vmauthHosts := sortedUniqueStrings(serviceHosts(manifest.Observability["vmauth"]))
-	caddy, ok := manifest.Interfaces["caddy"]
-	if !ok || !caddy.Enabled {
-		return fmt.Errorf("edge telemetry requires caddy to publish telemetry.<cluster> to vmauth")
+	telemetryClusters := clusterderive.LogicalServiceClusterIDs("vmauth", manifest.Observability["vmauth"], manifest)
+	if len(telemetryClusters) == 0 {
+		return fmt.Errorf("edge telemetry requires vmauth to target at least one media cluster")
 	}
-	caddyHosts := sortedUniqueStrings(serviceHosts(caddy))
-	if len(vmauthHosts) == 0 || len(caddyHosts) == 0 || !slices.Equal(vmauthHosts, caddyHosts) {
-		return fmt.Errorf("edge telemetry requires caddy and vmauth to be co-located on the same host set; got caddy=%v vmauth=%v", caddyHosts, vmauthHosts)
+	vmauthHosts := sortedUniqueStrings(serviceHosts(manifest.Observability["vmauth"]))
+	proxyHosts := edgeTelemetryReverseProxyHosts(manifest)
+	if len(proxyHosts) == 0 {
+		return fmt.Errorf("edge telemetry requires caddy or nginx to publish telemetry.<cluster> to vmauth")
+	}
+	missing := missingHosts(vmauthHosts, proxyHosts)
+	if len(vmauthHosts) == 0 || len(missing) > 0 {
+		return fmt.Errorf("edge telemetry requires caddy or nginx on every vmauth host; missing=%v proxy=%v vmauth=%v", missing, proxyHosts, vmauthHosts)
 	}
 	return nil
+}
+
+func edgeTelemetryReverseProxyHosts(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, name := range []string{"caddy", "nginx"} {
+		svc, ok := manifest.Interfaces[name]
+		if !ok || !svc.Enabled {
+			continue
+		}
+		for _, host := range serviceHosts(svc) {
+			if host != "" {
+				seen[host] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for host := range seen {
+		result = append(result, host)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func missingHosts(required, available []string) []string {
+	have := map[string]struct{}{}
+	for _, host := range available {
+		have[host] = struct{}{}
+	}
+	var missing []string
+	for _, host := range required {
+		if _, ok := have[host]; !ok {
+			missing = append(missing, host)
+		}
+	}
+	return missing
 }
 
 type internalPKIBootstrap struct {
@@ -3246,10 +3288,10 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			}
 			masterLabels := maps.Clone(baseLabels)
 			masterLabels["port"] = "master"
-			addTarget("yugabyte", address, 7000, "/prometheus-metrics", masterLabels)
+			addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
 			tserverLabels := maps.Clone(baseLabels)
 			tserverLabels["port"] = "tserver"
-			addTarget("yugabyte", address, 11000, "/prometheus-metrics", tserverLabels)
+			addTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels)
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host == hostName {
@@ -4018,7 +4060,7 @@ var proxyRouteServiceNames = map[string]struct{}{
 }
 
 func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, clusterID string) []map[string]any {
-	if manifest == nil || hostName == "" || clusterID == "" {
+	if manifest == nil || hostName == "" {
 		return nil
 	}
 	vmauth, ok := manifest.Observability["vmauth"]
@@ -4028,25 +4070,32 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 	if vmauth.Host != hostName && !containsHost(vmauth.Hosts, hostName) {
 		return nil
 	}
-	rootDomain := publicServiceRootDomain("telemetry", manifest, clusterID)
-	if rootDomain == "" {
+	telemetryClusters := clusterderive.LogicalServiceClusterIDs("vmauth", vmauth, manifest)
+	if len(telemetryClusters) == 0 {
 		return nil
 	}
-	fqdn, ok := pkgdns.ServiceFQDN("telemetry", rootDomain)
-	if !ok || fqdn == "" {
-		return nil
-	}
+	sort.Strings(telemetryClusters)
 	port, err := resolvePort("vmauth", vmauth)
 	if err != nil || port == 0 {
 		port = provisioner.ServicePorts["vmauth"]
 	}
-	return []map[string]any{
-		{
-			"name":         "telemetry",
+	routes := make([]map[string]any, 0, len(telemetryClusters))
+	for _, telemetryCluster := range telemetryClusters {
+		rootDomain := publicServiceRootDomain("telemetry", manifest, telemetryCluster)
+		if rootDomain == "" {
+			continue
+		}
+		fqdn, ok := pkgdns.ServiceFQDN("telemetry", rootDomain)
+		if !ok || fqdn == "" {
+			continue
+		}
+		routes = append(routes, map[string]any{
+			"name":         "telemetry-" + telemetryCluster,
 			"server_names": []string{fqdn},
 			"upstream":     fmt.Sprintf("127.0.0.1:%d", port),
-		},
+		})
 	}
+	return routes
 }
 
 func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID string, localSvcs map[string]any, extraRoutes any) []map[string]any {

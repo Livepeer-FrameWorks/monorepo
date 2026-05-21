@@ -139,6 +139,9 @@ func LogicalServiceClusterIDs(serviceName string, svc inventory.ServiceConfig, m
 	if !ok || pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny {
 		return nil
 	}
+	if serviceType == "telemetry" {
+		return MediaClusterIDs(manifest)
+	}
 	if clusterID := defaultMediaClusterID(manifest); clusterID != "" {
 		return []string{clusterID}
 	}

@@ -2740,14 +2740,15 @@ func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
 	}
 
 	targets := buildVMAgentScrapeTargets(manifest, "yuga-1")
-	master := findScrapeTarget(t, targets, "yugabyte", "yuga-1.internal:7000")
+	assertUniqueScrapeJobNames(t, targets)
+	master := findScrapeTarget(t, targets, "yugabyte-master", "yuga-1.internal:7000")
 	if got := master["path"]; got != "/prometheus-metrics" {
 		t.Fatalf("master path = %v, want /prometheus-metrics", got)
 	}
 	if got := scrapeTargetLabels(t, master)["port"]; got != "master" {
 		t.Fatalf("master port label = %q, want master", got)
 	}
-	tserver := findScrapeTarget(t, targets, "yugabyte", "yuga-1.internal:11000")
+	tserver := findScrapeTarget(t, targets, "yugabyte-tserver", "yuga-1.internal:11000")
 	if got := tserver["path"]; got != "/prometheus-metrics" {
 		t.Fatalf("tserver path = %v, want /prometheus-metrics", got)
 	}
@@ -2929,11 +2930,14 @@ func TestEnsureEdgeTelemetryJWTKeypairDerivesPublicKey(t *testing.T) {
 	}
 }
 
-func TestValidateEdgeTelemetryTopologyRequiresCaddyVMAUTHCoLocation(t *testing.T) {
+func TestValidateEdgeTelemetryTopologyRequiresReverseProxyOnVMAUTHHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
 			"control-1": {ExternalIP: "10.0.0.10"},
 			"router-1":  {ExternalIP: "10.0.0.11"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {Type: "edge", Roles: []string{"media"}},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: true, Host: "control-1"},
@@ -2948,15 +2952,18 @@ func TestValidateEdgeTelemetryTopologyRequiresCaddyVMAUTHCoLocation(t *testing.T
 	err := validateEdgeTelemetryTopology(manifest, map[string]string{
 		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
 	})
-	if err == nil || !strings.Contains(err.Error(), "co-located") {
-		t.Fatalf("validateEdgeTelemetryTopology error = %v, want co-location failure", err)
+	if err == nil || !strings.Contains(err.Error(), "on every vmauth host") {
+		t.Fatalf("validateEdgeTelemetryTopology error = %v, want missing reverse proxy failure", err)
 	}
 }
 
-func TestValidateEdgeTelemetryTopologyAcceptsDurableKeyAndCoLocation(t *testing.T) {
+func TestValidateEdgeTelemetryTopologyAcceptsDurableKeyAndCaddyPlacement(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{
 			"control-1": {ExternalIP: "10.0.0.10"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {Type: "edge", Roles: []string{"media"}},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: true, Host: "control-1"},
@@ -2976,6 +2983,34 @@ func TestValidateEdgeTelemetryTopologyAcceptsDurableKeyAndCoLocation(t *testing.
 	}
 	if strings.TrimSpace(env["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"]) == "" {
 		t.Fatal("shared env should receive derived public key for the provision run")
+	}
+}
+
+func TestValidateEdgeTelemetryTopologyAcceptsNginxSupersetPlacement(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1":  {ExternalIP: "10.0.0.9"},
+			"regional-1": {ExternalIP: "10.0.0.10"},
+			"regional-2": {ExternalIP: "10.0.0.11"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {Type: "edge", Roles: []string{"media"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn": {Enabled: true, Host: "regional-1"},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Hosts: []string{"central-1", "regional-1", "regional-2"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Hosts: []string{"regional-1", "regional-2"}},
+		},
+	}
+	env := map[string]string{
+		"EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64": testEdgeTelemetryPrivateKeyB64(t),
+	}
+	if err := validateEdgeTelemetryTopology(manifest, env); err != nil {
+		t.Fatalf("validateEdgeTelemetryTopology: %v", err)
 	}
 }
 
@@ -3004,6 +3039,21 @@ func scrapeTargetLabels(t *testing.T, target map[string]any) map[string]string {
 		t.Fatalf("target has invalid labels: %#v", target["labels"])
 	}
 	return labels
+}
+
+func assertUniqueScrapeJobNames(t *testing.T, targets []map[string]any) {
+	t.Helper()
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		jobName, ok := target["job_name"].(string)
+		if !ok || jobName == "" {
+			t.Fatalf("target has invalid job_name: %#v", target["job_name"])
+		}
+		if _, exists := seen[jobName]; exists {
+			t.Fatalf("duplicate scrape job_name %q in %#v", jobName, targets)
+		}
+		seen[jobName] = struct{}{}
+	}
 }
 
 func TestBuildTaskConfigBuildsProxySitesForReverseProxy(t *testing.T) {
@@ -3250,6 +3300,45 @@ func TestBuildTaskConfigDedupesProxySites(t *testing.T) {
 	}
 	if len(sites) != 1 {
 		t.Fatalf("proxy_sites len = %d, want 1: %#v", len(sites), sites)
+	}
+}
+
+func TestBuildExtraProxyRoutesForHostUsesVMAUTHLogicalMediaClusters(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10", Cluster: "regional-eu"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu": {Name: "Regional EU", Type: "regional"},
+			"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}},
+			"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "regional-eu-1", Port: 8427},
+		},
+	}
+
+	routes := buildExtraProxyRoutesForHost(manifest, "regional-eu-1", "regional-eu")
+	if len(routes) != 2 {
+		t.Fatalf("routes len = %d, want 2: %#v", len(routes), routes)
+	}
+	domains := map[string]bool{}
+	for _, route := range routes {
+		names, ok := route["server_names"].([]string)
+		if !ok || len(names) != 1 {
+			t.Fatalf("route server_names = %#v", route["server_names"])
+		}
+		domains[names[0]] = true
+	}
+	for _, want := range []string{
+		"telemetry.media-eu-1.frameworks.network",
+		"telemetry.media-us-1.frameworks.network",
+	} {
+		if !domains[want] {
+			t.Fatalf("missing route for %s; got %#v", want, domains)
+		}
 	}
 }
 

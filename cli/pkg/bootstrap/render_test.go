@@ -546,6 +546,48 @@ func TestDeriveLivepeerGatewayPhysicalRegistryAndLogicalTLSBundles(t *testing.T)
 	}
 }
 
+func TestDeriveVMAUTHDefaultsIngressToAllMediaClusters(t *testing.T) {
+	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Hosts["regional-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "regional-eu"}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"regional-eu": {Name: "Regional EU", Type: "regional"},
+		"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}},
+		"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+	}
+	m.Observability = map[string]inventory.ServiceConfig{
+		"vmauth": {
+			Enabled: true,
+			Host:    "regional-eu-1",
+			Port:    8427,
+		},
+	}
+
+	d, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	sites := map[string]IngressSite{}
+	for _, s := range d.Quartermaster.Ingress.Sites {
+		sites[s.ID] = s
+	}
+	for _, clusterID := range []string{"media-eu-1", "media-us-1"} {
+		siteID := "vmauth-regional-eu-1-" + clusterID
+		site, ok := sites[siteID]
+		if !ok {
+			t.Fatalf("missing vmauth ingress site %s; got %+v", siteID, sites)
+		}
+		wantDomains := []string{"telemetry." + clusterID + ".frameworks.network"}
+		if !slices.Equal(site.Domains, wantDomains) {
+			t.Fatalf("%s domains = %v, want %v", siteID, site.Domains, wantDomains)
+		}
+		if site.TLSBundleID != "wildcard-"+strings.ReplaceAll(clusterID+".frameworks.network", ".", "-") {
+			t.Fatalf("%s tls_bundle_id = %q", siteID, site.TLSBundleID)
+		}
+	}
+}
+
 func TestDeriveChandlerLogicalIngressUsesPhysicalNodeCluster(t *testing.T) {
 	m := minimalManifest()
 	m.RootDomain = "frameworks.network"
