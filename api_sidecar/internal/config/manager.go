@@ -863,6 +863,12 @@ func composeCaddyBundles(seed *pb.ConfigSeed) []CaddyfileBundle {
 				TLSKeyPath:  key,
 			})
 		}
+		if site := seed.GetSite(); site != nil {
+			edgeDomain := strings.TrimSpace(site.GetEdgeDomain())
+			if edgeDomain != "" && !caddyBundlesCoverHost(out, edgeDomain) {
+				out = append(out, CaddyfileBundle{SiteAddress: edgeDomain})
+			}
+		}
 		return out
 	}
 	// Single-bundle seed: one site block from SiteConfig + Tls.
@@ -875,6 +881,31 @@ func composeCaddyBundles(seed *pb.ConfigSeed) []CaddyfileBundle {
 		b.TLSCertPath, b.TLSKeyPath = edgeTLSPaths()
 	}
 	return []CaddyfileBundle{b}
+}
+
+func caddyBundlesCoverHost(bundles []CaddyfileBundle, host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), ".")
+	if host == "" {
+		return false
+	}
+	for _, b := range bundles {
+		for _, addr := range strings.Fields(b.SiteAddress) {
+			addr = strings.Trim(strings.TrimSpace(addr), ".")
+			if addr == host {
+				return true
+			}
+			if strings.HasPrefix(addr, "*.") {
+				suffix := strings.TrimPrefix(addr, "*.")
+				if strings.HasSuffix(host, "."+suffix) {
+					prefix := strings.TrimSuffix(host, "."+suffix)
+					if prefix != "" && !strings.Contains(prefix, ".") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 func caddyAdminAddr() string {

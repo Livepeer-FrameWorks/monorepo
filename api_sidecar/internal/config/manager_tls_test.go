@@ -186,6 +186,51 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 	}
 }
 
+func TestComposeCaddyBundlesKeepsEdgeDomainWhenClusterBundleMissing(t *testing.T) {
+	bundles := composeCaddyBundles(&pb.ConfigSeed{
+		Site: &pb.SiteConfig{
+			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
+		},
+		TlsBundles: []*pb.TLSCertBundle{
+			{
+				BundleId:      "platform:edge-multi",
+				SiteAddresses: []string{"edge.frameworks.network", "edge-ingest.frameworks.network"},
+			},
+		},
+	})
+
+	if len(bundles) != 2 {
+		t.Fatalf("bundle count = %d, want 2: %#v", len(bundles), bundles)
+	}
+	if got := bundles[1].SiteAddress; got != "edge-eu-1.media-eu-1.frameworks.network" {
+		t.Fatalf("fallback SiteAddress = %q", got)
+	}
+	if bundles[1].TLSCertPath != "" || bundles[1].TLSKeyPath != "" {
+		t.Fatalf("fallback bundle should use Caddy-managed ACME, got cert=%q key=%q", bundles[1].TLSCertPath, bundles[1].TLSKeyPath)
+	}
+}
+
+func TestComposeCaddyBundlesDoesNotDuplicateCoveredEdgeDomain(t *testing.T) {
+	bundles := composeCaddyBundles(&pb.ConfigSeed{
+		Site: &pb.SiteConfig{
+			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
+		},
+		TlsBundles: []*pb.TLSCertBundle{
+			{
+				BundleId:      "cluster:media-eu-1",
+				SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
+			},
+		},
+	})
+
+	if len(bundles) != 1 {
+		t.Fatalf("bundle count = %d, want 1: %#v", len(bundles), bundles)
+	}
+	if got := bundles[0].SiteAddress; got != "*.media-eu-1.frameworks.network" {
+		t.Fatalf("SiteAddress = %q", got)
+	}
+}
+
 func TestRenderCaddyfileEmptyBundlesFails(t *testing.T) {
 	if _, err := RenderCaddyfile(CaddyfileParams{}); err == nil {
 		t.Fatal("expected error for empty bundles")
