@@ -225,6 +225,13 @@ message ControlMessage {
     // Edge API token validation (Helmsman -> Foghorn -> Commodore/JWT)
     ValidateEdgeTokenRequest validate_edge_token_request = 90;
     ValidateEdgeTokenResponse validate_edge_token_response = 91;
+    // Mist-admin session validation (Helmsman -> Foghorn -> Commodore).
+    // Distinct from validate_edge_token because the session token is
+    // bound to the connected node_id and carries different claims (the
+    // operator-admin purpose, cluster_id, exp). Foghorn injects the
+    // expected node_id at the relay so Helmsman cannot spoof it.
+    EdgeMistAdminSessionRequest edge_mist_admin_session_request = 92;
+    EdgeMistAdminSessionResponse edge_mist_admin_session_response = 93;
     // Thumbnail asset upload (Helmsman -> Foghorn -> S3)
     ThumbnailUploadRequest thumbnail_upload_request = 100;
     ThumbnailUploadResponse thumbnail_upload_response = 101;
@@ -2190,6 +2197,24 @@ message ValidateEdgeTokenResponse {
   string tenant_id = 3;
   string role = 4;
   repeated string permissions = 5;
+}
+
+// Helmsman -> Foghorn over the control stream. Helmsman never sees the
+// JWT secret; Foghorn relays to Commodore.ValidateMistAdminSession and
+// injects expected_node_id from the connected stream's node identity so
+// a token minted for one edge cannot be replayed against another.
+message EdgeMistAdminSessionRequest {
+  string token = 1;
+}
+
+message EdgeMistAdminSessionResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  string role = 4;
+  string node_id = 5;
+  string cluster_id = 6;
+  int64 expires_at = 7; // Unix seconds; Helmsman uses for cookie Max-Age.
 }
 
 // Helmsman -> Foghorn: request presigned PUT URLs for thumbnail files

@@ -97,14 +97,6 @@ func normalizePreferredEdgeNodeID(raw string) string {
 	return candidate
 }
 
-func edgeNodeRecordLabel(nodeID string) string {
-	label := pkgdns.SanitizeLabel(nodeID)
-	if strings.HasPrefix(label, "edge-") {
-		return label
-	}
-	return "edge-" + label
-}
-
 func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *pb.BootstrapEdgeNodeRequest {
 	host := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -1329,6 +1321,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processUpdateApplyResult(x.UpdateApplyResult, nodeID, registry.log)
 		case *pb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_EdgeMistAdminSessionRequest:
+			go processEdgeMistAdminSession(msg.GetRequestId(), x.EdgeMistAdminSessionRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_ProcessingJobResult:
 			if x.ProcessingJobResult.GetStatus() == "cache_update" {
 				// Refresh cached overrides before returning so the restarted push
@@ -2529,7 +2523,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 
 		siteConfig = &pb.SiteConfig{
 			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
-			EdgeDomain:  fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), slug, rootDomain),
+			EdgeDomain:  pkgdns.EdgeNodeFQDN(nodeID, slug, rootDomain),
 			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
 			AcmeEmail:   os.Getenv("ACME_EMAIL"),
 		}
@@ -6551,7 +6545,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 
 	rootDomain := platformRootDomain()
 
-	edgeDomain := fmt.Sprintf("%s.%s.%s", edgeNodeRecordLabel(nodeID), clusterSlug, rootDomain)
+	edgeDomain := pkgdns.EdgeNodeFQDN(nodeID, clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
 	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18029", clusterSlug, rootDomain)
 
@@ -6605,6 +6599,52 @@ func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectSe
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).Warn("Failed to send edge token validation response")
+	}
+}
+
+// processEdgeMistAdminSession relays a Mist-admin session validation
+// request from Helmsman to Commodore. The connected nodeID is injected
+// here so a token minted for one edge cannot be replayed against another.
+func processEdgeMistAdminSession(requestID string, req *pb.EdgeMistAdminSessionRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	resp := &pb.EdgeMistAdminSessionResponse{Valid: false}
+	if req.GetToken() == "" || nodeID == "" || CommodoreClient == nil {
+		sendEdgeMistAdminSessionResponse(requestID, stream, resp, logger)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	commResp, err := CommodoreClient.ValidateMistAdminSession(ctx, &pb.ValidateMistAdminSessionRequest{
+		Token:          req.GetToken(),
+		ExpectedNodeId: nodeID,
+	})
+	if err != nil {
+		logger.WithError(err).WithField("node_id", nodeID).
+			Warn("Mist admin session validation failed at Commodore")
+		sendEdgeMistAdminSessionResponse(requestID, stream, resp, logger)
+		return
+	}
+
+	resp.Valid = commResp.GetValid()
+	resp.UserId = commResp.GetUserId()
+	resp.TenantId = commResp.GetTenantId()
+	resp.Role = commResp.GetRole()
+	resp.NodeId = commResp.GetNodeId()
+	resp.ClusterId = commResp.GetClusterId()
+	resp.ExpiresAt = commResp.GetExpiresAt()
+
+	sendEdgeMistAdminSessionResponse(requestID, stream, resp, logger)
+}
+
+func sendEdgeMistAdminSessionResponse(requestID string, stream pb.HelmsmanControl_ConnectServer, resp *pb.EdgeMistAdminSessionResponse, logger logging.Logger) {
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_EdgeMistAdminSessionResponse{EdgeMistAdminSessionResponse: resp},
+	}
+	if err := stream.Send(msg); err != nil {
+		logger.WithError(err).Warn("Failed to send mist admin session response")
 	}
 }
 

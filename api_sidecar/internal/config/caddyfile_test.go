@@ -1,0 +1,140 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+func baseParams() CaddyfileParams {
+	return CaddyfileParams{
+		Bundles: []CaddyfileBundle{
+			{
+				SiteAddress: "*.media-us-1.frameworks.network",
+				TLSCertPath: "/etc/frameworks/certs/bundles/cluster_media-us-1.crt",
+				TLSKeyPath:  "/etc/frameworks/certs/bundles/cluster_media-us-1.key",
+			},
+			{
+				SiteAddress: "acme.cdn.frameworks.network *.acme.cdn.frameworks.network",
+				TLSCertPath: "/etc/frameworks/certs/bundles/tenant_acme.crt",
+				TLSKeyPath:  "/etc/frameworks/certs/bundles/tenant_acme.key",
+			},
+		},
+		CaddyAdminAddr:   "localhost:2019",
+		HelmsmanUpstream: "localhost:18007",
+		ChandlerUpstream: "chandler:18020",
+		MistUpstream:     "mistserver:8080",
+	}
+}
+
+func TestRenderCaddyfile_MistAdminRouteRenderedWhenEdgeDomainSet(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	if !strings.Contains(out, "@mist_admin {") {
+		t.Errorf("expected @mist_admin matcher block; got:\n%s", out)
+	}
+	if !strings.Contains(out, "host edge-us-1.media-us-1.frameworks.network") {
+		t.Errorf("expected host matcher pinned to the edge domain; got:\n%s", out)
+	}
+	if !strings.Contains(out, "path /_mist /_mist/*") {
+		t.Errorf("expected path /_mist /_mist/* inside the matcher; got:\n%s", out)
+	}
+	if !strings.Contains(out, "handle @mist_admin {") {
+		t.Errorf("expected handle @mist_admin block referencing the matcher; got:\n%s", out)
+	}
+}
+
+func TestRenderCaddyfile_MistAdminRouteAbsentWhenEdgeDomainEmpty(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = ""
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if strings.Contains(out, "_mist") {
+		t.Errorf("did not expect any _mist tokens when EdgeDomain is empty; got:\n%s", out)
+	}
+	if strings.Contains(out, "@mist_admin") {
+		t.Errorf("did not expect @mist_admin matcher when EdgeDomain is empty; got:\n%s", out)
+	}
+}
+
+func TestRenderCaddyfile_MistAdminUsesHandleNotHandlePath(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	// Caddy must preserve the /_mist prefix — Helmsman strips it. Using
+	// handle_path here would cause the prefix to be stripped at the Caddy
+	// hop, which breaks the prefix-strip-and-forward contract Helmsman
+	// owns and which Mist's relative-path LSP frontend depends on.
+	if strings.Contains(out, "handle_path /_mist") {
+		t.Errorf("must use 'handle', not 'handle_path', for /_mist; got:\n%s", out)
+	}
+}
+
+func TestRenderCaddyfile_MistAdminRouteIsHostMatchedNotBare(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	// The route MUST be reached via the @mist_admin matcher (which carries
+	// the host clause), never via a bare path handler that any wildcard
+	// bundle host would match. A bare `handle /_mist*` in common_handlers
+	// would silently inherit the admin surface onto every tenant /
+	// customer site that imports common_handlers.
+	mistPathOccurrences := strings.Count(out, "/_mist")
+	matcherOccurrences := strings.Count(out, "@mist_admin")
+	if matcherOccurrences < 2 {
+		t.Fatalf("expected @mist_admin to appear in both matcher definition and handle; got %d occurrences", matcherOccurrences)
+	}
+	// /_mist should only appear inside the matcher block (twice on the
+	// `path /_mist /_mist/*` line). If the count is higher, a bare path
+	// matcher has likely been introduced.
+	if mistPathOccurrences != 2 {
+		t.Errorf("expected exactly 2 /_mist tokens (inside matcher only), got %d; rendered:\n%s", mistPathOccurrences, out)
+	}
+}
+
+func TestRenderCaddyfile_MistAdminReverseProxiesToHelmsman(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+	p.HelmsmanUpstream = "127.0.0.1:18007"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	// Sanity: the handle for @mist_admin proxies to Helmsman, not to Mist
+	// (operators must hit the auth boundary, never go straight to Mist).
+	handleStart := strings.Index(out, "handle @mist_admin {")
+	if handleStart < 0 {
+		t.Fatalf("missing handle @mist_admin block; got:\n%s", out)
+	}
+	handleEnd := strings.Index(out[handleStart:], "}")
+	if handleEnd < 0 {
+		t.Fatalf("unterminated handle @mist_admin block; got:\n%s", out)
+	}
+	body := out[handleStart : handleStart+handleEnd]
+	if !strings.Contains(body, "reverse_proxy 127.0.0.1:18007") {
+		t.Errorf("expected reverse_proxy to helmsman upstream inside handle; got body:\n%s", body)
+	}
+	if strings.Contains(body, "mistserver") {
+		t.Errorf("admin handle must not proxy directly to mistserver; got body:\n%s", body)
+	}
+}

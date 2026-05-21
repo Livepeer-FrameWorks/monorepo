@@ -921,6 +921,8 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
 			case *pb.ControlMessage_ValidateEdgeTokenResponse:
 				handleValidateEdgeTokenResponse(msg.GetRequestId(), x.ValidateEdgeTokenResponse)
+			case *pb.ControlMessage_EdgeMistAdminSessionResponse:
+				handleEdgeMistAdminSessionResponse(msg.GetRequestId(), x.EdgeMistAdminSessionResponse)
 			case *pb.ControlMessage_ThumbnailUploadResponse:
 				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_ProcessingJobRequest:
@@ -2595,6 +2597,105 @@ func ValidateEdgeToken(ctx context.Context, token string) (*pb.ValidateEdgeToken
 		delete(pendingEdgeTokenValidations, requestID)
 		<-pendingEdgeTokenMutex
 		return nil, fmt.Errorf("timeout waiting for token validation response")
+	}
+}
+
+// Mist-admin session validation — same control-stream pattern as the
+// edge-token path. Mirrored separately so the JWT-shaped session token
+// and the opaque API token never share a cache slot.
+
+type mistAdminSessionResult struct {
+	resp      *pb.EdgeMistAdminSessionResponse
+	expiresAt time.Time
+}
+
+var (
+	pendingMistAdminSessions = make(map[string]chan *pb.EdgeMistAdminSessionResponse)
+	pendingMistAdminMutex    = make(chan struct{}, 1)
+	mistAdminSessionCache    sync.Map // token string -> *mistAdminSessionResult
+	mistAdminSessionCacheTTL = 1 * time.Minute
+)
+
+func handleEdgeMistAdminSessionResponse(requestID string, resp *pb.EdgeMistAdminSessionResponse) {
+	pendingMistAdminMutex <- struct{}{}
+	ch, exists := pendingMistAdminSessions[requestID]
+	<-pendingMistAdminMutex
+	if exists {
+		ch <- resp
+	}
+}
+
+// ValidateMistAdminSession asks Foghorn to validate a session token; the
+// connected nodeID is injected at the Foghorn relay so this client side
+// passes only the token. Result cached briefly (well below the JWT exp)
+// so a flurry of LSP asset requests does not round-trip per file.
+func ValidateMistAdminSession(ctx context.Context, token string) (*pb.EdgeMistAdminSessionResponse, error) {
+	if cached, ok := mistAdminSessionCache.Load(token); ok {
+		entry, ok := cached.(*mistAdminSessionResult)
+		if ok && entry != nil && time.Now().Before(entry.expiresAt) {
+			return entry.resp, nil
+		}
+		mistAdminSessionCache.Delete(token)
+	}
+
+	stream := getStream()
+	if stream == nil {
+		return nil, fmt.Errorf("gRPC control stream not connected")
+	}
+
+	requestID := uuid.New().String()
+	responseCh := make(chan *pb.EdgeMistAdminSessionResponse, 1)
+
+	pendingMistAdminMutex <- struct{}{}
+	pendingMistAdminSessions[requestID] = responseCh
+	<-pendingMistAdminMutex
+
+	msg := &pb.ControlMessage{
+		RequestId: requestID,
+		SentAt:    timestamppb.Now(),
+		Payload: &pb.ControlMessage_EdgeMistAdminSessionRequest{
+			EdgeMistAdminSessionRequest: &pb.EdgeMistAdminSessionRequest{Token: token},
+		},
+	}
+	if err := stream.Send(msg); err != nil {
+		pendingMistAdminMutex <- struct{}{}
+		delete(pendingMistAdminSessions, requestID)
+		<-pendingMistAdminMutex
+		return nil, fmt.Errorf("send mist admin session validation: %w", err)
+	}
+
+	select {
+	case resp := <-responseCh:
+		pendingMistAdminMutex <- struct{}{}
+		delete(pendingMistAdminSessions, requestID)
+		<-pendingMistAdminMutex
+		if resp.GetValid() {
+			now := time.Now()
+			cacheUntil := now.Add(mistAdminSessionCacheTTL)
+			if exp := resp.GetExpiresAt(); exp > 0 {
+				tokenExp := time.Unix(exp, 0)
+				if tokenExp.Before(cacheUntil) {
+					cacheUntil = tokenExp
+				}
+			}
+			if cacheUntil.After(now) {
+				mistAdminSessionCache.Store(token, &mistAdminSessionResult{
+					resp:      resp,
+					expiresAt: cacheUntil,
+				})
+			}
+		}
+		return resp, nil
+	case <-ctx.Done():
+		pendingMistAdminMutex <- struct{}{}
+		delete(pendingMistAdminSessions, requestID)
+		<-pendingMistAdminMutex
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		pendingMistAdminMutex <- struct{}{}
+		delete(pendingMistAdminSessions, requestID)
+		<-pendingMistAdminMutex
+		return nil, fmt.Errorf("timeout waiting for mist admin session response")
 	}
 }
 

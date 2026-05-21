@@ -175,6 +175,18 @@ func main() {
 		edge.GET("/metrics", handlers.HandleEdgeMetrics)
 	}
 
+	// Operator-only Mist admin reverse proxy. Caddy preserves the /_mist
+	// prefix; Helmsman is the auth boundary and the prefix-strip site.
+	// /_mist/_session is the token→cookie exchange and must NOT be gated
+	// (it is the bootstrap that mints the cookie). Gin's radix tree
+	// prefers the literal /_mist/_session over the /_mist/*proxy catch-all.
+	mistAdminProxy := handlers.MistAdminProxy(cfg.MistServerURL, logger)
+	requireMistAdmin := handlers.RequireMistAdmin(logger)
+	mistAdminSession := handlers.MistAdminSessionHandler(logger)
+	r.POST("/_mist/_session", mistAdminSession)
+	r.Any("/_mist", requireMistAdmin, mistAdminProxy)
+	r.Any("/_mist/*proxy", requireMistAdmin, mistAdminProxy)
+
 	// Read-through artifact relay: Mist sees stable seekable HTTP sources
 	// for vod/clip/dvr-chapter playback and safe-wrapper processing input.
 	// Behind these URLs the relay materializes bytes from local disk

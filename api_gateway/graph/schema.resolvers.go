@@ -2402,6 +2402,11 @@ func (r *mutationResolver) SetNodeMode(ctx context.Context, input model.SetNodeM
 	return r.DoSetNodeMode(ctx, input)
 }
 
+// OpenMistAdminSession is the resolver for the openMistAdminSession field.
+func (r *mutationResolver) OpenMistAdminSession(ctx context.Context, input model.OpenMistAdminSessionInput) (model.OpenMistAdminSessionResult, error) {
+	return r.DoOpenMistAdminSession(ctx, input)
+}
+
 // TestPlaybackAccess is the resolver for the testPlaybackAccess field.
 func (r *mutationResolver) TestPlaybackAccess(ctx context.Context, input model.TestPlaybackAccessInput) (model.TestPlaybackAccessResult, error) {
 	return r.DoTestPlaybackAccess(ctx, input)

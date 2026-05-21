@@ -16,6 +16,13 @@
         reverse_proxy helmsman:18007
     }
 
+    @mist_admin {
+        path /_mist /_mist/*
+    }
+    handle @mist_admin {
+        reverse_proxy helmsman:18007
+    }
+
     respond "Node bootstrapping - awaiting activation" 503
 }
 

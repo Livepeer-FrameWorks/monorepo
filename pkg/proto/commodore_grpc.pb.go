@@ -28,6 +28,8 @@ const (
 	InternalService_RecordSigningKeyUse_FullMethodName             = "/commodore.InternalService/RecordSigningKeyUse"
 	InternalService_ResolveInternalName_FullMethodName             = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                = "/commodore.InternalService/ValidateAPIToken"
+	InternalService_MintMistAdminSession_FullMethodName            = "/commodore.InternalService/MintMistAdminSession"
+	InternalService_ValidateMistAdminSession_FullMethodName        = "/commodore.InternalService/ValidateMistAdminSession"
 	InternalService_StartDVR_FullMethodName                        = "/commodore.InternalService/StartDVR"
 	InternalService_RetrieveDVRChapter_FullMethodName              = "/commodore.InternalService/RetrieveDVRChapter"
 	InternalService_ListDVRChapters_FullMethodName                 = "/commodore.InternalService/ListDVRChapters"
@@ -106,6 +108,14 @@ type InternalServiceClient interface {
 	// Called by Gateway to validate developer API tokens
 	// Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
 	ValidateAPIToken(ctx context.Context, in *ValidateAPITokenRequest, opts ...grpc.CallOption) (*ValidateAPITokenResponse, error)
+	// Mint a short-TTL session token authorizing an operator to open the
+	// Mist admin UI on a specific edge node. The token is bound to a
+	// single node_id; Foghorn rejects validation against any other node.
+	MintMistAdminSession(ctx context.Context, in *MintMistAdminSessionRequest, opts ...grpc.CallOption) (*MintMistAdminSessionResponse, error)
+	// Validate a mist-admin session token. Caller (Foghorn) MUST set
+	// expected_node_id to the connected Helmsman's nodeID so that a token
+	// for one node cannot be replayed against another.
+	ValidateMistAdminSession(ctx context.Context, in *ValidateMistAdminSessionRequest, opts ...grpc.CallOption) (*ValidateMistAdminSessionResponse, error)
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(ctx context.Context, in *StartDVRRequest, opts ...grpc.CallOption) (*StartDVRResponse, error)
 	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
@@ -302,6 +312,26 @@ func (c *internalServiceClient) ValidateAPIToken(ctx context.Context, in *Valida
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateAPITokenResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateAPIToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) MintMistAdminSession(ctx context.Context, in *MintMistAdminSessionRequest, opts ...grpc.CallOption) (*MintMistAdminSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintMistAdminSessionResponse)
+	err := c.cc.Invoke(ctx, InternalService_MintMistAdminSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ValidateMistAdminSession(ctx context.Context, in *ValidateMistAdminSessionRequest, opts ...grpc.CallOption) (*ValidateMistAdminSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateMistAdminSessionResponse)
+	err := c.cc.Invoke(ctx, InternalService_ValidateMistAdminSession_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -699,6 +729,14 @@ type InternalServiceServer interface {
 	// Called by Gateway to validate developer API tokens
 	// Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
 	ValidateAPIToken(context.Context, *ValidateAPITokenRequest) (*ValidateAPITokenResponse, error)
+	// Mint a short-TTL session token authorizing an operator to open the
+	// Mist admin UI on a specific edge node. The token is bound to a
+	// single node_id; Foghorn rejects validation against any other node.
+	MintMistAdminSession(context.Context, *MintMistAdminSessionRequest) (*MintMistAdminSessionResponse, error)
+	// Validate a mist-admin session token. Caller (Foghorn) MUST set
+	// expected_node_id to the connected Helmsman's nodeID so that a token
+	// for one node cannot be replayed against another.
+	ValidateMistAdminSession(context.Context, *ValidateMistAdminSessionRequest) (*ValidateMistAdminSessionResponse, error)
 	// Called by Foghorn to initiate DVR recording for a stream
 	StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error)
 	// ===== DVR CHAPTERS (api_gateway -> Commodore -> Foghorn) =====
@@ -844,6 +882,12 @@ func (UnimplementedInternalServiceServer) ResolveInternalName(context.Context, *
 }
 func (UnimplementedInternalServiceServer) ValidateAPIToken(context.Context, *ValidateAPITokenRequest) (*ValidateAPITokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateAPIToken not implemented")
+}
+func (UnimplementedInternalServiceServer) MintMistAdminSession(context.Context, *MintMistAdminSessionRequest) (*MintMistAdminSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintMistAdminSession not implemented")
+}
+func (UnimplementedInternalServiceServer) ValidateMistAdminSession(context.Context, *ValidateMistAdminSessionRequest) (*ValidateMistAdminSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateMistAdminSession not implemented")
 }
 func (UnimplementedInternalServiceServer) StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartDVR not implemented")
@@ -1111,6 +1155,42 @@ func _InternalService_ValidateAPIToken_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateAPIToken(ctx, req.(*ValidateAPITokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_MintMistAdminSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintMistAdminSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).MintMistAdminSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_MintMistAdminSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).MintMistAdminSession(ctx, req.(*MintMistAdminSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ValidateMistAdminSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateMistAdminSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ValidateMistAdminSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ValidateMistAdminSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ValidateMistAdminSession(ctx, req.(*ValidateMistAdminSessionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1783,6 +1863,14 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateAPIToken",
 			Handler:    _InternalService_ValidateAPIToken_Handler,
+		},
+		{
+			MethodName: "MintMistAdminSession",
+			Handler:    _InternalService_MintMistAdminSession_Handler,
+		},
+		{
+			MethodName: "ValidateMistAdminSession",
+			Handler:    _InternalService_ValidateMistAdminSession_Handler,
 		},
 		{
 			MethodName: "StartDVR",

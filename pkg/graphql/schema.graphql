@@ -1813,6 +1813,21 @@ type Mutation {
   setNodeMode(input: SetNodeModeInput!): SetNodeModeResult!
 
   """
+  Open the MistServer admin UI on a specific edge node. Returns a short-TTL
+  session token plus the per-edge POST URL the webapp must submit the token
+  to (NOT a query parameter, so the token doesn't leak via referrers / URL
+  history / access logs). On success the browser sets a `fw_mist_admin`
+  cookie scoped to /_mist and is redirected to /_mist/.
+
+  Authority is infrastructure ownership, not subscriber access: Mist admin
+  access is effectively shell on the edge box, so only owner/admin users
+  in the cluster owner tenant can open it. FrameWorks system-tenant
+  owner/admin users are allowed as platform break-glass. Anything else
+  returns AuthError without exposing whether the node exists.
+  """
+  openMistAdminSession(input: OpenMistAdminSessionInput!): OpenMistAdminSessionResult!
+
+  """
   Run the same evaluator the live USER_NEW path uses against a caller-
   supplied JWT (or webhook test request) without registering a viewer
   session. Mutation, not query, because webhook mode (fireWebhook=true)
@@ -1924,6 +1939,8 @@ union SetStreamRetentionOverridesResult =
   | AuthError
 
 union SetNodeModeResult = InfrastructureNode | ValidationError | NotFoundError | AuthError
+
+union OpenMistAdminSessionResult = MistAdminSession | ValidationError | NotFoundError | AuthError
 
 union TestPlaybackAccessResult =
   | PlaybackAccessDecision
@@ -7370,6 +7387,32 @@ input SetNodeModeInput {
   mode: NodeOperationalMode!
   "Free-text reason recorded in Foghorn's audit trail. Defaults to the calling user/agent identity."
   reason: String
+}
+
+input OpenMistAdminSessionInput {
+  "Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID)."
+  nodeId: ID!
+}
+
+"""
+Short-lived credentials that let an authorized operator open the
+MistServer admin UI on a specific edge node.
+
+The webapp POSTs `sessionToken` (in the form body, NOT a query string)
+to `postUrl`. Helmsman validates the token against Foghorn, sets an
+HttpOnly, Secure, SameSite=Lax cookie scoped to `Path=/_mist`, and
+redirects the browser to `/_mist/` where the LSP UI loads.
+
+`sessionToken` is bound to one nodeId via the JWT's `node_id` claim;
+replay against any other edge node fails. `expiresAt` is Unix seconds.
+"""
+type MistAdminSession {
+  "Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist/_session)."
+  postUrl: String!
+  "Short-TTL JWT to submit as the `session_token` form field. Treat as a secret."
+  sessionToken: String!
+  "Unix-seconds expiry of the token. The webapp can refuse to open if already past."
+  expiresAt: Int!
 }
 
 """

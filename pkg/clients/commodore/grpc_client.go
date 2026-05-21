@@ -332,6 +332,19 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*pb.Va
 	})
 }
 
+// MintMistAdminSession mints a short-TTL session token bound to a single
+// edge node. Caller is expected to have authorized the operator at the
+// Gateway resolver level — this RPC is the mint primitive only.
+func (c *GRPCClient) MintMistAdminSession(ctx context.Context, req *pb.MintMistAdminSessionRequest) (*pb.MintMistAdminSessionResponse, error) {
+	return c.internal.MintMistAdminSession(ctx, req)
+}
+
+// ValidateMistAdminSession verifies a session token; expected_node_id MUST
+// be set to the connected Helmsman's nodeID by the relay (Foghorn).
+func (c *GRPCClient) ValidateMistAdminSession(ctx context.Context, req *pb.ValidateMistAdminSessionRequest) (*pb.ValidateMistAdminSessionResponse, error) {
+	return c.internal.ValidateMistAdminSession(ctx, req)
+}
+
 // StartDVR initiates DVR recording for a stream (internal, called by Foghorn)
 func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
 	return c.internal.StartDVR(ctx, req)

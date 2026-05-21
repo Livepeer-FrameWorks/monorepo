@@ -27,6 +27,7 @@
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { formatBytes } from "$lib/utils/formatters.js";
   import NodeModePanel from "$lib/components/nodes/NodeModePanel.svelte";
+  import OpenMistAdminButton from "$lib/components/nodes/OpenMistAdminButton.svelte";
 
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
   const HardDriveIcon = getIconComponent("HardDrive");
@@ -456,6 +457,13 @@
                 await nodeStore.fetch({ policy: "NetworkOnly", variables: { id: nodeRelayId } });
               }}
             />
+          </div>
+
+          <!-- Mist admin shortcut. Visibility is intentionally not gated
+               client-side; the resolver + Commodore both enforce node
+               ownership and surface AuthError for non-owners. -->
+          <div class="slab col-span-full">
+            <OpenMistAdminButton nodeId={node.nodeId} nodeName={node.nodeName} />
           </div>
         {/if}
 

@@ -31,6 +31,10 @@ type CaddyfileParams struct {
 	HelmsmanUpstream string // e.g. "helmsman:18007" or "localhost:18007"
 	ChandlerUpstream string // e.g. "chandler:18020" or "localhost:18020"
 	MistUpstream     string // e.g. "mistserver:8080" or "localhost:8080"
+	// EdgeDomain scopes the operator-only /_mist admin route to this exact
+	// host. Empty means the admin route is not rendered (the proxy stays
+	// off; tenant/customer hosts importing common_handlers cannot match).
+	EdgeDomain string
 }
 
 const caddyfileTmpl = `{
@@ -60,6 +64,16 @@ const caddyfileTmpl = `{
   handle_path /webhooks/* {
     reverse_proxy {{.HelmsmanUpstream}}
   }
+{{- if .EdgeDomain}}
+
+  @mist_admin {
+    host {{.EdgeDomain}}
+    path /_mist /_mist/*
+  }
+  handle @mist_admin {
+    reverse_proxy {{.HelmsmanUpstream}}
+  }
+{{- end}}
 
   handle /assets/* {
     reverse_proxy {{.ChandlerUpstream}}

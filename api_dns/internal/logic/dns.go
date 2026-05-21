@@ -442,11 +442,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 }
 
 func edgeNodeRecordLabel(nodeID string) string {
-	nodeLabel := SanitizeLabel(nodeID)
-	if strings.HasPrefix(nodeLabel, "edge-") {
-		return nodeLabel
-	}
-	return "edge-" + nodeLabel
+	return pkgdns.EdgeNodeLabel(nodeID)
 }
 
 func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain string, nodes []dnsNode) map[string]string {

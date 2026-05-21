@@ -68,6 +68,16 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
   rpc ValidateAPIToken(ValidateAPITokenRequest) returns (ValidateAPITokenResponse);
 
+  // Mint a short-TTL session token authorizing an operator to open the
+  // Mist admin UI on a specific edge node. The token is bound to a
+  // single node_id; Foghorn rejects validation against any other node.
+  rpc MintMistAdminSession(MintMistAdminSessionRequest) returns (MintMistAdminSessionResponse);
+
+  // Validate a mist-admin session token. Caller (Foghorn) MUST set
+  // expected_node_id to the connected Helmsman's nodeID so that a token
+  // for one node cannot be replayed against another.
+  rpc ValidateMistAdminSession(ValidateMistAdminSessionRequest) returns (ValidateMistAdminSessionResponse);
+
   // Called by Foghorn to initiate DVR recording for a stream
   rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
 
@@ -505,6 +515,52 @@ message ValidateAPITokenResponse {
   string role = 5;                      // json:"role,omitempty"
   repeated string permissions = 6;      // json:"permissions,omitempty"
   string token_id = 7;                  // json:"token_id,omitempty"
+}
+
+// ============================================================================
+// MIST ADMIN SESSION (Gateway -> Commodore; Foghorn -> Commodore)
+// Short-TTL signed session token authorizing access to the /_mist/* admin
+// proxy on a specific edge node. Minted by Commodore after the Gateway
+// resolver authorizes the caller. Validated by Foghorn (over the Helmsman
+// control stream) which injects the connected node_id so a token issued
+// for one node cannot be used against another.
+// ============================================================================
+
+// Mint request carries only the target node. Identity (user_id / tenant_id
+// / role) is taken from trusted gRPC metadata set by the gateway auth
+// middleware — never from the request body — so callers cannot claim an
+// identity they don't have.
+// Cluster ID is resolved server-side from the node, also never trusted
+// from the caller.
+message MintMistAdminSessionRequest {
+  string node_id = 1; // The edge node the operator wants to admin
+}
+
+message MintMistAdminSessionResponse {
+  string token = 1;
+  int64 expires_at = 2;   // Unix seconds; lets the cookie Max-Age match the JWT exp
+  // Public edge FQDN derived from the resolved cluster + node, e.g.
+  // "edge-us-1.media-us-1.frameworks.network". Returned here so the
+  // caller (Gateway) doesn't duplicate the {edge-<node>}.{cluster}.{root}
+  // string formatting that Foghorn already does.
+  string edge_domain = 3;
+}
+
+message ValidateMistAdminSessionRequest {
+  string token = 1;
+  // Foghorn injects this from the connected Helmsman's nodeID. Commodore
+  // rejects the request when expected_node_id != claims.node_id.
+  string expected_node_id = 2;
+}
+
+message ValidateMistAdminSessionResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string tenant_id = 3;
+  string role = 4;
+  string node_id = 5;
+  string cluster_id = 6;
+  int64 expires_at = 7;   // Unix seconds
 }
 
 // ============================================================================

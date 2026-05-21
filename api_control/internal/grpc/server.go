@@ -1633,6 +1633,163 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 	}, nil
 }
 
+// Quartermaster lookup functions are package variables so tests can exercise
+// the ownership policy without a real Quartermaster gRPC server.
+var (
+	mistAdminGetNodeOwner = func(s *CommodoreServer, ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+		if s.quartermasterClient == nil {
+			return nil, fmt.Errorf("quartermaster client unavailable")
+		}
+		return s.quartermasterClient.GetNodeOwner(ctx, nodeID)
+	}
+	mistAdminGetCluster = func(s *CommodoreServer, ctx context.Context, clusterID string) (*pb.ClusterResponse, error) {
+		if s.quartermasterClient == nil {
+			return nil, fmt.Errorf("quartermaster client unavailable")
+		}
+		return s.quartermasterClient.GetCluster(ctx, clusterID)
+	}
+)
+
+// MintMistAdminSession returns a short-TTL JWT authorizing the caller to
+// open the Mist admin UI on the named edge node.
+//
+// The Gateway resolver is the primary policy enforcer; this RPC is the
+// second wall. Mist admin can read local files and run processes, so
+// cluster ownership is the gate — not just a role string. Two
+// non-negotiables here:
+//
+//  1. Identity comes from TRUSTED gRPC context (set by the gateway auth
+//     middleware), not from the request body. The proto carries only the
+//     target node_id; user_id / tenant_id / role are extracted server-
+//     side. Callers cannot lift privileges by claiming a different
+//     tenant in the request.
+//
+//  2. Ownership is verified against Quartermaster. The caller must be an
+//     owner/admin in the cluster's owner tenant; the reserved system
+//     tenant is allowed as platform break-glass.
+func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *pb.MintMistAdminSessionRequest) (*pb.MintMistAdminSessionResponse, error) {
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+
+	trustedUserID, trustedTenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	trustedRole := strings.TrimSpace(ctxkeys.GetRole(ctx))
+
+	ownerResp, err := mistAdminGetNodeOwner(s, ctx, nodeID)
+	if err != nil {
+		s.logger.WithError(err).WithField("node_id", nodeID).Warn("MintMistAdminSession: GetNodeOwner failed")
+		return nil, status.Errorf(codes.Internal, "resolve node owner: %v", err)
+	}
+	clusterID := strings.TrimSpace(ownerResp.GetClusterId())
+	if clusterID == "" {
+		return nil, status.Error(codes.NotFound, "node has no cluster")
+	}
+	clusterResp, err := mistAdminGetCluster(s, ctx, clusterID)
+	if err != nil || clusterResp == nil || clusterResp.GetCluster() == nil {
+		s.logger.WithError(err).WithField("cluster_id", clusterID).Warn("MintMistAdminSession: GetCluster failed")
+		return nil, status.Errorf(codes.Internal, "resolve cluster: %v", err)
+	}
+	isPlatformOfficial := clusterResp.GetCluster().GetIsPlatformOfficial()
+	ownerTenantID := strings.TrimSpace(ownerResp.GetOwnerTenantId())
+
+	if !auth.CanAdminMistNode(ownerTenantID, trustedTenantID, trustedRole) {
+		s.logger.WithFields(logging.Fields{
+			"node_id":              nodeID,
+			"cluster_id":           clusterID,
+			"is_platform_official": isPlatformOfficial,
+			"trusted_user_id":      trustedUserID,
+			"trusted_tenant_id":    trustedTenantID,
+			"trusted_role":         trustedRole,
+		}).Warn("MintMistAdminSession denied: caller does not own node")
+		return nil, status.Error(codes.PermissionDenied, "node admin access denied")
+	}
+
+	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	token, exp, err := auth.GenerateMistAdminSessionJWT(
+		trustedUserID,
+		trustedTenantID,
+		trustedRole,
+		nodeID,
+		clusterID,
+		0, // default 5min TTL
+		secret,
+	)
+	if err != nil {
+		s.logger.WithError(err).Warn("MintMistAdminSession failed")
+		return nil, status.Errorf(codes.Internal, "mint session: %v", err)
+	}
+
+	// Compose the public edge FQDN the same way Foghorn does, so the
+	// gateway/webapp don't reinvent the string format. cluster_slug is
+	// derived from cluster_id via SanitizeLabel — single source of truth
+	// is pkg/dns.
+	edgeDomain := pkgdns.EdgeNodeFQDN(
+		nodeID,
+		pkgdns.SanitizeLabel(clusterID),
+		mistAdminRootDomain(),
+	)
+
+	s.logger.WithFields(logging.Fields{
+		"user_id":              trustedUserID,
+		"tenant_id":            trustedTenantID,
+		"role":                 trustedRole,
+		"node_id":              nodeID,
+		"cluster_id":           clusterID,
+		"is_platform_official": isPlatformOfficial,
+		"edge_domain":          edgeDomain,
+		"expires_at":           exp.Unix(),
+	}).Info("Minted mist admin session token")
+	s.emitMistAdminSessionMintedEvent(ctx, trustedUserID, trustedTenantID, nodeID, clusterID)
+	return &pb.MintMistAdminSessionResponse{
+		Token:      token,
+		ExpiresAt:  exp.Unix(),
+		EdgeDomain: edgeDomain,
+	}, nil
+}
+
+// mistAdminRootDomain resolves the platform root domain via the same
+// env precedence the rest of Commodore uses (populateTieredDomains).
+func mistAdminRootDomain() string {
+	rootDomain := strings.TrimSpace(os.Getenv("PLATFORM_ROOT_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
+	}
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+	return rootDomain
+}
+
+// ValidateMistAdminSession verifies a session token against the node the
+// caller (Foghorn) says is the connected Helmsman's nodeID. Bound-node
+// enforcement lives in pkg/auth so every validation path uses the same
+// node-binding rule.
+func (s *CommodoreServer) ValidateMistAdminSession(ctx context.Context, req *pb.ValidateMistAdminSessionRequest) (*pb.ValidateMistAdminSessionResponse, error) {
+	if req.GetToken() == "" || req.GetExpectedNodeId() == "" {
+		return &pb.ValidateMistAdminSessionResponse{Valid: false}, nil
+	}
+	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	claims, err := auth.ValidateMistAdminSessionJWT(req.GetToken(), secret, req.GetExpectedNodeId())
+	if err != nil {
+		s.logger.WithError(err).WithField("expected_node_id", req.GetExpectedNodeId()).
+			Debug("mist admin session validation rejected")
+		return &pb.ValidateMistAdminSessionResponse{Valid: false}, nil
+	}
+	return &pb.ValidateMistAdminSessionResponse{
+		Valid:     true,
+		UserId:    claims.UserID,
+		TenantId:  claims.TenantID,
+		Role:      claims.Role,
+		NodeId:    claims.NodeID,
+		ClusterId: claims.ClusterID,
+		ExpiresAt: claims.ExpiresAt.Unix(),
+	}, nil
+}
+
 // StartDVR initiates DVR recording for a stream (Gateway → Commodore → Foghorn).
 func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
 	// Get user and tenant context from gateway metadata.
@@ -6121,22 +6278,23 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 const (
 	refreshTokenReuseGracePeriod = 2 * time.Minute
 
-	eventAuthLoginSucceeded    = "auth_login_succeeded"
-	eventAuthLoginFailed       = "auth_login_failed"
-	eventAuthRegistered        = "auth_registered"
-	eventAuthTokenRefreshed    = "auth_token_refreshed"
-	eventTokenCreated          = "token_created"
-	eventTokenRevoked          = "token_revoked"
-	eventWalletLinked          = "wallet_linked"
-	eventWalletUnlinked        = "wallet_unlinked"
-	eventStreamCreated         = "stream_created"
-	eventStreamUpdated         = "stream_updated"
-	eventStreamDeleted         = "stream_deleted"
-	eventStreamKeyCreated      = "stream_key_created"
-	eventStreamKeyDeleted      = "stream_key_deleted"
-	eventArtifactRegistered    = "artifact_registered"
-	eventArtifactDeleted       = "artifact_deleted"
-	eventPlaybackPolicyChanged = "playback_policy_changed"
+	eventAuthLoginSucceeded     = "auth_login_succeeded"
+	eventAuthLoginFailed        = "auth_login_failed"
+	eventAuthRegistered         = "auth_registered"
+	eventAuthTokenRefreshed     = "auth_token_refreshed"
+	eventMistAdminSessionMinted = "mist_admin_session_minted"
+	eventTokenCreated           = "token_created"
+	eventTokenRevoked           = "token_revoked"
+	eventWalletLinked           = "wallet_linked"
+	eventWalletUnlinked         = "wallet_unlinked"
+	eventStreamCreated          = "stream_created"
+	eventStreamUpdated          = "stream_updated"
+	eventStreamDeleted          = "stream_deleted"
+	eventStreamKeyCreated       = "stream_key_created"
+	eventStreamKeyDeleted       = "stream_key_deleted"
+	eventArtifactRegistered     = "artifact_registered"
+	eventArtifactDeleted        = "artifact_deleted"
+	eventPlaybackPolicyChanged  = "playback_policy_changed"
 )
 
 // emitServiceEvent enqueues a service event into
@@ -6174,6 +6332,26 @@ func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, 
 		ResourceType: "user",
 		ResourceId:   userID,
 		Payload:      &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
+	}
+	s.emitServiceEvent(ctx, event)
+}
+
+func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, userID, tenantID, nodeID, clusterID string) {
+	payload := &pb.AuthEvent{
+		UserId:   userID,
+		TenantId: tenantID,
+		AuthType: "mist_admin_session",
+	}
+	event := &pb.ServiceEvent{
+		EventType:       eventMistAdminSessionMinted,
+		Timestamp:       timestamppb.Now(),
+		Source:          "commodore",
+		TenantId:        tenantID,
+		UserId:          userID,
+		ResourceType:    "infrastructure_node",
+		ResourceId:      nodeID,
+		SourceClusterId: clusterID,
+		Payload:         &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }

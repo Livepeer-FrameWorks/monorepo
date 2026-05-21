@@ -122,6 +122,10 @@ type MollieSubscriptionResult interface {
 	IsMollieSubscriptionResult()
 }
 
+type OpenMistAdminSessionResult interface {
+	IsOpenMistAdminSessionResult()
+}
+
 type PromoteToPaidResult interface {
 	IsPromoteToPaidResult()
 }
@@ -302,6 +306,8 @@ func (AuthError) IsUpdateMediaRetentionResult() {}
 func (AuthError) IsSetStreamRetentionOverridesResult() {}
 
 func (AuthError) IsSetNodeModeResult() {}
+
+func (AuthError) IsOpenMistAdminSessionResult() {}
 
 func (AuthError) IsTestPlaybackAccessResult() {}
 
@@ -1224,6 +1230,27 @@ type MessagesConnection struct {
 	TotalCount int `json:"totalCount"`
 }
 
+// Short-lived credentials that let an authorized operator open the
+// MistServer admin UI on a specific edge node.
+//
+// The webapp POSTs `sessionToken` (in the form body, NOT a query string)
+// to `postUrl`. Helmsman validates the token against Foghorn, sets an
+// HttpOnly, Secure, SameSite=Lax cookie scoped to `Path=/_mist`, and
+// redirects the browser to `/_mist/` where the LSP UI loads.
+//
+// `sessionToken` is bound to one nodeId via the JWT's `node_id` claim;
+// replay against any other edge node fails. `expiresAt` is Unix seconds.
+type MistAdminSession struct {
+	// Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist/_session).
+	PostURL string `json:"postUrl"`
+	// Short-TTL JWT to submit as the `session_token` form field. Treat as a secret.
+	SessionToken string `json:"sessionToken"`
+	// Unix-seconds expiry of the token. The webapp can refuse to open if already past.
+	ExpiresAt int `json:"expiresAt"`
+}
+
+func (MistAdminSession) IsOpenMistAdminSessionResult() {}
+
 // Mollie First Payment - redirect URL for initial payment that creates a mandate.
 type MollieFirstPayment struct {
 	// Mollie payment ID (tr_xxx).
@@ -1415,6 +1442,8 @@ func (NotFoundError) IsSetStreamRetentionOverridesResult() {}
 
 func (NotFoundError) IsSetNodeModeResult() {}
 
+func (NotFoundError) IsOpenMistAdminSessionResult() {}
+
 func (NotFoundError) IsTestPlaybackAccessResult() {}
 
 func (NotFoundError) IsSubmitX402PaymentResult() {}
@@ -1448,6 +1477,11 @@ func (NotFoundError) IsSetPreferredClusterResult() {}
 func (NotFoundError) IsUnlinkWalletResult() {}
 
 func (NotFoundError) IsSendMessageResult() {}
+
+type OpenMistAdminSessionInput struct {
+	// Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
+	NodeID string `json:"nodeId"`
+}
 
 // Detail response: orchestrator identity + every known instance (with their
 // own price/capabilities/hardware) + every per-(gateway, instance) vantage.
@@ -2195,6 +2229,8 @@ func (ValidationError) IsUpdateMediaRetentionResult() {}
 func (ValidationError) IsSetStreamRetentionOverridesResult() {}
 
 func (ValidationError) IsSetNodeModeResult() {}
+
+func (ValidationError) IsOpenMistAdminSessionResult() {}
 
 func (ValidationError) IsTestPlaybackAccessResult() {}
 

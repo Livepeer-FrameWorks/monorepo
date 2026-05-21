@@ -81,6 +81,7 @@ Event types are string constants emitted by services. The list below reflects cu
 **Auth (Commodore)**
 
 - `auth_login_succeeded`, `auth_login_failed`, `auth_registered`, `auth_token_refreshed`
+- `mist_admin_session_minted`
 - `token_created`, `token_revoked`, `wallet_linked`, `wallet_unlinked`
 
 **Tenant + Cluster (Quartermaster)**
