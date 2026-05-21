@@ -214,6 +214,62 @@ divergence is found.
 
 ---
 
+### frameworks cluster diff
+
+Typed change-kind survey: compare desired (manifest + release artifacts)
+against observed (sha256 of files on each host) for every service that has
+registered a fingerprinter.
+
+```bash
+frameworks cluster diff
+frameworks cluster diff --only-services foghorn,bridge
+frameworks cluster diff --only-hosts regional-eu-1
+frameworks cluster diff --output json
+```
+
+Diff kinds: `binary`, `env`, `unit`, `cert`, `infra`, `unknown`. Services
+without a registered fingerprinter report `unknown`; `cluster apply --confirm`
+falls through to the heavy `cluster provision` path for them.
+Exits non-zero when any kind diff is detected.
+
+---
+
+### frameworks cluster apply
+
+Rolling-update planner that composes typed diffs (`cluster diff`) with
+per-service rolling-update strategy (max_unavailable, region_stagger,
+canary, primary_last). Per-service `update_strategy` blocks in the manifest
+override those defaults when a service needs a different rollout budget.
+Without `--confirm` it prints the plan and exits (dry-run). With `--confirm`
+it executes each host through the same role provisioner used by
+`cluster provision`, so binaries, env files, systemd units, handlers, and
+validation stay owned by the Ansible roles. The action label is `reload` when
+the diff is env-only on a SIGHUP-capable service; otherwise it is `restart`.
+After each wave, `cluster apply` waits for a per-service readiness gate (HTTP
+health for HTTP services, `systemctl is-active` otherwise) before advancing.
+
+```bash
+frameworks cluster apply
+frameworks cluster apply --only-services foghorn,bridge
+frameworks cluster apply --output json
+frameworks cluster apply --confirm
+```
+
+`--output json` is a dry-run format only; `--confirm --output json` is
+rejected so execution logs cannot be mixed into structured plan JSON.
+
+Hard rule: if any host has a diff classified as `unknown` or `infra`, the
+command refuses and lists those entries under `Skipped` — those go through
+`cluster provision` instead. This is the safety guarantee that keeps the
+fast path from attempting structural changes.
+
+`--confirm` halts on the first host that fails its action or its readiness
+gate. Recovery is to fix the failing host and re-run `cluster apply` — the
+diff classifier only re-emits hosts that are still out of sync, so a
+second run resumes from where the first stopped.
+
+---
+
 ## Provisioning Commands
 
 ### frameworks cluster provision
@@ -2258,7 +2314,7 @@ Provides a guided interface for:
 
 - Edge Operations
 - Services & Health
-- Control Plane (Admin)
+- Control / API Plane (Admin)
 - Cluster Operations
 - DNS & Mesh
 - Settings & Contexts

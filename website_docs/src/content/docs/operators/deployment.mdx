@@ -84,7 +84,7 @@ The CLI provisions in dependency order:
 2. **Quartermaster** — Control plane bootstrap (tenant, clusters, nodes, tokens)
 3. **Privateer** — Mesh agent on ALL hosts → mesh health verification
 4. **Application services** — All other services (parallel)
-5. **Interfaces** — Nginx, Chartroom, Foredeck, Logbook (parallel)
+5. **Ingress & interfaces** — Nginx, Chartroom, Foredeck, Logbook (parallel)
 
 Use `--only infrastructure|applications|interfaces` to run a single phase.
 

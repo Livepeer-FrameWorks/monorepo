@@ -16,12 +16,18 @@ FrameWorks runs the same service topology in every environment — local, stagin
 
 ## Multi-Plane Architecture
 
-FrameWorks uses a multi-plane distributed architecture designed for scale, separating control logic from high-volume media and event data:
+FrameWorks uses a multi-plane distributed architecture designed for scale,
+separating tenant-facing control logic from high-volume media, event data, and
+network automation. Plane names describe runtime responsibility; deployment
+tiers describe placement.
 
-- **Control Plane**: Authentication, stream management, tenant/routing (immediate consistency).
-- **Data Plane**: Analytics, metrics, and event processing (Kafka-driven).
-- **Media Plane**: Media ingest/processing and routing.
-- **Support & Interfaces**: Web apps, marketing sites, and documentation.
+- **Control / API Plane**: GraphQL aggregation, auth, stream management, tenant routing, and billing APIs.
+- **Media Plane**: Media ingest, processing, playback routing, edge orchestration, and media asset delivery.
+- **Event & Analytics Plane**: Event ingress, Kafka fan-out, real-time fan-out, and analytical storage/querying.
+- **Network & Trust Plane**: Public DNS, certificates, service identity, mesh networking, and ingress.
+- **Support & Experience Services**: Support workflows, AI consultant workflows, forms, newsletters, and stream interaction services.
+- **Interfaces**: Web apps, marketing sites, documentation, CLI, SDKs, and player/studio packages.
+- **Observability & Operations**: Metrics, dashboards, alerting, BI, and incident workflows.
 
 ![Microservices Architecture](../../../assets/diagrams/Microservices_Architecture.png)
 
@@ -33,63 +39,58 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Core Services
 
-| Service                  | Port(s)                    | Tier     | Purpose                                                           |
-| ------------------------ | -------------------------- | -------- | ----------------------------------------------------------------- |
-| **Control Plane**        |                            |          |                                                                   |
-| Bridge                   | 18000                      | Regional | GraphQL API Gateway (aggregates all services)                     |
-| Commodore                | 18001 (HTTP), 19001 (gRPC) | Central  | Business logic & orchestration API                                |
-| Quartermaster            | 18002 (HTTP), 19002 (gRPC) | Central  | Tenant management API                                             |
-| Purser                   | 18003 (HTTP), 19003 (gRPC) | Central  | Billing API                                                       |
-| Navigator                | 18010 (HTTP), 18011 (gRPC) | Central  | DNS automation & ACME certificates                                |
-| **Data Plane**           |                            |          |                                                                   |
-| Periscope Query          | 18004 (HTTP), 19004 (gRPC) | Central  | Analytics & reporting API                                         |
-| Periscope Ingest         | 18005                      | Regional | Kafka event processing                                            |
-| Decklog                  | 18006 (gRPC)               | Regional | gRPC event ingress → Kafka                                        |
-| Decklog (metrics)        | 18026                      | Regional | Prometheus metrics                                                |
-| Signalman                | 18009 (WS), 19005 (gRPC)   | Regional | Real-time updates & WebSocket hub                                 |
-| **Media Plane**          |                            |          |                                                                   |
-| Foghorn                  | 18008                      | Regional | Load balancer, stream replication orchestrator (HA via Redis)     |
-| Foghorn (internal gRPC)  | 18019 (gRPC)               | Regional | Internal control API and HA relay over the internal CA            |
-| Foghorn (external gRPC)  | 18029 (gRPC)               | Regional | Edge bootstrap, Helmsman control, and FoghornFederation over ACME |
-| Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                |
-| **Data**                 |                            |          |                                                                   |
-| Chandler                 | 18020 (HTTP)               | Regional | Static asset server (thumbnails from S3 with LRU cache)           |
-| **Support & Interfaces** |                            |          |                                                                   |
-| Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                          |
-| Skipper                  | 18018 (HTTP), 19007 (gRPC) | Central  | AI video consultant API                                           |
-| Web Console              | 18030                      | Regional | Main application interface                                        |
-| Marketing Site           | 18031                      | Regional | Public website                                                    |
-| Forms                    | 18032                      | Central  | Contact form handling                                             |
+| Service                 | Port(s)                    | Tier             | Plane                         | Purpose                                                           |
+| ----------------------- | -------------------------- | ---------------- | ----------------------------- | ----------------------------------------------------------------- |
+| Bridge                  | 18000                      | Regional         | Control / API                 | GraphQL API Gateway and MCP hub                                   |
+| Commodore               | 18001 (HTTP), 19001 (gRPC) | Central          | Control / API                 | Auth, streams, API tokens, media registry, and business workflows |
+| Quartermaster           | 18002 (HTTP), 19002 (gRPC) | Central          | Control / API                 | Tenants, clusters, nodes, service discovery, and bootstrap state  |
+| Purser                  | 18003 (HTTP), 19003 (gRPC) | Central          | Control / API                 | Billing, usage, invoices, payments, and x402 state                |
+| Periscope Query         | 18004 (HTTP), 19004 (gRPC) | Central          | Event & Analytics             | Analytics and reporting API                                       |
+| Periscope Ingest        | 18005                      | Regional         | Event & Analytics             | Kafka event processing and ClickHouse writes                      |
+| Decklog                 | 18006 (gRPC)               | Regional         | Event & Analytics             | gRPC event ingress → Kafka                                        |
+| Decklog (metrics)       | 18026                      | Regional         | Observability & Operations    | Decklog Prometheus metrics                                        |
+| Signalman               | 18009 (WS), 19005 (gRPC)   | Regional         | Event & Analytics             | Real-time event fan-out and WebSocket hub                         |
+| Foghorn                 | 18008                      | Regional         | Media                         | Load balancer and media pipeline orchestrator                     |
+| Foghorn (internal gRPC) | 18019 (gRPC)               | Regional         | Media                         | Internal control API and HA relay over the internal CA            |
+| Foghorn (external gRPC) | 18029 (gRPC)               | Regional         | Media                         | Edge bootstrap, Helmsman control, and FoghornFederation over ACME |
+| Helmsman                | 18007 (HTTP)               | Edge             | Media                         | MistServer sidecar                                                |
+| Chandler                | 18020 (HTTP)               | Regional         | Media                         | Cluster-scoped static media asset server                          |
+| Navigator               | 18010 (HTTP), 18011 (gRPC) | Central          | Network & Trust               | Public DNS, ACME certificates, and internal CA material           |
+| Privateer               | 18012 (HTTP)               | Central/Regional | Network & Trust               | WireGuard mesh agent and local `.internal` DNS                    |
+| Deckhand                | 18015 (HTTP), 19006 (gRPC) | Central          | Support & Experience Services | Support messaging API (Chatwoot adapter)                          |
+| Skipper                 | 18018 (HTTP), 19007 (gRPC) | Central          | Support & Experience Services | AI video consultant API                                           |
+| Forms                   | 18032                      | Central          | Support & Experience Services | Contact form and newsletter handling                              |
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                                                      | Plane          | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing (ingest/transcode)                                                       | Media          | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway (orchestrator routing)                                                | Media          | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer                              | ETH transaction signer for gateway                                                        | Control        | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | State & configuration database                                                            | Control        | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database                                                            | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                                                                  | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| ZooKeeper                                    | Optional standalone coordination service; Kafka uses KRaft and does not require ZooKeeper | Data           | 2181                                              | Operator-defined, only when enabled        |
-| Privateer                                    | WireGuard mesh agent                                                                      | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional                           |
-| Foghorn Redis                                | Foghorn HA state sync                                                                     | Infrastructure | 6379                                              | Regional                                   |
-| Nginx                                        | Reverse proxy & routing                                                                   | Support        | 18090                                             | Central                                    |
-| VictoriaMetrics + vmagent                    | Metrics collection                                                                        | Support        | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                                                                     | Support        | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter/mailing list manager                                                           | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                                     | Plane                         | Port(s)                                           | Deploy Location                            |
+| -------------------------------------------- | -------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
+| MistServer                                   | Media processing, ingest, and edge delivery              | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration  | Media                         | 8935                                              | Edge (co-located with MistServer)          |
+| Livepeer Signer                              | ETH transaction signer for gateway                       | Control / API                 | 18016                                             | Central                                    |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate | Infrastructure                | Operator-defined                                  | Central                                    |
+| ClickHouse                                   | Time-series analytics database                           | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
+| Kafka                                        | Event streaming backbone                                 | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
+| Foghorn Redis                                | Foghorn HA state sync                                    | Media                         | 6379                                              | Regional                                   |
+| Nginx                                        | Reverse proxy and local development routing              | Network & Trust               | 18090                                             | Central                                    |
+| Caddy                                        | Edge TLS termination and reverse proxy                   | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in               | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
+| Grafana                                      | Metrics visualization                                    | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Metabase                                     | BI analytics                                             | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Listmonk                                     | Newsletter and mailing list manager                      | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
 ### Interfaces
 
-| Component      | Role                                  | Path                  | Port              | Deploy Location |
-| -------------- | ------------------------------------- | --------------------- | ----------------- | --------------- |
-| Web Console    | SvelteKit user dashboard              | `website_application` | 18030             | Regional        |
-| Marketing Site | Sales / Marketing website             | `website_marketing`   | 18031             | Regional        |
-| Documentation  | Astro Starlight docs site             | `website_docs`        | 18033             | Central         |
-| NPM Player     | Embeddable multi-protocol player      | `npm_player`          | N/A (npm package) | User websites   |
-| Android App    | Native mobile client (in development) | `app_android`         | N/A               | Roadmap         |
+| Component               | Role                                  | Path                  | Port              | Deploy Location |
+| ----------------------- | ------------------------------------- | --------------------- | ----------------- | --------------- |
+| Chartroom / Web Console | SvelteKit user dashboard              | `website_application` | 18030             | Regional        |
+| Foredeck / Marketing    | Sales / Marketing website             | `website_marketing`   | 18031             | Regional        |
+| Logbook / Documentation | Astro Starlight docs site             | `website_docs`        | 18033             | Central         |
+| NPM Player              | Embeddable multi-protocol player      | `npm_player`          | N/A (npm package) | User websites   |
+| NPM Studio              | Embeddable browser ingest studio      | `npm_studio`          | N/A (npm package) | User websites   |
+| Android App             | Native mobile client (in development) | `app_android`         | N/A               | Roadmap         |
 
 ### CLI Tool
 
@@ -101,7 +102,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Deployment Tiers
 
-- **Central**: Commodore, Quartermaster, Purser, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
+- **Central**: Commodore, Quartermaster, Purser, Navigator, Periscope Query, Deckhand, Skipper, Forms, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse, Listmonk, Chatwoot + Redis.
 - **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Chandler, Kafka, Web Console, Marketing Site.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
 - **Edge**: MistServer, Helmsman, Livepeer Gateway.
@@ -110,7 +111,7 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Multi-Cluster Topology
 
-FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central Control / API Plane (Commodore, Quartermaster, Purser) and Event & Analytics Plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
 
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 
@@ -158,7 +159,7 @@ graph LR
 
 Foghorn routes events to central services (Commodore for validation, Decklog for analytics, Quartermaster for tenant resolution).
 
-### Control Plane Communications
+### Control / API Communications
 
 ```mermaid
 graph LR

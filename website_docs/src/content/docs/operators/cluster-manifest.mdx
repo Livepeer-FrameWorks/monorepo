@@ -469,24 +469,6 @@ infrastructure:
 - `transaction_state_log_replication_factor` (optional)
 - `transaction_state_log_min_isr` (optional)
 
----
-
-### zookeeper
-
-Standalone ZooKeeper ensemble. **No longer required for Kafka** — Kafka native mode uses KRaft.
-
-ZooKeeper remains available as an independent infrastructure component if needed for other purposes.
-
-**Format:**
-
-```yaml
-infrastructure:
-  zookeeper:
-    enabled: false
-```
-
----
-
 ## Services / Interfaces / Observability
 
 All three sections share the same shape. Use them to define application services, public interfaces (reverse proxy + web surfaces), and observability stack (VictoriaMetrics, vmagent, Grafana, etc.).
@@ -638,7 +620,7 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 The CLI validates:
 
 - Required fields (`version`, `type`, hosts)
-- Host references used by Postgres, ClickHouse, ZooKeeper, Kafka, services, interfaces, and observability entries
+- Host references used by Postgres, ClickHouse, Kafka, services, interfaces, and observability entries
 - If `clusters` is present, each entry must have `name` and `type`
 - If a service sets `cluster`, it must reference a defined cluster key
 - Cluster IDs (map keys) must be non-empty strings
