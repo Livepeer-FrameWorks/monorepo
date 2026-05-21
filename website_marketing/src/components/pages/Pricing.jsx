@@ -170,26 +170,15 @@ const enterpriseTier = {
 
 const payAsYouGo = {
   name: "Account Balance",
-  price: "Pay per use",
+  price: "€0.00055",
+  period: "/delivered min",
   badge: "Agent-Ready",
-  description:
-    "Connect a wallet or pay inline with x402. Your balance covers storage, transcoding, and delivered minutes. Designed for AI agents and automation.",
+  description: "Pay only when you use it. Built for agents — works for humans too.",
   features: [
-    "Wallet auth via EIP-191 signature — no email, no registration",
-    "Fund via card, crypto deposits (ETH or USDC), or x402 gasless USDC on Base/Arbitrum",
-    "Full MCP access: streams, clips, DVR, VOD, billing, analytics, QoE diagnostics",
-    "GraphQL as an alternative operational interface (same auth)",
-    "Auto-discovery via skill.json, llms.txt, and .well-known/mcp.json",
-    "W3C DID and OAuth resource metadata for standards-compliant integration",
-    "Public operations (no auth): payment options, payment submission, playback resolution",
-    "Same usage rates as subscription tiers",
-  ],
-  howItWorks: [
-    "Agent discovers FrameWorks via skill.json, llms.txt, or .well-known/mcp.json",
-    "Wallet signature auto-provisions a prepaid tenant (no email, no form)",
-    "Agent funds balance via x402 (USDC on Base/Arbitrum), crypto deposit, or card",
-    "Usage (delivery minutes, storage, processing) deducted automatically",
-    "Preflight system guides agents through any blockers before billable operations",
+    "No subscription, no commitment",
+    "Wallet auth — no email, no signup form",
+    "Top up via card, crypto, or gasless USDC",
+    "Same rates as subscription tiers, full API access",
   ],
 };
 
@@ -676,6 +665,7 @@ const Pricing = () => {
                 badge={payAsYouGo.badge}
                 name={payAsYouGo.name}
                 price={payAsYouGo.price}
+                period={payAsYouGo.period}
                 description={payAsYouGo.description}
                 actions={
                   <CTACluster align="start">
@@ -698,11 +688,6 @@ const Pricing = () => {
                   {
                     title: "What's included",
                     items: payAsYouGo.features,
-                  },
-                  {
-                    title: "How it works",
-                    items: payAsYouGo.howItWorks,
-                    bullet: "number",
                   },
                 ]}
               />
