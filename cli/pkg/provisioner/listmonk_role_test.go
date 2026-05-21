@@ -45,6 +45,7 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 
 func TestListmonkRoleVarsWiresPublicURLReconcileDatabase(t *testing.T) {
 	vars, err := listmonkRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		Image: "listmonk/listmonk:v6.1.0@sha256:test",
 		EnvVars: map[string]string{
 			"DATABASE_HOST":             "yuga-eu-1.internal",
 			"DATABASE_PORT":             "5433",
@@ -71,6 +72,27 @@ func TestListmonkRoleVarsWiresPublicURLReconcileDatabase(t *testing.T) {
 	}
 	if got := vars["listmonk_db_password"]; got != "support-secret" {
 		t.Fatalf("listmonk_db_password = %v, want support Postgres password", got)
+	}
+}
+
+func TestListmonkRoleVarsResolvesPinnedImageFromReleaseManifest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: listmonk
+    image: listmonk/listmonk:v6.1.0
+    digest: sha256:listmonxdigest
+`)
+
+	vars, err := listmonkRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		Version:  "stable",
+		Metadata: map[string]any{"gitops_repository": repo},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("listmonkRoleVars: %v", err)
+	}
+	if got := vars["listmonk_image"]; got != "listmonk/listmonk:v6.1.0@sha256:listmonxdigest" {
+		t.Fatalf("listmonk_image = %v", got)
 	}
 }
 

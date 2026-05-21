@@ -1,13 +1,9 @@
 package provisioner
 
-// Cross-file helpers shared by the role-backed provisioners and the edge
-// provisioner: release-channel lookup, small set utilities, default image
-// pins for services whose manifest entry doesn't override them.
+import "fmt"
 
-const (
-	defaultChatwootImage = "chatwoot/chatwoot:latest"
-	defaultListmonkImage = "listmonk/listmonk:v4.0.1"
-)
+// Cross-file helpers shared by the role-backed provisioners and the edge
+// provisioner: release-channel lookup and small set utilities.
 
 // platformChannelFromMetadata pulls the release-channel key that the
 // cluster-provision flow injects into every ServiceConfig.Metadata. Empty
@@ -17,6 +13,17 @@ func platformChannelFromMetadata(metadata map[string]any) string {
 		return v
 	}
 	return ""
+}
+
+func resolvePinnedImage(serviceName string, config ServiceConfig) (string, error) {
+	if config.Image != "" {
+		return config.Image, nil
+	}
+	image, err := imageFromReleaseManifest(serviceName, config.Version, config.Metadata)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s image: %w", serviceName, err)
+	}
+	return image, nil
 }
 
 // dbSet turns a database name list into a set for O(1) membership checks.

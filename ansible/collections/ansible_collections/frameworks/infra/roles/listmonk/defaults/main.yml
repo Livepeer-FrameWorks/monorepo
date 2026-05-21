@@ -1,5 +1,5 @@
 ---
-listmonk_image: "listmonk/listmonk:v4.0.1"
+listmonk_image: "listmonk/listmonk:v6.1.0@sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f"
 listmonk_port: 9001
 listmonk_project_dir: /opt/frameworks/listmonk
 listmonk_wait_timeout: 300

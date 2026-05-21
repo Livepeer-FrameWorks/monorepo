@@ -11,9 +11,9 @@ import (
 // variable surface frameworks.infra.listmonk expects. The role owns compose
 // rendering via its own Jinja template; Go just hands over image, port, env.
 func listmonkRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
-	image := config.Image
-	if image == "" {
-		image = defaultListmonkImage
+	image, err := resolvePinnedImage("listmonk", config)
+	if err != nil {
+		return nil, err
 	}
 	port := config.Port
 	if port == 0 {

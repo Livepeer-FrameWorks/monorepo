@@ -9,7 +9,10 @@ import (
 )
 
 func chatwootRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
-	image := firstNonEmpty(config.Image, defaultChatwootImage)
+	image, err := resolvePinnedImage("chatwoot", config)
+	if err != nil {
+		return nil, err
+	}
 	port := config.Port
 	if port == 0 {
 		port = 18092

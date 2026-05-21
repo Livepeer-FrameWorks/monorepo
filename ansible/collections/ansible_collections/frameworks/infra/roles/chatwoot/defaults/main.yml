@@ -1,5 +1,5 @@
 ---
-chatwoot_image: "chatwoot/chatwoot:latest"
+chatwoot_image: "chatwoot/chatwoot:v4.13.0@sha256:4c96ec530e5f5dc81428357fd1c5b31a2b30f9e0ce84c5a59befb39031a7dace"
 chatwoot_port: 18092
 chatwoot_project_dir: /opt/frameworks/chatwoot
 chatwoot_secret_key_path: /etc/frameworks/.chatwoot_secret_key

@@ -55,6 +55,9 @@ profiles:
     - vmagent
     - grafana
     - metabase
+  support:
+    - listmonk
+    - chatwoot
 
 services:
   quartermaster:
@@ -251,7 +254,7 @@ services:
     name: prometheus
     title: Prometheus (Metrics)
     role: observability
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.5.3
     ports: ["9090:9090"]
     health:
       protocol: http
@@ -291,7 +294,7 @@ services:
     name: grafana
     title: Grafana (Dashboards)
     role: observability
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.0.1
     ports: ["3000:3000"]
     health:
       protocol: http
@@ -301,9 +304,29 @@ services:
     name: metabase
     title: Metabase (BI Analytics)
     role: observability
-    image: metabase/metabase:latest
+    image: metabase/metabase:v0.60.7
     ports: ["3001:3000"]
     health:
       protocol: http
       path: /api/health
+      port: 3000
+  listmonk:
+    name: listmonk
+    title: Listmonk (Mailing Lists)
+    role: support
+    image: listmonk/listmonk:v6.1.0
+    ports: ["9001:9000"]
+    health:
+      protocol: http
+      path: /api/health
+      port: 9000
+  chatwoot:
+    name: chatwoot
+    title: Chatwoot (Support Inbox)
+    role: support
+    image: chatwoot/chatwoot:v4.13.0
+    ports: ["18092:3000"]
+    health:
+      protocol: http
+      path: /api
       port: 3000

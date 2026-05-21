@@ -113,6 +113,11 @@ infrastructure:
     image: listmonk/listmonk:v6.1.0
     digest: sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f
 
+  - name: chatwoot
+    version: "v4.13.0"
+    image: chatwoot/chatwoot:v4.13.0
+    digest: sha256:4c96ec530e5f5dc81428357fd1c5b31a2b30f9e0ce84c5a59befb39031a7dace
+
   - name: metabase
     version: "v0.60.7"
     image: metabase/metabase:v0.60.7

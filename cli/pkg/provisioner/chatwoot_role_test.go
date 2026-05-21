@@ -1,6 +1,11 @@
 package provisioner
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"frameworks/cli/pkg/inventory"
+)
 
 func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 	env := chatwootEnvMap(ServiceConfig{
@@ -30,4 +35,25 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 	assertEnv("POSTGRES_USERNAME", "chatwoot")
 	assertEnv("POSTGRES_PASSWORD", "chatwoot-secret")
 	assertEnv("REDIS_URL", "redis://:redis+secret@host.docker.internal:6380")
+}
+
+func TestChatwootRoleVarsResolvesPinnedImageFromReleaseManifest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: chatwoot
+    image: chatwoot/chatwoot:v4.13.0
+    digest: sha256:chatwootdigest
+`)
+
+	vars, err := chatwootRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		Version:  "stable",
+		Metadata: map[string]any{"gitops_repository": repo},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("chatwootRoleVars: %v", err)
+	}
+	if got := vars["chatwoot_image"]; got != "chatwoot/chatwoot:v4.13.0@sha256:chatwootdigest" {
+		t.Fatalf("chatwoot_image = %v", got)
+	}
 }
