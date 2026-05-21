@@ -6,7 +6,7 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
+  postgres18_data:
   foghorn_redis_data:
   mistserver_data:
   mist_thumbs:
@@ -84,14 +84,15 @@ services:
   # PostgreSQL
   postgres:
     <<: *default-env
-    image: pgvector/pgvector:pg18
+    image: pgvector/pgvector:pg18@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
     container_name: frameworks-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/18/docker
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres18_data:/var/lib/postgresql
       # Schema
       - ./pkg/database/sql/schema/quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
       - ./pkg/database/sql/schema/purser.sql:/docker-entrypoint-initdb.d/20_init_purser.sql:ro
@@ -325,7 +326,7 @@ services:
 
   # Foghorn HA state store
   foghorn-redis:
-    image: valkey/valkey:9.0-alpine
+    image: valkey/valkey:9.0-alpine@sha256:d1cc70645bbcef743615463a2fa4616e841407545e18f560aed0c49671a90147
     container_name: frameworks-foghorn-redis
     hostname: foghorn-redis
     command: valkey-server --appendonly yes
@@ -344,7 +345,7 @@ services:
 
   # Kafka (KRaft mode)
   kafka:
-    image: apache/kafka:4.2.0
+    image: apache/kafka:4.2.0@sha256:9516fb7634bad307d17c33b589fde9023003b0cb761374f500002b980a3149b9
     container_name: frameworks-kafka
     hostname: kafka
     environment:
@@ -392,7 +393,7 @@ services:
 
   # Kafka Topic Initialization
   kafka-init:
-    image: apache/kafka:4.2.0
+    image: apache/kafka:4.2.0@sha256:9516fb7634bad307d17c33b589fde9023003b0cb761374f500002b980a3149b9
     container_name: frameworks-kafka-init
     depends_on:
       kafka:
@@ -1205,7 +1206,7 @@ services:
 
   # Reverse Proxy
   nginx:
-    image: nginx:1.30.1-alpine
+    image: nginx:1.30.1-alpine@sha256:c819f83c54b0361f5557601bf5eb4943d09360e7a7fdf426afc466570f45874d
     container_name: frameworks-nginx
     ports:
       - "18090:80"
@@ -1252,7 +1253,7 @@ services:
 
   # ClickHouse for time-series analytics
   clickhouse:
-    image: clickhouse/clickhouse-server:26.3.10.62
+    image: clickhouse/clickhouse-server:26.3.10.62@sha256:0a2995f39a2b7918e0870567ca84322d4cd4f6f8efbc80ff0ae0e5458ffdc721
     container_name: frameworks-clickhouse
     hostname: clickhouse
     ports:
@@ -1296,7 +1297,7 @@ services:
 
   # Listmonk Newsletter Manager
   listmonk:
-    image: listmonk/listmonk:v6.1.0
+    image: listmonk/listmonk:v6.1.0@sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f
     container_name: frameworks-listmonk
     hostname: listmonk
     ports:
@@ -1334,7 +1335,7 @@ services:
 
   chatwoot:
     <<: *default-env
-    image: chatwoot/chatwoot:v3.14.0
+    image: chatwoot/chatwoot:v4.13.0@sha256:4c96ec530e5f5dc81428357fd1c5b31a2b30f9e0ce84c5a59befb39031a7dace
     container_name: frameworks-chatwoot
     hostname: chatwoot
     # Run migrations on startup, then start the server
@@ -1394,7 +1395,7 @@ services:
 
   chatwoot-worker:
     <<: *default-env
-    image: chatwoot/chatwoot:v3.14.0
+    image: chatwoot/chatwoot:v4.13.0@sha256:4c96ec530e5f5dc81428357fd1c5b31a2b30f9e0ce84c5a59befb39031a7dace
     container_name: frameworks-chatwoot-worker
     hostname: chatwoot-worker
     command: bundle exec sidekiq -C config/sidekiq.yml
@@ -1436,7 +1437,7 @@ services:
         max-file: "3"
 
   platform-redis:
-    image: valkey/valkey:9.0-alpine
+    image: valkey/valkey:9.0-alpine@sha256:d1cc70645bbcef743615463a2fa4616e841407545e18f560aed0c49671a90147
     container_name: frameworks-platform-redis
     hostname: platform-redis
     command: valkey-server --appendonly yes

@@ -56,6 +56,7 @@ MISTSERVER_HTTP_HOST=mistserver
 MISTSERVER_HTTP_PORT=8080
 NAVIGATOR_HOST=navigator
 NAVIGATOR_GRPC_PORT=18011
+NAVIGATOR_GRPC_ADDR=
 GATEWAY_PUBLIC_URL=http://localhost:18090
 WEBAPP_PUBLIC_URL=http://localhost:18090/app
 MARKETING_PUBLIC_URL=http://localhost:18090/marketing
@@ -96,14 +97,17 @@ SERVICE_TOKEN=change-me
 	if got := env["CLICKHOUSE_ADDR"]; got != "clickhouse:9000" {
 		t.Fatalf("expected CLICKHOUSE_ADDR to be derived, got %q", got)
 	}
-	if got := env["NAVIGATOR_GRPC_ADDR"]; got != "navigator:18011" {
-		t.Fatalf("expected NAVIGATOR_GRPC_ADDR to be derived, got %q", got)
+	if got := env["NAVIGATOR_GRPC_ADDR"]; got != "" {
+		t.Fatalf("expected explicit empty NAVIGATOR_GRPC_ADDR to be preserved, got %q", got)
 	}
 	if got := env["MISTSERVER_URL"]; got != "http://mistserver:4242" {
 		t.Fatalf("expected MISTSERVER_URL to be derived from controller port, got %q", got)
 	}
 	if got := env["MISTSERVER_HTTP_URL"]; got != "http://mistserver:8080" {
 		t.Fatalf("expected MISTSERVER_HTTP_URL to be derived from HTTP output port, got %q", got)
+	}
+	if got := env["FOGHORN_CONTROL_ADDR"]; got != "foghorn:18029" {
+		t.Fatalf("expected FOGHORN_CONTROL_ADDR to target external control listener, got %q", got)
 	}
 	if _, ok := env["NAVIGATOR_URL"]; ok {
 		t.Fatalf("expected NAVIGATOR_URL to be absent from generated env")

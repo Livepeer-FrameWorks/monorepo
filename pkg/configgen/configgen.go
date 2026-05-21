@@ -324,15 +324,17 @@ func computeDerived(env map[string]string) error {
 	}
 
 	// Navigator gRPC address (no scheme, just host:port).
-	navHost, err := require(env, "NAVIGATOR_HOST")
-	if err != nil {
-		return err
+	if _, explicit := env["NAVIGATOR_GRPC_ADDR"]; !explicit {
+		navHost, requireErr := require(env, "NAVIGATOR_HOST")
+		if requireErr != nil {
+			return requireErr
+		}
+		navGRPCPort, requireErr := require(env, "NAVIGATOR_GRPC_PORT")
+		if requireErr != nil {
+			return requireErr
+		}
+		env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:%s", navHost, navGRPCPort)
 	}
-	navGRPCPort, err := require(env, "NAVIGATOR_GRPC_PORT")
-	if err != nil {
-		return err
-	}
-	env["NAVIGATOR_GRPC_ADDR"] = fmt.Sprintf("%s:%s", navHost, navGRPCPort)
 
 	// Control Plane gRPC addresses (host:port, no scheme)
 	// These are used for internal service-to-service communication
