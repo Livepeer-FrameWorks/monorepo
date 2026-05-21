@@ -86,8 +86,8 @@ The `X-PAYMENT` header contains a base64-encoded JSON payload:
 | Arbitrum | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 
 <Aside type="note">
-  x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**;
-  LPT is reserved but currently rejected.
+  x402 only works with USDC (EIP-3009 required). Prepaid crypto top-ups support **ETH and USDC**.
+  LPT is not supported as a top-up asset.
 </Aside>
 
 ## Crypto Deposits
@@ -104,7 +104,7 @@ For non-x402 prepaid top-ups, use the deposit flow:
    (`received_token × quoted_price_usd`), so you get exactly what was quoted
    regardless of price drift inside the 24h TTL.
 
-LPT is not yet supported — Chainlink doesn't publish an official LPT/USD aggregator. `topup_balance` returns an error if `asset: "LPT"` is requested.
+LPT is not supported as a top-up asset. Chainlink doesn't publish an official LPT/USD aggregator, so `topup_balance` rejects `asset: "LPT"`.
 
 ## Preflight Errors
 

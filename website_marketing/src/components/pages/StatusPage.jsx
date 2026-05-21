@@ -240,8 +240,8 @@ const StatusPage = () => {
         <MarketingFinalCTA
           variant="band"
           eyebrow="Next steps"
-          title="Ready to get started?"
-          description="Monitor your infrastructure health in real-time."
+          title="Build on observable infrastructure"
+          description="Get QoE metrics and routing visibility on every plan."
           primaryAction={{
             label: "Start Free",
             href: config.appUrl,
@@ -249,7 +249,7 @@ const StatusPage = () => {
           }}
           secondaryAction={[
             {
-              label: "View Documentation",
+              label: "Read the docs",
               to: "/docs",
             },
             {

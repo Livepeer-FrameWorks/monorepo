@@ -39,10 +39,9 @@ worth keeping during the cut-over.
   Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
 
-<Aside type="note">
-  FrameWorks is still maturing in a few product areas. Billing rates, production self-hosting
-  runbooks, DRM, and provider-specific migration gaps are flagged below — read the [beta and tricky
-  bits](#beta-and-tricky-bits) section before you cut over production traffic.
+<Aside type="caution" title="Read before cutting over production traffic">
+  Production-grade items still in motion: published billing rates, full self-hosting runbooks, DRM,
+  and provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
 </Aside>
 
 ## Translation table
@@ -404,7 +403,7 @@ Heads-up so nothing surprises you:
 - **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
   firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
   traffic.
-- **Marketplace primitives exist, but the public marketplace program is still being built.**
+- **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.
 - **Encoder port gotcha.** Mux's RTMP endpoint uses non-standard port `5222`; FrameWorks uses

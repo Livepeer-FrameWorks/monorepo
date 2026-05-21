@@ -178,14 +178,6 @@ audio-processing and thumbnail processes can still run.
   renditions when the source is large enough.
 - **Viewers automatically get the best available quality their connection supports** via HLS ABR,
   with DASH and LL-HLS available alongside on every cluster.
-- **Self-hosted operators must provide transcoding capacity.** Configure a Livepeer Gateway if you
-  want the default video ABR ladder on your own cluster.
-
-<Aside type="note" title="When ABR Is Available">
-  Video ABR renditions require the stream's process configuration and a Livepeer Gateway reachable
-  by the cluster handling the stream. Managed FrameWorks clusters include this path; self-hosted
-  clusters need to configure it.
-</Aside>
 
 ### Custom Transcoding Profiles
 

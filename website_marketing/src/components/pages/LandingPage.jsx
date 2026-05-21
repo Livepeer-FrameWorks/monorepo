@@ -105,17 +105,17 @@ const LandingPage = () => {
 
   const corePillars = [
     {
-      title: "Developer-First Platform",
+      title: "Developer-First",
       description:
-        "Relay-style GraphQL API with typed SDKs. Agent-native: skill.json, MCP, wallet auth, and x402 payments. Agents discover, operate, and pay autonomously.",
+        "Typed SDKs over a GraphQL API. Agents discover via skill.json, authenticate with a wallet, and pay through MCP — no human handoff.",
       icon: CodeBracketIcon,
       tone: "accent",
       badge: "Core",
     },
     {
-      title: "Unmatched Analytics",
+      title: "End-to-End Analytics",
       description:
-        "Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.",
+        "Routing decisions, QoE metrics, and player telemetry — so you can see why viewer X connected to edge Y.",
       icon: ChartBarIcon,
       tone: "green",
       badge: "Core",
@@ -123,7 +123,7 @@ const LandingPage = () => {
     {
       title: "Sovereignty Without Pain",
       description:
-        "Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.",
+        "Run the whole stack on your own hardware. No licensing fees. Switch to hybrid for burst capacity or extra geo coverage.",
       icon: ServerStackIcon,
       tone: "yellow",
       badge: "Core",
@@ -179,7 +179,7 @@ const LandingPage = () => {
       tone: "cyan",
       badge: "Agent-Ready",
       name: "Pay As You Go",
-      price: "Usage-based",
+      price: "Pay per use",
       period: "",
       description:
         "Connect a wallet, fund your balance, and go. Wallet auth, x402 payments, and full MCP access. Built for agents and automation.",
@@ -190,7 +190,7 @@ const LandingPage = () => {
         "Same usage rates as subscription tiers",
       ],
       ctaType: "internal",
-      ctaLabel: "View Details",
+      ctaLabel: "How wallet pay works",
       ctaTo: "/pricing",
       note: "No subscription · No minimum · Agent-native",
     },
@@ -205,7 +205,7 @@ const LandingPage = () => {
         "GPU-intensive features like AI processing and multi-stream compositing, plus hosted services and enterprise support.",
       features: paidPlanHighlights,
       ctaType: "internal",
-      ctaLabel: "View All Plans",
+      ctaLabel: "Compare paid tiers",
       ctaTo: "/pricing",
       note: "Supporter · Developer · Production · Enterprise",
     },
@@ -267,7 +267,7 @@ const LandingPage = () => {
           className: "cta-motion",
         }}
         secondaryAction={{
-          label: "View Pricing",
+          label: "See pricing",
           to: "/pricing",
           icon: "auto",
           className: "cta-motion",
@@ -487,7 +487,7 @@ const LandingPage = () => {
                 actionsPlacement="inline"
                 actions={
                   <CTACluster align="end">
-                    <MarketingCTAButton intent="secondary" to="/about" label="Learn More" />
+                    <MarketingCTAButton intent="secondary" to="/about" label="Read our mission" />
                   </CTACluster>
                 }
               />
@@ -555,7 +555,7 @@ const LandingPage = () => {
                     <MarketingCTAButton
                       intent="secondary"
                       href="https://github.com/livepeer/frameworks"
-                      label="View on GitHub"
+                      label="Self-host on GitHub"
                       icon="github"
                       external
                     />
@@ -759,7 +759,7 @@ const LandingPage = () => {
                 actionsPlacement="inline"
                 actions={
                   <CTACluster align="end">
-                    <MarketingCTAButton intent="secondary" to="/pricing" label="View Plans" />
+                    <MarketingCTAButton intent="secondary" to="/pricing" label="Compare plans" />
                   </CTACluster>
                 }
               />
@@ -822,7 +822,7 @@ const LandingPage = () => {
           >
             <MarketingFinalCTA
               eyebrow="Next steps"
-              title="Ready to get started?"
+              title="Three ways to ship"
               description="Deploy the full stack yourself, point your agent at skill.json, or let us run everything. Your call."
               variant="band"
               primaryAction={{
@@ -836,7 +836,7 @@ const LandingPage = () => {
                   to: "/contact",
                 },
                 {
-                  label: "View Open Source",
+                  label: "Source on GitHub",
                   href: config.githubUrl,
                   icon: "auto",
                   external: true,

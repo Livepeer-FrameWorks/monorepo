@@ -71,7 +71,7 @@ const TermsPage = () => (
       seed="/terms"
       eyebrow="Legal"
       title="Terms of Service"
-      description="These placeholder beta terms outline how you can use FrameWorks until the production policy is finalized."
+      description="Beta terms outlining how you can use FrameWorks today."
       align="center"
       accents={termsHeroAccents}
     />

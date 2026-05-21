@@ -111,30 +111,30 @@ const About = () => {
 
   const missionHighlights = [
     {
-      title: "Developer-First Platform",
+      title: "Developer-First",
       description:
-        "Relay-style GraphQL API with typed SDKs. Player and StreamCrafter components for React and Svelte. Build with confidence.",
+        "Typed SDKs over a GraphQL API. Player and StreamCrafter components for React and Svelte.",
       icon: null,
       tone: "accent",
     },
     {
-      title: "Unmatched Analytics",
+      title: "End-to-End Analytics",
       description:
-        "Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.",
+        "Routing decisions, QoE metrics, and player telemetry — so you can see why viewer X connected to edge Y.",
       icon: null,
       tone: "green",
     },
     {
       title: "Sovereignty Without Pain",
       description:
-        "Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.",
+        "Run the whole stack on your own hardware. No licensing fees. Switch to hybrid for burst capacity or extra geo coverage.",
       icon: null,
       tone: "yellow",
     },
     {
-      title: "Agent-Native Platform",
+      title: "Agent-Native",
       description:
-        "MCP server, wallet auth, x402 payments. AI agents operate autonomously, or call on Skipper to ensure we can solve any video roadblock",
+        "MCP server, wallet auth, x402 payments. AI agents operate autonomously; or call Skipper when you hit a video roadblock.",
       icon: null,
       tone: "cyan",
     },
@@ -142,7 +142,7 @@ const About = () => {
 
   const missionStoryCopy = [
     "We're building the streaming infrastructure that doesn't lock you in. Need custom features? Build them yourself or let us help. Switch providers? Your infrastructure comes with you. Cloud bills spiraling? Run it yourself with our open source stack.",
-    "Built by the MistServer team and backed by Livepeer, we're making enterprise-grade video accessible to everyone without surrendering control to cloud vendors.",
+    "Built by the MistServer team and backed by Livepeer, we make production-grade video infrastructure accessible without handing control to cloud vendors.",
     "Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.",
   ];
 
@@ -155,7 +155,7 @@ const About = () => {
       description:
         "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
       status: "pipeline",
-      statusNote: "In active development with limited pilot access.",
+      statusNote: "Internal and pilot workloads only — request access via Contact.",
     },
     {
       title: "Multi-stream Compositing",
@@ -165,7 +165,7 @@ const About = () => {
       description:
         "Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
       status: "pipeline",
-      statusNote: "In limited internal demos and pilot hardening.",
+      statusNote: "Internal and pilot workloads only — request access via Contact.",
     },
     {
       title: "Live AI Processing",
@@ -175,7 +175,7 @@ const About = () => {
       description:
         "AI-native live video: transcribe, analyze, automate, and transform streams in real time.",
       status: "pipeline",
-      statusNote: "In development with limited pilot workloads.",
+      statusNote: "Internal and pilot workloads only — request access via Contact.",
     },
     {
       title: "DRM Content Protection",
@@ -227,11 +227,10 @@ const About = () => {
         { glyph: Cable, label: "gRPC - service RPC" },
         { icon: "/gql.svg", label: "GraphQL - API gateway schema" },
         { icon: "/wireguard.svg", label: "WireGuard - mesh networking" },
-        { icon: "/powerdns.svg", label: "PowerDNS - planned authoritative DNS option" },
         { icon: "/lets-encrypt.svg", label: "ACME / Let's Encrypt - TLS certificates" },
         { icon: "/hashicorp-vault.svg", label: "HashiCorp Vault - secrets" },
         { icon: "/redis.svg", label: "Redis - caching" },
-        { icon: "/geoip.svg", label: "MaxMind GeoIP - geo lookup" },
+        { icon: "/maxmind.png", label: "MaxMind GeoIP - geo lookup" },
       ],
     },
     {
@@ -315,7 +314,7 @@ const About = () => {
         seed="/about"
         className="about-hero"
         title="About FrameWorks"
-        description="The only streaming platform that combines full self-hosting capabilities with hosted processing, backed by unique features you won’t find anywhere else."
+        description="The streaming platform that combines full self-hosting with hosted processing — own your stack, burst into ours."
         align="center"
         surface="gradient"
         surfaceTone="accent"
@@ -420,7 +419,6 @@ const About = () => {
               <HeadlineStack
                 eyebrow="Pipeline"
                 title="Coming Soon"
-                subtitle="Advanced features in active development for hybrid and self-hosted operators."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -452,14 +450,14 @@ const About = () => {
             <MarketingBand preset="foundation">
               <HeadlineStack
                 eyebrow="Technology"
-                title="Built on proven infrastructure"
+                title="What's under the hood"
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
               >
                 <p className="marketing-tech__intro">
-                  Production-ready components that scale with you, from ingest through analytics.
-                  Proven by MistServer operators and the Livepeer network.
+                  Components from ingest through analytics — used in production by MistServer
+                  operators and on the Livepeer network.
                 </p>
               </HeadlineStack>
               <MarketingGridSeam columns={1} className="marketing-tech-rows">
@@ -572,8 +570,8 @@ const About = () => {
         >
           <MarketingFinalCTA
             eyebrow="Next steps"
-            title="Ready to get started?"
-            description="Hosted, hybrid, or self-hosted. Mission-critical video infrastructure that fits how you work."
+            title="Three ways to deploy"
+            description="Hosted, hybrid, or self-hosted. Video infrastructure that fits how you work."
             variant="band"
             primaryAction={{
               label: "Start Free",
@@ -586,7 +584,7 @@ const About = () => {
                 to: "/contact",
               },
               {
-                label: "View Open Source",
+                label: "Source on GitHub",
                 href: config.githubUrl,
                 icon: "auto",
                 external: true,

@@ -103,7 +103,7 @@ const ChangelogPage = () => {
           }}
           secondaryAction={[
             {
-              label: "View Documentation",
+              label: "Read the docs",
               to: "/docs",
             },
             {

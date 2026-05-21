@@ -21,10 +21,9 @@ FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and 
 - **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · per-video heatmaps and retention curves · per-region replication knob · iframe-embed-as-a-product · first-class Python/PHP/C#/Java/Go SDKs · outbound HTTP webhooks · VOD URL-pull import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
-<Aside type="note">
-  FrameWorks is still maturing in a few product areas. Billing rates, production self-hosting
-  runbooks, DRM, and provider-specific migration gaps are flagged below — read the [beta and tricky
-  bits](#beta-and-tricky-bits) section before you cut over production traffic.
+<Aside type="caution" title="Read before cutting over production traffic">
+  Production-grade items still in motion: published billing rates, full self-hosting runbooks, DRM,
+  and provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
 </Aside>
 
 <Aside type="tip">
@@ -337,7 +336,7 @@ Heads-up so nothing surprises you:
 - **Self-hosted and hybrid production cutovers need operator validation.** Test DNS, TLS,
   firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
   traffic.
-- **Marketplace primitives exist, but the public marketplace program is still being built.**
+- **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.
 - **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.

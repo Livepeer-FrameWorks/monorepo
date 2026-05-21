@@ -6,26 +6,13 @@ sidebar:
   label: "Architecture"
 ---
 
-import { Steps, Card, Aside } from "@astrojs/starlight/components";
-
-<Aside type="note" title="Reality check">
-  This page reflects the **current architecture**. Self-hosting and hybrid deployment options are
-  available but still evolving; some pieces are production-ready and others are in active
-  development.
-</Aside>
-
 ## Overview
 
-FrameWorks employs a pragmatic, tiered approach to infrastructure management, evolving from simple local setups to complex, distributed production environments.
+FrameWorks runs the same service topology in every environment — local, staging, production, self-hosted — and varies only the deployment substrate:
 
-- **Current (MVP):**
-  - **Local Development:** Uses Docker Compose for a self-contained, rapidly reproducible environment.
-  - **Deployment:** Relies on the FrameWorks CLI (`frameworks cluster provision`), which orchestrates provisioning via internal provisioners (Ansible is used for some infrastructure components). See [CLI Reference](/operators/cli-reference).
-  - **Coordination:** The Quartermaster service acts as the source of truth, exposing tenant and cluster context via its API.
-
-- **Planned Evolution:**
-  - **Infrastructure as Code:** Introducing Terraform to manage machine resources (VMs, DNS records, Load Balancers) declaratively.
-  - **Orchestration:** Migrating to Kubernetes and GitOps for robust, long-term container orchestration at scale.
+- **Local development:** Docker Compose brings up the full stack on one host.
+- **Production and self-hosted:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
+- **Coordination:** Quartermaster is the runtime source of truth for tenants, clusters, and service discovery; every other service queries it rather than holding its own copy of routing state.
 
 ## Multi-Plane Architecture
 
@@ -46,33 +33,33 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Core Services
 
-| Service                  | Port(s)                    | Tier     | Purpose                                                             |
-| ------------------------ | -------------------------- | -------- | ------------------------------------------------------------------- |
-| **Control Plane**        |                            |          |                                                                     |
-| Bridge                   | 18000                      | Regional | GraphQL API Gateway (aggregates all services)                       |
-| Commodore                | 18001 (HTTP), 19001 (gRPC) | Central  | Business logic & orchestration API                                  |
-| Quartermaster            | 18002 (HTTP), 19002 (gRPC) | Central  | Tenant management API                                               |
-| Purser                   | 18003 (HTTP), 19003 (gRPC) | Central  | Billing API                                                         |
-| Navigator                | 18010 (HTTP), 18011 (gRPC) | Central  | DNS automation & ACME certificates (Future: Self-hosted Anycast) \* |
-| **Data Plane**           |                            |          |                                                                     |
-| Periscope Query          | 18004 (HTTP), 19004 (gRPC) | Central  | Analytics & reporting API                                           |
-| Periscope Ingest         | 18005                      | Regional | Kafka event processing                                              |
-| Decklog                  | 18006 (gRPC)               | Regional | gRPC event ingress → Kafka                                          |
-| Decklog (metrics)        | 18026                      | Regional | Prometheus metrics                                                  |
-| Signalman                | 18009 (WS), 19005 (gRPC)   | Regional | Real-time updates & WebSocket hub                                   |
-| **Media Plane**          |                            |          |                                                                     |
-| Foghorn                  | 18008                      | Regional | Load balancer, stream replication orchestrator (HA via Redis)       |
-| Foghorn (internal gRPC)  | 18019 (gRPC)               | Regional | Internal control API and HA relay over the internal CA              |
-| Foghorn (external gRPC)  | 18029 (gRPC)               | Regional | Edge bootstrap, Helmsman control, and FoghornFederation over ACME   |
-| Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                  |
-| **Data**                 |                            |          |                                                                     |
-| Chandler                 | 18020 (HTTP)               | Regional | Static asset server (thumbnails from S3 with LRU cache)             |
-| **Support & Interfaces** |                            |          |                                                                     |
-| Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                            |
-| Skipper                  | 18018 (HTTP), 19007 (gRPC) | Central  | AI video consultant API                                             |
-| Web Console              | 18030                      | Regional | Main application interface                                          |
-| Marketing Site           | 18031                      | Regional | Public website                                                      |
-| Forms                    | 18032                      | Central  | Contact form handling                                               |
+| Service                  | Port(s)                    | Tier     | Purpose                                                           |
+| ------------------------ | -------------------------- | -------- | ----------------------------------------------------------------- |
+| **Control Plane**        |                            |          |                                                                   |
+| Bridge                   | 18000                      | Regional | GraphQL API Gateway (aggregates all services)                     |
+| Commodore                | 18001 (HTTP), 19001 (gRPC) | Central  | Business logic & orchestration API                                |
+| Quartermaster            | 18002 (HTTP), 19002 (gRPC) | Central  | Tenant management API                                             |
+| Purser                   | 18003 (HTTP), 19003 (gRPC) | Central  | Billing API                                                       |
+| Navigator                | 18010 (HTTP), 18011 (gRPC) | Central  | DNS automation & ACME certificates                                |
+| **Data Plane**           |                            |          |                                                                   |
+| Periscope Query          | 18004 (HTTP), 19004 (gRPC) | Central  | Analytics & reporting API                                         |
+| Periscope Ingest         | 18005                      | Regional | Kafka event processing                                            |
+| Decklog                  | 18006 (gRPC)               | Regional | gRPC event ingress → Kafka                                        |
+| Decklog (metrics)        | 18026                      | Regional | Prometheus metrics                                                |
+| Signalman                | 18009 (WS), 19005 (gRPC)   | Regional | Real-time updates & WebSocket hub                                 |
+| **Media Plane**          |                            |          |                                                                   |
+| Foghorn                  | 18008                      | Regional | Load balancer, stream replication orchestrator (HA via Redis)     |
+| Foghorn (internal gRPC)  | 18019 (gRPC)               | Regional | Internal control API and HA relay over the internal CA            |
+| Foghorn (external gRPC)  | 18029 (gRPC)               | Regional | Edge bootstrap, Helmsman control, and FoghornFederation over ACME |
+| Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                |
+| **Data**                 |                            |          |                                                                   |
+| Chandler                 | 18020 (HTTP)               | Regional | Static asset server (thumbnails from S3 with LRU cache)           |
+| **Support & Interfaces** |                            |          |                                                                   |
+| Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                          |
+| Skipper                  | 18018 (HTTP), 19007 (gRPC) | Central  | AI video consultant API                                           |
+| Web Console              | 18030                      | Regional | Main application interface                                        |
+| Marketing Site           | 18031                      | Regional | Public website                                                    |
+| Forms                    | 18032                      | Central  | Contact form handling                                             |
 
 ### Infrastructure Components
 
@@ -85,44 +72,30 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | ClickHouse                                   | Time-series analytics database                                                            | Data           | 8123 (HTTP), 9000 (Native)                        | Central                                    |
 | Kafka                                        | Event streaming backbone                                                                  | Data           | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
 | ZooKeeper                                    | Optional standalone coordination service; Kafka uses KRaft and does not require ZooKeeper | Data           | 2181                                              | Operator-defined, only when enabled        |
-| Privateer                                    | WireGuard mesh agent                                                                      | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional \*                        |
+| Privateer                                    | WireGuard mesh agent                                                                      | Infrastructure | 18012 (API), 53/udp (DNS), 51820/udp (WireGuard)  | Central/Regional                           |
 | Foghorn Redis                                | Foghorn HA state sync                                                                     | Infrastructure | 6379                                              | Regional                                   |
 | Nginx                                        | Reverse proxy & routing                                                                   | Support        | 18090                                             | Central                                    |
 | VictoriaMetrics + vmagent                    | Metrics collection                                                                        | Support        | Operator-defined                                  | Central + every backend and edge host      |
 | Grafana                                      | Metrics visualization                                                                     | Support        | Operator-defined                                  | Central                                    |
 | Listmonk                                     | Newsletter/mailing list manager                                                           | Support        | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
-_Navigator and Privateer are in testing. Production rollout is controlled and may not be enabled in every environment._
-
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
 ### Interfaces
 
-| Component      | Role                             | Path                  | Port              | Deploy Location |
-| -------------- | -------------------------------- | --------------------- | ----------------- | --------------- |
-| Web Console    | SvelteKit user dashboard         | `website_application` | 18030             | Regional        |
-| Marketing Site | Sales / Marketing website        | `website_marketing`   | 18031             | Regional        |
-| Documentation  | Astro Starlight docs site        | `website_docs`        | 18033             | Central         |
-| NPM Player     | Embeddable multi-protocol player | `npm_player`          | N/A (npm package) | User websites   |
-| Android App    | Future mobile client             | `app_android`         | N/A               | Planned         |
-
-_Note: The Android app is present in-tree as an early stub. It is not a supported production client
-yet._
+| Component      | Role                                  | Path                  | Port              | Deploy Location |
+| -------------- | ------------------------------------- | --------------------- | ----------------- | --------------- |
+| Web Console    | SvelteKit user dashboard              | `website_application` | 18030             | Regional        |
+| Marketing Site | Sales / Marketing website             | `website_marketing`   | 18031             | Regional        |
+| Documentation  | Astro Starlight docs site             | `website_docs`        | 18033             | Central         |
+| NPM Player     | Embeddable multi-protocol player      | `npm_player`          | N/A (npm package) | User websites   |
+| Android App    | Native mobile client (in development) | `app_android`         | N/A               | Roadmap         |
 
 ### CLI Tool
 
 | Component      | Role                                | Path   | Install                |
 | -------------- | ----------------------------------- | ------ | ---------------------- |
 | FrameWorks CLI | Cluster management and provisioning | `cli/` | `go install` or binary |
-
----
-
-## Planned Services (Not Implemented)
-
-| Service                   | Purpose                  | Status                            |
-| ------------------------- | ------------------------ | --------------------------------- |
-| Lookout (`api_incidents`) | Incident management      | Deferred (use Prometheus/Grafana) |
-| Parlor (`api_rooms`)      | Interactive room service | Planned                           |
 
 ---
 
@@ -155,7 +128,7 @@ Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluste
 | **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
 | **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
 | **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
-| **Open Marketplace** | Operators can publish listed clusters with access controls, invites, subscription requests, and pricing metadata. A vetted public marketplace program is still being built.                                                                                |
+| **Open Marketplace** | Operators publish listed clusters with access controls, invites, subscription requests, and pricing metadata. Tenants browse listings and subscribe through the dashboard or API.                                                                          |
 
 ---
 
@@ -251,29 +224,29 @@ For URI patterns and player integration, see [Playback & Embedding](/builders/pl
 ```mermaid
 graph TB
     subgraph "Infrastructure Layers"
-        PROV["Provisioning Layer (IaaS)<br/>Terraform - Planned"]
-        CONFIG["Configuration Layer (CaC)<br/>Ansible via CLI"]
-        ORCH["Orchestration Layer<br/>Quartermaster"]
+        SOURCE["Release Source of Truth<br/>GitOps manifests"]
+        CONFIG["Configuration Layer<br/>Ansible (driven by CLI)"]
+        ORCH["Coordination Layer<br/>Quartermaster"]
     end
 
     subgraph "Components"
-        VMS["Virtual Machines"]
-        DNS["DNS/Cloudflare"]
+        VMS["Hosts (BYO or operator-provided)"]
+        DNS["DNS (Cloudflare / Bunny via Navigator)"]
         CERTS["TLS Certificates"]
-        MESH["WireGuard Mesh"]
+        MESH["WireGuard Mesh (Privateer)"]
         SERVICES["FrameWorks Services"]
-        TENANTS["Tenant Management"]
+        TENANTS["Tenants &amp; Clusters"]
     end
 
-    PROV --> VMS
-    PROV --> DNS
-    PROV --> CERTS
-
+    SOURCE --> CONFIG
+    CONFIG --> VMS
+    CONFIG --> DNS
+    CONFIG --> CERTS
     CONFIG --> MESH
     CONFIG --> SERVICES
 
     ORCH --> TENANTS
-    ORCH --> CONFIG
+    ORCH --> SERVICES
 ```
 
 ---

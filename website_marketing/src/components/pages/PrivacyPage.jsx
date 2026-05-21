@@ -32,7 +32,7 @@ const privacySections = [
     items: [
       "We keep data only as long as necessary for the purposes above or to comply with legal requirements.",
       `You can request access or deletion by emailing ${config.contactEmail ?? "privacy@frameworks.network"}. Deleting certain data may disable your account.`,
-      "We will update this placeholder policy as the product evolves; continuing to use FrameWorks means you accept the latest version.",
+      "We will update this policy as the product evolves; continuing to use FrameWorks means you accept the latest version.",
     ],
   },
 ];
@@ -68,7 +68,7 @@ const PrivacyPage = () => (
       seed="/privacy"
       eyebrow="Legal"
       title="Privacy Policy"
-      description="This placeholder covers how we handle data during the FrameWorks public beta while we finalize the production policy."
+      description="How we handle data during the FrameWorks public beta."
       align="center"
       accents={privacyHeroAccents}
     />

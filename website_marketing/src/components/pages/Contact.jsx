@@ -97,7 +97,7 @@ const Contact = () => {
       tone: "accent",
       title: "Email",
       subtitle: config.contactEmail,
-      description: "Get in touch via email.",
+      description: "Sales, support, and partnership inquiries.",
       link: { label: config.contactEmail, href: `mailto:${config.contactEmail}`, external: true },
     },
     {
@@ -105,7 +105,7 @@ const Contact = () => {
       tone: "yellow",
       title: "Discord Community",
       subtitle: "discord.gg/9J6haUjdAq",
-      description: "Join our Discord for ultra low latency chat.",
+      description: "Low-latency chat with the team and community.",
       link: { label: "discord.gg/9J6haUjdAq", href: config.discordUrl, external: true },
       widget: DISCORD_GUILD_ID
         ? `https://discord.com/widget?id=${DISCORD_GUILD_ID}&theme=dark`
@@ -284,7 +284,7 @@ const Contact = () => {
       <MarketingHero
         seed="/contact"
         title="Contact us"
-        description="Have questions about FrameWorks? We would love to hear from you."
+        description="Sales, support, partnerships, and bug reports — pick a channel below or send a note."
         align="left"
         surface="gradient"
         support="Email • Discord • Forum • Enterprise requests"
@@ -593,7 +593,7 @@ const Contact = () => {
           variant="band"
           eyebrow="Next steps"
           title="Partner with FrameWorks"
-          description="Tell us what you are building and we will map the next steps together."
+          description="Tell us what you are building. We usually reply within one business day."
           primaryAction={{
             label: "Start Free",
             href: config.appUrl,

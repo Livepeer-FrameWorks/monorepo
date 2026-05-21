@@ -41,7 +41,7 @@ const AupPage = () => (
       seed="/aup"
       eyebrow="Legal"
       title="Acceptable Use Policy"
-      description="Use FrameWorks responsibly during the public beta. These placeholder rules explain what is and is not allowed until the production policy ships."
+      description="Use FrameWorks responsibly during the public beta. These rules explain what is and is not allowed."
       align="center"
       accents={aupHeroAccents}
     />

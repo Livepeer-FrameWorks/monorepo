@@ -227,7 +227,7 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("- **Agent-native operations** — the dashboard, GraphQL API, and MCP tools expose the same platform controls for humans, automation, and AI agents.\n\n")
 	b.WriteString("## Availability key\n\n")
 	b.WriteString("- **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.\n")
-	b.WriteString("- **Expanding** — the core capability is live and a specific surface or workflow is still being rounded out.\n")
+	b.WriteString("- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.\n")
 	b.WriteString("- **Planned** — tracked on the [Roadmap](/roadmap), not represented as a shipped capability in this matrix.\n\n")
 	b.WriteString("## Capability matrix\n\n")
 
@@ -577,8 +577,8 @@ func (v *validator) routeExists(route string) bool {
 	}
 	segs := strings.Split(strings.TrimPrefix(route, "/"), "/")
 	for i, s := range segs {
-		if strings.HasPrefix(s, ":") {
-			segs[i] = "[" + strings.TrimPrefix(s, ":") + "]"
+		if rest, ok := strings.CutPrefix(s, ":"); ok {
+			segs[i] = "[" + rest + "]"
 		}
 	}
 	dir := filepath.Join(append([]string{v.repoRoot, "website_application", "src", "routes"}, segs...)...)

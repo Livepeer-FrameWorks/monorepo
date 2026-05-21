@@ -11,12 +11,12 @@ const steps = [
   {
     icon: GlobeAltIcon,
     title: "Discover",
-    description: "SKILL.md, MCP, DID, OAuth metadata.",
+    description: "Via SKILL.md, MCP, DID, or OAuth metadata.",
   },
   {
     icon: FingerPrintIcon,
     title: "Authenticate",
-    description: "Wallet signature or x402. Instant tenant.",
+    description: "Wallet signature or x402 — account created instantly.",
   },
   {
     icon: BanknotesIcon,

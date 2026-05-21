@@ -286,7 +286,7 @@ features:
   - slug: dvr-chapters
     name: DVR chapters
     area: storage
-    description: Virtual playlist views over long-running DVR archives, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without duplicating media.
+    description: Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream.
     status: partial
     gap_reason: Chapter playback and policy controls are present in the dashboard; audit-event coverage for chapter-policy changes still needs verification.
     required_surfaces:
@@ -582,7 +582,7 @@ features:
   - slug: cluster-marketplace
     name: Cluster marketplace
     area: infrastructure
-    description: Browse listed clusters and manage subscriptions; vetted third-party marketplace operations are still being rounded out.
+    description: Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap.
     status: partial
     gap_reason: |
       Marketplace primitives ship across the API, MCP, dashboard, and docs: listing, preferred cluster selection, invites, subscription requests, approval, pricing models, monthly checkout, and metered/custom rating paths. What is still missing is the full public marketplace operating model: operator vetting, published commercial terms, support boundaries, and production onboarding workflow for third-party capacity.

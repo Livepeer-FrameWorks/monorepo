@@ -81,9 +81,10 @@ mutation {
 ```
 
 `record: true` enables DVR recording from the start. For event channels, this gives late viewers
-seekback while the stream is live. For 24/7 channels, it builds one continuous archive that can be
-replayed later through chapters instead of chopped into fixed-duration assets. You can also toggle
-recording later with `updateStream`. See [Live and DVR Streams](#live-and-dvr-streams) for what that creates.
+seekback while the stream is live. For 24/7 channels, the live stream keeps running while replay
+is served from chapter artifacts that segment the session timeline — no forced stream restart at
+a duration boundary. You can also toggle recording later with `updateStream`. See
+[Live and DVR Streams](#live-and-dvr-streams) for what that creates.
 
 ## Live and DVR Streams
 

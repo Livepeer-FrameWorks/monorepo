@@ -38,12 +38,12 @@ Not sure which package to use? See the [Integration Guide](/builders/integration
 
 ## Key Features
 
-- **Multi-engine architecture** — Wraps hls.js, dash.js, Video.js, and native MistPlayer, selecting the best engine per browser/protocol
-- **Native WebSocket player** — Custom MSE-based player for ultra-low-latency WebSocket streams from MistServer
-- **Intelligent protocol selection** — Ported from MistServer's scoring algorithm for optimal player/source matching
-- **Adaptive bitrate (ABR)** — Resize-aware and bitrate-aware quality switching
-- **Gateway integration** — Automatic edge node resolution via GraphQL API
-- **Lazy-loaded transports** — Heavy player bundles loaded on-demand for small initial bundle
+- **Adaptive bitrate (ABR)** — resize-aware and bitrate-aware quality switching.
+- **Gateway integration** — edge node resolution via the GraphQL API, no manual URL juggling.
+- **Lazy-loaded transports** — heavy engines load on demand to keep the initial bundle small.
+- **Protocol coverage** — HLS, LL-HLS, DASH, WebRTC/WHEP, WebSocket, MP4, and direct protocols when exposed.
+
+For the underlying engine selection and protocol scoring, see [Playback Advanced](/builders/playback-advanced/).
 
 ## Where to Find Your Playback URLs
 

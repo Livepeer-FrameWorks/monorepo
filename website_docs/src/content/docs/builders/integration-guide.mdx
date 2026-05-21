@@ -67,10 +67,10 @@ Replace the default layout with framework sub-components. Mix our components wit
 
 Best for: Custom layouts, adding your own UI around standard controls, brand-specific styling.
 
-<Aside type="note" title="Studio Endpoint Resolution">
-  StreamCrafter components also accept `gatewayUrl` + `streamKey` and call the public
-  `resolveIngestEndpoint` GraphQL field. Use that mode only in environments where the ingest
-  resolver is enabled; otherwise pass the dashboard WHIP URL as `whipUrl`.
+<Aside type="note" title="Studio endpoint resolution">
+  StreamCrafter accepts `gatewayUrl` + `streamKey` and resolves the WHIP endpoint via the public
+  `resolveIngestEndpoint` GraphQL field. If your cluster doesn't expose that resolver, pass the
+  dashboard WHIP URL directly as `whipUrl` instead.
 </Aside>
 
 ---

@@ -48,23 +48,13 @@ const freeTier = {
   name: "Free Tier",
   price: "Free",
   period: "",
-  description: "Self-hosted features & free access to transcoding and shared bandwidth pool.",
+  description:
+    "Run the full stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
   features: [
-    "All self-hosted features",
-    "Livepeer-backed compute",
-    "Seamless failover and load balancing",
-    "Unified dashboard",
-    "Basic analytics",
+    "Full self-hosted stack, 10K delivered min/mo, 10 GB storage, 3 streams / 200 viewers, 7-day DVR",
   ],
   limitations: [
-    "10,000 delivered minutes/month included (zero-priced overage — Free never charges)",
-    "10 GB of stored content (new recordings/uploads rejected at cap)",
-    "Fair-use admission: free over-allowance accepted while the cluster is idle; rejected from 50% load; all free traffic rejected at 95% redline",
-    "3 concurrent live streams / 200 concurrent viewers",
-    "7-day recording retention",
-    "Self-host only (no SLA)",
-    "No GPU hours for AI workloads",
-    "Watermarked playback in player",
+    "No SLA during beta, no GPU hours for AI workloads, fair-use admission caps burst above quota",
   ],
   badge: "No Surprise Bills",
   ctaLabel: "Start Free",
@@ -79,7 +69,8 @@ const paidTiers = [
     price: "€79",
     period: "/month",
     dailyCost: "~€2.63/day",
-    description: "Starter allowances with hosted load balancer and custom subdomain.",
+    description:
+      "120K delivered minutes, 10 GPU-hours, hosted load balancer, and a custom subdomain.",
     features: [
       <span key="delivery">
         120,000 delivered minutes included <InfoTooltip>Overage €0.00055/min</InfoTooltip>
@@ -110,7 +101,8 @@ const paidTiers = [
     price: "€249",
     period: "/month",
     dailyCost: "~€8.30/day",
-    description: "Expanded allowances, collaboration tooling, and shared GPU priority.",
+    description:
+      "500K delivered minutes, 50 GPU-hours with priority, team features, and advanced analytics.",
     features: [
       <span key="delivery">
         500,000 delivered minutes included <InfoTooltip>Overage €0.00052/min</InfoTooltip>
@@ -138,7 +130,8 @@ const paidTiers = [
     price: "€999",
     period: "/month",
     dailyCost: "~€33.30/day",
-    description: "High allowances, dedicated options, and enterprise support.",
+    description:
+      "2M delivered minutes, 250 GPU-hours, SLA-backed 24/7 support, and dedicated capacity options.",
     features: [
       <span key="delivery">
         2,000,000 delivered minutes included <InfoTooltip>Overage €0.00050/min</InfoTooltip>
@@ -164,8 +157,8 @@ const paidTiers = [
 const enterpriseTier = {
   name: "Enterprise",
   price: "Custom pricing",
-  headline: "For high-bandwidth projects and fully custom deployments.",
-  description: "For teams building at massive scale with custom requirements.",
+  headline: "For teams scaling past Production limits or needing custom compliance.",
+  description: "",
   bullets: [
     "Custom feature development and white-label solutions",
     "Private deployments or co-managed operations with our engineers",
@@ -177,10 +170,10 @@ const enterpriseTier = {
 
 const payAsYouGo = {
   name: "Account Balance",
-  price: "Usage-based",
+  price: "Pay per use",
   badge: "Agent-Ready",
   description:
-    "Connect a wallet or pay inline with x402. Your balance covers storage, transcoding, and delivered minutes. Designed for AI agents, automation, and usage-based workflows.",
+    "Connect a wallet or pay inline with x402. Your balance covers storage, transcoding, and delivered minutes. Designed for AI agents and automation.",
   features: [
     "Wallet auth via EIP-191 signature — no email, no registration",
     "Fund via card, crypto deposits (ETH or USDC), or x402 gasless USDC on Base/Arbitrum",
@@ -216,7 +209,7 @@ const gpuFeatureMatrix = [
     description:
       "AI transcription, video analysis, automated highlights, and real-time V2V transformations. Metered against your GPU-hour allowance.",
     status: "pipeline",
-    statusNote: "Pipeline: AI assist is in development; limited to internal and pilot workloads.",
+    statusNote: "Internal and pilot workloads only — request access via Contact.",
     tiers: {
       free: "Only self-hosting",
       supporter: "Only self-hosting",
@@ -229,7 +222,7 @@ const gpuFeatureMatrix = [
     description:
       "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes — no separate GPU-hour charge.",
     status: "pipeline",
-    statusNote: "Pipeline: compositing is in active development with limited pilot access.",
+    statusNote: "Internal and pilot workloads only — request access via Contact.",
     tiers: {
       free: "Only self-hosting",
       supporter: "Only self-hosting",
@@ -253,8 +246,7 @@ const deploymentOptions = [
     tagline: "We run everything",
     tone: "accent",
     icon: CloudIcon,
-    summary:
-      "We operate the control plane, edge, and ops so your team can focus on shipping streams.",
+    summary: "Ingest, delivery, GPUs, and ops — fully managed.",
     modal: {
       description:
         "Let FrameWorks run ingest, delivery, observability, and GPU orchestration while your team focuses on product. You keep full visibility.",
@@ -278,7 +270,7 @@ const deploymentOptions = [
       bullets: [
         "Automatic failover and traffic steering with full audit trails and policy controls.",
         "Unified dashboards for bandwidth, viewer load, GPU draw, and AI usage across every region.",
-        "Usage-based pricing that keeps burst capacity transparent for finance and network ops.",
+        "Per-minute burst pricing with line-item dashboards for finance and network ops.",
       ],
     },
   },
@@ -306,8 +298,7 @@ const deploymentOptions = [
     tagline: "Co-managed scale",
     tone: "yellow",
     icon: BuildingOfficeIcon,
-    summary:
-      "Any operating model with reserved clusters, private consoles, and compliance workflows.",
+    summary: "Reserved clusters, private consoles, and compliance workflows.",
     modal: {
       description:
         "Design custom deployments alongside our engineers when you need dedicated capacity, compliance, and co-managed operations across regulated environments.",
@@ -344,7 +335,7 @@ const faqs = [
   {
     question: "What if we outgrow the published tiers?",
     answer:
-      "Enterprise engagements unlock private deployments, custom SLAs, security reviews, and co-managed operations. We scope the stack with you so you retain control while leaning on our crews.",
+      "Enterprise engagements add private deployments, custom SLAs, security reviews, and co-managed operations. We scope the stack with you so you retain control while leaning on our crews.",
   },
   {
     question: "What is pay-as-you-go billing?",
@@ -437,7 +428,7 @@ const pricingHeroHighlights = [
   {
     title: "Deep analytics included",
     description:
-      "See exactly why viewer X connected to edge Y. QoE metrics and routing decisions in every plan.",
+      "See why viewer X connected to edge Y — QoE metrics and routing decisions in every plan.",
     tone: "green",
     icon: BanknotesIcon,
   },
@@ -600,11 +591,11 @@ const Pricing = () => {
               }
               sections={[
                 {
-                  title: "What’s included",
+                  title: "What you get",
                   items: freeTier.features,
                 },
                 {
-                  title: "Limitations",
+                  title: "What you don’t",
                   items: freeTier.limitations,
                   bullet: "dash",
                 },
@@ -632,14 +623,14 @@ const Pricing = () => {
             >
               <HeadlineStack
                 eyebrow="Paid tiers"
-                title="Upgrade for more"
+                title="Scale beyond free"
                 subtitle="Add hosted services, GPU allowances, and enterprise capabilities as your workloads scale."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
                 actions={
                   <CTACluster align="end" wrap>
-                    <MarketingCTAButton intent="secondary" to="/docs" label="View documentation" />
+                    <MarketingCTAButton intent="secondary" to="/docs" label="Read the docs" />
                     <MarketingCTAButton intent="secondary" to="/contact" label="Talk to sales" />
                   </CTACluster>
                 }
@@ -915,7 +906,7 @@ const Pricing = () => {
         >
           <MarketingFinalCTA
             eyebrow="Next steps"
-            title="Ready to start building?"
+            title="Two ways to start"
             description="Launch the FrameWorks stack on your own hardware, or partner with us for managed deployments and GPU capacity."
             variant="band"
             primaryAction={{
