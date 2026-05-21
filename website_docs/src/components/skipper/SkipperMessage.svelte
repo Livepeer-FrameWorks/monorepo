@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { renderSkipperMarkdown } from "../../lib/skipperMarkdown";
+
   export type SkipperConfidence = "verified" | "sourced" | "best_guess" | "unknown";
 
   export interface SkipperCitation {
@@ -54,95 +56,19 @@
     return !!message.blocks?.some((block) => block.sources?.length);
   }
 
-  function escapeHtml(value: string) {
-    return value
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  let copyIdCounter = 0;
-
-  function renderMarkdown(value: string) {
-    const blocks: string[] = [];
-    let working = value.replace(/```([\s\S]*?)```/g, (_match, code) => {
-      const index = blocks.length;
-      const id = `skipper-code-${copyIdCounter++}`;
-      blocks.push(
-        `<div class="docs-skipper-message__code-wrap"><pre class="docs-skipper-message__code" id="${id}"><code>${escapeHtml(code.trim())}</code></pre><button class="docs-skipper-message__copy" data-copy-target="${id}" type="button">Copy</button></div>`
-      );
-      return `__BLOCK_${index}__`;
-    });
-
-    working = escapeHtml(working);
-
-    // Horizontal rules (must run before headings and line-break conversion)
-    working = working.replace(
-      /(?:^|\n) *--- *(?:\n|$)/g,
-      '\n<hr class="docs-skipper-message__hr">\n'
-    );
-
-    // Headings (### before ## before # to avoid greedy match)
-    working = working.replace(
-      /(?:^|\n)#### (.+)/g,
-      '\n<h6 class="docs-skipper-message__heading">$1</h6>'
-    );
-    working = working.replace(
-      /(?:^|\n)### (.+)/g,
-      '\n<h5 class="docs-skipper-message__heading">$1</h5>'
-    );
-    working = working.replace(
-      /(?:^|\n)## (.+)/g,
-      '\n<h4 class="docs-skipper-message__heading">$1</h4>'
-    );
-    working = working.replace(
-      /(?:^|\n)# (.+)/g,
-      '\n<h3 class="docs-skipper-message__heading">$1</h3>'
-    );
-
-    working = working.replace(/`([^`]+)`/g, '<code class="docs-skipper-message__inline">$1</code>');
-    working = working.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    working = working.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    working = working.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a class="docs-skipper-message__link" href="$2" target="_blank" rel="noreferrer">$1</a>'
-    );
-
-    // Convert unordered list blocks (consecutive lines starting with - )
-    working = working.replace(/(?:^|\n)((?:- .+(?:\n|$))+)/g, (_match, listBlock: string) => {
-      const items = listBlock
-        .split("\n")
-        .filter((line) => line.startsWith("- "))
-        .map((line) => `<li>${line.slice(2)}</li>`)
-        .join("");
-      return `<ul class="docs-skipper-message__list">${items}</ul>`;
-    });
-
-    // Convert ordered list blocks (consecutive lines starting with N. )
-    working = working.replace(/(?:^|\n)((?:\d+\. .+(?:\n|$))+)/g, (_match, listBlock: string) => {
-      const items = listBlock
-        .split("\n")
-        .filter((line) => /^\d+\. /.test(line))
-        .map((line) => `<li>${line.replace(/^\d+\. /, "")}</li>`)
-        .join("");
-      return `<ol class="docs-skipper-message__list">${items}</ol>`;
-    });
-
-    working = working.replace(/\n/g, "<br />");
-
-    blocks.forEach((block, index) => {
-      working = working.replace(`__BLOCK_${index}__`, block);
-    });
-
-    return working;
+  function isAbsoluteHttpUrl(value: string) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
   }
 
   function handleCopyClick(e: MouseEvent) {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-copy-target]");
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-copy-index]");
     if (!btn) return;
-    const pre = document.getElementById(btn.dataset.copyTarget || "");
+    const pre = btn.closest(".docs-skipper-message__code-wrap")?.querySelector("pre");
     if (!pre) return;
     navigator.clipboard.writeText(pre.textContent || "");
     btn.textContent = "Copied!";
@@ -218,20 +144,24 @@
               ? "docs-skipper-message__prose docs-skipper-message__content--dim"
               : "docs-skipper-message__prose"}
           >
-            {@html renderMarkdown(block.content)}
+            {@html renderSkipperMarkdown(block.content)}
           </div>
           {#if block.sources?.length}
             <ul class="docs-skipper-message__block-sources">
               {#each block.sources as source}
                 <li>
-                  <a
-                    class="docs-skipper-message__link"
-                    href={source.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {source.label}
-                  </a>
+                  {#if isAbsoluteHttpUrl(source.url)}
+                    <a
+                      class="docs-skipper-message__link"
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {source.label || source.url}
+                    </a>
+                  {:else}
+                    <span>{source.label}</span>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -246,7 +176,7 @@
       >
         <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
         <div class="docs-skipper-message__prose" onclick={handleCopyClick}>
-          {@html renderMarkdown(message.content)}
+          {@html renderSkipperMarkdown(message.content)}
         </div>
       </div>
     {/if}
@@ -261,14 +191,18 @@
       <ul class="docs-skipper-message__sources-list">
         {#each message.citations as citation}
           <li>
-            <a
-              class="docs-skipper-message__link"
-              href={citation.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {citation.label}
-            </a>
+            {#if isAbsoluteHttpUrl(citation.url)}
+              <a
+                class="docs-skipper-message__link"
+                href={citation.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {citation.label || citation.url}
+              </a>
+            {:else}
+              <span>{citation.label}</span>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -284,9 +218,18 @@
       <ul class="docs-skipper-message__sources-list">
         {#each message.externalLinks as link}
           <li>
-            <a class="docs-skipper-message__link" href={link.url} target="_blank" rel="noreferrer">
-              {link.label}
-            </a>
+            {#if isAbsoluteHttpUrl(link.url)}
+              <a
+                class="docs-skipper-message__link"
+                href={link.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {link.label || link.url}
+              </a>
+            {:else}
+              <span>{link.label}</span>
+            {/if}
           </li>
         {/each}
       </ul>

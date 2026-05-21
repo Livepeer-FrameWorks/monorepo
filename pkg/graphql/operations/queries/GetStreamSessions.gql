@@ -1,42 +1,17 @@
-# Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
-# Trimmed field set and reduced page sizes for lower complexity
+# Fetch paginated viewer sessions for a stream.
+# Use GetStreamAnalyticsSummary and GetClientQoeSummary for aggregate counters.
 query GetStreamSessions(
-  $streamId: ID!
+  $streamId: ID
   $timeRange: TimeRangeInput
-  $first: Int = 50
-  $sessionFirst: Int = 25
+  $first: Int = 25
+  $after: String
 ) {
   analytics {
-    usage {
-      streaming {
-        streamConnectionHourlyConnection(
-          streamId: $streamId
-          timeRange: $timeRange
-          page: { first: $first }
-        ) {
-          edges {
-            cursor
-            node {
-              id
-              hour
-              streamId
-              totalBytes
-              uniqueViewers
-              totalSessions
-            }
-          }
-          pageInfo {
-            ...PageInfoFields
-          }
-          totalCount
-        }
-      }
-    }
     lifecycle {
       viewerSessionsConnection(
         streamId: $streamId
         timeRange: $timeRange
-        page: { first: $sessionFirst }
+        page: { first: $first, after: $after }
       ) {
         edges {
           cursor
@@ -49,32 +24,6 @@ query GetStreamSessions(
             city
             durationSeconds
             connectionQuality
-          }
-        }
-        pageInfo {
-          ...PageInfoFields
-        }
-        totalCount
-      }
-    }
-    health {
-      clientQoeConnection(
-        streamId: $streamId
-        timeRange: $timeRange
-        page: { first: $sessionFirst }
-      ) {
-        edges {
-          cursor
-          node {
-            id
-            timestamp
-            streamId
-            nodeId
-            activeSessions
-            avgBandwidthIn
-            avgBandwidthOut
-            avgConnectionTime
-            packetLossRate
           }
         }
         pageInfo {

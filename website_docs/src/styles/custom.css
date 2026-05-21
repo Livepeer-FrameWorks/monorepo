@@ -688,6 +688,25 @@ code {
   color: hsl(var(--primary));
 }
 
+.docs-skipper-message__paragraph {
+  margin: 0.45rem 0;
+}
+
+.docs-skipper-message__paragraph:first-child {
+  margin-top: 0;
+}
+
+.docs-skipper-message__paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.docs-skipper-message__quote {
+  margin: 0.55rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--sl-color-hairline-shade);
+  color: var(--sl-color-gray-3);
+}
+
 .docs-skipper-message__heading {
   margin: 0.4rem 0 0.15rem;
   font-weight: 700;
@@ -727,6 +746,35 @@ h6.docs-skipper-message__heading {
 
 .docs-skipper-message__list li {
   margin: 0.15rem 0;
+}
+
+.docs-skipper-message__table-wrap {
+  width: 100%;
+  margin: 0.65rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--sl-color-hairline-shade);
+  border-radius: 0.45rem;
+}
+
+.docs-skipper-message__table {
+  width: 100%;
+  min-width: 24rem;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.docs-skipper-message__th,
+.docs-skipper-message__td {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--sl-color-hairline-shade);
+  vertical-align: top;
+  text-align: left;
+}
+
+.docs-skipper-message__th {
+  background: color-mix(in srgb, var(--sl-color-white) 6%, transparent);
+  color: var(--sl-color-white);
+  font-weight: 700;
 }
 
 .docs-skipper-message__inline {

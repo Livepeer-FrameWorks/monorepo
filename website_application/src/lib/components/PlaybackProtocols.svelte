@@ -74,6 +74,10 @@
   const ExternalLinkIcon = getIconComponent("ExternalLink");
   const ChevronDownIcon = getIconComponent("ChevronDown");
   const ChevronUpIcon = getIconComponent("ChevronUp");
+
+  function linkHref(href: string) {
+    return /^[a-z][a-z0-9+.-]*:/i.test(href) ? href : resolve(href as "/");
+  }
 </script>
 
 {#if urls}
@@ -82,14 +86,16 @@
       <p class="text-xs text-muted-foreground">
         Playback URLs for this {contentType === "dvr" ? "recording" : contentType}.
       </p>
+      <!-- eslint-disable svelte/no-navigation-without-resolve -->
       <a
-        href={resolve(docsUrl as "/")}
+        href={linkHref(docsUrl)}
         target="_blank"
         rel="noopener noreferrer"
         class="text-xs text-info hover:underline inline-flex items-center gap-1"
       >
         Protocol docs <ExternalLinkIcon class="w-3 h-3" />
       </a>
+      <!-- eslint-enable svelte/no-navigation-without-resolve -->
     </div>
 
     <!-- Primary Protocols -->

@@ -38,6 +38,17 @@
   };
 
   const docsBase = getDocsSiteUrl().replace(/\/$/, "");
+  const SCHEME_URL_RE = /^[a-z][a-z0-9+.-]*:/i;
+
+  function stripMdxSuffix(path: string) {
+    return path.replace(/\.mdx?(?=([?#]|$))/i, "");
+  }
+
+  function docsPageHref(page: string) {
+    const cleanPage = stripMdxSuffix(page.trim());
+    if (SCHEME_URL_RE.test(cleanPage)) return cleanPage;
+    return `${docsBase}/${cleanPage.replace(/^\/+/, "")}`;
+  }
 
   function tryInPlayground(query: string) {
     const base = resolve("/developer/playground");
@@ -167,9 +178,9 @@
             {#if feature.surfaces.docs.pages?.length}
               <div class="text-xs space-y-0.5">
                 {#each feature.surfaces.docs.pages as p (p)}
-                  {@const docsHref = `${docsBase}/${p.replace(/\.mdx?$/, "")}`}
+                  <!-- eslint-disable svelte/no-navigation-without-resolve -->
                   <a
-                    href={resolve(docsHref as "/")}
+                    href={docsPageHref(p)}
                     target="_blank"
                     rel="noopener"
                     class="text-primary hover:underline inline-flex items-center gap-1"
@@ -177,6 +188,7 @@
                     {p}
                     <ExternalLink class="w-3 h-3" />
                   </a>
+                  <!-- eslint-enable svelte/no-navigation-without-resolve -->
                 {/each}
               </div>
             {/if}

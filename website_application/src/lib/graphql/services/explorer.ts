@@ -3,6 +3,8 @@
  * Replaces Apollo for dynamic query execution
  */
 
+import { parse } from "graphql";
+
 import {
   loadAllTemplates,
   searchTemplates as searchTemplatesFromLoader,
@@ -12,14 +14,17 @@ import {
 
 import {
   type IntrospectedSchema,
+  type SchemaField,
+  type TypeRef,
   getBaseTypeName,
   findType,
   isUnionType,
   getPossibleTypes,
   isScalarType,
+  formatTypeString,
 } from "./schemaUtils";
 
-import { extractOperationType } from "./gqlParser";
+import { extractOperationType, stripClientDirectives } from "./gqlParser";
 import {
   EXPLORER_CATALOG,
   type ResolvedExplorerSection,
@@ -180,25 +185,6 @@ interface CodeExamples {
 interface ValidationResult {
   valid: boolean;
   error: string | null;
-}
-
-interface TypeRef {
-  name?: string;
-  kind?: string;
-  ofType?: TypeRef;
-}
-
-interface SchemaFieldArg {
-  name: string;
-  description?: string;
-  type?: TypeRef;
-}
-
-interface SchemaField {
-  name: string;
-  description?: string;
-  args?: SchemaFieldArg[];
-  type?: TypeRef;
 }
 
 interface GeneratedQuery {
@@ -465,7 +451,7 @@ export const explorerService = {
       // Configure headers for demo mode
       const headers: Record<string, string> = demoMode ? { "X-Demo-Mode": "true" } : {};
 
-      const result = await executeGraphQL(query, variables, headers);
+      const result = await executeGraphQL(stripClientDirectives(query), variables, headers);
 
       const endTime = Date.now();
       const duration = endTime - startTime;
@@ -841,29 +827,8 @@ ${Object.entries(variables)
    * Get the GraphQL type name from a type object
    */
   getGraphQLTypeName(type: TypeRef | undefined): string {
-    if (!type) return "String";
-
-    // Handle NON_NULL wrapper
-    if (type.kind === "NON_NULL") {
-      const innerType = type.ofType;
-      if (innerType?.name) return `${innerType.name}!`;
-      if (innerType?.kind === "LIST" && innerType.ofType?.name) {
-        return `[${innerType.ofType.name}]!`;
-      }
-      return "String!";
-    }
-
-    // Handle LIST wrapper
-    if (type.kind === "LIST") {
-      const innerType = type.ofType;
-      if (innerType?.name) return `[${innerType.name}]`;
-      return "[String]";
-    }
-
-    // Simple named type
-    if (type.name) return type.name;
-
-    return "String";
+    const typeName = formatTypeString(type);
+    return typeName === "unknown" ? "String" : typeName;
   },
 
   /**
@@ -1201,6 +1166,7 @@ ${Object.entries(variables)
       const childSelections =
         typeDef.fields
           ?.filter((f) => !f.name.startsWith("__"))
+          .filter((f) => !this.hasRequiredArguments(f))
           .slice(0, 6)
           .map((child) => {
             const childBase = getBaseTypeName(child.type);
@@ -1225,6 +1191,12 @@ ${Object.entries(variables)
     }
 
     return null;
+  },
+
+  hasRequiredArguments(field: SchemaField): boolean {
+    return (
+      field.args?.some((arg) => arg.type?.kind === "NON_NULL" && arg.defaultValue == null) ?? false
+    );
   },
 
   /**
@@ -1275,8 +1247,11 @@ ${fragments.join("\n")}
    */
   validateQuery(query: string): ValidationResult {
     try {
+      const executableQuery = stripClientDirectives(query);
+
       // Basic validation - check for balanced braces and basic structure
-      const braceCount = (query.match(/\{/g) || []).length - (query.match(/\}/g) || []).length;
+      const braceCount =
+        (executableQuery.match(/\{/g) || []).length - (executableQuery.match(/\}/g) || []).length;
       if (braceCount !== 0) {
         return {
           valid: false,
@@ -1286,7 +1261,7 @@ ${fragments.join("\n")}
 
       // Use extractOperationType which correctly handles comment-prefixed queries
       // Returns 'query', 'mutation', 'subscription', or 'fragment'
-      const opType = extractOperationType(query);
+      const opType = extractOperationType(executableQuery);
 
       // Fragment definitions aren't executable operations
       if (opType === "fragment") {
@@ -1295,6 +1270,8 @@ ${fragments.join("\n")}
           error: "Fragment definitions cannot be executed directly",
         };
       }
+
+      parse(executableQuery);
 
       return {
         valid: true,

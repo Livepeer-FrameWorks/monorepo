@@ -453,16 +453,21 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
     spreadablesRef.current.orchestrators.push({ marker, iconRadius: size / 2 });
   });
 
-  // Orchestrators sit at their real lat/lng at low/mid zoom - there are often
-  // dozens per region, and any hex fan inflates them across continents. Only
-  // disambiguate by spread when we're zoomed in close enough that overlap
-  // actually matters.
-  const spreadOrchs = map.getZoom() >= 7;
-  spreadOverlappingMarkers(map, [
-    ...spreadablesRef.current.nodes,
-    ...spreadablesRef.current.clusters,
-    ...(spreadOrchs ? spreadablesRef.current.orchestrators : []),
-  ]);
+  const zoomLevel = map.getZoom();
+  const spreadOrchs = zoomLevel >= 5;
+  spreadOverlappingMarkers(
+    map,
+    [
+      ...spreadablesRef.current.nodes,
+      ...spreadablesRef.current.clusters,
+      ...(spreadOrchs ? spreadablesRef.current.orchestrators : []),
+    ],
+    {
+      groupThresholdMultiplier: zoomLevel >= 6 ? 1.55 : 2.15,
+      maxExpandedGroupSize: 24,
+      denseStepScale: 0.82,
+    }
+  );
   redrawNetworkLines(L, map, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
 }
 
@@ -540,6 +545,28 @@ function smoothPolygon(points, cornerRadius, samplesPerCorner = 6) {
     }
   }
   return out;
+}
+
+function shouldDrawClusterHull(points) {
+  if (points.length < 3) return false;
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  points.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  });
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const major = Math.max(width, height);
+  const minor = Math.max(1, Math.min(width, height));
+  if (major > 360) return false;
+  if (major / minor > 4) return false;
+  if (major > 220 && minor < 56) return false;
+  return true;
 }
 
 function startPulse(L, layer, pulseTimersRef, from, to, color = "rgb(125, 207, 255)") {
@@ -636,8 +663,7 @@ function redrawNetworkLines(
     if (!clusterMarker || !cluster) return;
     const clusterColor = roleColor(cluster.clusterType, cluster.status);
 
-    if (members.length === 1) {
-      const node = members[0];
+    const drawMemberLine = (node) => {
       const from = markerLatLng(nodeMarkersById[node.nodeId], [node.latitude, node.longitude]);
       const to = markerLatLng(clusterMarker, [cluster.latitude, cluster.longitude]);
       if (!Number.isFinite(to[0]) || !Number.isFinite(to[1])) return;
@@ -651,6 +677,10 @@ function redrawNetworkLines(
         smoothFactor: 1,
         interactive: false,
       }).addTo(memberLayer);
+    };
+
+    if (members.length === 1) {
+      drawMemberLine(members[0]);
       return;
     }
 
@@ -658,6 +688,10 @@ function redrawNetworkLines(
       .filter(Boolean)
       .map((m) => map.latLngToContainerPoint(m.getLatLng()));
     if (pts.length < 3) return;
+    if (!shouldDrawClusterHull(pts)) {
+      members.forEach(drawMemberLine);
+      return;
+    }
     const hull = convexHull(pts);
     const inflated = inflateHull(hull, 10);
     const smoothed = smoothPolygon(inflated, 14);

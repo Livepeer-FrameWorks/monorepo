@@ -8,7 +8,7 @@ const DEFAULT_GAP_PX = 4;
  *
  * @param {import("leaflet").Map} map
  * @param {Array<{marker: import("leaflet").Marker, iconRadius: number}>} items
- * @param {{gapPx?: number}} [opts]
+ * @param {{gapPx?: number, groupThresholdMultiplier?: number, maxExpandedGroupSize?: number, denseStepScale?: number}} [opts]
  */
 export function spreadOverlappingMarkers(map, items, opts = {}) {
   if (items.length < 2) {
@@ -16,6 +16,9 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
     return;
   }
   const gap = opts.gapPx ?? DEFAULT_GAP_PX;
+  const thresholdMultiplier = opts.groupThresholdMultiplier ?? 1;
+  const maxExpandedGroupSize = opts.maxExpandedGroupSize ?? Number.POSITIVE_INFINITY;
+  const denseStepScale = opts.denseStepScale ?? 1;
 
   items.forEach((it) => resetToOriginal(it.marker));
 
@@ -40,7 +43,7 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
       const dx = points[i].x - points[j].x;
       const dy = points[i].y - points[j].y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const threshold = items[i].iconRadius + items[j].iconRadius + gap;
+      const threshold = (items[i].iconRadius + items[j].iconRadius + gap) * thresholdMultiplier;
       if (dist < threshold) union(i, j);
     }
   }
@@ -65,8 +68,9 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
     // Step = clearance between the two largest + gap. For uniform groups this
     // collapses to 2r+gap; for mixed groups (cluster + nodes) it stays tight
     // instead of inflating to 2 * cluster radius and leaving dead space.
-    const step = rMax + rSecond + gap;
-    const offsets = groupOffsets(indices.length, step);
+    const step =
+      (rMax + rSecond + gap) * (indices.length > maxExpandedGroupSize ? denseStepScale : 1);
+    const offsets = groupOffsets(indices.length, step, maxExpandedGroupSize);
 
     indices.forEach((idx, i) => {
       const [ox, oy] = offsets[i];
@@ -86,24 +90,35 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
  * @param {number} step
  * @returns {Array<[number, number]>}
  */
-function groupOffsets(n, step) {
+function groupOffsets(n, step, maxExpandedGroupSize = Number.POSITIVE_INFINITY) {
+  const slots = Math.max(1, Math.min(n, maxExpandedGroupSize));
   // Item 0 always sits at (0,0) — the caller anchors that slot at the largest
   // item's real pixel position, so it doesn't move.
-  if (n === 2) {
-    return [
+  if (slots === 2) {
+    const base = [
       [0, 0],
       [step, 0],
     ];
+    return repeatSlots(n, base);
   }
-  if (n === 3) {
+  if (slots === 3) {
     const h = (step * Math.sqrt(3)) / 2;
-    return [
+    const base = [
       [0, 0],
       [-step / 2, h],
       [step / 2, h],
     ];
+    return repeatSlots(n, base);
   }
-  return hexSpiral(n).map(([q, r]) => [step * (q + r / 2), step * (Math.sqrt(3) / 2) * r]);
+  const base = hexSpiral(slots).map(([q, r]) => [
+    step * (q + r / 2),
+    step * (Math.sqrt(3) / 2) * r,
+  ]);
+  return repeatSlots(n, base);
+}
+
+function repeatSlots(n, slots) {
+  return Array.from({ length: n }, (_, i) => slots[i % slots.length]);
 }
 
 function hexSpiral(n) {

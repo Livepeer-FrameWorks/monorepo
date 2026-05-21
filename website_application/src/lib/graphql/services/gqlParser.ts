@@ -23,6 +23,22 @@ export interface ParsedOperation {
   filePath?: string;
 }
 
+export const CLIENT_DIRECTIVE_NAMES = [
+  "paginate",
+  "list",
+  "prepend",
+  "append",
+  "allLists",
+  "parentID",
+  "loading",
+  "required",
+  "optimisticKey",
+  "blocking",
+  "cache",
+  "mask_disable",
+  "mask",
+] as const;
+
 /**
  * Extract the operation type from a GraphQL query string
  */
@@ -451,28 +467,12 @@ export function parseGqlFile(content: string, filePath?: string): ParsedOperatio
  * These directives are only valid on the client and will cause server errors
  */
 export function stripClientDirectives(query: string): string {
-  // List of Houdini-specific directives to remove
-  const clientDirectives = [
-    "@paginate",
-    "@list",
-    "@prepend",
-    "@append",
-    "@allLists",
-    "@parentID",
-    "@loading",
-    "@required",
-    "@optimisticKey",
-    "@blocking",
-    "@cache",
-    "@mask",
-  ];
-
   let result = query;
 
-  for (const directive of clientDirectives) {
+  for (const directiveName of CLIENT_DIRECTIVE_NAMES) {
     // Remove directive with optional arguments: @directive or @directive(...)
-    // This regex handles @directive, @directive(...), and preserves surrounding whitespace
-    const pattern = new RegExp(`\\s*${directive}(?:\\([^)]*\\))?`, "g");
+    // The word boundary prevents @mask from corrupting @mask_disable.
+    const pattern = new RegExp(`\\s*@${directiveName}\\b(?:\\([^)]*\\))?`, "g");
     result = result.replace(pattern, "");
   }
 

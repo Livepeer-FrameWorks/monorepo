@@ -5,6 +5,13 @@ export interface Spreadable {
   iconRadius: number;
 }
 
+interface SpreadOptions {
+  gapPx?: number;
+  groupThresholdMultiplier?: number;
+  maxExpandedGroupSize?: number;
+  denseStepScale?: number;
+}
+
 interface MarkerWithOriginal {
   getLatLng: Marker["getLatLng"];
   setLatLng: Marker["setLatLng"];
@@ -22,13 +29,16 @@ const DEFAULT_GAP_PX = 4;
 export function spreadOverlappingMarkers(
   map: LMap,
   items: Spreadable[],
-  opts: { gapPx?: number } = {}
+  opts: SpreadOptions = {}
 ): void {
   if (items.length < 2) {
     items.forEach((it) => resetToOriginal(it.marker));
     return;
   }
   const gap = opts.gapPx ?? DEFAULT_GAP_PX;
+  const thresholdMultiplier = opts.groupThresholdMultiplier ?? 1;
+  const maxExpandedGroupSize = opts.maxExpandedGroupSize ?? Number.POSITIVE_INFINITY;
+  const denseStepScale = opts.denseStepScale ?? 1;
 
   items.forEach((it) => resetToOriginal(it.marker));
 
@@ -56,7 +66,7 @@ export function spreadOverlappingMarkers(
       const dx = points[i].x - points[j].x;
       const dy = points[i].y - points[j].y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const threshold = items[i].iconRadius + items[j].iconRadius + gap;
+      const threshold = (items[i].iconRadius + items[j].iconRadius + gap) * thresholdMultiplier;
       if (dist < threshold) union(i, j);
     }
   }
@@ -81,8 +91,9 @@ export function spreadOverlappingMarkers(
     // Step = clearance between the two largest + gap. For uniform groups this
     // collapses to 2r+gap; for mixed groups (cluster + nodes) it stays tight
     // instead of inflating to 2 * cluster radius and leaving dead space.
-    const step = rMax + rSecond + gap;
-    const offsets = groupOffsets(indices.length, step);
+    const step =
+      (rMax + rSecond + gap) * (indices.length > maxExpandedGroupSize ? denseStepScale : 1);
+    const offsets = groupOffsets(indices.length, step, maxExpandedGroupSize);
 
     indices.forEach((idx, i) => {
       const [ox, oy] = offsets[i];
@@ -98,26 +109,38 @@ export function spreadOverlappingMarkers(
  * out around it. Small groups get hand-tuned layouts; larger groups use a
  * pointy-top hex spiral whose first cell is the anchor.
  */
-function groupOffsets(n: number, step: number): Array<[number, number]> {
+function groupOffsets(
+  n: number,
+  step: number,
+  maxExpandedGroupSize = Number.POSITIVE_INFINITY
+): Array<[number, number]> {
+  const slots = Math.max(1, Math.min(n, maxExpandedGroupSize));
   // Item 0 always sits at (0,0) — the caller anchors that slot at the largest
   // item's real pixel position, so it doesn't move.
-  if (n === 2) {
-    return [
+  if (slots === 2) {
+    const base: Array<[number, number]> = [
       [0, 0],
       [step, 0],
     ];
+    return repeatSlots(n, base);
   }
-  if (n === 3) {
+  if (slots === 3) {
     const h = (step * Math.sqrt(3)) / 2;
-    return [
+    const base: Array<[number, number]> = [
       [0, 0],
       [-step / 2, h],
       [step / 2, h],
     ];
+    return repeatSlots(n, base);
   }
-  return hexSpiral(n).map(
+  const base = hexSpiral(slots).map(
     ([q, r]) => [step * (q + r / 2), step * (Math.sqrt(3) / 2) * r] as [number, number]
   );
+  return repeatSlots(n, base);
+}
+
+function repeatSlots(n: number, slots: Array<[number, number]>): Array<[number, number]> {
+  return Array.from({ length: n }, (_, i) => slots[i % slots.length]);
 }
 
 function hexSpiral(n: number): Array<[number, number]> {

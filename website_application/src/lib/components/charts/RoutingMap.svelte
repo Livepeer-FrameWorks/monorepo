@@ -500,6 +500,28 @@
     return out;
   }
 
+  function shouldDrawClusterHull(points: Array<{ x: number; y: number }>): boolean {
+    if (points.length < 3) return false;
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    points.forEach((p) => {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    });
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const major = Math.max(width, height);
+    const minor = Math.max(1, Math.min(width, height));
+    if (major > 360) return false;
+    if (major / minor > 4) return false;
+    if (major > 220 && minor < 56) return false;
+    return true;
+  }
+
   function relationshipColor(type: RelationshipLine["type"]): string {
     if (type === "traffic") return "rgba(34, 197, 94, 0.6)";
     if (type === "assignment") return "rgba(168, 85, 247, 0.72)";
@@ -904,16 +926,17 @@
 
   function applySpread() {
     if (!map || !L) return;
-    // Orchestrators sit at their real lat/lng at low/mid zoom - there are
-    // often dozens per region, and any hex fan inflates them across
-    // continents. Only disambiguate by spread when we're zoomed in close
-    // enough that overlap actually matters.
-    const spreadOrchs = map.getZoom() >= 7;
-    spreadOverlappingMarkers(map, [
-      ...nodeSpreadables,
-      ...clusterSpreadables,
-      ...(spreadOrchs ? orchestratorSpreadables : []),
-    ]);
+    const zoomLevel = map.getZoom();
+    const spreadOrchs = zoomLevel >= 5;
+    spreadOverlappingMarkers(
+      map,
+      [...nodeSpreadables, ...clusterSpreadables, ...(spreadOrchs ? orchestratorSpreadables : [])],
+      {
+        groupThresholdMultiplier: zoomLevel >= 6 ? 1.55 : 2.15,
+        maxExpandedGroupSize: 24,
+        denseStepScale: 0.82,
+      }
+    );
     drawTopologyLines(renderedNodes, renderedClusters, renderedRelationships);
   }
 
@@ -976,8 +999,7 @@
         ? roleColor(cluster.clusterType, cluster.status)
         : "rgb(148, 163, 184)";
 
-      if (members.length === 1) {
-        const node = members[0];
+      const drawMemberLine = (node: NodeLocation) => {
         const from = markerLatLng(nodeMarkersByID[node.id], [node.lat, node.lng]);
         const to = markerLatLng(clusterMarker, from);
         if (from[0] === to[0] && from[1] === to[1]) return;
@@ -994,6 +1016,10 @@
             interactive: false,
           })
           .addTo(membershipLayer!);
+      };
+
+      if (members.length === 1) {
+        drawMemberLine(members[0]);
         return;
       }
 
@@ -1003,6 +1029,10 @@
       );
       const pts = markersForHull.map((m) => map!.latLngToContainerPoint(m.getLatLng()));
       if (pts.length < 3) return;
+      if (!shouldDrawClusterHull(pts)) {
+        members.forEach(drawMemberLine);
+        return;
+      }
       const hull = convexHull(pts);
       const inflated = inflateHull(hull, 10);
       const smoothed = smoothPolygon(inflated, 14);

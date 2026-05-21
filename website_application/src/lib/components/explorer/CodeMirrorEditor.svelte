@@ -3,6 +3,7 @@
   import { browser } from "$app/environment";
   import type { GraphQLSchema } from "graphql";
   import type { Diagnostic as LintDiagnostic } from "@codemirror/lint";
+  import { CLIENT_DIRECTIVE_NAMES } from "$lib/graphql/services/gqlParser";
 
   // Schema can be a proper GraphQLSchema for autocomplete,
   // or an introspection result (we'll build the schema from it),
@@ -66,6 +67,14 @@
   }
   let graphqlSchema: GraphQLSchema | null = null;
   let lastCursorSignature: string | null = null;
+
+  const ignoredClientDirectiveMessages = new Set(
+    CLIENT_DIRECTIVE_NAMES.map((name) => `Unknown directive "@${name}".`)
+  );
+
+  function isIgnoredDiagnostic(message: string): boolean {
+    return ignoredClientDirectiveMessages.has(message);
+  }
 
   type CursorInfo = {
     kind: "field" | "argument" | "enum" | "type" | "directive" | "variable";
@@ -273,6 +282,7 @@
               const rawDiagnostics = getDiagnostics(docText, graphqlSchema);
 
               return rawDiagnostics
+                .filter((d) => !isIgnoredDiagnostic(d.message))
                 .map((d): LintDiagnostic | null => {
                   const startLine = d.range?.start?.line ?? 0;
                   const startChar = d.range?.start?.character ?? 0;

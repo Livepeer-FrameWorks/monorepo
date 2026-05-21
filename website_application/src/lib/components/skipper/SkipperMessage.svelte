@@ -1,6 +1,7 @@
 <script lang="ts">
   import { format } from "date-fns";
   import SkipperToolResult from "./SkipperToolResult.svelte";
+  import { renderSkipperMarkdown } from "$lib/utils/skipperMarkdown";
 
   export type SkipperConfidence = "verified" | "sourced" | "best_guess" | "unknown";
 
@@ -67,91 +68,6 @@
   const externalLinks = $derived(
     (message.externalLinks ?? []).filter((item) => isAbsoluteHttpUrl(item.url))
   );
-
-  function escapeHtml(value: string) {
-    return value
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  function renderMarkdown(value: string) {
-    const blocks: string[] = [];
-    let blockCounter = 0;
-    let working = value.replace(/```([\s\S]*?)```/g, (_match, code) => {
-      const index = blockCounter++;
-      blocks.push(
-        `<div class="group/code relative mt-3"><pre class="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 pr-10 text-xs text-foreground"><code>${escapeHtml(
-          code.trim()
-        )}</code></pre><button data-copy-index="${index}" class="absolute right-2 top-2 rounded-md border border-border bg-background/80 p-1 text-muted-foreground opacity-0 transition hover:text-foreground group-hover/code:opacity-100" aria-label="Copy code"><svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg></button></div>`
-      );
-      return `__BLOCK_${index}__`;
-    });
-
-    working = escapeHtml(working);
-
-    // Horizontal rules
-    working = working.replace(/(?:^|\n) *--- *(?:\n|$)/g, '\n<hr class="my-3 border-border">\n');
-
-    // Headings (#### before ### before ## before # to avoid greedy match)
-    working = working.replace(
-      /(?:^|\n)#### (.+)/g,
-      '\n<h6 class="mt-3 mb-1 text-xs font-semibold text-foreground">$1</h6>'
-    );
-    working = working.replace(
-      /(?:^|\n)### (.+)/g,
-      '\n<h5 class="mt-3 mb-1 text-sm font-semibold text-foreground">$1</h5>'
-    );
-    working = working.replace(
-      /(?:^|\n)## (.+)/g,
-      '\n<h4 class="mt-3 mb-1 font-semibold text-foreground">$1</h4>'
-    );
-    working = working.replace(
-      /(?:^|\n)# (.+)/g,
-      '\n<h3 class="mt-4 mb-1 text-base font-semibold text-foreground">$1</h3>'
-    );
-
-    working = working.replace(
-      /`([^`]+)`/g,
-      '<code class="rounded bg-muted/60 px-1 py-0.5 text-xs">$1</code>'
-    );
-    working = working.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    working = working.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    working = working.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a class="text-primary underline underline-offset-4 hover:text-primary/80" href="$2" target="_blank" rel="noreferrer">$1</a>'
-    );
-
-    // Unordered lists (consecutive lines starting with - )
-    working = working.replace(/(?:^|\n)((?:- .+(?:\n|$))+)/g, (_match, listBlock: string) => {
-      const items = listBlock
-        .split("\n")
-        .filter((line) => line.startsWith("- "))
-        .map((line) => `<li>${line.slice(2)}</li>`)
-        .join("");
-      return `<ul class="my-2 list-disc space-y-1 pl-5">${items}</ul>`;
-    });
-
-    // Ordered lists (consecutive lines starting with N. )
-    working = working.replace(/(?:^|\n)((?:\d+\. .+(?:\n|$))+)/g, (_match, listBlock: string) => {
-      const items = listBlock
-        .split("\n")
-        .filter((line) => /^\d+\. /.test(line))
-        .map((line) => `<li>${line.replace(/^\d+\. /, "")}</li>`)
-        .join("");
-      return `<ol class="my-2 list-decimal space-y-1 pl-5">${items}</ol>`;
-    });
-
-    working = working.replace(/\n/g, "<br />");
-
-    blocks.forEach((block, index) => {
-      working = working.replace(`__BLOCK_${index}__`, block);
-    });
-
-    return working;
-  }
 
   function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement;
@@ -246,7 +162,7 @@
           <div class={block.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
             <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
               <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
-              {@html renderMarkdown(block.content)}
+              {@html renderSkipperMarkdown(block.content)}
             </div>
           </div>
         </div>
@@ -255,7 +171,7 @@
       <div class={message.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
         <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
           <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
-          {@html renderMarkdown(message.content)}
+          {@html renderSkipperMarkdown(message.content)}
         </div>
       </div>
     {/if}
