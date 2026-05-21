@@ -785,9 +785,9 @@ func removeIfNotEmpty(path string) {
 }
 
 // activateCaddy renders the production Caddyfile from ConfigSeed and pushes it to Caddy.
-// Returns true on a successful reload (or no-op when config is unchanged
-// and no cert change was detected). Returns false if rendering or reload
-// failed; callers ACK accordingly.
+// It always reloads the rendered config because Caddy may have been restarted
+// independently after Helmsman last activated it.
+// Returns false if rendering, persistence, or reload failed; callers ACK accordingly.
 func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 	bundles := composeCaddyBundles(seed)
 	if len(bundles) == 0 {
@@ -824,14 +824,13 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
-	if hash == m.lastCaddyHash && !certChanged {
-		return true
-	}
-
+	logActivation := hash != m.lastCaddyHash || certChanged || !m.caddyActivated
 	if m.reloadCaddy([]byte(rendered)) {
 		m.lastCaddyHash = hash
 		m.caddyActivated = true
-		m.logger.WithField("bundle_count", len(bundles)).Info("Activated production Caddyfile via ConfigSeed")
+		if logActivation {
+			m.logger.WithField("bundle_count", len(bundles)).Info("Activated production Caddyfile via ConfigSeed")
+		}
 		return true
 	}
 	return false

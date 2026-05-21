@@ -296,6 +296,39 @@ func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
 	}
 }
 
+func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	t.Setenv("CADDY_CONFIG_PATH", path)
+
+	reloadCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reloadCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+
+	seed := &pb.ConfigSeed{
+		Site: &pb.SiteConfig{
+			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
+		},
+		TlsBundles: []*pb.TLSCertBundle{{
+			BundleId:      "cluster:media-eu-1",
+			SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
+		}},
+	}
+	m := &Manager{logger: logging.NewLogger()}
+	if !m.activateCaddy(seed, false) {
+		t.Fatal("first activateCaddy returned false")
+	}
+	if !m.activateCaddy(seed, false) {
+		t.Fatal("second activateCaddy returned false")
+	}
+	if reloadCount != 2 {
+		t.Fatalf("reload count = %d, want 2", reloadCount)
+	}
+}
+
 func TestReloadCaddyAcceptsEmptyOKResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/load" {
