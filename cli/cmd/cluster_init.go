@@ -367,10 +367,12 @@ func initClickHouse(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster
 	config := provisioner.ServiceConfig{
 		Port: ch.Port,
 		Metadata: map[string]any{
+			"platform_channel":    manifest.ResolvedChannel(),
 			"databases":           ch.Databases,
 			"clickhouse_password": chPassword,
 		},
 	}
+	rc.applyReleaseMetadata(config.Metadata)
 
 	if initErr := prov.Initialize(ctx, host, config); initErr != nil {
 		return initErr

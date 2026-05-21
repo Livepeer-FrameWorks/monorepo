@@ -35,6 +35,31 @@ func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {
 	}
 }
 
+func TestClickHouseRoleVarsResolvesVersionFromReleaseManifest(t *testing.T) {
+	repo := writeTestGitopsRelease(t, `
+platform_version: vtest
+infrastructure:
+  - name: clickhouse
+    version: "26.3.10.62"
+    image: clickhouse/clickhouse-server:26.3.10.62
+    digest: sha256:clickhousedigest
+`)
+
+	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+		Version: "stable",
+		Metadata: map[string]any{
+			"gitops_repository": repo,
+			"platform_channel":  "stable",
+		},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	if got := vars["clickhouse_version"]; got != "26.3.10.62" {
+		t.Fatalf("clickhouse_version = %v, want 26.3.10.62", got)
+	}
+}
+
 func TestClickHouseRoleVarsDefaultsListenHostsToLocalAndMesh(t *testing.T) {
 	config := ServiceConfig{
 		Version: "26.3.10.62",
