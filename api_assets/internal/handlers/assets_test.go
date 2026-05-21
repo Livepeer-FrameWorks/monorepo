@@ -67,10 +67,14 @@ func init() {
 }
 
 func serveRequest(h *AssetHandler, urlPath string) *httptest.ResponseRecorder {
+	return serveMethodRequest(h, http.MethodGet, urlPath)
+}
+
+func serveMethodRequest(h *AssetHandler, method, urlPath string) *httptest.ResponseRecorder {
 	router := gin.New()
 	h.RegisterRoutes(router)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, urlPath, nil)
+	req := httptest.NewRequestWithContext(context.Background(), method, urlPath, nil)
 	router.ServeHTTP(w, req)
 	return w
 }
@@ -126,6 +130,23 @@ func TestHandleGetAsset_CacheMiss_S3Success(t *testing.T) {
 	}
 	if counterValue(hits) != 0 {
 		t.Fatal("expected 0 cache hits")
+	}
+	if counterValue(misses) != 1 {
+		t.Fatal("expected 1 cache miss")
+	}
+	if counterValue(s3errs) != 0 {
+		t.Fatal("expected 0 s3 errors")
+	}
+}
+
+func TestHandleHeadAsset_CacheMiss_S3Success(t *testing.T) {
+	fake := &fakeS3{data: []byte("jpeg-data")}
+	h, _, misses, s3errs := newTestHandler(fake, "")
+
+	w := serveMethodRequest(h, http.MethodHead, "/assets/stream123/poster.jpg")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	if counterValue(misses) != 1 {
 		t.Fatal("expected 1 cache miss")

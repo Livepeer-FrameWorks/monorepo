@@ -118,6 +118,7 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
+	router.HEAD("/assets/:assetKey/:file", h.handleGetAsset)
 	if h.serviceToken != "" {
 		router.POST("/internal/assets/cache/invalidate", auth.ServiceAuthMiddleware(h.serviceToken), h.handleInvalidateCache)
 	}

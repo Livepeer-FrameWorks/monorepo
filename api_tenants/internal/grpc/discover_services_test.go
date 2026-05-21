@@ -57,7 +57,7 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 	now := time.Now()
 	instanceCols := []string{
 		"id", "instance_id", "service_id", "cluster_id", "node_id",
-		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "metadata",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
 		"last_health_check", "created_at", "updated_at",
 	}
 
@@ -66,7 +66,7 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 		WithArgs("bridge", int32(51)). // limit = default 25 + 1
 		WillReturnRows(sqlmock.NewRows(instanceCols).
 			AddRow("uuid-1", "inst-bridge-1", "bridge", "cluster-1", "node-1",
-				"http", "10.0.0.1", int32(18000), nil, "running", []byte(`{"wallet_address":"0xabc123"}`),
+				"http", "10.0.0.1", int32(18000), nil, "running", "healthy", []byte(`{"wallet_address":"0xabc123"}`),
 				now, now, now))
 
 	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
@@ -90,6 +90,9 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 	}
 	if inst.GetPort() != 18000 {
 		t.Fatalf("expected port=18000, got %d", inst.GetPort())
+	}
+	if inst.GetHealthStatus() != "healthy" {
+		t.Fatalf("expected health_status=healthy, got %s", inst.GetHealthStatus())
 	}
 	if inst.GetMetadata()["wallet_address"] != "0xabc123" {
 		t.Fatalf("expected wallet metadata, got %v", inst.GetMetadata())
@@ -128,7 +131,7 @@ func TestDiscoverServices_PoolServiceMNPublicHostSynthesis(t *testing.T) {
 			now := time.Now()
 			instanceCols := []string{
 				"id", "instance_id", "service_id", "cluster_id", "node_id",
-				"protocol", "advertise_host", "port", "health_endpoint_override", "status", "metadata",
+				"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
 				"last_health_check", "created_at", "updated_at",
 				"cluster_name", "base_url",
 			}
@@ -140,7 +143,7 @@ func TestDiscoverServices_PoolServiceMNPublicHostSynthesis(t *testing.T) {
 				WithArgs("livepeer-gateway", tc.clusterID, int32(51)).
 				WillReturnRows(sqlmock.NewRows(instanceCols).
 					AddRow("uuid-1", "inst-lpgw-1", "livepeer-gateway", tc.clusterID, "core-eu-1",
-						"http", "203.0.113.10", int32(8935), nil, "running", []byte(`{}`),
+						"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
 						now, now, now,
 						tc.clusterName, tc.baseURL))
 
@@ -206,7 +209,7 @@ func TestDiscoverServices_EmptyResult(t *testing.T) {
 
 	instanceCols := []string{
 		"id", "instance_id", "service_id", "cluster_id", "node_id",
-		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "metadata",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
 		"last_health_check", "created_at", "updated_at",
 	}
 

@@ -460,6 +460,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		  AND sca.is_active = true
 		  AND svc.type = 'foghorn'
 		  AND si.status = 'running'
+		  AND si.health_status = 'healthy'
 		  AND COALESCE(si.advertise_host, '') <> ''
 		  AND COALESCE(si.port, 0) > 0
 		ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
@@ -502,6 +503,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				  AND sca.is_active = true
 				  AND svc.type = 'foghorn'
 				  AND si.status = 'running'
+				  AND si.health_status = 'healthy'
 				  AND COALESCE(si.advertise_host, '') <> ''
 				  AND COALESCE(si.port, 0) > 0
 				ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
@@ -533,6 +535,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND sca.is_active = TRUE
 		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
+		              AND si.health_status = 'healthy'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
 		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
@@ -548,6 +551,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND sca.is_active = TRUE
 		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
+		              AND si.health_status = 'healthy'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
 		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
@@ -1046,6 +1050,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			 JOIN quartermaster.services svc ON svc.service_id = si.service_id
 			 WHERE sca.cluster_id = n.cluster_id AND sca.is_active = true
 			   AND svc.type = 'foghorn' AND si.status = 'running'
+			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1),
@@ -1055,6 +1060,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			 JOIN quartermaster.services svc ON svc.service_id = si.service_id
 			 WHERE sca.cluster_id = n.cluster_id AND sca.is_active = true
 			   AND svc.type = 'foghorn' AND si.status = 'running'
+			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
 			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
@@ -1172,13 +1178,13 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	}
 
 	selectClause := `si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
-		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
+		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at`
 	if isPool {
 		// Override cluster_id with the assignment cluster, and pull cluster
 		// metadata so the handler can synthesize per-cluster public_host.
 		selectClause = `si.id, si.instance_id, si.service_id, sca.cluster_id, si.node_id,
-		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, COALESCE(si.metadata, '{}'::jsonb),
+		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at, c.cluster_name, c.base_url`
 	}
 
@@ -1209,7 +1215,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 
 		scanTargets := []any{
 			&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
-			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status, &metadataJSON,
+			&inst.Protocol, &host, &inst.Port, &healthEndpoint, &inst.Status, &inst.HealthStatus, &metadataJSON,
 			&lastHealthCheck, &createdAt, &updatedAt,
 		}
 		if isPool {
@@ -1658,7 +1664,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 			  AND ic.is_active = true
 			LEFT JOIN quartermaster.service_cluster_assignments sca
 			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc'
 			GROUP BY si.id, si.advertise_host, si.port, ic.cluster_id, ic.region_id, si.started_at
 			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
 			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
@@ -3192,6 +3198,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 			  ON sca.service_instance_id = si.id AND sca.is_active = true
 			WHERE svc.type = 'foghorn'
 			  AND si.status = 'running'
+			  AND si.health_status = 'healthy'
 			  AND sca.id IS NULL
 			ORDER BY si.started_at ASC
 			LIMIT $2
@@ -7138,6 +7145,7 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 		WHERE sca.cluster_id = $1
 		  AND sca.is_active = true
 		  AND si.status = 'running'
+		  AND si.health_status = 'healthy'
 		  AND si.protocol = 'grpc'
 		  AND svc.type = 'foghorn'
 		LIMIT 1
@@ -9269,7 +9277,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 			  AND ic.is_active = true
 			LEFT JOIN quartermaster.service_cluster_assignments sca
 			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.protocol = 'grpc'
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc'
 			GROUP BY si.id, ic.cluster_id, ic.region_id, si.started_at
 			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
 			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
@@ -10351,6 +10359,7 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 		              AND sca.is_active = TRUE
 		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
+		              AND si.health_status = 'healthy'
 		              AND si.protocol = 'grpc'
 		            ORDER BY si.updated_at DESC, si.id ASC
 		            LIMIT 1),

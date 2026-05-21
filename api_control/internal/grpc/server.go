@@ -206,6 +206,9 @@ func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID st
 		if inst.GetStatus() != "running" && inst.GetStatus() != "active" {
 			continue
 		}
+		if health := inst.GetHealthStatus(); health != "" && health != "healthy" {
+			continue
+		}
 		if addr := serviceInstanceAddr(inst); addr != "" {
 			addrs = append(addrs, addr)
 		}
