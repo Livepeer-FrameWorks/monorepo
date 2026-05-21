@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -591,7 +590,7 @@ func grpcHealthDialOption(inst serviceInstance) (grpc.DialOption, error) {
 // perServiceTLSServerNameForHealth reads <SERVICE>_GRPC_TLS_SERVER_NAME as an
 // override for the cert authority the health poller will validate against.
 // Empty string falls through to the grpcHealthTLSConfig fallback chain
-// (foghorn public name, then "<serviceID>.internal").
+// ("<serviceID>.internal").
 func perServiceTLSServerNameForHealth(inst serviceInstance) string {
 	serviceID := strings.TrimSpace(inst.serviceID)
 	if serviceID == "" {
@@ -602,9 +601,6 @@ func perServiceTLSServerNameForHealth(inst serviceInstance) string {
 }
 
 func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serverName, caFile string) {
-	if publicName := foghornPublicHealthServerName(inst); publicName != "" {
-		return publicName, ""
-	}
 	configuredName := strings.TrimSpace(configured)
 	if configuredName != "" {
 		return configuredName, caPath
@@ -622,38 +618,6 @@ func grpcHealthTLSConfig(inst serviceInstance, caPath, configured string) (serve
 func grpcHealthServerName(inst serviceInstance, caPath, configured string) string {
 	serverName, _ := grpcHealthTLSConfig(inst, caPath, configured)
 	return serverName
-}
-
-func foghornPublicHealthServerName(inst serviceInstance) string {
-	if strings.TrimSpace(inst.serviceID) != "foghorn" {
-		return ""
-	}
-	if inst.port != 18029 {
-		return ""
-	}
-	clusterID := strings.Trim(strings.TrimSpace(inst.assignedClusterID), ".")
-	rootDomain := rootDomainFromBaseURL(inst.assignedBaseURL)
-	if clusterID == "" || rootDomain == "" {
-		return ""
-	}
-	return "foghorn." + clusterID + "." + rootDomain
-}
-
-func rootDomainFromBaseURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
-		return strings.Trim(strings.TrimSpace(u.Hostname()), ".")
-	}
-	raw = strings.TrimPrefix(raw, "https://")
-	raw = strings.TrimPrefix(raw, "http://")
-	host := strings.Split(raw, "/")[0]
-	if h, _, ok := strings.Cut(host, ":"); ok {
-		host = h
-	}
-	return strings.Trim(strings.TrimSpace(host), ".")
 }
 
 func (m *grpcWatchManager) setBackoff(instanceID string, backoff time.Duration) {

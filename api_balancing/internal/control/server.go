@@ -1697,10 +1697,10 @@ type ServiceRegistrar func(srv *grpc.Server)
 //     intra-cluster Foghorn HA relay. Wire HA-only registrars via
 //     InternalRegistrars.
 //
-//   - External: Navigator-backed ACME wildcard, serves `foghorn.<cluster>.<root>`.
-//     Audience is cross-cluster + edge: Helmsman control, edge bootstrap, the
-//     full FoghornGRPCServer surface, federation peers. Wire those via
-//     ExternalRegistrars.
+//   - External: multi-bundle TLS for `foghorn.internal` and Navigator-backed
+//     ACME wildcards. Audience is cross-cluster + edge: Helmsman control, edge
+//     bootstrap, the full FoghornGRPCServer surface, federation peers. Wire
+//     those via ExternalRegistrars.
 type GRPCServerConfig struct {
 	InternalBindAddr   string
 	ExternalBindAddr   string
@@ -1812,6 +1812,14 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 
 	rootDomain := platformRootDomain()
 	tlsBundles := []*pb.TLSCertBundle{}
+	if certFile, keyFile := os.Getenv("GRPC_TLS_CERT_PATH"), os.Getenv("GRPC_TLS_KEY_PATH"); certFile != "" || keyFile != "" {
+		bundle, bundleErr := fileServerTLSBundle(certFile, keyFile)
+		if bundleErr != nil {
+			_ = lis.Close()
+			return nil, fmt.Errorf("load file-based external listener TLS: %w", bundleErr)
+		}
+		tlsBundles = append(tlsBundles, bundle)
+	}
 
 	if navigatorClient != nil {
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -6048,6 +6056,12 @@ func refreshTLSBundles(log logging.Logger) {
 		navBundles, certErr := fetchServedClusterTLSBundles(rootDomain)
 		if certErr == nil && len(navBundles) > 0 {
 			bundles = append(bundles, navBundles...)
+		} else if navigatorClient != nil {
+			if certErr == nil {
+				certErr = fmt.Errorf("no served cluster TLS bundles found")
+			}
+			log.WithError(certErr).Warn("Skipping server TLS refresh because Navigator ACME bundles are unavailable")
+			return
 		}
 		if len(bundles) > 0 {
 			if err := serverCert.StoreBundles(bundles); err == nil {

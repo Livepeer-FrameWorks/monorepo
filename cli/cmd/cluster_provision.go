@@ -5695,7 +5695,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// share the same env wiring.
 	baseName := task.Type
 	if baseName == "foghorn" {
-		internalPort := defaultGRPCPort("foghorn")
+		internalPort := 18019
 		externalPort := 18029
 		env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", internalPort)
 		env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", externalPort)

@@ -470,6 +470,61 @@ func TestGetClusterRouting(t *testing.T) {
 	}
 }
 
+func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	clusterCols := []string{
+		"cluster_id", "cluster_name", "cluster_type", "base_url",
+		"kafka_brokers", "database_url", "periscope_url", "topic_prefix",
+		"max_concurrent_streams", "health_status",
+	}
+	peerCols := []string{
+		"cluster_id", "cluster_name", "cluster_type", "base_url",
+		"s3_bucket", "s3_endpoint", "s3_region",
+		"region_id", "cell_id", "cluster_class",
+		"health_status",
+		"foghorn_advertise_host", "foghorn_port",
+	}
+	controlListenerFilter := `(?s)FROM quartermaster\.service_cluster_assignments.*\(si\.port = 18029 OR si\.metadata->>'foghorn_listener' = 'control'\)`
+
+	mock.ExpectQuery("FROM quartermaster.tenants").
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
+			AddRow("cluster-1", "", "pro"))
+	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").
+		WithArgs("cluster-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows(clusterCols).
+			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud",
+				pq.StringArray{"broker:9092"}, nil, nil, "tenant1_",
+				int32(100), "healthy"))
+	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access").
+		WithArgs("tenant-1", "cluster-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(controlListenerFilter).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"advertise_host", "port"}).AddRow("10.88.158.227", int32(18029)))
+	mock.ExpectQuery("FROM quartermaster.tenant_cluster_access tca").
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows(peerCols).
+			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", "", "", "", "10.88.158.227", int32(18029)))
+
+	server := &QuartermasterServer{db: db, logger: logrus.New()}
+	resp, err := server.GetClusterRouting(context.Background(), &pb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	if err != nil {
+		t.Fatalf("GetClusterRouting returned error: %v", err)
+	}
+	if resp.GetFoghornGrpcAddr() != "10.88.158.227:18029" {
+		t.Fatalf("unexpected foghorn addr: %q", resp.GetFoghornGrpcAddr())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func assertGRPCCode(t *testing.T, err error, expected codes.Code) {
 	t.Helper()
 	if err == nil {

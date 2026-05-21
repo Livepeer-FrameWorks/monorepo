@@ -549,6 +549,9 @@ func main() {
 			Protocol:  "grpc",
 			Port:      int32(grpcPort),
 			ClusterId: &foghornCfg.ClusterID,
+			Metadata: map[string]string{
+				"foghorn_listener": "control",
+			},
 		}
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
 			bsReq.NodeId = &nodeID
