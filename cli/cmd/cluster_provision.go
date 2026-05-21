@@ -3136,7 +3136,6 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	}
 	metricsCapableServices := map[string]metricsScrapeSpec{
 		"bridge":           {},
-		"caddy":            {port: 2019},
 		"chandler":         {},
 		"commodore":        {},
 		"deckhand":         {},

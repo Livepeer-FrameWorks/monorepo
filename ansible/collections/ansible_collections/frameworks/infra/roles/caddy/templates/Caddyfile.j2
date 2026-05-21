@@ -2,7 +2,6 @@
 {% if caddy_global_options.email | default('') | length > 0 %}
     email {{ caddy_global_options.email }}
 {% endif %}
-    metrics
     admin {{ caddy_admin_listen }}
 }
 

@@ -2781,31 +2781,6 @@ func TestBuildVMAgentScrapeTargetsIncludesClickHouse(t *testing.T) {
 	}
 }
 
-func TestBuildVMAgentScrapeTargetsIncludesCaddyAdminMetrics(t *testing.T) {
-	manifest := &inventory.Manifest{
-		Profile: "production",
-		Hosts: map[string]inventory.Host{
-			"edge-router-1": {ExternalIP: "10.0.0.10"},
-		},
-		Interfaces: map[string]inventory.ServiceConfig{
-			"caddy": {
-				Enabled: true,
-				Host:    "edge-router-1",
-				Port:    18090,
-			},
-		},
-	}
-
-	targets := buildVMAgentScrapeTargets(manifest, "edge-router-1")
-	target := findScrapeTarget(t, targets, "caddy", "127.0.0.1:2019")
-	if got := target["path"]; got != "/metrics" {
-		t.Fatalf("path = %v, want /metrics", got)
-	}
-	if got := scrapeTargetLabels(t, target)["frameworks_source"]; got != "interfaces" {
-		t.Fatalf("frameworks_source = %q, want interfaces", got)
-	}
-}
-
 func TestBuildVMAgentScrapeTargetsIncludesMistServer(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "production",
