@@ -112,17 +112,14 @@ func TestCompactMessagesTier3Emergency(t *testing.T) {
 	// No provider → can't summarize → falls to tier 3.
 	budget := 10 // extremely tight
 	result := compactMessages(context.Background(), msgs, budget, nil)
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages (system + placeholder + last), got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages (system + last), got %d", len(result))
 	}
 	if result[0].Role != "system" {
 		t.Error("expected system first")
 	}
-	if !strings.Contains(result[1].Content, "truncated") {
-		t.Error("expected truncation notice in emergency tier")
-	}
-	if result[2].Content != "last question" {
-		t.Errorf("expected last message preserved, got %q", result[2].Content)
+	if result[1].Content != "last question" {
+		t.Errorf("expected last message preserved, got %q", result[1].Content)
 	}
 }
 
@@ -138,8 +135,8 @@ func TestCompactMessagesSummaryFailure(t *testing.T) {
 	budget := 10
 	result := compactMessages(context.Background(), msgs, budget, provider)
 	// Should fall to tier 3 when summary fails.
-	if len(result) != 3 {
-		t.Fatalf("expected 3 messages on summary failure, got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages on summary failure, got %d", len(result))
 	}
 }
 
@@ -169,6 +166,42 @@ func TestPruneOldToolMessages(t *testing.T) {
 	}
 }
 
+func TestSanitizeToolProtocolMessagesPreservesCompletePairs(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "assistant", Content: "checking", ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search", Arguments: `{}`}}},
+		{Role: "tool", Content: "result", Name: "search", ToolCallID: "call-1"},
+		{Role: "user", Content: "next"},
+	}
+
+	result := sanitizeToolProtocolMessages(msgs)
+	if len(result) != len(msgs) {
+		t.Fatalf("expected complete pair preserved, got %d messages", len(result))
+	}
+	if len(result[1].ToolCalls) != 1 || result[2].Role != "tool" {
+		t.Fatalf("expected tool protocol pair intact, got %#v", result)
+	}
+}
+
+func TestSanitizeToolProtocolMessagesTextifiesOrphanTools(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "tool", Content: "orphan result", Name: "search", ToolCallID: "call-1"},
+		{Role: "assistant", Content: "checking", ToolCalls: []llm.ToolCall{{ID: "call-2", Name: "lookup", Arguments: `{}`}}},
+		{Role: "user", Content: "next"},
+	}
+
+	result := sanitizeToolProtocolMessages(msgs)
+	for _, msg := range result {
+		if msg.Role == "tool" || len(msg.ToolCalls) > 0 {
+			t.Fatalf("expected orphan tool protocol to be textified, got %#v", result)
+		}
+	}
+	if result[1].Role != "user" || !strings.Contains(result[1].Content, "orphan result") {
+		t.Fatalf("expected orphan tool result as user text, got %#v", result[1])
+	}
+}
+
 func TestEmergencyCompact(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},
@@ -177,13 +210,13 @@ func TestEmergencyCompact(t *testing.T) {
 		{Role: "user", Content: "last"},
 	}
 	result := emergencyCompact(msgs)
-	if len(result) != 3 {
-		t.Fatalf("expected 3, got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2, got %d", len(result))
 	}
 	if result[0].Content != "sys" {
 		t.Error("expected system preserved")
 	}
-	if result[2].Content != "last" {
+	if result[1].Content != "last" {
 		t.Error("expected last message preserved")
 	}
 }

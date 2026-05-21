@@ -177,13 +177,14 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	if len(result.Blocks) > 1 {
 		blocksJSON, _ = json.Marshal(result.Blocks)
 	}
-	if storeErr := s.conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); storeErr != nil {
+	storeCtx := context.WithoutCancel(ctx)
+	if storeErr := s.conversations.AddMessage(storeCtx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); storeErr != nil {
 		s.logger.WithError(storeErr).Warn("Failed to store assistant response (gRPC)")
 	}
 
 	if isNewConversation {
 		title := truncateTitle(message, 60)
-		if titleErr := s.conversations.UpdateTitle(ctx, conversationID, title); titleErr != nil {
+		if titleErr := s.conversations.UpdateTitle(storeCtx, conversationID, title); titleErr != nil {
 			s.logger.WithError(titleErr).Warn("Failed to set conversation title (gRPC)")
 		}
 	}
@@ -397,6 +398,10 @@ func bridgeAuthContext(ctx context.Context) context.Context {
 	}
 	if v := ctxkeys.GetJWTToken(ctx); v != "" {
 		ctx = skipper.WithJWTToken(ctx, v)
+		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, v)
+	}
+	if v := ctxkeys.GetAPIToken(ctx); v != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, v)
 	}
 	if v := ctxkeys.GetRole(ctx); v != "" {
 		ctx = skipper.WithRole(ctx, v)

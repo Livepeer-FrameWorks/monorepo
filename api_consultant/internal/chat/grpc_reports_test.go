@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -41,6 +42,19 @@ func tenantContext(tenantID string) context.Context {
 	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 	return ctx
+}
+
+func TestBridgeAuthContextCopiesJWTForGatewayMCP(t *testing.T) {
+	ctx := tenantContext("tenant-a")
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, "jwt-123")
+
+	bridged := bridgeAuthContext(ctx)
+	if got := skipper.GetJWTToken(bridged); got != "jwt-123" {
+		t.Fatalf("expected skipper jwt, got %q", got)
+	}
+	if got := ctxkeys.GetJWTToken(bridged); got != "jwt-123" {
+		t.Fatalf("expected ctxkeys jwt for gateway MCP, got %q", got)
+	}
 }
 
 func TestListReportsReturnsReports(t *testing.T) {

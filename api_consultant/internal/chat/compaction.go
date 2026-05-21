@@ -75,6 +75,77 @@ func pruneOldToolMessages(messages []llm.Message) []llm.Message {
 	return result
 }
 
+func sanitizeToolProtocolMessages(messages []llm.Message) []llm.Message {
+	result := make([]llm.Message, 0, len(messages))
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			end := i + 1
+			resultsByID := make(map[string]struct{}, len(msg.ToolCalls))
+			for end < len(messages) && messages[end].Role == "tool" {
+				if messages[end].ToolCallID != "" {
+					resultsByID[messages[end].ToolCallID] = struct{}{}
+				}
+				end++
+			}
+			if hasCompleteToolResults(msg.ToolCalls, resultsByID) {
+				result = append(result, msg)
+				result = append(result, messages[i+1:end]...)
+				i = end - 1
+				continue
+			}
+			msg.ToolCalls = nil
+			if strings.TrimSpace(msg.Content) != "" {
+				result = append(result, msg)
+			}
+			continue
+		}
+		if msg.Role == "tool" {
+			result = append(result, llm.Message{
+				Role:    "user",
+				Content: orphanToolResultText(msg),
+			})
+			continue
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
+func hasCompleteToolResults(calls []llm.ToolCall, resultsByID map[string]struct{}) bool {
+	if len(calls) == 0 || len(resultsByID) != len(calls) {
+		return false
+	}
+	for _, call := range calls {
+		if call.ID == "" {
+			return false
+		}
+		if _, ok := resultsByID[call.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func orphanToolResultText(msg llm.Message) string {
+	var parts []string
+	if msg.Name != "" {
+		parts = append(parts, "tool="+msg.Name)
+	}
+	if msg.ToolCallID != "" {
+		parts = append(parts, "tool_call_id="+msg.ToolCallID)
+	}
+	header := "Previous tool result was detached from its tool request"
+	if len(parts) > 0 {
+		header += " (" + strings.Join(parts, ", ") + ")"
+	}
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		return "[" + header + ".]"
+	}
+	return "[" + header + ":]\n" + content
+}
+
 // summarizeMiddle generates a summary of the middle messages and returns
 // [system, summary_injection, ...last_N].
 func summarizeMiddle(ctx context.Context, messages []llm.Message, keepLast int, provider llm.Provider) []llm.Message {
@@ -111,16 +182,12 @@ func summarizeMiddle(ctx context.Context, messages []llm.Message, keepLast int, 
 	return result
 }
 
-// emergencyCompact keeps only system + static note + last 1 message.
+// emergencyCompact keeps only system + last 1 message.
 func emergencyCompact(messages []llm.Message) []llm.Message {
 	system := messages[0]
 	last := messages[len(messages)-1]
 	return []llm.Message{
 		system,
-		{
-			Role:    "user",
-			Content: "[Earlier conversation history was truncated due to context limits. The assistant should ask the user to re-state their question if context is needed.]",
-		},
 		last,
 	}
 }

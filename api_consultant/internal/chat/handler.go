@@ -238,13 +238,14 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 	if len(result.Blocks) > 1 {
 		blocksJSON, _ = json.Marshal(result.Blocks)
 	}
-	if err := h.Conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); err != nil {
+	storeCtx := context.WithoutCancel(ctx)
+	if err := h.Conversations.AddMessage(storeCtx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); err != nil {
 		h.Logger.WithError(err).Warn("Failed to store assistant response")
 	}
 
 	if isNewConversation {
 		title := truncateTitle(req.Message, 60)
-		if err := h.Conversations.UpdateTitle(ctx, conversationID, title); err != nil {
+		if err := h.Conversations.UpdateTitle(storeCtx, conversationID, title); err != nil {
 			h.Logger.WithError(err).Warn("Failed to set conversation title")
 		}
 	}
@@ -506,6 +507,9 @@ func (h *ChatHandler) buildContext(ctx context.Context, tenantID, userID string)
 	}
 	if token := skipper.GetJWTToken(ctx); token != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+	}
+	if token := ctxkeys.GetAPIToken(ctx); token != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, token)
 	}
 	return ctx
 }

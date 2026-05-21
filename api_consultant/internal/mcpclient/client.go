@@ -379,9 +379,9 @@ func extractTextContent(result *mcp.CallToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
-// authTransport injects the calling user's JWT into each HTTP request.
+// authTransport injects the calling user's auth token into each HTTP request.
 // Session establishment requests (initialize, tools/list) go unauthenticated;
-// tool calls carry the user's JWT from the chat handler context.
+// tool calls carry the user's JWT or API token from the chat handler context.
 type authTransport struct {
 	base http.RoundTripper
 }
@@ -390,6 +390,8 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 
 	if token := ctxkeys.GetJWTToken(req.Context()); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else if token := ctxkeys.GetAPIToken(req.Context()); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

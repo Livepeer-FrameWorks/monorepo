@@ -127,6 +127,28 @@ func TestAuthTransport_NoAuthWithoutJWT(t *testing.T) {
 	}
 }
 
+func TestAuthTransport_UsesAPITokenWhenJWTMissing(t *testing.T) {
+	var capturedAuth string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	transport := &authTransport{base: http.DefaultTransport}
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAPIToken, "api-token-123")
+	req, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, nil)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+	if capturedAuth != "Bearer api-token-123" {
+		t.Fatalf("expected Bearer api-token-123, got %q", capturedAuth)
+	}
+}
+
 func TestNewGatewayClient_EmptyURL(t *testing.T) {
 	_, err := New(context.Background(), Config{})
 	if err == nil {

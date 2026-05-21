@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,6 +112,34 @@ func TestCrawlerSitemapAndFetch(t *testing.T) {
 	}
 	if content == "" {
 		t.Fatalf("expected content")
+	}
+}
+
+func TestFetchPageConditionalReturnsUnsupportedContentTypeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<urlset></urlset>`))
+	}))
+	defer server.Close()
+
+	crawler, err := NewCrawler(server.Client(), &fakeEmbedder{}, &fakeStore{}, withSkipURLValidation(), WithMinCrawlDelay(0))
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	_, err = crawler.fetchPageConditional(context.Background(), server.URL, nil)
+	var ctErr unsupportedContentTypeError
+	if !errors.As(err, &ctErr) {
+		t.Fatalf("expected unsupportedContentTypeError, got %v", err)
+	}
+}
+
+func TestErrorBodySnippetMarksTruncatedBody(t *testing.T) {
+	body := strings.Repeat("x", maxErrorBodyBytes)
+	got := errorBodySnippet([]byte(body))
+	if !strings.HasSuffix(got, " [truncated]") {
+		t.Fatalf("expected truncated marker, got %q", got)
 	}
 }
 

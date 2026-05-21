@@ -216,6 +216,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		if countTokensInMessages(messages) > maxPromptTokenBudget {
 			messages = compactMessages(ctx, messages, maxPromptTokenBudget, o.llmProvider)
 		}
+		messages = sanitizeToolProtocolMessages(messages)
 
 		inputTokens += countTokensInMessages(messages)
 		llmStart := time.Now()

@@ -27,9 +27,18 @@ const (
 	defaultMinCrawlDelay = 2 * time.Second
 	maxCrawlDelay        = 10 * time.Second
 	maxPageBytes         = 10 << 20 // 10 MB
-	maxErrorBodyBytes    = 1 << 20  // 1 MB
+	maxErrorBodyBytes    = 4 << 10  // 4 KB
 	emptyShellThreshold  = 10       // word count below which content is likely an SPA shell
 )
+
+type unsupportedContentTypeError struct {
+	contentType string
+	pageURL     string
+}
+
+func (e unsupportedContentTypeError) Error() string {
+	return fmt.Sprintf("unsupported content type %q for %s", e.contentType, e.pageURL)
+}
 
 type Page struct {
 	URL        string
@@ -568,7 +577,13 @@ func (c *Crawler) processPage(ctx context.Context, tenantID, sourceRoot, pageURL
 			return PageFailed, ctx.Err()
 		}
 		if c.logger != nil {
-			c.logger.WithField("url", pageURL).WithField("error", fetchErr.Error()).Warn("Page fetch failed, skipping")
+			entry := c.logger.WithField("url", pageURL).WithField("error", fetchErr.Error())
+			var ctErr unsupportedContentTypeError
+			if errors.As(fetchErr, &ctErr) {
+				entry.Debug("Skipping page with unsupported content type")
+			} else {
+				entry.Warn("Page fetch failed, skipping")
+			}
 		}
 		return PageFailed, nil
 	}
@@ -791,14 +806,14 @@ func (c *Crawler) fetchPageConditional(ctx context.Context, pageURL string, cach
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return FetchResult{}, fmt.Errorf("fetch page %s: unexpected status %s: %s", pageURL, resp.Status, strings.TrimSpace(string(body)))
+		return FetchResult{}, fmt.Errorf("fetch page %s: unexpected status %s: %s", pageURL, resp.Status, errorBodySnippet(body))
 	}
 
 	ct := resp.Header.Get("Content-Type")
 	isHTML := ct == "" || strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml")
 	isPlain := strings.Contains(ct, "text/plain") || strings.Contains(ct, "text/markdown") || strings.Contains(ct, "text/x-markdown")
 	if !isHTML && !isPlain {
-		return FetchResult{}, fmt.Errorf("unsupported content type %q for %s", ct, pageURL)
+		return FetchResult{}, unsupportedContentTypeError{contentType: ct, pageURL: pageURL}
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPageBytes))
@@ -904,10 +919,18 @@ func (c *Crawler) fetchURL(ctx context.Context, target string) ([]byte, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return nil, fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("unexpected status %s: %s", resp.Status, errorBodySnippet(body))
 	}
 
 	return io.ReadAll(io.LimitReader(resp.Body, maxPageBytes))
+}
+
+func errorBodySnippet(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if len(body) >= maxErrorBodyBytes {
+		return trimmed + " [truncated]"
+	}
+	return trimmed
 }
 
 func parseSitemapXML(data []byte) ([]string, []Page, error) {
