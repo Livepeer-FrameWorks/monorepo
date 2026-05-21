@@ -69,21 +69,17 @@ func mapSignalmanRoutingEvent(event *pb.SignalmanEvent) *pb.RoutingEvent {
 		c := data.ClientCountry
 		routing.ClientCountry = &c
 	}
-	if data.Latitude != 0 {
+	if data.ClientBucket != nil || data.Latitude != 0 || data.Longitude != 0 {
 		v := data.Latitude
 		routing.ClientLatitude = &v
+		lon := data.Longitude
+		routing.ClientLongitude = &lon
 	}
-	if data.Longitude != 0 {
-		v := data.Longitude
-		routing.ClientLongitude = &v
-	}
-	if data.NodeLatitude != 0 {
+	if data.NodeBucket != nil || data.NodeLatitude != 0 || data.NodeLongitude != 0 {
 		v := data.NodeLatitude
 		routing.NodeLatitude = &v
-	}
-	if data.NodeLongitude != 0 {
-		v := data.NodeLongitude
-		routing.NodeLongitude = &v
+		lon := data.NodeLongitude
+		routing.NodeLongitude = &lon
 	}
 	if data.NodeName != "" {
 		v := data.NodeName

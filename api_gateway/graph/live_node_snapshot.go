@@ -4,6 +4,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	proto "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	protoclone "google.golang.org/protobuf/proto"
@@ -50,10 +51,8 @@ func liveNodeFromSnapshot(obj *proto.InfrastructureNode) *proto.LiveNode {
 		DiskTotalBytes: snap.GetDiskTotalBytes(),
 		Location:       obj.GetRegion(),
 	}
-	if lat := obj.GetLatitude(); lat != 0 {
+	if lat, lon := obj.GetLatitude(), obj.GetLongitude(); geoip.IsValidLatLon(lat, lon) {
 		live.Latitude = lat
-	}
-	if lon := obj.GetLongitude(); lon != 0 {
 		live.Longitude = lon
 	}
 

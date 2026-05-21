@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -383,6 +384,32 @@ func TestSetNodeInfoDoesNotReviveStaleNode(t *testing.T) {
 	}
 	if !node.IsStale {
 		t.Fatal("expected node to remain stale after SetNodeInfo")
+	}
+}
+
+func TestApplyNodeLifecyclePreservesZeroCoordinateWithValidPair(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	if err := sm.ApplyNodeLifecycle(context.Background(), &pb.NodeLifecycleUpdate{
+		NodeId:    "node-zero",
+		BaseUrl:   "http://node-zero.example",
+		IsHealthy: true,
+		Latitude:  52.3676,
+		Longitude: 0,
+	}); err != nil {
+		t.Fatalf("ApplyNodeLifecycle failed: %v", err)
+	}
+
+	node := sm.GetNodeState("node-zero")
+	if node == nil {
+		t.Fatal("expected node state")
+	}
+	if node.Latitude == nil || *node.Latitude != 52.3676 {
+		t.Fatalf("expected latitude 52.3676, got %#v", node.Latitude)
+	}
+	if node.Longitude == nil || *node.Longitude != 0 {
+		t.Fatalf("expected longitude 0, got %#v", node.Longitude)
 	}
 }
 

@@ -222,9 +222,9 @@ func TestRoutingClusterHourlyMVCoalescesNullableMeasures(t *testing.T) {
 
 	schema := string(content)
 	required := []string{
-		"sum(ifNull(latency_ms, 0)) AS sum_latency_ms",
-		"sum(ifNull(routing_distance_km, 0)) AS sum_distance_km",
-		"max(ifNull(latency_ms, 0)) AS max_latency_ms",
+		"toFloat32(sum(if(isNull(latency_ms), 0., assumeNotNull(latency_ms)))) AS sum_latency_ms",
+		"toFloat64(sum(if(isNull(routing_distance_km), 0., assumeNotNull(routing_distance_km)))) AS sum_distance_km",
+		"toFloat32(max(if(isNull(latency_ms), 0., assumeNotNull(latency_ms)))) AS max_latency_ms",
 	}
 	for _, expr := range required {
 		if !strings.Contains(schema, expr) {
@@ -1131,6 +1131,52 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	}
 }
 
+func TestViewerConnectionPreservesZeroCoordinateWhenPresent(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	lat := float64(0)
+	lon := float64(4.9041)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName:      "live+demo",
+				SessionId:       "sess-zero",
+				Connector:       "hls",
+				Host:            "1.2.3.4",
+				ClientLatitude:  &lat,
+				ClientLongitude: &lon,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["viewer_connection_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[14] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[14])
+	}
+	if row[15] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[15])
+	}
+}
+
 func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -1172,6 +1218,51 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	}
 	if row[21] != uint32(42) {
 		t.Fatalf("expected session_duration 42, got %#v", row[21])
+	}
+}
+
+func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	lat := float64(52.3676)
+	lon := float64(0)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{
+				StreamName:         "live+demo",
+				PushUrl:            "rtmp://edge-ingest.example/live/demo",
+				PublisherLatitude:  &lat,
+				PublisherLongitude: &lon,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["stream_event_log"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected stream_event_log row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[12] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[12])
+	}
+	if row[13] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[13])
 	}
 }
 

@@ -2038,6 +2038,10 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 	if country == "" && geoipReader != nil && clientIP != "" {
 		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, clientIP); geoData != nil {
 			country = geoData.CountryCode
+			if !geoip.IsValidLatLon(lat, lon) && geoip.IsValidLatLon(geoData.Latitude, geoData.Longitude) {
+				lat = geoData.Latitude
+				lon = geoData.Longitude
+			}
 			logger.WithFields(logging.Fields{
 				"client_ip":    clientIP,
 				"country_code": geoData.CountryCode,

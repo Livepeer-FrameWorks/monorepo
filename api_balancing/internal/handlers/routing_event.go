@@ -58,6 +58,7 @@ func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
 
 	// Haversine distance between client and node
 	var routingDistanceKm float64
+	hasRoutingDistance := false
 	if geo.IsValidLatLon(e.ClientLat, e.ClientLon) && geo.IsValidLatLon(e.NodeLat, e.NodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1, lon1 := e.ClientLat*toRad, e.ClientLon*toRad
@@ -69,6 +70,7 @@ func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
 			val = -1
 		}
 		routingDistanceKm = 6371.0 * math.Acos(val)
+		hasRoutingDistance = true
 	}
 
 	// Resolve cluster identity from package-level bootstrap
@@ -110,7 +112,7 @@ func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
 	data.Source = optStr(e.Source)
 	data.RemoteClusterId = optStr(e.RemoteClusterID)
 
-	if routingDistanceKm > 0 {
+	if hasRoutingDistance {
 		data.RoutingDistanceKm = &routingDistanceKm
 	}
 	if e.LatencyMs > 0 {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/geo"
+
 	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -2672,13 +2674,11 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 	}
 	// Update in-memory node info and metrics
 	var latPtr, lonPtr *float64
-	if update.GetLatitude() != 0 {
+	if geo.IsValidLatLon(update.GetLatitude(), update.GetLongitude()) {
 		v := update.GetLatitude()
 		latPtr = &v
-	}
-	if update.GetLongitude() != 0 {
-		v := update.GetLongitude()
-		lonPtr = &v
+		lon := update.GetLongitude()
+		lonPtr = &lon
 	}
 	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
 	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch())

@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -207,14 +208,14 @@ func (pm *PeerManager) enrichFederationEventGeo(data *pb.FederationEventData) {
 	}
 	if data.LocalLat == nil && pm.selfGeoFunc != nil {
 		lat, lon, _ := pm.selfGeoFunc()
-		if lat != 0 || lon != 0 {
+		if geo.IsValidLatLon(lat, lon) {
 			data.LocalLat = &lat
 			data.LocalLon = &lon
 		}
 	}
 	if data.RemoteLat == nil && data.RemoteCluster != "" {
 		rLat, rLon := pm.GetPeerGeo(data.RemoteCluster)
-		if rLat != 0 || rLon != 0 {
+		if geo.IsValidLatLon(rLat, rLon) {
 			data.RemoteLat = &rLat
 			data.RemoteLon = &rLon
 		}

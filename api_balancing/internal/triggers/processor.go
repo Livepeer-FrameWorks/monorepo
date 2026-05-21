@@ -1265,12 +1265,10 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			if geoData.City != "" {
 				pushRewrite.PublisherCity = &geoData.City
 			}
-			if geoData.Latitude != 0 && geoData.Longitude != 0 {
-				if b, centLat, centLon, ok := geo.Bucket(geoData.Latitude, geoData.Longitude); ok {
-					pushRewrite.PublisherBucket = b
-					pushRewrite.PublisherLatitude = &centLat
-					pushRewrite.PublisherLongitude = &centLon
-				}
+			if b, centLat, centLon, ok := geo.Bucket(geoData.Latitude, geoData.Longitude); ok {
+				pushRewrite.PublisherBucket = b
+				pushRewrite.PublisherLatitude = &centLat
+				pushRewrite.PublisherLongitude = &centLon
 			}
 		}
 	}
@@ -2848,12 +2846,10 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 
 	// Parse latitude/longitude for state manager
 	var latitude, longitude *float64
-	if nu.GetLatitude() != 0 {
+	if geo.IsValidLatLon(nu.GetLatitude(), nu.GetLongitude()) {
 		lat := nu.GetLatitude()
-		latitude = &lat
-	}
-	if nu.GetLongitude() != 0 {
 		lon := nu.GetLongitude()
+		latitude = &lat
 		longitude = &lon
 	}
 

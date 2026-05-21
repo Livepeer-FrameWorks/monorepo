@@ -707,10 +707,10 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		if vc.GetClientCity() != "" {
 			city = vc.GetClientCity()
 		}
-		if vc.GetClientLatitude() != 0 {
+		if vc.ClientLatitude != nil {
 			latitude = vc.GetClientLatitude()
 		}
-		if vc.GetClientLongitude() != 0 {
+		if vc.ClientLongitude != nil {
 			longitude = vc.GetClientLongitude()
 		}
 		if bucket := vc.GetClientBucket(); bucket != nil && bucket.H3Index != 0 {
@@ -740,10 +740,10 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		if vd.GetCity() != "" {
 			city = vd.GetCity()
 		}
-		if vd.GetLatitude() != 0 {
+		if vd.Latitude != nil {
 			latitude = vd.GetLatitude()
 		}
-		if vd.GetLongitude() != 0 {
+		if vd.Longitude != nil {
 			longitude = vd.GetLongitude()
 		}
 		if bucket := vd.GetClientBucket(); bucket != nil && bucket.H3Index != 0 {
@@ -1176,15 +1176,15 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	}
 	// Prefer publisher geo (client-side) when available; otherwise fall back to node geo.
 	var lat interface{}
-	if pr.PublisherLatitude != nil && *pr.PublisherLatitude != 0 {
+	if pr.PublisherLatitude != nil {
 		lat = *pr.PublisherLatitude
-	} else if pr.Latitude != nil && *pr.Latitude != 0 {
+	} else if pr.Latitude != nil {
 		lat = *pr.Latitude
 	}
 	var lon interface{}
-	if pr.PublisherLongitude != nil && *pr.PublisherLongitude != 0 {
+	if pr.PublisherLongitude != nil {
 		lon = *pr.PublisherLongitude
-	} else if pr.Longitude != nil && *pr.Longitude != 0 {
+	} else if pr.Longitude != nil {
 		lon = *pr.Longitude
 	}
 	// Publisher location (where encoder is running, from GeoIP)
@@ -1270,7 +1270,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		selID = *loadBalancing.SelectedNodeId
 	}
 	var routeKm interface{}
-	if loadBalancing.RoutingDistanceKm != nil && *loadBalancing.RoutingDistanceKm != 0 {
+	if loadBalancing.RoutingDistanceKm != nil {
 		routeKm = *loadBalancing.RoutingDistanceKm
 	}
 
