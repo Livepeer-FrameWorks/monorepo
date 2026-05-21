@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -183,6 +184,7 @@ func (m *Manager) reconcile() {
 		return
 	}
 	desiredConfig := map[string]any{}
+	applyBaselineMistConfig(desiredConfig)
 
 	// Location (from seed)
 	if seed.GetLatitude() != 0 || seed.GetLongitude() != 0 || seed.GetLocationName() != "" {
@@ -193,13 +195,9 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	desiredConfig["prometheus"] = mist.MetricsConfigValue
 	if bwLimit := ConfiguredBandwidthLimitBytesPerSec(); bwLimit > 0 {
 		desiredConfig["bwlimit"] = bwLimit
 	}
-
-	// Trusted proxies: localhost (IPv4 + IPv6) + "nginx" Docker service name
-	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
 
 	// Triggers (pointed at Helmsman webhooks)
 	webhookBase := os.Getenv("HELMSMAN_WEBHOOK_URL")
@@ -279,6 +277,19 @@ func (m *Manager) reconcile() {
 		m.retryAttempt = 0
 		m.mu.Unlock()
 	}
+}
+
+func applyBaselineMistConfig(desiredConfig map[string]any) {
+	desiredConfig["accesslog"] = "LOG"
+	desiredConfig["debug"] = 4
+	desiredConfig["prometheus"] = mist.MetricsConfigValue
+	desiredConfig["sessionInputMode"] = 15
+	desiredConfig["sessionOutputMode"] = 15
+	desiredConfig["sessionStreamInfoMode"] = "1"
+	desiredConfig["sessionUnspecifiedMode"] = 0
+	desiredConfig["sessionViewerMode"] = 14
+	desiredConfig["tknMode"] = 15
+	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
 }
 
 func (m *Manager) startDriftRepairLoop() {
@@ -1053,98 +1064,26 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 	need := []map[string]any{}
 	var protocolUpdates []protocolUpdate
 
-	// HTTP protocol - check if exists and has correct pubaddr
-	if existing, ok := existingProtos["HTTP"]; !ok {
-		entry := map[string]any{"connector": "HTTP"}
-		if httpPubURL != "" {
-			entry["pubaddr"] = []string{httpPubURL}
+	for _, desired := range managedProtocolDefinitions(httpPubURL, webrtcPubHost) {
+		connector, ok := desired["connector"].(string)
+		if !ok || connector == "" {
+			continue
 		}
-		need = append(need, entry)
-	} else if httpPubURL != "" {
-		// Check if pubaddr needs updating
-		currentPubaddr := ""
-		if pa, ok := existing["pubaddr"].([]any); ok && len(pa) > 0 {
-			if s, ok := pa[0].(string); ok {
-				currentPubaddr = s
+
+		existing, ok := existingProtos[connector]
+		if !ok {
+			need = append(need, desired)
+			continue
+		}
+
+		if protocolUpdateNeeded(existing, desired) {
+			m.logger.WithFields(logging.Fields{
+				"connector": connector,
+			}).Info("Mist protocol settings need update")
+			updated := cloneStringAnyMap(existing)
+			for key, value := range desired {
+				updated[key] = value
 			}
-		}
-		if currentPubaddr != httpPubURL {
-			m.logger.WithFields(logging.Fields{
-				"current": currentPubaddr,
-				"desired": httpPubURL,
-			}).Info("HTTP pubaddr needs update")
-			updated := cloneStringAnyMap(existing)
-			updated["pubaddr"] = []string{httpPubURL}
-			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
-		}
-	}
-
-	// WebRTC protocol - check if exists and has correct pubhost
-	if existing, ok := existingProtos["WebRTC"]; !ok {
-		entry := map[string]any{"connector": "WebRTC", "bindhost": "0.0.0.0"}
-		if webrtcPubHost != "" {
-			entry["pubhost"] = webrtcPubHost
-		}
-		need = append(need, entry)
-	} else if webrtcPubHost != "" {
-		// Check if pubhost needs updating
-		currentPubhost := ""
-		if ph, ok := existing["pubhost"].(string); ok {
-			currentPubhost = ph
-		}
-		if currentPubhost != webrtcPubHost {
-			m.logger.WithFields(logging.Fields{
-				"current": currentPubhost,
-				"desired": webrtcPubHost,
-			}).Info("WebRTC pubhost needs update")
-			updated := cloneStringAnyMap(existing)
-			updated["bindhost"] = "0.0.0.0"
-			updated["pubhost"] = webrtcPubHost
-			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
-		}
-	}
-
-	// DTSC - ensure exists for inter-node communication
-	if _, ok := existingProtos["DTSC"]; !ok {
-		entry := map[string]any{"connector": "DTSC"}
-		need = append(need, entry)
-	}
-
-	// WSRaw - ensure exists for WebCodecs playback
-	if _, ok := existingProtos["WSRaw"]; !ok {
-		entry := map[string]any{"connector": "WSRaw"}
-		need = append(need, entry)
-	}
-
-	// ThumbVTT - ensure exists for thumbnail sprite VTT output
-	if _, ok := existingProtos["ThumbVTT"]; !ok {
-		entry := map[string]any{"connector": "ThumbVTT"}
-		need = append(need, entry)
-	}
-
-	// CMAF - serves LL-HLS, DASH, and HSS over fMP4. nonchunked forces
-	// per-segment buffering so segment responses carry Content-Length, which
-	// is required for player compatibility across dash.js and hls.js LL-HLS.
-	cmafNeedsUpdate := false
-	if existing, ok := existingProtos["CMAF"]; !ok {
-		entry := map[string]any{"connector": "CMAF", "mergesessions": true, "nonchunked": true}
-		need = append(need, entry)
-	} else {
-		currentMergesessions, hasMergesessions := existing["mergesessions"].(bool)
-		currentNonchunked, nok := existing["nonchunked"].(bool)
-		if !hasMergesessions || !currentMergesessions || !nok || !currentNonchunked {
-			m.logger.WithFields(logging.Fields{
-				"current_mergesessions": currentMergesessions,
-				"desired_mergesessions": true,
-				"current_nonchunked":    currentNonchunked,
-				"desired_nonchunked":    true,
-			}).Info("CMAF settings need update")
-			cmafNeedsUpdate = true
-		}
-		if cmafNeedsUpdate {
-			updated := cloneStringAnyMap(existing)
-			updated["mergesessions"] = true
-			updated["nonchunked"] = true
 			protocolUpdates = append(protocolUpdates, protocolUpdate{old: existing, new: updated})
 		}
 	}
@@ -1180,6 +1119,89 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 	}
 
 	return nil
+}
+
+func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]any {
+	http := map[string]any{"connector": "HTTP", "default_track_sorting": "id_lth"}
+	if httpPubURL != "" {
+		http["pubaddr"] = []string{httpPubURL}
+	}
+
+	webrtc := map[string]any{
+		"bindhost":              "0.0.0.0",
+		"connector":             "WebRTC",
+		"default_track_sorting": "id_lth",
+		"jitterlog":             false,
+		"mergesessions":         false,
+		"nackdisable":           false,
+		"nolocal":               false,
+		"noresolve":             false,
+		"packetlog":             false,
+	}
+	if webrtcPubHost != "" {
+		webrtc["pubhost"] = webrtcPubHost
+	}
+
+	return []map[string]any{
+		{"connector": "AAC"},
+		{"connector": "CMAF", "mergesessions": true, "nonchunked": true},
+		{"connector": "DTSC"},
+		{"connector": "EBML"},
+		{"connector": "FLAC"},
+		{"connector": "FLV"},
+		{"connector": "H264"},
+		{"connector": "HDS"},
+		{"connector": "HLS"},
+		http,
+		{"connector": "HTTPTS"},
+		{"connector": "JSON"},
+		{"connector": "MP3"},
+		{"connector": "MP4"},
+		{"connector": "OGG"},
+		{"connector": "RTMP"},
+		{"connector": "RTSP"},
+		{"connector": "SDP"},
+		{"connector": "SubRip"},
+		{"connector": "TSSRT"},
+		{"connector": "WAV"},
+		webrtc,
+		{"connector": "JPG"},
+		{"connector": "WSRaw"},
+		{"connector": "ThumbVTT"},
+	}
+}
+
+func protocolUpdateNeeded(existing, desired map[string]any) bool {
+	for key, desiredValue := range desired {
+		if !protocolValuesEqual(existing[key], desiredValue) {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolValuesEqual(existing, desired any) bool {
+	desiredStrings, ok := desired.([]string)
+	if !ok {
+		return reflect.DeepEqual(existing, desired)
+	}
+
+	switch existingTyped := existing.(type) {
+	case []string:
+		return reflect.DeepEqual(existingTyped, desiredStrings)
+	case []any:
+		if len(existingTyped) != len(desiredStrings) {
+			return false
+		}
+		for i, value := range existingTyped {
+			if value != desiredStrings[i] {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 type protocolUpdate struct {
