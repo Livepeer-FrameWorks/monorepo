@@ -802,7 +802,7 @@ Multi-node manifest example:
 				return err
 			}
 
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Edge node provisioned at https://%s/health", primaryDomain))
+			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Edge node provisioned at https://%s", primaryDomain))
 			ux.PrintNextSteps(cmd.OutOrStdout(), []ux.NextStep{
 				{Cmd: "frameworks edge status", Why: "Confirm services are running and HTTPS is healthy."},
 				{Cmd: "frameworks edge doctor", Why: "Run diagnostics if anything looks off."},

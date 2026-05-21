@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -374,71 +374,84 @@ func listenerLooksDockerManaged(listenerOutput string) bool {
 	return strings.Contains(output, "docker-proxy") || strings.Contains(output, "com.docker")
 }
 
-// verifyHTTPS polls the edge domain's /health endpoint until it returns 200
-// with a publicly trusted certificate for that domain. Bootstrap Caddy serves
-// /health with an internal self-signed certificate, so TLS verification is the
-// signal that ConfigSeed activation actually completed.
+// verifyHTTPS polls the edge domain until it serves a publicly trusted TLS
+// certificate for that domain. The provisioner dials the target host directly
+// when it knows the host IP, so this readiness gate is not blocked by DNS
+// propagation. Application routes are intentionally not checked here: the edge
+// Caddyfile ultimately proxies most paths to MistServer, which does not expose
+// a conventional /health endpoint.
 func (e *EdgeProvisioner) verifyHTTPS(domain, dialAddress string, timeout time.Duration) error {
-	url := "https://" + domain + "/health"
-	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-	if dialHost := edgeHTTPSDialHost(dialAddress); dialHost != "" && dialHost != domain {
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil || port == "" {
-				port = "443"
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(dialHost, port))
-		}
+	return verifyEdgeTLS(domain, dialAddress, timeout, nil)
+}
+
+func verifyEdgeTLS(domain, dialAddress string, timeout time.Duration, rootCAs *x509.CertPool) error {
+	serverName := edgeHTTPSDialHost(domain)
+	if serverName == "" {
+		return fmt.Errorf("HTTPS check failed: empty domain")
 	}
-	httpClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: transport,
+	dialHost := edgeHTTPSDialHost(dialAddress)
+	dialPort := edgeHTTPSDialPort(dialAddress)
+	if dialHost == "" {
+		dialHost = serverName
+	}
+	if dialPort == "" {
+		dialPort = "443"
+	}
+	endpoint := net.JoinHostPort(dialHost, dialPort)
+	displayURL := "https://" + serverName
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    rootCAs,
+		ServerName: serverName,
 	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
-	var lastStatus string
 	var lastTLS string
 
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			cancel()
-			return err
-		}
-		resp, err := httpClient.Do(req)
-		cancel()
-		lastErr = err
-		if err == nil && resp != nil && resp.StatusCode == 200 {
-			tlsSummary := tlsConnectionSummary(resp.TLS)
-			if resp.Body != nil {
-				_ = resp.Body.Close()
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return fmt.Errorf("HTTPS TLS check failed for %s via %s: %w", displayURL, dialHost, lastErr)
 			}
-			if dialHost := edgeHTTPSDialHost(dialAddress); dialHost != "" && dialHost != domain {
-				fmt.Printf("  HTTPS ready at %s via %s (%s)\n", url, dialHost, tlsSummary)
+			return fmt.Errorf("HTTPS TLS check failed for %s via %s: not ready before timeout (%s)", displayURL, dialHost, lastTLS)
+		}
+		dialTimeout := remaining
+		if dialTimeout > 5*time.Second {
+			dialTimeout = 5 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{},
+			Config:    tlsConfig,
+		}
+		conn, err := dialer.DialContext(ctx, "tcp", endpoint)
+		cancel()
+		if err == nil {
+			tlsConn, ok := conn.(*tls.Conn)
+			if !ok {
+				_ = conn.Close()
+				return fmt.Errorf("HTTPS TLS check failed for %s via %s: unexpected connection type %T", displayURL, dialHost, conn)
+			}
+			state := tlsConn.ConnectionState()
+			tlsSummary := tlsConnectionSummary(&state)
+			_ = conn.Close()
+			if dialHost != serverName {
+				fmt.Printf("  HTTPS TLS ready for %s via %s (%s)\n", displayURL, dialHost, tlsSummary)
 			} else {
-				fmt.Printf("  HTTPS ready at %s (%s)\n", url, tlsSummary)
+				fmt.Printf("  HTTPS TLS ready for %s (%s)\n", displayURL, tlsSummary)
 			}
 			return nil
 		}
-		if resp != nil {
-			lastStatus = resp.Status
-			lastTLS = tlsConnectionSummary(resp.TLS)
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
+		lastErr = err
+		lastTLS = tlsErrorSummary(err)
+		sleepFor := time.Until(deadline)
+		if sleepFor > 5*time.Second {
+			sleepFor = 5 * time.Second
 		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return fmt.Errorf("HTTPS check failed for %s: %w", url, lastErr)
-			}
-			if lastStatus != "" {
-				return fmt.Errorf("HTTPS check failed for %s: last status %s (%s)", url, lastStatus, lastTLS)
-			}
-			return fmt.Errorf("HTTPS check failed for %s: not ready before timeout", url)
+		if sleepFor > 0 {
+			time.Sleep(sleepFor)
 		}
-		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -451,6 +464,18 @@ func edgeHTTPSDialHost(dialAddress string) string {
 		return strings.Trim(host, "[]")
 	}
 	return strings.Trim(dialAddress, "[]")
+}
+
+func edgeHTTPSDialPort(dialAddress string) string {
+	dialAddress = strings.TrimSpace(dialAddress)
+	if dialAddress == "" {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(dialAddress)
+	if err != nil {
+		return ""
+	}
+	return port
 }
 
 func tlsConnectionSummary(state *tls.ConnectionState) string {
@@ -472,6 +497,13 @@ func tlsConnectionSummary(state *tls.ConnectionState) string {
 		parts = append(parts, "dns="+strings.Join(cert.DNSNames, ","))
 	}
 	return strings.Join(parts, " ")
+}
+
+func tlsErrorSummary(err error) string {
+	if err == nil {
+		return "tls: unavailable"
+	}
+	return "tls: " + err.Error()
 }
 
 func tlsVersionName(version uint16) string {

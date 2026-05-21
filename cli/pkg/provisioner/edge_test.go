@@ -1,10 +1,14 @@
 package provisioner
 
 import (
+	"crypto/x509"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/pkg/gitops"
@@ -114,6 +118,24 @@ func TestListenerLooksDockerManaged(t *testing.T) {
 	}
 	if listenerLooksDockerManaged(`users:(("caddy",pid=123,fd=4))`) {
 		t.Fatal("unexpectedly classified native caddy listener as docker managed")
+	}
+}
+
+func TestVerifyEdgeTLSDoesNotDependOnHealthRoute(t *testing.T) {
+	routeHit := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		routeHit = true
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+	}))
+	defer server.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	if err := verifyEdgeTLS("127.0.0.1", server.Listener.Addr().String(), 100*time.Millisecond, roots); err != nil {
+		t.Fatalf("verifyEdgeTLS returned error: %v", err)
+	}
+	if routeHit {
+		t.Fatal("verifyEdgeTLS made an HTTP request instead of stopping after certificate validation")
 	}
 }
 
