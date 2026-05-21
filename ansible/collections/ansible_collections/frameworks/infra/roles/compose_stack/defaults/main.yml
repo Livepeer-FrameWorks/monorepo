@@ -21,6 +21,7 @@ compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
 compose_stack_compose_content: ""
 compose_stack_files: {}
 compose_stack_service: {}
+compose_stack_state_dirs: []
 compose_stack_env: {}
 compose_stack_registry_auth: {}
 compose_stack_require_registry_auth: false

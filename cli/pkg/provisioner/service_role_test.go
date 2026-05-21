@@ -125,8 +125,48 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 	if !ok {
 		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
 	}
-	assertStringSlice(t, service["volumes"], []string{"./metabase-data:/metabase-data"})
+	assertStringSlice(t, service["volumes"], []string{"/var/lib/frameworks/metabase:/metabase-data"})
 	assertStringSlice(t, service["extra_hosts"], []string{"host.docker.internal:host-gateway"})
+	wantStateDirs := []map[string]string{{
+		"path":  "/var/lib/frameworks/metabase",
+		"owner": "2000",
+		"group": "2000",
+		"mode":  "0750",
+	}}
+	if got := vars["compose_stack_state_dirs"]; !reflect.DeepEqual(got, wantStateDirs) {
+		t.Fatalf("compose_stack_state_dirs got %#v, want %#v", got, wantStateDirs)
+	}
+}
+
+func TestServiceComposeVarsPersistsGrafanaState(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:   "grafana",
+		DefaultPort:   3000,
+		ContainerPort: 3000,
+		HealthPath:    "/api/health",
+		DefaultImage:  "grafana/grafana:13.0.1",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+
+	service, ok := vars["compose_stack_service"].(map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
+	}
+	assertStringSlice(t, service["volumes"], []string{"/var/lib/frameworks/grafana:/var/lib/grafana"})
+	wantStateDirs := []map[string]string{{
+		"path":  "/var/lib/frameworks/grafana",
+		"owner": "472",
+		"group": "0",
+		"mode":  "0750",
+	}}
+	if got := vars["compose_stack_state_dirs"]; !reflect.DeepEqual(got, wantStateDirs) {
+		t.Fatalf("compose_stack_state_dirs got %#v, want %#v", got, wantStateDirs)
+	}
 }
 
 func TestServiceComposeVarsPassesRegistryAuthForGHCRImages(t *testing.T) {

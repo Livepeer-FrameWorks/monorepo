@@ -7,6 +7,18 @@
     group: root
     mode: "0755"
 
+- name: Ensure compose stack state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ compose_stack_state_dirs }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: compose_stack_state_dirs | length > 0
+
 - name: Ensure additional stack file directories
   ansible.builtin.file:
     path: "{{ compose_stack_project_dir }}/{{ item.key | dirname }}"

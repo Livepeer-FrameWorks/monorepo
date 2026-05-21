@@ -157,6 +157,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	envMap := buildServiceEnvMap(config)
 	composeFiles := map[string]string{}
 	composeVolumes := []string{}
+	composeStateDirs := []map[string]string{}
 	composeExtraHosts := []string{}
 	if cfg.ServiceName == "skipper" {
 		var err error
@@ -167,10 +168,25 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	}
 	if cfg.ServiceName == "metabase" {
 		applyMetabaseComposeDefaults(envMap)
-		composeVolumes = append(composeVolumes, "./metabase-data:/metabase-data")
+		composeVolumes = append(composeVolumes, "/var/lib/frameworks/metabase:/metabase-data")
+		composeStateDirs = append(composeStateDirs, map[string]string{
+			"path":  "/var/lib/frameworks/metabase",
+			"owner": "2000",
+			"group": "2000",
+			"mode":  "0750",
+		})
 		if metabaseUsesDockerHostGateway(envMap) {
 			composeExtraHosts = append(composeExtraHosts, "host.docker.internal:host-gateway")
 		}
+	}
+	if cfg.ServiceName == "grafana" {
+		composeVolumes = append(composeVolumes, "/var/lib/frameworks/grafana:/var/lib/grafana")
+		composeStateDirs = append(composeStateDirs, map[string]string{
+			"path":  "/var/lib/frameworks/grafana",
+			"owner": "472",
+			"group": "0",
+			"mode":  "0750",
+		})
 	}
 	envAny := make(map[string]any, len(envMap))
 	for k, v := range envMap {
@@ -195,6 +211,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			"extra_hosts":    composeExtraHosts,
 		},
 		"compose_stack_env":                    envAny,
+		"compose_stack_state_dirs":             composeStateDirs,
 		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
 	}, nil
 }
