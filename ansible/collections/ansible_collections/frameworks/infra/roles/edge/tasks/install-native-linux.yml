@@ -58,7 +58,7 @@
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
-    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
       HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
@@ -90,7 +90,7 @@
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
-    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
       HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
@@ -125,7 +125,7 @@
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
-    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
       HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
@@ -160,7 +160,7 @@
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
     helmsman_mist_api_password: "{{ edge_mist_api_password }}"
-    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_ca_bundle_pem | length > 0 else '' }}"
+    helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
       HELMSMAN_VERSION: "{{ edge_helmsman_version }}"
@@ -174,6 +174,18 @@
       HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
       HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
       HELMSMAN_CAP_PROCESSING: "{{ edge_cap_processing }}"
+
+- name: Assert Helmsman trusts staged internal CA
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fx
+      - "GRPC_TLS_CA_PATH={{ edge_ca_path }}"
+      - "{{ helmsman_env_file | default('/etc/frameworks/helmsman.env') }}"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - edge_grpc_ca_bundle_stat.stat.exists | default(false)
 
 - name: Apply caddy bootstrap
   ansible.builtin.import_tasks: install-native-linux-caddy.yml

@@ -131,11 +131,11 @@ func TestVerifyEdgeTLSDoesNotDependOnHealthRoute(t *testing.T) {
 
 	roots := x509.NewCertPool()
 	roots.AddCert(server.Certificate())
-	if err := verifyEdgeTLS("127.0.0.1", server.Listener.Addr().String(), 100*time.Millisecond, roots); err != nil {
-		t.Fatalf("verifyEdgeTLS returned error: %v", err)
+	if err := VerifyEdgeTLS("127.0.0.1", server.Listener.Addr().String(), 100*time.Millisecond, roots); err != nil {
+		t.Fatalf("VerifyEdgeTLS returned error: %v", err)
 	}
 	if routeHit {
-		t.Fatal("verifyEdgeTLS made an HTTP request instead of stopping after certificate validation")
+		t.Fatal("VerifyEdgeTLS made an HTTP request instead of stopping after certificate validation")
 	}
 }
 

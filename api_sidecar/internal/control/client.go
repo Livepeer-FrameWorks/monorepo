@@ -955,11 +955,18 @@ func loadSidecarRootCAs(caPath string) (*x509.CertPool, error) {
 		return pool, nil
 	}
 
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("load system cert pool: %w", err)
+	}
+	if pool == nil {
+		pool = x509.NewCertPool()
+	}
+
 	pemBytes, err := os.ReadFile(caPath)
 	if err != nil {
 		return nil, fmt.Errorf("read sidecar CA cert %q: %w", caPath, err)
 	}
-	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(pemBytes) {
 		return nil, fmt.Errorf("append sidecar CA cert %q: invalid PEM", caPath)
 	}

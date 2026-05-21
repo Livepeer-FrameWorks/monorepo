@@ -344,7 +344,7 @@ func renderEdgeDeployResult(cmd *cobra.Command, f edgeDeployResultFields) {
 	}
 
 	httpsOK := f.provisioned
-	httpsDetail := "https/health reachable"
+	httpsDetail := "https tls reachable"
 	if !httpsOK {
 		httpsDetail = "not verified"
 	}

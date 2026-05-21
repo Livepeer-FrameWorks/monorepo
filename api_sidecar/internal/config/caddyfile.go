@@ -38,83 +38,83 @@ type CaddyfileParams struct {
 }
 
 const caddyfileTmpl = `{
-  admin {{.CaddyAdminAddr}}
+	admin {{.CaddyAdminAddr}}
 {{- if .AcmeEmail}}
-  email {{.AcmeEmail}}
+	email {{.AcmeEmail}}
 {{- end}}
-  servers {
-    protocols h1 h2 h3
-  }
+	servers {
+		protocols h1 h2 h3
+	}
 }
 
 (common_handlers) {
-  @compressible {
-    not path *.ts *.m4s *.mp4 *.webm
-  }
-  encode @compressible zstd gzip
+	@compressible {
+		not path *.ts *.m4s *.mp4 *.webm
+	}
+	encode @compressible zstd gzip
 
-  header {
-    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-    X-Content-Type-Options "nosniff"
-    X-Frame-Options "SAMEORIGIN"
-    Referrer-Policy "strict-origin-when-cross-origin"
-    Permissions-Policy "geolocation=(), microphone=()"
-  }
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=()"
+	}
 
-  handle_path /webhooks/* {
-    reverse_proxy {{.HelmsmanUpstream}}
-  }
+	handle_path /webhooks/* {
+		reverse_proxy {{.HelmsmanUpstream}}
+	}
 {{- if .EdgeDomain}}
 
-  @mist_admin {
-    host {{.EdgeDomain}}
-    path /_mist-session /_mist /_mist/*
-  }
-  handle @mist_admin {
-    reverse_proxy {{.HelmsmanUpstream}}
-  }
+	@mist_admin {
+		host {{.EdgeDomain}}
+		path /_mist-session /_mist /_mist/*
+	}
+	handle @mist_admin {
+		reverse_proxy {{.HelmsmanUpstream}}
+	}
 {{- end}}
 
-  handle /assets/* {
-    reverse_proxy {{.ChandlerUpstream}}
-  }
+	handle /assets/* {
+		reverse_proxy {{.ChandlerUpstream}}
+	}
 
-  handle /view/* {
-    reverse_proxy {{.MistUpstream}} {
-      flush_interval -1
-      transport http {
-        read_timeout 0
-        write_timeout 0
-        keepalive 64s
-      }
-      header_up X-Forwarded-Proto {scheme}
-      header_up X-Forwarded-For {remote_host}
-    }
-  }
+	handle /view/* {
+		reverse_proxy {{.MistUpstream}} {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				keepalive 64s
+			}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
 
-  reverse_proxy {{.MistUpstream}}
+	reverse_proxy {{.MistUpstream}}
 
-  handle_errors {
-    @upstream_down expression ` + "`" + `{err.status_code} in [502, 503, 504]` + "`" + `
-    handle @upstream_down {
-      root * /etc/caddy
-      rewrite * /maintenance.html
-      file_server
-    }
-  }
+	handle_errors {
+		@upstream_down expression ` + "`" + `{err.status_code} in [502, 503, 504]` + "`" + `
+		handle @upstream_down {
+			root * /etc/caddy
+			rewrite * /maintenance.html
+			file_server
+		}
+	}
 
-  log {
-    output stdout
-    format json
-  }
+	log {
+		output stdout
+		format json
+	}
 }
 
 {{range .Bundles}}
 {{.SiteAddress}} {
 {{- if and .TLSCertPath .TLSKeyPath}}
-  tls {{.TLSCertPath}} {{.TLSKeyPath}}
+	tls {{.TLSCertPath}} {{.TLSKeyPath}}
 {{- end}}
-  import common_handlers
+	import common_handlers
 }
 {{end}}`
 

@@ -61,7 +61,7 @@ func EdgeReadiness(in EdgeInputs) Report {
 	if in.HTTPSError != "" {
 		r.Warnings = append(r.Warnings, Warning{
 			Subject: "edge.https",
-			Detail:  fmt.Sprintf("HTTPS health check failed: %s", in.HTTPSError),
+			Detail:  fmt.Sprintf("HTTPS TLS check failed: %s", in.HTTPSError),
 			Remediation: Remediation{
 				Cmd: "frameworks edge logs caddy",
 				Why: "Check Caddy logs; ensure ports 80/443 are reachable and DNS A/AAAA records point at this host.",
@@ -70,10 +70,10 @@ func EdgeReadiness(in EdgeInputs) Report {
 	} else if in.HTTPSStatus != 0 && in.HTTPSStatus != 200 {
 		r.Warnings = append(r.Warnings, Warning{
 			Subject: "edge.https",
-			Detail:  fmt.Sprintf("HTTPS health check returned HTTP %d.", in.HTTPSStatus),
+			Detail:  fmt.Sprintf("HTTPS check returned HTTP %d.", in.HTTPSStatus),
 			Remediation: Remediation{
 				Cmd: "frameworks edge logs helmsman",
-				Why: "Helmsman /health replied with a non-200 status.",
+				Why: "The edge HTTPS endpoint replied with a non-200 status.",
 			},
 		})
 	}

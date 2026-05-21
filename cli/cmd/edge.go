@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -334,38 +333,11 @@ func newEdgeEnrollCmd() *cobra.Command {
 			ux.Warn(out, "EDGE_DOMAIN not set in .edge.env; skipping HTTPS check")
 			return nil
 		}
-		url := "https://" + domain + "/health"
-		httpClient := &http.Client{Timeout: 5 * time.Second}
-		deadline := time.Now().Add(timeout)
-		for {
-			ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				cancel()
-				return err
-			}
-			resp, err := httpClient.Do(req)
-			cancel()
-			if err == nil && resp != nil && resp.StatusCode == 200 {
-				if resp.Body != nil {
-					_ = resp.Body.Close()
-				}
-				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS ready at %s", url))
-				break
-			}
-			if resp != nil && resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-			if time.Now().After(deadline) {
-				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "HTTPS check failed: %v\n", err)
-				} else if resp != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "HTTPS not ready: status %d\n", resp.StatusCode)
-				}
-				return fmt.Errorf("edge HTTPS not ready before timeout")
-			}
-			time.Sleep(2 * time.Second)
+		if err := provisioner.VerifyEdgeTLS(domain, "", timeout, nil); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "HTTPS TLS check failed: %v\n", err)
+			return fmt.Errorf("edge HTTPS TLS not ready before timeout")
 		}
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS TLS ready at https://%s", domain))
 		return nil
 	}}
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory with docker-compose.edge.yml and .edge.env")
@@ -907,8 +879,10 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 
 	controlCtx := cliCtx
 	controlCABundlePEM := ""
+	clusterManifestPath := ""
 	if edgeManifestNeedsControlPlane(manifest) {
-		clusterManifestPath, ctxErr := resolveEdgeClusterManifestPath(manifestPath, manifest, clusterManifestOverride)
+		var ctxErr error
+		clusterManifestPath, ctxErr = resolveEdgeClusterManifestPath(manifestPath, manifest, clusterManifestOverride)
 		if ctxErr != nil {
 			return ctxErr
 		}
@@ -918,6 +892,15 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 		}
 		controlCtx = resolvedCtx
 		controlCABundlePEM = caBundlePEM
+	}
+	if !dryRun && clusterManifestPath != "" {
+		effectiveVersion := manifest.Channel
+		if cmd.Flags().Changed("version") {
+			effectiveVersion = cliVersion
+		}
+		if err := syncEdgeManifestReleaseTarget(cmd, clusterManifestPath, ageKeyFile, effectiveVersion); err != nil {
+			return err
+		}
 	}
 
 	// Semaphore for parallelism control
@@ -972,7 +955,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				if dryRun {
 					fmt.Fprintf(cmd.OutOrStdout(), "[%s] DRY-RUN OK\n", n.Name)
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: https://%s/health\n", n.Name, primaryDomain)
+					fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: HTTPS TLS ready at https://%s\n", n.Name, primaryDomain)
 				}
 			}
 
@@ -1020,6 +1003,37 @@ func edgeManifestNeedsControlPlane(manifest *inventory.EdgeManifest) bool {
 		}
 	}
 	return false
+}
+
+func syncEdgeManifestReleaseTarget(cmd *cobra.Command, clusterManifestPath, ageKeyFile, selector string) error {
+	clusterManifestPath = strings.TrimSpace(clusterManifestPath)
+	if clusterManifestPath == "" {
+		return nil
+	}
+	manifest, err := inventory.LoadWithHosts(clusterManifestPath, ageKeyFile)
+	if err != nil {
+		return fmt.Errorf("load cluster manifest for edge release target sync: %w", err)
+	}
+	rc := &resolvedCluster{
+		Manifest:     manifest,
+		ManifestPath: clusterManifestPath,
+		AgeKey:       ageKeyFile,
+		Source:       inventory.SourceManifestFlag,
+		ReleaseRepos: edgeManifestReleaseRepositories(clusterManifestPath),
+	}
+	if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, selector, nil); err != nil {
+		return fmt.Errorf("sync edge release target before edge install: %w", err)
+	}
+	return nil
+}
+
+func edgeManifestReleaseRepositories(clusterManifestPath string) []string {
+	var repos []string
+	if root := findGitopsRootFromManifest(clusterManifestPath); root != "" {
+		repos = append(repos, root)
+	}
+	repos = append(repos, fwgitops.DefaultRepository)
+	return repos
 }
 
 func resolveEdgeClusterManifestPath(edgeManifestPath string, manifest *inventory.EdgeManifest, override string) (string, error) {
@@ -1772,32 +1786,12 @@ func newEdgeStatusCmd() *cobra.Command {
 				fmt.Fprint(cmd.OutOrStdout(), out)
 			}
 		}
-		// HTTPS health
+		// HTTPS TLS
 		if strings.TrimSpace(domain) != "" {
-			url := "https://" + domain + "/health"
-			httpClient := &http.Client{Timeout: 3 * time.Second}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				cancel()
-				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s: %v", url, err))
+			if err := provisioner.VerifyEdgeTLS(domain, "", 3*time.Second, nil); err != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS TLS https://%s: %v", domain, err))
 			} else {
-				resp, err := httpClient.Do(req)
-				cancel()
-				switch {
-				case err != nil:
-					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s: %v", url, err))
-				case resp.StatusCode == 200:
-					if resp.Body != nil {
-						_ = resp.Body.Close()
-					}
-					ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s (http 200)", url))
-				default:
-					if resp.Body != nil {
-						_ = resp.Body.Close()
-					}
-					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("HTTPS %s (http %d)", url, resp.StatusCode))
-				}
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("HTTPS TLS https://%s", domain))
 			}
 		}
 		return nil
@@ -2044,7 +2038,7 @@ func newEdgeLogsCmd() *cobra.Command {
 	return cmd
 }
 
-// edgeDoctorHTTPS carries the /health probe result. Status == 0 with
+// edgeDoctorHTTPS carries the HTTPS TLS probe result. Status == 0 with
 // Error == "" means the probe was not attempted (no EDGE_DOMAIN).
 type edgeDoctorHTTPS struct {
 	URL    string `json:"url,omitempty"`
@@ -2148,7 +2142,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 		}
 
-		// HTTPS health
+		// HTTPS TLS
 		if domain == "" {
 			domain = readRemoteEnvFileKey(ctx, "", "", dir, envFile, "EDGE_DOMAIN")
 		}
@@ -2156,29 +2150,14 @@ func newEdgeDoctorCmd() *cobra.Command {
 		httpsError := ""
 		httpsURL := ""
 		if domain != "" {
-			httpsURL = "https://" + domain + "/health"
-			httpClient := &http.Client{Timeout: 3 * time.Second}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, httpsURL, nil)
+			httpsURL = "https://" + domain
+			err := provisioner.VerifyEdgeTLS(domain, "", 3*time.Second, nil)
+			fmt.Fprintln(textOut, "HTTPS TLS:")
 			if err != nil {
-				cancel()
 				httpsError = err.Error()
-				fmt.Fprintln(textOut, "HTTPS Health:")
 				fmt.Fprintf(textOut, " %s error: %v\n", httpsURL, err)
 			} else {
-				resp, err := httpClient.Do(req)
-				cancel()
-				fmt.Fprintln(textOut, "HTTPS Health:")
-				if err != nil {
-					httpsError = err.Error()
-					fmt.Fprintf(textOut, " %s error: %v\n", httpsURL, err)
-				} else {
-					if resp.Body != nil {
-						_ = resp.Body.Close()
-					}
-					httpsStatus = resp.StatusCode
-					fmt.Fprintf(textOut, " %s http %d\n", httpsURL, resp.StatusCode)
-				}
+				fmt.Fprintf(textOut, " %s tls ok\n", httpsURL)
 			}
 		}
 		// Stream health quick-check via MistServer analyzers

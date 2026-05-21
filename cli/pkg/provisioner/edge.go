@@ -381,10 +381,10 @@ func listenerLooksDockerManaged(listenerOutput string) bool {
 // Caddyfile ultimately proxies most paths to MistServer, which does not expose
 // a conventional /health endpoint.
 func (e *EdgeProvisioner) verifyHTTPS(domain, dialAddress string, timeout time.Duration) error {
-	return verifyEdgeTLS(domain, dialAddress, timeout, nil)
+	return VerifyEdgeTLS(domain, dialAddress, timeout, nil)
 }
 
-func verifyEdgeTLS(domain, dialAddress string, timeout time.Duration, rootCAs *x509.CertPool) error {
+func VerifyEdgeTLS(domain, dialAddress string, timeout time.Duration, rootCAs *x509.CertPool) error {
 	serverName := edgeHTTPSDialHost(domain)
 	if serverName == "" {
 		return fmt.Errorf("HTTPS check failed: empty domain")

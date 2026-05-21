@@ -41,6 +41,64 @@
   ansible.builtin.set_fact:
     helmsman_install_sentinel: "{{ helmsman_install_dir }}/.installed-{{ helmsman_artifact_checksum | default('') | hash('sha1') }}"
 
+- name: Create Helmsman artifact verification directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: helmsman-verify
+  register: helmsman_verify_dir
+  when: not ansible_check_mode
+
+- name: Extract Helmsman artifact for binary verification
+  ansible.builtin.unarchive:
+    src: "/tmp/helmsman.asset"
+    dest: "{{ helmsman_verify_dir.path }}"
+    remote_src: true
+  when: not ansible_check_mode
+
+- name: Read desired Helmsman binary checksum
+  ansible.builtin.shell: |
+    set -e
+    if ls "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* >/dev/null 2>&1; then
+      sha256sum "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* | awk '{print $1}'
+    elif [ -f "{{ helmsman_verify_dir.path }}/frameworks" ]; then
+      sha256sum "{{ helmsman_verify_dir.path }}/frameworks" | awk '{print $1}'
+    elif [ -f "{{ helmsman_verify_dir.path }}/helmsman" ]; then
+      sha256sum "{{ helmsman_verify_dir.path }}/helmsman" | awk '{print $1}'
+    else
+      echo "missing helmsman binary in artifact" >&2
+      exit 1
+    fi
+  args:
+    executable: /bin/sh
+  register: helmsman_desired_binary_checksum
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Read installed Helmsman binary checksum
+  ansible.builtin.command:
+    argv:
+      - sha256sum
+      - "{{ helmsman_install_dir }}/helmsman"
+  register: helmsman_installed_binary_checksum
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Remove stale Helmsman install sentinel when binary differs from artifact
+  ansible.builtin.file:
+    path: "{{ helmsman_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - helmsman_installed_binary_checksum.rc != 0
+      or ((helmsman_installed_binary_checksum.stdout.split() | first) | default('')) != (helmsman_desired_binary_checksum.stdout | trim)
+
+- name: Remove Helmsman artifact verification directory
+  ansible.builtin.file:
+    path: "{{ helmsman_verify_dir.path }}"
+    state: absent
+  when: not ansible_check_mode
+
 - name: Extract Helmsman
   ansible.builtin.unarchive:
     src: "/tmp/helmsman.asset"

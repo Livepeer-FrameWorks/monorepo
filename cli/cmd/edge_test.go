@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 )
 
@@ -204,6 +205,28 @@ func TestEdgeManifestFetchCertDoesNotRequireControlPlane(t *testing.T) {
 	manifest := &inventory.EdgeManifest{FetchCert: true}
 	if edgeManifestNeedsControlPlane(manifest) {
 		t.Fatal("fetch_cert is deprecated for manifest provisioning and must not force platform control-plane context")
+	}
+}
+
+func TestEdgeManifestReleaseRepositoriesPrefersLocalGitOpsRoot(t *testing.T) {
+	dir := t.TempDir()
+	gitopsRoot := filepath.Join(dir, "gitops")
+	for _, name := range []string{"clusters", "channels", "releases"} {
+		if err := os.MkdirAll(filepath.Join(gitopsRoot, name), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	clusterPath := filepath.Join(gitopsRoot, "clusters", "production", "cluster.yaml")
+
+	got := edgeManifestReleaseRepositories(clusterPath)
+	if len(got) != 2 {
+		t.Fatalf("repos = %#v, want local root plus default repository", got)
+	}
+	if got[0] != gitopsRoot {
+		t.Fatalf("first repo = %q, want local gitops root %q", got[0], gitopsRoot)
+	}
+	if got[1] != fwgitops.DefaultRepository {
+		t.Fatalf("fallback repo = %q, want %q", got[1], fwgitops.DefaultRepository)
 	}
 }
 

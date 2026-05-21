@@ -190,7 +190,13 @@ func buildClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, bool, error) {
 		err     error
 	)
 	if cfg.CACertFile != "" || cfg.CACertPEM != "" {
-		rootCAs = x509.NewCertPool()
+		rootCAs, err = x509.SystemCertPool()
+		if err != nil {
+			return nil, false, fmt.Errorf("load system cert pool: %w", err)
+		}
+		if rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
 	}
 	if cfg.CACertFile != "" {
 		pem, readErr := os.ReadFile(cfg.CACertFile)

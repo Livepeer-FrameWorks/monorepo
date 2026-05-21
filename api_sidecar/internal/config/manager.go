@@ -1022,10 +1022,35 @@ func (m *Manager) reloadCaddy(content []byte) bool {
 		return false
 	}
 	if bodyText != "" {
-		m.logger.WithField("response", bodyText).Warn("Caddy reload returned an error body")
+		if isCaddyLoadWarningBody(bodyText) {
+			m.logger.WithField("response", bodyText).Warn("Caddy reload returned adapter warnings")
+			m.logger.Info("Caddy configuration reloaded")
+			return true
+		}
+		m.logger.WithField("response", bodyText).Warn("Caddy reload returned an unexpected body")
 		return false
 	}
 	m.logger.Info("Caddy configuration reloaded")
+	return true
+}
+
+func isCaddyLoadWarningBody(bodyText string) bool {
+	var warnings []struct {
+		File    string `json:"file"`
+		Line    int    `json:"line"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(bodyText), &warnings); err != nil {
+		return false
+	}
+	if len(warnings) == 0 {
+		return false
+	}
+	for _, warning := range warnings {
+		if strings.TrimSpace(warning.Message) == "" {
+			return false
+		}
+	}
 	return true
 }
 

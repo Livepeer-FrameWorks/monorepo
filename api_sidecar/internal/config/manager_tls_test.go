@@ -312,7 +312,21 @@ func TestReloadCaddyAcceptsEmptyOKResponse(t *testing.T) {
 	}
 }
 
-func TestReloadCaddyRejectsErrorBodyOnOKResponse(t *testing.T) {
+func TestReloadCaddyAcceptsCaddyAdapterWarningBodyOnOKResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"file":"Caddyfile","line":2,"message":"Caddyfile input is not formatted; run 'caddy fmt --overwrite' to fix inconsistencies"}]`))
+	}))
+	defer srv.Close()
+
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	m := &Manager{logger: logging.NewLogger()}
+	if !m.reloadCaddy([]byte("edge.example { respond ok }")) {
+		t.Fatal("reloadCaddy returned false for Caddy adapter warning body")
+	}
+}
+
+func TestReloadCaddyRejectsUnexpectedBodyOnOKResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("loading config: permission denied"))
@@ -322,7 +336,7 @@ func TestReloadCaddyRejectsErrorBodyOnOKResponse(t *testing.T) {
 	t.Setenv("CADDY_ADMIN_URL", srv.URL)
 	m := &Manager{logger: logging.NewLogger()}
 	if m.reloadCaddy([]byte("edge.example { respond ok }")) {
-		t.Fatal("reloadCaddy returned true for 200 response with error body")
+		t.Fatal("reloadCaddy returned true for 200 response with unexpected body")
 	}
 }
 
