@@ -76,10 +76,13 @@ func main() {
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
-		ServiceToken: serviceToken,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		MaxIdleTime:  10 * time.Minute,
+		ServiceToken:  serviceToken,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		MaxIdleTime:   10 * time.Minute,
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 	})
 	defer foghornPool.Close()
 

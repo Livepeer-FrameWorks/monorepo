@@ -628,6 +628,9 @@ func foghornPublicHealthServerName(inst serviceInstance) string {
 	if strings.TrimSpace(inst.serviceID) != "foghorn" {
 		return ""
 	}
+	if inst.port != 18029 {
+		return ""
+	}
 	clusterID := strings.Trim(strings.TrimSpace(inst.assignedClusterID), ".")
 	rootDomain := rootDomainFromBaseURL(inst.assignedBaseURL)
 	if clusterID == "" || rootDomain == "" {

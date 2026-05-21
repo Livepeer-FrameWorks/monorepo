@@ -463,7 +463,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		  AND si.health_status = 'healthy'
 		  AND COALESCE(si.advertise_host, '') <> ''
 		  AND COALESCE(si.port, 0) > 0
-		ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, primaryClusterID).Scan(&foghornHost, &foghornPort)
 	if addr, ok := buildAdvertiseAddr(foghornHost, foghornPort); ok {
@@ -506,7 +506,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				  AND si.health_status = 'healthy'
 				  AND COALESCE(si.advertise_host, '') <> ''
 				  AND COALESCE(si.port, 0) > 0
-				ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+				ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 				LIMIT 1
 			`, officialClusterID.String).Scan(&offFoghornHost, &offFoghornPort)
 			if addr, ok := buildAdvertiseAddr(offFoghornHost, offFoghornPort); ok {
@@ -538,7 +538,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.health_status = 'healthy'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
 		       ) AS foghorn_advertise_host,
@@ -554,7 +554,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND si.health_status = 'healthy'
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           0
 		       ) AS foghorn_port
@@ -1053,7 +1053,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
-			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1),
+			 ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC LIMIT 1),
 			(SELECT si.port
 			 FROM quartermaster.service_cluster_assignments sca
 			 JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
@@ -1063,7 +1063,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
-			 ORDER BY si.updated_at DESC, si.id ASC LIMIT 1)
+			 ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC LIMIT 1)
 		FROM quartermaster.infrastructure_nodes n
 		JOIN quartermaster.infrastructure_clusters c ON n.cluster_id = c.cluster_id
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
@@ -7148,6 +7148,7 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 		  AND si.health_status = 'healthy'
 		  AND si.protocol = 'grpc'
 		  AND svc.type = 'foghorn'
+		ORDER BY CASE WHEN si.port = 18019 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, clusterID).Scan(&addr)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -51,6 +51,7 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghorn(t *testing.T) {
 		serviceID:         "foghorn",
 		assignedClusterID: "media-eu-1",
 		assignedBaseURL:   "https://frameworks.network",
+		port:              18029,
 	}
 
 	serverName, caFile := grpcHealthTLSConfig(inst, "/etc/frameworks/pki/ca.crt", "")
@@ -67,6 +68,7 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghornEvenWithGlobalServerName(t 
 		serviceID:         "foghorn",
 		assignedClusterID: "media-us-1",
 		assignedBaseURL:   "frameworks.network",
+		port:              18029,
 	}
 
 	serverName, caFile := grpcHealthTLSConfig(inst, "/etc/frameworks/pki/ca.crt", "foghorn.internal")
@@ -74,6 +76,23 @@ func TestGrpcHealthTLSConfigUsesClusterFQDNForFoghornEvenWithGlobalServerName(t 
 		t.Fatalf("server name = %q", serverName)
 	}
 	if caFile != "" {
+		t.Fatalf("ca file = %q", caFile)
+	}
+}
+
+func TestGrpcHealthTLSConfigUsesInternalNameForFoghornInternalPort(t *testing.T) {
+	inst := serviceInstance{
+		serviceID:         "foghorn",
+		assignedClusterID: "media-eu-1",
+		assignedBaseURL:   "https://frameworks.network",
+		port:              18019,
+	}
+
+	serverName, caFile := grpcHealthTLSConfig(inst, "/etc/frameworks/pki/ca.crt", "")
+	if serverName != "foghorn.internal" {
+		t.Fatalf("server name = %q", serverName)
+	}
+	if caFile != "/etc/frameworks/pki/ca.crt" {
 		t.Fatalf("ca file = %q", caFile)
 	}
 }
