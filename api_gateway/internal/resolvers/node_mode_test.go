@@ -6,6 +6,8 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNodeModeFieldsSkipNonEdgeNodes(t *testing.T) {
@@ -44,5 +46,26 @@ func TestNodeModeFieldsStillRequireControlPlaneForEdgeNodes(t *testing.T) {
 	}
 	if _, err := resolver.DoNodeRoutingImpactPreview(context.Background(), node); err == nil {
 		t.Fatal("DoNodeRoutingImpactPreview returned nil error without Commodore client")
+	}
+}
+
+func TestNodeHealthSoftFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "unavailable", err: status.Error(codes.Unavailable, "foghorn unavailable"), want: true},
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "permission denied", err: status.Error(codes.PermissionDenied, "denied"), want: false},
+		{name: "invalid argument", err: status.Error(codes.InvalidArgument, "bad node"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nodeHealthSoftFailure(tt.err); got != tt.want {
+				t.Fatalf("nodeHealthSoftFailure() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

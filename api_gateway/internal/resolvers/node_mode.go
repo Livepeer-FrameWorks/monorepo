@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,8 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Bridge exposes a GraphQL enum while the control plane stores node mode as a
@@ -74,7 +77,14 @@ func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *pb.Infrastructu
 	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
+		if nodeHealthSoftFailure(err) {
+			r.Logger.WithError(err).WithField("node_id", obj.GetNodeId()).Warn("Node health unavailable; defaulting effective mode")
+			return model.NodeOperationalModeNormal, nil
+		}
 		return model.NodeOperationalModeNormal, err
+	}
+	if health == nil {
+		return model.NodeOperationalModeNormal, nil
 	}
 	mode, ok := model.NodeOperationalModeFromWire(health.GetOperationalMode())
 	if !ok {
@@ -91,12 +101,34 @@ func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *pb.Infra
 	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
+		if nodeHealthSoftFailure(err) {
+			r.Logger.WithError(err).WithField("node_id", obj.GetNodeId()).Warn("Node health unavailable; defaulting routing impact preview")
+			return &model.RoutingImpactPreview{}, nil
+		}
 		return nil, err
+	}
+	if health == nil {
+		return &model.RoutingImpactPreview{}, nil
 	}
 	return &model.RoutingImpactPreview{
 		ActiveStreams: int(health.GetActiveStreams()),
 		ActiveViewers: int(health.GetActiveViewers()),
 	}, nil
+}
+
+func nodeHealthSoftFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func nodeSkipsOperationalMode(obj *pb.InfrastructureNode) bool {
