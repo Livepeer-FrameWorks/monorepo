@@ -19,6 +19,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"github.com/gin-gonic/gin"
 )
 
 // notifyFoghornShutdown sends a final health update to Foghorn before shutdown using shared client
@@ -175,17 +176,7 @@ func main() {
 		edge.GET("/metrics", handlers.HandleEdgeMetrics)
 	}
 
-	// Operator-only Mist admin reverse proxy. Caddy preserves the /_mist
-	// prefix; Helmsman is the auth boundary and the prefix-strip site.
-	// /_mist/_session is the token→cookie exchange and must NOT be gated
-	// (it is the bootstrap that mints the cookie). Gin's radix tree
-	// prefers the literal /_mist/_session over the /_mist/*proxy catch-all.
-	mistAdminProxy := handlers.MistAdminProxy(cfg.MistServerURL, logger)
-	requireMistAdmin := handlers.RequireMistAdmin(logger)
-	mistAdminSession := handlers.MistAdminSessionHandler(logger)
-	r.POST("/_mist/_session", mistAdminSession)
-	r.Any("/_mist", requireMistAdmin, mistAdminProxy)
-	r.Any("/_mist/*proxy", requireMistAdmin, mistAdminProxy)
+	registerMistAdminRoutes(r, cfg.MistServerURL, logger)
 
 	// Read-through artifact relay: Mist sees stable seekable HTTP sources
 	// for vod/clip/dvr-chapter playback and safe-wrapper processing input.
@@ -278,7 +269,18 @@ func main() {
 
 	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("helmsman", "18007")
+	server.RegisterEnvFileReload("helmsman", logger)
 	if err := server.Start(serverConfig, r, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+}
+
+func registerMistAdminRoutes(r *gin.Engine, mistServerURL string, logger logging.Logger) {
+	mistAdminProxy := handlers.MistAdminProxy(mistServerURL, logger)
+	requireMistAdmin := handlers.RequireMistAdmin(logger)
+	mistAdminSession := handlers.MistAdminSessionHandler(logger)
+
+	r.POST("/_mist-session", mistAdminSession)
+	r.Any("/_mist", requireMistAdmin, mistAdminProxy)
+	r.Any("/_mist/*proxy", requireMistAdmin, mistAdminProxy)
 }

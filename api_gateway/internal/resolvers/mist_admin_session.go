@@ -139,7 +139,7 @@ func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenM
 	}
 
 	return &model.MistAdminSession{
-		PostURL:      "https://" + edgeDomain + "/_mist/_session",
+		PostURL:      "https://" + edgeDomain + "/_mist-session",
 		SessionToken: mintResp.GetToken(),
 		ExpiresAt:    int(mintResp.GetExpiresAt()),
 	}, nil

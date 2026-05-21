@@ -41,8 +41,8 @@ func TestRenderCaddyfile_MistAdminRouteRenderedWhenEdgeDomainSet(t *testing.T) {
 	if !strings.Contains(out, "host edge-us-1.media-us-1.frameworks.network") {
 		t.Errorf("expected host matcher pinned to the edge domain; got:\n%s", out)
 	}
-	if !strings.Contains(out, "path /_mist /_mist/*") {
-		t.Errorf("expected path /_mist /_mist/* inside the matcher; got:\n%s", out)
+	if !strings.Contains(out, "path /_mist-session /_mist /_mist/*") {
+		t.Errorf("expected path /_mist-session /_mist /_mist/* inside the matcher; got:\n%s", out)
 	}
 	if !strings.Contains(out, "handle @mist_admin {") {
 		t.Errorf("expected handle @mist_admin block referencing the matcher; got:\n%s", out)
@@ -97,16 +97,17 @@ func TestRenderCaddyfile_MistAdminRouteIsHostMatchedNotBare(t *testing.T) {
 	// bundle host would match. A bare `handle /_mist*` in common_handlers
 	// would silently inherit the admin surface onto every tenant /
 	// customer site that imports common_handlers.
-	mistPathOccurrences := strings.Count(out, "/_mist")
 	matcherOccurrences := strings.Count(out, "@mist_admin")
 	if matcherOccurrences < 2 {
 		t.Fatalf("expected @mist_admin to appear in both matcher definition and handle; got %d occurrences", matcherOccurrences)
 	}
-	// /_mist should only appear inside the matcher block (twice on the
-	// `path /_mist /_mist/*` line). If the count is higher, a bare path
-	// matcher has likely been introduced.
-	if mistPathOccurrences != 2 {
-		t.Errorf("expected exactly 2 /_mist tokens (inside matcher only), got %d; rendered:\n%s", mistPathOccurrences, out)
+	if strings.Count(out, "path /_mist-session /_mist /_mist/*") != 1 {
+		t.Errorf("expected exactly one host-matched mist admin path matcher; rendered:\n%s", out)
+	}
+	for _, forbidden := range []string{"handle /_mist", "handle_path /_mist", "route /_mist"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("admin route must only use the host-matched @mist_admin matcher; found %q in:\n%s", forbidden, out)
+		}
 	}
 }
 

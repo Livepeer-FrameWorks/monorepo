@@ -180,14 +180,14 @@ func TestMistAdminSessionHandler_PostSetsCookieAndRedirects(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/_mist/_session", MistAdminSessionHandler(logging.NewLogger()))
+	r.POST("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
 	form := url.Values{}
 	form.Set("session_token", "fresh-session-token")
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist/_session", strings.NewReader(form.Encode()))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist-session", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// Disable redirect-following so we can inspect the 302 directly.
@@ -241,14 +241,14 @@ func TestMistAdminSessionHandler_RejectsGET(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	// Register on Any so the handler itself gets to enforce the method check.
-	r.Any("/_mist/_session", MistAdminSessionHandler(logging.NewLogger()))
+	r.Any("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	resp := getCtx(t, srv.URL+"/_mist/_session")
+	resp := getCtx(t, srv.URL+"/_mist-session")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("GET /_mist/_session: want 405; got %d", resp.StatusCode)
+		t.Errorf("GET /_mist-session: want 405; got %d", resp.StatusCode)
 	}
 	if got := resp.Header.Get("Allow"); got != http.MethodPost {
 		t.Errorf("Allow header: got %q, want POST", got)
@@ -258,11 +258,11 @@ func TestMistAdminSessionHandler_RejectsGET(t *testing.T) {
 func TestMistAdminSessionHandler_RejectsMissingToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/_mist/_session", MistAdminSessionHandler(logging.NewLogger()))
+	r.POST("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist/_session", strings.NewReader(""))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist-session", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -281,13 +281,13 @@ func TestMistAdminSessionHandler_RejectsInvalidToken(t *testing.T) {
 		})
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/_mist/_session", MistAdminSessionHandler(logging.NewLogger()))
+	r.POST("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
 	form := url.Values{}
 	form.Set("session_token", "rejected")
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist/_session", strings.NewReader(form.Encode()))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist-session", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -317,13 +317,13 @@ func TestMistAdminSessionHandler_RejectsExpiredToken(t *testing.T) {
 		})
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/_mist/_session", MistAdminSessionHandler(logging.NewLogger()))
+	r.POST("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 
 	form := url.Values{}
 	form.Set("session_token", "past")
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist/_session", strings.NewReader(form.Encode()))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist-session", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

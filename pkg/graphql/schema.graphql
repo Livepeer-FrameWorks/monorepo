@@ -7407,7 +7407,7 @@ redirects the browser to `/_mist/` where the LSP UI loads.
 replay against any other edge node fails. `expiresAt` is Unix seconds.
 """
 type MistAdminSession {
-  "Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist/_session)."
+  "Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist-session)."
   postUrl: String!
   "Short-TTL JWT to submit as the `session_token` form field. Treat as a secret."
   sessionToken: String!

@@ -152,14 +152,15 @@ api_control (Commodore)
 resolver returns MistAdminSession { postUrl, sessionToken, expiresAt }
   │
   │ 4. webapp hidden POST form (target=_blank)
-  │    POST https://{edge_domain}/_mist/_session
+  │    POST https://{edge_domain}/_mist-session
   │    body: session_token=<jwt>
   ▼
-edge Caddy → handle @mist_admin (host-matched to edge FQDN, /_mist /_mist/*)
-  │ 5. reverse_proxy → helmsman:18007 (preserves /_mist prefix)
+edge Caddy → handle @mist_admin (host-matched to edge FQDN,
+  │         /_mist-session /_mist /_mist/*)
+  │ 5. reverse_proxy → helmsman:18007 (preserves path)
   ▼
 api_sidecar (Helmsman)
-  │ /_mist/_session POST handler:
+  │ /_mist-session POST handler:
   │   - control.ValidateMistAdminSession(token) → Foghorn over bidi gRPC stream
   │   - Foghorn relays to Commodore.ValidateMistAdminSession injecting the
   │     CONNECTED node's nodeID as expected_node_id (so a token minted for
@@ -196,10 +197,10 @@ MistServer controller LSP UI
 | `pkg/proto/ipc.proto`                                                      | `EdgeMistAdminSession{Request,Response}` over the Helmsman control stream     |
 | `api_control/internal/grpc/server.go` (`MintMistAdminSession`)             | Second-wall ownership enforcement; trusted-context identity                   |
 | `api_balancing/internal/control/server.go` (`processEdgeMistAdminSession`) | Relay; injects connected node's `expected_node_id`                            |
-| `api_sidecar/internal/handlers/mist_admin_proxy.go`                        | Reverse proxy + `RequireMistAdmin` + `/_mist/_session`                        |
+| `api_sidecar/internal/handlers/mist_admin_proxy.go`                        | Reverse proxy + `RequireMistAdmin` + `/_mist-session`                         |
 | `api_sidecar/internal/config/caddyfile.go`                                 | Host-matched `@mist_admin` matcher in the production Caddy snippet            |
 | `api_gateway/internal/resolvers/mist_admin_session.go`                     | First-wall resolver; mirrors the Commodore policy via `mistAdminCanAdminNode` |
-| `website_application/src/lib/components/nodes/OpenMistAdminButton.svelte`  | Hidden-POST-form bridge to `/_mist/_session`                                  |
+| `website_application/src/lib/components/nodes/OpenMistAdminButton.svelte`  | Hidden-POST-form bridge to `/_mist-session`                                   |
 
 ## Key Files
 

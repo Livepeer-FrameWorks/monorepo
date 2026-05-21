@@ -15,7 +15,7 @@ import (
 )
 
 // MistAdminCookieName is the cookie carrying the operator's mint-issued
-// session token after the /_mist/_session POST exchange. Scoped to
+// session token after the /_mist-session POST exchange. Scoped to
 // Path=/_mist so it never leaks to /view or any tenant origin.
 const MistAdminCookieName = "fw_mist_admin"
 
@@ -126,7 +126,7 @@ func isLoopbackHost(host string) bool {
 }
 
 // RequireMistAdmin gates the /_mist proxy. It accepts only the
-// Commodore-minted cookie from /_mist/_session; direct bearer/API tokens
+// Commodore-minted cookie from /_mist-session; direct bearer/API tokens
 // are intentionally not accepted because they are not bound to this node.
 func RequireMistAdmin(logger logging.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -149,7 +149,7 @@ func RequireMistAdmin(logger logging.Logger) gin.HandlerFunc {
 	}
 }
 
-// MistAdminSessionHandler is the POST /_mist/_session endpoint that
+// MistAdminSessionHandler is the POST /_mist-session endpoint that
 // exchanges a short-lived session token (minted by the Gateway resolver
 // via Commodore.MintMistAdminSession) for a cookie scoped to /_mist.
 // Tokens arrive in the POST body — never query string — so they don't

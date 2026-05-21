@@ -68,7 +68,7 @@ const caddyfileTmpl = `{
 
   @mist_admin {
     host {{.EdgeDomain}}
-    path /_mist /_mist/*
+    path /_mist-session /_mist /_mist/*
   }
   handle @mist_admin {
     reverse_proxy {{.HelmsmanUpstream}}
