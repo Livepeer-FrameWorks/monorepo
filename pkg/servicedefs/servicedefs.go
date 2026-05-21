@@ -8,52 +8,60 @@ type Service struct {
 	HealthPath     string
 	HealthProtocol string // http|grpc
 	Role           string // control|data|analytics|media|mesh|interface|infra|support|observability
+
+	// SupportsSIGHUPReload is set on services whose main package has
+	// registered a ReloadCallback via pkg/server.RegisterReload. When
+	// true, the go_service Ansible role renders ExecReload= in the
+	// systemd unit so `systemctl reload <service>` re-fires registered
+	// callbacks instead of restarting the process. Default false is the
+	// safe baseline: services opt in only after wiring the callback.
+	SupportsSIGHUPReload bool
 }
 
 // Services is the canonical registry keyed by CLI service ID (brand name).
 var Services = map[string]Service{
 	// Core control plane
-	"bridge":        {ID: "bridge", DefaultPort: 18000, HealthPath: "/health", HealthProtocol: "http", Role: "control"},
-	"commodore":     {ID: "commodore", DefaultPort: 18001, HealthPath: "/health", HealthProtocol: "http", Role: "control"},
-	"quartermaster": {ID: "quartermaster", DefaultPort: 18002, HealthPath: "/health", HealthProtocol: "http", Role: "control"},
-	"purser":        {ID: "purser", DefaultPort: 18003, HealthPath: "/health", HealthProtocol: "http", Role: "control"},
+	"bridge":        {ID: "bridge", DefaultPort: 18000, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"commodore":     {ID: "commodore", DefaultPort: 18001, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"quartermaster": {ID: "quartermaster", DefaultPort: 18002, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
+	"purser":        {ID: "purser", DefaultPort: 18003, HealthPath: "/health", HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
 
 	// Analytics (Periscope)
-	"periscope-query":  {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
-	"periscope-ingest": {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
+	"periscope-query":  {ID: "periscope-query", DefaultPort: 18004, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
+	"periscope-ingest": {ID: "periscope-ingest", DefaultPort: 18005, HealthPath: "/health", HealthProtocol: "http", Role: "analytics", SupportsSIGHUPReload: true},
 
 	// Data plane
-	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "data"},
-	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", HealthProtocol: "http", Role: "data"},
+	"decklog":   {ID: "decklog", DefaultPort: 18006, HealthPath: "/health", HealthProtocol: "grpc", Role: "data", SupportsSIGHUPReload: true},
+	"signalman": {ID: "signalman", DefaultPort: 18009, HealthPath: "/health", HealthProtocol: "http", Role: "data", SupportsSIGHUPReload: true},
 
 	// Media plane
-	"foghorn":          {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
-	"helmsman":         {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
+	"foghorn":          {ID: "foghorn", DefaultPort: 18008, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
+	"helmsman":         {ID: "helmsman", DefaultPort: 18007, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
 	"livepeer-gateway": {ID: "livepeer-gateway", DefaultPort: 8935, HealthPath: "/healthz", HealthProtocol: "http", Role: "media"},
 	"livepeer-signer":  {ID: "livepeer-signer", DefaultPort: 18016, HealthPath: "/status", HealthProtocol: "http", Role: "control"},
+	"mistserver":       {ID: "mistserver", DefaultPort: 8080, HealthPath: "/metrics", HealthProtocol: "http", Role: "media"},
 
 	// Infra services
-	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", HealthProtocol: "http", Role: "infra"},
+	"navigator": {ID: "navigator", DefaultPort: 18010, HealthPath: "/health", HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", HealthProtocol: "http", Role: "mesh"},
 
 	// Assets
-	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", HealthProtocol: "http", Role: "media"},
+	"chandler": {ID: "chandler", DefaultPort: 18020, HealthPath: "/health", HealthProtocol: "http", Role: "media", SupportsSIGHUPReload: true},
 
 	// AI / support
-	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
-	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
+	"skipper":  {ID: "skipper", DefaultPort: 18018, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
+	"deckhand": {ID: "deckhand", DefaultPort: 18015, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
 	"chatwoot": {ID: "chatwoot", DefaultPort: 18092, HealthPath: "/api", HealthProtocol: "http", Role: "support"},
 
 	// Surfaces (interfaces)
 	"chartroom": {ID: "chartroom", DefaultPort: 18030, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
 	"foredeck":  {ID: "foredeck", DefaultPort: 18031, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
-	"steward":   {ID: "steward", DefaultPort: 18032, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
+	"steward":   {ID: "steward", DefaultPort: 18032, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
 	"logbook":   {ID: "logbook", DefaultPort: 18033, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
 
 	// Infra dependencies
 	"postgres":        {ID: "postgres", DefaultPort: 5432, HealthPath: "", HealthProtocol: "tcp", Role: "infra"},
 	"kafka":           {ID: "kafka", DefaultPort: 9092, HealthPath: "", HealthProtocol: "tcp", Role: "infra"},
-	"zookeeper":       {ID: "zookeeper", DefaultPort: 2181, HealthPath: "", HealthProtocol: "tcp", Role: "infra"},
 	"clickhouse":      {ID: "clickhouse", DefaultPort: 9000, HealthPath: "", HealthProtocol: "tcp", Role: "infra"},
 	"listmonk":        {ID: "listmonk", DefaultPort: 9001, HealthPath: "/health", HealthProtocol: "http", Role: "support"},
 	"nginx":           {ID: "nginx", DefaultPort: 18090, HealthPath: "", HealthProtocol: "http", Role: "interface"},
@@ -91,6 +99,19 @@ func DefaultPort(id string) (int, bool) {
 		return 0, false
 	}
 	return s.DefaultPort, true
+}
+
+// SupportsSIGHUPReload reports whether the service's main package has wired
+// a SIGHUP reload callback. Used by the go_service Ansible role's vars
+// builder to decide whether to render `ExecReload=` in the systemd unit.
+// Returns false for unknown services so an unrecognized manifest entry
+// never enables reload accidentally.
+func SupportsSIGHUPReload(id string) bool {
+	s, ok := Services[id]
+	if !ok {
+		return false
+	}
+	return s.SupportsSIGHUPReload
 }
 
 // GRPCService defines a service's gRPC endpoint for env var generation.

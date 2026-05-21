@@ -23,6 +23,19 @@ type RoleVarsBuilder func(ctx context.Context, host inventory.Host, config Servi
 // "does this already exist?" decision.
 type RoleDetector func(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error)
 
+// RoleFingerprinter is the optional Go-layer desired-state hook used by
+// `cluster diff` and `cluster apply` to decide whether a host needs touching
+// at all. It produces an ExpectedFile per FileKind the service models: binary,
+// env file, systemd unit, certs. Signature mirrors RoleVarsBuilder so the
+// fingerprinter sees the same ServiceConfig the vars builder sees; otherwise
+// it would have to duplicate provisioner logic to render desired-state content
+// for hashing.
+//
+// Returning a nil Fingerprint or a Fingerprint with no entries marks the
+// service as unmodeled — callers fall through to DiffUnknown for that
+// service rather than guessing.
+type RoleFingerprinter func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.Fingerprint, error)
+
 // RoleBuildHelpers is a tiny handle the builder/detector uses to reach the
 // surrounding machinery (SSH pool for detection reads, distro/arch probes,
 // artifact resolution). Passing it as a parameter keeps the builder pure
@@ -92,6 +105,12 @@ type RolePlaybookProvisioner struct {
 	// which causes the orchestrator to always run the role (safe default —
 	// idempotent tasks short-circuit on state match).
 	Detector RoleDetector
+
+	// Fingerprinter is optional. When nil, Fingerprint returns a nil
+	// fingerprint and callers fall through to DiffUnknown — the safe heavy
+	// path. Services opt in by registering a fingerprinter that returns the
+	// expected on-host file hashes for the kinds they model.
+	Fingerprinter RoleFingerprinter
 
 	// AnsibleRoot is the absolute path to the ansible/ tree. Resolved once
 	// in NewRolePlaybookProvisioner via FindAnsibleRoot.
@@ -172,6 +191,16 @@ func (r *RolePlaybookProvisioner) Detect(ctx context.Context, host inventory.Hos
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}
 	return r.Detector(ctx, host, r.helpers())
+}
+
+// Fingerprint delegates to the per-service fingerprinter. Returns nil when
+// the provisioner has no fingerprinter registered — `cluster diff` reads
+// that as "this service is not modeled here, fall through to DiffUnknown."
+func (r *RolePlaybookProvisioner) Fingerprint(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.Fingerprint, error) {
+	if r.Fingerprinter == nil {
+		return nil, nil
+	}
+	return r.Fingerprinter(ctx, host, config, r.helpers())
 }
 
 // Provision runs the role with install+configure+service+validate tags.

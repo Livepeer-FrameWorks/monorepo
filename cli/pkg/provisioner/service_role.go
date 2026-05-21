@@ -2,12 +2,15 @@ package provisioner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/detect"
@@ -15,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // ServiceRoleConfig customizes the generic service-role provisioner for a
@@ -80,6 +84,7 @@ func NewServiceRoleProvisioner(cfg ServiceRoleConfig, pool *ssh.Pool) (Provision
 		RoleName:         "frameworks.infra.service:" + cfg.ServiceName,
 		Builder:          serviceVarsBuilderFor(cfg),
 		Detector:         serviceRoleDetect(cfg.ServiceName),
+		Fingerprinter:    serviceRoleFingerprint(cfg),
 		PlaybookSelector: serviceRolePlaybookSelector,
 		AnsibleRoot:      root,
 		Executor:         exec,
@@ -349,6 +354,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_livepeer_expected_keystore_dir":   livepeerKeystoreDir,
 		"go_service_livepeer_expected_wallet_address": envMap["eth_acct_addr"],
 		"go_service_data_migrations_marker":           dataMigrationsMarker(cfg, config),
+		"go_service_supports_sighup_reload":           servicedefs.SupportsSIGHUPReload(cfg.ServiceName),
 	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca
@@ -639,5 +645,181 @@ func serviceRoleDetect(serviceName string) RoleDetector {
 			return &detect.ServiceState{Exists: false, Running: false}, nil
 		}
 		return detect.NewDetector(helpers.SSHPool, host).Detect(ctx, serviceName)
+	}
+}
+
+// serviceRoleFingerprint produces a desired-state fingerprint for native
+// go_service-backed services. The rendered bytes mirror the go_service role's
+// env-file and systemd-unit templates so the diff classifier compares the
+// files the role actually owns, not a parallel approximation.
+func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
+	return func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.Fingerprint, error) {
+		if cfg.ServiceName == "" {
+			return nil, nil
+		}
+		if config.Mode != "" && config.Mode != "native" {
+			return nil, nil
+		}
+
+		vars, err := serviceNativeVars(ctx, cfg, host, config, helpers)
+		if err != nil {
+			return nil, fmt.Errorf("fingerprint %s: render native vars: %w", cfg.ServiceName, err)
+		}
+
+		artifactURL := stringFromVars(vars, "go_service_artifact_url")
+		artifactChecksum := stringFromVars(vars, "go_service_artifact_checksum")
+		version := stringFromVars(vars, "go_service_version")
+		if artifactURL == "" || artifactChecksum == "" {
+			return nil, fmt.Errorf("binary artifact identity for %s is incomplete", cfg.ServiceName)
+		}
+
+		serviceName := stringFromVars(vars, "go_service_name")
+		if serviceName == "" {
+			serviceName = cfg.ServiceName
+		}
+		env := stringMapFromAny(vars["go_service_env"])
+		args := stringSliceFromAny(vars["go_service_args"])
+		supportsReload := boolFromVars(vars, "go_service_supports_sighup_reload")
+
+		files := map[detect.FileKind]detect.ExpectedFile{
+			detect.FileKindBinary: {
+				Path:   goServiceInstallSentinelPath(serviceName, version, artifactChecksum, artifactURL),
+				SHA256: sha256Hex(""),
+			},
+			detect.FileKindEnv: {
+				Path:   "/etc/frameworks/" + serviceName + ".env",
+				SHA256: sha256Hex(renderGoServiceEnvFile(env)),
+			},
+			detect.FileKindUnit: {
+				Path:   "/etc/systemd/system/frameworks-" + serviceName + ".service",
+				SHA256: sha256Hex(renderGoServiceUnit(serviceName, args, supportsReload)),
+			},
+		}
+
+		return &detect.Fingerprint{
+			ServiceName: serviceName,
+			Host:        host.Name,
+			Files:       files,
+			ComputedAt:  time.Now(),
+		}, nil
+	}
+}
+
+func goServiceInstallSentinelPath(serviceName, version, checksum, artifactURL string) string {
+	identity := version + ":" + checksum + ":" + artifactURL
+	return "/opt/frameworks/" + serviceName + "/.installed-" + sha256Hex(identity)
+}
+
+func renderGoServiceEnvFile(env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, key := range keys {
+		value := strings.ReplaceAll(env[key], "\r", "")
+		value = strings.ReplaceAll(value, "\n", `\n`)
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(shellQuoteForAnsible(value))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func renderGoServiceUnit(serviceName string, args []string, supportsReload bool) string {
+	installDir := "/opt/frameworks/" + serviceName
+	argv := append([]string{installDir + "/" + serviceName}, args...)
+	quoted := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		quoted = append(quoted, shellQuoteForAnsible(arg))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Unit]\n")
+	fmt.Fprintf(&b, "Description=Frameworks %s\n", serviceName)
+	fmt.Fprintf(&b, "After=network-online.target\n")
+	fmt.Fprintf(&b, "Wants=network-online.target\n\n")
+	fmt.Fprintf(&b, "[Service]\n")
+	fmt.Fprintf(&b, "User=frameworks\n")
+	fmt.Fprintf(&b, "Group=frameworks\n")
+	fmt.Fprintf(&b, "WorkingDirectory=%s\n", installDir)
+	fmt.Fprintf(&b, "EnvironmentFile=/etc/frameworks/%s.env\n", serviceName)
+	fmt.Fprintf(&b, "ExecStart=%s\n", strings.Join(quoted, " "))
+	if supportsReload {
+		fmt.Fprintf(&b, "ExecReload=/bin/kill -HUP $MAINPID\n")
+	}
+	fmt.Fprintf(&b, "Restart=always\n")
+	fmt.Fprintf(&b, "RestartSec=5\n")
+	fmt.Fprintf(&b, "LimitNOFILE=1048576\n\n")
+	fmt.Fprintf(&b, "[Install]\n")
+	fmt.Fprintf(&b, "WantedBy=multi-user.target\n")
+	return b.String()
+}
+
+func shellQuoteForAnsible(s string) string {
+	if s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return (r < 'A' || r > 'Z') &&
+			(r < 'a' || r > 'z') &&
+			(r < '0' || r > '9') &&
+			!strings.ContainsRune("_@%+=:,./-", r)
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func stringFromVars(vars map[string]any, key string) string {
+	if v, ok := vars[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func boolFromVars(vars map[string]any, key string) bool {
+	if v, ok := vars[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+func stringMapFromAny(v any) map[string]string {
+	switch m := v.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(m))
+		maps.Copy(out, m)
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(m))
+		for k, value := range m {
+			out[k] = fmt.Sprint(value)
+		}
+		return out
+	default:
+		return map[string]string{}
+	}
+}
+
+func stringSliceFromAny(v any) []string {
+	switch s := v.(type) {
+	case []string:
+		out := make([]string, len(s))
+		copy(out, s)
+		return out
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			out = append(out, fmt.Sprint(item))
+		}
+		return out
+	default:
+		return nil
 	}
 }

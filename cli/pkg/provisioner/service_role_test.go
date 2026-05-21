@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -552,6 +553,48 @@ func TestServiceNativeVarsInstallsSkipperSources(t *testing.T) {
 	}
 	if got := env["SKIPPER_SITEMAPS_DIR"]; got != "/etc/skipper/sitemaps" {
 		t.Fatalf("SKIPPER_SITEMAPS_DIR = %v, want /etc/skipper/sitemaps", got)
+	}
+}
+
+func TestGoServiceInstallSentinelPathMatchesRoleIdentity(t *testing.T) {
+	got := goServiceInstallSentinelPath("foghorn", "v1.2.3", "sha512:abc", "https://example.test/foghorn.tar.gz")
+	want := "/opt/frameworks/foghorn/.installed-3437ce4902b5aff0c5a10a7e3f90c26ba3cd5e1d9c904612512e36bbeeb73c21"
+	if got != want {
+		t.Fatalf("goServiceInstallSentinelPath got %q, want %q", got, want)
+	}
+}
+
+func TestRenderGoServiceEnvFileMatchesRoleOrderingAndQuoting(t *testing.T) {
+	got := renderGoServiceEnvFile(map[string]string{
+		"Z_LAST":   "plain",
+		"A_FIRST":  "hello world",
+		"M_QUOTE":  "can't",
+		"N_MULTI":  "line1\nline2",
+		"EMPTY":    "",
+		"COLON_OK": "host:1234/path",
+	})
+	want := "A_FIRST='hello world'\n" +
+		"COLON_OK=host:1234/path\n" +
+		"EMPTY=''\n" +
+		"M_QUOTE='can'\"'\"'t'\n" +
+		"N_MULTI='line1\\nline2'\n" +
+		"Z_LAST=plain\n"
+	if got != want {
+		t.Fatalf("renderGoServiceEnvFile mismatch:\nwant %q\ngot  %q", want, got)
+	}
+}
+
+func TestRenderGoServiceUnitIncludesExecReloadOnlyWhenSupported(t *testing.T) {
+	withReload := renderGoServiceUnit("foghorn", []string{"--flag", "value with space"}, true)
+	if !strings.Contains(withReload, "ExecReload=/bin/kill -HUP $MAINPID\n") {
+		t.Fatalf("reload-capable unit missing ExecReload:\n%s", withReload)
+	}
+	if !strings.Contains(withReload, "ExecStart=/opt/frameworks/foghorn/foghorn --flag 'value with space'\n") {
+		t.Fatalf("unit did not shell-quote ExecStart args:\n%s", withReload)
+	}
+	withoutReload := renderGoServiceUnit("foghorn", nil, false)
+	if strings.Contains(withoutReload, "ExecReload=") {
+		t.Fatalf("restart-only unit should not contain ExecReload:\n%s", withoutReload)
 	}
 }
 

@@ -32,6 +32,7 @@ go_service_install_dir: "/opt/frameworks/{{ go_service_name }}"
 go_service_env_file: "/etc/frameworks/{{ go_service_name }}.env"
 go_service_unit_path: "/etc/systemd/system/frameworks-{{ go_service_name }}.service"
 go_service_defer_start: false
+go_service_supports_sighup_reload: false # render ExecReload only for services with reload callbacks
 go_service_asset_path: "/tmp/{{ go_service_name }}.asset"
 go_service_internal_ca_default_path: /etc/frameworks/pki/ca.crt
 go_service_internal_tls_cert_default_path: "/etc/frameworks/pki/services/{{ go_service_name }}/tls.crt"

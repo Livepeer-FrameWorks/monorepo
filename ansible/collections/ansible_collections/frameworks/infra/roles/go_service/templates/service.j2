@@ -9,6 +9,9 @@ Group={{ go_service_group }}
 WorkingDirectory={{ go_service_install_dir }}
 EnvironmentFile={{ go_service_env_file }}
 ExecStart={{ ([go_service_install_dir ~ '/' ~ go_service_name] + (go_service_args | default([]))) | map('quote') | join(' ') }}
+{% if go_service_supports_sighup_reload | default(false) | bool %}
+ExecReload=/bin/kill -HUP $MAINPID
+{% endif %}
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576

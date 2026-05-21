@@ -120,3 +120,12 @@ type CheckDiffer interface {
 type Restarter interface {
 	Restart(ctx context.Context, host inventory.Host, config ServiceConfig) error
 }
+
+// Fingerprinter is the optional capability a Provisioner implements when it
+// can produce a desired-state file-hash snapshot for a host. `cluster diff`
+// type-asserts to this; a nil or absent fingerprint marks the service as
+// unmodeled, and the caller falls through to DiffUnknown (the safe heavy
+// path).
+type Fingerprinter interface {
+	Fingerprint(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.Fingerprint, error)
+}
