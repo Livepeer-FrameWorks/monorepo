@@ -71,7 +71,6 @@ jobs:
           - postgres
           - redis
           - clickhouse
-          - zookeeper
           - kafka
           - caddy
           - compose_stack

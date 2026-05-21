@@ -303,11 +303,11 @@ type DatabaseConfig struct {
 	Owner string `yaml:"owner"`
 }
 
-// KafkaConfig declares a Kafka cluster (KRaft-only, no ZooKeeper). The
-// top-level fields describe the primary cluster; Regional carries any
-// additional clusters in other regions. Non-empty Controllers selects
-// dedicated controller mode; empty Controllers selects combined
-// controller+broker mode on each broker node.
+// KafkaConfig declares a KRaft-mode Kafka cluster. The top-level fields
+// describe the primary cluster; Regional carries any additional clusters in
+// other regions. Non-empty Controllers selects dedicated controller mode;
+// empty Controllers selects combined controller+broker mode on each broker
+// node.
 type KafkaConfig struct {
 	Enabled                              bool              `yaml:"enabled"`
 	Mode                                 string            `yaml:"mode"` // native

@@ -342,7 +342,7 @@ services:
     networks:
       - frameworks
 
-  # Kafka (KRaft mode — no ZooKeeper)
+  # Kafka (KRaft mode)
   kafka:
     image: apache/kafka:4.2.0
     container_name: frameworks-kafka
