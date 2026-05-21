@@ -453,10 +453,15 @@ function drawLayers(L, map, layersRef, pulseTimersRef, spreadablesRef, data, onS
     spreadablesRef.current.orchestrators.push({ marker, iconRadius: size / 2 });
   });
 
+  // Orchestrators sit at their real lat/lng at low/mid zoom - there are often
+  // dozens per region, and any hex fan inflates them across continents. Only
+  // disambiguate by spread when we're zoomed in close enough that overlap
+  // actually matters.
+  const spreadOrchs = map.getZoom() >= 7;
   spreadOverlappingMarkers(map, [
     ...spreadablesRef.current.nodes,
     ...spreadablesRef.current.clusters,
-    ...spreadablesRef.current.orchestrators,
+    ...(spreadOrchs ? spreadablesRef.current.orchestrators : []),
   ]);
   redrawNetworkLines(L, map, layersRef, pulseTimersRef, data, nodeMarkersById, clusterMarkersById);
 }

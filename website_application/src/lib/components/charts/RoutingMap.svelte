@@ -904,10 +904,15 @@
 
   function applySpread() {
     if (!map || !L) return;
+    // Orchestrators sit at their real lat/lng at low/mid zoom - there are
+    // often dozens per region, and any hex fan inflates them across
+    // continents. Only disambiguate by spread when we're zoomed in close
+    // enough that overlap actually matters.
+    const spreadOrchs = map.getZoom() >= 7;
     spreadOverlappingMarkers(map, [
       ...nodeSpreadables,
       ...clusterSpreadables,
-      ...orchestratorSpreadables,
+      ...(spreadOrchs ? orchestratorSpreadables : []),
     ]);
     drawTopologyLines(renderedNodes, renderedClusters, renderedRelationships);
   }
