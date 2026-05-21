@@ -1816,8 +1816,9 @@ func bootstrapInternalCertSANs(serviceName, clusterID, rootDomain string, host i
 // they are shared with the bootstrap-desired-state renderer. Aliases below keep
 // existing call sites readable.
 var (
-	publicServiceRootDomain = clusterderive.PublicServiceRootDomain
-	autoIngressDomains      = clusterderive.AutoIngressDomains
+	publicServiceRootDomain      = clusterderive.PublicServiceRootDomain
+	autoIngressDomains           = clusterderive.AutoIngressDomains
+	autoIngressDomainsForService = clusterderive.AutoIngressDomainsForService
 )
 
 func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
@@ -4120,22 +4121,29 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		if !ok || port == 0 {
 			continue
 		}
-		domains, bundleID := autoIngressDomains(name, manifest, clusterID)
-		if len(domains) == 0 {
-			continue
+		svc := proxyServiceConfig(manifest, name)
+		profileService := name
+		if serviceType, ok := clusterderive.ManifestServiceType(name, svc); ok {
+			profileService = serviceType
 		}
-		site := map[string]any{
-			"name":     name,
-			"domains":  domains,
-			"upstream": fmt.Sprintf("127.0.0.1:%d", port),
-			"profile":  proxyRouteProfileForService(name),
+		for _, ingressClusterID := range proxySiteIngressClusterIDs(name, manifest, svc, clusterID) {
+			domains, bundleID := autoIngressDomainsForService(name, svc, manifest, ingressClusterID)
+			if len(domains) == 0 {
+				continue
+			}
+			site := map[string]any{
+				"name":     name,
+				"domains":  domains,
+				"upstream": fmt.Sprintf("127.0.0.1:%d", port),
+				"profile":  proxyRouteProfileForService(profileService),
+			}
+			if bundleID != "" {
+				site["tls_bundle_id"] = bundleID
+				applyProxySiteIngressTLSDefaults(site, bundleID)
+				applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
+			}
+			appendSite(site)
 		}
-		if bundleID != "" {
-			site["tls_bundle_id"] = bundleID
-			applyProxySiteIngressTLSDefaults(site, bundleID)
-			applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
-		}
-		appendSite(site)
 	}
 	for _, route := range proxyRouteSliceFromAny(extraRoutes) {
 		domains := stringSliceFromAny(route["server_names"])
@@ -4198,6 +4206,32 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		appendSite(site)
 	}
 	return sites
+}
+
+func proxyServiceConfig(manifest *inventory.Manifest, name string) inventory.ServiceConfig {
+	if manifest == nil {
+		return inventory.ServiceConfig{}
+	}
+	if svc, ok := manifest.Services[name]; ok {
+		return svc
+	}
+	if svc, ok := manifest.Interfaces[name]; ok {
+		return svc
+	}
+	if svc, ok := manifest.Observability[name]; ok {
+		return svc
+	}
+	return inventory.ServiceConfig{}
+}
+
+func proxySiteIngressClusterIDs(serviceName string, manifest *inventory.Manifest, svc inventory.ServiceConfig, physicalClusterID string) []string {
+	if logical := clusterderive.LogicalServiceClusterIDs(serviceName, svc, manifest); len(logical) > 0 {
+		return logical
+	}
+	if physicalClusterID == "" {
+		return nil
+	}
+	return []string{physicalClusterID}
 }
 
 func proxySiteDedupeKey(site map[string]any) string {
@@ -4405,7 +4439,7 @@ func addLocalProxyRoutes(routes map[string]any, hostName string, services map[st
 		if !svc.Enabled || name == skipName {
 			continue
 		}
-		if _, ok := proxyRouteServiceNames[name]; !ok {
+		if !isProxyRouteService(name, svc) {
 			continue
 		}
 		if svc.Host != hostName && !containsHost(svc.Hosts, hostName) {
@@ -4417,6 +4451,18 @@ func addLocalProxyRoutes(routes map[string]any, hostName string, services map[st
 		}
 		routes[name] = port
 	}
+}
+
+func isProxyRouteService(name string, svc inventory.ServiceConfig) bool {
+	if _, ok := proxyRouteServiceNames[name]; ok {
+		return true
+	}
+	serviceType, ok := clusterderive.ManifestServiceType(name, svc)
+	if !ok {
+		return false
+	}
+	_, ok = proxyRouteServiceNames[serviceType]
+	return ok
 }
 
 func resolveRedisInstanceForTask(instanceID, clusterID, hostName string, manifest *inventory.Manifest) *inventory.RedisInstance {

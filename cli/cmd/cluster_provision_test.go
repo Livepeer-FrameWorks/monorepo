@@ -3137,6 +3137,65 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 	}
 }
 
+func TestBuildTaskConfigProxySitesResolveDeployAliases(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "production",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10", Cluster: "regional-eu-primary"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu-primary": {Type: "central"},
+			"media-eu-1":          {Name: "media-eu-1", Type: "edge"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu":  {Enabled: true, Deploy: "foghorn", Host: "regional-eu-1", Cluster: "media-eu-1", Port: 18008},
+			"chandler-eu": {Enabled: true, Deploy: "chandler", Host: "regional-eu-1", Cluster: "media-eu-1", Port: 18020},
+			"livepeer-eu": {Enabled: true, Deploy: "livepeer-gateway", Host: "regional-eu-1", Cluster: "media-eu-1", Port: 8935},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "regional-eu-1", Mode: "native"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "regional-eu-1",
+		ClusterID: "regional-eu-primary",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) == 0 {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+
+	byDomain := map[string]map[string]any{}
+	for _, site := range sites {
+		for _, domain := range stringSliceFromAny(site["domains"]) {
+			byDomain[domain] = site
+		}
+	}
+	for _, domain := range []string{
+		"foghorn.media-eu-1.frameworks.network",
+		"chandler.media-eu-1.frameworks.network",
+		"livepeer.media-eu-1.frameworks.network",
+	} {
+		if _, ok := byDomain[domain]; !ok {
+			t.Fatalf("missing alias-derived proxy site for %s; got %#v", domain, sites)
+		}
+	}
+	if _, ok := byDomain["foghorn.regional-eu-primary.frameworks.network"]; ok {
+		t.Fatalf("foghorn alias should not use physical host cluster domain; got %#v", sites)
+	}
+	if got := byDomain["livepeer.media-eu-1.frameworks.network"]["profile"]; got != "media_ingest" {
+		t.Fatalf("livepeer alias profile = %v, want media_ingest", got)
+	}
+}
+
 func TestBuildTaskConfigManagedBundleIDHasCanonicalTLSPaths(t *testing.T) {
 	// Privateer-managed bundles must use the canonical on-disk paths under
 	// ingress.TLSRoot regardless of any tls_cert_path / tls_key_path /
