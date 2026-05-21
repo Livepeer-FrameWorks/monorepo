@@ -19,6 +19,7 @@ helmsman_mist_api_upstream: "localhost:4242"
 helmsman_mist_http_upstream: "localhost:8080"
 helmsman_webhook_upstream: "localhost:18007"
 helmsman_caddy_admin_url: "http://localhost:2019"
+helmsman_caddy_config_path: /etc/caddy/Caddyfile
 helmsman_mist_api_user: frameworks
 helmsman_mist_api_password: ""
 # Optional: path to the gRPC CA bundle on the target, written by the edge

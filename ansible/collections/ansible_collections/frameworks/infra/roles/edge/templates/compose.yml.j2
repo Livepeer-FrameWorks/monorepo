@@ -61,12 +61,14 @@ services:
       - MISTSERVER_URL=http://mistserver:4242
       - MISTSERVER_HTTP_URL=http://mistserver:8080
       - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
+      - CADDY_CONFIG_PATH=/etc/caddy/Caddyfile
       - MIST_API_USERNAME=frameworks
       - MIST_API_PASSWORD={{ edge_mist_api_password }}
     volumes:
       - ./certs:/etc/frameworks/certs
       - ./pki:/etc/frameworks/pki
       - ./telemetry:/etc/frameworks/telemetry
+      - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_admin:/run/caddy
       - mist_thumbs:/tmp/mist_thumbs
     expose:

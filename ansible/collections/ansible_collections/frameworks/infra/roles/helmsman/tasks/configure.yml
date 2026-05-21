@@ -14,6 +14,7 @@
         'MISTSERVER_HTTP_URL': 'http://' ~ helmsman_mist_http_upstream,
         'HELMSMAN_WEBHOOK_URL': 'http://' ~ helmsman_webhook_upstream,
         'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
+        'CADDY_CONFIG_PATH': helmsman_caddy_config_path,
         'MIST_API_USERNAME': helmsman_mist_api_user,
         'MIST_API_PASSWORD': helmsman_mist_api_password,
         }

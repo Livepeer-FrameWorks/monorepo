@@ -110,6 +110,7 @@
     helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
     helmsman_enrollment_token: "{{ edge_enrollment_token }}"
     helmsman_deploy_mode: native
+    helmsman_caddy_config_path: "{{ edge_darwin_conf_dir }}/Caddyfile"
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
@@ -145,6 +146,7 @@
     helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
     helmsman_enrollment_token: "{{ edge_enrollment_token }}"
     helmsman_deploy_mode: native
+    helmsman_caddy_config_path: "{{ edge_darwin_conf_dir }}/Caddyfile"
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
@@ -183,6 +185,7 @@
     helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
     helmsman_enrollment_token: "{{ edge_enrollment_token }}"
     helmsman_deploy_mode: native
+    helmsman_caddy_config_path: "{{ edge_darwin_conf_dir }}/Caddyfile"
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
@@ -221,6 +224,7 @@
     helmsman_foghorn_grpc_addr: "{{ edge_foghorn_grpc_addr }}"
     helmsman_enrollment_token: "{{ edge_enrollment_token }}"
     helmsman_deploy_mode: native
+    helmsman_caddy_config_path: "{{ edge_darwin_conf_dir }}/Caddyfile"
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"

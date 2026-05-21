@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -202,6 +203,51 @@ func TestCaddyfileAdminAddrKeepsUnixSocket(t *testing.T) {
 	t.Setenv("CADDY_ADMIN_SOCKET", "/run/caddy/admin.sock")
 	if got := caddyfileAdminAddr(); got != "unix//run/caddy/admin.sock" {
 		t.Fatalf("caddyfileAdminAddr() = %q, want unix//run/caddy/admin.sock", got)
+	}
+}
+
+func TestPersistCaddyfileUsesConfiguredPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	t.Setenv("CADDY_CONFIG_PATH", path)
+
+	m := &Manager{logger: logging.NewLogger()}
+	if err := m.persistCaddyfile([]byte("edge.example { respond ok }\n")); err != nil {
+		t.Fatalf("persistCaddyfile: %v", err)
+	}
+	if got := readFileString(t, path); got != "edge.example { respond ok }\n" {
+		t.Fatalf("persisted Caddyfile = %q", got)
+	}
+	if mode := fileMode(t, path); mode != 0o644 {
+		t.Fatalf("Caddyfile mode = %o, want 0644", mode)
+	}
+}
+
+func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	const content = "edge.example { respond ok }\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write Caddyfile: %v", err)
+	}
+	t.Setenv("CADDY_CONFIG_PATH", path)
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+	m := &Manager{logger: logging.NewLogger()}
+	if !m.reloadCaddy(nil) {
+		t.Fatal("reloadCaddy returned false")
+	}
+	if gotBody != content {
+		t.Fatalf("reload body = %q", gotBody)
 	}
 }
 

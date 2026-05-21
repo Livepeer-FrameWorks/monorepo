@@ -807,6 +807,10 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 		m.logger.WithError(err).Warn("Failed to render production Caddyfile")
 		return false
 	}
+	if err := m.persistCaddyfile([]byte(rendered)); err != nil {
+		m.logger.WithError(err).WithField("path", caddyConfigPath()).Warn("Failed to persist production Caddyfile")
+		return false
+	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(rendered)))
 	if hash == m.lastCaddyHash && !certChanged {
@@ -820,6 +824,23 @@ func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
 		return true
 	}
 	return false
+}
+
+func (m *Manager) persistCaddyfile(content []byte) error {
+	path := caddyConfigPath()
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, content) {
+		return nil
+	}
+	tmpPath, err := writeManagedFileTemp(path, content, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { removeIfNotEmpty(tmpPath) }()
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	tmpPath = ""
+	return nil
 }
 
 // composeCaddyBundles builds the list of CaddyfileBundle entries from a
@@ -885,8 +906,12 @@ func envDefault(key, fallback string) string {
 	return fallback
 }
 
+func caddyConfigPath() string {
+	return envDefault("CADDY_CONFIG_PATH", "/etc/caddy/Caddyfile")
+}
+
 // reloadCaddy triggers a Caddy config reload via the admin API.
-// If content is provided, it is POSTed directly. Otherwise reads from /etc/caddy/Caddyfile.
+// If content is provided, it is POSTed directly. Otherwise reads from CADDY_CONFIG_PATH.
 //
 // Docker: CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
 // Bare metal: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
@@ -919,7 +944,7 @@ func (m *Manager) reloadCaddy(content []byte) bool {
 	body := content
 	if body == nil {
 		var err error
-		body, err = os.ReadFile("/etc/caddy/Caddyfile")
+		body, err = os.ReadFile(caddyConfigPath())
 		if err != nil {
 			m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
 			return false

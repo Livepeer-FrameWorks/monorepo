@@ -82,10 +82,10 @@
     state: directory
     owner: "{{ item.owner | default('root') }}"
     group: "{{ item.group | default('root') }}"
-    mode: "0755"
+    mode: "{{ item.mode | default('0755') }}"
   loop:
     - { path: /opt/frameworks/caddy }
-    - { path: /etc/caddy, owner: caddy, group: caddy }
+    - { path: /etc/caddy, owner: frameworks, group: caddy, mode: "2775" }
     - { path: /var/lib/caddy, owner: caddy, group: caddy }
 
 - name: Download Caddy tarball
@@ -122,7 +122,7 @@
   ansible.builtin.template:
     src: Caddyfile.native.j2
     dest: /etc/caddy/Caddyfile
-    owner: caddy
+    owner: frameworks
     group: caddy
     mode: "0644"
   notify: edge caddy restart
