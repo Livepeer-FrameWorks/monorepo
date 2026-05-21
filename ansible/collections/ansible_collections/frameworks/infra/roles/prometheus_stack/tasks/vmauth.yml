@@ -9,6 +9,12 @@
       - vmauth_upstream_url | length > 0
     fail_msg: "vmauth requires artifact URL/checksum, basic auth credentials, and an upstream URL"
 
+- name: Validate vmauth edge JWT support
+  ansible.builtin.assert:
+    that:
+      - "(vmauth_edge_jwt_public_key_pem_b64 | length == 0) or ((vmauth_version | regex_replace('^v', '')) is version('1.138.0', '>='))"
+    fail_msg: "vmauth edge JWT routing requires VictoriaMetrics v1.138.0 or newer"
+
 - name: Set vmauth extract directory
   ansible.builtin.set_fact:
     vmauth_extract_dir: "/tmp/frameworks-vmauth-{{ vmauth_artifact_checksum | hash('sha1') }}"

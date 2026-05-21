@@ -3,10 +3,11 @@
 # installs from Altinity's apt/yum repos, so this is the repo package version.
 clickhouse_version: "24.8.9.95"
 
-# Listen on all interfaces by default so the cluster-facing probe works. In
-# production the firewall layer restricts access; the role does not open
-# ports itself.
-clickhouse_listen_host: "::"
+# Keep direct role use loopback-only unless the caller explicitly publishes
+# ClickHouse. Cluster provisioning passes clickhouse_listen_hosts with
+# loopback plus the mesh IP.
+clickhouse_listen_host: "127.0.0.1"
+clickhouse_listen_hosts: []
 clickhouse_port_http: 8123
 clickhouse_port_tcp: 9000
 clickhouse_port_interserver: 9009

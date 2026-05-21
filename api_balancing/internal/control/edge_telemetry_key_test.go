@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestParseEdgeTelemetryPrivateKeyAcceptsProvisionedECKey(t *testing.T) {
@@ -76,6 +78,36 @@ func TestParseEdgeTelemetryPrivateKeyRejectsInvalidPEM(t *testing.T) {
 	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", base64.StdEncoding.EncodeToString([]byte("not pem")))
 	if _, err := parseEdgeTelemetryPrivateKey(); err == nil {
 		t.Fatal("expected invalid telemetry private key PEM to fail")
+	}
+}
+
+func TestMintEdgeTelemetryTokenUsesVMAuthLabelClaimShape(t *testing.T) {
+	key := mustGenerateTelemetryTestKey(t)
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey failed: %v", err)
+	}
+	t.Setenv("EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64", encodeTelemetryTestPEM("EC PRIVATE KEY", der))
+
+	tokenString, _, err := mintEdgeTelemetryToken("edge-1", "cluster-1", "tenant-1")
+	if err != nil {
+		t.Fatalf("mintEdgeTelemetryToken failed: %v", err)
+	}
+	claims := &edgeTelemetryClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(*jwt.Token) (any, error) {
+		return &key.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("ParseWithClaims failed: %v", err)
+	}
+	if !token.Valid {
+		t.Fatal("token should be valid")
+	}
+	if got := claims.Role; got != "edge_metrics_write" {
+		t.Fatalf("role = %q, want edge_metrics_write", got)
+	}
+	if got := claims.VMAccess.MetricsExtraLabels; len(got) != 1 || got[0] != "frameworks_node=edge-1" {
+		t.Fatalf("metrics_extra_labels = %#v, want frameworks_node=edge-1 array", got)
 	}
 }
 

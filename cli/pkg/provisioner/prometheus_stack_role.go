@@ -75,6 +75,12 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 			if upstream := vmauthUpstreamURL(config.EnvVars); upstream != "" {
 				vars["vmauth_upstream_url"] = upstream
 			}
+			if publicKey := firstNonEmpty(
+				config.EnvVars["VMAUTH_EDGE_JWT_PUBLIC_KEY_PEM_B64"],
+				config.EnvVars["EDGE_TELEMETRY_JWT_PUBLIC_KEY_PEM_B64"],
+			); strings.TrimSpace(publicKey) != "" {
+				vars["vmauth_edge_jwt_public_key_pem_b64"] = strings.TrimSpace(publicKey)
+			}
 		case "prometheus":
 			if v := firstNonEmpty(config.Version, metaString(config.Metadata, "version")); v != "" {
 				vars["prometheus_version"] = v

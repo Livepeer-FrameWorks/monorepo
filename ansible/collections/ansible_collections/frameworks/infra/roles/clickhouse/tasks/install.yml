@@ -40,8 +40,20 @@
     mode: "0644"
     content: |
       <clickhouse>
-        <listen_host>{{ clickhouse_listen_host }}</listen_host>
+      {% set managed_listen_hosts = clickhouse_listen_hosts if (clickhouse_listen_hosts | length > 0) else [clickhouse_listen_host] %}
+      {% for listen_host in managed_listen_hosts %}
+        <listen_host>{{ listen_host }}</listen_host>
+      {% endfor %}
       </clickhouse>
+
+- name: Write managed ClickHouse Prometheus endpoint
+  ansible.builtin.template:
+    src: prometheus.xml.j2
+    dest: /etc/clickhouse-server/config.d/prometheus.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+  notify: clickhouse restart
 
 - name: Remove broken upstream TLS block when ClickHouse TLS is disabled
   when: not (clickhouse_enable_ssl | default(false) | bool)

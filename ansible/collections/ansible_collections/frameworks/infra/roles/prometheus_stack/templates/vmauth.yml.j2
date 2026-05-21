@@ -2,3 +2,15 @@ users:
   - username: {{ vmauth_username | to_json }}
     password: {{ vmauth_password | to_json }}
     url_prefix: {{ vmauth_upstream_url | to_json }}
+{% if vmauth_edge_jwt_public_key_pem_b64 | length > 0 %}
+  - jwt:
+      public_keys:
+        - |
+{{ (vmauth_edge_jwt_public_key_pem_b64 | b64decode | trim) | indent(10, true) }}
+      match_claims:
+        role: edge_metrics_write
+    url_map:
+      - src_paths:
+          - "/api/v1/write"
+        url_prefix: '{{ vmauth_upstream_url }}/?extra_label={% raw %}{{.MetricsExtraLabels}}{% endraw %}'
+{% endif %}

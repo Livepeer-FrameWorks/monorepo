@@ -45,6 +45,7 @@ vmauth_config_path: /etc/vmauth/config.yml
 vmauth_username: ""
 vmauth_password: ""
 vmauth_upstream_url: ""
+vmauth_edge_jwt_public_key_pem_b64: ""
 
 # Select which components to install on this host. Override from manifest.
 prometheus_stack_components: [prometheus, node_exporter]

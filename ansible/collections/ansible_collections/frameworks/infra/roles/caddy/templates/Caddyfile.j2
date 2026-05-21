@@ -2,6 +2,7 @@
 {% if caddy_global_options.email | default('') | length > 0 %}
     email {{ caddy_global_options.email }}
 {% endif %}
+    metrics
     admin {{ caddy_admin_listen }}
 }
 
@@ -17,10 +18,22 @@
 {% if site.upstream is defined and site.upstream | length > 0 %}
 {% if site.path_prefixes | default([]) | length > 0 %}
 {% for path_prefix in site.path_prefixes %}
+{% if (site.upstream | string | lower).startswith('https://') %}
+    reverse_proxy {{ path_prefix }} {{ site.upstream }} {
+        header_up Host {upstream_hostport}
+    }
+{% else %}
     reverse_proxy {{ path_prefix }} {{ site.upstream }}
+{% endif %}
 {% endfor %}
 {% else %}
+{% if (site.upstream | string | lower).startswith('https://') %}
+    reverse_proxy {{ site.upstream }} {
+        header_up Host {upstream_hostport}
+    }
+{% else %}
     reverse_proxy {{ site.upstream }}
+{% endif %}
 {% endif %}
 {% endif %}
 {% for directive in site.extra_directives | default([]) %}

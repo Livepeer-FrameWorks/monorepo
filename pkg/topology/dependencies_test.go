@@ -44,6 +44,18 @@ func TestGlobalDNSDependencies(t *testing.T) {
 	}
 }
 
+func TestMetricsDNSDependencies(t *testing.T) {
+	if got, want := DNSServiceDependencies("vmagent"), []string{"victoriametrics", "vmauth"}; !equalStrings(got, want) {
+		t.Fatalf("DNSServiceDependencies(vmagent) = %v, want %v", got, want)
+	}
+	if got, want := DNSServiceDependencies("vmauth"), []string{"victoriametrics"}; !equalStrings(got, want) {
+		t.Fatalf("DNSServiceDependencies(vmauth) = %v, want %v", got, want)
+	}
+	if got, want := GlobalDNSServiceDependencies("vmagent"), []string{"victoriametrics", "vmauth"}; !equalStrings(got, want) {
+		t.Fatalf("GlobalDNSServiceDependencies(vmagent) = %v, want %v", got, want)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

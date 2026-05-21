@@ -33,3 +33,6 @@ argument_specs:
       vmagent_remote_write_url:
         type: str
         required: false
+      vmauth_edge_jwt_public_key_pem_b64:
+        type: str
+        required: false

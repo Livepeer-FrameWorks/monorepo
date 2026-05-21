@@ -2,7 +2,7 @@ global:
   scrape_interval: 30s
 scrape_configs:
   - job_name: edge-mist
-    metrics_path: /api2
+    metrics_path: /metrics
     static_configs:
       - targets:
 {% if edge_mode == 'docker' %}

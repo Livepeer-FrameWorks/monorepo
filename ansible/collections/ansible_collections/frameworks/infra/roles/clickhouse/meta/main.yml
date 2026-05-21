@@ -25,7 +25,11 @@ argument_specs:
       clickhouse_listen_host:
         type: str
         required: false
-        default: "::"
+        default: "127.0.0.1"
+      clickhouse_listen_hosts:
+        type: list
+        elements: str
+        required: false
       clickhouse_port_http:
         type: int
         required: false

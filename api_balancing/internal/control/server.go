@@ -2715,7 +2715,7 @@ type edgeTelemetryClaims struct {
 	TenantID  string `json:"tenant_id,omitempty"`
 	Role      string `json:"role"`
 	VMAccess  struct {
-		MetricsExtraLabels string `json:"metrics_extra_labels"`
+		MetricsExtraLabels []string `json:"metrics_extra_labels"`
 	} `json:"vm_access"`
 	jwt.RegisteredClaims
 }
@@ -2796,7 +2796,7 @@ func mintEdgeTelemetryToken(nodeID, clusterID, tenantID string) (string, time.Ti
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
-	claims.VMAccess.MetricsExtraLabels = "frameworks_node=" + nodeID
+	claims.VMAccess.MetricsExtraLabels = []string{"frameworks_node=" + nodeID}
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	signed, err := token.SignedString(privateKey)
 	if err != nil {

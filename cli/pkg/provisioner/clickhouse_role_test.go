@@ -34,3 +34,49 @@ func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {
 		t.Fatalf("clickhouse_databases = %#v, want [periscope]", vars["clickhouse_databases"])
 	}
 }
+
+func TestClickHouseRoleVarsDefaultsListenHostsToLocalAndMesh(t *testing.T) {
+	config := ServiceConfig{
+		Metadata: map[string]any{
+			"advertised_host": "10.66.0.12",
+		},
+	}
+
+	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{}, config, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	listenHosts, ok := vars["clickhouse_listen_hosts"].([]string)
+	if !ok {
+		t.Fatalf("clickhouse_listen_hosts = %#v, want []string", vars["clickhouse_listen_hosts"])
+	}
+	want := []string{"127.0.0.1", "10.66.0.12"}
+	if len(listenHosts) != len(want) {
+		t.Fatalf("clickhouse_listen_hosts = %#v, want %#v", listenHosts, want)
+	}
+	for i := range want {
+		if listenHosts[i] != want[i] {
+			t.Fatalf("clickhouse_listen_hosts = %#v, want %#v", listenHosts, want)
+		}
+	}
+}
+
+func TestClickHouseRoleVarsRespectsExplicitListenHost(t *testing.T) {
+	config := ServiceConfig{
+		Metadata: map[string]any{
+			"advertised_host": "10.66.0.12",
+			"listen_host":     "::",
+		},
+	}
+
+	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{}, config, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	if got := vars["clickhouse_listen_host"]; got != "::" {
+		t.Fatalf("clickhouse_listen_host = %v, want ::", got)
+	}
+	if _, ok := vars["clickhouse_listen_hosts"]; ok {
+		t.Fatalf("clickhouse_listen_hosts should not be set when listen_host is explicit")
+	}
+}

@@ -116,6 +116,13 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "tier gating and billing checks"},
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "cluster and infrastructure diagnostics"},
 	},
+	"vmagent": {
+		{TargetServiceID: "vmauth", EnvKey: "VMAGENT_REMOTE_WRITE_URL", Transport: "http", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "authenticated metrics remote write"},
+		{TargetServiceID: "victoriametrics", EnvKey: "VMAGENT_REMOTE_WRITE_URL", Transport: "http", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "direct metrics remote write when vmauth is absent"},
+	},
+	"vmauth": {
+		{TargetServiceID: "victoriametrics", EnvKey: "VMAUTH_UPSTREAM_WRITE_URL", Transport: "http", Purpose: "metrics write upstream"},
+	},
 }
 
 var infraDependencies = map[string][]InfraDependency{
