@@ -14,6 +14,7 @@
     - pki
     - telemetry
     - certs
+    - storage
 
 - name: Mirror CA bundle into compose project (when provided)
   ansible.builtin.copy:

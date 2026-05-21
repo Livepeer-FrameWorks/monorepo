@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -564,15 +565,7 @@ func writeBundleFiles(certPath, keyPath string, bundle *pb.TLSCertBundle) (bool,
 		return false, fmt.Errorf("empty cert or key")
 	}
 
-	certSame := false
-	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
-		certSame = true
-	}
-	keySame := false
-	if existing, err := os.ReadFile(keyPath); err == nil && bytes.Equal(existing, keyBytes) {
-		keySame = true
-	}
-	if certSame && keySame {
+	if managedFileUpToDate(certPath, certBytes, 0o644) && managedFileUpToDate(keyPath, keyBytes, 0o640) {
 		return false, nil
 	}
 
@@ -689,10 +682,8 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
 		return false
 	}
 
-	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
-		if existingKey, keyErr := os.ReadFile(keyPath); keyErr == nil && bytes.Equal(existingKey, keyBytes) {
-			return false
-		}
+	if managedFileUpToDate(certPath, certBytes, 0o644) && managedFileUpToDate(keyPath, keyBytes, 0o640) {
+		return false
 	}
 
 	certTmp, err := writeManagedFileTemp(certPath, certBytes, 0o644)
@@ -776,6 +767,34 @@ func writeManagedFileTemp(path string, data []byte, mode os.FileMode) (string, e
 		return "", err
 	}
 	return tmpPath, nil
+}
+
+func managedFileUpToDate(path string, data []byte, mode os.FileMode) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
+		return false
+	}
+	if !sameGroupAsParent(info, filepath.Dir(path)) {
+		return false
+	}
+	existing, err := os.ReadFile(path)
+	return err == nil && bytes.Equal(existing, data)
+}
+
+func sameGroupAsParent(fileInfo os.FileInfo, parentDir string) bool {
+	fileStat, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	parentInfo, err := os.Stat(parentDir)
+	if err != nil {
+		return true
+	}
+	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	return fileStat.Gid == parentStat.Gid
 }
 
 func removeIfNotEmpty(path string) {

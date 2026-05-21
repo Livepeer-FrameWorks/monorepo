@@ -8,6 +8,14 @@
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
+- name: Ensure edge durable storage directory
+  ansible.builtin.file:
+    path: "{{ edge_storage_local_path }}"
+    state: directory
+    owner: frameworks
+    group: frameworks
+    mode: "0755"
+
 - name: Apply mistserver configure sub-role
   ansible.builtin.include_role:
     name: frameworks.infra.mistserver
@@ -68,6 +76,7 @@
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_STORAGE_LOCAL_PATH: "{{ edge_storage_local_path }}"
       HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
       HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
       HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
@@ -100,6 +109,7 @@
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_STORAGE_LOCAL_PATH: "{{ edge_storage_local_path }}"
       HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
       HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
       HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
@@ -135,6 +145,7 @@
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_STORAGE_LOCAL_PATH: "{{ edge_storage_local_path }}"
       HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
       HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
       HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"
@@ -170,6 +181,7 @@
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
+      HELMSMAN_STORAGE_LOCAL_PATH: "{{ edge_storage_local_path }}"
       HELMSMAN_CAP_INGEST: "{{ edge_cap_ingest }}"
       HELMSMAN_CAP_EDGE: "{{ edge_cap_edge }}"
       HELMSMAN_CAP_STORAGE: "{{ edge_cap_storage }}"

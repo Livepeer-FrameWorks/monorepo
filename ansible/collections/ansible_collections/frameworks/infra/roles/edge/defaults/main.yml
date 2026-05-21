@@ -68,6 +68,8 @@ edge_base_dir: /opt/frameworks/edge
 edge_conf_dir: /etc/frameworks
 edge_ca_path: /etc/frameworks/pki/ca.crt
 edge_cert_dir: /etc/frameworks/certs
+edge_storage_local_path: /var/lib/frameworks/edge-storage
+edge_docker_storage_local_path: /data/storage
 
 # Darwin launchd domain selection. Forwarded to mistserver + helmsman
 # sub-roles. "system" puts plists in /Library/LaunchDaemons (root-owned,

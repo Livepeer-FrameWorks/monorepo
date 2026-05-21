@@ -894,7 +894,9 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			return ctxErr
 		}
 		if needsControlPlane {
-			resolvedCtx, caBundlePEM, ctxErr := edgeManifestControlPlaneContext(cmd.Context(), cliCtx, clusterManifestPath, ageKeyFile)
+			var resolvedCtx fwcfg.Context
+			var caBundlePEM string
+			resolvedCtx, caBundlePEM, ctxErr = edgeManifestControlPlaneContext(cmd.Context(), cliCtx, clusterManifestPath, ageKeyFile)
 			if ctxErr != nil {
 				return ctxErr
 			}

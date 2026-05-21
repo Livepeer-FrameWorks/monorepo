@@ -36,6 +36,16 @@ func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
 		t.Fatalf("key mode = %o, want 0640", mode)
 	}
 
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod stale key mode: %v", err)
+	}
+	if !m.applyTLSBundle(&pb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
+		t.Fatal("metadata repair applyTLSBundle returned false")
+	}
+	if mode := fileMode(t, keyPath); mode != 0o640 {
+		t.Fatalf("repaired key mode = %o, want 0640", mode)
+	}
+
 	if !m.applyTLSBundle(&pb.TLSCertBundle{CertPem: "cert-b", KeyPem: "key-b", Domain: "*.edge.example"}) {
 		t.Fatal("rotated applyTLSBundle returned false")
 	}
@@ -106,6 +116,21 @@ func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 	}
 	if got := readFileString(t, filepath.Join(dir, "tenant_acme.crt")); got != "tenant-cert" {
 		t.Fatalf("tenant cert = %q", got)
+	}
+
+	keyPath := filepath.Join(dir, "cluster_media-us-1.key")
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod stale bundle key mode: %v", err)
+	}
+	changed, results = m.applyTLSBundles(bundles)
+	if !changed {
+		t.Fatal("expected changed=true for bundle key metadata repair")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 repair results, got %d", len(results))
+	}
+	if mode := fileMode(t, keyPath); mode != 0o640 {
+		t.Fatalf("repaired bundle key mode = %o, want 0640", mode)
 	}
 }
 

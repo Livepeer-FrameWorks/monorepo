@@ -71,6 +71,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_admin:/run/caddy
       - mist_thumbs:/tmp/mist_thumbs
+      - ./storage:{{ edge_docker_storage_local_path }}
     expose:
       - "18007"
     restart: unless-stopped
