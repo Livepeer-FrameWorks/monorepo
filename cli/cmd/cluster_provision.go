@@ -6409,6 +6409,7 @@ func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 		"max_ticket_ev":          "3000000000000",
 		"deposit_multiplier":     "1",
 		"block_polling_interval": "20",
+		"monitor":                "true",
 	}
 	for key, value := range defaults {
 		if _, ok := env[key]; !ok {

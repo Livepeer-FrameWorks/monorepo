@@ -586,6 +586,7 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"max_ticket_ev", "maxTicketEV"},
 		{"deposit_multiplier", "depositMultiplier"},
 		{"block_polling_interval", "blockPollingInterval"},
+		{"monitor", "monitor"},
 		{"eth_url", "ethUrl"},
 		{"eth_acct_addr", "ethAcctAddr"},
 		{"orch_webhook_url", "orchWebhookUrl"},
