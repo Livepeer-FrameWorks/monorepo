@@ -18,7 +18,6 @@ func TestDoctorServiceRemediation_mapsKnownServicesToRunnableCmd(t *testing.T) {
 		{"postgres", "frameworks cluster logs postgres"},
 		{"Kafka Broker 1", "frameworks cluster diagnose kafka"},
 		{"ClickHouse", "frameworks cluster logs clickhouse"},
-		{"Zookeeper-1", "frameworks cluster logs zookeeper-1"},
 		{"Redis", "frameworks cluster logs redis"},
 	}
 	for _, tc := range cases {

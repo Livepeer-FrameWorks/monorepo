@@ -176,7 +176,7 @@ scrape_configs:
 			WriteMode: EdgeWriteAlways,
 		})
 		vmagentServiceBlock = `  vmagent:
-    image: victoriametrics/vmagent:v1.122.0
+    image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
     command:
       - -httpListenAddr=:8430

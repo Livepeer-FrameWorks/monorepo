@@ -2,7 +2,7 @@
 
 Ansible collection containing the FrameWorks infrastructure roles. Each role
 installs and configures one service (Kafka, Yugabyte, ClickHouse, Postgres,
-Zookeeper, Redis, Caddy, observability, docker-compose stacks, edge).
+Redis, Caddy, observability, docker-compose stacks, edge).
 
 ## Design contract
 
@@ -20,7 +20,7 @@ Zookeeper, Redis, Caddy, observability, docker-compose stacks, edge).
 ## Roles
 
 One role per FrameWorks service: `postgres`, `yugabyte`, `kafka`,
-`zookeeper`, `clickhouse`, `redis`, `caddy`, `privateer`, `prometheus_stack`,
+`clickhouse`, `redis`, `caddy`, `privateer`, `prometheus_stack`,
 `chatwoot`, `listmonk`, `compose_stack` (generic docker shape), `go_service`
 (generic native shape), `mistserver`, `helmsman`, `edge` (meta-role that
 composes mistserver+helmsman+caddy in native mode or delegates to

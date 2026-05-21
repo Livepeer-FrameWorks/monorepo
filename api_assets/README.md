@@ -1,6 +1,6 @@
-# Chandler (Assets)
+# Chandler (Media Assets)
 
-S3-backed asset proxy for stream media files. Serves posters, sprite sheets, and VTT files from object storage with an in-memory LRU cache.
+S3-backed media asset proxy for stream files. Serves posters, sprite sheets, and VTT files from object storage with an in-memory LRU cache.
 
 ## What it does
 

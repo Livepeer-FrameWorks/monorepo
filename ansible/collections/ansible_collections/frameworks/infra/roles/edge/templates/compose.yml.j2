@@ -77,7 +77,7 @@ services:
 {% if edge_telemetry_url | length > 0 %}
 
   vmagent:
-    image: victoriametrics/vmagent:v1.122.0
+    image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
     command:
       - -httpListenAddr=:8430

@@ -1,4 +1,4 @@
-# Commodore (Control Plane)
+# Commodore (Control / API Plane)
 
 Commodore is the control API. It owns users, streams, API tokens and exposes tenant‑scoped gRPC endpoints. **Works identically in self-hosted, hybrid, and managed deployments.**
 

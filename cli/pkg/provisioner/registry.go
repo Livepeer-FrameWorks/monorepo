@@ -12,7 +12,6 @@ var ServicePorts = map[string]int{
 	"kafka":             9092,
 	"kafka-controller":  9093,
 	"kafka-mirrormaker": 8083,
-	"zookeeper":         2181,
 	"clickhouse":        9000,
 	"listmonk":          9001,
 	"bridge":            18000,
@@ -79,10 +78,6 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewRolePlaybookProvisioner("kafka-mirrormaker", pool,
 			"frameworks.infra.kafka_mirrormaker", "playbooks/kafka_mirrormaker.yml",
 			kafkaMirrorMakerRoleVars, kafkaMirrorMakerRoleDetect)
-	case "zookeeper":
-		return NewRolePlaybookProvisioner("zookeeper", pool,
-			"frameworks.infra.zookeeper", "playbooks/zookeeper.yml",
-			zookeeperRoleVars, zookeeperRoleDetect)
 	case "clickhouse":
 		return NewRolePlaybookProvisioner("clickhouse", pool,
 			"frameworks.infra.clickhouse", "playbooks/clickhouse.yml",

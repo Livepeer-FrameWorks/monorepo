@@ -84,7 +84,7 @@ services:
   # PostgreSQL
   postgres:
     <<: *default-env
-    image: pgvector/pgvector:pg15
+    image: pgvector/pgvector:pg18
     container_name: frameworks-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -325,7 +325,7 @@ services:
 
   # Foghorn HA state store
   foghorn-redis:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:9.0-alpine
     container_name: frameworks-foghorn-redis
     hostname: foghorn-redis
     command: valkey-server --appendonly yes
@@ -1205,7 +1205,7 @@ services:
 
   # Reverse Proxy
   nginx:
-    image: nginx:alpine
+    image: nginx:1.30.1-alpine
     container_name: frameworks-nginx
     ports:
       - "18090:80"
@@ -1252,7 +1252,7 @@ services:
 
   # ClickHouse for time-series analytics
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:26.3.10.62
     container_name: frameworks-clickhouse
     hostname: clickhouse
     ports:
@@ -1296,7 +1296,7 @@ services:
 
   # Listmonk Newsletter Manager
   listmonk:
-    image: listmonk/listmonk:v4.0.1
+    image: listmonk/listmonk:v6.1.0
     container_name: frameworks-listmonk
     hostname: listmonk
     ports:
@@ -1436,7 +1436,7 @@ services:
         max-file: "3"
 
   platform-redis:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:9.0-alpine
     container_name: frameworks-platform-redis
     hostname: platform-redis
     command: valkey-server --appendonly yes

@@ -31,14 +31,14 @@ Routes streaming traffic to the best available media nodes based on:
 - Dispatches commands such as `ConfigSeed`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, `DefrostRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
 - Tracks node health, capabilities, and stream state
 
-### Control Plane (Commodore, Quartermaster)
+### Control / API Plane (Commodore, Quartermaster)
 
 - Validates stream keys via Commodore gRPC
 - Resolves playback IDs (view keys) via Commodore
 - Resolves node fingerprints to tenants via Quartermaster
 - Handles edge node enrollment via Quartermaster bootstrap tokens
 
-### Data Plane (Decklog)
+### Event & Analytics Plane (Decklog)
 
 - Geo-enriches all events before forwarding
 - Sends analytics and routing events to Decklog gRPC
