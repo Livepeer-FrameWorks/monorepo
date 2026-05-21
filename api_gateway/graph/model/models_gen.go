@@ -1241,7 +1241,7 @@ type MessagesConnection struct {
 // `sessionToken` is bound to one nodeId via the JWT's `node_id` claim;
 // replay against any other edge node fails. `expiresAt` is Unix seconds.
 type MistAdminSession struct {
-	// Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist/_session).
+	// Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist-session).
 	PostURL string `json:"postUrl"`
 	// Short-TTL JWT to submit as the `session_token` form field. Treat as a secret.
 	SessionToken string `json:"sessionToken"`
