@@ -99,6 +99,48 @@ func TestEdgeManifestNodeDomain(t *testing.T) {
 	}
 }
 
+func TestEdgeManifestTelemetryWriteURL(t *testing.T) {
+	edgeManifest := &inventory.EdgeManifest{RootDomain: "frameworks.network"}
+	clusterManifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Name: "Media EU 1", Type: "edge", Roles: []string{"media"}},
+			"media-us-1": {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "central-eu-1"},
+		},
+	}
+
+	got := edgeManifestTelemetryWriteURL(edgeManifest, clusterManifest, "media-eu-1")
+	want := "https://telemetry.media-eu-1.frameworks.network/api/v1/write"
+	if got != want {
+		t.Fatalf("edgeManifestTelemetryWriteURL() = %q, want %q", got, want)
+	}
+}
+
+func TestEdgeManifestTelemetryWriteURLRequiresCoveredVMAUTHCluster(t *testing.T) {
+	edgeManifest := &inventory.EdgeManifest{RootDomain: "frameworks.network"}
+	clusterManifest := &inventory.Manifest{
+		RootDomain: "frameworks.network",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Name: "Media EU 1", Type: "edge", Roles: []string{"media"}},
+			"media-us-1": {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "central-eu-1", Clusters: []string{"media-eu-1"}},
+		},
+	}
+
+	if got := edgeManifestTelemetryWriteURL(edgeManifest, clusterManifest, "media-us-1"); got != "" {
+		t.Fatalf("edgeManifestTelemetryWriteURL() = %q, want empty for cluster outside vmauth coverage", got)
+	}
+	clusterManifest.Observability["vmauth"] = inventory.ServiceConfig{Enabled: false, Host: "central-eu-1"}
+	if got := edgeManifestTelemetryWriteURL(edgeManifest, clusterManifest, "media-eu-1"); got != "" {
+		t.Fatalf("edgeManifestTelemetryWriteURL() = %q, want empty when vmauth is disabled", got)
+	}
+}
+
 func TestEdgeManifestChannelNotVersion(t *testing.T) {
 	// Verify that manifest.Version (schema version) is never used as a release
 	// version. Only manifest.Channel should be used for release resolution.

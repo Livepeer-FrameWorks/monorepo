@@ -6,9 +6,9 @@ scrape_configs:
     static_configs:
       - targets:
 {% if edge_mode == 'docker' %}
-          - "mistserver:8080"
+          - "mistserver:4242"
 {% else %}
-          - "127.0.0.1:8080"
+          - "127.0.0.1:4242"
 {% endif %}
         labels:
           frameworks_mode: "edge"
@@ -27,3 +27,14 @@ scrape_configs:
           frameworks_mode: "edge"
           frameworks_node: "{{ edge_node_id }}"
           frameworks_service: "helmsman"
+{% if edge_mode != 'docker' %}
+  - job_name: edge-caddy
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "127.0.0.1:2019"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: "{{ edge_node_id }}"
+          frameworks_service: "caddy"
+{% endif %}

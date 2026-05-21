@@ -25,6 +25,7 @@ import (
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
+	"frameworks/cli/pkg/clusterderive"
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/mistdiag"
@@ -750,6 +751,9 @@ Multi-node manifest example:
 						if strings.TrimSpace(cfg.EnrollmentToken) == "" {
 							cfg.EnrollmentToken = mintedToken
 						}
+						if err := populateEdgePreRegistration(ctx, cmd, cliCtx, cfg, sshTarget, sshKey, externalIP); err != nil {
+							return err
+						}
 					}
 					if fetchCert {
 						fmt.Fprintln(cmd.OutOrStdout(), "  - Fetching TLS certificate from Navigator")
@@ -880,20 +884,29 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	controlCtx := cliCtx
 	controlCABundlePEM := ""
 	clusterManifestPath := ""
-	if edgeManifestNeedsControlPlane(manifest) {
+	var clusterManifest *inventory.Manifest
+	needsControlPlane := edgeManifestNeedsControlPlane(manifest)
+	hasExplicitClusterManifest := strings.TrimSpace(clusterManifestOverride) != "" || strings.TrimSpace(manifest.ClusterManifest) != ""
+	if needsControlPlane || hasExplicitClusterManifest {
 		var ctxErr error
 		clusterManifestPath, ctxErr = resolveEdgeClusterManifestPath(manifestPath, manifest, clusterManifestOverride)
 		if ctxErr != nil {
 			return ctxErr
 		}
-		resolvedCtx, caBundlePEM, ctxErr := edgeManifestControlPlaneContext(cmd.Context(), cliCtx, clusterManifestPath, ageKeyFile)
-		if ctxErr != nil {
-			return ctxErr
+		if needsControlPlane {
+			resolvedCtx, caBundlePEM, ctxErr := edgeManifestControlPlaneContext(cmd.Context(), cliCtx, clusterManifestPath, ageKeyFile)
+			if ctxErr != nil {
+				return ctxErr
+			}
+			controlCtx = resolvedCtx
+			controlCABundlePEM = caBundlePEM
 		}
-		controlCtx = resolvedCtx
-		controlCABundlePEM = caBundlePEM
+		clusterManifest, ctxErr = inventory.LoadWithHosts(clusterManifestPath, ageKeyFile)
+		if ctxErr != nil {
+			return fmt.Errorf("load cluster manifest for edge telemetry: %w", ctxErr)
+		}
 	}
-	if !dryRun && clusterManifestPath != "" {
+	if !dryRun && needsControlPlane && clusterManifestPath != "" {
 		effectiveVersion := manifest.Channel
 		if cmd.Flags().Changed("version") {
 			effectiveVersion = cliVersion
@@ -945,7 +958,8 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if cmd.Flags().Changed("version") {
 				nodeVersion = cliVersion
 			}
-			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, "", "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun)
+			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
+			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -1143,6 +1157,40 @@ func edgeManifestFoghornGRPCAddr(rootDomain, clusterID string) string {
 	return fmt.Sprintf("foghorn.%s.%s:%d", clusterID, rootDomain, foghornExternalGRPCPort)
 }
 
+func edgeManifestTelemetryWriteURL(manifest *inventory.EdgeManifest, clusterManifest *inventory.Manifest, clusterID string) string {
+	if manifest == nil || clusterManifest == nil {
+		return ""
+	}
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return ""
+	}
+	vmauth, ok := clusterManifest.Observability["vmauth"]
+	if !ok || !vmauth.Enabled {
+		return ""
+	}
+	covered := false
+	for _, telemetryCluster := range clusterderive.LogicalServiceClusterIDs("vmauth", vmauth, clusterManifest) {
+		if strings.TrimSpace(telemetryCluster) == clusterID {
+			covered = true
+			break
+		}
+	}
+	if !covered {
+		return ""
+	}
+	rootDomain := strings.Trim(strings.TrimSpace(manifest.RootDomain), ".")
+	if rootDomain == "" {
+		return ""
+	}
+	clusterScope := pkgdns.SanitizeLabel(clusterID) + "." + rootDomain
+	fqdn, ok := pkgdns.ServiceFQDN("telemetry", clusterScope)
+	if !ok || fqdn == "" {
+		return ""
+	}
+	return "https://" + fqdn + "/api/v1/write"
+}
+
 func edgeFoghornUsesInternalCA(addr string) bool {
 	host := strings.TrimSpace(addr)
 	if host == "" {
@@ -1175,6 +1223,74 @@ func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
 		return label + "." + rootDomain
 	}
 	return label + "." + clusterID + "." + rootDomain
+}
+
+func applyEdgePreRegistrationConfig(cfg *provisioner.EdgeProvisionConfig, resp *pb.PreRegisterEdgeResponse) {
+	if cfg == nil || resp == nil {
+		return
+	}
+	if cfg.NodeID == "" {
+		cfg.NodeID = resp.GetNodeId()
+	}
+	if cfg.NodeName == "" {
+		cfg.NodeName = resp.GetNodeId()
+	}
+	if cfg.NodeDomain == "" {
+		cfg.NodeDomain = resp.GetEdgeDomain()
+	}
+	if cfg.PoolDomain == "" {
+		cfg.PoolDomain = resp.GetPoolDomain()
+	}
+	if cfg.ClusterID == "" {
+		cfg.ClusterID = firstNonEmpty(resp.GetClusterId(), resp.GetClusterSlug())
+	}
+	if cfg.FoghornGRPCAddr == "" {
+		cfg.FoghornGRPCAddr = resp.GetFoghornGrpcAddr()
+	}
+	if cfg.CABundlePEM == "" && edgeFoghornUsesInternalCA(cfg.FoghornGRPCAddr) {
+		cfg.CABundlePEM = string(resp.GetInternalCaBundle())
+	}
+	if telemetry := resp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
+		if cfg.TelemetryURL == "" {
+			cfg.TelemetryURL = telemetry.GetWriteUrl()
+		}
+		cfg.TelemetryToken = telemetry.GetBearerToken()
+	}
+}
+
+func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx fwcfg.Context, cfg *provisioner.EdgeProvisionConfig, sshTarget, sshKey, knownExternalIP string) error {
+	if cfg == nil || strings.TrimSpace(cfg.EnrollmentToken) == "" {
+		return nil
+	}
+	if strings.TrimSpace(cfg.TelemetryURL) != "" && strings.TrimSpace(cfg.TelemetryToken) != "" {
+		return nil
+	}
+
+	preferredNodeID := firstNonEmpty(cfg.NodeID, canonicalEdgeNodeID(cfg.NodeName), cfg.NodeName)
+	preRegCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var (
+		resp *pb.PreRegisterEdgeResponse
+		err  error
+	)
+	if strings.TrimSpace(cliCtx.Endpoints.BridgeURL) != "" {
+		resp, err = bootstrapEdgeViaBridge(preRegCtx, cliCtx, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+	}
+	if resp == nil && err != nil && strings.TrimSpace(cfg.FoghornGRPCAddr) == "" {
+		return fmt.Errorf("pre-registration failed: %w", err)
+	}
+	if resp == nil && strings.TrimSpace(cfg.FoghornGRPCAddr) != "" {
+		resp, err = preRegisterEdge(preRegCtx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+	}
+	if err != nil {
+		return fmt.Errorf("pre-registration failed: %w", err)
+	}
+	applyEdgePreRegistrationConfig(cfg, resp)
+	if strings.TrimSpace(cfg.TelemetryURL) != "" && strings.TrimSpace(cfg.TelemetryToken) == "" {
+		return fmt.Errorf("edge telemetry write URL resolved but Foghorn did not issue a bearer token")
+	}
+	return nil
 }
 
 // provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
@@ -1217,6 +1333,9 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		if telemetry := preRegResp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
 			telemetryURL = telemetry.GetWriteUrl()
 			telemetryToken = telemetry.GetBearerToken()
+		}
+		if strings.TrimSpace(telemetryURL) != "" && strings.TrimSpace(telemetryToken) == "" {
+			return fmt.Errorf("edge telemetry write URL resolved but Foghorn did not issue a bearer token")
 		}
 	}
 	primaryDomain := firstNonEmpty(nodeDomain, poolDomain)
@@ -1276,6 +1395,9 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 					}
 					if strings.TrimSpace(cfg.EnrollmentToken) == "" {
 						cfg.EnrollmentToken = mintedToken
+					}
+					if err := populateEdgePreRegistration(ctx, cmd, cliCtx, cfg, sshTarget, sshKey, knownExternalIP); err != nil {
+						return err
 					}
 				}
 			}
