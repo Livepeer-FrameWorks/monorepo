@@ -1726,6 +1726,26 @@ func TestBuildServiceEnvVarsPrefersDeclaredDatabasePassword(t *testing.T) {
 	}
 }
 
+func TestDatabaseConfigsToMetadataUsesPerDatabasePassword(t *testing.T) {
+	items := databaseConfigsToMetadata([]inventory.DatabaseConfig{
+		{Name: "chatwoot", Owner: "chatwoot"},
+		{Name: "metabase", Owner: "metabase"},
+	}, "support-secret", map[string]string{
+		"POSTGRES_METABASE_PASSWORD": "metabase-secret",
+	})
+
+	got := map[string]string{}
+	for _, item := range items {
+		got[item["name"]] = item["password"]
+	}
+	if got["chatwoot"] != "support-secret" {
+		t.Fatalf("chatwoot password = %q, want support-secret", got["chatwoot"])
+	}
+	if got["metabase"] != "metabase-secret" {
+		t.Fatalf("metabase password = %q, want metabase-secret", got["metabase"])
+	}
+}
+
 func TestYugabyteDatabaseMetadataUsesClusterPasswordForServiceDatabase(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Services: map[string]inventory.ServiceConfig{

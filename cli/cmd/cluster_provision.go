@@ -2381,7 +2381,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["instance_name"] = inst.Name
 					instancePassword := postgresInstancePassword(inst, sharedEnv)
 					if len(inst.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases, instancePassword)
+						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases, instancePassword, sharedEnv)
 					}
 					if len(inst.Tuning) > 0 {
 						config.Metadata["tuning"] = stringMapToAnyMap(inst.Tuning)
@@ -4268,19 +4268,35 @@ func postgresInstancePort(inst *inventory.PostgresInstance) int {
 	return inst.Port
 }
 
-func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, password string) []map[string]string {
+func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, defaultPassword string, sharedEnv ...map[string]string) []map[string]string {
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
 		item := map[string]string{
 			"name":  db.Name,
 			"owner": db.Owner,
 		}
+		password := databaseConfigPassword(db, defaultPassword, sharedEnv...)
 		if password != "" {
 			item["password"] = password
 		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func databaseConfigPassword(db inventory.DatabaseConfig, defaultPassword string, sharedEnv ...map[string]string) string {
+	owner := db.Owner
+	if owner == "" {
+		owner = db.Name
+	}
+	if len(sharedEnv) > 0 {
+		for _, key := range declaredPostgresPasswordEnvKeys("", db.Name, owner) {
+			if password := strings.TrimSpace(sharedEnv[0][key]); password != "" {
+				return password
+			}
+		}
+	}
+	return defaultPassword
 }
 
 func postgresInstancePassword(inst *inventory.PostgresInstance, sharedEnv map[string]string) string {
@@ -5961,7 +5977,7 @@ func declaredPostgresPasswordEnvKeys(instancePrefix, dbName, owner string) []str
 		"POSTGRES_" + envNameToken(owner),
 		instancePrefix,
 	} {
-		if prefix == "POSTGRES_" {
+		if prefix == "" || prefix == "POSTGRES_" {
 			continue
 		}
 		key := prefix + "_PASSWORD"
