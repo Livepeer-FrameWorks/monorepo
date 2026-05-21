@@ -1302,7 +1302,12 @@ services:
     hostname: listmonk
     ports:
       - "9001:9000"
-    entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "./listmonk --install --idempotent --yes && ./listmonk --upgrade --yes && ./listmonk",
+      ]
     environment:
       LISTMONK_app__address: "0.0.0.0:9000"
       LISTMONK_db__host: postgres

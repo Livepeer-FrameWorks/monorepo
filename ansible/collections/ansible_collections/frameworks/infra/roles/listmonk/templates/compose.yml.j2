@@ -3,7 +3,7 @@ services:
     image: {{ listmonk_image }}
     container_name: frameworks-listmonk
     restart: always
-    entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
+    entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk --upgrade --yes && ./listmonk"]
     ports:
       - "{{ listmonk_port }}:9000"
     env_file:

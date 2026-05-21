@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -112,5 +113,24 @@ func TestListmonkEnvMapDoesNotSubstituteAdminCredsWhenMissing(t *testing.T) {
 	}
 	if got := env["LISTMONK_ADMIN_PASSWORD"]; got != "" {
 		t.Fatalf("LISTMONK_ADMIN_PASSWORD = %v, want empty (no silent fallback)", got)
+	}
+}
+
+func TestListmonkComposeRunsDatabaseUpgradeBeforeServing(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/listmonk/templates/compose.yml.j2")
+	for _, want := range []string{
+		"./listmonk --install --idempotent --yes",
+		"./listmonk --upgrade --yes",
+		"&& ./listmonk",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("listmonk compose should install, upgrade, then serve; missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Index(content, "--upgrade --yes") < strings.Index(content, "--install --idempotent --yes") {
+		t.Fatalf("listmonk upgrade must run after idempotent install:\n%s", content)
+	}
+	if strings.LastIndex(content, "&& ./listmonk") < strings.Index(content, "--upgrade --yes") {
+		t.Fatalf("listmonk server must start after database upgrade:\n%s", content)
 	}
 }
