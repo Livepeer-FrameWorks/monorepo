@@ -20,14 +20,6 @@ struct LoginView: View {
       }
 
       VStack(spacing: 12) {
-        TextField("Email", text: $appState.loginEmailDraft)
-          .textFieldStyle(.roundedBorder)
-          .textContentType(.emailAddress)
-
-        SecureField("Password", text: $appState.loginPasswordDraft)
-          .textFieldStyle(.roundedBorder)
-          .textContentType(.password)
-
         if appState.currentContext.isEmpty {
           TextField("Bridge URL", text: $appState.loginBridgeURLDraft)
             .textFieldStyle(.roundedBorder)
@@ -44,7 +36,7 @@ struct LoginView: View {
             if isLoading {
               ProgressView().controlSize(.small)
             }
-            Text("Log In")
+            Text("Sign In with Browser")
           }
           .frame(maxWidth: .infinity)
         }
@@ -61,23 +53,15 @@ struct LoginView: View {
   }
 
   private var canSubmit: Bool {
-    let hasEmail = !appState.loginEmailDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    let hasPassword = !appState.loginPasswordDraft.isEmpty
     let hasBridgeURL = !appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !appState.loginBridgeURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    return hasEmail && hasPassword && hasBridgeURL && !isLoading
+    return hasBridgeURL && !isLoading
   }
 
   private func login() {
-    let email = appState.loginEmailDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    let password = appState.loginPasswordDraft
     let contextURL = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let draftURL = appState.loginBridgeURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmed = contextURL.isEmpty ? draftURL : contextURL
-    guard !email.isEmpty && !password.isEmpty else {
-      errorMessage = "Email and password are required."
-      return
-    }
     guard !trimmed.isEmpty else {
       errorMessage = "Bridge URL is required."
       return
@@ -91,11 +75,7 @@ struct LoginView: View {
 
     Task {
       do {
-        try await AuthService.shared.login(
-          email: email,
-          password: password,
-          appState: appState
-        )
+        try await AuthService.shared.loginWithBrowser(appState: appState)
         await ensureCLIContextIfNeeded(bridgeURL: trimmed)
         await MainActor.run {
           closePanel()
