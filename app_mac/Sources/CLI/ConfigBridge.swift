@@ -68,7 +68,16 @@ struct CLIMenuAction: Decodable, Identifiable, Hashable {
   }
 
   var commandText: String {
-    "frameworks " + args.joined(separator: " ")
+    (["frameworks"] + args).map(shellQuote).joined(separator: " ")
+  }
+
+  private func shellQuote(_ value: String) -> String {
+    guard !value.isEmpty else { return "''" }
+    let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-./:=,@%")
+    if value.unicodeScalars.allSatisfy({ safe.contains($0) }) {
+      return value
+    }
+    return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
 }
 
