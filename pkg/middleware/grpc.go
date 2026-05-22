@@ -5,11 +5,13 @@ import (
 	"crypto/subtle"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -57,7 +59,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
 	}
 
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// Skip auth for certain methods (health checks, etc.)
 		if skipMap[info.FullMethod] {
 			return handler(ctx, req)
@@ -154,7 +156,7 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
 	}
 
-	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if skipMap[info.FullMethod] {
 			return handler(srv, stream)
 		}
@@ -281,10 +283,72 @@ func IsServiceCall(ctx context.Context) bool {
 	return ctxkeys.GetUserID(ctx) == "" && ctxkeys.GetTenantID(ctx) == ""
 }
 
+// shortMethodName returns the trailing component of a gRPC FullMethod
+// (e.g. "/commodore.CommodoreService/Login" to "Login"). Falls back to the
+// original string when no slash is present.
+func shortMethodName(fullMethod string) string {
+	if idx := strings.LastIndex(fullMethod, "/"); idx >= 0 && idx < len(fullMethod)-1 {
+		return fullMethod[idx+1:]
+	}
+	return fullMethod
+}
+
+// grpcStatusLabel maps an error returned from a gRPC handler to the status
+// label written on the request counter. Nil maps to "ok"; otherwise the canonical
+// gRPC code name (e.g. "Unauthenticated", "PermissionDenied"). Non-gRPC
+// errors land on "Unknown".
+func grpcStatusLabel(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	return status.Code(err).String()
+}
+
+// GRPCMetricsInterceptor returns a unary server interceptor that records
+// per-method request counts and duration. The interceptor MUST be placed
+// outermost in the chain (before logging and auth); otherwise
+// Unauthenticated/PermissionDenied rejections from downstream interceptors
+// would be invisible to the metric, hiding exactly the failure signal we
+// want to surface.
+//
+// requests labels: {method, status}. duration labels: {method}.
+func GRPCMetricsInterceptor(requests *prometheus.CounterVec, duration *prometheus.HistogramVec) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		start := time.Now()
+		resp, err := handler(ctx, req)
+		method := shortMethodName(info.FullMethod)
+		if requests != nil {
+			requests.WithLabelValues(method, grpcStatusLabel(err)).Inc()
+		}
+		if duration != nil {
+			duration.WithLabelValues(method).Observe(time.Since(start).Seconds())
+		}
+		return resp, err
+	}
+}
+
+// GRPCStreamMetricsInterceptor is the streaming counterpart to
+// GRPCMetricsInterceptor. Same placement rule applies (outermost in the
+// chain). Duration covers the full stream lifetime, from open to close.
+func GRPCStreamMetricsInterceptor(requests *prometheus.CounterVec, duration *prometheus.HistogramVec) grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		start := time.Now()
+		err := handler(srv, stream)
+		method := shortMethodName(info.FullMethod)
+		if requests != nil {
+			requests.WithLabelValues(method, grpcStatusLabel(err)).Inc()
+		}
+		if duration != nil {
+			duration.WithLabelValues(method).Observe(time.Since(start).Seconds())
+		}
+		return err
+	}
+}
+
 // GRPCLoggingInterceptor returns a unary server interceptor for request logging.
 // This is a basic logging interceptor that doesn't require authentication.
 func GRPCLoggingInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := ctx.Value(ctxkeys.KeyRequestStart)
 		if start == nil {
 			// Add start time if not present

@@ -1,6 +1,7 @@
 package monitoring
 
 import (
+	"database/sql"
 	"strconv"
 	"strings"
 	"time"
@@ -185,17 +186,48 @@ func (mc *MetricsCollector) NewSummary(name, help string, labels []string, objec
 
 // Common service metrics creators
 
-// CreateDatabaseMetrics creates standard database metrics
-func (mc *MetricsCollector) CreateDatabaseMetrics() (
-	*prometheus.CounterVec, // db_queries_total
-	*prometheus.HistogramVec, // db_query_duration_seconds
-	*prometheus.GaugeVec, // db_connections_active
-) {
-	queries := mc.NewCounter("db_queries_total", "Total database queries", []string{"query_type", "status"})
-	duration := mc.NewHistogram("db_query_duration_seconds", "Database query duration", []string{"query_type"}, nil)
-	connections := mc.NewGauge("db_connections_active", "Active database connections", []string{"database"})
+// RegisterDBStats registers Prometheus collectors that expose Go
+// database/sql connection-pool stats at scrape time. No background
+// goroutine, no ticker; Prometheus calls db.Stats() on each scrape via
+// GaugeFunc / CounterFunc, which avoids sampling drift and goroutine
+// lifecycle management entirely.
+//
+// Series registered:
+//   - <service>_db_open_connections          (GaugeFunc)
+//   - <service>_db_in_use_connections        (GaugeFunc)
+//   - <service>_db_idle_connections          (GaugeFunc)
+//   - <service>_db_wait_count_total          (CounterFunc, monotonic)
+//   - <service>_db_wait_duration_seconds_total (CounterFunc, monotonic)
+func (mc *MetricsCollector) RegisterDBStats(db *sql.DB) {
+	if db == nil {
+		return
+	}
+	openConns := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: mc.serviceName + "_db_open_connections",
+		Help: "Currently open database connections (in-use + idle)",
+	}, func() float64 { return float64(db.Stats().OpenConnections) })
+	inUse := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: mc.serviceName + "_db_in_use_connections",
+		Help: "Database connections currently in use",
+	}, func() float64 { return float64(db.Stats().InUse) })
+	idle := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: mc.serviceName + "_db_idle_connections",
+		Help: "Database connections currently idle",
+	}, func() float64 { return float64(db.Stats().Idle) })
+	waitCount := prometheus.NewCounterFunc(prometheus.CounterOpts{
+		Name: mc.serviceName + "_db_wait_count_total",
+		Help: "Total times a connection request had to wait for a free connection",
+	}, func() float64 { return float64(db.Stats().WaitCount) })
+	waitDuration := prometheus.NewCounterFunc(prometheus.CounterOpts{
+		Name: mc.serviceName + "_db_wait_duration_seconds_total",
+		Help: "Total time spent waiting for a database connection",
+	}, func() float64 { return db.Stats().WaitDuration.Seconds() })
 
-	return queries, duration, connections
+	mc.RegisterCustomMetric("db_open_connections", openConns)
+	mc.RegisterCustomMetric("db_in_use_connections", inUse)
+	mc.RegisterCustomMetric("db_idle_connections", idle)
+	mc.RegisterCustomMetric("db_wait_count_total", waitCount)
+	mc.RegisterCustomMetric("db_wait_duration_seconds_total", waitDuration)
 }
 
 // CreateKafkaMetrics creates standard Kafka metrics

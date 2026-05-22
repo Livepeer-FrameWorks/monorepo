@@ -220,14 +220,14 @@ func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
 	return ctx
 }
 
-// FoghornMetrics holds all Prometheus metrics for Foghorn
+// FoghornMetrics holds all Prometheus metrics for Foghorn.
+// DB connection-pool stats are registered separately via
+// monitoring.MetricsCollector.RegisterDBStats and read from db.Stats()
+// at scrape time, so they do not appear on this struct.
 type FoghornMetrics struct {
 	RoutingDecisions      *prometheus.CounterVec
 	NodeSelectionDuration *prometheus.HistogramVec
 	LoadDistribution      *prometheus.GaugeVec
-	DBQueries             *prometheus.CounterVec
-	DBDuration            *prometheus.HistogramVec
-	DBConnections         *prometheus.GaugeVec
 
 	// LivepeerAuthRejected counts Livepeer gateway auth-webhook rejections by reason.
 	// Reasons: stream_not_found, stream_not_live, peer_context_missing,

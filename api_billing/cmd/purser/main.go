@@ -88,8 +88,10 @@ func main() {
 		WebhookSignatureFailures: metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
 	}
 
-	// Create database metrics
-	handlerMetrics.DBQueries, handlerMetrics.DBDuration, handlerMetrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+	// Register DB connection-pool stats (open/in-use/idle gauges +
+	// wait_count/wait_duration counters) sourced from db.Stats() at
+	// scrape time.
+	metricsCollector.RegisterDBStats(db)
 
 	// Create gRPC server metrics
 	serverMetrics := &pursergrpc.ServerMetrics{

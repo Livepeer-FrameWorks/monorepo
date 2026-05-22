@@ -298,8 +298,10 @@ func main() {
 	}
 	_ = newCache // Placeholder until wired into clients (Commodore/GeoIP)
 
-	// Create database metrics
-	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+	// Register DB connection-pool stats (open/in-use/idle gauges +
+	// wait_count/wait_duration counters) sourced from db.Stats() at
+	// scrape time.
+	metricsCollector.RegisterDBStats(db)
 
 	// --- Initialize Clients (Lifted from Handlers) ---
 

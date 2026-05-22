@@ -257,8 +257,12 @@ func main() {
 			logger.Warn("Navigator gRPC is running without TLS; private keys require a private network path.")
 		}
 
+		// GRPCMetricsInterceptor sits outermost so Unauthenticated /
+		// PermissionDenied rejections from authInterceptor / private-peer
+		// still show up in navigator_grpc_requests_total.
 		serverOpts := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
+				middleware.GRPCMetricsInterceptor(serverMetrics.GRPCRequests, serverMetrics.GRPCDuration),
 				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 				requirePrivatePeerUnaryInterceptor(),
