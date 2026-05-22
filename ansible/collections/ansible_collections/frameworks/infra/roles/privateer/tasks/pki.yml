@@ -6,6 +6,20 @@
     mode: "0755"
   when: not ansible_check_mode
 
+- name: Privateer | collect service state before PKI repair
+  ansible.builtin.service_facts:
+  when: not ansible_check_mode
+
+- name: Privateer | stop service before PKI repair
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: stopped
+  notify: privateer restart
+  when:
+    - not ansible_check_mode
+    - "'frameworks-privateer.service' in ansible_facts.services"
+    - ansible_facts.services['frameworks-privateer.service'].state == 'running'
+
 - name: Privateer | ensure internal PKI directory
   ansible.builtin.file:
     path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
@@ -66,7 +80,6 @@
     patterns:
       - tls.crt
       - tls.key
-      - .tls.write.lock
   register: privateer_service_pki_files
   when:
     - not ansible_check_mode
@@ -76,10 +89,53 @@
     path: "{{ item.path }}"
     owner: "{{ privateer_user }}"
     group: frameworks
-    mode: "{{ (item.path | basename == '.tls.write.lock') | ternary('0600', (item.path | basename == 'tls.key') | ternary('0640', '0644')) }}"
+    mode: "{{ (item.path | basename == 'tls.key') | ternary('0640', '0644') }}"
   loop: "{{ privateer_service_pki_files.files | default([]) }}"
   loop_control:
     label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+
+- name: Privateer | discover stale service certificate lock files
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: file
+    hidden: true
+    recurse: true
+    patterns:
+      - .tls.write.lock
+  register: privateer_service_pki_lock_files
+  when:
+    - not ansible_check_mode
+
+- name: Privateer | remove stale service certificate lock files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ privateer_service_pki_lock_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - not ansible_check_mode
+
+- name: Privateer | verify service PKI write access
+  ansible.builtin.shell: |
+    set -euo pipefail
+    base={{ (((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services') | quote }}
+    probe="$base/.ansible-privateer-pki-probe"
+    printf ok > "$probe"
+    rm -f "$probe"
+    for dir in "$base"/*; do
+      [ -d "$dir" ] || continue
+      probe="$dir/.ansible-privateer-pki-probe"
+      printf ok > "$probe"
+      rm -f "$probe"
+    done
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: "{{ privateer_user }}"
+  changed_when: false
   when:
     - not ansible_check_mode
 

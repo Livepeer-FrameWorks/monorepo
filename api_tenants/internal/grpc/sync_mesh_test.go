@@ -12,6 +12,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -104,6 +105,31 @@ func TestMeshServiceRequirementsMarksSkipperBridgeGlobal(t *testing.T) {
 		}
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMeshServiceRequirementsRetriesSchemaVersionMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	mock.ExpectQuery(`(?s)SELECT DISTINCT service_type\s+FROM \(`).
+		WithArgs("central-1").
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 121, got 120"})
+	expectMeshRequirements(mock, "central-1", "skipper")
+
+	_, peerRequired, _, _, err := server.meshServiceRequirements(t.Context(), "central-1")
+	if err != nil {
+		t.Fatalf("meshServiceRequirements returned error after retry: %v", err)
+	}
+	if _, ok := peerRequired["bridge"]; !ok {
+		t.Fatalf("peer requirements missing bridge after retry: %v", sortedStringKeys(peerRequired))
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
@@ -415,6 +441,32 @@ func TestSyncMeshIncludesReciprocalServiceConsumers(t *testing.T) {
 	}
 	if len(resp.GetPeers()) != 1 || resp.GetPeers()[0].GetNodeName() != "regional-1" {
 		t.Fatalf("expected reciprocal regional consumer peer, got %#v", resp.GetPeers())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestCollectReciprocalServicePeerNodeIDsRetriesSchemaVersionMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	expectReciprocalProvidedServices(mock, "central-1", "quartermaster")
+	mock.ExpectQuery(`(?s)WITH provided AS .*SELECT DISTINCT n\.node_id`).
+		WithArgs("central-1", "core", "quartermaster", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 121, got 120"})
+	expectReciprocalDependentNodes(mock, "core", "central-1", "quartermaster", "regional-1")
+
+	peers, err := server.collectReciprocalServicePeerNodeIDs(t.Context(), "core", "central-1")
+	if err != nil {
+		t.Fatalf("collectReciprocalServicePeerNodeIDs returned error after retry: %v", err)
+	}
+	if _, ok := peers["regional-1"]; !ok {
+		t.Fatalf("reciprocal peers missing regional-1 after retry: %v", sortedStringKeys(peers))
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

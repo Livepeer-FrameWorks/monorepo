@@ -6350,54 +6350,62 @@ func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeI
 	peerRequired := map[string]struct{}{"quartermaster": {}}
 	globalPeerRequired := map[string]struct{}{}
 	var infraRequired []topology.InfraDependency
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT service_type
-		FROM (
-			SELECT s.type AS service_type
-			FROM quartermaster.service_instances si
-			JOIN quartermaster.services s ON s.service_id = si.service_id
-			WHERE si.node_id = $1
-			  AND si.status IN ('running', 'active')
-			  AND s.type IS NOT NULL
-			  AND s.type <> ''
-			UNION ALL
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
-					ELSE '[]'::jsonb
-				END
-			) AS service_type
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $1
-			UNION ALL
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
-					ELSE '[]'::jsonb
-				END
-			) AS service_type
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $1
-		) local_services
-		WHERE service_type IS NOT NULL AND service_type <> ''
-	`, nodeID)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("local service query: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
 	var localServices []string
-	for rows.Next() {
-		var serviceType string
-		if scanErr := rows.Scan(&serviceType); scanErr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("scan local service: %w", scanErr)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT DISTINCT service_type
+			FROM (
+				SELECT s.type AS service_type
+				FROM quartermaster.service_instances si
+				JOIN quartermaster.services s ON s.service_id = si.service_id
+				WHERE si.node_id = $1
+				  AND si.status IN ('running', 'active')
+				  AND s.type IS NOT NULL
+				  AND s.type <> ''
+				UNION ALL
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
+						ELSE '[]'::jsonb
+					END
+				) AS service_type
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $1
+				UNION ALL
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
+						ELSE '[]'::jsonb
+					END
+				) AS service_type
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $1
+			) local_services
+			WHERE service_type IS NOT NULL AND service_type <> ''
+		`, nodeID)
+		if err != nil {
+			return fmt.Errorf("local service query: %w", err)
 		}
-		if serviceType != "" {
-			localServices = append(localServices, serviceType)
+		defer func() { _ = rows.Close() }()
+
+		var services []string
+		for rows.Next() {
+			var serviceType string
+			if scanErr := rows.Scan(&serviceType); scanErr != nil {
+				return fmt.Errorf("scan local service: %w", scanErr)
+			}
+			if serviceType != "" {
+				services = append(services, serviceType)
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("iterate local services: %w", err)
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate local services: %w", err)
+		}
+		localServices = services
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
 	for _, dep := range topology.DNSDependenciesForServices(localServices) {
 		dnsRequired[dep] = struct{}{}
@@ -6429,114 +6437,8 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 	if len(peerTypes) == 0 && len(globalPeerTypes) == 0 {
 		return endpoints, requiredPeerNodeIDs, nil
 	}
-	svcRows, svcErr := s.db.QueryContext(ctx, `
-		WITH request_contexts AS (
-			SELECT $1::text AS cluster_id WHERE $1 <> ''
-			UNION
-			SELECT si.cluster_id
-			FROM quartermaster.service_instances si
-			WHERE si.node_id = $2
-			  AND si.status IN ('running', 'active')
-			  AND si.cluster_id IS NOT NULL
-			  AND si.cluster_id <> ''
-			UNION
-			SELECT sca.cluster_id
-			FROM quartermaster.service_instances si
-			JOIN quartermaster.service_cluster_assignments sca
-			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE si.node_id = $2
-			  AND si.status IN ('running', 'active')
-			  AND sca.cluster_id IS NOT NULL
-			  AND sca.cluster_id <> ''
-			UNION
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
-					ELSE '[]'::jsonb
-				END
-			) AS cluster_id
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $2
-			UNION
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
-					ELSE '[]'::jsonb
-				END
-			) AS cluster_id
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $2
-			UNION
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
-					ELSE '[]'::jsonb
-				END
-			) AS cluster_id
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $2
-		),
-		eligible AS (
-			SELECT s.type,
-			       si.node_id,
-			       host(n.wireguard_ip) AS wireguard_ip,
-			       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster
-			FROM quartermaster.services s
-			JOIN quartermaster.service_instances si ON si.service_id = s.service_id
-			JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
-			LEFT JOIN quartermaster.service_cluster_assignments sca
-			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE si.status IN ('running', 'active')
-			  AND n.wireguard_ip IS NOT NULL
-			  AND n.status = 'active'
-			  AND (s.type = ANY($3::text[]) OR s.type = ANY($4::text[]))
-		),
-		service_scope AS (
-			SELECT type, COUNT(DISTINCT provider_cluster) AS provider_cluster_count
-			FROM eligible
-			WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
-			GROUP BY type
-		)
-		SELECT DISTINCT e.type, e.node_id, e.wireguard_ip
-		FROM eligible e
-		JOIN service_scope ss ON ss.type = e.type
-		WHERE e.type = ANY($4::text[])
-		   OR e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
-		   OR ss.provider_cluster_count = 1
-	`, clusterID, nodeID, pq.Array(peerTypes), pq.Array(globalPeerTypes))
-	if svcErr != nil {
-		return nil, nil, fmt.Errorf("service endpoint query: %w", svcErr)
-	}
-	defer func() { _ = svcRows.Close() }()
-	for svcRows.Next() {
-		var svcType, svcNodeID, svcIP string
-		if scanErr := svcRows.Scan(&svcType, &svcNodeID, &svcIP); scanErr != nil {
-			return nil, nil, fmt.Errorf("scan service endpoint: %w", scanErr)
-		}
-		if svcIP == "" {
-			continue
-		}
-		if svcNodeID != "" {
-			requiredPeerNodeIDs[svcNodeID] = struct{}{}
-		}
-		if _, ok := dnsRequired[svcType]; !ok {
-			continue
-		}
-		if endpoints[svcType] == nil {
-			endpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
-		}
-		endpoints[svcType].Ips = append(endpoints[svcType].Ips, svcIP)
-	}
-	if err := svcRows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate service endpoints: %w", err)
-	}
-	return endpoints, requiredPeerNodeIDs, nil
-}
-
-func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) (map[string]struct{}, error) {
-	out := map[string]struct{}{}
-	for _, dep := range dedupeInfraDependencies(infraRequired) {
-		rows, err := s.db.QueryContext(ctx, `
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		svcRows, svcErr := s.db.QueryContext(ctx, `
 			WITH request_contexts AS (
 				SELECT $1::text AS cluster_id WHERE $1 <> ''
 				UNION
@@ -6549,95 +6451,225 @@ func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clust
 				UNION
 				SELECT sca.cluster_id
 				FROM quartermaster.service_instances si
-					JOIN quartermaster.service_cluster_assignments sca
-					  ON sca.service_instance_id = si.id AND sca.is_active = true
-					WHERE si.node_id = $2
-					  AND si.status IN ('running', 'active')
-					  AND sca.cluster_id IS NOT NULL
-					  AND sca.cluster_id <> ''
-					UNION
-					SELECT jsonb_array_elements_text(
-						CASE
-							WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
-							ELSE '[]'::jsonb
-						END
-					) AS cluster_id
-					FROM quartermaster.infrastructure_nodes n
-					WHERE n.node_id = $2
-					UNION
-					SELECT jsonb_array_elements_text(
-						CASE
-							WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
-							ELSE '[]'::jsonb
-						END
-					) AS cluster_id
-					FROM quartermaster.infrastructure_nodes n
-					WHERE n.node_id = $2
-					UNION
-					SELECT jsonb_array_elements_text(
-						CASE
-							WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
-							ELSE '[]'::jsonb
-						END
-					) AS cluster_id
-					FROM quartermaster.infrastructure_nodes n
-					WHERE n.node_id = $2
-				),
+				JOIN quartermaster.service_cluster_assignments sca
+				  ON sca.service_instance_id = si.id AND sca.is_active = true
+				WHERE si.node_id = $2
+				  AND si.status IN ('running', 'active')
+				  AND sca.cluster_id IS NOT NULL
+				  AND sca.cluster_id <> ''
+				UNION
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
+						ELSE '[]'::jsonb
+					END
+				) AS cluster_id
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $2
+				UNION
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
+						ELSE '[]'::jsonb
+					END
+				) AS cluster_id
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $2
+				UNION
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
+						ELSE '[]'::jsonb
+					END
+				) AS cluster_id
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $2
+			),
 			eligible AS (
-				SELECT si.node_id,
-				       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster,
-				       COALESCE(si.metadata->>'infra_role', '') AS infra_role,
-				       COALESCE(si.metadata->>'infra_name', '') AS infra_name
-				FROM quartermaster.services svc
-				JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+				SELECT s.type,
+				       si.node_id,
+				       host(n.wireguard_ip) AS wireguard_ip,
+				       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster
+				FROM quartermaster.services s
+				JOIN quartermaster.service_instances si ON si.service_id = s.service_id
 				JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
 				LEFT JOIN quartermaster.service_cluster_assignments sca
 				  ON sca.service_instance_id = si.id AND sca.is_active = true
 				WHERE si.status IN ('running', 'active')
 				  AND n.wireguard_ip IS NOT NULL
 				  AND n.status = 'active'
-				  AND svc.type = $3
-				  AND svc.plane = 'infra'
+				  AND (s.type = ANY($3::text[]) OR s.type = ANY($4::text[]))
 			),
 			service_scope AS (
-				SELECT COUNT(DISTINCT provider_cluster) AS provider_cluster_count
+				SELECT type, COUNT(DISTINCT provider_cluster) AS provider_cluster_count
 				FROM eligible
 				WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
+				GROUP BY type
 			)
-			SELECT DISTINCT e.node_id
+			SELECT DISTINCT e.type, e.node_id, e.wireguard_ip
 			FROM eligible e
-			CROSS JOIN service_scope ss
-			WHERE (
-				$4 = 'primary' AND e.infra_role = 'primary'
-			) OR (
-				$4 = 'aggregator' AND e.infra_role = 'aggregator'
-			) OR (
-				$4 = 'named' AND e.infra_name = $5 AND (
-					e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
-					OR ss.provider_cluster_count = 1
+			JOIN service_scope ss ON ss.type = e.type
+			WHERE e.type = ANY($4::text[])
+			   OR e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+			   OR ss.provider_cluster_count = 1
+		`, clusterID, nodeID, pq.Array(peerTypes), pq.Array(globalPeerTypes))
+		if svcErr != nil {
+			return fmt.Errorf("service endpoint query: %w", svcErr)
+		}
+		defer func() { _ = svcRows.Close() }()
+
+		nextEndpoints := map[string]*pb.ServiceEndpoints{}
+		nextRequiredPeerNodeIDs := map[string]struct{}{}
+		for svcRows.Next() {
+			var svcType, svcNodeID, svcIP string
+			if scanErr := svcRows.Scan(&svcType, &svcNodeID, &svcIP); scanErr != nil {
+				return fmt.Errorf("scan service endpoint: %w", scanErr)
+			}
+			if svcIP == "" {
+				continue
+			}
+			if svcNodeID != "" {
+				nextRequiredPeerNodeIDs[svcNodeID] = struct{}{}
+			}
+			if _, ok := dnsRequired[svcType]; !ok {
+				continue
+			}
+			if nextEndpoints[svcType] == nil {
+				nextEndpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
+			}
+			nextEndpoints[svcType].Ips = append(nextEndpoints[svcType].Ips, svcIP)
+		}
+		if err := svcRows.Err(); err != nil {
+			return fmt.Errorf("iterate service endpoints: %w", err)
+		}
+		endpoints = nextEndpoints
+		requiredPeerNodeIDs = nextRequiredPeerNodeIDs
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return endpoints, requiredPeerNodeIDs, nil
+}
+
+func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	for _, dep := range dedupeInfraDependencies(infraRequired) {
+		var depPeerNodeIDs []string
+		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			rows, err := s.db.QueryContext(ctx, `
+				WITH request_contexts AS (
+					SELECT $1::text AS cluster_id WHERE $1 <> ''
+					UNION
+					SELECT si.cluster_id
+					FROM quartermaster.service_instances si
+					WHERE si.node_id = $2
+					  AND si.status IN ('running', 'active')
+					  AND si.cluster_id IS NOT NULL
+					  AND si.cluster_id <> ''
+					UNION
+					SELECT sca.cluster_id
+					FROM quartermaster.service_instances si
+						JOIN quartermaster.service_cluster_assignments sca
+						  ON sca.service_instance_id = si.id AND sca.is_active = true
+						WHERE si.node_id = $2
+						  AND si.status IN ('running', 'active')
+						  AND sca.cluster_id IS NOT NULL
+						  AND sca.cluster_id <> ''
+						UNION
+						SELECT jsonb_array_elements_text(
+							CASE
+								WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
+								ELSE '[]'::jsonb
+							END
+						) AS cluster_id
+						FROM quartermaster.infrastructure_nodes n
+						WHERE n.node_id = $2
+						UNION
+						SELECT jsonb_array_elements_text(
+							CASE
+								WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
+								ELSE '[]'::jsonb
+							END
+						) AS cluster_id
+						FROM quartermaster.infrastructure_nodes n
+						WHERE n.node_id = $2
+						UNION
+						SELECT jsonb_array_elements_text(
+							CASE
+								WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
+								ELSE '[]'::jsonb
+							END
+						) AS cluster_id
+						FROM quartermaster.infrastructure_nodes n
+						WHERE n.node_id = $2
+					),
+				eligible AS (
+					SELECT si.node_id,
+					       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster,
+					       COALESCE(si.metadata->>'infra_role', '') AS infra_role,
+					       COALESCE(si.metadata->>'infra_name', '') AS infra_name
+					FROM quartermaster.services svc
+					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+					LEFT JOIN quartermaster.service_cluster_assignments sca
+					  ON sca.service_instance_id = si.id AND sca.is_active = true
+					WHERE si.status IN ('running', 'active')
+					  AND n.wireguard_ip IS NOT NULL
+					  AND n.status = 'active'
+					  AND svc.type = $3
+					  AND svc.plane = 'infra'
+				),
+				service_scope AS (
+					SELECT COUNT(DISTINCT provider_cluster) AS provider_cluster_count
+					FROM eligible
+					WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
 				)
-			) OR (
-				$4 = 'regional' AND e.infra_role = 'regional' AND (
-					e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
-					OR ss.provider_cluster_count = 1
+				SELECT DISTINCT e.node_id
+				FROM eligible e
+				CROSS JOIN service_scope ss
+				WHERE (
+					$4 = 'primary' AND e.infra_role = 'primary'
+				) OR (
+					$4 = 'aggregator' AND e.infra_role = 'aggregator'
+				) OR (
+					$4 = 'named' AND e.infra_name = $5 AND (
+						e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+						OR ss.provider_cluster_count = 1
+					)
+				) OR (
+					$4 = 'regional' AND e.infra_role = 'regional' AND (
+						e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
+						OR ss.provider_cluster_count = 1
+					)
 				)
-			)
-		`, clusterID, nodeID, dep.Kind, dep.Provider, dep.Name)
+			`, clusterID, nodeID, dep.Kind, dep.Provider, dep.Name)
+			if err != nil {
+				return fmt.Errorf("infra provider query kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
+			}
+			defer func() { _ = rows.Close() }()
+
+			var nextPeerNodeIDs []string
+			for rows.Next() {
+				var peerNodeID string
+				if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+					return fmt.Errorf("scan infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, scanErr)
+				}
+				if peerNodeID != "" {
+					nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("iterate infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
+			}
+			depPeerNodeIDs = nextPeerNodeIDs
+			return nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("infra provider query kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
+			return nil, err
 		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var peerNodeID string
-			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
-				return nil, fmt.Errorf("scan infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, scanErr)
-			}
-			if peerNodeID != "" {
-				out[peerNodeID] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterate infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
+		for _, peerNodeID := range depPeerNodeIDs {
+			out[peerNodeID] = struct{}{}
 		}
 	}
 	return out, nil
@@ -6655,181 +6687,209 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 			continue
 		}
 		globalDependents := topology.GlobalDNSServiceDependents([]string{targetType})
-		rows, queryErr := s.db.QueryContext(ctx, `
-			WITH provided AS (
-				SELECT DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id, $2) AS provider_cluster
-				FROM quartermaster.services svc
-				JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
-				JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
-				LEFT JOIN quartermaster.service_cluster_assignments sca
-				  ON sca.service_instance_id = si.id AND sca.is_active = true
-				WHERE si.node_id = $1
-				  AND si.status IN ('running', 'active')
-				  AND svc.type = $3
-				UNION
-				SELECT $2::text AS provider_cluster
-			),
-			service_scope AS (
-				SELECT COUNT(DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id)) AS provider_cluster_count
-				FROM quartermaster.services svc
-				JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
-				JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
-				LEFT JOIN quartermaster.service_cluster_assignments sca
-				  ON sca.service_instance_id = si.id AND sca.is_active = true
-				WHERE si.status IN ('running', 'active')
+		var dependentPeerNodeIDs []string
+		queryErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			rows, queryErr := s.db.QueryContext(ctx, `
+				WITH provided AS (
+					SELECT DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id, $2) AS provider_cluster
+					FROM quartermaster.services svc
+					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+					LEFT JOIN quartermaster.service_cluster_assignments sca
+					  ON sca.service_instance_id = si.id AND sca.is_active = true
+					WHERE si.node_id = $1
+					  AND si.status IN ('running', 'active')
+					  AND svc.type = $3
+					UNION
+					SELECT $2::text AS provider_cluster
+				),
+				service_scope AS (
+					SELECT COUNT(DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id)) AS provider_cluster_count
+					FROM quartermaster.services svc
+					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+					LEFT JOIN quartermaster.service_cluster_assignments sca
+					  ON sca.service_instance_id = si.id AND sca.is_active = true
+					WHERE si.status IN ('running', 'active')
+					  AND n.wireguard_ip IS NOT NULL
+					  AND n.status = 'active'
+					  AND svc.type = $3
+				),
+				node_services AS (
+					SELECT si.node_id, svc.type AS service_type
+					FROM quartermaster.service_instances si
+					JOIN quartermaster.services svc ON svc.service_id = si.service_id
+					WHERE si.status IN ('running', 'active')
+					  AND svc.type IS NOT NULL
+					  AND svc.type <> ''
+					UNION
+					SELECT n.node_id, jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
+							ELSE '[]'::jsonb
+						END
+					) AS service_type
+					FROM quartermaster.infrastructure_nodes n
+					UNION
+					SELECT n.node_id, jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
+							ELSE '[]'::jsonb
+						END
+					) AS service_type
+					FROM quartermaster.infrastructure_nodes n
+				),
+				consumer_contexts AS (
+					SELECT node_id, cluster_id
+					FROM quartermaster.infrastructure_nodes
+					WHERE cluster_id IS NOT NULL AND cluster_id <> ''
+					UNION
+					SELECT si.node_id, si.cluster_id
+					FROM quartermaster.service_instances si
+					WHERE si.status IN ('running', 'active')
+					  AND si.cluster_id IS NOT NULL
+					  AND si.cluster_id <> ''
+					UNION
+					SELECT si.node_id, sca.cluster_id
+					FROM quartermaster.service_instances si
+					JOIN quartermaster.service_cluster_assignments sca
+					  ON sca.service_instance_id = si.id AND sca.is_active = true
+					WHERE si.status IN ('running', 'active')
+					  AND sca.cluster_id IS NOT NULL
+					  AND sca.cluster_id <> ''
+					UNION
+					SELECT n.node_id, jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+					UNION
+					SELECT n.node_id, jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+					UNION
+					SELECT n.node_id, jsonb_array_elements_text(
+						CASE
+							WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
+							ELSE '[]'::jsonb
+						END
+					) AS cluster_id
+					FROM quartermaster.infrastructure_nodes n
+				)
+				SELECT DISTINCT n.node_id
+				FROM quartermaster.infrastructure_nodes n
+				JOIN node_services ns ON ns.node_id = n.node_id
+				CROSS JOIN service_scope ss
+				WHERE n.node_id <> $1
+				  AND n.wireguard_public_key IS NOT NULL
 				  AND n.wireguard_ip IS NOT NULL
 				  AND n.status = 'active'
-				  AND svc.type = $3
-			),
-			node_services AS (
-				SELECT si.node_id, svc.type AS service_type
-				FROM quartermaster.service_instances si
-				JOIN quartermaster.services svc ON svc.service_id = si.service_id
-				WHERE si.status IN ('running', 'active')
-				  AND svc.type IS NOT NULL
-				  AND svc.type <> ''
-				UNION
-				SELECT n.node_id, jsonb_array_elements_text(
-					CASE
-						WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
-						ELSE '[]'::jsonb
-					END
-				) AS service_type
-				FROM quartermaster.infrastructure_nodes n
-				UNION
-				SELECT n.node_id, jsonb_array_elements_text(
-					CASE
-						WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
-						ELSE '[]'::jsonb
-					END
-				) AS service_type
-				FROM quartermaster.infrastructure_nodes n
-			),
-			consumer_contexts AS (
-				SELECT node_id, cluster_id
-				FROM quartermaster.infrastructure_nodes
-				WHERE cluster_id IS NOT NULL AND cluster_id <> ''
-				UNION
-				SELECT si.node_id, si.cluster_id
-				FROM quartermaster.service_instances si
-				WHERE si.status IN ('running', 'active')
-				  AND si.cluster_id IS NOT NULL
-				  AND si.cluster_id <> ''
-				UNION
-				SELECT si.node_id, sca.cluster_id
-				FROM quartermaster.service_instances si
-				JOIN quartermaster.service_cluster_assignments sca
-				  ON sca.service_instance_id = si.id AND sca.is_active = true
-				WHERE si.status IN ('running', 'active')
-				  AND sca.cluster_id IS NOT NULL
-				  AND sca.cluster_id <> ''
-				UNION
-				SELECT n.node_id, jsonb_array_elements_text(
-					CASE
-						WHEN jsonb_typeof(n.metadata->'desired_cluster_ids') = 'array' THEN n.metadata->'desired_cluster_ids'
-						ELSE '[]'::jsonb
-					END
-				) AS cluster_id
-				FROM quartermaster.infrastructure_nodes n
-				UNION
-				SELECT n.node_id, jsonb_array_elements_text(
-					CASE
-						WHEN jsonb_typeof(n.metadata->'service_cluster_ids') = 'array' THEN n.metadata->'service_cluster_ids'
-						ELSE '[]'::jsonb
-					END
-				) AS cluster_id
-				FROM quartermaster.infrastructure_nodes n
-				UNION
-				SELECT n.node_id, jsonb_array_elements_text(
-					CASE
-						WHEN jsonb_typeof(n.metadata->'logical_cluster_ids') = 'array' THEN n.metadata->'logical_cluster_ids'
-						ELSE '[]'::jsonb
-					END
-				) AS cluster_id
-				FROM quartermaster.infrastructure_nodes n
-			)
-			SELECT DISTINCT n.node_id
-			FROM quartermaster.infrastructure_nodes n
-			JOIN node_services ns ON ns.node_id = n.node_id
-			CROSS JOIN service_scope ss
-			WHERE n.node_id <> $1
-			  AND n.wireguard_public_key IS NOT NULL
-			  AND n.wireguard_ip IS NOT NULL
-			  AND n.status = 'active'
-			  AND ns.service_type = ANY($4::text[])
-			  AND (
-				ns.service_type = ANY($5::text[])
-				OR
-				ss.provider_cluster_count <= 1
-				OR EXISTS (
-					SELECT 1
-					FROM provided p
-					JOIN consumer_contexts cc ON cc.node_id = n.node_id AND cc.cluster_id = p.provider_cluster
-				)
-			  )
-			`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
+				  AND ns.service_type = ANY($4::text[])
+				  AND (
+					ns.service_type = ANY($5::text[])
+					OR
+					ss.provider_cluster_count <= 1
+					OR EXISTS (
+						SELECT 1
+						FROM provided p
+						JOIN consumer_contexts cc ON cc.node_id = n.node_id AND cc.cluster_id = p.provider_cluster
+					)
+				  )
+				`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
+			if queryErr != nil {
+				return fmt.Errorf("dependent node query service_type=%s: %w", targetType, queryErr)
+			}
+			defer func() { _ = rows.Close() }()
+
+			var nextPeerNodeIDs []string
+			for rows.Next() {
+				var peerNodeID string
+				if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+					return fmt.Errorf("scan dependent node service_type=%s: %w", targetType, scanErr)
+				}
+				if peerNodeID != "" {
+					nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("iterate dependent nodes service_type=%s: %w", targetType, err)
+			}
+			dependentPeerNodeIDs = nextPeerNodeIDs
+			return nil
+		})
 		if queryErr != nil {
-			return nil, fmt.Errorf("dependent node query service_type=%s: %w", targetType, queryErr)
+			return nil, queryErr
 		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var peerNodeID string
-			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
-				return nil, fmt.Errorf("scan dependent node service_type=%s: %w", targetType, scanErr)
-			}
-			if peerNodeID != "" {
-				out[peerNodeID] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterate dependent nodes service_type=%s: %w", targetType, err)
+		for _, peerNodeID := range dependentPeerNodeIDs {
+			out[peerNodeID] = struct{}{}
 		}
 	}
 	return out, nil
 }
 
 func (s *QuartermasterServer) meshProvidedServiceTypes(ctx context.Context, nodeID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT service_type
-		FROM (
-			SELECT svc.type AS service_type
-			FROM quartermaster.service_instances si
-			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			WHERE si.node_id = $1
-			  AND si.status IN ('running', 'active')
-			  AND svc.type IS NOT NULL
-			  AND svc.type <> ''
-			UNION ALL
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
-					ELSE '[]'::jsonb
-				END
-			) AS service_type
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $1
-			UNION ALL
-			SELECT jsonb_array_elements_text(
-				CASE
-					WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
-					ELSE '[]'::jsonb
-				END
-			) AS service_type
-			FROM quartermaster.infrastructure_nodes n
-			WHERE n.node_id = $1
-		) local_services
-		WHERE service_type IS NOT NULL AND service_type <> ''
-	`, nodeID)
+	var out []string
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT DISTINCT service_type
+			FROM (
+				SELECT svc.type AS service_type
+				FROM quartermaster.service_instances si
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE si.node_id = $1
+				  AND si.status IN ('running', 'active')
+				  AND svc.type IS NOT NULL
+				  AND svc.type <> ''
+				UNION ALL
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'desired_service_types') = 'array' THEN n.metadata->'desired_service_types'
+						ELSE '[]'::jsonb
+					END
+				) AS service_type
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $1
+				UNION ALL
+				SELECT jsonb_array_elements_text(
+					CASE
+						WHEN jsonb_typeof(n.metadata->'service_types') = 'array' THEN n.metadata->'service_types'
+						ELSE '[]'::jsonb
+					END
+				) AS service_type
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $1
+			) local_services
+			WHERE service_type IS NOT NULL AND service_type <> ''
+		`, nodeID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+
+		var next []string
+		for rows.Next() {
+			var serviceType string
+			if scanErr := rows.Scan(&serviceType); scanErr != nil {
+				return scanErr
+			}
+			if serviceType != "" {
+				next = append(next, serviceType)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		out = next
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var serviceType string
-		if scanErr := rows.Scan(&serviceType); scanErr == nil && serviceType != "" {
-			out = append(out, serviceType)
-		}
 	}
 	return out, nil
 }
