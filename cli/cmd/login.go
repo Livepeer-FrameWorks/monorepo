@@ -104,8 +104,8 @@ func runDeviceLogin(ctx context.Context, cmd *cobra.Command, store credentials.S
 	fmt.Fprintf(out, "Enter code: %s\n\n", start.UserCode)
 
 	if !noBrowser && term.IsTerminal(int(os.Stdout.Fd())) {
-		if err := loginOpenBrowser(start.VerificationURIComplete); err != nil {
-			ux.Warn(out, fmt.Sprintf("Could not open browser automatically: %v", err))
+		if openErr := loginOpenBrowser(start.VerificationURIComplete); openErr != nil {
+			ux.Warn(out, fmt.Sprintf("Could not open browser automatically: %v", openErr))
 		}
 	}
 
@@ -245,7 +245,9 @@ func pollDeviceAuthorization(ctx context.Context, bridgeURL string, start device
 		}
 
 		var pollErr deviceErrorResponse
-		_ = json.Unmarshal(errBody, &pollErr)
+		if decodeErr := json.Unmarshal(errBody, &pollErr); decodeErr != nil {
+			pollErr.Error = strings.TrimSpace(string(errBody))
+		}
 		switch pollErr.Error {
 		case "authorization_pending":
 			continue
