@@ -95,7 +95,10 @@ struct DiagnosticsView: View {
     VStack(spacing: 0) {
       header
       Divider()
-      controls
+      ScrollView {
+        controls
+      }
+      .frame(maxHeight: 300)
       Divider()
       outputView
       footer
