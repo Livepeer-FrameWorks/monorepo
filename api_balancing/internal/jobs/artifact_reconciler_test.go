@@ -13,6 +13,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func newTestReconciler(t *testing.T, db *sql.DB, s3 ReconcilerS3Client, commodore ReconcilerCommodoreClient, freeze FreezeRequestSender) *ArtifactReconciler {
@@ -125,6 +126,42 @@ func TestRetryFailed_QueriesFailedArtifacts(t *testing.T) {
 	}
 	if call.Req.AssetHash != "hash1" {
 		t.Fatalf("expected hash1, got %s", call.Req.AssetHash)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetryFailed_RetriesSchemaVersionMismatch(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	s3 := &mockReconcilerS3Client{}
+	fc := &freezeCapture{}
+	r := newTestReconciler(t, mockDB, s3, nil, fc.send)
+
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}).
+		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4")
+
+	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
+		WithArgs(50, 8).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 73, got 72"})
+	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
+		WithArgs(50, 8).
+		WillReturnRows(rows)
+	mock.ExpectExec("UPDATE foghorn.artifacts.*storage_location = 'freezing'").
+		WithArgs("hash1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	count := r.retryFailed(context.Background())
+	if count != 1 {
+		t.Fatalf("expected 1 retried after schema retry, got %d", count)
+	}
+	if fc.count() != 1 {
+		t.Fatalf("expected 1 freeze call, got %d", fc.count())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

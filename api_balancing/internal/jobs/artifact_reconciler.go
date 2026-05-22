@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -176,19 +177,25 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 	if r.commodore == nil {
 		return 0
 	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT artifact_hash, artifact_type, tenant_id::text,
-		       COALESCE(storage_cluster_id, ''), COALESCE(origin_cluster_id, ''),
-		       COALESCE(has_thumbnails, false), COALESCE(size_bytes, 0)
-		FROM foghorn.artifacts
-		WHERE status != 'deleted'
-		  AND tenant_id IS NOT NULL
-		  AND (COALESCE(storage_cluster_id, '') <> ''
-		       OR COALESCE(has_thumbnails, false) = TRUE
-		       OR COALESCE(size_bytes, 0) > 0)
-		ORDER BY updated_at DESC
-		LIMIT $1
-	`, r.batchSize)
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT artifact_hash, artifact_type, tenant_id::text,
+			       COALESCE(storage_cluster_id, ''), COALESCE(origin_cluster_id, ''),
+			       COALESCE(has_thumbnails, false), COALESCE(size_bytes, 0)
+			FROM foghorn.artifacts
+			WHERE status != 'deleted'
+			  AND tenant_id IS NOT NULL
+			  AND (COALESCE(storage_cluster_id, '') <> ''
+			       OR COALESCE(has_thumbnails, false) = TRUE
+			       OR COALESCE(size_bytes, 0) > 0)
+			ORDER BY updated_at DESC
+			LIMIT $1
+		`, r.batchSize)
+		return err
+	})
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query artifacts for Commodore projection repair")
 		return 0
@@ -244,23 +251,29 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 	// excluded from future retry scans — operator-visible terminal-by-budget.
 	// lost_local is already terminal (separate filter via sync_status='failed').
 	// DVR rows use the segment ledger and are excluded from generic freeze.
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
-		       an.node_id, an.file_path
-		FROM foghorn.artifacts a
-		JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
-		WHERE a.sync_status = 'failed'
-		  AND a.artifact_type != 'dvr'
-		  AND a.failure_count < $2
-		  AND a.updated_at < NOW() - LEAST(
-		      INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
-		      INTERVAL '1 hour'
-		    )
-		  AND a.status != 'deleted'
-		  AND an.is_orphaned = false
-		ORDER BY a.updated_at ASC
-		LIMIT $1
-	`, r.batchSize, maxArtifactRetries)
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
+			       an.node_id, an.file_path
+			FROM foghorn.artifacts a
+			JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
+			WHERE a.sync_status = 'failed'
+			  AND a.artifact_type != 'dvr'
+			  AND a.failure_count < $2
+			  AND a.updated_at < NOW() - LEAST(
+			      INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
+			      INTERVAL '1 hour'
+			    )
+			  AND a.status != 'deleted'
+			  AND an.is_orphaned = false
+			ORDER BY a.updated_at ASC
+			LIMIT $1
+		`, r.batchSize, maxArtifactRetries)
+		return err
+	})
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query failed artifacts for retry")
 		return 0

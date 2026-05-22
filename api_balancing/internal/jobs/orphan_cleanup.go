@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
@@ -138,17 +139,23 @@ type orphanedVOD struct {
 // findOrphanedClips finds soft-deleted clips that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedClips(ctx context.Context) ([]orphanedClip, error) {
 	// Find clips marked 'deleted' that still have non-orphaned node copies
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, an.node_id
-		FROM foghorn.artifacts a
-		INNER JOIN foghorn.artifact_nodes an
-			ON an.artifact_hash = a.artifact_hash
-			AND an.is_orphaned = false
-		WHERE a.artifact_type = 'clip'
-		  AND a.status = 'deleted'
-		  AND a.updated_at < NOW() - $1::interval
-		LIMIT 100
-	`, j.maxAge.String())
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
+		rows, err = j.db.QueryContext(ctx, `
+			SELECT a.artifact_hash, an.node_id
+			FROM foghorn.artifacts a
+			INNER JOIN foghorn.artifact_nodes an
+				ON an.artifact_hash = a.artifact_hash
+				AND an.is_orphaned = false
+			WHERE a.artifact_type = 'clip'
+			  AND a.status = 'deleted'
+			  AND a.updated_at < NOW() - $1::interval
+			LIMIT 100
+		`, j.maxAge.String())
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -168,17 +175,23 @@ func (j *OrphanCleanupJob) findOrphanedClips(ctx context.Context) ([]orphanedCli
 // findOrphanedDVRs finds soft-deleted DVRs that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedDVRs(ctx context.Context) ([]orphanedDVR, error) {
 	// Find DVRs marked 'deleted' that still have non-orphaned node copies
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, an.node_id
-		FROM foghorn.artifacts a
-		INNER JOIN foghorn.artifact_nodes an
-			ON an.artifact_hash = a.artifact_hash
-			AND an.is_orphaned = false
-		WHERE a.artifact_type = 'dvr'
-		  AND a.status = 'deleted'
-		  AND a.updated_at < NOW() - $1::interval
-		LIMIT 100
-	`, j.maxAge.String())
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
+		rows, err = j.db.QueryContext(ctx, `
+			SELECT a.artifact_hash, an.node_id
+			FROM foghorn.artifacts a
+			INNER JOIN foghorn.artifact_nodes an
+				ON an.artifact_hash = a.artifact_hash
+				AND an.is_orphaned = false
+			WHERE a.artifact_type = 'dvr'
+			  AND a.status = 'deleted'
+			  AND a.updated_at < NOW() - $1::interval
+			LIMIT 100
+		`, j.maxAge.String())
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -198,17 +211,23 @@ func (j *OrphanCleanupJob) findOrphanedDVRs(ctx context.Context) ([]orphanedDVR,
 // findOrphanedVODs finds soft-deleted VODs (uploads) that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD, error) {
 	// Find VODs marked 'deleted' that still have non-orphaned node copies
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, an.node_id
-		FROM foghorn.artifacts a
-		INNER JOIN foghorn.artifact_nodes an
-			ON an.artifact_hash = a.artifact_hash
-			AND an.is_orphaned = false
-		WHERE a.artifact_type = 'vod'
-		  AND a.status = 'deleted'
-		  AND a.updated_at < NOW() - $1::interval
-		LIMIT 100
-	`, j.maxAge.String())
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
+		rows, err = j.db.QueryContext(ctx, `
+			SELECT a.artifact_hash, an.node_id
+			FROM foghorn.artifacts a
+			INNER JOIN foghorn.artifact_nodes an
+				ON an.artifact_hash = a.artifact_hash
+				AND an.is_orphaned = false
+			WHERE a.artifact_type = 'vod'
+			  AND a.status = 'deleted'
+			  AND a.updated_at < NOW() - $1::interval
+			LIMIT 100
+		`, j.maxAge.String())
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

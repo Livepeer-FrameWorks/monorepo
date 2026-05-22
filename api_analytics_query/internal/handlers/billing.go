@@ -794,19 +794,24 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tenantID string) error {
 	// Get last processed timestamp from cursor
 	var lastProcessed time.Time
-	err := bs.yugaDB.QueryRowContext(ctx, `
-		SELECT last_processed_at FROM periscope.billing_cursors WHERE tenant_id = $1
-	`, tenantID).Scan(&lastProcessed)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return bs.yugaDB.QueryRowContext(ctx, `
+			SELECT last_processed_at FROM periscope.billing_cursors WHERE tenant_id = $1
+		`, tenantID).Scan(&lastProcessed)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Default to 24 hours ago for new tenants/first run
 		// This avoids reprocessing history forever if we add a new tenant
 		lastProcessed = time.Now().Add(-24 * time.Hour)
 		// Insert initial cursor
-		_, err = bs.yugaDB.ExecContext(ctx, `
-			INSERT INTO periscope.billing_cursors (tenant_id, last_processed_at, updated_at)
-			VALUES ($1, $2, NOW())
-		`, tenantID, lastProcessed)
+		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			_, execErr := bs.yugaDB.ExecContext(ctx, `
+				INSERT INTO periscope.billing_cursors (tenant_id, last_processed_at, updated_at)
+				VALUES ($1, $2, NOW())
+			`, tenantID, lastProcessed)
+			return execErr
+		})
 		if err != nil {
 			return fmt.Errorf("failed to initialize cursor: %w", err)
 		}
@@ -839,11 +844,14 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		}
 
 		// Update cursor ONLY after successful send
-		_, err = bs.yugaDB.ExecContext(ctx, `
-			UPDATE periscope.billing_cursors 
-			SET last_processed_at = $1, updated_at = NOW()
-			WHERE tenant_id = $2
-		`, targetEnd, tenantID)
+		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			_, execErr := bs.yugaDB.ExecContext(ctx, `
+				UPDATE periscope.billing_cursors 
+				SET last_processed_at = $1, updated_at = NOW()
+				WHERE tenant_id = $2
+			`, targetEnd, tenantID)
+			return execErr
+		})
 		if err != nil {
 			return fmt.Errorf("failed to update cursor: %w", err)
 		}
@@ -855,11 +863,14 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		}).Info("Successfully processed pending usage")
 	} else {
 		// Advance cursor even when no usage summary is emitted
-		_, err = bs.yugaDB.ExecContext(ctx, `
-			UPDATE periscope.billing_cursors 
-			SET last_processed_at = $1, updated_at = NOW()
-			WHERE tenant_id = $2
-		`, targetEnd, tenantID)
+		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			_, execErr := bs.yugaDB.ExecContext(ctx, `
+				UPDATE periscope.billing_cursors 
+				SET last_processed_at = $1, updated_at = NOW()
+				WHERE tenant_id = $2
+			`, targetEnd, tenantID)
+			return execErr
+		})
 		if err != nil {
 			return fmt.Errorf("failed to update cursor: %w", err)
 		}

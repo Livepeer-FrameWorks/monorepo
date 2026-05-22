@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -56,6 +57,57 @@ func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 	}
 	if resp.GetClusterId() != "cluster-1" {
 		t.Fatalf("expected cluster-1, got %q", resp.GetClusterId())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBootstrapEdgeNode_RetriesSchemaVersionMismatch(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	expiresAt := time.Now().Add(time.Hour)
+
+	tokenQuery := regexp.QuoteMeta(`
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
+		FROM quartermaster.bootstrap_tokens
+		WHERE token_hash = $1 AND kind = 'edge_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
+		FOR UPDATE
+	`)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(tokenQuery).
+		WithArgs(hashBootstrapToken("tok-retry")).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 115, got 114"})
+	mock.ExpectRollback()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(tokenQuery).
+		WithArgs(hashBootstrapToken("tok-retry")).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
+			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
+		WithArgs("edge-retry").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
+		WithArgs("tenant-1", "edge-retry", "machine-sha", "", sqlmock.AnyArg(), "{}").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+		Token:           "tok-retry",
+		Hostname:        "edge-retry.example.com",
+		MachineIdSha256: ptr("machine-sha"),
+	})
+	if err != nil {
+		t.Fatalf("BootstrapEdgeNode returned error after retry: %v", err)
+	}
+	if resp.GetNodeId() != "edge-retry" {
+		t.Fatalf("expected edge-retry, got %q", resp.GetNodeId())
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

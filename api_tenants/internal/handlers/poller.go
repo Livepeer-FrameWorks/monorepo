@@ -168,60 +168,70 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cutoff := time.Now().Add(-minAge)
-	rows, err := db.QueryContext(ctx, `
-        SELECT si.instance_id, si.service_id, si.cluster_id, si.protocol, si.advertise_host, si.port,
-               COALESCE(si.health_endpoint_override, s.health_check_path) AS path,
-               si.last_health_check, s.protocol AS default_protocol,
-               assigned.cluster_id, assigned.base_url
-        FROM quartermaster.service_instances si
-        JOIN quartermaster.services s ON si.service_id = s.service_id
-        LEFT JOIN LATERAL (
-            SELECT sca.cluster_id, c.base_url
-            FROM quartermaster.service_cluster_assignments sca
-            JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
-            WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
-            ORDER BY sca.cluster_id
-            LIMIT 1
-        ) assigned ON TRUE
-        WHERE si.status IN ('running','starting')
-          AND si.service_id NOT LIKE 'edge-%'
-          AND (si.last_health_check IS NULL OR si.last_health_check < $1)
-        ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
-        LIMIT $2
-    `, cutoff, batchSize)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-
 	var list []serviceInstance
-	for rows.Next() {
-		var i serviceInstance
-		var proto, defaultProto sql.NullString
-		var host sql.NullString
-		var path sql.NullString
-		var assignedClusterID, assignedBaseURL sql.NullString
-		if err := rows.Scan(&i.id, &i.serviceID, new(string), &proto, &host, &i.port, &path, new(sql.NullTime), &defaultProto, &assignedClusterID, &assignedBaseURL); err == nil {
-			if proto.Valid {
-				i.proto = proto.String
-			}
-			if defaultProto.Valid {
-				i.defaultProto = defaultProto.String
-			}
-			if host.Valid {
-				i.host = host.String
-			}
-			if path.Valid {
-				i.path = path.String
-			}
-			if assignedClusterID.Valid {
-				i.assignedClusterID = assignedClusterID.String
-			}
-			if assignedBaseURL.Valid {
-				i.assignedBaseURL = assignedBaseURL.String
-			}
-			list = append(list, i)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := db.QueryContext(ctx, `
+	        SELECT si.instance_id, si.service_id, si.cluster_id, si.protocol, si.advertise_host, si.port,
+	               COALESCE(si.health_endpoint_override, s.health_check_path) AS path,
+	               si.last_health_check, s.protocol AS default_protocol,
+	               assigned.cluster_id, assigned.base_url
+	        FROM quartermaster.service_instances si
+	        JOIN quartermaster.services s ON si.service_id = s.service_id
+	        LEFT JOIN LATERAL (
+	            SELECT sca.cluster_id, c.base_url
+	            FROM quartermaster.service_cluster_assignments sca
+	            JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
+	            WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
+	            ORDER BY sca.cluster_id
+	            LIMIT 1
+	        ) assigned ON TRUE
+	        WHERE si.status IN ('running','starting')
+	          AND si.service_id NOT LIKE 'edge-%'
+	          AND (si.last_health_check IS NULL OR si.last_health_check < $1)
+	        ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
+	        LIMIT $2
+	    `, cutoff, batchSize)
+		if err != nil {
+			return err
 		}
+		defer func() { _ = rows.Close() }()
+
+		nextList := []serviceInstance{}
+		for rows.Next() {
+			var i serviceInstance
+			var proto, defaultProto sql.NullString
+			var host sql.NullString
+			var path sql.NullString
+			var assignedClusterID, assignedBaseURL sql.NullString
+			if err := rows.Scan(&i.id, &i.serviceID, new(string), &proto, &host, &i.port, &path, new(sql.NullTime), &defaultProto, &assignedClusterID, &assignedBaseURL); err == nil {
+				if proto.Valid {
+					i.proto = proto.String
+				}
+				if defaultProto.Valid {
+					i.defaultProto = defaultProto.String
+				}
+				if host.Valid {
+					i.host = host.String
+				}
+				if path.Valid {
+					i.path = path.String
+				}
+				if assignedClusterID.Valid {
+					i.assignedClusterID = assignedClusterID.String
+				}
+				if assignedBaseURL.Valid {
+					i.assignedBaseURL = assignedBaseURL.String
+				}
+				nextList = append(nextList, i)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		list = nextList
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	logger.WithField("count", len(list)).Debug("Health poller checking instances")

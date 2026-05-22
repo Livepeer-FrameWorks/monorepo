@@ -26,7 +26,12 @@ func IsRetryablePostgresError(err error) bool {
 		}
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "schema version mismatch") && strings.Contains(msg, "40001")
+	if !strings.Contains(msg, "40001") {
+		return false
+	}
+	return strings.Contains(msg, "schema version mismatch") ||
+		strings.Contains(msg, "read restart") ||
+		strings.Contains(msg, "restart transaction")
 }
 
 func RetryPostgres(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {

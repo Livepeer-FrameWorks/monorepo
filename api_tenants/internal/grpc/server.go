@@ -81,6 +81,16 @@ const (
 	foghornExternalGRPCPort        = 18029
 )
 
+func retryQueryContext(ctx context.Context, db *sql.DB, query string, args ...any) (*sql.Rows, error) {
+	var rows *sql.Rows
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		rows, err = db.QueryContext(ctx, query, args...) //nolint:sqlclosecheck // caller owns rows after retry succeeds
+		return err
+	})
+	return rows, err
+}
+
 // SetQuartermasterGRPCAddr configures the gRPC address this Quartermaster
 // advertises to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse.
 // Called during startup once the listener address is known.
@@ -3054,7 +3064,9 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c %s %s`, baseWhere, countWhere)
-	if countErr := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+	if countErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	}); countErr != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
@@ -3080,7 +3092,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	// Append limit arg
 	args = append(args, params.Limit+1)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := retryQueryContext(ctx, s.db, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -5121,10 +5133,10 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 	argIdx := len(args) + 1
 
 	var totalNodes int32
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, where),
-		args...,
-	).Scan(&totalNodes); err != nil {
+	totalQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, where)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -5133,14 +5145,14 @@ func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWher
 	healthWhere := where + fmt.Sprintf(" AND n.last_heartbeat > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
 	var healthyNodes int32
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, healthWhere),
-		healthArgs...,
-	).Scan(&healthyNodes); err != nil {
+	healthyQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, healthWhere)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, healthyQuery, healthArgs...).Scan(&healthyNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+	rows, err := retryQueryContext(ctx, s.db, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
@@ -5194,10 +5206,10 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 			AND (si.node_id = n.node_id OR si.advertise_host = host(n.external_ip) OR si.advertise_host = host(n.internal_ip) OR si.advertise_host = host(n.wireguard_ip))`
 
 	var totalNodes int32
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s %s %s`, siJoin, servicesJoin, where),
-		args...,
-	).Scan(&totalNodes); err != nil {
+	totalQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s %s %s`, siJoin, servicesJoin, where)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -5206,13 +5218,16 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
 	var healthyNodes int32
-	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`
+	healthyQuery := fmt.Sprintf(`
 		SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s %s %s
-	`, siJoin, servicesJoin, healthWhere), healthArgs...).Scan(&healthyNodes); err != nil {
+	`, siJoin, servicesJoin, healthWhere)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, healthyQuery, healthArgs...).Scan(&healthyNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+	rows, err := retryQueryContext(ctx, s.db, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
@@ -5272,10 +5287,10 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 			OR si.advertise_host = host(n.wireguard_ip)`
 
 	var totalNodes int32
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, where),
-		args...,
-	).Scan(&totalNodes); err != nil {
+	totalQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, where)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -5284,14 +5299,14 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
 
 	var healthyNodes int32
-	if err := s.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, healthWhere),
-		healthArgs...,
-	).Scan(&healthyNodes); err != nil {
+	healthyQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, sca.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, healthWhere)
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, healthyQuery, healthArgs...).Scan(&healthyNodes)
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+	rows, err := retryQueryContext(ctx, s.db, fmt.Sprintf(`
 		SELECT DISTINCT n.id, n.node_id, sca.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
 		       n.latitude, n.longitude,
@@ -5567,6 +5582,19 @@ func deriveEdgeNodeID(hostname string) string {
 
 // BootstrapEdgeNode registers an edge node using a bootstrap token
 func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
+	var resp *pb.BootstrapEdgeNodeResponse
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		resp, err = s.bootstrapEdgeNodeOnce(ctx, req)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
 	token := req.GetToken()
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
@@ -8039,9 +8067,10 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.tls_bundles %s`, countWhere)
-	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if retryErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	}); retryErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", retryErr)
 	}
 
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
@@ -8057,7 +8086,7 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 		LIMIT %d
 	`, where, builder.OrderBy(params), params.Limit+1)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := retryQueryContext(ctx, s.db, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -8221,9 +8250,10 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.ingress_sites %s`, countWhere)
-	err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if retryErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	}); retryErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", retryErr)
 	}
 
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
@@ -8239,7 +8269,7 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 		LIMIT %d
 	`, where, builder.OrderBy(params), params.Limit+1)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := retryQueryContext(ctx, s.db, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}

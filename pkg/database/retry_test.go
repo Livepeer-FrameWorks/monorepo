@@ -19,7 +19,10 @@ func TestIsRetryablePostgresError(t *testing.T) {
 		{"serialization", &pq.Error{Code: "40001"}, true},
 		{"deadlock", &pq.Error{Code: "40P01"}, true},
 		{"schema version text", errors.New("pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
+		{"wrapped grpc schema version text", errors.New("rpc error: code = Internal desc = database error: pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
+		{"read restart text", errors.New("pq: restart transaction: read restart required (40001)"), true},
 		{"syntax", &pq.Error{Code: "42601"}, false},
+		{"non-transient 40001 text", errors.New("application error 40001"), false},
 		{"ordinary", errors.New("boom"), false},
 	}
 	for _, tt := range tests {
