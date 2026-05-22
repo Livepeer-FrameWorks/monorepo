@@ -20,9 +20,13 @@
   });
 
   function normalizeCode(value: string): string {
+    // Server emits user_codes from the Crockford alphabet (0-9, A-Z minus
+    // I/L/O/U). Accept any alphanumeric input and let the server reject
+    // characters that can't appear in a real code. A stricter [A-Z2-7]
+    // base32 regex would silently strip legitimate digits like 0/1/8/9.
     return value
       .toUpperCase()
-      .replace(/[^A-Z2-7]/g, "")
+      .replace(/[^A-Z0-9]/g, "")
       .slice(0, 8)
       .replace(/^(.{4})(.+)$/, "$1-$2");
   }

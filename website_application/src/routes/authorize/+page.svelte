@@ -17,11 +17,32 @@
   const requestState = $derived(params.get("state") ?? "");
 
   const clientName = $derived(clientId === "tray-mac" ? "FrameWorks macOS tray" : clientId);
+
+  // Mirror of the server-side check in validateAuthorizationClient. Done
+  // client-side too so the Deny path (which doesn't hit the server) can't be
+  // turned into an open redirect to an arbitrary URL via a crafted link.
+  function isLoopbackRedirect(uri: string): boolean {
+    try {
+      const u = new URL(uri);
+      if (u.protocol !== "http:") return false;
+      if (u.hostname !== "127.0.0.1" && u.hostname !== "[::1]" && u.hostname !== "::1")
+        return false;
+      if (u.pathname !== "/callback") return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const redirectAllowed = $derived(
+    clientId === "tray-mac" ? isLoopbackRedirect(redirectURI) : false
+  );
   const requestValid = $derived(
     clientId.length > 0 &&
       redirectURI.length > 0 &&
       codeChallenge.length > 0 &&
-      codeChallengeMethod === "S256"
+      codeChallengeMethod === "S256" &&
+      redirectAllowed
   );
 
   function axiosErrorMessage(err: unknown, fallback: string): string {
@@ -43,7 +64,10 @@
   }
 
   function redirectWithError() {
-    if (!redirectURI) return;
+    // Refuse to navigate to a redirect_uri the server would reject. The Deny
+    // path doesn't hit the API, so this is the only thing standing between
+    // an attacker-crafted ?redirect_uri=https://evil.com and a real bounce.
+    if (!redirectAllowed) return;
     const target = new URL(redirectURI);
     target.searchParams.set("error", "access_denied");
     if (requestState) {
