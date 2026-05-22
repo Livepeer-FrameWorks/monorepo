@@ -183,6 +183,16 @@ func TestEdgeRoleVarsCapacityControls(t *testing.T) {
 	}
 }
 
+func TestNativeVMAgentUnitDoesNotTemplateRestartIntoBearerTokenPath(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/edge/tasks/install-native-linux-vmagent.yml")
+	if strings.Contains(content, "bearerTokenFile=/etc/frameworks/telemetry/token{% endif %}") {
+		t.Fatal("vmagent bearer token flag must not end at an inline Jinja block; Ansible trim_blocks can concatenate Restart=always into the file path")
+	}
+	if !strings.Contains(content, "-remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token' if edge_telemetry_token") {
+		t.Fatalf("vmagent unit should keep bearer token flag conditional inside the ExecStart expression:\n%s", content)
+	}
+}
+
 // The templates package is still used by `edge init` for operators who
 // render the compose/env/Caddyfile locally before running the role against
 // their own host. These tests pin the bootstrap shape so renames don't
