@@ -11,14 +11,19 @@ import (
 )
 
 var (
-	cfgFile     string
-	output      string
-	verbose     bool
-	contextName string
+	output  string
+	verbose bool
 )
 
 // NewRootCmd returns the root command for the Frameworks CLI
 func NewRootCmd() *cobra.Command {
+	var (
+		rootCfgFile     string
+		rootOutput      string
+		rootVerbose     bool
+		rootContextName string
+	)
+
 	rootCmd := &cobra.Command{
 		Use:           "frameworks",
 		Short:         "Frameworks CLI — unified operator tool",
@@ -29,12 +34,14 @@ func NewRootCmd() *cobra.Command {
 			// Parse flags + env once into typed RuntimeOverrides so the
 			// config / credentials / inventory packages don't need to
 			// know about cobra.
+			output = rootOutput
+			verbose = rootVerbose
 			fwcfg.SetRuntimeOverrides(fwcfg.RuntimeOverrides{
-				ContextName:        contextName,
+				ContextName:        rootContextName,
 				ContextExplicit:    cmd.Flags().Changed("context"),
-				ConfigPath:         cfgFile,
+				ConfigPath:         rootCfgFile,
 				ConfigPathExplicit: cmd.Flags().Changed("config"),
-				OutputJSON:         output == "json",
+				OutputJSON:         rootOutput == "json",
 				NoHints:            os.Getenv("CI") != "" || os.Getenv("FRAMEWORKS_NO_HINTS") != "",
 			})
 			return nil
@@ -48,10 +55,10 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "path to config.yaml (default: $XDG_CONFIG_HOME/frameworks/config.yaml)")
-	rootCmd.PersistentFlags().StringVar(&output, "output", "", "output format: json|text (default: text)")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose logging")
-	rootCmd.PersistentFlags().StringVar(&contextName, "context", "", "context name to use for this invocation (overrides the saved current context)")
+	rootCmd.PersistentFlags().StringVar(&rootCfgFile, "config", "", "path to config.yaml (default: $XDG_CONFIG_HOME/frameworks/config.yaml)")
+	rootCmd.PersistentFlags().StringVar(&rootOutput, "output", "", "output format: json|text (default: text)")
+	rootCmd.PersistentFlags().BoolVarP(&rootVerbose, "verbose", "v", false, "enable verbose logging")
+	rootCmd.PersistentFlags().StringVar(&rootContextName, "context", "", "context name to use for this invocation (overrides the saved current context)")
 
 	// Subcommands (groups)
 	rootCmd.AddCommand(newMenuCmd())
