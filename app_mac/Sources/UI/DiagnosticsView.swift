@@ -331,9 +331,15 @@ struct DiagnosticsView: View {
         Text(commandFlagLabel(flag))
           .font(.caption2)
           .foregroundStyle(.secondary)
-        TextField(commandFlagPlaceholder(flag), text: flagBinding(flag))
-          .textFieldStyle(.roundedBorder)
-          .font(.caption)
+        if flag.sensitive == true {
+          SecureField(commandFlagPlaceholder(flag), text: flagBinding(flag))
+            .textFieldStyle(.roundedBorder)
+            .font(.caption)
+        } else {
+          TextField(commandFlagPlaceholder(flag), text: flagBinding(flag))
+            .textFieldStyle(.roundedBorder)
+            .font(.caption)
+        }
         if let usage = flag.usage, !usage.isEmpty {
           Text(usage)
             .font(.caption2)
@@ -451,7 +457,7 @@ struct DiagnosticsView: View {
   }
 
   private func commandIsInteractive(_ command: CLICommandEntry) -> Bool {
-    command.command == "frameworks menu" || command.command == "frameworks setup"
+    command.interactive == true
   }
 
   private func defaultBoolValues(for command: CLICommandEntry) -> [String: Bool] {

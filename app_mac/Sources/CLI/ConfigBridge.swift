@@ -84,6 +84,7 @@ struct CLICommandEntry: Decodable, Identifiable, Hashable {
   let short: String?
   let long: String?
   let runnable: Bool
+  let interactive: Bool?
   let hidden: Bool?
   let deprecated: String?
   let risk: String?
@@ -109,6 +110,7 @@ struct CLICommandFlag: Decodable, Identifiable, Hashable {
   let scope: String
   let source: String?
   let required: Bool?
+  let sensitive: Bool?
   let hidden: Bool?
   let deprecated: String?
 }

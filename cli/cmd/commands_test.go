@@ -24,12 +24,24 @@ func TestBuildCommandCatalogIncludesRunnableCommandsAndFlags(t *testing.T) {
 	if !hasCatalogFlag(entry, "enrollment-token") {
 		t.Fatalf("edge provision missing enrollment-token flag")
 	}
+	if !catalogFlagSensitive(entry, "enrollment-token") {
+		t.Fatalf("edge provision enrollment-token flag should be sensitive")
+	}
+
 	contextCheck, ok := byCommand["frameworks context check"]
 	if !ok {
 		t.Fatalf("catalog missing context check")
 	}
 	if contextCheck.Risk != "" {
 		t.Fatalf("context check risk = %q, want empty", contextCheck.Risk)
+	}
+
+	setup, ok := byCommand["frameworks setup"]
+	if !ok {
+		t.Fatalf("catalog missing setup")
+	}
+	if !setup.Interactive {
+		t.Fatalf("setup should be marked interactive")
 	}
 
 	adminCreate, ok := byCommand["frameworks admin clusters create"]
@@ -95,6 +107,15 @@ func catalogFlagRequired(entry commandCatalogEntry, name string) bool {
 	for _, flag := range entry.Flags {
 		if flag.Name == name {
 			return flag.Required
+		}
+	}
+	return false
+}
+
+func catalogFlagSensitive(entry commandCatalogEntry, name string) bool {
+	for _, flag := range entry.Flags {
+		if flag.Name == name {
+			return flag.Sensitive
 		}
 	}
 	return false

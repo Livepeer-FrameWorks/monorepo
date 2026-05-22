@@ -14,17 +14,18 @@ type commandCatalog struct {
 }
 
 type commandCatalogEntry struct {
-	Path       []string                 `json:"path"`
-	Command    string                   `json:"command"`
-	Use        string                   `json:"use"`
-	Short      string                   `json:"short,omitempty"`
-	Long       string                   `json:"long,omitempty"`
-	Runnable   bool                     `json:"runnable"`
-	Hidden     bool                     `json:"hidden,omitempty"`
-	Deprecated string                   `json:"deprecated,omitempty"`
-	Risk       string                   `json:"risk,omitempty"`
-	Arguments  []commandCatalogArgument `json:"arguments,omitempty"`
-	Flags      []commandCatalogFlag     `json:"flags,omitempty"`
+	Path        []string                 `json:"path"`
+	Command     string                   `json:"command"`
+	Use         string                   `json:"use"`
+	Short       string                   `json:"short,omitempty"`
+	Long        string                   `json:"long,omitempty"`
+	Runnable    bool                     `json:"runnable"`
+	Interactive bool                     `json:"interactive,omitempty"`
+	Hidden      bool                     `json:"hidden,omitempty"`
+	Deprecated  string                   `json:"deprecated,omitempty"`
+	Risk        string                   `json:"risk,omitempty"`
+	Arguments   []commandCatalogArgument `json:"arguments,omitempty"`
+	Flags       []commandCatalogFlag     `json:"flags,omitempty"`
 }
 
 type commandCatalogFlag struct {
@@ -36,6 +37,7 @@ type commandCatalogFlag struct {
 	Scope      string `json:"scope"`
 	Source     string `json:"source,omitempty"`
 	Required   bool   `json:"required,omitempty"`
+	Sensitive  bool   `json:"sensitive,omitempty"`
 	Hidden     bool   `json:"hidden,omitempty"`
 	Deprecated string `json:"deprecated,omitempty"`
 }
@@ -83,17 +85,18 @@ func buildCommandCatalog(root *cobra.Command, includeHidden bool) commandCatalog
 			return
 		}
 		entries = append(entries, commandCatalogEntry{
-			Path:       commandPathParts(c),
-			Command:    c.CommandPath(),
-			Use:        c.Use,
-			Short:      c.Short,
-			Long:       strings.TrimSpace(c.Long),
-			Runnable:   catalogCommandRunnable(c),
-			Hidden:     c.Hidden,
-			Deprecated: c.Deprecated,
-			Risk:       inferCommandRisk(c),
-			Arguments:  commandArguments(c),
-			Flags:      commandFlags(c, includeHidden),
+			Path:        commandPathParts(c),
+			Command:     c.CommandPath(),
+			Use:         c.Use,
+			Short:       c.Short,
+			Long:        strings.TrimSpace(c.Long),
+			Runnable:    catalogCommandRunnable(c),
+			Interactive: inferCommandInteractive(c),
+			Hidden:      c.Hidden,
+			Deprecated:  c.Deprecated,
+			Risk:        inferCommandRisk(c),
+			Arguments:   commandArguments(c),
+			Flags:       commandFlags(c, includeHidden),
 		})
 		for _, child := range c.Commands() {
 			walk(child)
@@ -140,6 +143,7 @@ func commandFlags(cmd *cobra.Command, includeHidden bool) []commandCatalogFlag {
 				Scope:      scope,
 				Source:     source.CommandPath(),
 				Required:   flagRequired(flag),
+				Sensitive:  flagSensitive(flag),
 				Hidden:     flag.Hidden,
 				Deprecated: flag.Deprecated,
 			})
@@ -222,4 +226,20 @@ func inferCommandRisk(cmd *cobra.Command) string {
 		}
 	}
 	return ""
+}
+
+func inferCommandInteractive(cmd *cobra.Command) bool {
+	switch cmd.CommandPath() {
+	case "frameworks login", "frameworks menu", "frameworks setup":
+		return true
+	default:
+		return false
+	}
+}
+
+func flagSensitive(flag *pflag.Flag) bool {
+	name := strings.ToLower(flag.Name)
+	return strings.Contains(name, "password") ||
+		strings.Contains(name, "secret") ||
+		strings.Contains(name, "token")
 }
