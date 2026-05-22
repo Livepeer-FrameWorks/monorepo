@@ -6521,7 +6521,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 			})
 		}
 	}
-	valCtx, valCancel := context.WithTimeout(ctx, 5*time.Second)
+	valCtx, valCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer valCancel()
 	valResp, valErr := validateFn(valCtx, token)
 	if valErr != nil {

@@ -358,8 +358,10 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 		`mode: "2750"`,
 		"normalize existing service certificate directories",
 		"normalize existing service certificate files",
+		`mode: "{{ (item.path | basename == 'tls.key') | ternary('0640', '0644') }}"`,
+		"discover stale service certificate lock files",
+		"remove stale service certificate lock files",
 		".tls.write.lock",
-		`mode: "{{ (item.path | basename == '.tls.write.lock') | ternary('0600', (item.path | basename == 'tls.key') | ternary('0640', '0644')) }}"`,
 	} {
 		if !strings.Contains(pki, want) {
 			t.Fatalf("privateer PKI tasks should keep /etc/frameworks traversable and runtime PKI writable; missing %q:\n%s", want, pki)

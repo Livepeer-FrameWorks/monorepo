@@ -1269,21 +1269,28 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 	}
 
 	preferredNodeID := firstNonEmpty(cfg.NodeID, canonicalEdgeNodeID(cfg.NodeName), cfg.NodeName)
-	preRegCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
 	var (
 		resp *pb.PreRegisterEdgeResponse
 		err  error
 	)
 	if strings.TrimSpace(cliCtx.Endpoints.BridgeURL) != "" {
-		resp, err = bootstrapEdgeViaBridge(preRegCtx, cliCtx, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		fmt.Fprintln(cmd.OutOrStdout(), "    Pre-registering edge via Bridge bootstrap")
+		bridgeCtx, bridgeCancel := context.WithTimeout(ctx, 75*time.Second)
+		resp, err = bootstrapEdgeViaBridge(bridgeCtx, cliCtx, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		bridgeCancel()
 	}
 	if resp == nil && err != nil && strings.TrimSpace(cfg.FoghornGRPCAddr) == "" {
 		return fmt.Errorf("pre-registration failed: %w", err)
 	}
 	if resp == nil && strings.TrimSpace(cfg.FoghornGRPCAddr) != "" {
-		resp, err = preRegisterEdge(preRegCtx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "    Bridge pre-registration failed, trying Foghorn directly: %v\n", err)
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "    Pre-registering edge via Foghorn")
+		}
+		foghornCtx, foghornCancel := context.WithTimeout(ctx, 45*time.Second)
+		resp, err = preRegisterEdge(foghornCtx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
+		foghornCancel()
 	}
 	if err != nil {
 		return fmt.Errorf("pre-registration failed: %w", err)

@@ -1836,26 +1836,30 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 
 	var authorized bool
 	if lifecycleActor {
-		err = s.db.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM quartermaster.infrastructure_clusters
-				WHERE cluster_id = $1 AND is_active = true
-			)
-		`, clusterID).Scan(&authorized)
+		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			return s.db.QueryRowContext(ctx, `
+				SELECT EXISTS (
+					SELECT 1 FROM quartermaster.infrastructure_clusters
+					WHERE cluster_id = $1 AND is_active = true
+				)
+			`, clusterID).Scan(&authorized)
+		})
 	} else {
-		err = s.db.QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM quartermaster.infrastructure_clusters
-				WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
-				UNION
-				SELECT 1 FROM quartermaster.tenant_cluster_access
-				WHERE cluster_id = $1
-				  AND tenant_id = $2
-				  AND access_level = 'owner'
-				  AND subscription_status = 'active'
-				  AND is_active = true
-			)
-		`, clusterID, tenantID).Scan(&authorized)
+		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			return s.db.QueryRowContext(ctx, `
+				SELECT EXISTS (
+					SELECT 1 FROM quartermaster.infrastructure_clusters
+					WHERE cluster_id = $1 AND owner_tenant_id = $2 AND is_active = true
+					UNION
+					SELECT 1 FROM quartermaster.tenant_cluster_access
+					WHERE cluster_id = $1
+					  AND tenant_id = $2
+					  AND access_level = 'owner'
+					  AND subscription_status = 'active'
+					  AND is_active = true
+				)
+			`, clusterID, tenantID).Scan(&authorized)
+		})
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -1887,11 +1891,14 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.bootstrap_tokens (
-			id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
-		) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
-	`, tokenID, hashBootstrapToken(token), tokenPrefix(token), tokenName, tenantID, clusterID, expiresAt)
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO quartermaster.bootstrap_tokens (
+				id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+			) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+		`, tokenID, hashBootstrapToken(token), tokenPrefix(token), tokenName, tenantID, clusterID, expiresAt)
+		return err
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
 	}
@@ -7161,11 +7168,13 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	var usedAt sql.NullTime
 	var metadataJSON []byte
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
-		FROM quartermaster.bootstrap_tokens
-		WHERE token_hash = $1
-	`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt, &metadataJSON)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
+			FROM quartermaster.bootstrap_tokens
+			WHERE token_hash = $1
+		`, hashBootstrapToken(token)).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt, &metadataJSON)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
@@ -7197,16 +7206,21 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 
 	// Consume: increment usage_count if requested (PreRegisterEdge uses this)
 	if req.GetConsume() {
-		result, updateErr := s.db.ExecContext(ctx, `
-			UPDATE quartermaster.bootstrap_tokens
-			SET usage_count = usage_count + 1, used_at = NOW()
-			WHERE token_hash = $1
-			  AND expires_at > NOW()
-			  AND (
-				(usage_limit IS NULL AND used_at IS NULL) OR
-				(usage_limit IS NOT NULL AND usage_count < usage_limit)
-			  )
-		`, hashBootstrapToken(token))
+		var result sql.Result
+		updateErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			var err error
+			result, err = s.db.ExecContext(ctx, `
+				UPDATE quartermaster.bootstrap_tokens
+				SET usage_count = usage_count + 1, used_at = NOW()
+				WHERE token_hash = $1
+				  AND expires_at > NOW()
+				  AND (
+					(usage_limit IS NULL AND used_at IS NULL) OR
+					(usage_limit IS NOT NULL AND usage_count < usage_limit)
+				  )
+			`, hashBootstrapToken(token))
+			return err
+		})
 		if updateErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", updateErr)
 		}
@@ -7251,21 +7265,23 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 // single QM call.
 func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
 	var addr string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT si.advertise_host || ':' || si.port
-		FROM quartermaster.service_instances si
-		JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE sca.cluster_id = $1
-		  AND sca.is_active = true
-		  AND si.status = 'running'
-		  AND si.health_status = 'healthy'
-		  AND si.protocol = 'grpc'
-		  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
-		  AND svc.type = 'foghorn'
-		ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
-		LIMIT 1
-	`, clusterID).Scan(&addr)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT si.advertise_host || ':' || si.port
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			WHERE sca.cluster_id = $1
+			  AND sca.is_active = true
+			  AND si.status = 'running'
+			  AND si.health_status = 'healthy'
+			  AND si.protocol = 'grpc'
+			  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND svc.type = 'foghorn'
+			ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+			LIMIT 1
+		`, clusterID).Scan(&addr)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

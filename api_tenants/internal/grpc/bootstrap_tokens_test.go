@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -178,6 +179,112 @@ func TestCreateEnrollmentTokenAllowsOwnerAccess(t *testing.T) {
 	}
 	if resp.GetToken().GetTenantId() != "tenant-owner" {
 		t.Fatalf("tenant_id = %q, want tenant-owner", resp.GetToken().GetTenantId())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateEnrollmentTokenRetriesRetryablePostgresError(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+				SELECT EXISTS (
+					SELECT 1 FROM quartermaster.infrastructure_clusters
+					WHERE cluster_id = $1 AND is_active = true
+				)
+			`)).
+		WithArgs("cluster-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	insertQuery := regexp.QuoteMeta(`
+			INSERT INTO quartermaster.bootstrap_tokens (
+				id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+			) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+		`)
+	mock.ExpectExec(insertQuery).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "edge provision: edge-eu-1", "tenant-owner", "cluster-1", sqlmock.AnyArg()).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 92, got 91"})
+	mock.ExpectExec(insertQuery).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "edge provision: edge-eu-1", "tenant-owner", "cluster-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	resp, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{
+		ClusterId: "cluster-1",
+		TenantId:  ptr("tenant-owner"),
+		Name:      ptr("edge provision: edge-eu-1"),
+	})
+	if err != nil {
+		t.Fatalf("CreateEnrollmentToken: %v", err)
+	}
+	if resp.GetToken().GetToken() == "" {
+		t.Fatal("expected generated token")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestValidateBootstrapTokenRetriesRetryablePostgresError(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	expiresAt := time.Now().Add(time.Hour)
+	tokenQuery := regexp.QuoteMeta(`
+			SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at, COALESCE(metadata, '{}'::jsonb)
+			FROM quartermaster.bootstrap_tokens
+			WHERE token_hash = $1
+		`)
+
+	mock.ExpectQuery(tokenQuery).
+		WithArgs(hashBootstrapToken("bt_edge")).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 92, got 91"})
+	mock.ExpectQuery(tokenQuery).
+		WithArgs(hashBootstrapToken("bt_edge")).
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at", "metadata"}).
+			AddRow("edge_node", "tenant-1", nil, nil, expiresAt, nil, int32(0), nil, []byte(`{}`)))
+
+	resp, err := srv.ValidateBootstrapToken(context.Background(), &pb.ValidateBootstrapTokenRequest{Token: "bt_edge"})
+	if err != nil {
+		t.Fatalf("ValidateBootstrapToken: %v", err)
+	}
+	if !resp.GetValid() {
+		t.Fatalf("expected valid token, got reason %q", resp.GetReason())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestLookupClusterFoghornGRPCRetriesRetryablePostgresError(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	lookupQuery := regexp.QuoteMeta(`
+			SELECT si.advertise_host || ':' || si.port
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			WHERE sca.cluster_id = $1
+			  AND sca.is_active = true
+			  AND si.status = 'running'
+			  AND si.health_status = 'healthy'
+			  AND si.protocol = 'grpc'
+			  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND svc.type = 'foghorn'
+			ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+			LIMIT 1
+		`)
+
+	mock.ExpectQuery(lookupQuery).
+		WithArgs("media-eu-1").
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 92, got 91"})
+	mock.ExpectQuery(lookupQuery).
+		WithArgs("media-eu-1").
+		WillReturnRows(sqlmock.NewRows([]string{"addr"}).AddRow("foghorn.internal:18029"))
+
+	addr, err := srv.lookupClusterFoghornGRPC(context.Background(), "media-eu-1")
+	if err != nil {
+		t.Fatalf("lookupClusterFoghornGRPC: %v", err)
+	}
+	if addr != "foghorn.internal:18029" {
+		t.Fatalf("addr = %q, want foghorn.internal:18029", addr)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
