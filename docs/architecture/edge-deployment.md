@@ -8,6 +8,7 @@ The edge stack (Helmsman, MistServer, Caddy) supports Linux and macOS. Linux can
 frameworks edge deploy --ssh admin@target --mode docker
     │
     ├─ Bridge creates or resolves the edge cluster + enrollment token
+    ├─ Bridge validates bootstrap state through Quartermaster
     ├─ PreRegisterEdge resolves node ID, edge domain, pool domain, Foghorn address
     ├─ SSH connect, detect OS/arch
     │   ├─ Linux + docker → compose path
@@ -54,7 +55,7 @@ The CLI shape is shared across operator personas, but the auth path is different
 | selfhosted | Tenant-owned BYO edge footprint                                          | Edge deploy goes through Bridge; no direct Quartermaster/Foghorn lifecycle surface |
 | user       | Account, billing, insights, Skipper interactions                         | Public Bridge/account APIs; no cluster node lifecycle mutation                     |
 
-Self-hosted is not a separate node type from edge. It is the tenant-owned operator persona for a BYO edge footprint. The operator does not run Quartermaster or Foghorn in this flow; Bridge creates or reuses the private edge cluster, mints the enrollment token, and resolves the assigned Foghorn for bootstrap. Those edges are still managed by the platform control plane. `frameworks cluster nodes ...` is a platform/operator surface for direct Quartermaster/Foghorn lifecycle operations, not the BYO edge path. Hosted user contexts remain separate: they can inspect account and cluster insights through public account APIs, but they cannot drain, remove, evict, or add infrastructure nodes.
+Self-hosted is not a separate node type from edge. It is the tenant-owned operator persona for a BYO edge footprint. The operator does not run Quartermaster or Foghorn in this flow. Bridge creates or reuses the private edge cluster, mints the enrollment token, validates bootstrap state through Quartermaster, and may proxy only Foghorn's public `PreRegisterEdge` bootstrap RPC. Those edges are still managed by the platform control plane. `frameworks cluster nodes ...` is a platform/operator surface for direct Quartermaster/Foghorn lifecycle operations, not the BYO edge path. Hosted user contexts remain separate: they can inspect account and cluster insights through public account APIs, but they cannot drain, remove, evict, or add infrastructure nodes.
 
 ## Edge Release State
 

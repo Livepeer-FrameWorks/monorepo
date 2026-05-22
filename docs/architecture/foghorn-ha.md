@@ -115,7 +115,8 @@ Lifecycle: set on Helmsman connect, refreshed on every heartbeat, deleted on dis
 
 Foghorn publishes two addresses with different audiences:
 
-- Quartermaster service registration advertises the external Foghorn gRPC listener, normally `foghorn.<cluster>.<root>:18029`. Edge bootstrap, Helmsman, Quartermaster polling, and federation use this address with the public ACME cluster wildcard.
+- Quartermaster service registration advertises the internal Foghorn gRPC listener, normally the mesh address on `:18019`, for service-to-service control RPCs, federation, and gRPC health checks.
+- Quartermaster token validation can also return the public edge listener, normally `foghorn.<cluster>.<root>:18029`, for edge bootstrap before the node has joined the mesh. Bridge may proxy only that `PreRegisterEdge` bootstrap RPC; tenant/media control flows use Commodore and the internal listener.
 - HA relay ownership stores `FOGHORN_RELAY_ADVERTISE_ADDR` in Redis, normally the mesh host on `:18019`. Relay traffic uses the internal gRPC listener and internal CA identity `foghorn.internal`.
 
 Provisioning should set `FOGHORN_RELAY_ADVERTISE_ADDR` from the node's mesh DNS or mesh IP. If it is absent, Foghorn falls back to `FOGHORN_RELAY_ADVERTISE_HOST`, then `FOGHORN_HOST`, then the external advertise host with the internal port.
@@ -206,7 +207,7 @@ foghorn-2:
   ports: [18018, "18039:18029"]
 ```
 
-Both instances register independently with Quartermaster via `BootstrapService` using the external gRPC port. HA relay addressing is not taken from Quartermaster; it is the internal `FOGHORN_RELAY_ADVERTISE_ADDR` value stored in Redis connection ownership. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes public requests across instances.
+Both instances register independently with Quartermaster via `BootstrapService` using the internal gRPC port for service-to-service discovery. HA relay addressing is not taken from Quartermaster; it is the internal `FOGHORN_RELAY_ADVERTISE_ADDR` value stored in Redis connection ownership. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes public HTTP and public edge-control requests across instances.
 
 ### Local HA Relay Validation Matrix
 

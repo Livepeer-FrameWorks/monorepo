@@ -18,12 +18,12 @@ certificate ServerName is the logical service name, for example
 `decklog.internal` or `quartermaster.internal`.
 
 Foghorn is the exception because it is both an internal control-plane service and
-the public edge/federation authority:
+the public edge authority:
 
-| Listener | Default bind | Certificate           | ServerName                 | Audience                                                                           |
-| -------- | ------------ | --------------------- | -------------------------- | ---------------------------------------------------------------------------------- |
-| Internal | `:18019`     | Internal CA           | `foghorn.internal`         | Foghorn HA relay                                                                   |
-| External | `:18029`     | ACME cluster wildcard | `foghorn.<cluster>.<root>` | Helmsman, edge bootstrap/enrollment, Quartermaster polling, and Foghorn federation |
+| Listener | Default bind | Certificate           | ServerName                 | Audience                                                                 |
+| -------- | ------------ | --------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| Internal | `:18019`     | Internal CA           | `foghorn.internal`         | Commodore control RPCs, Foghorn federation, HA relay, and gRPC health    |
+| External | `:18029`     | ACME cluster wildcard | `foghorn.<cluster>.<root>` | Helmsman control streams and the narrow edge bootstrap `PreRegisterEdge` |
 
 The external listener must not serve the internal leaf. If Navigator cannot
 provide a cluster wildcard bundle in production, Foghorn fails startup.
@@ -46,18 +46,24 @@ variables. Entrypoints read environment and pass fully specified client config.
 `GRPC_TLS_SERVER_NAME` is not a process-wide runtime knob. Multi-client services
 such as Bridge must pass one ServerName per downstream client.
 
+Bridge is not a general Foghorn client. Its only permitted direct Foghorn RPC is
+the public edge-bootstrap `PreRegisterEdge` rendezvous after Quartermaster has
+validated the bootstrap token and returned a public Foghorn address. Tenant and
+media control flows stay on Commodore, which resolves the correct internal
+Foghorn through Quartermaster routing.
+
 ## Environment Knobs
 
-| Variable                                                      | Scope                                                           |
-| ------------------------------------------------------------- | --------------------------------------------------------------- |
-| `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                         |
-| `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                        |
-| `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                      |
-| `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                     |
-| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`                     |
-| `FOGHORN_EXTERNAL_GRPC_PORT`                                  | Port advertised to Quartermaster for external Foghorn consumers |
-| `FOGHORN_RELAY_ADVERTISE_ADDR`                                | Internal HA relay address stored in Redis connection ownership  |
-| `FRAMEWORKS_BOOTSTRAP_INSECURE`                               | Privateer HTTPS bootstrap dev/test escape hatch only            |
+| Variable                                                      | Scope                                                          |
+| ------------------------------------------------------------- | -------------------------------------------------------------- |
+| `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                        |
+| `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                       |
+| `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                     |
+| `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                    |
+| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`                    |
+| `FOGHORN_EXTERNAL_GRPC_PORT`                                  | Public edge listener port returned for edge bootstrap          |
+| `FOGHORN_RELAY_ADVERTISE_ADDR`                                | Internal HA relay address stored in Redis connection ownership |
+| `FRAMEWORKS_BOOTSTRAP_INSECURE`                               | Privateer HTTPS bootstrap dev/test escape hatch only           |
 
 ## Open Items
 

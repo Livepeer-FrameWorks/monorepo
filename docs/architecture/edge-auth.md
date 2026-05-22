@@ -10,27 +10,26 @@ Foghorn has multiple legitimate inbound surfaces:
 
 - Public HTTP redirect/source endpoints used by viewers and MistServer.
 - Public gRPC endpoints used by Helmsman and self-hosted edge bootstrap.
-- Logical-cluster gRPC endpoints used by Quartermaster health polling.
-- Peer/federation gRPC endpoints between physical Foghorn instances.
+- Internal logical-cluster gRPC endpoints used by Commodore, Quartermaster
+  health polling, and Foghorn peers.
 
 Those callers do not all share a trust boundary, so Foghorn uses two gRPC
 listeners in one process:
 
-| Listener | Default bind | Certificate                                                                 | Names                                  | Audience                                                                           |
-| -------- | ------------ | --------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
-| Internal | `:18019`     | File-based internal-CA leaf from `GRPC_TLS_CERT_PATH` / `GRPC_TLS_KEY_PATH` | `foghorn.internal` and mesh names      | Foghorn HA relay                                                                   |
-| External | `:18029`     | Navigator ACME cluster wildcard (`cluster:{cluster_slug}`)                  | `foghorn.{cluster_slug}.{root_domain}` | Helmsman control, edge bootstrap/enrollment, Quartermaster polling, and federation |
+| Listener | Default bind | Certificate                                                                 | Names                                  | Audience                                                                   |
+| -------- | ------------ | --------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------- |
+| Internal | `:18019`     | File-based internal-CA leaf from `GRPC_TLS_CERT_PATH` / `GRPC_TLS_KEY_PATH` | `foghorn.internal` and mesh names      | Commodore control RPCs, Quartermaster health polling, federation, HA relay |
+| External | `:18029`     | Navigator ACME cluster wildcard (`cluster:{cluster_slug}`)                  | `foghorn.{cluster_slug}.{root_domain}` | Helmsman control and edge bootstrap/enrollment                             |
 
 The external listener serves only Navigator-backed cluster TLS bundles. If
 Foghorn is configured with Navigator in production but cannot load a cluster
 bundle for its served clusters, startup fails instead of running a process that
-Quartermaster, federation peers, and edge bootstrap cannot trust.
+Helmsman and edge bootstrap cannot trust.
 
-Federation belongs on the external listener. The peer manager reads
-`TenantClusterPeer.foghorn_grpc_addr` from Quartermaster and, when absent, falls
-back to `foghorn.{cluster_slug}.{base_url}:18029` in
-`api_balancing/internal/federation/peer_manager.go`. That address is a cluster
-FQDN backed by the public ACME wildcard, not an internal mesh identity.
+Federation belongs on the internal listener. The peer manager reads
+`TenantClusterPeer.foghorn_grpc_addr` from Quartermaster and expects an internal
+mesh address with the `foghorn.internal` identity. Missing peer addresses should
+fail discovery instead of falling back to the public edge-bootstrap listener.
 
 Insecure fallback is local-dev only, when neither internal file TLS nor
 Navigator TLS is configured.
@@ -40,6 +39,11 @@ when Helmsman is configured to dial an internal-CA address such as
 `foghorn.internal:18019`. Managed edge nodes normally dial the external listener
 at `foghorn.{cluster_slug}.{root_domain}:18029` and validate the public ACME
 certificate with system roots.
+
+Bridge is allowed to proxy only the public edge-bootstrap `PreRegisterEdge` RPC
+after Quartermaster validates the bootstrap token and returns a public Foghorn
+address. Bridge does not own tenant/media control routing; those calls go
+through Commodore and the internal Foghorn listener.
 
 **Implementation:** `api_balancing/internal/control` (server),
 `api_sidecar/internal/control` (client)
