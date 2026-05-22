@@ -34,14 +34,14 @@ enum MCPResources {
     case "edge://metrics": path = "/api/edge/metrics"
     case "edge://clients": path = "/api/edge/clients"
     default:
-      return [["uri": uri, "mimeType": "application/json", "text": "{\"error\": \"Unknown resource\"}"]]
+      return [["uri": uri, "mimeType": "application/json", "text": jsonText(["error": "Unknown resource"])]]
     }
 
     do {
       let data = try await fetchEdgeRaw(path)
       return [["uri": uri, "mimeType": "application/json", "text": data]]
     } catch {
-      return [["uri": uri, "mimeType": "application/json", "text": "{\"error\": \"\(error.localizedDescription)\"}"]]
+      return [["uri": uri, "mimeType": "application/json", "text": jsonText(["error": error.localizedDescription])]]
     }
   }
 
@@ -65,8 +65,16 @@ enum MCPResources {
       }
       return [["uri": uri, "mimeType": "application/json", "text": "[]"]]
     } catch {
-      return [["uri": uri, "mimeType": "application/json", "text": "{\"error\": \"\(error.localizedDescription)\"}"]]
+      return [["uri": uri, "mimeType": "application/json", "text": jsonText(["error": error.localizedDescription])]]
     }
+  }
+
+  private static func jsonText(_ object: [String: Any]) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys),
+          let text = String(data: data, encoding: .utf8) else {
+      return "{}"
+    }
+    return text
   }
 
   private static func fetchEdgeRaw(_ path: String) async throws -> String {

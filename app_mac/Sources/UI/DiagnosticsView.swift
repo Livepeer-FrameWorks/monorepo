@@ -4,10 +4,11 @@ struct DiagnosticsView: View {
   @ObservedObject var appState: AppState
   var closePanel: () -> Void
 
-  @State private var selectedCommand = DiagnosticCommand.edgeDoctor
+  @State private var selectedCommand = DiagnosticCommand.contextCheck
 
-  enum DiagnosticCommand: String, CaseIterable {
-    case edgeDoctor = "Edge"
+  enum DiagnosticCommand: String {
+    case edgeStatus = "Edge Status"
+    case edgeDoctor = "Edge Doctor"
     case contextCheck = "Context"
     case dnsDoctor = "DNS"
     case meshStatus = "Mesh"
@@ -18,16 +19,34 @@ struct DiagnosticsView: View {
 
     var args: [String] {
       switch self {
+      case .edgeStatus: return ["edge", "status"]
       case .edgeDoctor: return ["edge", "doctor"]
       case .contextCheck: return ["context", "check"]
       case .dnsDoctor: return ["dns", "doctor"]
       case .meshStatus: return ["mesh", "status"]
       case .servicesHealth: return ["services", "health"]
-      case .edgeLogs: return ["edge", "logs"]
+      case .edgeLogs: return ["edge", "logs", "--tail", "100"]
       case .edgeUpdate: return ["edge", "update"]
       case .cliUpdate: return ["update"]
       }
     }
+  }
+
+  private var availableCommands: [DiagnosticCommand] {
+    var commands: [DiagnosticCommand] = [.contextCheck]
+    let persona = appState.currentPersona
+    let hasLocalEdge = appState.edgeDetected || appState.edgeServiceDomain != .none
+
+    if hasLocalEdge || persona == "selfhosted" || persona == "platform" {
+      commands.append(contentsOf: [.edgeStatus, .edgeDoctor, .edgeLogs, .edgeUpdate])
+    }
+
+    if persona == "platform" {
+      commands.append(contentsOf: [.dnsDoctor, .meshStatus, .servicesHealth])
+    }
+
+    commands.append(.cliUpdate)
+    return commands
   }
 
   var body: some View {
@@ -47,7 +66,7 @@ struct DiagnosticsView: View {
 
       HStack {
         Picker("Command", selection: $selectedCommand) {
-          ForEach(DiagnosticCommand.allCases, id: \.self) { cmd in
+          ForEach(availableCommands, id: \.self) { cmd in
             Text(cmd.rawValue).tag(cmd)
           }
         }
@@ -107,10 +126,15 @@ struct DiagnosticsView: View {
     .frame(width: 420, height: 560)
     .background(.regularMaterial)
     .tint(Color.tnAccent)
+    .onAppear(perform: ensureSelectedCommandAvailable)
+    .onChange(of: appState.currentPersona) { _, _ in ensureSelectedCommandAvailable() }
+    .onChange(of: appState.edgeDetected) { _, _ in ensureSelectedCommandAvailable() }
+    .onChange(of: appState.edgeServiceDomain) { _, _ in ensureSelectedCommandAvailable() }
   }
 
   private func runDiagnostic() {
     guard !appState.isDiagnosticRunning else { return }
+    ensureSelectedCommandAvailable()
     appState.diagnosticOutput = ""
     appState.isDiagnosticRunning = true
     let args = selectedCommand.args
@@ -134,6 +158,13 @@ struct DiagnosticsView: View {
           appState.isDiagnosticRunning = false
         }
       }
+    }
+  }
+
+  private func ensureSelectedCommandAvailable() {
+    let commands = availableCommands
+    if !commands.contains(selectedCommand), let first = commands.first {
+      selectedCommand = first
     }
   }
 }

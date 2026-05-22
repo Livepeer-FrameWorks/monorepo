@@ -27,6 +27,7 @@ class AppState: ObservableObject {
 
   // Platform
   @Published var streams: [StreamSummary] = []
+  @Published var streamLoadError: String?
 
   // Skipper
   @Published var skipperMessages: [SkipperMessage] = []
@@ -39,6 +40,9 @@ class AppState: ObservableObject {
   @Published var cliAvailable = false
   @Published var cliVersion: String?
   @Published var currentContext: String = ""
+  @Published var currentPersona: String = ""
+  @Published var currentAccessMode: String = ""
+  @Published var currentClusterID: String?
   @Published var availableContexts: [String] = []
   @Published var diagnosticOutput: String = ""
   @Published var isDiagnosticRunning = false

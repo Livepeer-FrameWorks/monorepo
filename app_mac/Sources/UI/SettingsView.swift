@@ -37,6 +37,15 @@ struct SettingsView: View {
               "Context",
               value: appState.currentContext.isEmpty ? "(no context — run 'frameworks setup')" : appState.currentContext
             )
+            if !appState.currentPersona.isEmpty {
+              LabeledContent("Persona", value: appState.currentPersona)
+            }
+            if !appState.currentAccessMode.isEmpty {
+              LabeledContent("Access", value: appState.currentAccessMode)
+            }
+            if let clusterID = appState.currentClusterID, !clusterID.isEmpty {
+              LabeledContent("Cluster", value: clusterID)
+            }
           }
           LabeledContent(
             "Bridge URL",

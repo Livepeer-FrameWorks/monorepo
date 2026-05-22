@@ -38,7 +38,7 @@ class EdgeClient {
   }
 
   func fetchStreamDetail(_ streamName: String) async throws -> EdgeStreamDetailResponse {
-    try await get("/api/edge/streams/\(streamName)")
+    try await get("/api/edge/streams/\(Self.pathComponent(streamName))")
   }
 
   func fetchClients() async throws -> EdgeClientsResponse {
@@ -62,12 +62,20 @@ class EdgeClient {
 
     let (data, response) = try await URLSession.shared.data(for: request)
 
-    guard let httpResponse = response as? HTTPURLResponse,
-          (200...299).contains(httpResponse.statusCode) else {
-      throw EdgeError.requestFailed
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw EdgeError.requestFailed(0, nil)
+    }
+    guard (200...299).contains(httpResponse.statusCode) else {
+      throw EdgeError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8))
     }
 
     return try JSONDecoder().decode(T.self, from: data)
+  }
+
+  static func pathComponent(_ value: String) -> String {
+    var allowed = CharacterSet.urlPathAllowed
+    allowed.remove(charactersIn: "/")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
   }
 
   private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -85,9 +93,11 @@ class EdgeClient {
 
     let (data, response) = try await session.data(for: request)
 
-    guard let httpResponse = response as? HTTPURLResponse,
-          (200...299).contains(httpResponse.statusCode) else {
-      throw EdgeError.requestFailed
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw EdgeError.requestFailed(0, nil)
+    }
+    guard (200...299).contains(httpResponse.statusCode) else {
+      throw EdgeError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8))
     }
 
     return try JSONDecoder().decode(T.self, from: data)
@@ -96,12 +106,20 @@ class EdgeClient {
 
 enum EdgeError: LocalizedError {
   case invalidURL
-  case requestFailed
+  case requestFailed(Int, String?)
 
   var errorDescription: String? {
     switch self {
     case .invalidURL: return "Invalid edge URL"
-    case .requestFailed: return "Edge request failed"
+    case .requestFailed(let status, let body):
+      let detail = body?.trimmingCharacters(in: .whitespacesAndNewlines)
+      if status > 0, let detail, !detail.isEmpty {
+        return "Edge request failed with HTTP \(status): \(detail)"
+      }
+      if status > 0 {
+        return "Edge request failed with HTTP \(status)"
+      }
+      return "Edge request failed"
     }
   }
 }

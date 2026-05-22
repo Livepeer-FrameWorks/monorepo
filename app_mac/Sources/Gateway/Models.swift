@@ -57,6 +57,15 @@ struct EdgeStream: Codable, Identifiable {
     case upBytes = "up_bytes"
     case downBytes = "down_bytes"
   }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try container.decode(String.self, forKey: .name)
+    viewers = try container.decodeIfPresent(Int.self, forKey: .viewers) ?? 0
+    clients = try container.decodeIfPresent(Int.self, forKey: .clients) ?? 0
+    upBytes = try container.decodeIfPresent(UInt64.self, forKey: .upBytes) ?? 0
+    downBytes = try container.decodeIfPresent(UInt64.self, forKey: .downBytes) ?? 0
+  }
 }
 
 struct EdgeMetricsResponse: Codable {
@@ -74,6 +83,16 @@ struct EdgeMetricsResponse: Codable {
     case cpuPercent = "cpu_percent"
     case memBytes = "mem_bytes"
     case totalViewers = "total_viewers"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    nodeId = try container.decode(String.self, forKey: .nodeId)
+    bandwidthUp = try container.decodeIfPresent(UInt64.self, forKey: .bandwidthUp) ?? 0
+    bandwidthDown = try container.decodeIfPresent(UInt64.self, forKey: .bandwidthDown) ?? 0
+    cpuPercent = try container.decodeIfPresent(Double.self, forKey: .cpuPercent) ?? 0
+    memBytes = try container.decodeIfPresent(UInt64.self, forKey: .memBytes) ?? 0
+    totalViewers = try container.decodeIfPresent(Int.self, forKey: .totalViewers) ?? 0
   }
 }
 

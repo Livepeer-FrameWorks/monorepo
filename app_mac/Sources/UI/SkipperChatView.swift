@@ -23,7 +23,31 @@ struct SkipperChatView: View {
 
       Divider()
 
-      // Messages
+      if SkipperService.supportsInteractiveChat {
+        chatContent
+      } else {
+        VStack(spacing: 10) {
+          Image(systemName: "antenna.radiowaves.left.and.right.slash")
+            .font(.largeTitle)
+            .foregroundStyle(Color.tnOrange)
+          Text("Skipper chat is unavailable in this tray build.")
+            .font(.headline)
+            .multilineTextAlignment(.center)
+          Text("The current GraphQL schema exposes Skipper chat as a subscription stream, and this tray client only has HTTP GraphQL transport.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .frame(width: 420, height: 560)
+    .background(.regularMaterial)
+  }
+
+  private var chatContent: some View {
+    VStack(spacing: 0) {
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 12) {
@@ -41,7 +65,7 @@ struct SkipperChatView: View {
           }
           .padding()
         }
-        .onChange(of: appState.skipperMessages.count) { _ in
+        .onChange(of: appState.skipperMessages.count) { _, _ in
           if let last = appState.skipperMessages.last {
             proxy.scrollTo(last.id, anchor: .bottom)
           }
@@ -66,8 +90,6 @@ struct SkipperChatView: View {
       }
       .padding()
     }
-    .frame(width: 420, height: 560)
-    .background(.regularMaterial)
   }
 
   private func messageRow(_ message: SkipperMessage) -> some View {

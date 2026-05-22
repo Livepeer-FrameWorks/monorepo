@@ -134,7 +134,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       if appState.edgeDetected {
         let edgeItem = NSMenuItem(
           title: appState.edgeHealthy ? "Edge: Healthy" : "Edge: Unhealthy",
-          action: nil, keyEquivalent: "")
+          action: #selector(openEdgeStatus), keyEquivalent: "")
+        edgeItem.target = self
         edgeItem.image = SFSymbols.tintedImage(
           "circle.fill",
           color: appState.edgeHealthy ? .systemGreen : .systemRed)
@@ -148,7 +149,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       }
 
       menu.addItem(NSMenuItem(title: "Dashboard", action: #selector(openDashboard), keyEquivalent: "d"))
-      menu.addItem(NSMenuItem(title: "Ask Skipper...", action: #selector(openSkipper), keyEquivalent: "s"))
+      if SkipperService.supportsInteractiveChat {
+        menu.addItem(NSMenuItem(title: "Ask Skipper...", action: #selector(openSkipper), keyEquivalent: "s"))
+      }
 
       if appState.cliAvailable {
         menu.addItem(NSMenuItem.separator())
@@ -214,6 +217,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   @objc private func openDiagnostics() {
     guard let button = statusItem.button else { return }
     panelManager.showView(.diagnostics, relativeTo: button)
+  }
+
+  @objc private func openEdgeStatus() {
+    guard let button = statusItem.button else { return }
+    panelManager.showView(.edgeStatus, relativeTo: button)
   }
 
   @objc private func openContextPicker() {
@@ -290,9 +298,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       }
     }
 
+    let detectedVersion = version
     await MainActor.run {
       appState.cliAvailable = available
-      appState.cliVersion = version
+      appState.cliVersion = detectedVersion
     }
     await applyHydratedContext(current, contextNames: contextNames, retryRestore: false)
   }
@@ -309,7 +318,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     retryRestore: Bool = true
   ) async {
     guard let ctx else {
-      await clearToNoContextState(contextNames: contextNames)
+      await clearToNoContextState(contextNames: contextNames, retryRestore: retryRestore)
       return
     }
 
@@ -317,6 +326,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let previousURL = await MainActor.run { () -> String in
       let prev = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
       appState.currentContext = ctx.name
+      appState.currentPersona = ctx.persona ?? ""
+      appState.currentAccessMode = ctx.accessMode ?? "local"
+      appState.currentClusterID = ctx.clusterID
       appState.gatewayBaseURL = ctx.endpoints.bridgeURL
       GatewayClient.shared.baseURL = ctx.endpoints.bridgeURL
       appState.availableContexts = contextNames
@@ -341,19 +353,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  // clearToNoContextState mirrors a full no-context reset: empty Bridge URL,
-  // empty active context, auth dropped (no network call — loss of CLI context
-  // is not a server logout), no edge polling. The picker, the watcher, and
-  // any future caller all converge on this state.
-  private func clearToNoContextState(contextNames: [String]) async {
-    await clearAuthState()
-    await MainActor.run {
+  // clearToNoContextState keeps hosted account login usable even when the CLI
+  // has not been set up yet. No active context means "use the hosted bridge
+  // fallback," not "delete the user's session."
+  private func clearToNoContextState(contextNames: [String], retryRestore: Bool) async {
+    let fallbackURL = await MainActor.run {
+      let draftURL = appState.loginBridgeURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+      return draftURL.isEmpty ? AppState.hostedBridgeURL : draftURL
+    }
+    let previousURL = await MainActor.run { () -> String in
+      let previous = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
       appState.currentContext = ""
-      appState.gatewayBaseURL = ""
-      GatewayClient.shared.baseURL = ""
+      appState.currentPersona = ""
+      appState.currentAccessMode = ""
+      appState.currentClusterID = nil
+      appState.gatewayBaseURL = fallbackURL
+      GatewayClient.shared.baseURL = fallbackURL
       appState.availableContexts = contextNames
-      edgePoller?.stop()
-      edgePoller = nil
+      return previous
+    }
+
+    guard retryRestore, fallbackURL != previousURL else { return }
+
+    let restored = await AuthService.shared.restoreSession(appState: appState)
+    await MainActor.run {
+      if restored {
+        startEdgePolling()
+      } else {
+        edgePoller?.stop()
+        edgePoller = nil
+      }
       updateStatusIcon()
     }
   }
@@ -370,6 +399,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       appState.userId = nil
       appState.tenantId = nil
       appState.streams = []
+      appState.streamLoadError = nil
     }
   }
 

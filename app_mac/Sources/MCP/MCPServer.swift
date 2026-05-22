@@ -3,6 +3,7 @@ import Network
 
 class MCPServer {
   static let shared = MCPServer()
+  private static let discoveryServerName = "frameworks-desktop"
 
   private var listener: NWListener?
   private(set) var port: UInt16 = 0
@@ -170,24 +171,52 @@ class MCPServer {
     let configDir = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent(".config/frameworks")
     try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+    let configPath = configDir.appendingPathComponent("mcp.json")
 
-    let config: [String: Any] = [
-      "mcpServers": [
-        "frameworks-desktop": [
-          "url": "http://localhost:\(port)/mcp",
-          "transport": "http",
-        ]
-      ]
+    var config = readDiscoveryConfig(from: configPath)
+    var servers = config["mcpServers"] as? [String: Any] ?? [:]
+    servers[Self.discoveryServerName] = [
+      "url": "http://localhost:\(port)/mcp",
+      "transport": "http",
     ]
+    config["mcpServers"] = servers
 
-    if let data = try? JSONSerialization.data(withJSONObject: config, options: .prettyPrinted) {
-      try? data.write(to: configDir.appendingPathComponent("mcp.json"))
-    }
+    writeDiscoveryConfig(config, to: configPath)
   }
 
   private func removeDiscoveryConfig() {
     let configPath = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent(".config/frameworks/mcp.json")
-    try? FileManager.default.removeItem(at: configPath)
+    var config = readDiscoveryConfig(from: configPath)
+    guard var servers = config["mcpServers"] as? [String: Any] else { return }
+
+    servers.removeValue(forKey: Self.discoveryServerName)
+    if servers.isEmpty {
+      config.removeValue(forKey: "mcpServers")
+    } else {
+      config["mcpServers"] = servers
+    }
+
+    if config.isEmpty {
+      try? FileManager.default.removeItem(at: configPath)
+    } else {
+      writeDiscoveryConfig(config, to: configPath)
+    }
+  }
+
+  private func readDiscoveryConfig(from url: URL) -> [String: Any] {
+    guard let data = try? Data(contentsOf: url),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let config = object as? [String: Any] else {
+      return [:]
+    }
+    return config
+  }
+
+  private func writeDiscoveryConfig(_ config: [String: Any], to url: URL) {
+    guard let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) else {
+      return
+    }
+    try? data.write(to: url, options: .atomic)
   }
 }

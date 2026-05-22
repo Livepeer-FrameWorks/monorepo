@@ -2,6 +2,7 @@ import Foundation
 
 class SkipperService {
   static let shared = SkipperService()
+  static let supportsInteractiveChat = false
   private let gateway = GatewayClient.shared
 
   private init() {}

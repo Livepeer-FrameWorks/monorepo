@@ -50,31 +50,22 @@ struct LoginView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(Color.tnAccent)
-        .disabled(appState.loginEmailDraft.isEmpty || appState.loginPasswordDraft.isEmpty || isLoading)
+        .disabled(!canSubmit)
         .keyboardShortcut(.defaultAction)
       }
-
-      Divider()
-
-      Text("Or connect with a wallet")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-      Button(action: {}) {
-        HStack {
-          Image(systemName: "wallet.pass")
-          Text("Wallet Login")
-        }
-        .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.bordered)
-      .disabled(true)
-
       Spacer()
     }
     .padding()
     .frame(width: 380, height: 420)
     .background(.regularMaterial)
+  }
+
+  private var canSubmit: Bool {
+    let hasEmail = !appState.loginEmailDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let hasPassword = !appState.loginPasswordDraft.isEmpty
+    let hasBridgeURL = !appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !appState.loginBridgeURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return hasEmail && hasPassword && hasBridgeURL && !isLoading
   }
 
   private func login() {
@@ -133,6 +124,9 @@ struct LoginView: View {
       appState.availableContexts = contexts.map(\.name)
       if let current {
         appState.currentContext = current.name
+        appState.currentPersona = current.persona ?? ""
+        appState.currentAccessMode = current.accessMode ?? "local"
+        appState.currentClusterID = current.clusterID
         appState.gatewayBaseURL = current.endpoints.bridgeURL
         GatewayClient.shared.baseURL = current.endpoints.bridgeURL
       }

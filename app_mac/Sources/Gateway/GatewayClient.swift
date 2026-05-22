@@ -131,9 +131,25 @@ enum GatewayError: LocalizedError {
     case .notConfigured: return "Gateway URL not configured — run 'frameworks setup' to create a context"
     case .invalidURL(let path): return "Invalid URL: \(path)"
     case .invalidResponse: return "Invalid response"
-    case .httpError(let code, _): return "HTTP \(code)"
+    case .httpError(let code, let data):
+      if let message = HTTPErrorMessage.decode(from: data) {
+        return "HTTP \(code): \(message)"
+      }
+      return "HTTP \(code)"
     case .graphqlErrors(let msgs): return msgs.joined(separator: ", ")
     case .noData: return "No data in response"
     }
+  }
+}
+
+private struct HTTPErrorMessage: Decodable {
+  let error: String?
+  let message: String?
+
+  static func decode(from data: Data) -> String? {
+    if let decoded = try? JSONDecoder().decode(HTTPErrorMessage.self, from: data) {
+      return decoded.error ?? decoded.message
+    }
+    return String(data: data, encoding: .utf8)
   }
 }

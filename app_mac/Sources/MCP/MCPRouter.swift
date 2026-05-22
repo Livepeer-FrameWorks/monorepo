@@ -30,8 +30,13 @@ enum MCPRouter {
       return result
     case "edge_stream_detail":
       let streamName = arguments["stream_name"] as? String ?? ""
+      guard !streamName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw MCPError.invalidArgument("stream_name is required")
+      }
       let base = try await resolveBaseURL(arguments)
-      let result: EdgeStreamDetailResponse = try await EdgeClient.fetch("/api/edge/streams/\(streamName)", from: base)
+      let result: EdgeStreamDetailResponse = try await EdgeClient.fetch(
+        "/api/edge/streams/\(EdgeClient.pathComponent(streamName))",
+        from: base)
       return result
     case "edge_clients":
       let base = try await resolveBaseURL(arguments)

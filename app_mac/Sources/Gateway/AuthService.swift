@@ -77,6 +77,16 @@ class AuthService {
 
   func restoreSession(appState: AppState) async -> Bool {
     guard KeychainHelper.load(key: "user_session") != nil else {
+      if KeychainHelper.load(key: "refresh_token") != nil {
+        do {
+          try await refreshToken(appState: appState)
+          return await restoreSession(appState: appState)
+        } catch {
+          await logout(appState: appState)
+          return false
+        }
+      }
+      await logout(appState: appState)
       return false
     }
 
@@ -116,6 +126,7 @@ class AuthService {
       appState.userId = nil
       appState.tenantId = nil
       appState.streams = []
+      appState.streamLoadError = nil
     }
   }
 

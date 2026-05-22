@@ -130,7 +130,20 @@ struct DashboardView: View {
           .font(.caption).foregroundStyle(.secondary)
       }
 
-      if appState.streams.isEmpty {
+      if let error = appState.streamLoadError {
+        VStack(spacing: 6) {
+          Label("Streams unavailable", systemImage: "exclamationmark.triangle")
+            .font(.caption.bold())
+            .foregroundStyle(Color.tnOrange)
+          Text(error)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding()
+      } else if appState.streams.isEmpty {
         Text("No streams yet")
           .font(.caption).foregroundStyle(.tertiary)
           .frame(maxWidth: .infinity, alignment: .center)
@@ -167,12 +180,17 @@ struct DashboardView: View {
   private func loadStreams() {
     Task {
       do {
+        await MainActor.run {
+          appState.streamLoadError = nil
+        }
         let streams = try await StreamService.shared.listStreams()
         await MainActor.run {
           appState.streams = streams
         }
       } catch {
-        // Silently fail — streams section shows empty state
+        await MainActor.run {
+          appState.streamLoadError = error.localizedDescription
+        }
       }
     }
   }

@@ -6,6 +6,7 @@ struct EdgeStatusView: View {
   var onDiagnostics: (() -> Void)?
 
   @State private var streams: [EdgeStream] = []
+  @State private var streamsError: String?
 
   var body: some View {
     VStack(spacing: 0) {
@@ -54,6 +55,10 @@ struct EdgeStatusView: View {
           // Active streams
           if !streams.isEmpty {
             activeStreamsSection
+          }
+
+          if let streamsError {
+            errorSection(streamsError)
           }
 
           if appState.cliAvailable {
@@ -144,10 +149,36 @@ struct EdgeStatusView: View {
     .clipShape(RoundedRectangle(cornerRadius: 8))
   }
 
+  private func errorSection(_ message: String) -> some View {
+    VStack(spacing: 6) {
+      Label("Edge streams unavailable", systemImage: "exclamationmark.triangle")
+        .font(.caption.bold())
+        .foregroundStyle(Color.tnOrange)
+      Text(message)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .textSelection(.enabled)
+    }
+    .frame(maxWidth: .infinity)
+    .padding()
+    .background(Color.tnOrange.opacity(0.05))
+    .clipShape(RoundedRectangle(cornerRadius: 8))
+  }
+
   private func loadEdgeStreams() {
     Task {
-      if let response = try? await EdgeClient.shared.fetchStreams() {
-        await MainActor.run { streams = response.streams }
+      do {
+        let response = try await EdgeClient.shared.fetchStreams()
+        await MainActor.run {
+          streams = response.streams
+          streamsError = nil
+        }
+      } catch {
+        await MainActor.run {
+          streams = []
+          streamsError = error.localizedDescription
+        }
       }
     }
   }

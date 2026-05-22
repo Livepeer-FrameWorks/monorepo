@@ -3,11 +3,15 @@ import Foundation
 struct CLIContext: Decodable {
   let name: String
   let clusterID: String?
+  let persona: String?
+  let accessMode: String?
   let endpoints: CLIEndpoints
 
   enum CodingKeys: String, CodingKey {
     case name
     case clusterID = "cluster_id"
+    case persona
+    case accessMode = "access_mode"
     case endpoints
   }
 }

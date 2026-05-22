@@ -6,6 +6,36 @@ struct CLIResult {
   let exitCode: Int32
 }
 
+private final class StreamingLineBuffer: @unchecked Sendable {
+  private var buffer = Data()
+  private let lock = NSLock()
+
+  func append(_ data: Data, onLine: @Sendable (String) -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+
+    buffer.append(data)
+    while let newlineRange = buffer.range(of: Data([0x0A])) {
+      let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
+      buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
+      if let line = String(data: lineData, encoding: .utf8) {
+        onLine(line)
+      }
+    }
+  }
+
+  func flush(onLine: @Sendable (String) -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+
+    guard !buffer.isEmpty else { return }
+    if let remaining = String(data: buffer, encoding: .utf8) {
+      onLine(remaining)
+    }
+    buffer.removeAll()
+  }
+}
+
 actor CLIRunner {
   static let shared = CLIRunner()
 
@@ -88,18 +118,11 @@ actor CLIRunner {
     process.standardOutput = stdoutPipe
     process.standardError = stderrPipe
 
-    var buffer = Data()
+    let stdoutBuffer = StreamingLineBuffer()
     stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
       let data = handle.availableData
       guard !data.isEmpty else { return }
-      buffer.append(data)
-      while let newlineRange = buffer.range(of: Data([0x0A])) {
-        let lineData = buffer.subdata(in: buffer.startIndex..<newlineRange.lowerBound)
-        buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
-        if let line = String(data: lineData, encoding: .utf8) {
-          onLine(line)
-        }
-      }
+      stdoutBuffer.append(data, onLine: onLine)
     }
 
     stderrPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -116,10 +139,7 @@ actor CLIRunner {
     stdoutPipe.fileHandleForReading.readabilityHandler = nil
     stderrPipe.fileHandleForReading.readabilityHandler = nil
 
-    // Flush remaining buffer
-    if !buffer.isEmpty, let remaining = String(data: buffer, encoding: .utf8) {
-      onLine(remaining)
-    }
+    stdoutBuffer.flush(onLine: onLine)
 
     return process.terminationStatus
   }

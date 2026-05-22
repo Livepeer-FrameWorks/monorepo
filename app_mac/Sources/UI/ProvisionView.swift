@@ -37,7 +37,7 @@ struct ProvisionView: View {
           Button("Provision") { runProvision() }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(enrollmentToken.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(enrollmentToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
       }
       .padding(.horizontal)
@@ -83,7 +83,7 @@ struct ProvisionView: View {
   }
 
   private func runProvision() {
-    let token = enrollmentToken.trimmingCharacters(in: .whitespaces)
+    let token = enrollmentToken.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !token.isEmpty, !isRunning else { return }
     output = ""
     isRunning = true
