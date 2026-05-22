@@ -314,7 +314,10 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer, tenantID strin
 
 		addr := peer.GetFoghornGrpcAddr()
 		if addr == "" {
-			addr = "foghorn." + peer.GetClusterSlug() + "." + peer.GetBaseUrl() + ":" + federationPort
+			pm.logger.WithFields(map[string]interface{}{
+				"peer_cluster": peer.GetClusterId(),
+			}).Warn("Skipping federation peer without internal Foghorn address")
+			continue
 		}
 		if existing, known := pm.peers[peer.GetClusterId()]; known {
 			if existing.addr != addr {
@@ -487,7 +490,6 @@ const (
 	artifactPushInterval  = 30 * time.Second
 	peerReconnectBackoff  = 10 * time.Second
 	heartbeatPushInterval = 10 * time.Second
-	federationPort        = "18029" // external Foghorn gRPC listener for federation
 	leaderAcquireInterval = 5 * time.Second
 	leaderRole            = "peer_manager"
 	protocolVersion       = uint32(1)

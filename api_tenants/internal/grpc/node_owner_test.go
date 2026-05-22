@@ -46,18 +46,18 @@ func TestGetNodeOwnerReturnsFoghornControlListener(t *testing.T) {
 	}
 	defer db.Close()
 
-	controlListenerFilter := `(?s)\(si\.port = 18029 OR si\.metadata->>'foghorn_listener' = 'control'\).*FROM quartermaster\.infrastructure_nodes`
+	controlListenerFilter := `(?s)\(si\.metadata->>'foghorn_listener' = 'internal_control' OR si\.port = 18019 OR si\.metadata->>'foghorn_listener' = 'control'\).*FROM quartermaster\.infrastructure_nodes`
 	mock.ExpectQuery(controlListenerFilter).
 		WithArgs("edge-eu-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "cluster_name", "owner_tenant_id", "name", "advertise_host", "port"}).
-			AddRow("edge-eu-1", "media-eu-1", "Media EU", "tenant-1", "Tenant One", "10.88.158.227", int32(18029)))
+			AddRow("edge-eu-1", "media-eu-1", "Media EU", "tenant-1", "Tenant One", "10.88.158.227", int32(18019)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
 	resp, err := server.GetNodeOwner(context.Background(), &pb.GetNodeOwnerRequest{NodeId: "edge-eu-1"})
 	if err != nil {
 		t.Fatalf("GetNodeOwner returned error: %v", err)
 	}
-	if resp.GetFoghornGrpcAddr() != "10.88.158.227:18029" {
+	if resp.GetFoghornGrpcAddr() != "10.88.158.227:18019" {
 		t.Fatalf("unexpected foghorn addr: %s", resp.GetFoghornGrpcAddr())
 	}
 

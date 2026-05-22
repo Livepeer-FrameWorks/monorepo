@@ -13,7 +13,7 @@ func TestGRPCServicesIncludeRuntimeDependencyEndpoints(t *testing.T) {
 		"deckhand":        {ServiceID: "deckhand", EnvKey: "DECKHAND_GRPC_ADDR", Port: 19006},
 		"skipper":         {ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
 		"navigator":       {ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
-		"foghorn":         {ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18029},
+		"foghorn":         {ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
 	}
 
 	got := make(map[string]GRPCService)

@@ -75,6 +75,12 @@ type QuartermasterServer struct {
 	quartermasterGRPCAddr string
 }
 
+const (
+	foghornListenerInternalControl = "internal_control"
+	foghornInternalGRPCPort        = 18019
+	foghornExternalGRPCPort        = 18029
+)
+
 // SetQuartermasterGRPCAddr configures the gRPC address this Quartermaster
 // advertises to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse.
 // Called during startup once the listener address is known.
@@ -461,10 +467,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		  AND svc.type = 'foghorn'
 		  AND si.status = 'running'
 		  AND si.health_status = 'healthy'
-		  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+		  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 		  AND COALESCE(si.advertise_host, '') <> ''
 		  AND COALESCE(si.port, 0) > 0
-		ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, primaryClusterID).Scan(&foghornHost, &foghornPort)
 	if addr, ok := buildAdvertiseAddr(foghornHost, foghornPort); ok {
@@ -505,10 +511,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				  AND svc.type = 'foghorn'
 				  AND si.status = 'running'
 				  AND si.health_status = 'healthy'
-				  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+				  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 				  AND COALESCE(si.advertise_host, '') <> ''
 				  AND COALESCE(si.port, 0) > 0
-				ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+				ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 				LIMIT 1
 			`, officialClusterID.String).Scan(&offFoghornHost, &offFoghornPort)
 			if addr, ok := buildAdvertiseAddr(offFoghornHost, offFoghornPort); ok {
@@ -538,10 +544,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
 		              AND si.health_status = 'healthy'
-		              AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+		              AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           ''
 		       ) AS foghorn_advertise_host,
@@ -555,10 +561,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		              AND svc.type = 'foghorn'
 		              AND si.status = 'running'
 		              AND si.health_status = 'healthy'
-		              AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+		              AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 		              AND COALESCE(si.advertise_host, '') <> ''
 		              AND COALESCE(si.port, 0) > 0
-		            ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+		            ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
 		            LIMIT 1),
 		           0
 		       ) AS foghorn_port
@@ -860,7 +866,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		metadataJSON = &emptyMetadata
 	}
 	metadata := req.GetMetadata()
-	isFoghornControlListener := serviceID == "foghorn" && proto == "grpc" && (port == 18029 || metadata["foghorn_listener"] == "control")
+	isFoghornControlListener := serviceID == "foghorn" && proto == "grpc" && (port == foghornInternalGRPCPort || metadata["foghorn_listener"] == foghornListenerInternalControl)
 
 	// 5a. Auto-associate with node by IP when no explicit node_id provided.
 	// If advHost is a hostname, resolve it to an IP first.
@@ -1069,9 +1075,9 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			   AND svc.type = 'foghorn' AND si.status = 'running'
 			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
-			   AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			   AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
-			 ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC LIMIT 1),
+			 ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC LIMIT 1),
 			(SELECT si.port
 			 FROM quartermaster.service_cluster_assignments sca
 			 JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
@@ -1080,9 +1086,9 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 			   AND svc.type = 'foghorn' AND si.status = 'running'
 			   AND si.health_status = 'healthy'
 			   AND si.protocol = 'grpc'
-			   AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			   AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			   AND COALESCE(si.advertise_host, '') <> '' AND COALESCE(si.port, 0) > 0
-			 ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC LIMIT 1)
+			 ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC LIMIT 1)
 		FROM quartermaster.infrastructure_nodes n
 		JOIN quartermaster.infrastructure_clusters c ON n.cluster_id = c.cluster_id
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
@@ -1153,7 +1159,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 
 	whereClause := "WHERE s.type = $1 AND si.status IN ('running','starting','active')"
 	if serviceType == "foghorn" {
-		whereClause += " AND si.protocol = 'grpc' AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')"
+		whereClause += " AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')"
 	}
 
 	if tenantID != "" {
@@ -1686,7 +1692,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 			  AND ic.is_active = true
 			LEFT JOIN quartermaster.service_cluster_assignments sca
 			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			GROUP BY si.id, si.advertise_host, si.port, ic.cluster_id, ic.region_id, si.started_at
 			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
 			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
@@ -1892,12 +1898,12 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 	expiresAt := now.Add(ttl)
 
 	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		_, err := s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.bootstrap_tokens (
-				id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
-			) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
-		`, tokenID, hashBootstrapToken(token), tokenPrefix(token), tokenName, tenantID, clusterID, expiresAt)
-		return err
+		_, execErr := s.db.ExecContext(ctx, `
+				INSERT INTO quartermaster.bootstrap_tokens (
+					id, token_hash, token_prefix, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+				) VALUES ($1, $2, $3, 'edge_node', $4, $5, $6, $7, $5, NOW())
+			`, tokenID, hashBootstrapToken(token), tokenPrefix(token), tokenName, tenantID, clusterID, expiresAt)
+		return execErr
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
@@ -3230,7 +3236,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 			  AND si.status = 'running'
 			  AND si.health_status = 'healthy'
 			  AND si.protocol = 'grpc'
-			  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			  AND sca.id IS NULL
 			ORDER BY si.started_at ASC
 			LIMIT $2
@@ -7242,9 +7248,10 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	}
 	if clusterID.Valid {
 		resp.ClusterId = clusterID.String
-		// Resolve the cluster's assigned Foghorn so a stateless rendezvous
-		// (Bridge bootstrapEdge) can route without a second RPC.
-		if addr, lookupErr := s.lookupClusterFoghornGRPC(ctx, clusterID.String); lookupErr == nil {
+		// Bootstrap tokens are consumed before an edge joins the mesh, so expose
+		// the public Foghorn edge listener rather than the internal control
+		// assignment used by service-to-service clients.
+		if addr, lookupErr := s.lookupClusterPublicFoghornGRPC(ctx, clusterID.String); lookupErr == nil {
 			resp.FoghornGrpcAddr = addr
 		}
 	}
@@ -7257,12 +7264,43 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	return resp, nil
 }
 
-// lookupClusterFoghornGRPC returns the gRPC advertise addr of the
-// Foghorn instance currently assigned to the given cluster. Returns an
-// empty string with nil error when no active assignment exists yet
-// (caller decides whether that's fatal). Used by ValidateBootstrapToken
-// so a stateless rendezvous (Bridge bootstrapEdge) can route on a
-// single QM call.
+func (s *QuartermasterServer) lookupClusterPublicFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
+	var baseURL sql.NullString
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT base_url
+			FROM quartermaster.infrastructure_clusters
+			WHERE cluster_id = $1 AND is_active = true
+		`, clusterID).Scan(&baseURL)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !baseURL.Valid {
+		return "", nil
+	}
+	return publicFoghornGRPCAddr(clusterID, baseURL.String), nil
+}
+
+func publicFoghornGRPCAddr(clusterID, baseURL string) string {
+	rootDomain := dns.NormalizeDomainScope(baseURL)
+	clusterSlug := dns.SanitizeLabel(clusterID)
+	if rootDomain == "" || clusterSlug == "" {
+		return ""
+	}
+	host, ok := dns.ServiceFQDN("foghorn", clusterSlug+"."+rootDomain)
+	if !ok || host == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(foghornExternalGRPCPort))
+}
+
+// lookupClusterFoghornGRPC returns the internal gRPC advertise addr of the
+// Foghorn instance currently assigned to the given cluster. Returns an empty
+// string with nil error when no active assignment exists yet.
 func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
 	var addr string
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -7276,9 +7314,9 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 			  AND si.status = 'running'
 			  AND si.health_status = 'healthy'
 			  AND si.protocol = 'grpc'
-			  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			  AND svc.type = 'foghorn'
-			ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+			ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC
 			LIMIT 1
 		`, clusterID).Scan(&addr)
 	})
@@ -9409,7 +9447,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 			  AND ic.is_active = true
 			LEFT JOIN quartermaster.service_cluster_assignments sca
 			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			GROUP BY si.id, ic.cluster_id, ic.region_id, si.started_at
 			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
 			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC

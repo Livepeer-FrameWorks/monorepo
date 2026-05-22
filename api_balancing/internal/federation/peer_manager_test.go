@@ -202,10 +202,11 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{
 		{
-			ClusterId:   "remote-cluster",
-			ClusterSlug: "remote",
-			BaseUrl:     "example.com",
-			Role:        "official",
+			ClusterId:       "remote-cluster",
+			ClusterSlug:     "remote",
+			BaseUrl:         "example.com",
+			FoghornGrpcAddr: "10.88.1.10:18019",
+			Role:            "official",
 		},
 	}, "tenant-a")
 
@@ -213,7 +214,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 	if addr == "" {
 		t.Fatal("expected non-leader to have peer address registered")
 	}
-	if addr != "foghorn.remote.example.com:18029" {
+	if addr != "10.88.1.10:18019" {
 		t.Fatalf("unexpected address: %s", addr)
 	}
 
@@ -229,7 +230,7 @@ func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 	peers := []*pb.TenantClusterPeer{
 		{ClusterId: "local-cluster", ClusterSlug: "local", BaseUrl: "example.com"},
 		{ClusterId: "", ClusterSlug: "empty", BaseUrl: "example.com"},
-		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", Role: "preferred"},
+		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.11:18019", Role: "preferred"},
 	}
 
 	pm.NotifyPeers(peers, "tenant-a")
@@ -255,7 +256,7 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{
 		{ClusterId: "demo-media-test", ClusterSlug: "demo", BaseUrl: "example.com"},
-		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com"},
+		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.12:18019"},
 	}, "tenant-a")
 
 	if pm.GetPeerAddr("demo-media-test") != "" {
@@ -263,6 +264,18 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 	}
 	if pm.GetPeerAddr("remote-media-test") == "" {
 		t.Fatal("expected remote media cluster to be registered")
+	}
+}
+
+func TestNotifyPeers_SkipsPeerWithoutInternalFoghornAddress(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{
+		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com"},
+	}, "tenant-a")
+
+	if pm.GetPeerAddr("remote-cluster") != "" {
+		t.Fatal("should not derive a public Foghorn address for mesh federation")
 	}
 }
 
@@ -275,7 +288,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 	close(pm.done)
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{
-		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", Role: "official"},
+		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.13:18019", Role: "official"},
 	}, "tenant-a")
 
 	// Verify addresses were synced to Redis
@@ -287,7 +300,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 	if len(addrs) != 1 {
 		t.Fatalf("expected 1 address in Redis, got %d", len(addrs))
 	}
-	if addrs["remote-1"] != "foghorn.r1.example.com:18029" {
+	if addrs["remote-1"] != "10.88.1.13:18019" {
 		t.Fatalf("unexpected Redis address: %s", addrs["remote-1"])
 	}
 }
@@ -571,20 +584,22 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
-		ClusterId:   "remote-cluster",
-		ClusterSlug: "remote-old",
-		BaseUrl:     "example.com",
-		Role:        "subscribed",
+		ClusterId:       "remote-cluster",
+		ClusterSlug:     "remote-old",
+		BaseUrl:         "example.com",
+		FoghornGrpcAddr: "10.88.1.14:18019",
+		Role:            "subscribed",
 	}}, "tenant-a")
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
-		ClusterId:   "remote-cluster",
-		ClusterSlug: "remote-new",
-		BaseUrl:     "example.net",
-		Role:        "official",
-		S3Bucket:    "bucket-a",
-		S3Endpoint:  "https://s3.example.net",
-		S3Region:    "us-east-1",
+		ClusterId:       "remote-cluster",
+		ClusterSlug:     "remote-new",
+		BaseUrl:         "example.net",
+		FoghornGrpcAddr: "10.88.1.15:18019",
+		Role:            "official",
+		S3Bucket:        "bucket-a",
+		S3Endpoint:      "https://s3.example.net",
+		S3Region:        "us-east-1",
 	}}, "tenant-a")
 
 	pm.mu.RLock()
@@ -593,7 +608,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("expected peer to exist")
 	}
-	if ps.addr != "foghorn.remote-new.example.net:18029" {
+	if ps.addr != "10.88.1.15:18019" {
 		t.Fatalf("unexpected addr: %s", ps.addr)
 	}
 	if ps.lifecycle != peerAlwaysOn {
@@ -612,18 +627,20 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	close(pm.done)
 
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
-		ClusterId:   "remote-1",
-		ClusterSlug: "r1",
-		BaseUrl:     "old.example.com",
-		Role:        "official",
+		ClusterId:       "remote-1",
+		ClusterSlug:     "r1",
+		BaseUrl:         "old.example.com",
+		FoghornGrpcAddr: "10.88.1.16:18019",
+		Role:            "official",
 	}}, "tenant-a")
 
 	// Update address for the same peer
 	pm.NotifyPeers([]*pb.TenantClusterPeer{{
-		ClusterId:   "remote-1",
-		ClusterSlug: "r1",
-		BaseUrl:     "new.example.com",
-		Role:        "official",
+		ClusterId:       "remote-1",
+		ClusterSlug:     "r1",
+		BaseUrl:         "new.example.com",
+		FoghornGrpcAddr: "10.88.1.17:18019",
+		Role:            "official",
 	}}, "tenant-a")
 
 	ctx := context.Background()
@@ -631,7 +648,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPeerAddresses: %v", err)
 	}
-	if addrs["remote-1"] != "foghorn.r1.new.example.com:18029" {
+	if addrs["remote-1"] != "10.88.1.17:18019" {
 		t.Fatalf("expected updated address in Redis, got %q", addrs["remote-1"])
 	}
 }

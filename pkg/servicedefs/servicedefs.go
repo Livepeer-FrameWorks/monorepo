@@ -133,7 +133,7 @@ var grpcServices = []GRPCService{
 	{ServiceID: "deckhand", EnvKey: "DECKHAND_GRPC_ADDR", Port: 19006},
 	{ServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Port: 19007},
 	{ServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Port: 18011},
-	{ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18029},
+	{ServiceID: "foghorn", EnvKey: "FOGHORN_GRPC_ADDR", Port: 18019},
 }
 
 // DefaultGRPCPort returns the default gRPC port for a canonical ID, if defined.

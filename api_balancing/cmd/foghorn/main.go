@@ -547,7 +547,7 @@ func main() {
 	// internal_ip > external_ip.
 	advertiseAddr := ""
 	if qmClient != nil {
-		grpcPort := config.GetEnvInt("FOGHORN_EXTERNAL_GRPC_PORT", controlPortFromBindAddr(externalGRPCBindAddr, 18029))
+		grpcPort := config.GetEnvInt("FOGHORN_INTERNAL_GRPC_PORT", controlPortFromBindAddr(internalGRPCBindAddr, 18019))
 		bsReq := &pb.BootstrapServiceRequest{
 			Type:      "foghorn",
 			Version:   version.Version,
@@ -555,7 +555,7 @@ func main() {
 			Port:      int32(grpcPort),
 			ClusterId: &foghornCfg.ClusterID,
 			Metadata: map[string]string{
-				"foghorn_listener": "control",
+				"foghorn_listener": "internal_control",
 			},
 		}
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {
@@ -948,11 +948,10 @@ func main() {
 	// control-plane name.
 	control.LoadServedClusters()
 
-	externalRegistrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
+	internalRegistrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
-		externalRegistrars = append(externalRegistrars, federationServer.RegisterServices)
+		internalRegistrars = append(internalRegistrars, federationServer.RegisterServices)
 	}
-	var internalRegistrars []control.ServiceRegistrar
 	if relayServer != nil {
 		internalRegistrars = append(internalRegistrars, relayServer.RegisterServices)
 	}
@@ -963,7 +962,6 @@ func main() {
 		ServiceToken:       serviceToken,
 		JWTSecret:          os.Getenv("JWT_SECRET"),
 		InternalRegistrars: internalRegistrars,
-		ExternalRegistrars: externalRegistrars,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")

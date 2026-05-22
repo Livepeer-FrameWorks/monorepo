@@ -5698,6 +5698,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		internalPort := 18019
 		externalPort := 18029
 		env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", internalPort)
+		env["FOGHORN_INTERNAL_GRPC_PORT"] = strconv.Itoa(internalPort)
 		env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", externalPort)
 		env["FOGHORN_EXTERNAL_GRPC_PORT"] = strconv.Itoa(externalPort)
 		if relayHost := manifestMeshHostname(manifest, task.Host); relayHost != "" {

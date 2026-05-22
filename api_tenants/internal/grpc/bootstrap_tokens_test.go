@@ -266,9 +266,9 @@ func TestLookupClusterFoghornGRPCRetriesRetryablePostgresError(t *testing.T) {
 			  AND si.status = 'running'
 			  AND si.health_status = 'healthy'
 			  AND si.protocol = 'grpc'
-			  AND (si.port = 18029 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
 			  AND svc.type = 'foghorn'
-			ORDER BY CASE WHEN si.port = 18029 THEN 0 ELSE 1 END, si.updated_at DESC, si.id ASC
+			ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC
 			LIMIT 1
 		`)
 
@@ -277,17 +277,24 @@ func TestLookupClusterFoghornGRPCRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 92, got 91"})
 	mock.ExpectQuery(lookupQuery).
 		WithArgs("media-eu-1").
-		WillReturnRows(sqlmock.NewRows([]string{"addr"}).AddRow("foghorn.internal:18029"))
+		WillReturnRows(sqlmock.NewRows([]string{"addr"}).AddRow("foghorn.internal:18019"))
 
 	addr, err := srv.lookupClusterFoghornGRPC(context.Background(), "media-eu-1")
 	if err != nil {
 		t.Fatalf("lookupClusterFoghornGRPC: %v", err)
 	}
-	if addr != "foghorn.internal:18029" {
-		t.Fatalf("addr = %q, want foghorn.internal:18029", addr)
+	if addr != "foghorn.internal:18019" {
+		t.Fatalf("addr = %q, want foghorn.internal:18019", addr)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestPublicFoghornGRPCAddrUsesExternalEdgeListener(t *testing.T) {
+	addr := publicFoghornGRPCAddr("media-eu-1", "https://frameworks.network/")
+	if addr != "foghorn.media-eu-1.frameworks.network:18029" {
+		t.Fatalf("addr = %q, want public Foghorn external listener", addr)
 	}
 }
 

@@ -1714,13 +1714,12 @@ type ServiceRegistrar func(srv *grpc.Server)
 // listeners. The control plane is split into two listeners sharing one process:
 //
 //   - Internal: internal-CA leaf only, serves `foghorn.internal`. Audience is
-//     intra-cluster Foghorn HA relay. Wire HA-only registrars via
-//     InternalRegistrars.
+//     mesh-only service traffic: Foghorn control APIs, federation, and HA relay.
+//     Wire those registrars via InternalRegistrars.
 //
-//   - External: multi-bundle TLS for `foghorn.internal` and Navigator-backed
-//     ACME wildcards. Audience is cross-cluster + edge: Helmsman control, edge
-//     bootstrap, the full FoghornGRPCServer surface, federation peers. Wire
-//     those via ExternalRegistrars.
+//   - External: Navigator-backed ACME wildcards only. Audience is public edge
+//     traffic: Helmsman control and edge bootstrap. Do not register service
+//     control APIs here.
 type GRPCServerConfig struct {
 	InternalBindAddr   string
 	ExternalBindAddr   string
@@ -1728,7 +1727,6 @@ type GRPCServerConfig struct {
 	ServiceToken       string
 	JWTSecret          string
 	InternalRegistrars []ServiceRegistrar
-	ExternalRegistrars []ServiceRegistrar
 }
 
 // GRPCServers is the pair of gRPC servers returned by StartGRPCServers.
@@ -1763,9 +1761,9 @@ func StartGRPCServers(ctx context.Context, cfg GRPCServerConfig) (*GRPCServers, 
 }
 
 // startInternalGRPCListener listens on the internal-CA bind addr. Serves
-// `foghorn.internal`. Registers HA relay (via InternalRegistrars) + health +
-// reflection. No HelmsmanControl, no EdgeProvisioning, no FoghornGRPCServer,
-// no federation — those are external.
+// `foghorn.internal`. Registers mesh-only control services via
+// InternalRegistrars plus health + reflection. No HelmsmanControl and no
+// EdgeProvisioning; those are public edge APIs.
 func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	lc := net.ListenConfig{}
 	lis, err := lc.Listen(ctx, "tcp", cfg.InternalBindAddr)
@@ -1820,9 +1818,8 @@ func startInternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 }
 
 // startExternalGRPCListener listens on the external bind addr. Serves cluster
-// FQDNs via Navigator-backed ACME wildcards.
-// Registers HelmsmanControl + EdgeProvisioning + ExternalRegistrars (typically
-// FoghornGRPCServer + federation) + health + reflection.
+// FQDNs via Navigator-backed ACME wildcards. Registers only HelmsmanControl,
+// EdgeProvisioning, health, and reflection.
 func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, error) {
 	lc := net.ListenConfig{}
 	lis, err := lc.Listen(ctx, "tcp", cfg.ExternalBindAddr)
@@ -1832,14 +1829,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 
 	rootDomain := platformRootDomain()
 	tlsBundles := []*pb.TLSCertBundle{}
-	if certFile, keyFile := os.Getenv("GRPC_TLS_CERT_PATH"), os.Getenv("GRPC_TLS_KEY_PATH"); certFile != "" || keyFile != "" {
-		bundle, bundleErr := fileServerTLSBundle(certFile, keyFile)
-		if bundleErr != nil {
-			_ = lis.Close()
-			return nil, fmt.Errorf("load file-based external listener TLS: %w", bundleErr)
-		}
-		tlsBundles = append(tlsBundles, bundle)
-	}
 
 	if navigatorClient != nil {
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1891,9 +1880,6 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	pb.RegisterHelmsmanControlServer(srv, &Server{})
 	RegisterEdgeProvisioningService(srv)
 	registerHealthAndReflection(srv, pb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
-	for _, reg := range cfg.ExternalRegistrars {
-		reg(srv)
-	}
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {

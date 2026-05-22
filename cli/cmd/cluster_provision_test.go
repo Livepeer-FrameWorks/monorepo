@@ -2143,6 +2143,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			serviceID: "foghorn",
 			want: map[string]string{
 				"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019",
+				"FOGHORN_INTERNAL_GRPC_PORT":      "18019",
 				"FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
 				"FOGHORN_EXTERNAL_GRPC_PORT":      "18029",
 				"CHANDLER_INTERNAL_URL":           "http://central-eu-1.internal:18020",
