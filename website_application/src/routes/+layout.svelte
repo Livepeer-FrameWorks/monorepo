@@ -119,8 +119,13 @@
 
       if (!isAuthenticated && !isPublicRoute) {
         const target = `${currentPath}${$page.url.search}`;
+        // loginPath is already resolve()'d; the appended query is just data.
+        // eslint-disable-next-line svelte/no-navigation-without-resolve
         goto(`${loginPath}?return_to=${encodeURIComponent(target)}`);
       } else if (isAuthenticated && isPublicRoute) {
+        // returnTo is a same-origin path that came through safeReturnTo,
+        // which already rejected absolute URLs and protocol-relative refs.
+        // eslint-disable-next-line svelte/no-navigation-without-resolve
         goto(returnTo ?? dashboardPath);
       }
     }

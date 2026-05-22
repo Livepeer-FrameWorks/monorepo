@@ -113,6 +113,9 @@
           typeof window === "undefined"
             ? null
             : safeReturnTo(new URLSearchParams(window.location.search).get("return_to"));
+        // returnTo is a validated same-origin path (safeReturnTo enforces
+        // it starts with a single "/"); falls back to a resolve()'d default.
+        // eslint-disable-next-line svelte/no-navigation-without-resolve
         goto(returnTo ?? resolve("/"));
       } else {
         error = result.error || "Login failed";
