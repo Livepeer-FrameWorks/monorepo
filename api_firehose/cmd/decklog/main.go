@@ -72,8 +72,9 @@ func main() {
 		GRPCRequests:       metricsCollector.NewCounter("grpc_requests_total", "gRPC requests", []string{"method", "status"}),
 	}
 
-	// Create Kafka metrics
-	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
+	// Create Kafka producer metrics (no consumer, so no lag gauge).
+	metrics.KafkaMessages = metricsCollector.NewCounter("kafka_messages_total", "Total Kafka messages", []string{"topic", "operation", "status"})
+	metrics.KafkaDuration = metricsCollector.NewHistogram("kafka_operation_duration_seconds", "Kafka operation duration", []string{"operation"}, nil)
 
 	// Get TLS configuration
 	certFile := config.GetEnv("GRPC_TLS_CERT_PATH", "")

@@ -208,3 +208,64 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 
 - **Rate fields** (`_bps`, `_bytes_per_sec`): Display with `/s` suffix
 - **Cumulative fields** (`_bytes`, `_total`): Display as totals, never with `/s`
+
+## Prometheus Metric Wiring Policy
+
+These rules govern how service-side Prometheus metrics are declared, updated, and cleaned up. They apply to every `*_total` counter, `*_seconds` histogram, and gauge exposed on a service's `/metrics` endpoint.
+
+### Pre-initialization of bounded labelsets
+
+For metrics whose label cardinality is bounded and known ahead of time (e.g. `status="ok"|"error"`, fixed operation enums), pre-initialize each expected labelset to zero at service startup so the series appears immediately in `/metrics`:
+
+```go
+counter.WithLabelValues("create", "ok").Add(0)
+counter.WithLabelValues("create", "error").Add(0)
+```
+
+This must ship in the same change that wires the actual increment site — never earlier. Pre-initializing a metric that has no real updater paints a permanent zero series and hides the missing wiring. A declared-but-never-updated metric showing as null in Grafana is a feature: it surfaces unwired code paths.
+
+### Dynamic labelsets
+
+For labels with unbounded or runtime-dependent values (`tenant_id`, `stream_id`, `node_id`, `partition`), do not pre-initialize. Dashboard queries must tolerate cold series with `… or vector(0)` or similar.
+
+### Stale labelset cleanup for gauges
+
+A `GaugeVec` keyed by a dynamic label accumulates dead labelsets forever unless the application explicitly deletes them. Two patterns:
+
+- **Per-cycle truth (poller/reconciler):** Track the set of label values observed in the current cycle. Diff against the previous cycle and call `vec.DeleteLabelValues(...)` for each labelset that disappeared. Helmsman's `emitClientLifecycle` is the reference implementation (`api_sidecar/internal/handlers/poller.go`).
+- **Lifecycle-driven:** Pair every `Inc()` with a matching `Dec()` on the corresponding teardown path. The Dec must run on the real lifecycle event (connection close, client retire), not in a resolver `defer` that fires when the resolver returns.
+
+Use the **app-declared labels** of the GaugeVec — never scrape-target labels added by vmagent (`instance`, `node_id`-as-target-label, etc.) which do not exist in the vec.
+
+### When to remove a metric
+
+Remove only when the architecture cannot produce the event. Examples:
+
+- A `kafka_consumer_lag` gauge in a service that has no Kafka consumer.
+- A `dns_queries_total` counter in a service that does not run a DNS server.
+
+Do not remove a metric simply because production has not exercised the code path yet.
+
+### Counter vs gauge for connection-pool / system stats
+
+For Go `database/sql` connection-pool stats, register `prometheus.NewGaugeFunc` / `NewCounterFunc` that read `db.Stats()` at scrape time. Do not start a background goroutine + ticker — that introduces sampling drift, a context lifecycle, and a goroutine to leak.
+
+Standard names:
+
+| Metric                                     | Type        | Source                              |
+| ------------------------------------------ | ----------- | ----------------------------------- |
+| `<service>_db_open_connections`            | GaugeFunc   | `db.Stats().OpenConnections`        |
+| `<service>_db_in_use_connections`          | GaugeFunc   | `db.Stats().InUse`                  |
+| `<service>_db_idle_connections`            | GaugeFunc   | `db.Stats().Idle`                   |
+| `<service>_db_wait_count_total`            | CounterFunc | `db.Stats().WaitCount`              |
+| `<service>_db_wait_duration_seconds_total` | CounterFunc | `db.Stats().WaitDuration.Seconds()` |
+
+### gRPC metrics interceptor placement
+
+When a service exposes `<svc>_grpc_requests_total{method,status}` + `<svc>_grpc_request_duration_seconds`, wire it as a `grpc.UnaryServerInterceptor` placed **outermost** in the interceptor chain. Sitting after the auth interceptor hides every `Unauthenticated` / `PermissionDenied` rejection, which is precisely the failure-rate signal we want to see.
+
+Chain order: `GRPCMetricsInterceptor → GRPCLoggingInterceptor → GRPCAuthInterceptor → handler`. The status label is `"ok"` on success, otherwise `status.Code(err).String()` (e.g. `"Unauthenticated"`).
+
+### Naming and double-prefix trap
+
+`pkg/monitoring/metrics.go` `NewCounter` / `NewGauge` / `NewHistogram` already prepend `serviceName + "_"`. Never pass a name that itself begins with the service name — the result is a double-prefixed metric (`<svc>_<svc>_*`).

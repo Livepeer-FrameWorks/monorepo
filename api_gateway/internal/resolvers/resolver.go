@@ -22,13 +22,16 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// GraphQLMetrics holds all Prometheus metrics for GraphQL operations
+// GraphQLMetrics holds all Prometheus metrics for GraphQL operations.
+// SignalmanClients tracks live bridge→Signalman gRPC fan-out clients
+// (not browser WebSocket connections); SubscriptionsActive tracks live
+// GraphQL subscription goroutines.
 type GraphQLMetrics struct {
-	Operations           *prometheus.CounterVec
-	Duration             *prometheus.HistogramVec
-	WebSocketConnections *prometheus.GaugeVec
-	WebSocketMessages    *prometheus.CounterVec
-	SubscriptionsActive  *prometheus.GaugeVec
+	Operations          *prometheus.CounterVec
+	Duration            *prometheus.HistogramVec
+	SignalmanClients    *prometheus.GaugeVec
+	WebSocketMessages   *prometheus.CounterVec
+	SubscriptionsActive *prometheus.GaugeVec
 }
 
 // Resolver represents the GraphQL resolver

@@ -19,9 +19,6 @@ import (
 func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *model.StreamEvent, error) {
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_streams", "requested").Inc()
-		defer func() {
-			r.Metrics.SubscriptionsActive.WithLabelValues("streams").Inc()
-		}()
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)

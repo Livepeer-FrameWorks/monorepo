@@ -25,14 +25,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// DecklogMetrics holds all Prometheus metrics for Decklog
+// DecklogMetrics holds all Prometheus metrics for Decklog. Decklog is a
+// Kafka producer only — there is no consumer lag to track.
 type DecklogMetrics struct {
 	EventsIngested     *prometheus.CounterVec
 	ProcessingDuration *prometheus.HistogramVec
 	KafkaMessages      *prometheus.CounterVec
 	GRPCRequests       *prometheus.CounterVec
 	KafkaDuration      *prometheus.HistogramVec
-	KafkaLag           *prometheus.GaugeVec
 }
 
 type DecklogServer struct {
@@ -78,7 +78,7 @@ func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging
 }
 
 // convertProtobufToKafkaEvent converts any protobuf message to kafka.AnalyticsEvent with transparent JSON serialization
-func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, source, tenantID string) (*kafka.AnalyticsEvent, error) {
+func (s *DecklogServer) convertProtobufToKafkaEvent(msg any, eventType, source, tenantID string) (*kafka.AnalyticsEvent, error) {
 	// Tenant ID should be enriched by Foghorn; do not normalize to zero UUID.
 	normalized := tenantID
 	if normalized == "" || !isValidUUID(normalized) {
@@ -109,7 +109,7 @@ func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, 
 	}
 
 	// Parse JSON into map for Data field - this is the transparent representation
-	var dataMap map[string]interface{}
+	var dataMap map[string]any
 	if err := json.Unmarshal(jsonBytes, &dataMap); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON to map: %w", err)
 	}
@@ -183,7 +183,7 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceE
 		return nil, fmt.Errorf("failed to convert service event payload: %w", err)
 	}
 	if data == nil {
-		data = map[string]interface{}{}
+		data = map[string]any{}
 	}
 
 	serviceEvent := &kafka.ServiceEvent{
@@ -269,9 +269,9 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceE
 	return &emptypb.Empty{}, nil
 }
 
-func serviceEventPayloadToMap(event *pb.ServiceEvent) (map[string]interface{}, error) {
+func serviceEventPayloadToMap(event *pb.ServiceEvent) (map[string]any, error) {
 	if event == nil {
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 
 	switch payload := event.GetPayload().(type) {
@@ -294,13 +294,13 @@ func serviceEventPayloadToMap(event *pb.ServiceEvent) (map[string]interface{}, e
 	case *pb.ServiceEvent_ArtifactEvent:
 		return protoMessageToMap(payload.ArtifactEvent)
 	default:
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 }
 
-func protoMessageToMap(msg proto.Message) (map[string]interface{}, error) {
+func protoMessageToMap(msg proto.Message) (map[string]any, error) {
 	if msg == nil {
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 
 	b, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
@@ -308,7 +308,7 @@ func protoMessageToMap(msg proto.Message) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	var out map[string]interface{}
+	var out map[string]any
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil, fmt.Errorf("unmarshal payload: %w", err)
 	}
@@ -744,7 +744,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 
 // Interceptors for logging and metrics
 func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
 		logger.WithFields(logging.Fields{
@@ -757,7 +757,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 }
 
 func streamInterceptor(logger logging.Logger) grpc.StreamServerInterceptor {
-	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		start := time.Now()
 		err := handler(srv, stream)
 		logger.WithFields(logging.Fields{

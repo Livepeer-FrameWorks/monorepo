@@ -146,6 +146,23 @@ var (
 	)
 )
 
+// streamClientKey identifies a per-client labelset on the bandwidth /
+// connection / packet gauges so we can clean up entries for clients that
+// have disappeared between polls.
+type streamClientKey struct {
+	stream, protocol, host string
+}
+
+// prev-poll observed labelsets for stale cleanup. Mist's GetClients
+// response is the source of truth; anything present last poll but missing
+// this poll must be removed from the GaugeVecs to avoid stale rows
+// surviving past disconnect.
+var (
+	prevStreamsMu     sync.Mutex
+	prevStreams       = map[string]struct{}{}
+	prevStreamClients = map[streamClientKey]struct{}{}
+)
+
 func currentComponentVersions() []*pb.EdgeComponentVersion {
 	recorded := updater.ReadComponentVersions()
 	versions := []*pb.EdgeComponentVersion{{
@@ -997,8 +1014,15 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 		return err
 	}
 
-	// Process client metrics
+	// Process client metrics.
 	presentSessions := make(map[string]struct{})
+	// Aggregate viewer count per stream this poll; Mist returns one row
+	// per client connection, so we count rows ourselves rather than
+	// Inc()'ing the gauge per row (which never reset between polls).
+	currStreamViewers := map[string]int{}
+	// Track per-client labelsets observed this poll for stale cleanup
+	// of bandwidth/connection/packet gauges.
+	currStreamClients := map[streamClientKey]struct{}{}
 	if clients, ok := result["clients"].(map[string]any); ok {
 		if data, ok := clients["data"].([]any); ok {
 			fields, ok := clients["fields"].([]any)
@@ -1059,8 +1083,10 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 					continue
 				}
 
-				// Update Prometheus metrics
-				streamViewers.WithLabelValues(streamName).Inc()
+				// Update Prometheus metrics. streamViewers is aggregated
+				// after the loop; here we just count rows per stream.
+				currStreamViewers[streamName]++
+				currStreamClients[streamClientKey{streamName, protocol, host}] = struct{}{}
 
 				// Bandwidth metrics
 				if idx, ok := fieldMap["downbps"]; ok {
@@ -1206,6 +1232,37 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 			}
 		}
 	}
+
+	// Publish aggregated viewer counts and clean up labelsets for streams
+	// or per-client tuples that have disappeared since the last poll. Mist
+	// is the source of truth for which clients are currently connected;
+	// anything missing this poll must be removed so the gauge reflects
+	// current state instead of accumulating stale rows.
+	prevStreamsMu.Lock()
+	for stream, count := range currStreamViewers {
+		streamViewers.WithLabelValues(stream).Set(float64(count))
+	}
+	for stream := range prevStreams {
+		if _, present := currStreamViewers[stream]; !present {
+			streamViewers.DeleteLabelValues(stream)
+		}
+	}
+	for key := range prevStreamClients {
+		if _, present := currStreamClients[key]; !present {
+			streamBandwidthDown.DeleteLabelValues(key.stream, key.protocol, key.host)
+			streamBandwidthUp.DeleteLabelValues(key.stream, key.protocol, key.host)
+			streamConnectionTime.DeleteLabelValues(key.stream, key.protocol, key.host)
+			streamPacketsTotal.DeleteLabelValues(key.stream, key.protocol, key.host)
+			streamPacketsLost.DeleteLabelValues(key.stream, key.protocol, key.host)
+			streamPacketsRetransmitted.DeleteLabelValues(key.stream, key.protocol, key.host)
+		}
+	}
+	prevStreams = make(map[string]struct{}, len(currStreamViewers))
+	for stream := range currStreamViewers {
+		prevStreams[stream] = struct{}{}
+	}
+	prevStreamClients = currStreamClients
+	prevStreamsMu.Unlock()
 
 	// Reconcile viewer leases against Mist's authoritative client list. Only
 	// reached after a successful GetClients call.

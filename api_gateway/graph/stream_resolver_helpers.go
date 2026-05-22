@@ -37,7 +37,7 @@ func (r *Resolver) resolveNullableStreamByRawID(ctx context.Context, rawID strin
 	}
 	stream, err := r.resolveStreamByID(ctx, globalid.Encode(globalid.TypeStream, rawID))
 	if err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // Nullable stream fields omit unresolved references.
 	}
 	return stream, nil
 }

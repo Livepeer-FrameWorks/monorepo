@@ -130,13 +130,16 @@ func main() {
 		"SERVICE_TOKEN": serviceToken,
 	}))
 
-	// Create custom GraphQL metrics
+	// Create custom GraphQL metrics. signalman_clients_active tracks live
+	// bridge→Signalman gRPC fan-out clients per tenant (not browser WS);
+	// subscription_active_count tracks live subscription goroutines per
+	// operation.
 	graphqlMetrics := &resolvers.GraphQLMetrics{
-		Operations:           metricsCollector.NewCounter("graphql_operations_total", "Total GraphQL operations", []string{"operation", "status"}),
-		Duration:             metricsCollector.NewHistogram("graphql_operation_duration_seconds", "GraphQL operation duration", []string{"operation"}, nil),
-		WebSocketConnections: metricsCollector.NewGauge("websocket_connections_active", "Active WebSocket connections", []string{"tenant_id"}),
-		WebSocketMessages:    metricsCollector.NewCounter("websocket_messages_total", "WebSocket messages", []string{"direction", "type"}),
-		SubscriptionsActive:  metricsCollector.NewGauge("subscription_active_count", "Active GraphQL subscriptions", []string{"operation"}),
+		Operations:          metricsCollector.NewCounter("graphql_operations_total", "Total GraphQL operations", []string{"operation", "status"}),
+		Duration:            metricsCollector.NewHistogram("graphql_operation_duration_seconds", "GraphQL operation duration", []string{"operation"}, nil),
+		SignalmanClients:    metricsCollector.NewGauge("signalman_clients_active", "Active bridge→Signalman gRPC fan-out clients", []string{"tenant_id"}),
+		WebSocketMessages:   metricsCollector.NewCounter("websocket_messages_total", "WebSocket messages", []string{"direction", "type"}),
+		SubscriptionsActive: metricsCollector.NewGauge("subscription_active_count", "Active GraphQL subscriptions", []string{"operation"}),
 	}
 
 	// Initialize GraphQL resolver and server

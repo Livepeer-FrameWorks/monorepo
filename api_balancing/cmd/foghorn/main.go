@@ -250,12 +250,12 @@ func main() {
 		NodeSelectionDuration: metricsCollector.NewHistogram("node_selection_duration_seconds", "Node selection latency", []string{}, nil),
 		LoadDistribution:      metricsCollector.NewGauge("load_distribution_ratio", "Load distribution ratio", []string{"node_id"}),
 		LivepeerAuthRejected: metricsCollector.NewCounter(
-			"foghorn_livepeer_auth_rejected_total",
+			"livepeer_auth_rejected_total",
 			"Livepeer gateway auth-webhook rejections by reason",
 			[]string{"reason"},
 		),
 		StorageMint: metricsCollector.NewCounter(
-			"foghorn_storage_mint_total",
+			"storage_mint_total",
 			"MintStorageURLs federation-handler outcomes by result",
 			[]string{"result"},
 		),
@@ -693,7 +693,7 @@ func main() {
 	// the per-request storage cluster resolvers below — same metric name,
 	// label values distinguish service ("livepeer-gateway", "storage", ...).
 	serviceResolutionRejected := metricsCollector.NewCounter(
-		"foghorn_service_resolution_rejected_total",
+		"service_resolution_rejected_total",
 		"Service-discovery resolutions that ended without a usable target",
 		[]string{"reason", "service"},
 	)
@@ -716,7 +716,7 @@ func main() {
 			[]string{"class"},
 		),
 		ClientLifecycleBatchDrops: metricsCollector.NewCounter(
-			"foghorn_client_lifecycle_batch_drops_total",
+			"client_lifecycle_batch_drops_total",
 			"CLIENT_LIFECYCLE batcher outcomes (send_failed/retry_succeeded)",
 			[]string{"reason"},
 		),
