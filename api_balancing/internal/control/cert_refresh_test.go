@@ -90,6 +90,36 @@ func TestServerCertHolderSelectsServedClusterBySNI(t *testing.T) {
 	}
 }
 
+func TestServerCertHolderFileBundleDoesNotShadowPublicWildcard(t *testing.T) {
+	var holder serverCertHolder
+	internal := testTLSBundle(t,
+		"file:/etc/frameworks/pki/services/foghorn/tls.crt",
+		"foghorn.internal",
+		"foghorn.media-eu-1.frameworks.network",
+	)
+	eu := testTLSBundle(t, "cluster:media-eu-1", "*.media-eu-1.frameworks.network")
+
+	if err := holder.StoreBundles([]*pb.TLSCertBundle{internal, eu}); err != nil {
+		t.Fatalf("StoreBundles: %v", err)
+	}
+
+	cert, err := holder.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.media-eu-1.frameworks.network"})
+	if err != nil {
+		t.Fatalf("GetCertificate: %v", err)
+	}
+	if cert.Leaf == nil || len(cert.Leaf.DNSNames) == 0 || cert.Leaf.DNSNames[0] != "*.media-eu-1.frameworks.network" {
+		t.Fatalf("selected SANs = %v, want EU wildcard", cert.Leaf.DNSNames)
+	}
+
+	cert, err = holder.GetCertificate(&tls.ClientHelloInfo{ServerName: "foghorn.internal"})
+	if err != nil {
+		t.Fatalf("GetCertificate internal: %v", err)
+	}
+	if cert.Leaf == nil || len(cert.Leaf.DNSNames) == 0 || cert.Leaf.DNSNames[0] != "foghorn.internal" {
+		t.Fatalf("selected SANs = %v, want internal leaf", cert.Leaf.DNSNames)
+	}
+}
+
 func TestServerCertHolderRejectsEmptyBundles(t *testing.T) {
 	var holder serverCertHolder
 	if err := holder.StoreBundles(nil); err == nil {

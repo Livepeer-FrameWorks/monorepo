@@ -267,7 +267,9 @@ func tlsBundleNames(bundle *pb.TLSCertBundle, cert *x509.Certificate) []string {
 	for _, name := range bundle.GetSiteAddresses() {
 		add(name)
 	}
-	if cert != nil {
+	// File-backed internal leaves may contain public FQDN SANs for mesh reachability;
+	// do not let those exact names shadow Navigator's public wildcard bundles.
+	if cert != nil && !strings.HasPrefix(bundle.GetBundleId(), "file:") {
 		for _, name := range cert.DNSNames {
 			add(name)
 		}
@@ -6314,6 +6316,7 @@ func fileServerTLSBundle(certFile, keyFile string) (*pb.TLSCertBundle, error) {
 	}
 	return &pb.TLSCertBundle{
 		BundleId: "file:" + certFile,
+		Domain:   "foghorn.internal",
 		CertPem:  string(certPEM),
 		KeyPem:   string(keyPEM),
 	}, nil
