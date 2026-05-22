@@ -72,6 +72,37 @@ struct CLIMenuAction: Decodable, Identifiable, Hashable {
   }
 }
 
+struct CLICommandCatalog: Decodable {
+  let commands: [CLICommandEntry]
+}
+
+struct CLICommandEntry: Decodable, Identifiable, Hashable {
+  var id: String { command }
+  let path: [String]
+  let command: String
+  let use: String
+  let short: String?
+  let long: String?
+  let runnable: Bool
+  let hidden: Bool?
+  let deprecated: String?
+  let risk: String?
+  let flags: [CLICommandFlag]?
+}
+
+struct CLICommandFlag: Decodable, Identifiable, Hashable {
+  var id: String { name }
+  let name: String
+  let shorthand: String?
+  let usage: String?
+  let `default`: String?
+  let type: String?
+  let scope: String
+  let required: Bool?
+  let hidden: Bool?
+  let deprecated: String?
+}
+
 actor ConfigBridge {
   static let shared = ConfigBridge()
 
@@ -105,6 +136,13 @@ actor ConfigBridge {
     await rearmIfDeferred()
     return try? await CLIRunner.shared.runJSON(
       ["menu"], as: CLIMenuCatalog.self
+    )
+  }
+
+  func loadCommandCatalog() async -> CLICommandCatalog? {
+    await rearmIfDeferred()
+    return try? await CLIRunner.shared.runJSON(
+      ["commands"], as: CLICommandCatalog.self
     )
   }
 

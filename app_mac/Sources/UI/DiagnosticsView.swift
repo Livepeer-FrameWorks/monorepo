@@ -5,21 +5,45 @@ struct DiagnosticsView: View {
   var closePanel: () -> Void
 
   @State private var catalog: CLIMenuCatalog?
+  @State private var commandCatalog: CLICommandCatalog?
   @State private var selectedActionKey = ""
+  @State private var selectedCatalogAction: CLIMenuAction?
   @State private var loadingCatalog = false
   @State private var confirmingActionKey: String?
+  @State private var commandSearch = ""
+  @State private var showAllCommands = false
 
   private var sections: [CLIMenuSection] {
     catalog?.sections ?? fallbackCatalog.sections
   }
 
   private var selectedAction: CLIMenuAction? {
+    if let selectedCatalogAction {
+      return selectedCatalogAction
+    }
     for section in sections {
       if let action = section.actions.first(where: { $0.key == selectedActionKey }) {
         return action
       }
     }
     return nil
+  }
+
+  private var commandResults: [CLICommandEntry] {
+    let commands = (commandCatalog?.commands ?? [])
+      .filter { $0.runnable && ($0.hidden != true) }
+    let query = commandSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let filtered: [CLICommandEntry]
+    if query.isEmpty {
+      filtered = commands
+    } else {
+      filtered = commands.filter { command in
+        command.command.lowercased().contains(query)
+          || command.use.lowercased().contains(query)
+          || (command.short ?? "").lowercased().contains(query)
+      }
+    }
+    return Array(filtered.prefix(8))
   }
 
   private var fallbackCatalog: CLIMenuCatalog {
@@ -96,6 +120,10 @@ struct DiagnosticsView: View {
         }
         .pickerStyle(.menu)
         .disabled(loadingCatalog || appState.isDiagnosticRunning)
+        .onChange(of: selectedActionKey) { _, _ in
+          selectedCatalogAction = nil
+          confirmingActionKey = nil
+        }
 
         if loadingCatalog {
           ProgressView().controlSize(.small)
@@ -133,6 +161,48 @@ struct DiagnosticsView: View {
             }
           }
         }
+      }
+
+      DisclosureGroup("All CLI Commands", isExpanded: $showAllCommands) {
+        VStack(alignment: .leading, spacing: 8) {
+          TextField("Search commands", text: $commandSearch)
+            .textFieldStyle(.roundedBorder)
+            .disabled(loadingCatalog || appState.isDiagnosticRunning)
+
+          ForEach(commandResults) { command in
+            Button(action: { selectCommand(command) }) {
+              HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(command.command)
+                    .font(.system(.caption, design: .monospaced))
+                  if let short = command.short, !short.isEmpty {
+                    Text(short)
+                      .font(.caption2)
+                      .foregroundStyle(.secondary)
+                      .lineLimit(1)
+                  }
+                }
+                Spacer()
+                if commandNeedsInput(command) {
+                  Image(systemName: "ellipsis.rectangle")
+                    .foregroundStyle(Color.tnOrange)
+                } else if let risk = command.risk, !risk.isEmpty {
+                  Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(Color.tnOrange)
+                }
+              }
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isDiagnosticRunning)
+          }
+
+          if commandResults.isEmpty {
+            Text("No matching commands")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.top, 6)
       }
     }
     .padding(.horizontal)
@@ -192,15 +262,20 @@ struct DiagnosticsView: View {
   private func loadCatalog() {
     guard appState.cliAvailable else {
       catalog = nil
+      commandCatalog = nil
       ensureSelectedActionAvailable()
       return
     }
 
     loadingCatalog = true
     Task {
-      let loaded = await ConfigBridge.shared.loadMenuCatalog()
+      async let loadedMenu = ConfigBridge.shared.loadMenuCatalog()
+      async let loadedCommands = ConfigBridge.shared.loadCommandCatalog()
+      let loaded = await loadedMenu
+      let commands = await loadedCommands
       await MainActor.run {
         catalog = loaded
+        commandCatalog = commands
         loadingCatalog = false
         ensureSelectedActionAvailable()
       }
@@ -212,13 +287,36 @@ struct DiagnosticsView: View {
     if !allActions.contains(where: { $0.key == selectedActionKey }) {
       selectedActionKey = allActions.first?.key ?? ""
       confirmingActionKey = nil
+      selectedCatalogAction = nil
     }
+  }
+
+  private func selectCommand(_ command: CLICommandEntry) {
+    let args = Array(command.path.dropFirst())
+    let needsInput = commandNeedsInput(command)
+    selectedCatalogAction = CLIMenuAction(
+      key: "catalog:" + command.command,
+      label: command.command,
+      description: command.short,
+      args: args,
+      longRunning: command.risk == "mutating",
+      risk: needsInput ? "needs input" : command.risk,
+      interactive: needsInput)
+    confirmingActionKey = nil
+  }
+
+  private func commandNeedsInput(_ command: CLICommandEntry) -> Bool {
+    command.use.contains("<") || (command.flags ?? []).contains { $0.required == true }
   }
 
   private func runSelectedAction() {
     guard !appState.isDiagnosticRunning, let action = selectedAction else { return }
     guard !action.interactive else {
-      appState.diagnosticOutput = "[interactive CLI action: run this in Terminal]\n\(action.commandText)\n"
+      if action.risk == "needs input" {
+        appState.diagnosticOutput = "[inputs required]\nThis command needs arguments or required flags before the tray can run it:\n\(action.commandText)\n"
+      } else {
+        appState.diagnosticOutput = "[interactive CLI action]\nRun this in Terminal:\n\(action.commandText)\n"
+      }
       return
     }
 

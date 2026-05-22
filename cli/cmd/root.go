@@ -65,6 +65,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newAdminCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newConfigCmd())
+	rootCmd.AddCommand(newCommandsCmd())
 	rootCmd.AddCommand(newDNSCmd())
 	rootCmd.AddCommand(newMeshCmd())
 	rootCmd.AddCommand(newUpdateCmd())
