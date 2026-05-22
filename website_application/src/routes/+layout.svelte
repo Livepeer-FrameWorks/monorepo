@@ -84,6 +84,12 @@
     resetPasswordIndexPath,
   ];
 
+  function safeReturnTo(value: string | null): string | null {
+    if (!value || !value.startsWith("/") || value.startsWith("//")) return null;
+    if (value === loginPath || value.startsWith(`${loginPath}?`)) return null;
+    return value;
+  }
+
   // Subscribe to auth store
   const unsubscribeAuth = auth.subscribe((authState) => {
     const wasAuthenticated = isAuthenticated;
@@ -109,13 +115,13 @@
     if (!loading && initialized) {
       const currentPath = $page.url.pathname;
       const isPublicRoute = publicRoutes.includes(currentPath);
+      const returnTo = safeReturnTo($page.url.searchParams.get("return_to"));
 
       if (!isAuthenticated && !isPublicRoute) {
-        // Redirect unauthenticated users to login
-        goto(loginPath);
+        const target = `${currentPath}${$page.url.search}`;
+        goto(`${loginPath}?return_to=${encodeURIComponent(target)}`);
       } else if (isAuthenticated && isPublicRoute) {
-        // Redirect authenticated users away from auth pages
-        goto(dashboardPath);
+        goto(returnTo ?? dashboardPath);
       }
     }
   });

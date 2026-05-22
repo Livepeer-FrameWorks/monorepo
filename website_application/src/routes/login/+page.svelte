@@ -44,7 +44,11 @@
     }
   };
 
-  // Note: Authentication redirects are handled by +layout.svelte
+  function safeReturnTo(value: string | null): string | null {
+    if (!value || !value.startsWith("/") || value.startsWith("//")) return null;
+    if (value === resolve("/login") || value.startsWith(`${resolve("/login")}?`)) return null;
+    return value;
+  }
 
   onMount(() => {
     // Record when form was shown
@@ -105,7 +109,11 @@
       });
 
       if (result.success) {
-        goto(resolve("/"));
+        const returnTo =
+          typeof window === "undefined"
+            ? null
+            : safeReturnTo(new URLSearchParams(window.location.search).get("return_to"));
+        goto(returnTo ?? resolve("/"));
       } else {
         error = result.error || "Login failed";
       }
