@@ -6,13 +6,14 @@ struct LoginView: View {
 
   @State private var isLoading = false
   @State private var errorMessage: String?
+  @State private var loginTask: Task<Void, Never>?
 
   var body: some View {
     VStack(spacing: 16) {
       HStack {
         Text("Log In").font(.title2.bold())
         Spacer()
-        Button(action: closePanel) {
+        Button(action: cancelAndClose) {
           Image(systemName: "xmark.circle.fill")
             .foregroundStyle(.secondary)
         }
@@ -50,6 +51,11 @@ struct LoginView: View {
     .padding()
     .frame(width: 380, height: 420)
     .background(.regularMaterial)
+    .onDisappear {
+      if isLoading {
+        cancelLogin()
+      }
+    }
   }
 
   private var canSubmit: Bool {
@@ -73,20 +79,38 @@ struct LoginView: View {
     GatewayClient.shared.baseURL = trimmed
     appState.gatewayBaseURL = trimmed
 
-    Task {
+    loginTask?.cancel()
+    loginTask = Task {
       do {
         try await AuthService.shared.loginWithBrowser(appState: appState)
+        guard !Task.isCancelled else { return }
         await ensureCLIContextIfNeeded(bridgeURL: trimmed)
         await MainActor.run {
+          isLoading = false
+          loginTask = nil
           closePanel()
         }
       } catch {
+        guard !Task.isCancelled else { return }
         await MainActor.run {
           errorMessage = error.localizedDescription
           isLoading = false
+          loginTask = nil
         }
       }
     }
+  }
+
+  private func cancelAndClose() {
+    cancelLogin()
+    closePanel()
+  }
+
+  private func cancelLogin() {
+    loginTask?.cancel()
+    loginTask = nil
+    AuthService.shared.cancelBrowserLogin()
+    isLoading = false
   }
 
   private func ensureCLIContextIfNeeded(bridgeURL: String) async {

@@ -38,6 +38,7 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 		{name: "oauth token", handler: h.OAuthToken()},
 		{name: "device start", handler: h.DeviceStart()},
 		{name: "device poll", handler: h.DevicePoll()},
+		{name: "device lookup", handler: h.DeviceLookup()},
 		{name: "device approve", handler: h.DeviceApprove()},
 	}
 

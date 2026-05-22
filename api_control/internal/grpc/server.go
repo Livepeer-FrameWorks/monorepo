@@ -4041,7 +4041,10 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "failed to allocate unique user_code: %v", err)
 	}
 
-	verificationURI := s.deviceVerificationBaseURL()
+	verificationURI, err := s.deviceVerificationBaseURL()
+	if err != nil {
+		return nil, err
+	}
 	verificationURIComplete := verificationURI + "?user_code=" + url.QueryEscape(userCode)
 
 	return &pb.StartDeviceAuthorizationResponse{
@@ -4055,13 +4058,16 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.
 }
 
 // deviceVerificationBaseURL returns the URL the user visits to approve a
-// device code. Configured via DEVICE_VERIFICATION_URL env var (set by ops);
-// falls back to a placeholder so misconfigured environments fail loudly.
-func (s *CommodoreServer) deviceVerificationBaseURL() string {
-	if v := os.Getenv("DEVICE_VERIFICATION_URL"); v != "" {
-		return v
+// device code.
+func (s *CommodoreServer) deviceVerificationBaseURL() (string, error) {
+	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("DEVICE_VERIFICATION_URL")), "/"); v != "" {
+		return v, nil
 	}
-	return "https://app.frameworks.network/device"
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL")), "/")
+	if baseURL == "" {
+		return "", status.Error(codes.FailedPrecondition, "WEBAPP_PUBLIC_URL required")
+	}
+	return baseURL + "/device", nil
 }
 
 // PollDeviceAuthorization is called by the CLI on the returned interval. While
@@ -4158,6 +4164,61 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *pb.P
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 	return resp, nil
+}
+
+// LookupDeviceAuthorization returns pending device-code metadata for the
+// consent page without approving it.
+func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *pb.LookupDeviceAuthorizationRequest) (*pb.LookupDeviceAuthorizationResponse, error) {
+	if _, _, err := extractUserContext(ctx); err != nil {
+		return nil, err
+	}
+	normalized := normalizeUserCode(req.GetUserCode())
+	if normalized == "" {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_code")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer s.rollbackTx(tx)
+
+	var rowID, clientID, scope, dbStatus string
+	var expiresAt time.Time
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, client_id, scope, status, expires_at
+		FROM commodore.auth_device_codes
+		WHERE user_code = $1
+		FOR UPDATE
+	`, normalized).Scan(&rowID, &clientID, &scope, &dbStatus, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "user_code not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if time.Now().After(expiresAt) {
+		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
+	}
+	if dbStatus != "pending" {
+		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+	}
+
+	return &pb.LookupDeviceAuthorizationResponse{
+		ClientId:  clientID,
+		Scope:     scope,
+		ExpiresAt: timestamppb.New(expiresAt),
+	}, nil
 }
 
 // ApproveDeviceAuthorization marks a pending device-code row as approved and

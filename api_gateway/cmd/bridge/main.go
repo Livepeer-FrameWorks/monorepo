@@ -499,6 +499,15 @@ func main() {
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/refresh", authHandlers.RefreshToken())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/forgot-password", authHandlers.ForgotPassword())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/reset-password", authHandlers.ResetPassword())
+		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/webapp-url", authHandlers.WebappURL())
+		server.HandleOptionalTrailingSlash(auth, http.MethodGet, "/token/validate", middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients), func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"valid":     true,
+				"auth_type": ctxkeys.GetAuthType(c.Request.Context()),
+				"user_id":   ctxkeys.GetUserID(c.Request.Context()),
+				"tenant_id": ctxkeys.GetTenantID(c.Request.Context()),
+			})
+		})
 
 		// Native-client browser-handoff (RFC 8252 + RFC 7636 PKCE) and
 		// device-code grant (RFC 8628). Public endpoints called by the tray
@@ -512,6 +521,7 @@ func main() {
 		authProtected := auth.Group("", middleware.RequireJWTAuth([]byte(jwtSecret)))
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/logout", authHandlers.Logout())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/authorize/complete", authHandlers.AuthorizeComplete())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/device/lookup", authHandlers.DeviceLookup())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/device/approve", authHandlers.DeviceApprove())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me", authHandlers.GetMe())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPatch, "/me", authHandlers.UpdateMe())

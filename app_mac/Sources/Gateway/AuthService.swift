@@ -7,6 +7,7 @@ import Security
 class AuthService {
   static let shared = AuthService()
   private let gateway = GatewayClient.shared
+  private let browserLoginTimeoutNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
   private var browserLoginServer: BrowserLoginCallbackServer?
 
   private init() {}
@@ -17,6 +18,7 @@ class AuthService {
     let verifier = try randomBase64URL(byteCount: 32)
     let challenge = base64URLEncode(Data(SHA256.hash(data: Data(verifier.utf8))))
     let state = try randomBase64URL(byteCount: 16)
+    let webappBaseURL = try await fetchWebappBaseURL()
 
     let server = BrowserLoginCallbackServer()
     browserLoginServer?.stop()
@@ -25,6 +27,7 @@ class AuthService {
 
     let redirectURI = "http://127.0.0.1:\(port)/callback"
     guard let authorizeURL = makeAuthorizeURL(
+      webappBaseURL: webappBaseURL,
       redirectURI: redirectURI,
       codeChallenge: challenge,
       state: state
@@ -45,7 +48,7 @@ class AuthService {
       }
     }
 
-    let callback = try await server.waitForCallback()
+    let callback = try await waitForBrowserCallback(from: server)
     guard constantTimeEqual(callback.state, state) else {
       throw AuthError.stateMismatch
     }
@@ -74,6 +77,11 @@ class AuthService {
     }
 
     scheduleTokenRefresh(expiresAt: response.expiresAt, appState: appState)
+  }
+
+  func cancelBrowserLogin() {
+    browserLoginServer?.stop()
+    browserLoginServer = nil
   }
 
   // MARK: - Refresh
@@ -179,19 +187,14 @@ class AuthService {
   }
 
   private func makeAuthorizeURL(
+    webappBaseURL: String,
     redirectURI: String,
     codeChallenge: String,
     state: String
   ) -> URL? {
-    let trimmed = gateway.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = webappBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, var base = URLComponents(string: trimmed) else { return nil }
-    if base.host == "bridge.frameworks.network" {
-      base.host = "app.frameworks.network"
-      base.port = nil
-    } else if (base.host == "localhost" || base.host == "127.0.0.1") && base.port == 18000 {
-      base.port = 5173
-    }
-    base.path = "/authorize"
+    base.path = pathByAppending("authorize", to: base.path)
     base.queryItems = [
       URLQueryItem(name: "client_id", value: "tray-mac"),
       URLQueryItem(name: "redirect_uri", value: redirectURI),
@@ -201,6 +204,47 @@ class AuthService {
       URLQueryItem(name: "scope", value: "account"),
     ]
     return base.url
+  }
+
+  private func fetchWebappBaseURL() async throws -> String {
+    let data = try await gateway.request(
+      method: "GET",
+      path: "/auth/webapp-url",
+      authenticated: false
+    )
+    let response = try JSONDecoder().decode(WebappURLResponse.self, from: data)
+    let webappURL = response.webappURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !webappURL.isEmpty else {
+      throw AuthError.missingWebappURL
+    }
+    return webappURL
+  }
+
+  private func waitForBrowserCallback(from server: BrowserLoginCallbackServer) async throws -> BrowserLoginCallback {
+    try await withThrowingTaskGroup(of: BrowserLoginCallback.self) { group in
+      group.addTask {
+        try await server.waitForCallback()
+      }
+      group.addTask { [browserLoginTimeoutNanoseconds] in
+        try await Task.sleep(nanoseconds: browserLoginTimeoutNanoseconds)
+        server.stop()
+        throw AuthError.browserLoginTimedOut
+      }
+
+      guard let callback = try await group.next() else {
+        throw AuthError.browserLoginTimedOut
+      }
+      group.cancelAll()
+      return callback
+    }
+  }
+
+  private func pathByAppending(_ component: String, to path: String) -> String {
+    let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    if trimmedPath.isEmpty {
+      return "/\(component)"
+    }
+    return "/\(trimmedPath)/\(component)"
   }
 
   private func exchangeAuthorizationCode(
@@ -331,6 +375,14 @@ struct MeResponse: Codable {
   let user: AuthUser
 }
 
+private struct WebappURLResponse: Decodable {
+  let webappURL: String
+
+  enum CodingKeys: String, CodingKey {
+    case webappURL = "webapp_url"
+  }
+}
+
 enum AuthError: LocalizedError {
   case noRefreshToken
   case missingAccessToken
@@ -340,6 +392,8 @@ enum AuthError: LocalizedError {
   case stateMismatch
   case authorizationDenied(String)
   case missingCallbackCode
+  case missingWebappURL
+  case browserLoginTimedOut
   case randomGenerationFailed(OSStatus)
 
   var errorDescription: String? {
@@ -352,6 +406,8 @@ enum AuthError: LocalizedError {
     case .stateMismatch: return "Browser sign in returned an invalid state"
     case .authorizationDenied(let message): return "Browser sign in was denied: \(message)"
     case .missingCallbackCode: return "Browser sign in did not return an authorization code"
+    case .missingWebappURL: return "Bridge did not return a webapp URL for browser sign in"
+    case .browserLoginTimedOut: return "Browser sign in timed out"
     case .randomGenerationFailed(let status): return "Could not generate secure login nonce: \(status)"
     }
   }

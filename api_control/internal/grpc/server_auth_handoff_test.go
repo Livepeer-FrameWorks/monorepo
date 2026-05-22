@@ -111,6 +111,34 @@ func TestGenerateUserCode_FormatAndAlphabet(t *testing.T) {
 	}
 }
 
+func TestDeviceVerificationBaseURLUsesConfiguredWebappURL(t *testing.T) {
+	t.Setenv("DEVICE_VERIFICATION_URL", "")
+	t.Setenv("WEBAPP_PUBLIC_URL", "https://chartroom.frameworks.network/app/")
+
+	server := &CommodoreServer{logger: logrus.New()}
+	got, err := server.deviceVerificationBaseURL()
+	if err != nil {
+		t.Fatalf("deviceVerificationBaseURL: %v", err)
+	}
+	if want := "https://chartroom.frameworks.network/app/device"; got != want {
+		t.Fatalf("deviceVerificationBaseURL() = %q, want %q", got, want)
+	}
+}
+
+func TestDeviceVerificationBaseURLOverride(t *testing.T) {
+	t.Setenv("DEVICE_VERIFICATION_URL", "https://login.example.com/device/")
+	t.Setenv("WEBAPP_PUBLIC_URL", "https://chartroom.frameworks.network/app")
+
+	server := &CommodoreServer{logger: logrus.New()}
+	got, err := server.deviceVerificationBaseURL()
+	if err != nil {
+		t.Fatalf("deviceVerificationBaseURL: %v", err)
+	}
+	if want := "https://login.example.com/device"; got != want {
+		t.Fatalf("deviceVerificationBaseURL() = %q, want %q", got, want)
+	}
+}
+
 // TestExchangeAuthorizationCode_VerifierMismatch is the security primitive
 // of PKCE: an attacker who intercepts the authorization code on the loopback
 // redirect cannot redeem it without the verifier held only by the originating
@@ -256,5 +284,68 @@ func TestApproveDeviceAuthorization_RequiresSession(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected codes.InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestLookupDeviceAuthorization_RequiresSession(t *testing.T) {
+	server := &CommodoreServer{logger: logrus.New()}
+
+	_, err := server.LookupDeviceAuthorization(context.Background(), &pb.LookupDeviceAuthorizationRequest{
+		UserCode: "ABCD-EFGH",
+	})
+	if err == nil {
+		t.Fatal("expected Unauthenticated, got nil")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected codes.Unauthenticated, got %v (%v)", status.Code(err), err)
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+	_, err = server.LookupDeviceAuthorization(ctx, &pb.LookupDeviceAuthorizationRequest{
+		UserCode: "garbage",
+	})
+	if err == nil {
+		t.Fatal("expected InvalidArgument, got nil")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected codes.InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestLookupDeviceAuthorization_ReturnsPendingClientMetadata(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	expiresAt := time.Now().Add(5 * time.Minute)
+	mock.ExpectBegin()
+	mock.ExpectQuery("FROM commodore.auth_device_codes").
+		WithArgs("ABCD-EFGH").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "client_id", "scope", "status", "expires_at",
+		}).AddRow("device-row-1", "cli", "account", "pending", expiresAt))
+	mock.ExpectCommit()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+
+	resp, err := server.LookupDeviceAuthorization(ctx, &pb.LookupDeviceAuthorizationRequest{
+		UserCode: "abcd efgh",
+	})
+	if err != nil {
+		t.Fatalf("LookupDeviceAuthorization: %v", err)
+	}
+	if resp.ClientId != "cli" || resp.Scope != "account" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.ExpiresAt.AsTime().Sub(expiresAt).Abs() > time.Second {
+		t.Fatalf("expires_at = %v, want near %v", resp.ExpiresAt.AsTime(), expiresAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }

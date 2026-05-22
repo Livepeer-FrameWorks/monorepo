@@ -90,6 +90,44 @@ func TestPollDeviceAuthorizationStoresReturnedTokensShape(t *testing.T) {
 	}
 }
 
+func TestValidateLoginTokenUsesBearerValidationEndpoint(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/token/validate" {
+			t.Fatalf("path = %q, want /auth/token/validate", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]any{"valid": true})
+	}))
+	defer server.Close()
+
+	oldClient := loginHTTPClient
+	loginHTTPClient = server.Client()
+	defer func() { loginHTTPClient = oldClient }()
+
+	if err := validateLoginToken(context.Background(), server.URL, "fw_token"); err != nil {
+		t.Fatalf("validateLoginToken: %v", err)
+	}
+	if gotAuth != "Bearer fw_token" {
+		t.Fatalf("Authorization = %q, want Bearer fw_token", gotAuth)
+	}
+}
+
+func TestValidateLoginTokenRejectsInvalidToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"authentication failed"}`, http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	oldClient := loginHTTPClient
+	loginHTTPClient = server.Client()
+	defer func() { loginHTTPClient = oldClient }()
+
+	if err := validateLoginToken(context.Background(), server.URL, "bad-token"); err == nil {
+		t.Fatal("expected invalid token to fail validation")
+	}
+}
+
 func TestSaveLoginTokensStoresRefreshAndClearsStaleRefreshForTokenFlag(t *testing.T) {
 	store := &memoryCredentialStore{entries: map[string]string{
 		credentials.AccountUserRefresh: "old-refresh",

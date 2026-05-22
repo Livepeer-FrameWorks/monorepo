@@ -74,7 +74,15 @@ your manifest env_files (gitops). There is no 'login --service-account'.
 			}
 
 			if tokenFlag != "" {
-				return saveLoginTokens(cmd, store, strings.TrimSpace(tokenFlag), "")
+				bridgeURL, bridgeErr := resolveLoginBridgeURL(bridgeURLFlag)
+				if bridgeErr != nil {
+					return bridgeErr
+				}
+				token := strings.TrimSpace(tokenFlag)
+				if validateErr := validateLoginToken(cmd.Context(), bridgeURL, token); validateErr != nil {
+					return validateErr
+				}
+				return saveLoginTokens(cmd, store, token, "")
 			}
 
 			bridgeURL, err := resolveLoginBridgeURL(bridgeURLFlag)
@@ -269,6 +277,38 @@ func pollDeviceAuthorization(ctx context.Context, bridgeURL string, start device
 			return deviceTokenResponse{}, fmt.Errorf("device login failed: HTTP %d: %s", statusCode, msg)
 		}
 	}
+}
+
+func validateLoginToken(ctx context.Context, bridgeURL, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("no token provided")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bridgeURL+"/auth/token/validate", nil)
+	if err != nil {
+		return fmt.Errorf("build token validation request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "FrameWorks-CLI/1.0")
+
+	resp, err := loginHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("validate token: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if readErr != nil {
+		return fmt.Errorf("validate token: HTTP %d", resp.StatusCode)
+	}
+	message := strings.TrimSpace(string(raw))
+	if message == "" {
+		message = http.StatusText(resp.StatusCode)
+	}
+	return fmt.Errorf("validate token: HTTP %d: %s", resp.StatusCode, message)
 }
 
 func postJSON(ctx context.Context, url string, body any, out any) error {

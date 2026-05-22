@@ -1045,6 +1045,7 @@ service UserService {
   // CLI polls until approved and receives an AuthResponse session.
   rpc StartDeviceAuthorization(StartDeviceAuthorizationRequest) returns (StartDeviceAuthorizationResponse);
   rpc PollDeviceAuthorization(PollDeviceAuthorizationRequest) returns (AuthResponse);
+  rpc LookupDeviceAuthorization(LookupDeviceAuthorizationRequest) returns (LookupDeviceAuthorizationResponse);
   rpc ApproveDeviceAuthorization(ApproveDeviceAuthorizationRequest) returns (ApproveDeviceAuthorizationResponse);
 }
 
@@ -2021,6 +2022,19 @@ message PollDeviceAuthorizationRequest {
   string client_id = 2;
 }
 
+// LookupDeviceAuthorization: called by the gateway on behalf of the webapp
+// /device page before approval, so the consent UI can name the requesting
+// client. Requires a signed-in browser session.
+message LookupDeviceAuthorizationRequest {
+  string user_code = 1;
+}
+
+message LookupDeviceAuthorizationResponse {
+  string client_id = 1;
+  string scope = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
 // ApproveDeviceAuthorization: called by the gateway on behalf of the webapp
 // /device page after the signed-in user confirms the displayed user_code.
 message ApproveDeviceAuthorizationRequest {
@@ -2031,5 +2045,5 @@ message ApproveDeviceAuthorizationRequest {
 
 message ApproveDeviceAuthorizationResponse {
   bool success = 1;
-  string client_id = 2;                // surfaced back to webapp so consent UI can name the requesting client
+  string client_id = 2;
 }

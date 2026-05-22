@@ -2040,6 +2040,7 @@ const (
 	UserService_ExchangeAuthorizationCode_FullMethodName  = "/commodore.UserService/ExchangeAuthorizationCode"
 	UserService_StartDeviceAuthorization_FullMethodName   = "/commodore.UserService/StartDeviceAuthorization"
 	UserService_PollDeviceAuthorization_FullMethodName    = "/commodore.UserService/PollDeviceAuthorization"
+	UserService_LookupDeviceAuthorization_FullMethodName  = "/commodore.UserService/LookupDeviceAuthorization"
 	UserService_ApproveDeviceAuthorization_FullMethodName = "/commodore.UserService/ApproveDeviceAuthorization"
 )
 
@@ -2082,6 +2083,7 @@ type UserServiceClient interface {
 	// CLI polls until approved and receives an AuthResponse session.
 	StartDeviceAuthorization(ctx context.Context, in *StartDeviceAuthorizationRequest, opts ...grpc.CallOption) (*StartDeviceAuthorizationResponse, error)
 	PollDeviceAuthorization(ctx context.Context, in *PollDeviceAuthorizationRequest, opts ...grpc.CallOption) (*AuthResponse, error)
+	LookupDeviceAuthorization(ctx context.Context, in *LookupDeviceAuthorizationRequest, opts ...grpc.CallOption) (*LookupDeviceAuthorizationResponse, error)
 	ApproveDeviceAuthorization(ctx context.Context, in *ApproveDeviceAuthorizationRequest, opts ...grpc.CallOption) (*ApproveDeviceAuthorizationResponse, error)
 }
 
@@ -2313,6 +2315,16 @@ func (c *userServiceClient) PollDeviceAuthorization(ctx context.Context, in *Pol
 	return out, nil
 }
 
+func (c *userServiceClient) LookupDeviceAuthorization(ctx context.Context, in *LookupDeviceAuthorizationRequest, opts ...grpc.CallOption) (*LookupDeviceAuthorizationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupDeviceAuthorizationResponse)
+	err := c.cc.Invoke(ctx, UserService_LookupDeviceAuthorization_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *userServiceClient) ApproveDeviceAuthorization(ctx context.Context, in *ApproveDeviceAuthorizationRequest, opts ...grpc.CallOption) (*ApproveDeviceAuthorizationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ApproveDeviceAuthorizationResponse)
@@ -2362,6 +2374,7 @@ type UserServiceServer interface {
 	// CLI polls until approved and receives an AuthResponse session.
 	StartDeviceAuthorization(context.Context, *StartDeviceAuthorizationRequest) (*StartDeviceAuthorizationResponse, error)
 	PollDeviceAuthorization(context.Context, *PollDeviceAuthorizationRequest) (*AuthResponse, error)
+	LookupDeviceAuthorization(context.Context, *LookupDeviceAuthorizationRequest) (*LookupDeviceAuthorizationResponse, error)
 	ApproveDeviceAuthorization(context.Context, *ApproveDeviceAuthorizationRequest) (*ApproveDeviceAuthorizationResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
@@ -2438,6 +2451,9 @@ func (UnimplementedUserServiceServer) StartDeviceAuthorization(context.Context, 
 }
 func (UnimplementedUserServiceServer) PollDeviceAuthorization(context.Context, *PollDeviceAuthorizationRequest) (*AuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PollDeviceAuthorization not implemented")
+}
+func (UnimplementedUserServiceServer) LookupDeviceAuthorization(context.Context, *LookupDeviceAuthorizationRequest) (*LookupDeviceAuthorizationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LookupDeviceAuthorization not implemented")
 }
 func (UnimplementedUserServiceServer) ApproveDeviceAuthorization(context.Context, *ApproveDeviceAuthorizationRequest) (*ApproveDeviceAuthorizationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApproveDeviceAuthorization not implemented")
@@ -2859,6 +2875,24 @@ func _UserService_PollDeviceAuthorization_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_LookupDeviceAuthorization_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupDeviceAuthorizationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).LookupDeviceAuthorization(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_LookupDeviceAuthorization_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).LookupDeviceAuthorization(ctx, req.(*LookupDeviceAuthorizationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_ApproveDeviceAuthorization_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ApproveDeviceAuthorizationRequest)
 	if err := dec(in); err != nil {
@@ -2971,6 +3005,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PollDeviceAuthorization",
 			Handler:    _UserService_PollDeviceAuthorization_Handler,
+		},
+		{
+			MethodName: "LookupDeviceAuthorization",
+			Handler:    _UserService_LookupDeviceAuthorization_Handler,
 		},
 		{
 			MethodName: "ApproveDeviceAuthorization",

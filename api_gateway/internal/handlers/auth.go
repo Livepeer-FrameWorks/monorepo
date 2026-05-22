@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"frameworks/api_gateway/internal/attribution"
@@ -536,7 +537,24 @@ func (h *AuthHandlers) ForgotPassword() gin.HandlerFunc {
 	}
 }
 
-// ResetPassword handles password reset
+// WebappURL exposes the configured webapp origin/base path to native clients
+// so browser handoff uses the same public URL as hosted login.
+func (h *AuthHandlers) WebappURL() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		webappURL := strings.TrimRight(strings.TrimSpace(config.GetEnv("WEBAPP_PUBLIC_URL", "")), "/")
+		if webappURL == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webapp public URL is not configured"})
+			return
+		}
+		parsed, err := url.Parse(webappURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "webapp public URL is invalid"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"webapp_url": webappURL})
+	}
+}
+
 // AuthorizeComplete handles POST /auth/authorize/complete — the webapp
 // /authorize page calls this after the signed-in user clicks "Approve". The
 // user_id/tenant_id forwarded to Commodore come from the verified JWT
@@ -732,6 +750,54 @@ func (h *AuthHandlers) DevicePoll() gin.HandlerFunc {
 			"token_type":    "Bearer",
 			"expires_at":    resp.ExpiresAt.AsTime(),
 			"user":          userToJSON(resp.User),
+		})
+	}
+}
+
+// DeviceLookup handles POST /auth/device/lookup — the webapp /device page
+// calls this before approval so the user can see which client requested the
+// session.
+func (h *AuthHandlers) DeviceLookup() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			UserCode string `json:"user_code" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.LookupDeviceAuthorization(c.Request.Context(), &pb.LookupDeviceAuthorizationRequest{
+			UserCode: req.UserCode,
+		})
+		if err != nil {
+			h.logger.WithError(err).Debug("LookupDeviceAuthorization failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, _ := status.FromError(err)
+			switch st.Code() {
+			case codes.NotFound:
+				c.JSON(http.StatusNotFound, gin.H{"error": st.Message()})
+			case codes.InvalidArgument:
+				c.JSON(http.StatusBadRequest, gin.H{"error": st.Message()})
+			case codes.FailedPrecondition:
+				c.JSON(http.StatusConflict, gin.H{"error": st.Message()})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "device lookup failed"})
+			}
+			return
+		}
+
+		var expiresAt any
+		if resp.ExpiresAt != nil {
+			expiresAt = resp.ExpiresAt.AsTime()
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"client_id":  resp.ClientId,
+			"scope":      resp.Scope,
+			"expires_at": expiresAt,
 		})
 	}
 }

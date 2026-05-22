@@ -883,6 +883,12 @@ func (c *GRPCClient) PollDeviceAuthorization(ctx context.Context, req *pb.PollDe
 	return c.user.PollDeviceAuthorization(ctx, req)
 }
 
+// LookupDeviceAuthorization returns pending device-code metadata for the
+// consent page before the user approves it.
+func (c *GRPCClient) LookupDeviceAuthorization(ctx context.Context, req *pb.LookupDeviceAuthorizationRequest) (*pb.LookupDeviceAuthorizationResponse, error) {
+	return c.user.LookupDeviceAuthorization(ctx, req)
+}
+
 // ApproveDeviceAuthorization stamps the signed-in user's identity onto a
 // pending device-code row. Called by the gateway on behalf of the webapp
 // /device page after the user confirms the displayed user_code.

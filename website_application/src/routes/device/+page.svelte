@@ -5,18 +5,23 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Alert, AlertDescription } from "$lib/components/ui/alert";
-  import { CheckCircle2, KeyRound, Terminal } from "lucide-svelte";
+  import { CheckCircle2, KeyRound, ShieldCheck, Terminal } from "lucide-svelte";
 
   let userCode = $state("");
+  let lookingUp = $state(false);
   let approving = $state(false);
   let approved = $state(false);
   let clientId = $state("");
+  let scope = $state("");
   let error = $state("");
 
   onMount(() => {
     userCode = normalizeCode(
       $page.url.searchParams.get("user_code") ?? $page.url.searchParams.get("code") ?? ""
     );
+    if (userCode.replace("-", "").length === 8) {
+      void lookup();
+    }
   });
 
   function normalizeCode(value: string): string {
@@ -49,8 +54,42 @@
     return fallback;
   }
 
+  const clientName = $derived(clientId === "cli" ? "FrameWorks CLI" : clientId);
+  const hasPreview = $derived(clientId.length > 0);
+
+  function setUserCode(value: string) {
+    userCode = normalizeCode(value);
+    clientId = "";
+    scope = "";
+    error = "";
+  }
+
+  async function lookup() {
+    if (lookingUp || userCode.replace("-", "").length !== 8) return;
+
+    lookingUp = true;
+    error = "";
+    clientId = "";
+    scope = "";
+    try {
+      const response = await authAPI.post<{
+        client_id: string;
+        scope: string;
+        expires_at?: string;
+      }>("/device/lookup", {
+        user_code: userCode,
+      });
+      clientId = response.data.client_id;
+      scope = response.data.scope;
+    } catch (err) {
+      error = axiosErrorMessage(err, "Could not find this device code.");
+    } finally {
+      lookingUp = false;
+    }
+  }
+
   async function approve() {
-    if (approving || userCode.replace("-", "").length !== 8) return;
+    if (approving || !hasPreview || userCode.replace("-", "").length !== 8) return;
 
     approving = true;
     error = "";
@@ -62,7 +101,6 @@
         }
       );
       approved = response.data.success;
-      clientId = response.data.client_id;
     } catch (err) {
       error = axiosErrorMessage(err, "Could not approve this device code.");
     } finally {
@@ -105,7 +143,7 @@
           <div>
             <p class="text-base font-medium text-foreground">Enter the code from your terminal</p>
             <p class="mt-2 text-sm text-muted-foreground">
-              Approving this code grants a FrameWorks account session to the CLI that requested it.
+              We will show the requesting client before you authorize the session.
             </p>
           </div>
         </div>
@@ -118,12 +156,27 @@
             id="device-code"
             value={userCode}
             oninput={(event) => {
-              userCode = normalizeCode((event.currentTarget as HTMLInputElement).value);
+              setUserCode((event.currentTarget as HTMLInputElement).value);
             }}
             placeholder="ABCD-EFGH"
             class="font-mono text-center tracking-widest"
           />
         </div>
+
+        {#if hasPreview}
+          <div
+            class="rounded-md bg-muted/40 border border-border px-3 py-2 text-xs text-muted-foreground"
+          >
+            <div class="flex justify-between gap-3">
+              <span>Client</span>
+              <span class="font-mono text-foreground">{clientName}</span>
+            </div>
+            <div class="flex justify-between gap-3 mt-1">
+              <span>Scope</span>
+              <span class="font-mono text-foreground">{scope || "account"}</span>
+            </div>
+          </div>
+        {/if}
 
         {#if error}
           <Alert variant="destructive">
@@ -135,18 +188,33 @@
 
     {#if !approved}
       <div class="px-5 py-4 border-t border-border flex justify-end">
-        <Button
-          class="gap-2"
-          onclick={approve}
-          disabled={approving || userCode.replace("-", "").length !== 8}
-        >
-          {#if approving}
-            <div class="loading-spinner"></div>
-          {:else}
-            <CheckCircle2 class="w-4 h-4" />
-          {/if}
-          Authorize CLI
-        </Button>
+        {#if hasPreview}
+          <Button
+            class="gap-2"
+            onclick={approve}
+            disabled={approving || userCode.replace("-", "").length !== 8}
+          >
+            {#if approving}
+              <div class="loading-spinner"></div>
+            {:else}
+              <CheckCircle2 class="w-4 h-4" />
+            {/if}
+            Authorize CLI
+          </Button>
+        {:else}
+          <Button
+            class="gap-2"
+            onclick={lookup}
+            disabled={lookingUp || userCode.replace("-", "").length !== 8}
+          >
+            {#if lookingUp}
+              <div class="loading-spinner"></div>
+            {:else}
+              <ShieldCheck class="w-4 h-4" />
+            {/if}
+            Continue
+          </Button>
+        {/if}
       </div>
     {/if}
   </div>
