@@ -73,14 +73,12 @@ func main() {
 		"SERVICE_TOKEN": serviceToken,
 	}))
 
-	// Create gRPC server metrics
+	// Per-method counts + duration are captured by GRPCMetricsInterceptor
+	// on the GRPCRequests / GRPCDuration vectors; separate tenant_/cluster_/
+	// node_/service_operations counters would only rename the same axis.
 	serverMetrics := &qmgrpc.ServerMetrics{
-		TenantOperations:  metricsCollector.NewCounter("grpc_tenant_operations_total", "gRPC tenant operations", []string{"operation", "status"}),
-		ClusterOperations: metricsCollector.NewCounter("grpc_cluster_operations_total", "gRPC cluster operations", []string{"operation", "status"}),
-		NodeOperations:    metricsCollector.NewCounter("grpc_node_operations_total", "gRPC node operations", []string{"operation", "status"}),
-		ServiceOperations: metricsCollector.NewCounter("grpc_service_operations_total", "gRPC service registry operations", []string{"operation", "status"}),
-		GRPCRequests:      metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:      metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
 	// Initialize Navigator client

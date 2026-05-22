@@ -76,10 +76,26 @@ const caddyfileTmpl = `{
 {{- end}}
 
 	handle /assets/* {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+			Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
+			Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
+		}
+		@assets_options method OPTIONS
+		respond @assets_options "" 204
 		reverse_proxy {{.ChandlerUpstream}}
 	}
 
-	handle /view/* {
+	handle_path /view/* {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+			Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
+			Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
+		}
+		@view_options method OPTIONS
+		respond @view_options "" 204
 		reverse_proxy {{.MistUpstream}} {
 			flush_interval -1
 			transport http {
@@ -89,6 +105,7 @@ const caddyfileTmpl = `{
 			}
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-For {remote_host}
+			header_up X-Mst-Path {scheme}://{host}/view/
 		}
 	}
 

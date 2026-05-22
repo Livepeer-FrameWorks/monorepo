@@ -231,6 +231,9 @@ func (h *Hub) BroadcastToTenant(tenantID string, eventType pb.EventType, channel
 		Timestamp: timestamppb.Now(),
 		TenantId:  &tenantID,
 	}
+	if h.metrics != nil && h.metrics.EventsPublished != nil {
+		h.metrics.EventsPublished.WithLabelValues(eventType.String(), channelToString(channel)).Inc()
+	}
 	h.broadcast <- event
 }
 
@@ -241,6 +244,9 @@ func (h *Hub) BroadcastInfrastructure(eventType pb.EventType, data *pb.EventData
 		Channel:   pb.Channel_CHANNEL_SYSTEM,
 		Data:      data,
 		Timestamp: timestamppb.Now(),
+	}
+	if h.metrics != nil && h.metrics.EventsPublished != nil {
+		h.metrics.EventsPublished.WithLabelValues(eventType.String(), channelToString(pb.Channel_CHANNEL_SYSTEM)).Inc()
 	}
 	h.broadcast <- event
 }

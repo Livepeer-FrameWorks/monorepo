@@ -12,6 +12,16 @@ func TestFoghornBalancerBaseUsesClusterScopedDNS(t *testing.T) {
 	}
 }
 
+func TestFoghornBalancerBaseNormalizesBrandDomain(t *testing.T) {
+	t.Setenv("BRAND_DOMAIN", "https://frameworks.network/")
+
+	got := foghornBalancerBase("media-eu-1")
+	want := "https://foghorn.media-eu-1.frameworks.network"
+	if got != want {
+		t.Fatalf("foghornBalancerBase() = %q, want %q", got, want)
+	}
+}
+
 func TestFoghornBalancerBaseUsesExplicitPublicBase(t *testing.T) {
 	t.Setenv("FOGHORN_PUBLIC_BASE", "https://foghorn.example")
 

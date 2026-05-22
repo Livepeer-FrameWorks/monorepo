@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestBuildThumbnailAssetsUsesPublicChandlerBaseOverride(t *testing.T) {
@@ -39,5 +40,19 @@ func TestBuildThumbnailAssetsUsesClusterSnapshotWithoutOverride(t *testing.T) {
 	}
 	if got.GetPosterUrl() != "https://chandler.demo.frameworks.network/assets/stream-uuid/poster.jpg" {
 		t.Fatalf("poster URL = %q", got.GetPosterUrl())
+	}
+}
+
+func TestChandlerBaseForNormalizesClusterBaseURL(t *testing.T) {
+	t.Setenv("CHANDLER_BASE_URL", "")
+
+	got := chandlerBaseFor(&pb.InfrastructureCluster{
+		ClusterId:   "media-eu-1",
+		ClusterName: "Media EU 1",
+		BaseUrl:     "https://frameworks.network/",
+	})
+
+	if got != "https://chandler.media-eu-1.frameworks.network" {
+		t.Fatalf("chandlerBaseFor normalized URL base = %q", got)
 	}
 }

@@ -45,12 +45,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ServerMetrics holds Prometheus metrics for the gRPC server
+// ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
+// counts + duration are captured by GRPCMetricsInterceptor; separate
+// dns_/cert_operations_total would only rename the same axis.
 type ServerMetrics struct {
-	DNSOperations  *prometheus.CounterVec
-	CertOperations *prometheus.CounterVec
-	GRPCRequests   *prometheus.CounterVec
-	GRPCDuration   *prometheus.HistogramVec
+	GRPCRequests *prometheus.CounterVec
+	GRPCDuration *prometheus.HistogramVec
 }
 
 // NavigatorServer holds dependencies for the gRPC and HTTP server
@@ -183,10 +183,8 @@ func main() {
 
 	// Create gRPC server metrics
 	serverMetrics := &ServerMetrics{
-		DNSOperations:  metricsCollector.NewCounter("dns_operations_total", "DNS operations", []string{"operation", "status"}),
-		CertOperations: metricsCollector.NewCounter("cert_operations_total", "Certificate operations", []string{"operation", "status"}),
-		GRPCRequests:   metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:   metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
 	// === Server Setup ===

@@ -246,9 +246,12 @@ func main() {
 
 	// Create custom load balancing metrics
 	metrics := &handlers.FoghornMetrics{
+		// Distribution across nodes is derived from
+		// rate(foghorn_routing_decisions_total{selected_node=...}[5m]) at query
+		// time; a per-routing-decision gauge would go stale on nodes that stop
+		// being selected.
 		RoutingDecisions:      metricsCollector.NewCounter("routing_decisions_total", "Routing decisions made", []string{"algorithm", "selected_node"}),
 		NodeSelectionDuration: metricsCollector.NewHistogram("node_selection_duration_seconds", "Node selection latency", []string{}, nil),
-		LoadDistribution:      metricsCollector.NewGauge("load_distribution_ratio", "Load distribution ratio", []string{"node_id"}),
 		LivepeerAuthRejected: metricsCollector.NewCounter(
 			"livepeer_auth_rejected_total",
 			"Livepeer gateway auth-webhook rejections by reason",

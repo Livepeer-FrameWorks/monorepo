@@ -122,6 +122,38 @@ func TestServiceFQDN(t *testing.T) {
 	}
 }
 
+func TestNormalizeDomainScope(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "bare domain", in: "frameworks.network", want: "frameworks.network"},
+		{name: "https url", in: "https://frameworks.network", want: "frameworks.network"},
+		{name: "https url with slash", in: "https://frameworks.network/", want: "frameworks.network"},
+		{name: "url with path", in: "https://frameworks.network/clusters/media", want: "frameworks.network"},
+		{name: "protocol relative", in: "//frameworks.network", want: "frameworks.network"},
+		{name: "host port", in: "frameworks.network:443", want: "frameworks.network"},
+		{name: "mixed case", in: "HTTPS://FrameWorks.Network", want: "frameworks.network"},
+		{name: "empty", in: " ", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeDomainScope(tt.in); got != tt.want {
+				t.Fatalf("NormalizeDomainScope(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServiceFQDNNormalizesDomainScope(t *testing.T) {
+	got, ok := ServiceFQDN("chandler", "https://frameworks.network/")
+	if !ok || got != "chandler.frameworks.network" {
+		t.Fatalf("ServiceFQDN normalized URL scope = %q, %v; want chandler.frameworks.network true", got, ok)
+	}
+}
+
 func TestRootServiceFQDNRejectsMediaServices(t *testing.T) {
 	if got, ok := RootServiceFQDN("livepeer-gateway", "example.com"); ok || got != "" {
 		t.Fatalf("RootServiceFQDN(livepeer-gateway) = %q, %v; want empty false", got, ok)

@@ -38,12 +38,14 @@ import (
 
 var servicePKIReaderGroup = "frameworks"
 
-// Metrics holds Prometheus metrics for the agent
+// Metrics holds Prometheus metrics for the agent. Wireguard resync events
+// are not tracked separately because every resync is a mesh apply, already
+// covered by MeshApplyDuration / MeshApplyFailures with finer-grained
+// {layer, reason} labels.
 type Metrics struct {
-	SyncOperations   *prometheus.CounterVec
-	PeersConnected   *prometheus.GaugeVec
-	DNSQueries       *prometheus.CounterVec
-	WireGuardResyncs *prometheus.CounterVec
+	SyncOperations *prometheus.CounterVec
+	PeersConnected *prometheus.GaugeVec
+	DNSQueries     *prometheus.CounterVec
 	// LayerApplied reports which layer's config is currently on wg0:
 	// labels: layer="managed" (fresh from Quartermaster)
 	//       | "last_known" (disk cache from prior managed sync)
@@ -88,6 +90,7 @@ type dnsService interface {
 	Start()
 	Stop()
 	UpdateRecords(records map[string][]string) error
+	SetQueriesMetric(vec *prometheus.CounterVec)
 }
 
 type Agent struct {
@@ -285,10 +288,14 @@ func New(cfg Config) (*Agent, error) {
 		}
 	}
 
-	// Initialize DNS Server
+	// Initialize DNS Server. Hand it the dns_queries_total counter so
+	// each handled query updates {type=internal|forward, status=...}.
 	dnsSrv := cfg.DNSService
 	if dnsSrv == nil {
 		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort, cfg.DNSUpstreams...)
+	}
+	if cfg.Metrics != nil && cfg.Metrics.DNSQueries != nil {
+		dnsSrv.SetQueriesMetric(cfg.Metrics.DNSQueries)
 	}
 
 	return &Agent{

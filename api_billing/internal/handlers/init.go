@@ -22,14 +22,13 @@ var (
 	decklogClient *decklogclient.BatchedClient
 )
 
-// PurserMetrics holds all Prometheus metrics for Purser. DB
-// connection-pool stats are registered separately via
-// monitoring.MetricsCollector.RegisterDBStats and read from db.Stats()
-// at scrape time, so they do not appear on this struct.
+// PurserMetrics holds all Prometheus metrics for Purser. DB connection-pool
+// stats are registered separately via RegisterDBStats. invoice_operations_total
+// was dropped because the invoice UPSERT branches on a status column rather
+// than going through distinct create/finalize/void/reissue entry points.
 type PurserMetrics struct {
 	BillingCalculations      *prometheus.CounterVec
 	UsageRecords             *prometheus.CounterVec
-	InvoiceOperations        *prometheus.CounterVec
 	WebhookSignatureFailures *prometheus.CounterVec
 }
 

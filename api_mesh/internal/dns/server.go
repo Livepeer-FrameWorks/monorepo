@@ -9,6 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/miekg/dns"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type Server struct {
@@ -19,6 +20,21 @@ type Server struct {
 	mu        sync.RWMutex
 	port      int
 	upstreams []string // upstream resolver addresses for non-.internal queries
+	// queries counts DNS responses by {type=internal|forward, status=ok|nxdomain|servfail|error}.
+	queries *prometheus.CounterVec
+}
+
+// SetQueriesMetric installs the dns_queries_total counter; calling sites
+// pass the CounterVec from privateer's agent.Metrics. nil is a no-op so
+// the DNS server stays usable in tests without a Prometheus registry.
+func (s *Server) SetQueriesMetric(vec *prometheus.CounterVec) {
+	s.queries = vec
+}
+
+func (s *Server) recordQuery(qtype, status string) {
+	if s.queries != nil {
+		s.queries.WithLabelValues(qtype, status).Inc()
+	}
 }
 
 func NewServer(logger logging.Logger, port int, upstreams ...string) *Server {
@@ -121,6 +137,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	status := "ok"
 	switch r.Question[0].Qtype {
 	case dns.TypeA:
 		m.Authoritative = true
@@ -141,13 +158,16 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 			s.logger.WithField("domain", domain).Debug("DNS Query resolved")
 		} else {
 			m.Rcode = dns.RcodeNameError
+			status = "nxdomain"
 			s.logger.WithField("domain", domain).Debug("DNS Query not found")
 		}
 	}
 
 	if err := w.WriteMsg(m); err != nil {
 		s.logger.WithError(err).Warn("Failed to write DNS response")
+		status = "error"
 	}
+	s.recordQuery("internal", status)
 }
 
 func (s *Server) handleForward(w dns.ResponseWriter, r *dns.Msg) {
@@ -164,9 +184,12 @@ func (s *Server) handleForward(w dns.ResponseWriter, r *dns.Msg) {
 			s.logger.WithError(err).WithField("upstream", upstream).Debug("Upstream DNS query failed")
 			continue
 		}
+		status := "ok"
 		if err := w.WriteMsg(resp); err != nil {
 			s.logger.WithError(err).Warn("Failed to write forwarded DNS response")
+			status = "error"
 		}
+		s.recordQuery("forward", status)
 		return
 	}
 
@@ -174,7 +197,10 @@ func (s *Server) handleForward(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Rcode = dns.RcodeServerFailure
+	status := "servfail"
 	if err := w.WriteMsg(m); err != nil {
 		s.logger.WithError(err).Warn("Failed to write SERVFAIL DNS response")
+		status = "error"
 	}
+	s.recordQuery("forward", status)
 }

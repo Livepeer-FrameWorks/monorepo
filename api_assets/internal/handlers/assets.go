@@ -117,11 +117,17 @@ func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheH
 }
 
 func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
+	router.OPTIONS("/assets/:assetKey/:file", h.handleAssetOptions)
 	router.GET("/assets/:assetKey/:file", h.handleGetAsset)
 	router.HEAD("/assets/:assetKey/:file", h.handleGetAsset)
 	if h.serviceToken != "" {
 		router.POST("/internal/assets/cache/invalidate", auth.ServiceAuthMiddleware(h.serviceToken), h.handleInvalidateCache)
 	}
+}
+
+func (h *AssetHandler) handleAssetOptions(c *gin.Context) {
+	setAssetCORSHeaders(c)
+	c.Status(http.StatusNoContent)
 }
 
 type invalidateCacheRequest struct {
@@ -130,6 +136,7 @@ type invalidateCacheRequest struct {
 }
 
 func (h *AssetHandler) handleGetAsset(c *gin.Context) {
+	setAssetCORSHeaders(c)
 	assetKey := c.Param("assetKey")
 	file := c.Param("file")
 
@@ -186,6 +193,13 @@ func (h *AssetHandler) handleGetAsset(c *gin.Context) {
 
 	c.Header("Cache-Control", policy.cacheControl)
 	c.Data(http.StatusOK, policy.contentType, data)
+}
+
+func setAssetCORSHeaders(c *gin.Context) {
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range")
+	c.Header("Access-Control-Expose-Headers", "Content-Length,Content-Range,Accept-Ranges")
 }
 
 func (h *AssetHandler) handleInvalidateCache(c *gin.Context) {

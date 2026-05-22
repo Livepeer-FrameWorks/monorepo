@@ -78,6 +78,7 @@ func SelfRegisters(serviceName string) bool {
 // the result must be filesystem-safe (dots → hyphens, wildcard markers expanded,
 // lowercased).
 func TLSBundleID(kind, rootDomain string) string {
+	rootDomain = pkgdns.NormalizeDomainScope(rootDomain)
 	replacer := strings.NewReplacer(".", "-", "*", "wildcard-", " ", "-")
 	return strings.ToLower(kind + "-" + replacer.Replace(rootDomain))
 }
@@ -86,7 +87,11 @@ func TLSBundleID(kind, rootDomain string) string {
 // services. Empty when no root domain is configured or the cluster slug can't be
 // derived (cluster missing from manifest, slug rules reject the inputs, etc.).
 func ClusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) string {
-	if manifest == nil || manifest.RootDomain == "" || clusterID == "" {
+	rootDomain := ""
+	if manifest != nil {
+		rootDomain = pkgdns.NormalizeDomainScope(manifest.RootDomain)
+	}
+	if manifest == nil || rootDomain == "" || clusterID == "" {
 		return ""
 	}
 	clusterName := ""
@@ -97,7 +102,7 @@ func ClusterScopedRootDomain(manifest *inventory.Manifest, clusterID string) str
 	if clusterSlug == "" {
 		return ""
 	}
-	return clusterSlug + "." + manifest.RootDomain
+	return clusterSlug + "." + rootDomain
 }
 
 // PublicServiceRootDomain returns the root domain a public service's FQDN sits
@@ -110,7 +115,7 @@ func PublicServiceRootDomain(serviceType string, manifest *inventory.Manifest, c
 	if pkgdns.IsClusterScopedServiceType(serviceType) {
 		return ClusterScopedRootDomain(manifest, clusterID)
 	}
-	return strings.TrimSpace(manifest.RootDomain)
+	return pkgdns.NormalizeDomainScope(manifest.RootDomain)
 }
 
 // LogicalServiceClusterIDs returns the full set of logical media clusters a
@@ -186,7 +191,7 @@ func MediaClusterIDs(manifest *inventory.Manifest) []string {
 // the issued cert covers both the apex (e.g. frameworks.network) and any subdomain
 // served via this bundle (e.g. chatwoot.frameworks.network).
 func WildcardBundleDomains(rootDomain string) []string {
-	rootDomain = strings.TrimSpace(rootDomain)
+	rootDomain = pkgdns.NormalizeDomainScope(rootDomain)
 	if rootDomain == "" {
 		return nil
 	}

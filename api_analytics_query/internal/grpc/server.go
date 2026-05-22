@@ -6286,8 +6286,15 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 		},
 	})
 
+	// GRPCMetricsInterceptor sits outermost so Unauthenticated /
+	// PermissionDenied rejections from authInterceptor still show up in
+	// periscope_query_grpc_requests_total.
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+		grpc.ChainUnaryInterceptor(
+			middleware.GRPCMetricsInterceptor(cfg.Metrics.GRPCRequests, cfg.Metrics.GRPCDuration),
+			unaryInterceptor(cfg.Logger),
+			authInterceptor,
+		),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,

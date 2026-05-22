@@ -106,7 +106,19 @@ func main() {
 
 	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
 		return func(ctx context.Context, msg kafka.Message) error {
-			if err := handler(ctx, msg); err != nil {
+			start := time.Now()
+			err := handler(ctx, msg)
+			if serviceMetrics.KafkaDuration != nil {
+				serviceMetrics.KafkaDuration.WithLabelValues("consume").Observe(time.Since(start).Seconds())
+			}
+			if serviceMetrics.KafkaMessages != nil {
+				status := "ok"
+				if err != nil {
+					status = "error"
+				}
+				serviceMetrics.KafkaMessages.WithLabelValues(msg.Topic, "consume", status).Inc()
+			}
+			if err != nil {
 				if dlqProducer == nil {
 					return err
 				}

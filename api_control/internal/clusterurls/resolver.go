@@ -165,7 +165,7 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.Thumbnai
 // CHANDLER_BASE_URL because Chandler is exposed by the same public nginx
 // surface as the app, under /assets.
 func chandlerBaseFor(c *pb.InfrastructureCluster) string {
-	baseDomain := strings.TrimSpace(c.GetBaseUrl())
+	baseDomain := pkgdns.NormalizeDomainScope(c.GetBaseUrl())
 	if baseDomain == "" {
 		return ""
 	}

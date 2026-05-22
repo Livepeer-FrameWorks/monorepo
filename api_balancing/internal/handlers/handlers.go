@@ -227,7 +227,6 @@ func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
 type FoghornMetrics struct {
 	RoutingDecisions      *prometheus.CounterVec
 	NodeSelectionDuration *prometheus.HistogramVec
-	LoadDistribution      *prometheus.GaugeVec
 
 	// LivepeerAuthRejected counts Livepeer gateway auth-webhook rejections by reason.
 	// Reasons: stream_not_found, stream_not_live, peer_context_missing,

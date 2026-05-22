@@ -281,6 +281,8 @@ func (f *fakeDNS) Start() {}
 
 func (f *fakeDNS) Stop() {}
 
+func (f *fakeDNS) SetQueriesMetric(_ *prometheus.CounterVec) {}
+
 func (f *fakeDNS) UpdateRecords(records map[string][]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

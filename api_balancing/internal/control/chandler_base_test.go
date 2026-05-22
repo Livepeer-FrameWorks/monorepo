@@ -89,6 +89,34 @@ func TestGetChandlerBaseURLDerivesPlatformDomainFromClusterMetadata(t *testing.T
 	}
 }
 
+func TestGetChandlerBaseURLNormalizesClusterBaseURL(t *testing.T) {
+	prevClusterID := localClusterID
+	prevGetCluster := getClusterFn
+	clearResolvedChandlerBaseURL()
+	t.Cleanup(func() {
+		localClusterID = prevClusterID
+		getClusterFn = prevGetCluster
+		clearResolvedChandlerBaseURL()
+	})
+
+	t.Setenv("CHANDLER_BASE_URL", "")
+	t.Setenv("CHANDLER_HOST", "fallback-host")
+	t.Setenv("CHANDLER_PORT", "18020")
+
+	localClusterID = "media-eu-1"
+	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+		return &pb.InfrastructureCluster{
+			ClusterId:   "media-eu-1",
+			ClusterName: "Media EU 1",
+			BaseUrl:     "https://frameworks.network/",
+		}, nil
+	}
+
+	if got := getChandlerBaseURL(); got != "https://chandler.media-eu-1.frameworks.network" {
+		t.Fatalf("expected normalized platform-derived Chandler base URL, got %q", got)
+	}
+}
+
 func TestGetChandlerBaseURLFallsBackToHostAndPort(t *testing.T) {
 	prevClusterID := localClusterID
 	prevGetCluster := getClusterFn
@@ -235,6 +263,27 @@ func TestGetChandlerBaseURLForCluster_DerivesPerClusterURL(t *testing.T) {
 	}
 	if got := getChandlerBaseURLForCluster("media-us-1"); got != "https://chandler.media-us-1.frameworks.network" {
 		t.Fatalf("media-us-1: got %q", got)
+	}
+}
+
+func TestGetChandlerBaseURLForCluster_NormalizesClusterBaseURL(t *testing.T) {
+	prevGetCluster := getClusterFn
+	clearChandlerPerClusterCache()
+	t.Cleanup(func() {
+		getClusterFn = prevGetCluster
+		clearChandlerPerClusterCache()
+	})
+
+	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+		return &pb.InfrastructureCluster{
+			ClusterId:   clusterID,
+			ClusterName: clusterID,
+			BaseUrl:     "https://frameworks.network/",
+		}, nil
+	}
+
+	if got := getChandlerBaseURLForCluster("media-us-1"); got != "https://chandler.media-us-1.frameworks.network" {
+		t.Fatalf("expected normalized per-cluster URL, got %q", got)
 	}
 }
 

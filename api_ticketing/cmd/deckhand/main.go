@@ -68,13 +68,15 @@ func main() {
 		"CHATWOOT_HOST": chatwootHost,
 	}))
 
-	// Create handler metrics
+	// Create handler metrics. The CreateConversation gRPC method is
+	// already covered by grpc_requests_total{method="CreateConversation"};
+	// a separate conversations_created_total counter would only rename
+	// the same axis.
 	handlerMetrics := &handlers.Metrics{
-		WebhooksReceived:     metricsCollector.NewCounter("webhooks_received_total", "Chatwoot webhooks received", []string{"event_type"}),
-		EnrichmentCalls:      metricsCollector.NewCounter("enrichment_calls_total", "Enrichment service calls", []string{"service", "status"}),
-		ChatwootAPICalls:     metricsCollector.NewCounter("chatwoot_api_calls_total", "Chatwoot API calls", []string{"endpoint", "status"}),
-		MessagesSent:         metricsCollector.NewCounter("messages_sent_total", "Messages sent via gRPC", []string{"status"}),
-		ConversationsCreated: metricsCollector.NewCounter("conversations_created_total", "Conversations created", []string{"status"}),
+		WebhooksReceived: metricsCollector.NewCounter("webhooks_received_total", "Chatwoot webhooks received", []string{"event_type"}),
+		EnrichmentCalls:  metricsCollector.NewCounter("enrichment_calls_total", "Enrichment service calls", []string{"service", "status"}),
+		ChatwootAPICalls: metricsCollector.NewCounter("chatwoot_api_calls_total", "Chatwoot API calls", []string{"endpoint", "status"}),
+		MessagesSent:     metricsCollector.NewCounter("messages_sent_total", "Messages sent via gRPC", []string{"status"}),
 	}
 
 	// Create gRPC server metrics

@@ -139,3 +139,36 @@ func TestRenderCaddyfile_MistAdminReverseProxiesToHelmsman(t *testing.T) {
 		t.Errorf("admin handle must not proxy directly to mistserver; got body:\n%s", body)
 	}
 }
+
+func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
+	out, err := RenderCaddyfile(baseParams())
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	if !strings.Contains(out, "handle_path /view/* {") {
+		t.Fatalf("expected /view route to strip prefix before proxying to Mist; got:\n%s", out)
+	}
+	if strings.Contains(out, "handle /view/* {") {
+		t.Fatalf("must not preserve /view prefix when proxying to Mist; got:\n%s", out)
+	}
+	if !strings.Contains(out, "header_up X-Mst-Path {scheme}://{host}/view/") {
+		t.Fatalf("expected X-Mst-Path public base header for Mist; got:\n%s", out)
+	}
+}
+
+func TestRenderCaddyfile_MediaRoutesExposeCorsHeaders(t *testing.T) {
+	out, err := RenderCaddyfile(baseParams())
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+
+	if count := strings.Count(out, "Access-Control-Allow-Origin \"*\""); count < 2 {
+		t.Fatalf("expected CORS headers on /assets and /view routes, got %d occurrences:\n%s", count, out)
+	}
+	for _, want := range []string{"respond @assets_options \"\" 204", "respond @view_options \"\" 204"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected CORS preflight response %q; got:\n%s", want, out)
+		}
+	}
+}

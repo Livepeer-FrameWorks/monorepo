@@ -212,14 +212,13 @@ func mapToProtoStruct(m map[string]any) *structpb.Struct {
 	return s
 }
 
-// ServerMetrics holds Prometheus metrics for the gRPC server
+// ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
+// counts + duration come from GRPCMetricsInterceptor; per-domain operation
+// counters were removed because their {operation} label maps 1:1 to the
+// gRPC method already exposed on {method}.
 type ServerMetrics struct {
-	BillingOperations      *prometheus.CounterVec
-	UsageOperations        *prometheus.CounterVec
-	SubscriptionOperations *prometheus.CounterVec
-	InvoiceOperations      *prometheus.CounterVec
-	GRPCRequests           *prometheus.CounterVec
-	GRPCDuration           *prometheus.HistogramVec
+	GRPCRequests *prometheus.CounterVec
+	GRPCDuration *prometheus.HistogramVec
 }
 
 type stripeBillingClient interface {

@@ -88,11 +88,12 @@ func validateBehavior(req botProtectionRequest) bool {
 	return true
 }
 
-// ServerMetrics holds Prometheus metrics for the gRPC server
+// ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
+// request count + duration are captured by GRPCMetricsInterceptor and
+// emitted on the GRPCRequests / GRPCDuration vectors below.
 type ServerMetrics struct {
-	AuthOperations   *prometheus.CounterVec
-	AuthDuration     *prometheus.HistogramVec
-	StreamOperations *prometheus.CounterVec
+	GRPCRequests *prometheus.CounterVec
+	GRPCDuration *prometheus.HistogramVec
 }
 
 // CommodoreServer implements the Commodore gRPC services
@@ -7915,8 +7916,15 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 		},
 	})
 
+	// GRPCMetricsInterceptor sits outermost so Unauthenticated /
+	// PermissionDenied rejections from authInterceptor still show up in
+	// commodore_grpc_requests_total.
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+		grpc.ChainUnaryInterceptor(
+			middleware.GRPCMetricsInterceptor(cfg.Metrics.GRPCRequests, cfg.Metrics.GRPCDuration),
+			unaryInterceptor(cfg.Logger),
+			authInterceptor,
+		),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,

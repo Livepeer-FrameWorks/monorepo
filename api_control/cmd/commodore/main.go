@@ -68,11 +68,13 @@ func main() {
 		"JWT_SECRET":   jwtSecret,
 	}))
 
-	// Create custom auth and stream metrics for gRPC server
+	// Per-method counters live on commodore_grpc_requests_total{method,status}
+	// produced by middleware.GRPCMetricsInterceptor (wired into the gRPC
+	// server below); separate auth_/stream_operations counters would just
+	// rename the same axis.
 	serverMetrics := &commodoregrpc.ServerMetrics{
-		AuthOperations:   metricsCollector.NewCounter("auth_operations_total", "Authentication operations", []string{"operation", "status"}),
-		AuthDuration:     metricsCollector.NewHistogram("auth_operation_duration_seconds", "Authentication operation duration", []string{"operation"}, nil),
-		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
+		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{

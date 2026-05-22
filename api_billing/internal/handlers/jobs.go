@@ -2775,6 +2775,9 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		if err != nil {
 			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
 		}
+		if metrics != nil && metrics.UsageRecords != nil {
+			metrics.UsageRecords.WithLabelValues(usageType).Inc()
+		}
 	}
 
 	return nil

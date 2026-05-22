@@ -255,6 +255,34 @@ func TestHandleGetAsset_CacheControl(t *testing.T) {
 	}
 }
 
+func TestHandleGetAsset_CORSHeaders(t *testing.T) {
+	fake := &fakeS3{data: []byte("data")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	w := serveRequest(h, "/assets/stream123/sprite.vtt")
+
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("expected wildcard CORS origin, got %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, "Content-Range") {
+		t.Fatalf("expected range headers exposed, got %q", got)
+	}
+}
+
+func TestHandleAssetOptionsReturnsCORSPreflight(t *testing.T) {
+	fake := &fakeS3{data: []byte("data")}
+	h, _, _, _ := newTestHandler(fake, "")
+
+	w := serveMethodRequest(h, http.MethodOptions, "/assets/stream123/sprite.vtt")
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "OPTIONS") {
+		t.Fatalf("expected OPTIONS in allow methods, got %q", got)
+	}
+}
+
 func TestHandleGetAsset_SpriteCacheControl(t *testing.T) {
 	fake := &fakeS3{data: []byte("data")}
 	h, _, _, _ := newTestHandler(fake, "")

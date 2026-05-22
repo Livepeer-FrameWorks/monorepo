@@ -74,12 +74,16 @@ func main() {
 		"JWT_SECRET":      jwtSecret,
 	}))
 
-	// Create custom analytics query metrics (used by gRPC server)
+	// Per-RPC counts + duration come from GRPCMetricsInterceptor on the
+	// GRPCRequests / GRPCDuration vectors; a parallel analytics_queries
+	// counter where query_type maps 1:1 to the method would just rename
+	// the same axis. clickhouse_queries_total{table} would be meaningful
+	// (table != method) but every QueryContext call site is bespoke; wire
+	// it when there is a single chokepoint to instrument, not before.
 	serviceMetrics := &metrics.Metrics{
-		AnalyticsQueries:  metricsCollector.NewCounter("analytics_queries_total", "Analytics queries executed", []string{"query_type", "status"}),
-		QueryDuration:     metricsCollector.NewHistogram("analytics_query_duration_seconds", "Analytics query duration", []string{"query_type"}, nil),
-		ClickHouseQueries: metricsCollector.NewCounter("clickhouse_queries_total", "ClickHouse queries executed", []string{"table", "status"}),
-		CursorCollisions:  metricsCollector.NewCounter("analytics_cursor_collisions_total", "Cursor collisions detected during pagination", []string{"query"}),
+		CursorCollisions: metricsCollector.NewCounter("analytics_cursor_collisions_total", "Cursor collisions detected during pagination", []string{"query"}),
+		GRPCRequests:     metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:     metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
 	// Initialize and start scheduler for billing summarization (uses yugaDB for cursors)

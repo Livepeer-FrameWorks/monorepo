@@ -1,6 +1,10 @@
 package dns
 
-import "slices"
+import (
+	"net/url"
+	"slices"
+	"strings"
+)
 
 type Provider string
 
@@ -236,14 +240,52 @@ func GlobalRootServiceZoneLabels() []string {
 // ServiceFQDN resolves the service label under the supplied DNS scope. For media
 // services, pass the media cluster scope such as `ams.example.com`.
 func ServiceFQDN(serviceType, rootDomain string) (string, bool) {
+	rootDomain = NormalizeDomainScope(rootDomain)
 	subdomain, ok := PublicSubdomain(serviceType)
 	if !ok {
+		return "", false
+	}
+	if rootDomain == "" {
 		return "", false
 	}
 	if subdomain == "" {
 		return rootDomain, true
 	}
 	return subdomain + "." + rootDomain, true
+}
+
+// NormalizeDomainScope converts deployment base_url values into DNS scopes.
+// Quartermaster stores this value as operator-facing config, and older
+// manifests may include a scheme or path. Public DNS helpers need only the
+// hostname portion.
+func NormalizeDomainScope(raw string) string {
+	value := strings.Trim(strings.TrimSpace(raw), ".")
+	if value == "" {
+		return ""
+	}
+
+	parseHost := func(candidate string) string {
+		parsed, err := url.Parse(candidate)
+		if err != nil {
+			return ""
+		}
+		host := parsed.Hostname()
+		if host == "" {
+			return ""
+		}
+		return strings.Trim(strings.ToLower(host), ".")
+	}
+
+	if strings.Contains(value, "://") {
+		return parseHost(value)
+	}
+	if strings.HasPrefix(value, "//") {
+		return parseHost("https:" + value)
+	}
+	if host := parseHost("//" + value); host != "" {
+		return host
+	}
+	return strings.ToLower(value)
 }
 
 // ClusterSlug returns a DNS-safe slug for a cluster, preferring cluster_id and

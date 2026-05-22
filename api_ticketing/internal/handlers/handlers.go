@@ -12,11 +12,10 @@ import (
 
 // Metrics holds Prometheus metrics for the handlers
 type Metrics struct {
-	WebhooksReceived     *prometheus.CounterVec
-	EnrichmentCalls      *prometheus.CounterVec
-	ChatwootAPICalls     *prometheus.CounterVec
-	MessagesSent         *prometheus.CounterVec
-	ConversationsCreated *prometheus.CounterVec
+	WebhooksReceived *prometheus.CounterVec
+	EnrichmentCalls  *prometheus.CounterVec
+	ChatwootAPICalls *prometheus.CounterVec
+	MessagesSent     *prometheus.CounterVec
 }
 
 // Dependencies holds all external dependencies for handlers

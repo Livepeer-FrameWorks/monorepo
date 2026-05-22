@@ -80,11 +80,14 @@ func main() {
 		"JWT_SECRET":   jwtSecret,
 	}))
 
-	// Create custom billing metrics for HTTP handlers
+	// Create custom billing metrics for HTTP handlers. invoice_operations_total
+	// was declared but has no single lifecycle owner event in the code; the
+	// invoice UPSERT branches on a status column internally rather than going
+	// through distinct create/finalize/void/reissue entry points, so adding
+	// it would only ever fire with one synthetic label combination. Drop.
 	handlerMetrics := &handlers.PurserMetrics{
 		BillingCalculations:      metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
 		UsageRecords:             metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
-		InvoiceOperations:        metricsCollector.NewCounter("invoice_operations_total", "Invoice operations", []string{"operation", "status"}),
 		WebhookSignatureFailures: metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
 	}
 
@@ -93,14 +96,13 @@ func main() {
 	// scrape time.
 	metricsCollector.RegisterDBStats(db)
 
-	// Create gRPC server metrics
+	// Per-method counts + duration are captured by GRPCMetricsInterceptor on
+	// the GRPCRequests / GRPCDuration vectors; separate per-domain counters
+	// (billing/usage/subscription/invoice) where the operation label maps 1:1
+	// to a gRPC method would only rename the same axis.
 	serverMetrics := &pursergrpc.ServerMetrics{
-		BillingOperations:      metricsCollector.NewCounter("grpc_billing_operations_total", "gRPC billing operations", []string{"operation", "status"}),
-		UsageOperations:        metricsCollector.NewCounter("grpc_usage_operations_total", "gRPC usage operations", []string{"operation", "status"}),
-		SubscriptionOperations: metricsCollector.NewCounter("grpc_subscription_operations_total", "gRPC subscription operations", []string{"operation", "status"}),
-		InvoiceOperations:      metricsCollector.NewCounter("grpc_invoice_operations_total", "gRPC invoice operations", []string{"operation", "status"}),
-		GRPCRequests:           metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:           metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)

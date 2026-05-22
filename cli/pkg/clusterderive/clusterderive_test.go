@@ -29,6 +29,11 @@ func TestWildcardBundleDomains(t *testing.T) {
 			want:       []string{"frameworks.network", "*.frameworks.network"},
 		},
 		{
+			name:       "normalizes URL input",
+			rootDomain: "https://frameworks.network/",
+			want:       []string{"frameworks.network", "*.frameworks.network"},
+		},
+		{
 			name:       "empty input",
 			rootDomain: "",
 			want:       nil,
@@ -151,5 +156,28 @@ func TestMediaClusterIDsFiltersCoreClusters(t *testing.T) {
 	want := []string{"media-central-primary", "media-secondary"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("media clusters = %v, want %v", got, want)
+	}
+}
+
+func TestPublicServiceDomainsNormalizeRootDomain(t *testing.T) {
+	manifest := &inventory.Manifest{
+		RootDomain: "https://frameworks.network/",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Name: "Media EU 1", Type: "edge"},
+		},
+	}
+
+	if got := ClusterScopedRootDomain(manifest, "media-eu-1"); got != "media-eu-1.frameworks.network" {
+		t.Fatalf("ClusterScopedRootDomain = %q", got)
+	}
+	if got := PublicServiceRootDomain("bridge", manifest, "media-eu-1"); got != "frameworks.network" {
+		t.Fatalf("PublicServiceRootDomain bridge = %q", got)
+	}
+	domains, bundleID := AutoIngressDomainsForService("chandler", inventory.ServiceConfig{}, manifest, "media-eu-1")
+	if !slices.Equal(domains, []string{"chandler.media-eu-1.frameworks.network"}) {
+		t.Fatalf("AutoIngressDomainsForService domains = %v", domains)
+	}
+	if bundleID != "wildcard-media-eu-1-frameworks-network" {
+		t.Fatalf("AutoIngressDomainsForService bundleID = %q", bundleID)
 	}
 }

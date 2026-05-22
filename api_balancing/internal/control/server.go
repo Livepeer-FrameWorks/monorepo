@@ -75,7 +75,7 @@ func categorizeEnrollmentError(err error) bool {
 var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
 
 func platformRootDomain() string {
-	rootDomain := strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
+	rootDomain := pkgdns.NormalizeDomainScope(os.Getenv("BRAND_DOMAIN"))
 	if rootDomain == "" {
 		rootDomain = "frameworks.network"
 	}
@@ -839,7 +839,7 @@ func resolvePlatformChandlerBaseURL() string {
 		return ""
 	}
 
-	baseDomain := strings.TrimSpace(cluster.GetBaseUrl())
+	baseDomain := pkgdns.NormalizeDomainScope(cluster.GetBaseUrl())
 	if baseDomain == "" {
 		return ""
 	}
@@ -2769,7 +2769,7 @@ func edgeTelemetryWriteURL(clusterID string) string {
 			if slug := pkgdns.ClusterSlug(clusterID, cluster.GetClusterName()); slug != "" {
 				clusterSlug = slug
 			}
-			if baseURL := strings.TrimSpace(cluster.GetBaseUrl()); baseURL != "" {
+			if baseURL := pkgdns.NormalizeDomainScope(cluster.GetBaseUrl()); baseURL != "" {
 				rootDomain = baseURL
 			}
 		}
@@ -7255,7 +7255,7 @@ func getChandlerBaseURLForCluster(clusterID string) string {
 	if err != nil || cluster == nil {
 		return ""
 	}
-	baseDomain := strings.TrimSpace(cluster.GetBaseUrl())
+	baseDomain := pkgdns.NormalizeDomainScope(cluster.GetBaseUrl())
 	if baseDomain == "" {
 		return ""
 	}

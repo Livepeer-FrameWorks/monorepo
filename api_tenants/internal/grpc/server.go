@@ -3191,6 +3191,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		}
 	}
 
+	baseURL := dns.NormalizeDomainScope(req.GetBaseUrl())
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (id, cluster_id, cluster_name, cluster_type, deployment_model,
 		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
@@ -3199,7 +3200,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		                                                   allow_private_pull_sources, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $17, $17)
 	`, id, clusterID, req.GetClusterName(), clusterType, deploymentModel,
-		ownerTenantID, req.GetBaseUrl(),
+		ownerTenantID, baseURL,
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
 		isPlatformOfficial, isDefaultCluster, allowPrivatePullSources, now)
@@ -3284,7 +3285,7 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	}
 	if req.BaseUrl != nil {
 		updates = append(updates, fmt.Sprintf("base_url = $%d", argIdx))
-		args = append(args, *req.BaseUrl)
+		args = append(args, dns.NormalizeDomainScope(*req.BaseUrl))
 		argIdx++
 	}
 	if req.HealthStatus != nil {
@@ -5056,10 +5057,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 // cluster — so this is computed at lookup time rather than stored as static
 // service_instances metadata.
 func synthesizePublicHost(serviceType, clusterID, clusterName, baseURL string) string {
-	root := strings.TrimSpace(baseURL)
-	root = strings.TrimPrefix(root, "https://")
-	root = strings.TrimPrefix(root, "http://")
-	root = strings.TrimSuffix(root, "/")
+	root := dns.NormalizeDomainScope(baseURL)
 	if root == "" {
 		return ""
 	}
@@ -10564,14 +10562,11 @@ type GRPCServerConfig struct {
 	AdvertiseGRPCAddr string
 }
 
-// ServerMetrics holds Prometheus metrics for the gRPC server
+// ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
+// counts + duration come from GRPCMetricsInterceptor.
 type ServerMetrics struct {
-	TenantOperations  *prometheus.CounterVec
-	ClusterOperations *prometheus.CounterVec
-	NodeOperations    *prometheus.CounterVec
-	ServiceOperations *prometheus.CounterVec
-	GRPCRequests      *prometheus.CounterVec
-	GRPCDuration      *prometheus.HistogramVec
+	GRPCRequests *prometheus.CounterVec
+	GRPCDuration *prometheus.HistogramVec
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster
