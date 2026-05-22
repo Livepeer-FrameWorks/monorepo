@@ -1,17 +1,11 @@
 version: 2
 updates:
-  # Go modules - shared pkg (root dependency for all services)
-  - package-ecosystem: gomod
-    directory: /pkg
-    schedule:
-      interval: weekly
-    groups:
-      go-deps:
-        patterns: ["*"]
-
-  # Go modules - all API services
+  # Go modules - keep the workspace together. Service modules use
+  # replace ../pkg, so pkg dependency bumps can require service go.sum
+  # updates even when service go.mod files do not change directly.
   - package-ecosystem: gomod
     directories:
+      - /pkg
       - /api_analytics_ingest
       - /api_analytics_query
       - /api_assets
@@ -28,21 +22,14 @@ updates:
       - /api_sidecar
       - /api_tenants
       - /api_ticketing
-    schedule:
-      interval: weekly
-    groups:
-      go-service-deps:
-        patterns: ["*"]
-
-  # Go modules - CLI and scripts
-  - package-ecosystem: gomod
-    directories:
       - /cli
       - /scripts/env
+      - /scripts/registry
+      - /tools/release-plan
     schedule:
       interval: weekly
     groups:
-      go-tooling-deps:
+      go-deps:
         patterns: ["*"]
 
   # Node/pnpm - root workspace
