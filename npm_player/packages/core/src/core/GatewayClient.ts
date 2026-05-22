@@ -15,8 +15,8 @@ import type { ContentEndpoints, ContentType, PlaybackAuth } from "../types";
 export type GatewayStatus = "idle" | "loading" | "ready" | "error";
 
 export interface GatewayClientConfig {
-  /** Gateway GraphQL endpoint URL */
-  gatewayUrl: string;
+  /** Gateway GraphQL endpoint URL. Defaults to the official FrameWorks Gateway. */
+  gatewayUrl?: string;
   /** Content identifier (stream name) */
   contentId: string;
   /** Optional content type (no longer required for resolution) */
@@ -44,6 +44,7 @@ export interface GatewayClientEvents {
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_INITIAL_DELAY_MS = 500;
+export const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
 // F2: Cache TTL for resolved endpoints
 const DEFAULT_CACHE_TTL_MS = 10000;
 // F3: Circuit breaker constants
@@ -111,7 +112,6 @@ async function fetchWithRetry(
  * @example
  * ```typescript
  * const client = new GatewayClient({
- *   gatewayUrl: 'https://gateway.example.com/graphql',
  *   contentId: 'pk_...', // playbackId (view key)
  * });
  *
@@ -290,7 +290,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     this.abort();
 
     const {
-      gatewayUrl,
+      gatewayUrl: configuredGatewayUrl,
       contentId,
       authToken,
       playbackAuth,
@@ -298,9 +298,11 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
     } = this.config;
 
+    const gatewayUrl = configuredGatewayUrl?.trim() || DEFAULT_GATEWAY_URL;
+
     // Validate required params
-    if (!gatewayUrl || !contentId) {
-      const error = "Missing required parameters: gatewayUrl or contentId";
+    if (!contentId) {
+      const error = "Missing required parameter: contentId";
       this.setStatus("error", error);
       throw new Error(error);
     }

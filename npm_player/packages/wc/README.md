@@ -21,13 +21,7 @@ import "@livepeer-frameworks/player-wc/define";
 ```
 
 ```html
-<fw-player
-  content-id="pk_..."
-  content-type="live"
-  gateway-url="https://your-bridge/graphql"
-  autoplay
-  muted
-></fw-player>
+<fw-player content-id="pk_..." content-type="live" autoplay muted></fw-player>
 ```
 
 ### Class import (no auto-registration)
@@ -46,7 +40,8 @@ import { FwPlayer } from "@livepeer-frameworks/player-wc";
 
 Notes:
 
-- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
+- The player uses the official FrameWorks Gateway by default. Override `gateway-url` only for a fully
+  self-hosted control plane or local Gateway preview.
 
 ### Direct MistServer Node (mistUrl)
 
@@ -64,7 +59,7 @@ Notes:
 | ---------------- | --------- | -------- | --------------------------------------- |
 | `content-id`     | `string`  | `""`     | Playback ID                             |
 | `content-type`   | `string`  | —        | `"live"` · `"dvr"` · `"clip"` · `"vod"` |
-| `gateway-url`    | `string`  | —        | Gateway GraphQL endpoint                |
+| `gateway-url`    | `string`  | Official | Gateway GraphQL endpoint override       |
 | `mist-url`       | `string`  | —        | Direct MistServer endpoint              |
 | `auth-token`     | `string`  | —        | Auth token                              |
 | `autoplay`       | `boolean` | `true`   | Auto-start playback                     |

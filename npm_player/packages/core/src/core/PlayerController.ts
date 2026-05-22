@@ -9,7 +9,7 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
-import { GatewayClient } from "./GatewayClient";
+import { DEFAULT_GATEWAY_URL, GatewayClient } from "./GatewayClient";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
 import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
@@ -99,7 +99,7 @@ export interface PlayerControllerConfig {
   /** Pre-resolved endpoints (skip gateway) */
   endpoints?: ContentEndpoints;
 
-  /** Gateway URL (for FrameWorks Gateway resolution) */
+  /** Gateway URL (for FrameWorks Gateway resolution). Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
   /** Direct MistServer base URL (bypasses Gateway, fetches json_{contentId}.js directly) */
   mistUrl?: string;
@@ -590,7 +590,6 @@ export function buildStreamInfoFromEndpoints(
  * const controller = new PlayerController({
  *   contentId: 'pk_...', // playbackId (view key)
  *   contentType: 'live',
- *   gatewayUrl: 'https://gateway.example.com/graphql',
  * });
  *
  * controller.on('stateChange', ({ state }) => console.log('State:', state));
@@ -2749,12 +2748,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     // Priority 3: Gateway resolution
-    if (gatewayUrl) {
-      await this.resolveFromGateway(gatewayUrl, contentId, authToken);
-      return;
-    }
-
-    throw new Error("No endpoints provided and no gatewayUrl or mistUrl configured");
+    await this.resolveFromGateway(gatewayUrl?.trim() || DEFAULT_GATEWAY_URL, contentId, authToken);
   }
 
   /**

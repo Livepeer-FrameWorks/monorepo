@@ -24,14 +24,14 @@ npm i @livepeer-frameworks/player-svelte
     contentType="live"
     contentId="pk_..."
     // playbackId
-    options={{ gatewayUrl: "https://your-bridge/graphql" }}
   />
 </div>
 ```
 
 Notes:
 
-- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
+- The player uses the official FrameWorks Gateway by default. Override `gatewayUrl` only for a fully
+  self-hosted control plane or local Gateway preview.
 
 ### Direct MistServer Node (mistUrl)
 

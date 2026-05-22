@@ -136,11 +136,7 @@ Use `playbackId` with the FrameWorks Player or raw `/play` URLs:
 ```tsx
 import { Player } from "@livepeer-frameworks/player-react";
 
-<Player
-  contentType="live"
-  contentId="<PLAYBACK_ID>"
-  options={{ gatewayUrl: "%GATEWAY_URL%/graphql", autoplay: true, muted: true }}
-/>;
+<Player contentType="live" contentId="<PLAYBACK_ID>" options={{ autoplay: true, muted: true }} />;
 ```
 
 ```bash

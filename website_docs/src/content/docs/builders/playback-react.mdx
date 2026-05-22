@@ -27,7 +27,6 @@ function LiveStream() {
       contentType="live"
       contentId="<YOUR_PLAYBACK_ID>"
       options={{
-        gatewayUrl: "%GATEWAY_URL%/graphql",
         autoplay: true,
         muted: true,
       }}
@@ -36,9 +35,10 @@ function LiveStream() {
 }
 ```
 
-The `gatewayUrl` request runs in the viewer's browser, so Foghorn routes from that viewer's IP. For
-backend-generated playback URLs or custom players that do not use this component, use the dashboard
-playback DNS URL directly.
+The player resolves through the official FrameWorks Gateway from the viewer's browser, so Foghorn
+routes from that viewer's IP. Set `gatewayUrl` only for a fully self-hosted control plane or local
+Gateway preview. For backend-generated playback URLs or custom players that do not use this
+component, use the dashboard playback DNS URL directly.
 
 ### Direct MistServer Node
 
@@ -53,8 +53,8 @@ playback DNS URL directly.
 ### DVR and Clips
 
 ```tsx
-<Player contentType="dvr" contentId="pk_..." options={{ gatewayUrl: "..." }} />
-<Player contentType="clip" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+<Player contentType="dvr" contentId="pk_..." />
+<Player contentType="clip" contentId="pk_..." />
 ```
 
 ## Composable Controls
@@ -76,7 +76,7 @@ import {
 
 function CustomPlayer() {
   return (
-    <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+    <Player contentId="pk_..." contentType="live">
       <ControlBar>
         <PlayButton />
         <SkipButton direction="back" />
@@ -118,7 +118,6 @@ function FullyCustomPlayer() {
   const { containerRef, state, controller } = usePlayerController({
     contentId: "pk_...",
     contentType: "live",
-    gatewayUrl: "%GATEWAY_URL%/graphql",
     autoplay: true,
     muted: true,
   });
@@ -170,7 +169,7 @@ function FullyCustomPlayer() {
 | `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type (affects presets and UI)                                                             |
 | `endpoints`              | `ContentEndpoints`                                   | Advanced: pass pre-resolved endpoints                                                             |
 | `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                          |
-| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint                                                                          |
+| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                 |
 | `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                        |
 | `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                       |
 | `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports |
@@ -190,7 +189,6 @@ function FullyCustomPlayer() {
 <Player
   contentId="pk_..."
   contentType="live"
-  options={{ gatewayUrl: "..." }}
   onStateChange={(state, context) => {
     // States: booting, gateway_loading, gateway_ready, gateway_error,
     //         no_endpoint, selecting_player, connecting, buffering,
@@ -215,11 +213,7 @@ LL-HLS and DASH are served from MistServer's CMAF output (`/play/{id}/cmaf/index
 `/play/{id}/cmaf/index.mpd`) on every helmsman-managed edge.
 
 ```tsx
-<Player
-  contentId="pk_..."
-  contentType="live"
-  options={{ gatewayUrl: "...", playbackMode: "low-latency" }}
-/>
+<Player contentId="pk_..." contentType="live" options={{ playbackMode: "low-latency" }} />
 ```
 
 ### Runtime Protocol Overrides
@@ -228,7 +222,6 @@ LL-HLS and DASH are served from MistServer's CMAF output (`/play/{id}/cmaf/index
 const { setDevModeOptions } = usePlayerController({
   contentId: "pk_...",
   contentType: "live",
-  gatewayUrl: "...",
 });
 
 void setDevModeOptions({ forceType: "whep" });

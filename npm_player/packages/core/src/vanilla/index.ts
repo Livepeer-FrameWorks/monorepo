@@ -9,7 +9,6 @@
  * const player = createPlayer({
  *   target: '#player',
  *   contentId: 'my-stream',
- *   gatewayUrl: 'https://gateway.example.com/graphql',
  * });
  * ```
  */

@@ -27,7 +27,6 @@ const player = createPlayer({
   target: "#player",
   contentId: "my-stream",
   contentType: "live",
-  gatewayUrl: "%GATEWAY_URL%/graphql",
   theme: "dracula",
   autoplay: true,
   muted: true,
@@ -54,9 +53,10 @@ const unsub = player.subscribe.on("volume", (v) => console.log("Volume:", v));
 player.destroy();
 ```
 
-When `gatewayUrl` is set, the resolve request should run in the viewer's browser or playback
-device. If you are generating URLs on a backend or building a player that will not call Gateway from
-the viewer, use the dashboard playback DNS URL directly.
+By default, resolution runs through the official FrameWorks Gateway from the viewer's browser or
+playback device. Set `gatewayUrl` only for a fully self-hosted control plane or local Gateway
+preview. If you are generating URLs on a backend or building a player that will not call Gateway
+from the viewer, use the dashboard playback DNS URL directly.
 
 ## Queries (Read State)
 
@@ -172,7 +172,6 @@ import "@livepeer-frameworks/player-core/player.css";
 const player = new FrameWorksPlayer("#player", {
   contentId: "<YOUR_PLAYBACK_ID>",
   contentType: "live",
-  gatewayUrl: "%GATEWAY_URL%/graphql",
   autoplay: true,
   muted: true,
   onStateChange: (state) => console.log("State:", state),
@@ -208,7 +207,6 @@ onMounted(async () => {
     player = new FrameWorksPlayer(container.value, {
       contentId: "<YOUR_PLAYBACK_ID>",
       contentType: "live",
-      gatewayUrl: "%GATEWAY_URL%/graphql",
       autoplay: true,
       muted: true,
     });
@@ -245,7 +243,7 @@ if (player.capabilities.qualitySelection) player.selectQuality("720p");
 | `target`         | `string \| HTMLElement`             | —           | Container                                                                   |
 | `contentId`      | `string`                            | —           | Playback ID                                                                 |
 | `contentType`    | `string`                            | `"live"`    | Content type                                                                |
-| `gatewayUrl`     | `string`                            | —           | Gateway GraphQL endpoint                                                    |
+| `gatewayUrl`     | `string`                            | Official    | Gateway GraphQL endpoint override                                           |
 | `mistUrl`        | `string`                            | —           | Direct MistServer URL                                                       |
 | `endpoints`      | `ContentEndpoints`                  | —           | Pre-resolved endpoints                                                      |
 | `autoplay`       | `boolean`                           | `true`      | Auto-start                                                                  |

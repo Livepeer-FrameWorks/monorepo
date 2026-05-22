@@ -7,8 +7,10 @@
 import { writable, derived, type Readable } from "svelte/store";
 import type { ContentEndpoints, ContentType } from "@livepeer-frameworks/player-core";
 
+const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
+
 export interface ViewerEndpointsOptions {
-  gatewayUrl: string;
+  gatewayUrl?: string;
   contentId: string;
   contentType?: ContentType;
   authToken?: string;
@@ -80,7 +82,6 @@ const initialState: ViewerEndpointsState = {
  *   import { createEndpointResolver } from './stores/viewerEndpoints';
  *
  *   const resolver = createEndpointResolver({
- *     gatewayUrl: 'https://gateway.example.com/graphql',
  *     contentType: 'live',
  *     contentId: 'pk_...',
  *   });
@@ -91,7 +92,8 @@ const initialState: ViewerEndpointsState = {
  * ```
  */
 export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerEndpointsStore {
-  const { gatewayUrl, contentType, contentId, authToken } = options;
+  const { gatewayUrl, contentId, authToken } = options;
+  const effectiveGatewayUrl = gatewayUrl?.trim() || DEFAULT_GATEWAY_URL;
 
   const store = writable<ViewerEndpointsState>(initialState);
   let abortController: AbortController | null = null;
@@ -101,7 +103,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
    * Fetch endpoints from Gateway
    */
   async function fetchEndpoints() {
-    if (!gatewayUrl || !contentId || !mounted) return;
+    if (!contentId || !mounted) return;
 
     // Abort previous request
     abortController?.abort();
@@ -110,7 +112,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
     store.update((s) => ({ ...s, status: "loading", error: null }));
 
     try {
-      const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
+      const graphqlEndpoint = effectiveGatewayUrl.replace(/\/$/, "");
       const query = `
         query ResolveViewer($contentId: String!) {
           resolveViewerEndpoint(contentId: $contentId) {
@@ -197,7 +199,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
   }
 
   // Auto-fetch on creation if params are valid
-  if (gatewayUrl && contentType && contentId) {
+  if (contentId) {
     fetchEndpoints();
   }
 

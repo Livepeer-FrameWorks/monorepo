@@ -12,7 +12,6 @@
  * const player = new FrameWorksPlayer('#player', {
  *   contentId: 'pk_...',
  *   contentType: 'live',
- *   gatewayUrl: 'https://gateway.example.com/graphql',
  *   onStateChange: (state) => console.log('State:', state),
  * });
  *
@@ -50,7 +49,7 @@ export interface FrameWorksPlayerOptions {
   /** Pre-resolved endpoints (skip gateway) */
   endpoints?: ContentEndpoints;
 
-  /** Gateway URL (required if endpoints not provided) */
+  /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
   /** Auth token for Gateway GraphQL resolution */
   authToken?: string;

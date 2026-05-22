@@ -29,16 +29,16 @@ npm install @livepeer-frameworks/player-svelte
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
   options={{
-    gatewayUrl: "%GATEWAY_URL%/graphql",
     autoplay: true,
     muted: true,
   }}
 />
 ```
 
-The `gatewayUrl` request runs in the viewer's browser, so Foghorn routes from that viewer's IP. For
-backend-generated playback URLs or custom players that do not use this component, use the dashboard
-playback DNS URL directly.
+The player resolves through the official FrameWorks Gateway from the viewer's browser, so Foghorn
+routes from that viewer's IP. Set `gatewayUrl` only for a fully self-hosted control plane or local
+Gateway preview. For backend-generated playback URLs or custom players that do not use this
+component, use the dashboard playback DNS URL directly.
 
 ### Direct MistServer Node
 
@@ -53,8 +53,8 @@ playback DNS URL directly.
 ### DVR and Clips
 
 ```svelte
-<Player contentType="dvr" contentId="pk_..." options={{ gatewayUrl: "..." }} />
-<Player contentType="clip" contentId="pk_..." options={{ gatewayUrl: "..." }} />
+<Player contentType="dvr" contentId="pk_..." />
+<Player contentType="clip" contentId="pk_..." />
 ```
 
 ## Composable Controls
@@ -76,7 +76,7 @@ Pass a `children` snippet to replace the default controls:
   import "@livepeer-frameworks/player-svelte/player.css";
 </script>
 
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live">
   {#snippet children()}
     <div class="my-controls">
       <PlayButton />
@@ -150,7 +150,7 @@ Then use it as children:
   import CustomControls from "./CustomControls.svelte";
 </script>
 
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live">
   {#snippet children()}
     <CustomControls />
   {/snippet}
@@ -197,7 +197,7 @@ The context object from `getContext("fw-player-controller")` provides:
 | `endpoints`              | `ContentEndpoints`                                   | Pre-resolved endpoints                                                                               |
 | `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                             |
 | `options`                | `PlayerOptions`                                      | Configuration options                                                                                |
-| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint                                                                             |
+| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                    |
 | `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                           |
 | `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                          |
 | `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports    |

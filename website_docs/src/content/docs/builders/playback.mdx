@@ -7,10 +7,11 @@ import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
 Playback options: drop-in components across React, Svelte, and Web Components, or raw protocol URLs for HLS, LL-HLS, DASH, WebRTC/WHEP, Mist WebRTC, MP4, WebM/MKV, AAC, TS, H264, WebSocket outputs, and direct RTMP/RTSP/SRT/DTSC when exposed.
 
-<Aside type="note" title="Self-hosted delivery">
-  Self-hosted operators serve streams from their own edge nodes. The same protocols and player work
-  — use your **Gateway GraphQL endpoint** for the player, and your **Foghorn /play** base URL for
-  direct protocol URLs.
+<Aside type="note" title="Default Gateway">
+  Player SDKs use the official FrameWorks Gateway by default. Set `gatewayUrl` only for a fully
+  self-hosted control plane or local development. Direct protocol URLs use the playback base URL;
+  paid tenants can use a tenant playback domain that geo-balances across subscribed
+  platform-official, private, and marketplace clusters.
 </Aside>
 
 ## Packages
@@ -86,39 +87,42 @@ import { Player } from "@livepeer-frameworks/player-react";
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
   options={{
-    gatewayUrl: "%GATEWAY_URL%/graphql",
     autoplay: true,
     muted: true,
   }}
 />;
 ```
 
-<Aside type="note" title="No default gateway">
-  Outside the FrameWorks dashboard, there is **no default gateway**. Provide `gatewayUrl` (GraphQL
-  endpoint) unless you pass `endpoints` or `mistUrl`. See [Source Resolution
-  Modes](/builders/playback-advanced/#source-resolution-modes) for when to use each option.
+<Aside type="note" title="Gateway override">
+  The default resolves through the official FrameWorks Gateway. Override `gatewayUrl` for a fully
+  self-hosted Gateway or a local preview environment. You can still bypass Gateway resolution with
+  `endpoints` or `mistUrl`; see [Source Resolution
+  Modes](/builders/playback-advanced/#source-resolution-modes).
 </Aside>
 
 ## Where to Resolve From
 
 Call `resolveViewerEndpoint` from the viewer's browser or playback device when you want geographic
-routing to reflect that viewer. The FrameWorks player does this for you when you provide
-`gatewayUrl`: the browser calls Gateway GraphQL, Gateway forwards the request IP to Foghorn, and
-Foghorn uses that IP for GeoIP and edge scoring.
+routing to reflect that viewer. The FrameWorks player does this for you: the browser calls Gateway
+GraphQL, Gateway forwards the request IP to Foghorn, and Foghorn uses that IP for GeoIP and edge
+scoring.
 
 Do not call `resolveViewerEndpoint` from your application backend unless you intentionally want
 routing based on the backend's IP address. Backend-side resolution cannot know where the final
 viewer is unless your infrastructure preserves and trusts the viewer IP all the way to Gateway.
 
-For custom players that do not use the FrameWorks player, use the playback DNS name directly:
+For custom players that do not use the FrameWorks player, use the playback DNS name directly. Paid
+tenants should prefer their tenant playback domain:
 
 ```bash
 https://foghorn.{tenant}.cdn.{base}/play/{playback-id}/hls/index.m3u8
 ```
 
-If a tenant alias is not available, use the global root playback domain, then the cluster-concrete
-Foghorn domain shown in the dashboard. HTTP playback URLs can go through `/play` because Foghorn can
-return JSON or issue a 307 redirect from the viewer's request.
+That tenant domain spans every subscribed delivery pool: FrameWorks platform-official clusters,
+private clusters, and marketplace clusters. If a tenant alias is not available, use the global root
+playback domain, then the cluster-concrete Foghorn domain shown in the dashboard. HTTP playback URLs
+can go through `/play` because Foghorn can return JSON or issue a 307 redirect from the viewer's
+request.
 
 ## Universal Playback URLs (`/play`)
 
@@ -192,7 +196,7 @@ See [Recordings, Clips & VOD](/builders/recordings#archive-chapters) and
 In multi-cluster deployments, Foghorn handles cross-cluster routing transparently. When a viewer requests a stream from a remote cluster, Foghorn arranges origin-pull replication or redirects via HTTP 307.
 
 The player SDK handles this automatically when it runs in the viewer's browser or playback device:
-`gatewayUrl` resolves to the correct Foghorn for that viewer's region.
+Gateway resolution returns the right Foghorn-backed edge endpoints for that viewer's region.
 
 ## Using Other Players
 

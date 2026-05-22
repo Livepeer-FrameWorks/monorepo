@@ -15,7 +15,6 @@
  * const player = createPlayer({
  *   target: '#player',
  *   contentId: 'my-stream',
- *   gatewayUrl: 'https://gateway.example.com/graphql',
  * });
  *
  * // Queries (getters)
@@ -79,7 +78,7 @@ export interface CreatePlayerConfig {
   /** Pre-resolved endpoints (skip gateway) */
   endpoints?: ContentEndpoints;
 
-  /** Gateway URL (for FrameWorks Gateway resolution) */
+  /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
   /** Direct MistServer base URL */
   mistUrl?: string;

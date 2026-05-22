@@ -39,7 +39,6 @@
 
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import type { LoadingPosterInfo } from "@livepeer-frameworks/player-core";
 
   interface Props {
     loadingPoster: LoadingPosterInfo | null;

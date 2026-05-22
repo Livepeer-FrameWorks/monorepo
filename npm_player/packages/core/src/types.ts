@@ -42,6 +42,7 @@ export interface PlayerStateContext {
 
 // FrameWorks Player options
 export interface PlayerOptions {
+  /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
   /** Direct MistServer base URL (e.g. "http://localhost:8080") - bypasses Gateway resolution */
   mistUrl?: string;

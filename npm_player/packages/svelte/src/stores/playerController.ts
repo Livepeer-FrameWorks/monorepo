@@ -249,7 +249,6 @@ function createInitialState(
  *   const playerStore = createPlayerControllerStore({
  *     contentId: 'pk_...',
  *     contentType: 'live',
- *     gatewayUrl: 'https://gateway.example.com/graphql',
  *   });
  *
  *   onMount(() => {

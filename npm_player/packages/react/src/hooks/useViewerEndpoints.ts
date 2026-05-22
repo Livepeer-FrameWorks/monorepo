@@ -4,9 +4,10 @@ import type { ContentEndpoints } from "../types";
 
 const MAX_RETRIES = 3;
 const INITIAL_DELAY_MS = 500;
+const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
 
 interface Params {
-  gatewayUrl: string;
+  gatewayUrl?: string;
   contentId: string;
   contentType?: ContentType;
   authToken?: string;
@@ -56,9 +57,10 @@ export function useViewerEndpoints({
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const effectiveGatewayUrl = gatewayUrl?.trim() || DEFAULT_GATEWAY_URL;
 
   useEffect(() => {
-    if (!gatewayUrl || !contentId) return;
+    if (!contentId) return;
     setStatus("loading");
     setError(null);
     abortRef.current?.abort();
@@ -67,7 +69,7 @@ export function useViewerEndpoints({
 
     (async () => {
       try {
-        const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
+        const graphqlEndpoint = effectiveGatewayUrl.replace(/\/$/, "");
         const query = `
           query ResolveViewer($contentId: String!) {
             resolveViewerEndpoint(contentId: $contentId) {
@@ -122,7 +124,7 @@ export function useViewerEndpoints({
     })();
 
     return () => ac.abort();
-  }, [gatewayUrl, contentId, authToken]);
+  }, [effectiveGatewayUrl, contentId, authToken]);
 
   return { endpoints, status, error };
 }

@@ -238,6 +238,7 @@
     controllerLiveEdge: 0,
     controllerCanSeek: false,
     controllerHasAudio: true,
+    autoplayStatus: null as "success" | "muted" | "failed" | null,
     thumbnailCues: [] as ThumbnailCue[],
     loadingPoster: null as LoadingPosterInfo | null,
     shouldShowLoadingPoster: false,
@@ -392,10 +393,8 @@
   );
 
   let waitingMessage = $derived(
-    options?.gatewayUrl
-      ? storeState.state === "gateway_loading"
-        ? $translatorStore("resolvingEndpoint")
-        : $translatorStore("waitingForStream")
+    storeState.state === "gateway_loading"
+      ? $translatorStore("resolvingEndpoint")
       : $translatorStore("waitingForStream")
   );
   let streamStateMessage = $derived(storeState.streamState?.message);

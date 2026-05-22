@@ -18,7 +18,7 @@
  * <Player
  *   contentId="pk_..."
  *   contentType="live"
- *   options={{ gatewayUrl: "https://gateway.example.com/graphql", devMode: true }}
+ *   options={{ devMode: true }}
  *   autoplay
  *   muted
  * />

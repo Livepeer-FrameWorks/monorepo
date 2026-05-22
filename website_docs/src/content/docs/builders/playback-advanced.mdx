@@ -43,7 +43,6 @@ registerSkin("mybrand", {
 const player = createPlayer({
   target: "#player",
   contentId: "pk_...",
-  gatewayUrl: "%GATEWAY_URL%/graphql",
   skin: "mybrand",
 });
 ```
@@ -56,7 +55,6 @@ Pass a `SkinDefinition` directly:
 const player = createPlayer({
   target: "#player",
   contentId: "pk_...",
-  gatewayUrl: "%GATEWAY_URL%/graphql",
   skin: {
     inherit: "default",
     blueprints: {
@@ -489,25 +487,31 @@ const stats = await player.getStats();
 
 ## Source Resolution Modes
 
-The player resolves playback sources through one of three modes, evaluated in priority order. The first one set wins.
+The player resolves playback sources through one of three modes, evaluated in priority order. The
+first one set wins. If you do not pass any resolution option, the player uses the official
+FrameWorks Gateway.
 
 | Priority | Option       | Resolution                                          | When to Use                                                                |
 | -------- | ------------ | --------------------------------------------------- | -------------------------------------------------------------------------- |
 | 1        | `endpoints`  | None — uses the endpoints as-is                     | You already have resolved edge node URLs from your own orchestration layer |
 | 2        | `mistUrl`    | Fetches Mist JSON metadata directly from MistServer | Standalone setups pointing at a known MistServer node                      |
-| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Production deployments with multi-node routing                             |
+| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Fully self-hosted control planes or local Gateway previews                 |
 
-### `gatewayUrl` (recommended for production)
+### Gateway Resolution (default)
 
-The Gateway resolves the best edge node for the viewer, returns structured endpoints, and handles failover across clusters.
-Resolve through Gateway from the viewer's browser or playback device. If your backend calls Gateway,
-Foghorn routes using the backend or proxy IP, not the final viewer's location.
+The official FrameWorks Gateway resolves the best edge node for the viewer, returns structured
+endpoints, and handles failover across clusters. Resolve through Gateway from the viewer's browser
+or playback device. If your backend calls Gateway, Foghorn routes using the backend or proxy IP, not
+the final viewer's location.
+
+Override `gatewayUrl` only when you run a fully self-hosted FrameWorks control plane or a local
+Gateway preview:
 
 ```ts
 createPlayer({
   target: "#player",
   contentId: "pk_abc123",
-  gatewayUrl: "%GATEWAY_URL%/graphql",
+  gatewayUrl: "https://bridge.selfhost.example/graphql",
 });
 ```
 

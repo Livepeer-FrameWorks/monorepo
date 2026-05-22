@@ -126,11 +126,7 @@ MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
 With the Player SDK, use `contentType="dvr"` for the live DVR window. The player enables seeking, skip, and speed controls within the active window:
 
 ```tsx
-<Player
-  contentType="dvr"
-  contentId="pk_dvr_..."
-  options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }}
-/>
+<Player contentType="dvr" contentId="pk_dvr_..." />
 ```
 
 ### Live Time-Shift
@@ -521,7 +517,7 @@ Track progress with the `liveVodLifecycle` subscription.
 Same URL pattern as all other content:
 
 ```tsx
-<Player contentType="vod" contentId="pk_..." options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
+<Player contentType="vod" contentId="pk_..." />
 ```
 
 ### Managing VOD Assets

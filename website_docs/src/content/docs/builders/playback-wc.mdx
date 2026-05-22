@@ -31,18 +31,13 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 ## Drop-in Element
 
 ```html
-<fw-player
-  content-type="live"
-  content-id="<YOUR_PLAYBACK_ID>"
-  gateway-url="%GATEWAY_URL%/graphql"
-  autoplay
-  muted
-></fw-player>
+<fw-player content-type="live" content-id="<YOUR_PLAYBACK_ID>" autoplay muted></fw-player>
 ```
 
-The `gateway-url` request runs in the viewer's browser, so Foghorn routes from that viewer's IP. For
-backend-generated playback URLs or custom players that do not use this element, use the dashboard
-playback DNS URL directly.
+The element resolves through the official FrameWorks Gateway from the viewer's browser, so Foghorn
+routes from that viewer's IP. Set `gateway-url` only for a fully self-hosted control plane or local
+Gateway preview. For backend-generated playback URLs or custom players that do not use this element,
+use the dashboard playback DNS URL directly.
 
 ### Direct MistServer Node
 
@@ -59,8 +54,8 @@ playback DNS URL directly.
 ### DVR and Clips
 
 ```html
-<fw-player content-type="dvr" content-id="pk_..." gateway-url="..."></fw-player>
-<fw-player content-type="clip" content-id="pk_..." gateway-url="..."></fw-player>
+<fw-player content-type="dvr" content-id="pk_..."></fw-player>
+<fw-player content-type="clip" content-id="pk_..."></fw-player>
 ```
 
 ## Custom Controls Mode
@@ -68,14 +63,7 @@ playback DNS URL directly.
 Provide your own controls via the `controls` slot. Access the controller for programmatic control:
 
 ```html
-<fw-player
-  id="player"
-  content-type="live"
-  content-id="pk_..."
-  gateway-url="..."
-  autoplay
-  muted
-></fw-player>
+<fw-player id="player" content-type="live" content-id="pk_..." autoplay muted></fw-player>
 
 <script>
   const player = document.getElementById("player");
@@ -98,7 +86,7 @@ Provide your own controls via the `controls` slot. Access the controller for pro
 Provide custom controls via the `controls` slot and call the player element's exposed controller:
 
 ```html
-<fw-player id="slot-player" content-id="pk_..." content-type="live" gateway-url="...">
+<fw-player id="slot-player" content-id="pk_..." content-type="live">
   <div slot="controls">
     <button type="button" data-action="play">Play/Pause</button>
     <button type="button" data-action="back">Back 10s</button>
@@ -131,7 +119,7 @@ import "@livepeer-frameworks/player-wc";
 ```
 
 ```html
-<fw-player id="my-player" content-id="pk_..." content-type="live" gateway-url="..."></fw-player>
+<fw-player id="my-player" content-id="pk_..." content-type="live"></fw-player>
 
 <div class="external-controls">
   <fw-play-button for="my-player"></fw-play-button>
@@ -159,7 +147,7 @@ import "@livepeer-frameworks/player-wc";
 | -------------------------- | --------------------- | ----------- | ----------------------------------------------------------------------------------------------------- |
 | `content-id`               | `string`              | —           | Playback ID                                                                                           |
 | `content-type`             | `string`              | `"live"`    | `live`, `dvr`, `clip`, or `vod`                                                                       |
-| `gateway-url`              | `string`              | —           | Gateway GraphQL endpoint                                                                              |
+| `gateway-url`              | `string`              | Official    | Gateway GraphQL endpoint override                                                                     |
 | `mist-url`                 | `string`              | —           | Direct MistServer URL                                                                                 |
 | `auth-token`               | `string`              | —           | Bearer token for Gateway GraphQL resolution                                                           |
 | `playback-token`           | `string`              | —           | Viewer JWT for playback access control                                                                |
@@ -196,7 +184,7 @@ Or use a preset:
 
 ```vue
 <template>
-  <fw-player :content-id="contentId" content-type="live" :gateway-url="gatewayUrl" autoplay muted />
+  <fw-player :content-id="contentId" content-type="live" autoplay muted />
 </template>
 
 <script setup>
@@ -204,7 +192,6 @@ import "@livepeer-frameworks/player-wc/define";
 import { ref } from "vue";
 
 const contentId = ref("pk_...");
-const gatewayUrl = ref("%GATEWAY_URL%/graphql");
 </script>
 ```
 
@@ -219,11 +206,5 @@ export class AppModule {}
 ```
 
 ```html
-<fw-player
-  [attr.content-id]="contentId"
-  content-type="live"
-  [attr.gateway-url]="gatewayUrl"
-  autoplay
-  muted
-></fw-player>
+<fw-player [attr.content-id]="contentId" content-type="live" autoplay muted></fw-player>
 ```

@@ -521,7 +521,7 @@ export class FwPlayer extends LitElement {
 
   private get _waitingMessage() {
     const s = this.pc.s;
-    if (this.gatewayUrl && s.state === "gateway_loading") {
+    if (s.state === "gateway_loading") {
       return this.pc.t("resolvingEndpoint");
     }
     return this.pc.t("waitingForStream");

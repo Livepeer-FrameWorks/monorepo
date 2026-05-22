@@ -4,7 +4,7 @@
  *
  * Usage:
  *   <script src="https://cdn.example.com/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
- *   <fw-player content-id="my-stream" gateway-url="https://..." muted autoplay></fw-player>
+ *   <fw-player content-id="my-stream" muted autoplay></fw-player>
  */
 import "./define.js";
 export { FwPlayer } from "./components/fw-player.js";

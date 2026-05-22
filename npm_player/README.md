@@ -43,7 +43,6 @@ const player = createPlayer({
   target: "#player",
   contentId: "my-stream",
   contentType: "live",
-  gatewayUrl: "https://gateway.example.com/graphql",
   theme: "dracula",
   autoplay: true,
   muted: true,
@@ -62,7 +61,6 @@ import "@livepeer-frameworks/player-react/player.css";
   contentId="my-stream"
   contentType="live"
   options={{
-    gatewayUrl: "https://gateway.example.com/graphql",
     autoplay: true,
     muted: true,
     theme: "tokyo-night",
@@ -82,7 +80,6 @@ import "@livepeer-frameworks/player-react/player.css";
   contentId="my-stream"
   contentType="live"
   options={{
-    gatewayUrl: "https://gateway.example.com/graphql",
     autoplay: true,
     muted: true,
     theme: "nord",
@@ -95,14 +92,7 @@ import "@livepeer-frameworks/player-react/player.css";
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
 
-<fw-player
-  content-id="my-stream"
-  content-type="live"
-  gateway-url="https://gateway.example.com/graphql"
-  theme="catppuccin"
-  autoplay
-  muted
-></fw-player>
+<fw-player content-id="my-stream" content-type="live" theme="catppuccin" autoplay muted></fw-player>
 ```
 
 ---
@@ -117,7 +107,6 @@ import { createPlayer } from "@livepeer-frameworks/player-core";
 const player = createPlayer({
   target: "#player",
   contentId: "stream-abc",
-  gatewayUrl: "https://gateway.example.com/graphql",
 });
 ```
 
@@ -256,7 +245,7 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 | `target`         | `string \| HTMLElement`                              | —           | Mount target (CSS selector or element)                |
 | `contentId`      | `string`                                             | —           | Stream or asset identifier                            |
 | `contentType`    | `string`                                             | `"live"`    | `live`, `dvr`, `clip`, or `vod`                       |
-| `gatewayUrl`     | `string`                                             | —           | FrameWorks Gateway GraphQL URL                        |
+| `gatewayUrl`     | `string`                                             | Official    | FrameWorks Gateway GraphQL URL override               |
 | `mistUrl`        | `string`                                             | —           | Direct MistServer base URL                            |
 | `endpoints`      | `ContentEndpoints`                                   | —           | Pre-resolved endpoints (skip gateway)                 |
 | `authToken`      | `string`                                             | —           | Bearer token for Gateway GraphQL resolution           |
@@ -275,23 +264,26 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 
 ### Source Resolution
 
-The player resolves playback sources through one of three modes. They are mutually exclusive — the first one set wins.
+The player resolves playback sources through one of three modes. They are mutually exclusive — the
+first one set wins. If none are set, the official FrameWorks Gateway is used.
 
 | Priority | Option       | Resolution                                          | When to Use                                                                       |
 | -------- | ------------ | --------------------------------------------------- | --------------------------------------------------------------------------------- |
 | 1        | `endpoints`  | None — uses the endpoints as-is                     | You already have resolved edge node URLs (e.g. from your own orchestration layer) |
 | 2        | `mistUrl`    | Fetches Mist JSON metadata directly from MistServer | Standalone / playground setups pointing at a known MistServer node                |
-| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Production deployments with multi-node routing                                    |
+| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Fully self-hosted control planes or local Gateway previews                        |
 
-**`gatewayUrl` (recommended for production)**
+**Gateway Resolution (default)**
 
-The Gateway resolves the best edge node for the viewer, returns structured endpoints, and handles failover across clusters. This is the standard path for the FrameWorks dashboard and self-hosted multi-node deployments.
+The official FrameWorks Gateway resolves the best edge node for the viewer, returns structured
+endpoints, and handles failover across clusters. Override `gatewayUrl` only when you run a fully
+self-hosted control plane or local Gateway preview.
 
 ```ts
 createPlayer({
   target: "#player",
   contentId: "pk_abc123",
-  gatewayUrl: "https://gateway.example.com/graphql",
+  gatewayUrl: "https://bridge.selfhost.example/graphql",
 });
 ```
 
@@ -490,7 +482,7 @@ import {
   SettingsMenu,
 } from "@livepeer-frameworks/player-react";
 
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live">
   <ControlBar>
     <PlayButton />
     <SkipButton direction="back" />
@@ -512,7 +504,6 @@ import { usePlayerController } from "@livepeer-frameworks/player-react";
 const { state, controller } = usePlayerController({
   contentId: "pk_...",
   contentType: "live",
-  gatewayUrl: "...",
 });
 ```
 
@@ -532,7 +523,7 @@ const { state, controller } = usePlayerController({
   } from "@livepeer-frameworks/player-svelte";
 </script>
 
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live">
   {#snippet children()}
     <PlayButton />
     <SkipButton direction="back" />
@@ -562,7 +553,7 @@ Controls connect via Svelte 5 context (`getContext("fw-player-controller")`). Cu
 
 ```html
 <!-- Slotted controls inside the player -->
-<fw-player content-id="pk_..." content-type="live" gateway-url="...">
+<fw-player content-id="pk_..." content-type="live">
   <div slot="controls">
     <fw-play-button></fw-play-button>
     <fw-skip-button direction="back"></fw-skip-button>
@@ -575,7 +566,7 @@ Controls connect via Svelte 5 context (`getContext("fw-player-controller")`). Cu
 </fw-player>
 
 <!-- Or standalone controls anywhere in the DOM -->
-<fw-player id="myplayer" content-id="pk_..." gateway-url="..."></fw-player>
+<fw-player id="myplayer" content-id="pk_..."></fw-player>
 <fw-play-button for="myplayer"></fw-play-button>
 <fw-fullscreen-button for="myplayer"></fw-fullscreen-button>
 ```
@@ -588,7 +579,6 @@ Programmatic access: `document.getElementById("myplayer").controller`.
 const player = createPlayer({
   target: "#player",
   contentId: "pk_...",
-  gatewayUrl: "...",
   skin: false, // no UI
 });
 

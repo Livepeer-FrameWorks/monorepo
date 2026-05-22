@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-import { GatewayClient, type GatewayClientConfig } from "../src/core/GatewayClient";
+import {
+  DEFAULT_GATEWAY_URL,
+  GatewayClient,
+  type GatewayClientConfig,
+} from "../src/core/GatewayClient";
 
 function makeConfig(overrides: Partial<GatewayClientConfig> = {}): GatewayClientConfig {
   return {
@@ -147,9 +151,20 @@ describe("GatewayClient", () => {
       client.destroy();
     });
 
-    it("throws on missing config params", async () => {
+    it("uses the official gateway when gatewayUrl is omitted", async () => {
+      const primary = { nodeId: "n1" };
+      globalThis.fetch = mockFetchSuccess(makeGqlResponse(primary));
+
       const client = new GatewayClient(makeConfig({ gatewayUrl: "" }));
-      await expect(client.resolve()).rejects.toThrow("Missing required parameters");
+      await client.resolve();
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(DEFAULT_GATEWAY_URL, expect.any(Object));
+      client.destroy();
+    });
+
+    it("throws on missing contentId", async () => {
+      const client = new GatewayClient(makeConfig({ contentId: "" }));
+      await expect(client.resolve()).rejects.toThrow("Missing required parameter: contentId");
       client.destroy();
     });
   });

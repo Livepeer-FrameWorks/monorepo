@@ -141,14 +141,13 @@ players accept it via the `playbackAuth` prop:
 <Player
   contentId="abc123"
   options={{
-    gatewayUrl: "https://...",
     playbackAuth: { token: viewerJwt },
   }}
 />
 ```
 
 ```html
-<fw-player content-id="abc123" gateway-url="https://..." playback-token="eyJ..."></fw-player>
+<fw-player content-id="abc123" playback-token="eyJ..."></fw-player>
 ```
 
 By default the player appends `?jwt=<token>` to every resolved playback URL

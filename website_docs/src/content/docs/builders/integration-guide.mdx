@@ -30,7 +30,7 @@ Use the component as-is. No custom UI work required.
 
 ```tsx
 // Player
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
+<Player contentId="pk_..." contentType="live" />
 
 // Studio
 <StreamCrafter whipUrl="..." />
@@ -46,7 +46,7 @@ Replace the default layout with framework sub-components. Mix our components wit
 
 ```tsx
 // Player — custom control bar
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }}>
+<Player contentId="pk_..." contentType="live">
   <PlayButton />
   <VolumeControl />
   <SettingsMenu />
@@ -108,7 +108,6 @@ Run the media engine without any visual UI. Full programmatic control.
 const player = createPlayer({
   target: "#player",
   contentId: "pk_...",
-  gatewayUrl: "...",
   skin: false,
 });
 
@@ -153,7 +152,7 @@ Framework packages re-export core types. You only need to install one package pe
 ### Themed Player with Custom Controls
 
 ```tsx
-<Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "...", theme: "tokyo-night" }}>
+<Player contentId="pk_..." contentType="live" options={{ theme: "tokyo-night" }}>
   <PlayButton />
   <SettingsMenu />
   <div className="spacer" />
@@ -188,7 +187,7 @@ function LiveDashboard() {
         <StreamCrafter whipUrl="..." />
       </div>
       <div className="preview">
-        <Player contentId="pk_..." contentType="live" options={{ gatewayUrl: "..." }} />
+        <Player contentId="pk_..." contentType="live" />
       </div>
     </div>
   );
@@ -203,7 +202,7 @@ function LiveDashboard() {
   <body>
     <!-- Player -->
     <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/fw-player.js"></script>
-    <fw-player content-id="pk_..." content-type="live" gateway-url="..." autoplay muted></fw-player>
+    <fw-player content-id="pk_..." content-type="live" autoplay muted></fw-player>
 
     <!-- Studio -->
     <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/fw-streamcrafter.js"></script>

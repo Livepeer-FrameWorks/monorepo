@@ -28,7 +28,6 @@ import { PlayerController } from "@livepeer-frameworks/player-core";
 const controller = new PlayerController({
   contentId: "pk_...", // playbackId
   contentType: "live",
-  gatewayUrl: "https://your-bridge/graphql",
   debug: true,
 });
 
@@ -38,7 +37,8 @@ await controller.attach(container);
 
 Notes:
 
-- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
+- The controller uses the official FrameWorks Gateway by default. Override `gatewayUrl` only for a
+  fully self-hosted control plane or local Gateway preview.
 
 ### Direct MistServer Node (mistUrl)
 
