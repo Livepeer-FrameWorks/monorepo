@@ -34,6 +34,44 @@ struct CLIPath: Decodable {
   let path: String
 }
 
+struct CLIMenuCatalog: Decodable {
+  let persona: String?
+  let sections: [CLIMenuSection]
+}
+
+struct CLIMenuSection: Decodable, Identifiable {
+  var id: String { key }
+  let key: String
+  let label: String
+  let recommended: Bool
+  let actions: [CLIMenuAction]
+}
+
+struct CLIMenuAction: Decodable, Identifiable, Hashable {
+  var id: String { key }
+  let key: String
+  let label: String
+  let description: String?
+  let args: [String]
+  let longRunning: Bool
+  let risk: String?
+  let interactive: Bool
+
+  enum CodingKeys: String, CodingKey {
+    case key
+    case label
+    case description
+    case args
+    case longRunning = "long_running"
+    case risk
+    case interactive
+  }
+
+  var commandText: String {
+    "frameworks " + args.joined(separator: " ")
+  }
+}
+
 actor ConfigBridge {
   static let shared = ConfigBridge()
 
@@ -61,6 +99,13 @@ actor ConfigBridge {
       return false
     }
     return result.exitCode == 0
+  }
+
+  func loadMenuCatalog() async -> CLIMenuCatalog? {
+    await rearmIfDeferred()
+    return try? await CLIRunner.shared.runJSON(
+      ["menu"], as: CLIMenuCatalog.self
+    )
   }
 
   func ensureUserContext(bridgeURL: String) async -> Bool {

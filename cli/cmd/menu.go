@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -17,6 +18,28 @@ type menuSection struct {
 	key         string // "account", "edge", "services", "control-plane", "cluster", "dns-mesh", "settings"
 	label       string
 	recommended bool
+}
+
+type menuCatalog struct {
+	Persona  string               `json:"persona,omitempty"`
+	Sections []menuCatalogSection `json:"sections"`
+}
+
+type menuCatalogSection struct {
+	Key         string              `json:"key"`
+	Label       string              `json:"label"`
+	Recommended bool                `json:"recommended"`
+	Actions     []menuCatalogAction `json:"actions"`
+}
+
+type menuCatalogAction struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Args        []string `json:"args"`
+	LongRunning bool     `json:"long_running,omitempty"`
+	Risk        string   `json:"risk,omitempty"`
+	Interactive bool     `json:"interactive,omitempty"`
 }
 
 // menuSectionsForPersona returns the sections in display order for commands
@@ -50,9 +73,99 @@ func newMenuCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "menu",
 		Short: "Interactive menu for Frameworks operations",
+		Long: `Interactive menu for Frameworks operations.
+
+Use --output json to print the same persona-aware action catalog in a
+machine-readable form for the macOS tray and other local launchers.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if output == "json" {
+				return writeMenuCatalog(cmd, activePersona())
+			}
 			return runMainMenu(cmd)
 		},
+	}
+}
+
+func writeMenuCatalog(cmd *cobra.Command, persona fwcfg.Persona) error {
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(menuCatalogForPersona(persona))
+}
+
+func menuCatalogForPersona(persona fwcfg.Persona) menuCatalog {
+	sections := menuSectionsForPersona(persona)
+	out := menuCatalog{
+		Persona:  string(persona),
+		Sections: make([]menuCatalogSection, 0, len(sections)),
+	}
+	for _, section := range sections {
+		out.Sections = append(out.Sections, menuCatalogSection{
+			Key:         section.key,
+			Label:       section.label,
+			Recommended: section.recommended,
+			Actions:     menuActionsForSection(section.key),
+		})
+	}
+	return out
+}
+
+func menuActionsForSection(key string) []menuCatalogAction {
+	switch key {
+	case "account":
+		return []menuCatalogAction{
+			action("login", "Login", "Store a user session token in the CLI credential store.", []string{"login"}, true, "", true),
+			action("logout", "Logout", "Clear stored user-session credentials.", []string{"logout"}, false, "destructive", false),
+			action("context-check", "Context Check", "Check reachability and persona/auth invariants.", []string{"context", "check"}, false, "", false),
+		}
+	case "edge":
+		return []menuCatalogAction{
+			action("edge-preflight", "Preflight Checks", "Check host readiness for edge workloads.", []string{"edge", "preflight"}, false, "", false),
+			action("edge-status", "Status", "Show local and registry edge health.", []string{"edge", "status"}, false, "", false),
+			action("edge-doctor", "Doctor", "Run edge diagnostics and remediation hints.", []string{"edge", "doctor"}, false, "", false),
+			action("edge-logs", "Logs", "Show recent proxy, MistServer, and Helmsman logs.", []string{"edge", "logs", "--tail", "100"}, false, "", false),
+			action("edge-cert", "TLS Certificate", "Show TLS expiry and optionally reload Caddy.", []string{"edge", "cert"}, false, "", false),
+			action("edge-update", "Update Edge", "Pull and restart edge services.", []string{"edge", "update"}, true, "mutating", false),
+		}
+	case "services":
+		return []menuCatalogAction{
+			action("services-health", "Health Overview", "Show aggregated service health.", []string{"services", "health"}, false, "", false),
+		}
+	case "control-plane":
+		return []menuCatalogAction{
+			action("bootstrap-tokens-list", "List Bootstrap Tokens", "List Quartermaster bootstrap tokens.", []string{"admin", "bootstrap-tokens", "list"}, false, "", false),
+		}
+	case "cluster":
+		return []menuCatalogAction{
+			action("cluster-detect", "Detect", "Detect cluster state from a manifest.", []string{"cluster", "detect", "--manifest", "cluster.yaml"}, true, "", false),
+			action("cluster-doctor", "Doctor", "Run cluster diagnostics from a manifest.", []string{"cluster", "doctor", "--manifest", "cluster.yaml"}, true, "", false),
+			action("cluster-provision", "Provision", "Provision infrastructure and services from a manifest.", []string{"cluster", "provision", "--manifest", "cluster.yaml", "--only", "all"}, true, "mutating", false),
+		}
+	case "dns-mesh":
+		return []menuCatalogAction{
+			action("dns-doctor", "DNS Doctor", "Verify public DNS records against inventory.", []string{"dns", "doctor", "--domain", "frameworks.network"}, false, "", false),
+			action("mesh-status", "Mesh Status", "Show internal mesh status.", []string{"mesh", "status"}, false, "", false),
+		}
+	case "settings":
+		return []menuCatalogAction{
+			action("context-list", "List Contexts", "List configured CLI contexts.", []string{"context", "list"}, false, "", false),
+			action("context-show", "Show Context", "Show active context details.", []string{"context", "show"}, false, "", false),
+			action("config-path", "Config Path", "Show the CLI config file path.", []string{"config", "path", "--kind", "config"}, false, "", false),
+			action("cli-update-check", "Check CLI Update", "Check whether a CLI update is available.", []string{"update", "--check"}, true, "", false),
+		}
+	default:
+		return nil
+	}
+}
+
+func action(key, label, description string, args []string, longRunning bool, risk string, interactive bool) menuCatalogAction {
+	return menuCatalogAction{
+		Key:         key,
+		Label:       label,
+		Description: description,
+		Args:        args,
+		LongRunning: longRunning,
+		Risk:        risk,
+		Interactive: interactive,
 	}
 }
 

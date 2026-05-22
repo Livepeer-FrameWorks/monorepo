@@ -4,144 +4,237 @@ struct DiagnosticsView: View {
   @ObservedObject var appState: AppState
   var closePanel: () -> Void
 
-  @State private var selectedCommand = DiagnosticCommand.contextCheck
+  @State private var catalog: CLIMenuCatalog?
+  @State private var selectedActionKey = ""
+  @State private var loadingCatalog = false
+  @State private var confirmingActionKey: String?
 
-  enum DiagnosticCommand: String {
-    case edgeStatus = "Edge Status"
-    case edgeDoctor = "Edge Doctor"
-    case contextCheck = "Context"
-    case dnsDoctor = "DNS"
-    case meshStatus = "Mesh"
-    case servicesHealth = "Services"
-    case edgeLogs = "Logs"
-    case edgeUpdate = "Update"
-    case cliUpdate = "CLI Update"
-
-    var args: [String] {
-      switch self {
-      case .edgeStatus: return ["edge", "status"]
-      case .edgeDoctor: return ["edge", "doctor"]
-      case .contextCheck: return ["context", "check"]
-      case .dnsDoctor: return ["dns", "doctor"]
-      case .meshStatus: return ["mesh", "status"]
-      case .servicesHealth: return ["services", "health"]
-      case .edgeLogs: return ["edge", "logs", "--tail", "100"]
-      case .edgeUpdate: return ["edge", "update"]
-      case .cliUpdate: return ["update"]
-      }
-    }
+  private var sections: [CLIMenuSection] {
+    catalog?.sections ?? fallbackCatalog.sections
   }
 
-  private var availableCommands: [DiagnosticCommand] {
-    var commands: [DiagnosticCommand] = [.contextCheck]
-    let persona = appState.currentPersona
-    let hasLocalEdge = appState.edgeDetected || appState.edgeServiceDomain != .none
-
-    if hasLocalEdge || persona == "selfhosted" || persona == "platform" {
-      commands.append(contentsOf: [.edgeStatus, .edgeDoctor, .edgeLogs, .edgeUpdate])
+  private var selectedAction: CLIMenuAction? {
+    for section in sections {
+      if let action = section.actions.first(where: { $0.key == selectedActionKey }) {
+        return action
+      }
     }
+    return nil
+  }
 
-    if persona == "platform" {
-      commands.append(contentsOf: [.dnsDoctor, .meshStatus, .servicesHealth])
-    }
-
-    commands.append(.cliUpdate)
-    return commands
+  private var fallbackCatalog: CLIMenuCatalog {
+    let actions = [
+      CLIMenuAction(
+        key: "context-check",
+        label: "Context Check",
+        description: "Check reachability and persona/auth invariants.",
+        args: ["context", "check"],
+        longRunning: false,
+        risk: nil,
+        interactive: false),
+      CLIMenuAction(
+        key: "cli-update-check",
+        label: "Check CLI Update",
+        description: "Check whether a CLI update is available.",
+        args: ["update", "--check"],
+        longRunning: true,
+        risk: nil,
+        interactive: false),
+    ]
+    return CLIMenuCatalog(
+      persona: appState.currentPersona,
+      sections: [
+        CLIMenuSection(
+          key: "settings",
+          label: "Settings & Contexts",
+          recommended: true,
+          actions: actions)
+      ])
   }
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        Image(systemName: "stethoscope").foregroundStyle(Color.tnAccent)
-        Text("Diagnostics").font(.title2.bold())
-        Spacer()
-        Button(action: closePanel) {
-          Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-      }
-      .padding()
-
+      header
       Divider()
-
-      HStack {
-        Picker("Command", selection: $selectedCommand) {
-          ForEach(availableCommands, id: \.self) { cmd in
-            Text(cmd.rawValue).tag(cmd)
-          }
-        }
-        .pickerStyle(.menu)
-
-        if appState.isDiagnosticRunning {
-          ProgressView()
-            .controlSize(.small)
-            .padding(.leading, 4)
-        } else {
-          Button(action: runDiagnostic) {
-            Image(systemName: "play.fill")
-          }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-        }
-      }
-      .padding(.horizontal)
-      .padding(.vertical, 8)
-
+      controls
       Divider()
-
-      ScrollViewReader { proxy in
-        ScrollView {
-          Text(appState.diagnosticOutput.isEmpty ? "Press play to run diagnostics." : appState.diagnosticOutput)
-            .font(.system(.caption, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .id("output")
-        }
-        .onChange(of: appState.diagnosticOutput) { _, _ in
-          proxy.scrollTo("output", anchor: .bottom)
-        }
-      }
-
-      if !appState.diagnosticOutput.isEmpty {
-        Divider()
-        HStack {
-          Button("Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(appState.diagnosticOutput, forType: .string)
-          }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-
-          Button("Clear") {
-            appState.diagnosticOutput = ""
-          }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
-
-          Spacer()
-        }
-        .padding(8)
-      }
+      outputView
+      footer
     }
     .frame(width: 420, height: 560)
     .background(.regularMaterial)
     .tint(Color.tnAccent)
-    .onAppear(perform: ensureSelectedCommandAvailable)
-    .onChange(of: appState.currentPersona) { _, _ in ensureSelectedCommandAvailable() }
-    .onChange(of: appState.edgeDetected) { _, _ in ensureSelectedCommandAvailable() }
-    .onChange(of: appState.edgeServiceDomain) { _, _ in ensureSelectedCommandAvailable() }
+    .onAppear(perform: loadCatalog)
+    .onChange(of: appState.currentContext) { _, _ in loadCatalog() }
+    .onChange(of: appState.currentPersona) { _, _ in loadCatalog() }
   }
 
-  private func runDiagnostic() {
-    guard !appState.isDiagnosticRunning else { return }
-    ensureSelectedCommandAvailable()
-    appState.diagnosticOutput = ""
+  private var header: some View {
+    HStack {
+      Image(systemName: "terminal").foregroundStyle(Color.tnAccent)
+      Text("Command Center").font(.title2.bold())
+      Spacer()
+      Button(action: closePanel) {
+        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+    }
+    .padding()
+  }
+
+  private var controls: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Picker("Action", selection: $selectedActionKey) {
+          ForEach(sections) { section in
+            Section(section.label) {
+              ForEach(section.actions) { action in
+                Text(action.label).tag(action.key)
+              }
+            }
+          }
+        }
+        .pickerStyle(.menu)
+        .disabled(loadingCatalog || appState.isDiagnosticRunning)
+
+        if loadingCatalog {
+          ProgressView().controlSize(.small)
+        } else if appState.isDiagnosticRunning {
+          ProgressView().controlSize(.small)
+        } else {
+          Button(action: runSelectedAction) {
+            Image(systemName: confirmingActionKey == selectedActionKey ? "exclamationmark.triangle.fill" : "play.fill")
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .disabled(selectedAction == nil || selectedAction?.interactive == true)
+        }
+      }
+
+      if let action = selectedAction {
+        VStack(alignment: .leading, spacing: 6) {
+          Text(action.commandText)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+          if let description = action.description, !description.isEmpty {
+            Text(description)
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+          HStack(spacing: 6) {
+            if action.longRunning {
+              tag("long-running", color: .tnCyan)
+            }
+            if let risk = action.risk, !risk.isEmpty {
+              tag(risk, color: .tnOrange)
+            }
+            if action.interactive {
+              tag("interactive CLI", color: .tnPurple)
+            }
+          }
+        }
+      }
+    }
+    .padding(.horizontal)
+    .padding(.vertical, 10)
+  }
+
+  private var outputView: some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        Text(appState.diagnosticOutput.isEmpty ? "Pick a CLI action and press run." : appState.diagnosticOutput)
+          .font(.system(.caption, design: .monospaced))
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding()
+          .id("output")
+      }
+      .onChange(of: appState.diagnosticOutput) { _, _ in
+        proxy.scrollTo("output", anchor: .bottom)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var footer: some View {
+    if !appState.diagnosticOutput.isEmpty {
+      Divider()
+      HStack {
+        Button("Copy") {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(appState.diagnosticOutput, forType: .string)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+
+        Button("Clear") {
+          appState.diagnosticOutput = ""
+          confirmingActionKey = nil
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+
+        Spacer()
+      }
+      .padding(8)
+    }
+  }
+
+  private func tag(_ label: String, color: Color) -> some View {
+    Text(label)
+      .font(.caption2.bold())
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(color.opacity(0.15))
+      .foregroundStyle(color)
+      .clipShape(Capsule())
+  }
+
+  private func loadCatalog() {
+    guard appState.cliAvailable else {
+      catalog = nil
+      ensureSelectedActionAvailable()
+      return
+    }
+
+    loadingCatalog = true
+    Task {
+      let loaded = await ConfigBridge.shared.loadMenuCatalog()
+      await MainActor.run {
+        catalog = loaded
+        loadingCatalog = false
+        ensureSelectedActionAvailable()
+      }
+    }
+  }
+
+  private func ensureSelectedActionAvailable() {
+    let allActions = sections.flatMap(\.actions)
+    if !allActions.contains(where: { $0.key == selectedActionKey }) {
+      selectedActionKey = allActions.first?.key ?? ""
+      confirmingActionKey = nil
+    }
+  }
+
+  private func runSelectedAction() {
+    guard !appState.isDiagnosticRunning, let action = selectedAction else { return }
+    guard !action.interactive else {
+      appState.diagnosticOutput = "[interactive CLI action: run this in Terminal]\n\(action.commandText)\n"
+      return
+    }
+
+    if let risk = action.risk, !risk.isEmpty, confirmingActionKey != action.key {
+      confirmingActionKey = action.key
+      appState.diagnosticOutput = "[confirm required]\nPress run again to execute:\n\(action.commandText)\n"
+      return
+    }
+
+    confirmingActionKey = nil
+    appState.diagnosticOutput = "$ \(action.commandText)\n"
     appState.isDiagnosticRunning = true
-    let args = selectedCommand.args
 
     Task {
       do {
-        let exitCode = try await CLIRunner.shared.runStreaming(args) { line in
+        let exitCode = try await CLIRunner.shared.runStreaming(action.args) { line in
           Task { @MainActor in
             appState.diagnosticOutput += line + "\n"
           }
@@ -158,13 +251,6 @@ struct DiagnosticsView: View {
           appState.isDiagnosticRunning = false
         }
       }
-    }
-  }
-
-  private func ensureSelectedCommandAvailable() {
-    let commands = availableCommands
-    if !commands.contains(selectedCommand), let first = commands.first {
-      selectedCommand = first
     }
   }
 }

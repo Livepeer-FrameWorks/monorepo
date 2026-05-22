@@ -63,7 +63,7 @@ struct EdgeStatusView: View {
 
           if appState.cliAvailable {
             Button(action: { onDiagnostics?() }) {
-              Label("Run Diagnostics", systemImage: "stethoscope")
+              Label("Open Command Center", systemImage: "terminal")
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)

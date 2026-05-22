@@ -77,6 +77,52 @@ func TestMenuSectionsForPersona_filtersPlatformOnlySections(t *testing.T) {
 	}
 }
 
+func TestMenuCatalogForPersona_includesActionsForVisibleSections(t *testing.T) {
+	t.Parallel()
+
+	catalog := menuCatalogForPersona(fwcfg.PersonaPlatform)
+	if catalog.Persona != string(fwcfg.PersonaPlatform) {
+		t.Fatalf("persona = %q, want %q", catalog.Persona, fwcfg.PersonaPlatform)
+	}
+
+	sections := map[string]menuCatalogSection{}
+	for _, section := range catalog.Sections {
+		sections[section.Key] = section
+		if len(section.Actions) == 0 {
+			t.Fatalf("section %q has no actions", section.Key)
+		}
+	}
+
+	cluster, ok := sections["cluster"]
+	if !ok {
+		t.Fatalf("expected cluster section in platform catalog")
+	}
+	foundProvision := false
+	for _, action := range cluster.Actions {
+		if action.Key == "cluster-provision" {
+			foundProvision = true
+			if !action.LongRunning || action.Risk != "mutating" {
+				t.Fatalf("cluster-provision metadata = long=%v risk=%q, want long=true risk=mutating", action.LongRunning, action.Risk)
+			}
+		}
+	}
+	if !foundProvision {
+		t.Fatalf("cluster section missing cluster-provision action")
+	}
+}
+
+func TestMenuCatalogForPersona_userDoesNotExposePlatformSections(t *testing.T) {
+	t.Parallel()
+
+	catalog := menuCatalogForPersona(fwcfg.PersonaUser)
+	for _, section := range catalog.Sections {
+		switch section.Key {
+		case "cluster", "control-plane", "services", "dns-mesh", "edge":
+			t.Fatalf("user catalog exposed platform/selfhosted section %q", section.Key)
+		}
+	}
+}
+
 func TestSetupNextSteps_byPersona(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

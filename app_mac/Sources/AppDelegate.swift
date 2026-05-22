@@ -155,7 +155,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
       if appState.cliAvailable {
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Diagnostics...", action: #selector(openDiagnostics), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Command Center...", action: #selector(openDiagnostics), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Provision Edge...", action: #selector(openProvision), keyEquivalent: ""))
 
         let contextSubmenu = NSMenu()
