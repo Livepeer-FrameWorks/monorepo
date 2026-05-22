@@ -38,7 +38,7 @@ jobs:
       - name: Install build dependencies
         if: matrix.language == 'go'
         run: |
-          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v34.1/protoc-34.1-linux-x86_64.zip -o /tmp/protoc.zip
+          curl -fsSL https://github.com/protocolbuffers/protobuf/releases/download/v35.0/protoc-35.0-linux-x86_64.zip -o /tmp/protoc.zip
           sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
           rm /tmp/protoc.zip
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
