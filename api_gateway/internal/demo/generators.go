@@ -1116,7 +1116,7 @@ func GenerateConnectionEventSubscriptionEvents() []*pb.ConnectionEvent {
 			EventId:        "conn_demo_001",
 			Timestamp:      timestamppb.New(now.Add(-5 * time.Second)),
 			TenantId:       "00000000-0000-0000-0000-000000000001",
-			StreamId:       "demo_live_stream_001",
+			StreamId:       DemoStreamID,
 			SessionId:      "session_demo_001",
 			ConnectionAddr: "192.0.2.1",
 			Connector:      "HLS",
@@ -1131,7 +1131,7 @@ func GenerateConnectionEventSubscriptionEvents() []*pb.ConnectionEvent {
 			EventId:                "conn_demo_002",
 			Timestamp:              timestamppb.New(now),
 			TenantId:               "00000000-0000-0000-0000-000000000001",
-			StreamId:               "demo_live_stream_001",
+			StreamId:               DemoStreamID,
 			SessionId:              "session_demo_001",
 			ConnectionAddr:         "192.0.2.1",
 			Connector:              "HLS",
@@ -1377,6 +1377,7 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 		}
 
 		videoBitrate := bitrateVal
+		hasIssues := bufferState != "FULL"
 
 		tracks := []*pb.StreamTrack{
 			{
@@ -1401,7 +1402,7 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 
 		metric := &pb.StreamHealthMetric{
 			Timestamp:              timestamppb.New(ts),
-			StreamId:               "demo_live_stream_001",
+			StreamId:               DemoStreamID,
 			TenantId:               "00000000-0000-0000-0000-000000000001",
 			NodeId:                 "node_demo_us_west_01",
 			Bitrate:                bitrateVal, // kbps (consistent with ClickHouse schema)
@@ -1421,6 +1422,7 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 			PrimaryAudioBitrate:    &audioBitrate,
 			PacketLossPercentage:   float64Ptr(packetLoss),
 			QualityTier:            &qualityTierFull,
+			HasIssues:              &hasIssues,
 		}
 
 		if bufferState != "FULL" {

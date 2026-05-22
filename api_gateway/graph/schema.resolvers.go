@@ -5118,7 +5118,7 @@ func (r *streamHealthMetricResolver) StreamID(ctx context.Context, obj *proto.St
 
 // Stream is the resolver for the stream field.
 func (r *streamHealthMetricResolver) Stream(ctx context.Context, obj *proto.StreamHealthMetric) (*proto.Stream, error) {
-	return r.resolveStreamByID(ctx, obj.GetStreamId())
+	return r.resolveNullableStreamByRawID(ctx, obj.GetStreamId())
 }
 
 // Fps is the resolver for the fps field.

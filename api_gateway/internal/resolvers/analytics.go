@@ -759,6 +759,7 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream health metrics: %T", val)
 	}
+	normalizeStreamHealthMetrics(resp.Metrics)
 	return resp, nil
 }
 

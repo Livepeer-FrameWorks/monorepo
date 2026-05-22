@@ -30,3 +30,14 @@ func (r *Resolver) resolveStreamByIDPtr(ctx context.Context, streamID *string) (
 	}
 	return r.resolveStreamByID(ctx, *streamID)
 }
+
+func (r *Resolver) resolveNullableStreamByRawID(ctx context.Context, rawID string) (*pb.Stream, error) {
+	if rawID == "" {
+		return nil, nil
+	}
+	stream, err := r.resolveStreamByID(ctx, globalid.Encode(globalid.TypeStream, rawID))
+	if err != nil {
+		return nil, nil
+	}
+	return stream, nil
+}

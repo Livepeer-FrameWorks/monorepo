@@ -670,6 +670,16 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 	}, nil
 }
 
+func normalizeStreamHealthMetrics(metrics []*pb.StreamHealthMetric) {
+	for _, metric := range metrics {
+		if metric == nil || metric.HasIssues != nil {
+			continue
+		}
+		hasIssues := false
+		metric.HasIssues = &hasIssues
+	}
+}
+
 // DoGetTrackListEventsConnection returns a connection-style payload for track list events.
 func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.TrackListEventsConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
