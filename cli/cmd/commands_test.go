@@ -51,6 +51,14 @@ func TestBuildCommandCatalogIncludesRunnableCommandsAndFlags(t *testing.T) {
 	if !catalogFlagRequired(adminCreate, "cluster-id") {
 		t.Fatalf("admin clusters create cluster-id flag should be required")
 	}
+
+	servicesDown, ok := byCommand["frameworks services down"]
+	if !ok {
+		t.Fatalf("catalog missing services down")
+	}
+	if !catalogFlagConfirmation(servicesDown, "yes") {
+		t.Fatalf("services down yes flag should be marked as confirmation")
+	}
 }
 
 func TestBuildCommandCatalogIncludesRootPersistentFlags(t *testing.T) {
@@ -116,6 +124,15 @@ func catalogFlagSensitive(entry commandCatalogEntry, name string) bool {
 	for _, flag := range entry.Flags {
 		if flag.Name == name {
 			return flag.Sensitive
+		}
+	}
+	return false
+}
+
+func catalogFlagConfirmation(entry commandCatalogEntry, name string) bool {
+	for _, flag := range entry.Flags {
+		if flag.Name == name {
+			return flag.Confirmation
 		}
 	}
 	return false

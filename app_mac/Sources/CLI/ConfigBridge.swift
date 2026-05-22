@@ -111,6 +111,7 @@ struct CLICommandFlag: Decodable, Identifiable, Hashable {
   let source: String?
   let required: Bool?
   let sensitive: Bool?
+  let confirmation: Bool?
   let hidden: Bool?
   let deprecated: String?
 }

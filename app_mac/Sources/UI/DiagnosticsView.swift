@@ -414,6 +414,11 @@ struct DiagnosticsView: View {
         }
       }
     }
+    if command.risk != nil {
+      for flag in commandConfirmationFlags(command) where flag.default != "true" {
+        args.append("--\(flag.name)")
+      }
+    }
 
     let missing = missingRequiredInputs(for: command)
     return CLIMenuAction(
@@ -435,7 +440,16 @@ struct DiagnosticsView: View {
       if flag.hidden == true || flag.deprecated != nil {
         return false
       }
+      if flag.confirmation == true {
+        return false
+      }
       return flag.source != "frameworks"
+    }
+  }
+
+  private func commandConfirmationFlags(_ command: CLICommandEntry) -> [CLICommandFlag] {
+    (command.flags ?? []).filter { flag in
+      flag.confirmation == true && flag.type == "bool" && flag.hidden != true && flag.deprecated == nil
     }
   }
 

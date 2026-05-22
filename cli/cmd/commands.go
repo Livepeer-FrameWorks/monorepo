@@ -29,17 +29,18 @@ type commandCatalogEntry struct {
 }
 
 type commandCatalogFlag struct {
-	Name       string `json:"name"`
-	Shorthand  string `json:"shorthand,omitempty"`
-	Usage      string `json:"usage,omitempty"`
-	Default    string `json:"default,omitempty"`
-	Type       string `json:"type,omitempty"`
-	Scope      string `json:"scope"`
-	Source     string `json:"source,omitempty"`
-	Required   bool   `json:"required,omitempty"`
-	Sensitive  bool   `json:"sensitive,omitempty"`
-	Hidden     bool   `json:"hidden,omitempty"`
-	Deprecated string `json:"deprecated,omitempty"`
+	Name         string `json:"name"`
+	Shorthand    string `json:"shorthand,omitempty"`
+	Usage        string `json:"usage,omitempty"`
+	Default      string `json:"default,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Scope        string `json:"scope"`
+	Source       string `json:"source,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	Sensitive    bool   `json:"sensitive,omitempty"`
+	Confirmation bool   `json:"confirmation,omitempty"`
+	Hidden       bool   `json:"hidden,omitempty"`
+	Deprecated   string `json:"deprecated,omitempty"`
 }
 
 type commandCatalogArgument struct {
@@ -135,17 +136,18 @@ func commandFlags(cmd *cobra.Command, includeHidden bool) []commandCatalogFlag {
 			}
 			seen[flag.Name] = true
 			flags = append(flags, commandCatalogFlag{
-				Name:       flag.Name,
-				Shorthand:  flag.Shorthand,
-				Usage:      flag.Usage,
-				Default:    flag.DefValue,
-				Type:       flag.Value.Type(),
-				Scope:      scope,
-				Source:     source.CommandPath(),
-				Required:   flagRequired(flag),
-				Sensitive:  flagSensitive(flag),
-				Hidden:     flag.Hidden,
-				Deprecated: flag.Deprecated,
+				Name:         flag.Name,
+				Shorthand:    flag.Shorthand,
+				Usage:        flag.Usage,
+				Default:      flag.DefValue,
+				Type:         flag.Value.Type(),
+				Scope:        scope,
+				Source:       source.CommandPath(),
+				Required:     flagRequired(flag),
+				Sensitive:    flagSensitive(flag),
+				Confirmation: flagConfirmation(flag),
+				Hidden:       flag.Hidden,
+				Deprecated:   flag.Deprecated,
 			})
 		})
 	}
@@ -242,4 +244,11 @@ func flagSensitive(flag *pflag.Flag) bool {
 	return strings.Contains(name, "password") ||
 		strings.Contains(name, "secret") ||
 		strings.Contains(name, "token")
+}
+
+func flagConfirmation(flag *pflag.Flag) bool {
+	name := strings.ToLower(flag.Name)
+	usage := strings.ToLower(flag.Usage)
+	return flag.Value.Type() == "bool" &&
+		(name == "yes" || strings.Contains(usage, "skip confirmation"))
 }
