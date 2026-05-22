@@ -85,7 +85,9 @@ func main() {
 	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
 	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
 
-	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger)
+	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger,
+		kafka.WithLagTracker(kafka.LagTrackerConfig{Gauge: metrics.KafkaLag}),
+	)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka consumer")
 	}

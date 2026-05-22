@@ -82,7 +82,9 @@ func main() {
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
-	consumerOpts := []kafka.ConsumerOption{}
+	consumerOpts := []kafka.ConsumerOption{
+		kafka.WithLagTracker(kafka.LagTrackerConfig{Gauge: serviceMetrics.KafkaLag}),
+	}
 	if strings.EqualFold(config.GetEnv("KAFKA_CONSUME_RESET_OFFSET", "latest"), "latest") {
 		consumerOpts = append(consumerOpts, kafka.WithResetOffsetLatest())
 	}

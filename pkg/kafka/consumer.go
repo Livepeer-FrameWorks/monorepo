@@ -3,10 +3,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -32,6 +35,12 @@ type Consumer struct {
 	groupID   string
 	handlers  map[string]Handler
 	mu        sync.RWMutex
+
+	// lagTracker is non-nil when the caller passed WithLagTracker.
+	// Start() launches a sibling goroutine that periodically samples
+	// end-offset vs committed-offset per (topic, partition) and
+	// publishes the difference to lagTracker.Gauge.
+	lagTracker *LagTrackerConfig
 }
 
 // ConsumerOption configures a Consumer at construction time. Callers wanting
@@ -41,6 +50,25 @@ type ConsumerOption func(*consumerOptions)
 
 type consumerOptions struct {
 	resetOffset kgo.Offset
+	lagTracker  *LagTrackerConfig
+}
+
+// LagTrackerConfig configures the background lag tracker. Gauge labels
+// must be ["topic", "partition"].
+type LagTrackerConfig struct {
+	Gauge    *prometheus.GaugeVec
+	Interval time.Duration // defaults to 30s when zero
+}
+
+// WithLagTracker enables a background goroutine that samples consumer-group
+// lag (end_offset - committed_offset) per (topic, partition) on a fixed
+// interval and publishes the result to the provided GaugeVec. The tracker
+// shares the consumer's existing kgo client via kadm; no second connection.
+// The goroutine exits when the context passed to Start is cancelled.
+func WithLagTracker(cfg LagTrackerConfig) ConsumerOption {
+	return func(o *consumerOptions) {
+		o.lagTracker = &cfg
+	}
 }
 
 // WithResetOffsetLatest configures the consumer to start at the end of the
@@ -80,11 +108,12 @@ func NewConsumer(brokers []string, groupID string, clusterID string, clientID st
 	}
 
 	return &Consumer{
-		client:    client,
-		logger:    logger,
-		clusterID: clusterID,
-		groupID:   groupID,
-		handlers:  make(map[string]Handler),
+		client:     client,
+		logger:     logger,
+		clusterID:  clusterID,
+		groupID:    groupID,
+		handlers:   make(map[string]Handler),
+		lagTracker: cfg.lagTracker,
 	}, nil
 }
 
@@ -103,8 +132,107 @@ func (c *Consumer) Close() error {
 	return nil
 }
 
+// lagFetcher is the minimal slice of kadm.Client used by the lag tracker.
+// Defined as an interface so tests can inject a fake without a broker.
+type lagFetcher interface {
+	ListEndOffsets(ctx context.Context, topics ...string) (kadm.ListedOffsets, error)
+	FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (kadm.OffsetResponses, error)
+}
+
+// topics returns the topics this consumer has handlers registered for.
+func (c *Consumer) topics() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.handlers))
+	for topic := range c.handlers {
+		out = append(out, topic)
+	}
+	return out
+}
+
+// publishLag samples end_offset - committed_offset for each (topic,
+// partition) the consumer reads and updates the configured gauge. Returns
+// an error only when both admin calls fail; partial data still gets
+// published. Tests inject lagFetcher so no broker is required.
+func (c *Consumer) publishLag(ctx context.Context, fetcher lagFetcher, topics []string) error {
+	if c.lagTracker == nil || c.lagTracker.Gauge == nil || len(topics) == 0 {
+		return nil
+	}
+
+	ends, err := fetcher.ListEndOffsets(ctx, topics...)
+	if err != nil {
+		return fmt.Errorf("lag fetch end offsets: %w", err)
+	}
+	commits, err := fetcher.FetchOffsetsForTopics(ctx, c.groupID, topics...)
+	if err != nil {
+		return fmt.Errorf("lag fetch committed offsets: %w", err)
+	}
+
+	committedByTP := make(map[string]map[int32]int64)
+	commits.Each(func(r kadm.OffsetResponse) {
+		if r.Err != nil {
+			return
+		}
+		if _, ok := committedByTP[r.Topic]; !ok {
+			committedByTP[r.Topic] = make(map[int32]int64)
+		}
+		committedByTP[r.Topic][r.Partition] = r.At
+	})
+
+	ends.Each(func(o kadm.ListedOffset) {
+		if o.Err != nil {
+			return
+		}
+		committed := int64(0)
+		if perTopic, ok := committedByTP[o.Topic]; ok {
+			if v, ok2 := perTopic[o.Partition]; ok2 {
+				committed = v
+			}
+		}
+		lag := o.Offset - committed
+		if lag < 0 {
+			lag = 0
+		}
+		c.lagTracker.Gauge.WithLabelValues(o.Topic, strconv.Itoa(int(o.Partition))).Set(float64(lag))
+	})
+	return nil
+}
+
+// runLagTracker is the background goroutine launched from Start when the
+// consumer was constructed with WithLagTracker.
+func (c *Consumer) runLagTracker(ctx context.Context) {
+	interval := c.lagTracker.Interval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	adm := kadm.NewClient(c.client)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			topics := c.topics()
+			if len(topics) == 0 {
+				continue
+			}
+			if err := c.publishLag(ctx, adm, topics); err != nil {
+				// Admin errors are transient (broker rolling, network blip);
+				// keep previous gauge values and try again next tick.
+				if ctx.Err() == nil {
+					c.logger.WithError(err).Debug("kafka lag sample failed")
+				}
+			}
+		}
+	}
+}
+
 // Start starts polling for messages
 func (c *Consumer) Start(ctx context.Context) error {
+	if c.lagTracker != nil && c.lagTracker.Gauge != nil {
+		go c.runLagTracker(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
