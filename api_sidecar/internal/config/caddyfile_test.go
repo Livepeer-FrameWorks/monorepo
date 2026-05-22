@@ -155,6 +155,20 @@ func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
 	if !strings.Contains(out, "header_up X-Mst-Path {scheme}://{host}/view/") {
 		t.Fatalf("expected X-Mst-Path public base header for Mist; got:\n%s", out)
 	}
+	for _, headerName := range []string{
+		"Access-Control-Allow-Credentials",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Origin",
+		"Access-Control-Expose-Headers",
+		"Access-Control-Max-Age",
+		"Access-Control-Request-Headers",
+		"Access-Control-Request-Method",
+	} {
+		if !strings.Contains(out, "header_down -"+headerName) {
+			t.Fatalf("expected /view proxy to strip Mist upstream CORS header %s; got:\n%s", headerName, out)
+		}
+	}
 }
 
 func TestRenderCaddyfile_MediaRoutesExposeCorsHeaders(t *testing.T) {
