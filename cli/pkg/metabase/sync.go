@@ -239,7 +239,7 @@ func Sync(ctx context.Context, opts SyncOptions) (SyncSummary, error) {
 	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
-		return summary, fmt.Errorf("Metabase managed-card conflicts:\n%s", strings.Join(conflicts, "\n"))
+		return summary, fmt.Errorf("metabase managed-card conflicts:\n%s", strings.Join(conflicts, "\n"))
 	}
 	return summary, nil
 }
@@ -354,7 +354,10 @@ func (c client) do(ctx context.Context, method, path string, body any, out any) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		content, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		content, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if readErr != nil {
+			return fmt.Errorf("%s %s returned %s and reading response body failed: %w", method, path, resp.Status, readErr)
+		}
 		return fmt.Errorf("%s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(content)))
 	}
 	if out == nil {
@@ -393,7 +396,11 @@ func cardHash(card Card) string {
 		Display: card.Display,
 		Query:   strings.TrimSpace(card.Query),
 	}
-	content, _ := json.Marshal(payload)
+	content, err := json.Marshal(payload)
+	if err != nil {
+		fallback := sha256.Sum256([]byte(card.Slug + "\x00" + card.Name + "\x00" + card.Display + "\x00" + strings.TrimSpace(card.Query)))
+		return "sha256:" + hex.EncodeToString(fallback[:])
+	}
 	sum := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -442,7 +449,10 @@ func extractEntities(raw any) []entity {
 			id, idOK := typed["id"].(float64)
 			name, nameOK := typed["name"].(string)
 			if idOK && nameOK {
-				model, _ := typed["model"].(string)
+				model := ""
+				if rawModel, ok := typed["model"].(string); ok {
+					model = rawModel
+				}
 				entities = append(entities, entity{ID: int(id), Name: name, Model: model})
 				return
 			}
