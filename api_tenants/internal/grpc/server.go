@@ -4627,12 +4627,14 @@ func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context,
 }
 
 func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clusterID string) (*pb.ClusterReleaseTarget, error) {
-	row := s.db.QueryRowContext(ctx, `
-			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
-		FROM quartermaster.cluster_release_targets
-		WHERE cluster_id = $1
-	`, clusterID)
-	target, err := scanClusterReleaseTarget(row)
+	var target *pb.ClusterReleaseTarget
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rowTarget, err := s.queryClusterReleaseTargetNoRetry(ctx, clusterID)
+		if err == nil {
+			target = rowTarget
+		}
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster release target not found")
 	}
@@ -4640,6 +4642,15 @@ func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clu
 		return nil, status.Errorf(codes.Internal, "get release target: %v", err)
 	}
 	return target, nil
+}
+
+func (s *QuartermasterServer) queryClusterReleaseTargetNoRetry(ctx context.Context, clusterID string) (*pb.ClusterReleaseTarget, error) {
+	row := s.db.QueryRowContext(ctx, `
+			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
+		FROM quartermaster.cluster_release_targets
+		WHERE cluster_id = $1
+	`, clusterID)
+	return scanClusterReleaseTarget(row)
 }
 
 type rowScanner interface {

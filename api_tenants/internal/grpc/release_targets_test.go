@@ -245,6 +245,35 @@ func TestSetClusterReleaseTargetRetriesRetryablePostgresError(t *testing.T) {
 	}
 }
 
+func TestGetClusterReleaseTargetRetriesRetryablePostgresError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	updatedAt := time.Date(2026, 5, 22, 11, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT cluster_id, channel, COALESCE\(target_version, ''\), rollout_plan::text, COALESCE\(paused, false\), updated_at[\s\S]*FROM quartermaster\.cluster_release_targets`).
+		WithArgs("core-central-primary").
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 92, got 91"})
+	mock.ExpectQuery(`SELECT cluster_id, channel, COALESCE\(target_version, ''\), rollout_plan::text, COALESCE\(paused, false\), updated_at[\s\S]*FROM quartermaster\.cluster_release_targets`).
+		WithArgs("core-central-primary").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "channel", "target_version", "rollout_plan", "paused", "updated_at"}).
+			AddRow("core-central-primary", "stable", "v1.2.3", `{"batch_size":1}`, false, updatedAt))
+
+	resp, err := server.GetClusterReleaseTarget(serviceCtx(), &pb.GetClusterReleaseTargetRequest{ClusterId: "core-central-primary"})
+	if err != nil {
+		t.Fatalf("GetClusterReleaseTarget: %v", err)
+	}
+	if got := resp.GetTarget().GetTargetVersion(); got != "v1.2.3" {
+		t.Fatalf("target_version = %q, want v1.2.3", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestEnsureEdgeReleaseTargetExistsRejectsEmptyChannelCatalog(t *testing.T) {
 	t.Parallel()
 
