@@ -64,6 +64,10 @@ actor CLIRunner {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: binary)
     process.arguments = fullArgs
+    let stdin = FileHandle(forReadingAtPath: "/dev/null")
+    if let stdin {
+      process.standardInput = stdin
+    }
 
     var env = ProcessInfo.processInfo.environment
     // The credential contract is: env > store. Only inject the Keychain
@@ -105,6 +109,10 @@ actor CLIRunner {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: binary)
     process.arguments = args
+    let stdin = FileHandle(forReadingAtPath: "/dev/null")
+    if let stdin {
+      process.standardInput = stdin
+    }
 
     var env = ProcessInfo.processInfo.environment
     if (env["FW_USER_TOKEN"] ?? "").isEmpty,
