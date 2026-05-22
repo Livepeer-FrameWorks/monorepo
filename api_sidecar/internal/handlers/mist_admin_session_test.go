@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -127,6 +128,33 @@ func TestRequireMistAdmin_RejectsInvalidCookie(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("want 401; got %d", resp.StatusCode)
+	}
+}
+
+func TestRequireMistAdmin_ValidationUnavailable(t *testing.T) {
+	withFakeSessionValidator(t,
+		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
+			return nil, errors.New("control stream disconnected")
+		})
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/_mist/probe", RequireMistAdmin(logging.NewLogger()), func(c *gin.Context) {
+		t.Fatal("downstream must not run when validation is unavailable")
+	})
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/_mist/probe", nil)
+	req.AddCookie(&http.Cookie{Name: MistAdminCookieName, Value: "fresh"})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("want 503; got %d", resp.StatusCode)
 	}
 }
 
@@ -299,6 +327,34 @@ func TestMistAdminSessionHandler_RejectsInvalidToken(t *testing.T) {
 	}
 	if len(resp.Cookies()) != 0 {
 		t.Error("invalid token must not set any cookie")
+	}
+}
+
+func TestMistAdminSessionHandler_ValidationUnavailable(t *testing.T) {
+	withFakeSessionValidator(t,
+		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
+			return nil, errors.New("control stream disconnected")
+		})
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/_mist-session", MistAdminSessionHandler(logging.NewLogger()))
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	form := url.Values{}
+	form.Set("session_token", "fresh")
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/_mist-session", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("want 503; got %d", resp.StatusCode)
+	}
+	if len(resp.Cookies()) != 0 {
+		t.Error("validation failure must not set any cookie")
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -154,7 +155,12 @@ func (q *ChapterFinalizationQueue) tick() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	chapters, err := control.ListChaptersNeedingFinalization(ctx, chapterFinalizationDispatchBatchMax, chapterFinalizationMaxTimeout)
+	var chapters []control.DVRChapterRow
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var listErr error
+		chapters, listErr = control.ListChaptersNeedingFinalization(ctx, chapterFinalizationDispatchBatchMax, chapterFinalizationMaxTimeout)
+		return listErr
+	})
 	if err != nil {
 		q.logger.WithError(err).Warn("Chapter finalization queue: list failed")
 		return

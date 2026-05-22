@@ -147,7 +147,7 @@ func parseFloat64(s string) float64 {
 func GetStoragePath() string {
 	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
 	if storagePath == "" {
-		storagePath = "/data/storage"
+		storagePath = "/var/lib/frameworks/edge-storage"
 	}
 	return storagePath
 }

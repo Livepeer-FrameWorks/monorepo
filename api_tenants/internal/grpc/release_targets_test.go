@@ -3,11 +3,16 @@ package grpc
 import (
 	"context"
 	"testing"
+	"time"
+
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestValidateRolloutPlanJSONRejectsInvalidFieldType(t *testing.T) {
@@ -160,6 +165,83 @@ func TestValidateEdgeReleaseComponentsAcceptsSupportedComponents(t *testing.T) {
 	}`)
 	if err != nil {
 		t.Fatalf("validateEdgeReleaseComponents: %v", err)
+	}
+}
+
+func TestUpsertEdgeReleaseRetriesRetryablePostgresError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	publishedAt := time.Date(2026, 5, 22, 11, 0, 0, 0, time.UTC)
+	components := `{"helmsman":{"version":"v1.2.3","artifacts":{"linux/amd64":{"artifact_url":"https://example.test/helmsman.tgz","checksum":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}`
+	normalizedComponents := `{"helmsman":{"artifacts":{"linux/amd64":{"artifact_url":"https://example.test/helmsman.tgz","checksum":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"version":"v1.2.3"}}`
+
+	mock.ExpectQuery(`INSERT INTO quartermaster\.edge_releases`).
+		WithArgs("stable", "v1.2.3", normalizedComponents, publishedAt).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 89, got 88"})
+	mock.ExpectQuery(`INSERT INTO quartermaster\.edge_releases`).
+		WithArgs("stable", "v1.2.3", normalizedComponents, publishedAt).
+		WillReturnRows(sqlmock.NewRows([]string{"channel", "version", "components", "published_at"}).
+			AddRow("stable", "v1.2.3", normalizedComponents, publishedAt))
+
+	resp, err := server.UpsertEdgeRelease(serviceCtx(), &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
+		Channel:        "stable",
+		Version:        "v1.2.3",
+		ComponentsJson: components,
+		PublishedAt:    timestamppb.New(publishedAt),
+	}})
+	if err != nil {
+		t.Fatalf("UpsertEdgeRelease: %v", err)
+	}
+	if got := resp.GetRelease().GetVersion(); got != "v1.2.3" {
+		t.Fatalf("version = %q, want v1.2.3", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestSetClusterReleaseTargetRetriesRetryablePostgresError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
+	updatedAt := time.Date(2026, 5, 22, 11, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(`SELECT EXISTS \([\s\S]*FROM quartermaster\.edge_releases[\s\S]*WHERE channel = \$1 AND version = \$2`).
+		WithArgs("stable", "v1.2.3").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.cluster_release_targets`).
+		WithArgs("media-eu-1", "stable", "v1.2.3", "{}", false).
+		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 89, got 88"})
+	mock.ExpectQuery(`SELECT EXISTS \([\s\S]*FROM quartermaster\.edge_releases[\s\S]*WHERE channel = \$1 AND version = \$2`).
+		WithArgs("stable", "v1.2.3").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.cluster_release_targets`).
+		WithArgs("media-eu-1", "stable", "v1.2.3", "{}", false).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "channel", "target_version", "rollout_plan", "paused", "updated_at"}).
+			AddRow("media-eu-1", "stable", "v1.2.3", "{}", false, updatedAt))
+
+	resp, err := server.SetClusterReleaseTarget(serviceCtx(), &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
+		ClusterId:       "media-eu-1",
+		Channel:         "stable",
+		TargetVersion:   "v1.2.3",
+		RolloutPlanJson: "{}",
+		Paused:          false,
+	}})
+	if err != nil {
+		t.Fatalf("SetClusterReleaseTarget: %v", err)
+	}
+	if got := resp.GetTarget().GetClusterId(); got != "media-eu-1" {
+		t.Fatalf("cluster_id = %q, want media-eu-1", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

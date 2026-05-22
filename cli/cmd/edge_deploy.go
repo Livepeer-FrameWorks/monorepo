@@ -402,6 +402,9 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		Timeout:         cfg.timeout,
 		Version:         cfg.version,
 	}
+	if err := applyEdgeDeployTelemetryConfig(&epConfig, resp); err != nil {
+		return err
+	}
 
 	ep := provisioner.NewEdgeProvisioner(pool)
 	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge node via SSH...")
@@ -445,10 +448,27 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		Version:         cfg.version,
 		DarwinDomain:    provisioner.DomainUser,
 	}
+	if err := applyEdgeDeployTelemetryConfig(&epConfig, resp); err != nil {
+		return err
+	}
 
 	pool := fwssh.NewPool(30*time.Second, "")
 	ep := provisioner.NewEdgeProvisioner(pool)
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Provisioning edge locally (user LaunchAgent, no admin required)...")
 	return ep.Provision(ctx, host, epConfig)
+}
+
+func applyEdgeDeployTelemetryConfig(cfg *provisioner.EdgeProvisionConfig, resp *pb.PreRegisterEdgeResponse) error {
+	if cfg == nil || resp == nil {
+		return nil
+	}
+	if telemetry := resp.GetTelemetry(); telemetry != nil && telemetry.GetEnabled() {
+		cfg.TelemetryURL = telemetry.GetWriteUrl()
+		cfg.TelemetryToken = telemetry.GetBearerToken()
+	}
+	if strings.TrimSpace(cfg.TelemetryURL) != "" && strings.TrimSpace(cfg.TelemetryToken) == "" {
+		return fmt.Errorf("edge telemetry write URL resolved but Foghorn did not issue a bearer token")
+	}
+	return nil
 }

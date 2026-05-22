@@ -36,11 +36,17 @@ func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
 		WithArgs("edge-existing").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
+		WithArgs("tenant-1", "edge-existing", "machine-sha", "macs-sha", sqlmock.AnyArg(), "{}").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
-		Token:    "tok-idempotent",
-		Hostname: "edge-existing.example.com",
+		Token:           "tok-idempotent",
+		Hostname:        "edge-existing.example.com",
+		Ips:             []string{"203.0.113.10"},
+		MachineIdSha256: ptr("machine-sha"),
+		MacsSha256:      ptr("macs-sha"),
 	})
 	if err != nil {
 		t.Fatalf("BootstrapEdgeNode returned error: %v", err)

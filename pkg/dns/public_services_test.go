@@ -131,6 +131,7 @@ func TestNormalizeDomainScope(t *testing.T) {
 		{name: "bare domain", in: "frameworks.network", want: "frameworks.network"},
 		{name: "https url", in: "https://frameworks.network", want: "frameworks.network"},
 		{name: "https url with slash", in: "https://frameworks.network/", want: "frameworks.network"},
+		{name: "https url missing colon", in: "https//frameworks.network", want: "frameworks.network"},
 		{name: "url with path", in: "https://frameworks.network/clusters/media", want: "frameworks.network"},
 		{name: "protocol relative", in: "//frameworks.network", want: "frameworks.network"},
 		{name: "host port", in: "frameworks.network:443", want: "frameworks.network"},

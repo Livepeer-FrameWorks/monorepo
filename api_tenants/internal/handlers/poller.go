@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -14,7 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -227,6 +230,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	var checked, healthy, unhealthy, skipped int32
 	serviceSummary := newServiceHealthSummary()
 	for _, it := range list {
+		applyServiceDefinitionFallback(&it)
 		if it.host == "" || it.port == 0 {
 			logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping health check: missing host or port")
 			atomic.AddInt32(&skipped, 1)
@@ -267,7 +271,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					atomic.AddInt32(&unhealthy, 1)
 					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
-					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
 					}
 					return
@@ -289,7 +293,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if resp != nil {
 					_ = resp.Body.Close()
 				}
-				_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+				_ = persistHealthStatus(context.Background(), ii.id, status)
 			}(it)
 			continue
 		}
@@ -311,7 +315,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					atomic.AddInt32(&unhealthy, 1)
 					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check TLS config failed")
-					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
 					}
 					return
@@ -326,7 +330,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					atomic.AddInt32(&unhealthy, 1)
 					serviceSummary.recordResult(ii.serviceID, status)
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
-					if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id); dbErr != nil {
+					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
 						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
 					}
 					return
@@ -342,7 +346,34 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check passed")
 				}
 				serviceSummary.recordResult(ii.serviceID, status)
-				_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+				_ = persistHealthStatus(context.Background(), ii.id, status)
+			}(it)
+			continue
+		}
+		if proto == "tcp" {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(ii serviceInstance) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				addr := fmt.Sprintf("%s:%d", ii.host, ii.port)
+				status := "healthy"
+				atomic.AddInt32(&checked, 1)
+				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				var d net.Dialer
+				conn, err := d.DialContext(probeCtx, "tcp", addr)
+				if err != nil {
+					status = "unhealthy"
+					atomic.AddInt32(&unhealthy, 1)
+					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("TCP health check failed")
+				} else {
+					atomic.AddInt32(&healthy, 1)
+					_ = conn.Close()
+					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("TCP health check passed")
+				}
+				serviceSummary.recordResult(ii.serviceID, status)
+				_ = persistHealthStatus(context.Background(), ii.id, status)
 			}(it)
 			continue
 		}
@@ -371,11 +402,37 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	return nil
 }
 
+func applyServiceDefinitionFallback(i *serviceInstance) {
+	def, ok := servicedefs.Lookup(i.serviceID)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(i.defaultProto) == "" {
+		i.defaultProto = def.HealthProtocol
+	}
+	if strings.TrimSpace(i.proto) == "" && strings.TrimSpace(i.defaultProto) == "" {
+		i.proto = def.HealthProtocol
+	}
+	if strings.TrimSpace(i.path) == "" {
+		i.path = def.HealthPath
+	}
+	if i.port == 0 {
+		i.port = def.DefaultPort
+	}
+}
+
+func persistHealthStatus(ctx context.Context, instanceID, status string) error {
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, err := db.ExecContext(ctx, `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, instanceID)
+		return err
+	})
+}
+
 func recordSkippedHealthCheck(instanceID string) {
 	if instanceID == "" {
 		return
 	}
-	if _, err := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status='skipped', last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$1`, instanceID); err != nil {
+	if err := persistHealthStatus(context.Background(), instanceID, "skipped"); err != nil {
 		logger.WithError(err).WithField("instance_id", instanceID).Warn("Failed to persist skipped health status")
 	}
 }

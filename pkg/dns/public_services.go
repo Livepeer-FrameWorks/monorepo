@@ -263,6 +263,13 @@ func NormalizeDomainScope(raw string) string {
 	if value == "" {
 		return ""
 	}
+	lower := strings.ToLower(value)
+	switch {
+	case strings.HasPrefix(lower, "https//"):
+		value = "https://" + strings.TrimLeft(value[len("https//"):], "/")
+	case strings.HasPrefix(lower, "http//"):
+		value = "http://" + strings.TrimLeft(value[len("http//"):], "/")
+	}
 
 	parseHost := func(candidate string) string {
 		parsed, err := url.Parse(candidate)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 )
 
@@ -52,12 +53,18 @@ func TestComputeBackoffNegativeAttemptsTreatedAsZero(t *testing.T) {
 }
 
 type fakeStore struct {
-	claims       []Claim[string]
-	claimErr     error
-	completed    []string
-	completedErr error
-	failures     []failureCall
-	failureErr   error
+	claims        []Claim[string]
+	claimErr      error
+	claimErrs     []error
+	claimCalls    int
+	completed     []string
+	completedErr  error
+	completedErrs []error
+	completeCalls int
+	failures      []failureCall
+	failureErr    error
+	failureErrs   []error
+	failureCalls  int
 }
 
 type failureCall struct {
@@ -69,10 +76,26 @@ type failureCall struct {
 }
 
 func (s *fakeStore) ClaimBatch(_ context.Context, _ int, _ time.Duration) ([]Claim[string], error) {
+	s.claimCalls++
+	if len(s.claimErrs) > 0 {
+		err := s.claimErrs[0]
+		s.claimErrs = s.claimErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	return s.claims, s.claimErr
 }
 
 func (s *fakeStore) MarkCompleted(_ context.Context, id string) error {
+	s.completeCalls++
+	if len(s.completedErrs) > 0 {
+		err := s.completedErrs[0]
+		s.completedErrs = s.completedErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if s.completedErr != nil {
 		return s.completedErr
 	}
@@ -81,6 +104,14 @@ func (s *fakeStore) MarkCompleted(_ context.Context, id string) error {
 }
 
 func (s *fakeStore) RecordFailure(_ context.Context, id string, attempts int, failedTargets []string, cause error, backoff time.Duration) error {
+	s.failureCalls++
+	if len(s.failureErrs) > 0 {
+		err := s.failureErrs[0]
+		s.failureErrs = s.failureErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if s.failureErr != nil {
 		return s.failureErr
 	}
@@ -226,5 +257,40 @@ func TestProcessBatchSwallowsClaimError(t *testing.T) {
 
 	if len(disp.dispatched) != 0 {
 		t.Errorf("dispatcher should not be invoked on claim error")
+	}
+}
+
+func TestProcessBatchRetriesRetryableClaimError(t *testing.T) {
+	store := &fakeStore{
+		claims:    []Claim[string]{{ID: "o1", Attempts: 0, Payload: "p1"}},
+		claimErrs: []error{&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 89, got 88"}, nil},
+	}
+	disp := &fakeDispatcher{}
+	w := newTestWorker(store, disp)
+
+	w.ProcessBatch(context.Background())
+
+	if store.claimCalls != 2 {
+		t.Fatalf("claim calls = %d, want 2", store.claimCalls)
+	}
+	if len(disp.dispatched) != 1 || disp.dispatched[0] != "p1" {
+		t.Fatalf("dispatcher not invoked after retry: %+v", disp.dispatched)
+	}
+}
+
+func TestTryDispatchRetriesRetryableCompletionError(t *testing.T) {
+	store := &fakeStore{
+		completedErrs: []error{&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 89, got 88"}, nil},
+	}
+	disp := &fakeDispatcher{}
+	w := newTestWorker(store, disp)
+
+	w.TryDispatch(context.Background(), "o1", 0, "p1")
+
+	if store.completeCalls != 2 {
+		t.Fatalf("complete calls = %d, want 2", store.completeCalls)
+	}
+	if len(store.completed) != 1 || store.completed[0] != "o1" {
+		t.Fatalf("completed not recorded after retry: %+v", store.completed)
 	}
 }

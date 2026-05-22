@@ -34,6 +34,35 @@ func TestServiceHealthSummarySnapshot(t *testing.T) {
 	}
 }
 
+func TestApplyServiceDefinitionFallbackUsesCanonicalHealthMetadata(t *testing.T) {
+	inst := serviceInstance{serviceID: "vmauth"}
+
+	applyServiceDefinitionFallback(&inst)
+
+	if inst.defaultProto != "http" {
+		t.Fatalf("defaultProto = %q, want http", inst.defaultProto)
+	}
+	if inst.path != "/health" {
+		t.Fatalf("path = %q, want /health", inst.path)
+	}
+	if inst.port != 8427 {
+		t.Fatalf("port = %d, want 8427", inst.port)
+	}
+}
+
+func TestApplyServiceDefinitionFallbackDoesNotOverrideInstanceProtocol(t *testing.T) {
+	inst := serviceInstance{serviceID: "foghorn", proto: "grpc", port: 18029}
+
+	applyServiceDefinitionFallback(&inst)
+
+	if inst.proto != "grpc" {
+		t.Fatalf("proto = %q, want grpc", inst.proto)
+	}
+	if inst.port != 18029 {
+		t.Fatalf("port = %d, want 18029", inst.port)
+	}
+}
+
 func TestGrpcHealthServerNameDefaultsToServiceInternalWithCA(t *testing.T) {
 	if got := grpcHealthServerName(serviceInstance{serviceID: "decklog"}, "/etc/frameworks/pki/ca.crt", ""); got != "decklog.internal" {
 		t.Fatalf("server name = %q", got)

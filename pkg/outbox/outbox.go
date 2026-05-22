@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -62,7 +63,12 @@ func (w *Worker[P]) Run(ctx context.Context) {
 }
 
 func (w *Worker[P]) ProcessBatch(ctx context.Context) {
-	claims, err := w.Store.ClaimBatch(ctx, w.Config.BatchSize, w.Config.Lease)
+	var claims []Claim[P]
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var claimErr error
+		claims, claimErr = w.Store.ClaimBatch(ctx, w.Config.BatchSize, w.Config.Lease)
+		return claimErr
+	})
 	if err != nil {
 		if w.Logger != nil {
 			w.Logger.WithError(err).Warn("claim outbox batch failed")
@@ -72,7 +78,10 @@ func (w *Worker[P]) ProcessBatch(ctx context.Context) {
 	for _, c := range claims {
 		failed, dispatchErr := w.Dispatcher.Dispatch(ctx, c.Payload)
 		if dispatchErr == nil && len(failed) == 0 {
-			if mErr := w.Store.MarkCompleted(ctx, c.ID); mErr != nil && w.Logger != nil {
+			mErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+				return w.Store.MarkCompleted(ctx, c.ID)
+			})
+			if mErr != nil && w.Logger != nil {
 				w.Logger.WithError(mErr).WithField("outbox_id", c.ID).Warn("mark outbox completed failed")
 			}
 			continue
@@ -92,7 +101,10 @@ func (w *Worker[P]) TryDispatch(ctx context.Context, id string, currentAttempts 
 	}
 	failed, err := w.Dispatcher.Dispatch(ctx, payload)
 	if err == nil && len(failed) == 0 {
-		if mErr := w.Store.MarkCompleted(ctx, id); mErr != nil && w.Logger != nil {
+		mErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			return w.Store.MarkCompleted(ctx, id)
+		})
+		if mErr != nil && w.Logger != nil {
 			w.Logger.WithError(mErr).WithField("outbox_id", id).Warn("mark outbox completed failed")
 		}
 		return
@@ -102,7 +114,10 @@ func (w *Worker[P]) TryDispatch(ctx context.Context, id string, currentAttempts 
 
 func (w *Worker[P]) recordFailure(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error) {
 	backoff := ComputeBackoff(w.Config, currentAttempts)
-	if err := w.Store.RecordFailure(ctx, id, currentAttempts, failedTargets, cause, backoff); err != nil {
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return w.Store.RecordFailure(ctx, id, currentAttempts, failedTargets, cause, backoff)
+	})
+	if err != nil {
 		if w.Logger != nil {
 			w.Logger.WithError(err).WithField("outbox_id", id).Warn("record outbox failure failed")
 		}

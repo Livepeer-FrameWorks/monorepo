@@ -5732,9 +5732,11 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				env["FOGHORN_INSTANCE_ID"] = "foghorn-1"
 			}
 		}
-		// Default storage base — must match helmsman's HELMSMAN_STORAGE_LOCAL_PATH
+		// Default storage base must match the edge role's native
+		// HELMSMAN_STORAGE_LOCAL_PATH so Foghorn-issued DVR work never falls
+		// back to MistServer's historical /data path.
 		if env["FOGHORN_DEFAULT_STORAGE_BASE"] == "" {
-			env["FOGHORN_DEFAULT_STORAGE_BASE"] = "/var/lib/mistserver/recordings"
+			env["FOGHORN_DEFAULT_STORAGE_BASE"] = "/var/lib/frameworks/edge-storage"
 		}
 	}
 	if baseName == "navigator" {

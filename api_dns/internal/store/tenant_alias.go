@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/lib/pq"
 )
 
@@ -22,9 +24,11 @@ func (s *Store) EnsureTenantAlias(ctx context.Context, tenantID, subdomain strin
 		RETURNING tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
 	`
 	var a TenantAlias
-	err := s.db.QueryRowContext(ctx, q, tenantID, subdomain).Scan(
-		&a.TenantID, &a.Subdomain, &a.Status, &a.CertIssuedAt, &a.LastError, &a.CreatedAt, &a.UpdatedAt,
-	)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, q, tenantID, subdomain).Scan(
+			&a.TenantID, &a.Subdomain, &a.Status, &a.CertIssuedAt, &a.LastError, &a.CreatedAt, &a.UpdatedAt,
+		)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +149,13 @@ func (s *Store) UpsertTenantEdgeApplyState(ctx context.Context, st *TenantEdgeAp
 			in_dns_at = EXCLUDED.in_dns_at,
 			updated_at = NOW()
 	`
-	_, err := s.db.ExecContext(ctx, q,
-		st.TenantID, st.ClusterID, st.NodeID, st.BundleID,
-		st.State, st.LastSeedVersion, st.LastAckAt, st.InDNSAt,
-	)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, execErr := s.db.ExecContext(ctx, q,
+			st.TenantID, st.ClusterID, st.NodeID, st.BundleID,
+			st.State, st.LastSeedVersion, st.LastAckAt, st.InDNSAt,
+		)
+		return execErr
+	})
 	return err
 }
 
@@ -156,12 +163,14 @@ func (s *Store) UpsertTenantEdgeApplyState(ctx context.Context, st *TenantEdgeAp
 // the tenant's DNS pool.
 func (s *Store) TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error) {
 	var ok bool
-	err := s.db.QueryRowContext(ctx, `
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM navigator.tenant_edge_apply_state
 			WHERE tenant_id = $1::uuid AND state = 'in_dns'
 		)
 	`, tenantID).Scan(&ok)
+	})
 	return ok, err
 }
 

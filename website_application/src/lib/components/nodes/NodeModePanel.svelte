@@ -146,19 +146,21 @@
     />
   </div>
 
-  <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-2">
     {#each MODES as m (m.mode)}
       {@const Icon = m.icon}
       <Button
         variant={m.mode === effectiveMode ? "default" : "outline"}
         disabled={pending !== null || m.mode === effectiveMode}
         onclick={() => apply(m.mode)}
-        class="justify-start h-auto py-2"
+        class="h-auto w-full min-w-0 items-start justify-start whitespace-normal px-3 py-2.5 text-left"
       >
         <Icon class="w-4 h-4 mr-2 shrink-0" />
-        <div class="text-left">
+        <div class="min-w-0 flex-1">
           <div class="text-sm font-medium">{m.label}</div>
-          <div class="text-[10px] text-muted-foreground leading-tight">{m.description}</div>
+          <div class="break-words text-[10px] leading-tight text-muted-foreground">
+            {m.description}
+          </div>
         </div>
       </Button>
     {/each}

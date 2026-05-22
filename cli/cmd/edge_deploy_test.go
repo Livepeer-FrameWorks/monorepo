@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	fwcfg "frameworks/cli/internal/config"
+	"frameworks/cli/pkg/provisioner"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/spf13/cobra"
 )
 
@@ -98,5 +100,40 @@ func TestRenderEdgeDeployResult_noOutputInJSONMode(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Errorf("JSON mode should produce no ux output, got:\n%s", buf.String())
+	}
+}
+
+func TestApplyEdgeDeployTelemetryConfigCopiesPreRegistrationTelemetry(t *testing.T) {
+	cfg := &provisioner.EdgeProvisionConfig{}
+	resp := &pb.PreRegisterEdgeResponse{
+		Telemetry: &pb.EdgeTelemetryConfig{
+			Enabled:     true,
+			WriteUrl:    "https://telemetry.example.com/api/v1/write",
+			BearerToken: "token",
+		},
+	}
+
+	if err := applyEdgeDeployTelemetryConfig(cfg, resp); err != nil {
+		t.Fatalf("applyEdgeDeployTelemetryConfig returned error: %v", err)
+	}
+	if cfg.TelemetryURL != "https://telemetry.example.com/api/v1/write" {
+		t.Fatalf("TelemetryURL = %q", cfg.TelemetryURL)
+	}
+	if cfg.TelemetryToken != "token" {
+		t.Fatalf("TelemetryToken = %q", cfg.TelemetryToken)
+	}
+}
+
+func TestApplyEdgeDeployTelemetryConfigRequiresTokenForTelemetryURL(t *testing.T) {
+	cfg := &provisioner.EdgeProvisionConfig{}
+	resp := &pb.PreRegisterEdgeResponse{
+		Telemetry: &pb.EdgeTelemetryConfig{
+			Enabled:  true,
+			WriteUrl: "https://telemetry.example.com/api/v1/write",
+		},
+	}
+
+	if err := applyEdgeDeployTelemetryConfig(cfg, resp); err == nil {
+		t.Fatal("expected missing telemetry token to fail")
 	}
 }

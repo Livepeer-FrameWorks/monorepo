@@ -33,6 +33,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -2723,7 +2724,8 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	// Commodore-supplied retention_days takes precedence; the tier cap
 	// (0=uncapped on paid, finite on Free) clamps the result.
 	vodRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 0 /* infinite VOD default */, s.logger)
-	_, err = s.db.ExecContext(ctx, `
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, execErr := s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, internal_name,
 			tenant_id, user_id, status,
@@ -2732,6 +2734,8 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
 		        'in_progress', $5, $6, $7, $8, $9, $10, NOW(), NOW())
 	`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil)
+		return execErr
+	})
 
 	if err != nil {
 		// Abort S3 upload since we can't track it
@@ -2743,13 +2747,16 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	uploadExpiresAt := time.Now().Add(2 * time.Hour)
 
 	// Store VOD metadata
-	_, err = s.db.ExecContext(ctx, `
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, execErr := s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.vod_metadata (
 			artifact_hash, filename, title, description, content_type,
 			s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 	`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key, uploadExpiresAt, partCount)
+		return execErr
+	})
 
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to store VOD metadata")

@@ -1879,11 +1879,10 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		nodeUpdate.BwLimit = sidecarcfg.ConfiguredBandwidthLimitBytesPerSec()
 	}
 
-	// Get Disk Usage from OS
-	// Default to /var/lib/mistserver if env not set
+	// Get Disk Usage from OS.
 	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
 	if storagePath == "" {
-		storagePath = "/var/lib/mistserver"
+		storagePath = sidecarcfg.GetStoragePath()
 	}
 
 	info, err := os.Stat(storagePath)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -2485,7 +2486,12 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 	}
 	// DVR
 	if sm.repos.DVR != nil {
-		recs, err := sm.repos.DVR.ListAllDVR(ctx)
+		var recs []DVRRecord
+		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			var listErr error
+			recs, listErr = sm.repos.DVR.ListAllDVR(ctx)
+			return listErr
+		})
 		if err != nil {
 			if rehydrateErr == nil {
 				rehydrateErr = err

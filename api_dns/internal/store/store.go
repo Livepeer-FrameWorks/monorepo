@@ -11,6 +11,7 @@ import (
 	"time"
 
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 var ErrNotFound = errors.New("record not found")
@@ -430,10 +431,12 @@ func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, 
 
 	var bundle TLSBundle
 	var domainsJSON []byte
-	err := s.db.QueryRowContext(ctx, query, bundleID).Scan(
-		&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
-		&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
-	)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query, bundleID).Scan(
+			&bundle.ID, &bundle.BundleID, &domainsJSON, &bundle.CertPEM, &bundle.KeyPEM,
+			&bundle.ExpiresAt, &bundle.CreatedAt, &bundle.UpdatedAt, &bundle.IssuerCA,
+		)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -476,9 +479,11 @@ func (s *Store) SaveTLSBundle(ctx context.Context, bundle *TLSBundle) error {
 			updated_at = NOW()
 		RETURNING id, created_at
 	`
-	return s.db.QueryRowContext(ctx, query,
-		bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt, issuer,
-	).Scan(&bundle.ID, &bundle.CreatedAt)
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query,
+			bundle.BundleID, string(domainsJSON), bundle.CertPEM, encryptedKey, bundle.ExpiresAt, issuer,
+		).Scan(&bundle.ID, &bundle.CreatedAt)
+	})
 }
 
 func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]TLSBundle, error) {
@@ -527,9 +532,11 @@ func (s *Store) GetInternalCA(ctx context.Context, role string) (*InternalCA, er
 
 	var ca InternalCA
 	var keyPEM sql.NullString
-	err := s.db.QueryRowContext(ctx, query, role).Scan(
-		&ca.Role, &ca.CertPEM, &keyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
-	)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query, role).Scan(
+			&ca.Role, &ca.CertPEM, &keyPEM, &ca.ExpiresAt, &ca.CreatedAt, &ca.UpdatedAt,
+		)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -567,7 +574,9 @@ func (s *Store) SaveInternalCA(ctx context.Context, ca *InternalCA) error {
 			updated_at = NOW()
 		RETURNING created_at
 	`
-	return s.db.QueryRowContext(ctx, query, ca.Role, ca.CertPEM, encryptedKey, ca.ExpiresAt).Scan(&ca.CreatedAt)
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query, ca.Role, ca.CertPEM, encryptedKey, ca.ExpiresAt).Scan(&ca.CreatedAt)
+	})
 }
 
 func (s *Store) GetInternalCertificate(ctx context.Context, nodeID, serviceType string) (*InternalCertificate, error) {
@@ -578,10 +587,12 @@ func (s *Store) GetInternalCertificate(ctx context.Context, nodeID, serviceType 
 	`
 
 	var cert InternalCertificate
-	err := s.db.QueryRowContext(ctx, query, nodeID, serviceType).Scan(
-		&cert.ID, &cert.NodeID, &cert.ClusterID, &cert.ServiceType, &cert.CertPEM, &cert.KeyPEM,
-		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
-	)
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query, nodeID, serviceType).Scan(
+			&cert.ID, &cert.NodeID, &cert.ClusterID, &cert.ServiceType, &cert.CertPEM, &cert.KeyPEM,
+			&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
+		)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -611,7 +622,9 @@ func (s *Store) SaveInternalCertificate(ctx context.Context, cert *InternalCerti
 			updated_at = NOW()
 		RETURNING id, created_at
 	`
-	return s.db.QueryRowContext(ctx, query,
-		cert.NodeID, cert.ClusterID, cert.ServiceType, cert.CertPEM, encryptedKey, cert.ExpiresAt,
-	).Scan(&cert.ID, &cert.CreatedAt)
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, query,
+			cert.NodeID, cert.ClusterID, cert.ServiceType, cert.CertPEM, encryptedKey, cert.ExpiresAt,
+		).Scan(&cert.ID, &cert.CreatedAt)
+	})
 }

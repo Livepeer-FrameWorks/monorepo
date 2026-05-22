@@ -134,14 +134,20 @@ func RequireMistAdmin(logger logging.Logger) gin.HandlerFunc {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 			defer cancel()
 			resp, err := validateMistAdminSession(ctx, cookie)
-			if err == nil && resp != nil && resp.GetValid() && resp.GetExpiresAt() > time.Now().Unix() {
+			if err != nil {
+				logger.WithError(err).Info("mist admin cookie validation unavailable")
+				c.String(http.StatusServiceUnavailable, "session validation unavailable")
+				c.Abort()
+				return
+			}
+			if resp != nil && resp.GetValid() && resp.GetExpiresAt() > time.Now().Unix() {
 				c.Set("mist_admin_user_id", resp.GetUserId())
 				c.Set("mist_admin_tenant_id", resp.GetTenantId())
 				c.Set("mist_admin_role", resp.GetRole())
 				c.Next()
 				return
 			}
-			logger.WithError(err).Debug("mist admin cookie rejected")
+			logger.Debug("mist admin cookie rejected")
 		}
 
 		c.String(http.StatusUnauthorized, "unauthorized")
@@ -178,8 +184,13 @@ func MistAdminSessionHandler(logger logging.Logger) gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		resp, err := validateMistAdminSession(ctx, token)
-		if err != nil || resp == nil || !resp.GetValid() {
-			logger.WithError(err).Info("mist admin session exchange rejected")
+		if err != nil {
+			logger.WithError(err).Info("mist admin session validation unavailable")
+			c.String(http.StatusServiceUnavailable, "session validation unavailable")
+			return
+		}
+		if resp == nil || !resp.GetValid() {
+			logger.Info("mist admin session exchange rejected")
 			c.String(http.StatusUnauthorized, "invalid or expired session token")
 			return
 		}

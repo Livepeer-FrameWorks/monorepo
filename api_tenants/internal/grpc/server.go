@@ -4315,7 +4315,9 @@ func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.Ups
 	if release.GetPublishedAt() != nil {
 		publishedAt = release.GetPublishedAt().AsTime()
 	}
-	row := s.db.QueryRowContext(ctx, `
+	var saved *pb.EdgeRelease
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row := s.db.QueryRowContext(ctx, `
 			INSERT INTO quartermaster.edge_releases (channel, version, components, published_at)
 			VALUES ($1, $2, $3::jsonb, $4)
 			ON CONFLICT (channel, version) DO UPDATE SET
@@ -4323,7 +4325,10 @@ func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.Ups
 				published_at = EXCLUDED.published_at
 			RETURNING channel, version, components::text, published_at
 		`, channel, version, components, publishedAt)
-	saved, err := scanEdgeRelease(row)
+		var scanErr error
+		saved, scanErr = scanEdgeRelease(row)
+		return scanErr
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert release: %v", err)
 	}
@@ -4527,10 +4532,12 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 		return nil, err
 	}
 	targetVersion := strings.TrimSpace(target.GetTargetVersion())
-	if existsErr := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); existsErr != nil {
-		return nil, existsErr
-	}
-	row := s.db.QueryRowContext(ctx, `
+	var saved *pb.ClusterReleaseTarget
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		if existsErr := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); existsErr != nil {
+			return existsErr
+		}
+		row := s.db.QueryRowContext(ctx, `
 				INSERT INTO quartermaster.cluster_release_targets (cluster_id, channel, target_version, rollout_plan, paused, updated_at)
 				VALUES ($1, $2, NULLIF($3, ''), $4::jsonb, $5, NOW())
 			ON CONFLICT (cluster_id) DO UPDATE SET
@@ -4541,8 +4548,14 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 				updated_at = NOW()
 			RETURNING cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
 		`, clusterID, channel, targetVersion, rolloutPlan, target.GetPaused())
-	saved, err := scanClusterReleaseTarget(row)
+		var scanErr error
+		saved, scanErr = scanClusterReleaseTarget(row)
+		return scanErr
+	})
 	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Internal, "set release target: %v", err)
 	}
 	return &pb.ClusterReleaseTargetResponse{Target: saved}, nil
@@ -4550,22 +4563,22 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 
 func (s *QuartermasterServer) ensureEdgeReleaseTargetExists(ctx context.Context, channel, version string) error {
 	var exists bool
-	var err error
-	if strings.TrimSpace(version) == "" {
-		err = s.db.QueryRowContext(ctx, `
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		if strings.TrimSpace(version) == "" {
+			return s.db.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM quartermaster.edge_releases
 				WHERE channel = $1
 			)
 		`, channel).Scan(&exists)
-	} else {
-		err = s.db.QueryRowContext(ctx, `
+		}
+		return s.db.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM quartermaster.edge_releases
 				WHERE channel = $1 AND version = $2
 			)
 		`, channel, version).Scan(&exists)
-	}
+	})
 	if err != nil {
 		return status.Errorf(codes.Internal, "check edge release target: %v", err)
 	}
@@ -5634,6 +5647,9 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"node %s already exists in cluster %s", nodeID, existingClusterID)
 		}
+		if err := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); err != nil {
+			return nil, err
+		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
@@ -5671,43 +5687,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
 
-	// Insert node fingerprint if fingerprint data provided
-	machineIDSHA := req.GetMachineIdSha256()
-	macsSHA := req.GetMacsSha256()
-	ips := req.GetIps()
-	labels := req.GetLabels()
-
-	hasLabels := labels != nil && len(labels.GetFields()) > 0
-	if machineIDSHA != "" || macsSHA != "" || len(ips) > 0 || hasLabels {
-		attrsJSON := "{}"
-		if hasLabels {
-			if attrsBytes, marshalErr := json.Marshal(labels.AsMap()); marshalErr == nil {
-				attrsJSON = string(attrsBytes)
-			}
-		}
-
-		var ipsLiteral any = nil
-		if len(ips) > 0 {
-			ipsLiteral = "{" + strings.Join(ips, ",") + "}"
-		}
-
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO quartermaster.node_fingerprints (tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256, seen_ips, attrs)
-			VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5::inet[], $6)
-			ON CONFLICT (node_id) DO UPDATE SET
-				tenant_id = EXCLUDED.tenant_id,
-				fingerprint_machine_sha256 = COALESCE(EXCLUDED.fingerprint_machine_sha256, quartermaster.node_fingerprints.fingerprint_machine_sha256),
-				fingerprint_macs_sha256 = COALESCE(EXCLUDED.fingerprint_macs_sha256, quartermaster.node_fingerprints.fingerprint_macs_sha256),
-				attrs = CASE
-					WHEN EXCLUDED.attrs IS NULL OR EXCLUDED.attrs = '{}'::jsonb THEN quartermaster.node_fingerprints.attrs
-					ELSE EXCLUDED.attrs
-				END,
-				last_seen = NOW(),
-				seen_ips = quartermaster.node_fingerprints.seen_ips || EXCLUDED.seen_ips
-		`, tenantID.String, nodeID, machineIDSHA, macsSHA, ipsLiteral, attrsJSON)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to upsert node fingerprint: %v", err)
-		}
+	if err := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); err != nil {
+		return nil, err
 	}
 
 	// Update token usage
@@ -6043,6 +6024,46 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		// existing Privateer cert-sync loop. SERVICE_TOKEN is not returned
 		// here — operators deliver it to enrolling nodes via `mesh join`.
 	}, nil
+}
+
+func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID string, req *pb.BootstrapEdgeNodeRequest) error {
+	machineIDSHA := req.GetMachineIdSha256()
+	macsSHA := req.GetMacsSha256()
+	ips := req.GetIps()
+	labels := req.GetLabels()
+
+	hasLabels := labels != nil && len(labels.GetFields()) > 0
+	if machineIDSHA == "" && macsSHA == "" && len(ips) == 0 && !hasLabels {
+		return nil
+	}
+
+	attrsJSON := "{}"
+	if hasLabels {
+		attrsBytes, err := json.Marshal(labels.AsMap())
+		if err != nil {
+			return status.Errorf(codes.Internal, "marshal node fingerprint labels: %v", err)
+		}
+		attrsJSON = string(attrsBytes)
+	}
+
+	_, err := tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.node_fingerprints (tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256, seen_ips, attrs)
+			VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5::inet[], $6)
+			ON CONFLICT (node_id) DO UPDATE SET
+				tenant_id = EXCLUDED.tenant_id,
+				fingerprint_machine_sha256 = COALESCE(EXCLUDED.fingerprint_machine_sha256, quartermaster.node_fingerprints.fingerprint_machine_sha256),
+				fingerprint_macs_sha256 = COALESCE(EXCLUDED.fingerprint_macs_sha256, quartermaster.node_fingerprints.fingerprint_macs_sha256),
+				attrs = CASE
+					WHEN EXCLUDED.attrs IS NULL OR EXCLUDED.attrs = '{}'::jsonb THEN quartermaster.node_fingerprints.attrs
+					ELSE EXCLUDED.attrs
+				END,
+				last_seen = NOW(),
+				seen_ips = quartermaster.node_fingerprints.seen_ips || EXCLUDED.seen_ips
+		`, tenantID, nodeID, machineIDSHA, macsSHA, pq.Array(ips), attrsJSON)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to upsert node fingerprint: %v", err)
+	}
+	return nil
 }
 
 // SetNodeEnrollmentOrigin flips a node's enrollment_origin column. Used by
