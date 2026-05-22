@@ -1373,14 +1373,11 @@ func summarizePullPlacementRejects(rejects []pullsource.PlacementReject) string 
 	return strings.Join(parts, "; ")
 }
 
-func pullUpstreamScore(upstream string, activeScore uint64) uint64 {
+func pullUpstreamScore(upstream string) uint64 {
 	if !pullsource.IsValid(upstream) {
 		return 0
 	}
-	if activeScore == 0 {
-		return 1
-	}
-	return 0
+	return 1
 }
 
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
@@ -1424,52 +1421,24 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		return
 	}
 
-	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
-	activeDTSC := ""
-	activeSource := "local"
-	originClusterID := ""
-	if err == nil {
-		hostname := bestNode
-		if u, parseErr := url.Parse(bestNode); parseErr == nil && u.Hostname() != "" {
-			hostname = u.Hostname()
-		}
-		activeDTSC = "dtsc://" + hostname
-	} else if remoteDTSC, remoteCluster := resolveRemoteSource(ctx, streamName, lat, lon); remoteDTSC != "" {
-		activeDTSC = remoteDTSC
-		activeSource = "remote"
-		originClusterID = remoteCluster
-	}
-
-	upstreamScore := pullUpstreamScore(upstream, score)
-	if activeDTSC == "" || upstreamScore > score {
-		durationMs := float32(time.Since(start).Milliseconds())
-		if metrics != nil {
-			metrics.RoutingDecisions.WithLabelValues("source", "pull_upstream").Inc()
-			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
-		}
-		logger.WithFields(logging.Fields{
-			"stream":         streamName,
-			"upstream_score": upstreamScore,
-			"active_score":   score,
-		}).Info("Source lookup: pull stream returning upstream origin")
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs)
-		c.String(http.StatusOK, upstream)
+	upstreamScore := pullUpstreamScore(upstream)
+	if upstreamScore == 0 {
+		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI failed validation; refusing")
+		c.Status(http.StatusNotFound)
 		return
 	}
 
 	durationMs := float32(time.Since(start).Milliseconds())
 	if metrics != nil {
-		metrics.RoutingDecisions.WithLabelValues("source", activeSource).Inc()
+		metrics.RoutingDecisions.WithLabelValues("source", "pull_upstream").Inc()
 		metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 	}
 	logger.WithFields(logging.Fields{
-		"stream":       streamName,
-		"dtsc_url":     activeDTSC,
-		"active_score": score,
-		"node_name":    nodeName,
-	}).Info("Source lookup: pull stream returning active DTSC origin")
-	go postBalancingEventEx(c, streamName, nodeName, score, lat, lon, "source_selection", activeDTSC, nodeLat, nodeLon, "", durationMs, originClusterID)
-	c.String(http.StatusOK, activeDTSC)
+		"stream":         streamName,
+		"upstream_score": upstreamScore,
+	}).Info("Source lookup: pull stream returning upstream origin")
+	go postBalancingEvent(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs)
+	c.String(http.StatusOK, upstream)
 }
 
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)

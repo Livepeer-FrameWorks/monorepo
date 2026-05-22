@@ -474,7 +474,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 // playback uses the chapter VOD artifact's playback_id (resolved
 // through Commodore) and never produces a dvr+ token.
 func ExtractInternalName(streamName string) string {
-	for _, prefix := range []string{"live+", "vod+", "dvr+", "processing+"} {
+	for _, prefix := range []string{"live+", "pull+", "vod+", "dvr+", "processing+"} {
 		if rest, ok := strings.CutPrefix(streamName, prefix); ok {
 			return rest
 		}

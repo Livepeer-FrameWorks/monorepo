@@ -13,6 +13,7 @@ func TestExtractInternalName(t *testing.T) {
 		expected string
 	}{
 		{name: "live prefix", input: "live+stream_id", expected: "stream_id"},
+		{name: "pull prefix", input: "pull+stream_id", expected: "stream_id"},
 		{name: "vod prefix", input: "vod+asset_hash", expected: "asset_hash"},
 		{name: "plain", input: "plain_stream", expected: "plain_stream"},
 		{name: "plus in name", input: "stream+with+plus", expected: "stream+with+plus"},
