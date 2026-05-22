@@ -120,6 +120,37 @@ func TestServerCertHolderFileBundleDoesNotShadowPublicWildcard(t *testing.T) {
 	}
 }
 
+func TestTLSBundleNamesUseDeclaredRoutingNamesOnly(t *testing.T) {
+	bundle := testTLSBundle(t,
+		"file:/etc/frameworks/pki/services/foghorn/tls.crt",
+		"foghorn.internal",
+		"foghorn.media-eu-1.frameworks.network",
+	)
+	bundle.SiteAddresses = []string{"foghorn.internal", "  *.media-eu-1.frameworks.network.  "}
+
+	names := tlsBundleNames(bundle)
+	want := []string{"foghorn.internal", "*.media-eu-1.frameworks.network"}
+	if len(names) != len(want) {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("names = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestServerCertHolderRejectsConfiguredNameNotCoveredByCert(t *testing.T) {
+	var holder serverCertHolder
+	bundle := testTLSBundle(t, "cluster:media-eu-1", "*.other.frameworks.network")
+	bundle.Domain = "*.media-eu-1.frameworks.network"
+	bundle.SiteAddresses = []string{"*.media-eu-1.frameworks.network"}
+
+	if err := holder.StoreBundles([]*pb.TLSCertBundle{bundle}); err == nil {
+		t.Fatal("expected certificate/name mismatch to fail")
+	}
+}
+
 func TestServerCertHolderRejectsEmptyBundles(t *testing.T) {
 	var holder serverCertHolder
 	if err := holder.StoreBundles(nil); err == nil {

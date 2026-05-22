@@ -212,7 +212,11 @@ func (h *serverCertHolder) StoreBundles(bundles []*pb.TLSCertBundle) error {
 		if set.defaultCert == nil {
 			set.defaultCert = certPtr
 		}
-		for _, name := range tlsBundleNames(bundle, cert.Leaf) {
+		names := tlsBundleNames(bundle)
+		for _, name := range names {
+			if !certCoversBundleName(cert.Leaf, name) {
+				return fmt.Errorf("TLS bundle %q certificate does not cover configured name %q", bundle.GetBundleId(), name)
+			}
 			set.byName[name] = certPtr
 		}
 	}
@@ -249,7 +253,7 @@ func (h *serverCertHolder) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Cert
 	return set.defaultCert, nil
 }
 
-func tlsBundleNames(bundle *pb.TLSCertBundle, cert *x509.Certificate) []string {
+func tlsBundleNames(bundle *pb.TLSCertBundle) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	add := func(value string) {
@@ -263,18 +267,32 @@ func tlsBundleNames(bundle *pb.TLSCertBundle, cert *x509.Certificate) []string {
 		seen[value] = struct{}{}
 		out = append(out, value)
 	}
-	add(bundle.GetDomain())
+	for _, name := range strings.Split(bundle.GetDomain(), ",") {
+		add(name)
+	}
 	for _, name := range bundle.GetSiteAddresses() {
 		add(name)
 	}
-	// File-backed internal leaves may contain public FQDN SANs for mesh reachability;
-	// do not let those exact names shadow Navigator's public wildcard bundles.
-	if cert != nil && !strings.HasPrefix(bundle.GetBundleId(), "file:") {
-		for _, name := range cert.DNSNames {
-			add(name)
-		}
-	}
 	return out
+}
+
+func certCoversBundleName(cert *x509.Certificate, name string) bool {
+	if cert == nil {
+		return false
+	}
+	name = strings.Trim(strings.ToLower(strings.TrimSpace(name)), ".")
+	if name == "" {
+		return true
+	}
+	if strings.HasPrefix(name, "*.") {
+		for _, dnsName := range cert.DNSNames {
+			if strings.Trim(strings.ToLower(strings.TrimSpace(dnsName)), ".") == name {
+				return true
+			}
+		}
+		return cert.VerifyHostname("foghorn."+strings.TrimPrefix(name, "*.")) == nil
+	}
+	return cert.VerifyHostname(name) == nil
 }
 
 func wildcardMatches(pattern, serverName string) bool {
