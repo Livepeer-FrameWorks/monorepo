@@ -132,48 +132,30 @@ type ServiceInfo struct {
 	FullImage string
 }
 
-// ValidateServiceCohorts rejects manifests that split the core control-plane
-// cohort across different service versions. Those services exchange Foghorn
-// routing/control RPCs during provisioning and request handling, so a manifest
-// that carries only part of the cohort forward is not deployable.
-func (m *Manifest) ValidateServiceCohorts() error {
+// ValidateServiceArtifacts verifies each service's native artifacts match that
+// service's own release identity. Carry-forward may intentionally leave
+// different services at different versions; dependency-aware release hashing
+// decides when a service must rebuild.
+func (m *Manifest) ValidateServiceArtifacts() error {
 	if m == nil {
 		return nil
 	}
-	if !supportsCoreCohortValidation(m.PlatformVersion) {
+	if !supportsServiceArtifactValidation(m.PlatformVersion) {
 		return nil
 	}
-	for _, cohort := range [][]string{{"bridge", "commodore", "foghorn", "quartermaster"}} {
-		versions := make(map[string]string, len(cohort))
-		for _, name := range cohort {
-			version, ok := m.serviceVersion(name)
-			if !ok {
-				versions = nil
-				break
-			}
-			versions[name] = version
+	for _, svc := range m.Services {
+		version := strings.TrimSpace(svc.ServiceVersion)
+		if version == "" {
+			version = strings.TrimSpace(m.PlatformVersion)
 		}
-		if len(versions) == 0 {
-			continue
-		}
-
-		expected := versions[cohort[0]]
-		for _, name := range cohort[1:] {
-			if versions[name] == expected {
-				continue
-			}
-			return fmt.Errorf("release manifest %s splits core control-plane service versions: %s=%s, %s=%s", m.PlatformVersion, cohort[0], expected, name, versions[name])
-		}
-		for _, name := range cohort {
-			if err := m.validateNativeBinaryVersion(name, versions[name]); err != nil {
-				return err
-			}
+		if err := m.validateNativeBinaryVersion(svc.Name, version); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func supportsCoreCohortValidation(version string) bool {
+func supportsServiceArtifactValidation(version string) bool {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
 	parts := strings.Split(version, ".")
 	if len(parts) < 3 {
@@ -194,18 +176,10 @@ func supportsCoreCohortValidation(version string) bool {
 	return patch >= 40
 }
 
-func (m *Manifest) serviceVersion(name string) (string, bool) {
-	for _, svc := range m.Services {
-		if svc.Name != name {
-			continue
-		}
-		version := strings.TrimSpace(svc.ServiceVersion)
-		if version == "" {
-			version = strings.TrimSpace(m.PlatformVersion)
-		}
-		return version, true
-	}
-	return "", false
+// ValidateServiceCohorts is kept for callers compiled against the old method
+// name. It no longer enforces cross-service version equality.
+func (m *Manifest) ValidateServiceCohorts() error {
+	return m.ValidateServiceArtifacts()
 }
 
 func (m *Manifest) validateNativeBinaryVersion(name, version string) error {

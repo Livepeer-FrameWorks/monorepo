@@ -253,7 +253,7 @@ services:
 	}
 }
 
-func TestPlanBuildsControlPlaneCohortWhenOneMemberChanges(t *testing.T) {
+func TestPlanDoesNotBuildUnchangedServicesWhenOneCoreServiceChanges(t *testing.T) {
 	componentsJSON := `{"services":[
 		{"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false,"darwin_binary":true},
 		{"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true,"darwin_binary":false},
@@ -314,13 +314,93 @@ func TestPlanBuildsControlPlaneCohortWhenOneMemberChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn"} {
-		d := plan2.Decisions[name]
-		if d.Action != ActionBuild {
-			t.Fatalf("%s action = %s, want build", name, d.Action)
+	if d := plan2.Decisions["commodore"]; d.Action != ActionBuild {
+		t.Fatalf("commodore action = %s, want build", d.Action)
+	}
+	for _, name := range []string{"bridge", "quartermaster", "foghorn", "toy"} {
+		if d := plan2.Decisions[name]; d.Action != ActionCarryForward {
+			t.Fatalf("%s action = %s, want carry_forward", name, d.Action)
 		}
-		if d.CarriedService != nil || d.CarriedNativeBinary != nil {
-			t.Fatalf("%s carried stale release identity after cohort build: service=%+v native=%+v", name, d.CarriedService, d.CarriedNativeBinary)
+	}
+	if plan2.Summary.BuildCount != 1 || plan2.Summary.CarryForwardCount != 4 {
+		t.Fatalf("summary = %+v, want build=1 carry=4", plan2.Summary)
+	}
+	if len(plan2.Notes) != 0 {
+		t.Fatalf("notes = %+v, want no forced build notes", plan2.Notes)
+	}
+}
+
+func TestPlanBuildsProtoConsumersWhenProtoDefinitionChanges(t *testing.T) {
+	componentsJSON := `{"services":[
+		{"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false,"darwin_binary":true},
+		{"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true,"darwin_binary":false},
+		{"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false,"darwin_binary":true},
+		{"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true,"darwin_binary":false},
+		{"name":"toy","context":"toy","cmd":"./cmd/toy","cgo":false,"darwin_binary":true}
+	]}`
+	files := map[string]string{
+		".github/release-components.json":    componentsJSON,
+		".go-version":                        "1.26.2",
+		".github/workflows/release.yml":      "name: release\n",
+		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
+		"pkg/proto/proto.go":                 "package proto\n",
+		"pkg/proto/foghorn.proto":            "syntax = \"proto3\";\nservice ViewerControlService {}\n",
+		"tools/release-plan/release-plan.go": "package main // stub for HashWorkflowFiles\n",
+	}
+	for _, svc := range []struct {
+		context string
+		cmd     string
+		proto   bool
+	}{
+		{context: "api_gateway", cmd: "bridge", proto: true},
+		{context: "api_tenants", cmd: "quartermaster", proto: true},
+		{context: "api_control", cmd: "commodore", proto: true},
+		{context: "api_balancing", cmd: "foghorn", proto: true},
+		{context: "toy", cmd: "toy"},
+	} {
+		files[filepath.Join(svc.context, "go.mod")] = "module example.com/" + svc.context + "\n\ngo 1.26.2\n\nrequire github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0\n\nreplace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg\n"
+		if svc.proto {
+			files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = "package main\nimport _ \"github.com/Livepeer-FrameWorks/monorepo/pkg/proto\"\nfunc main() {}\n"
+		} else {
+			files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = "package main\nfunc main() {}\n"
+		}
+	}
+	monorepo := writeFakeMonorepo(t, files)
+
+	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitopsDir := t.TempDir()
+	if mkdirErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var baseline strings.Builder
+	baseline.WriteString("platform_version: v0.2.39\nservices:\n")
+	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn", "toy"} {
+		hash := plan1.Decisions[name].SourceHash
+		fmt.Fprintf(&baseline, "  - name: %s\n    service_version: v0.2.39\n    image: example.com/frameworks-%s:v0.2.39\n    digest: sha256:%s\n    source_hash: %s\n", name, name, name, hash)
+	}
+	if writeErr := os.WriteFile(filepath.Join(gitopsDir, "releases", "v0.2.39.yaml"), []byte(baseline.String()), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(monorepo, "pkg", "proto", "foghorn.proto"), []byte("syntax = \"proto3\";\nservice ViewerControlService { rpc GetNodeHealth(HealthRequest) returns (HealthResponse); }\nmessage HealthRequest {}\nmessage HealthResponse {}\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	plan2, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn"} {
+		if d := plan2.Decisions[name]; d.Action != ActionBuild {
+			t.Fatalf("%s action = %s, want build", name, d.Action)
 		}
 	}
 	if d := plan2.Decisions["toy"]; d.Action != ActionCarryForward {
@@ -328,9 +408,6 @@ func TestPlanBuildsControlPlaneCohortWhenOneMemberChanges(t *testing.T) {
 	}
 	if plan2.Summary.BuildCount != 4 || plan2.Summary.CarryForwardCount != 1 {
 		t.Fatalf("summary = %+v, want build=4 carry=1", plan2.Summary)
-	}
-	if len(plan2.Notes) == 0 || !strings.Contains(plan2.Notes[0], "forced build cohort") {
-		t.Fatalf("notes = %+v, want forced cohort note", plan2.Notes)
 	}
 }
 

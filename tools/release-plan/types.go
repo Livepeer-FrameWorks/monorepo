@@ -16,12 +16,13 @@ import "time"
 
 // ReleaseComponent describes one Go service in .github/release-components.json.
 type ReleaseComponent struct {
-	Name         string `json:"name"`
-	Context      string `json:"context"`
-	Cmd          string `json:"cmd"`
-	Dockerfile   string `json:"dockerfile"`
-	CGO          bool   `json:"cgo"`
-	DarwinBinary bool   `json:"darwin_binary"`
+	Name           string   `json:"name"`
+	Context        string   `json:"context"`
+	Cmd            string   `json:"cmd"`
+	Dockerfile     string   `json:"dockerfile"`
+	CGO            bool     `json:"cgo"`
+	DarwinBinary   bool     `json:"darwin_binary"`
+	ExtraHashPaths []string `json:"extra_hash_paths,omitempty"`
 }
 
 // ReleaseWebapp describes one webapp (SvelteKit / Vite / Astro) in

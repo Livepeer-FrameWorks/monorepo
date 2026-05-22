@@ -86,7 +86,6 @@ func (p *Planner) Plan() (*PlanOutput, error) {
 		}
 		out.Decisions[app.Name] = d
 	}
-	out.Notes = append(out.Notes, applyServiceBuildCohorts(out.Decisions)...)
 
 	for _, d := range out.Decisions {
 		switch d.Action {
@@ -98,48 +97,6 @@ func (p *Planner) Plan() (*PlanOutput, error) {
 	}
 
 	return out, nil
-}
-
-// The core control-plane cohort shares service discovery and Foghorn control
-// RPC contracts; carrying only one member forward can produce a valid-looking
-// manifest whose binaries disagree at runtime.
-var serviceBuildCohorts = [][]string{
-	{"bridge", "commodore", "foghorn", "quartermaster"},
-}
-
-func applyServiceBuildCohorts(decisions map[string]Decision) []string {
-	var notes []string
-	for _, cohort := range serviceBuildCohorts {
-		var triggers []string
-		for _, name := range cohort {
-			d, ok := decisions[name]
-			if !ok || d.Kind != KindService || d.Action != ActionBuild {
-				continue
-			}
-			triggers = append(triggers, name)
-		}
-		if len(triggers) == 0 {
-			continue
-		}
-
-		var forced []string
-		for _, name := range cohort {
-			d, ok := decisions[name]
-			if !ok || d.Kind != KindService || d.Action != ActionCarryForward {
-				continue
-			}
-			d.Action = ActionBuild
-			d.CarriedService = nil
-			d.CarriedNativeBinary = nil
-			d.CarriedInterface = nil
-			decisions[name] = d
-			forced = append(forced, name)
-		}
-		if len(forced) > 0 {
-			notes = append(notes, fmt.Sprintf("forced build cohort [%s] because [%s] changed", strings.Join(forced, ", "), strings.Join(triggers, ", ")))
-		}
-	}
-	return notes
 }
 
 func (p *Planner) decideForGoService(comp ReleaseComponent, kind ComponentKind, baseline *Manifest) (Decision, error) {

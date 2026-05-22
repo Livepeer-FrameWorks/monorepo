@@ -47,6 +47,8 @@ type HashInputs struct {
 //   - service go.mod, go.sum.
 //   - pkg/go.mod, pkg/go.sum (required because of the `replace ../pkg`
 //     directive).
+//   - Explicit extra hash paths from release-components.json, used for
+//     non-Go contract inputs such as .proto files.
 //   - The service Dockerfile.
 //   - The release-components.json entry (cgo, darwin_binary flags).
 //   - Go toolchain version.
@@ -68,7 +70,11 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("go list deps for %s: %w", inputs.Component.Name, err)
 	}
+	usesProtoPackage := false
 	for _, f := range files {
+		if isUnderRelPath(inputs.MonorepoRoot, f, "pkg/proto") {
+			usesProtoPackage = true
+		}
 		if fileErr := hashFileRel(h, inputs.MonorepoRoot, f, &contributingFiles); fileErr != nil {
 			return "", nil, fmt.Errorf("hash %s: %w", f, fileErr)
 		}
@@ -90,7 +96,28 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 		}
 	}
 
-	// 4. Service Dockerfile.
+	// 4. Contract/source inputs that are not visible to go list. If the
+	// command imports the monorepo proto package, the .proto definitions are
+	// part of its ABI even before generated .pb.go files are refreshed.
+	extraFiles, err := collectExtraHashFiles(inputs.MonorepoRoot, inputs.Component.ExtraHashPaths)
+	if err != nil {
+		return "", nil, err
+	}
+	if usesProtoPackage {
+		protoFiles, protoErr := collectFilesByExtension(filepath.Join(inputs.MonorepoRoot, "pkg", "proto"), ".proto")
+		if protoErr != nil {
+			return "", nil, protoErr
+		}
+		extraFiles = append(extraFiles, protoFiles...)
+	}
+	extraFiles = uniqueSortedPaths(extraFiles)
+	for _, f := range extraFiles {
+		if fileErr := hashFileRel(h, inputs.MonorepoRoot, f, &contributingFiles); fileErr != nil {
+			return "", nil, fmt.Errorf("hash %s: %w", f, fileErr)
+		}
+	}
+
+	// 5. Service Dockerfile.
 	if inputs.Component.Dockerfile != "" {
 		path := filepath.Join(inputs.MonorepoRoot, inputs.Component.Dockerfile)
 		if fileErr := hashFileRelIfExists(h, inputs.MonorepoRoot, path, &contributingFiles); fileErr != nil {
@@ -98,7 +125,7 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 		}
 	}
 
-	// 5. release-components.json entry — serialized canonically so flag
+	// 6. release-components.json entry — serialized canonically so flag
 	// changes (cgo, darwin_binary) invalidate the hash.
 	entryJSON, err := json.Marshal(inputs.Component)
 	if err != nil {
@@ -106,13 +133,108 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 	}
 	mustWrite(h, []byte("component-entry:"), entryJSON, []byte("\n"))
 
-	// 6. Go toolchain version.
+	// 7. Go toolchain version.
 	mustWrite(h, []byte("go-toolchain:"), []byte(inputs.GoToolchainVersion), []byte("\n"))
 
-	// 7. Workflow salt.
+	// 8. Workflow salt.
 	mustWrite(h, []byte("workflow-salt:"), []byte(inputs.WorkflowSalt), []byte("\n"))
 
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), contributingFiles, nil
+}
+
+func collectFilesByExtension(root, ext string) ([]string, error) {
+	var out []string
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ext {
+			return nil
+		}
+		out = append(out, path)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("walk %s: %w", root, err)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func collectExtraHashFiles(root string, paths []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	for _, raw := range paths {
+		rel := filepath.Clean(strings.TrimSpace(raw))
+		if rel == "." || rel == "" {
+			return nil, fmt.Errorf("extra_hash_paths contains empty path")
+		}
+		if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("extra_hash_paths entry %q must stay under the repository root", raw)
+		}
+
+		abs := filepath.Join(root, rel)
+		info, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("stat extra_hash_paths entry %q: %w", raw, err)
+		}
+		if !info.IsDir() {
+			seen[abs] = struct{}{}
+			continue
+		}
+		if walkErr := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			seen[path] = struct{}{}
+			return nil
+		}); walkErr != nil {
+			return nil, fmt.Errorf("walk extra_hash_paths entry %q: %w", raw, walkErr)
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func uniqueSortedPaths(paths []string) []string {
+	seen := map[string]struct{}{}
+	for _, path := range paths {
+		seen[path] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isUnderRelPath(root, path, relDir string) bool {
+	if isUnderRelPathRaw(root, path, relDir) {
+		return true
+	}
+	canonicalRoot, rootErr := filepath.EvalSymlinks(root)
+	canonicalPath, pathErr := filepath.EvalSymlinks(path)
+	if rootErr != nil || pathErr != nil {
+		return false
+	}
+	return isUnderRelPathRaw(canonicalRoot, canonicalPath, relDir)
+}
+
+func isUnderRelPathRaw(root, path, relDir string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	relDir = filepath.ToSlash(filepath.Clean(relDir))
+	return rel == relDir || strings.HasPrefix(rel, relDir+"/")
 }
 
 // goListDeps walks the import closure of the cmd target via `go list -deps

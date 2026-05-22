@@ -443,7 +443,7 @@ func TestGetServiceInfoFallsBackToPlatformVersionWhenServiceVersionEmpty(t *test
 	}
 }
 
-func TestValidateServiceCohortsRejectsCoreControlPlaneSkew(t *testing.T) {
+func TestValidateServiceArtifactsAllowsCarryForwardVersionSkew(t *testing.T) {
 	m := &Manifest{
 		PlatformVersion: "v0.2.59",
 		Services: []ServiceEntry{
@@ -453,12 +453,12 @@ func TestValidateServiceCohortsRejectsCoreControlPlaneSkew(t *testing.T) {
 			{Name: "quartermaster", ServiceVersion: "v0.2.59"},
 		},
 	}
-	if err := m.ValidateServiceCohorts(); err == nil {
-		t.Fatal("ValidateServiceCohorts accepted split core control-plane versions")
+	if err := m.ValidateServiceArtifacts(); err != nil {
+		t.Fatalf("ValidateServiceArtifacts rejected carry-forward version skew: %v", err)
 	}
 }
 
-func TestValidateServiceCohortsRejectsNativeBinaryVersionDrift(t *testing.T) {
+func TestValidateServiceArtifactsRejectsNativeBinaryVersionDrift(t *testing.T) {
 	m := &Manifest{
 		PlatformVersion: "v0.2.60",
 		Services: []ServiceEntry{
@@ -476,12 +476,12 @@ func TestValidateServiceCohortsRejectsNativeBinaryVersionDrift(t *testing.T) {
 			},
 		},
 	}
-	if err := m.ValidateServiceCohorts(); err == nil {
-		t.Fatal("ValidateServiceCohorts accepted native binary URL outside service version")
+	if err := m.ValidateServiceArtifacts(); err == nil {
+		t.Fatal("ValidateServiceArtifacts accepted native binary URL outside service version")
 	}
 }
 
-func TestFetcherRejectsSkewedLocalManifest(t *testing.T) {
+func TestFetcherAcceptsCarryForwardVersionSkew(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(repo, "channels"), 0o755); err != nil {
 		t.Fatal(err)
@@ -510,8 +510,8 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fetcher.Fetch("stable", "latest"); err == nil {
-		t.Fatal("Fetch accepted skewed local release manifest")
+	if _, err := fetcher.Fetch("stable", "latest"); err != nil {
+		t.Fatalf("Fetch rejected carry-forward version skew: %v", err)
 	}
 }
 
