@@ -830,6 +830,21 @@ func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *pb
 	return nil
 }
 
+func shouldSurfaceDecklogError(trigger *pb.MistTrigger) bool {
+	switch trigger.GetTriggerType() {
+	case string(mist.TriggerUserEnd),
+		string(mist.TriggerStreamEnd),
+		string(mist.TriggerPushEnd),
+		string(mist.TriggerRecordingEnd),
+		string(mist.TriggerRecordingSegment),
+		string(mist.TriggerLivepeerSegmentComplete),
+		string(mist.TriggerProcessAVSegmentComplete):
+		return true
+	default:
+		return false
+	}
+}
+
 // ProcessTypedTrigger processes a typed protobuf MistTrigger directly
 func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error) {
 	if trigger == nil {
@@ -931,6 +946,9 @@ func (p *Processor) handleProcessBilling(trigger *pb.MistTrigger) (string, bool,
 			"trigger_type": trigger.GetTriggerType(),
 			"error":        err,
 		}).Error("Failed to send process billing trigger to Decklog")
+		if shouldSurfaceDecklogError(trigger) {
+			return "", false, err
+		}
 	}
 	return "", false, nil
 }
@@ -2169,6 +2187,8 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 		pushEnd.StreamId = &streamID
 	}
 
+	var decklogErr error
+
 	// Send enriched trigger to Decklog
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
@@ -2177,6 +2197,7 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send push end trigger to Decklog")
+		decklogErr = err
 	}
 
 	// Update multistream push target status based on push result
@@ -2197,6 +2218,9 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 		go p.updatePushTargetStatus(pushEnd.GetStreamName(), targetURI, status, lastErr)
 	}
 
+	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
+		return "", false, decklogErr
+	}
 	return "", false, nil
 }
 
@@ -2463,6 +2487,8 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 		streamEnd.StreamId = &streamID
 	}
 
+	var decklogErr error
+
 	// Send enriched trigger to Decklog
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
@@ -2470,6 +2496,7 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send stream end trigger to Decklog")
+		decklogErr = err
 	}
 
 	// Update state offline
@@ -2494,6 +2521,9 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 	// Deactivate multistream push targets on the origin node
 	go p.deactivatePushTargets(nodeID, streamEnd.GetStreamName())
 
+	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
+		return "", false, decklogErr
+	}
 	return "", false, nil
 }
 
@@ -2566,6 +2596,8 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		}
 	}
 
+	var decklogErr error
+
 	// Send enriched trigger to Decklog
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
@@ -2574,6 +2606,7 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send user disconnect trigger to Decklog")
+		decklogErr = err
 	}
 
 	clientIP := userEnd.GetHost()
@@ -2581,6 +2614,9 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		state.DefaultManager().UpdateUserConnection(internalStreamName, trigger.GetNodeId(), info.TenantID, -1)
 	}
 
+	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
+		return "", false, decklogErr
+	}
 	return "", false, nil
 }
 
@@ -2679,6 +2715,9 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send recording trigger to Decklog")
+		if shouldSurfaceDecklogError(trigger) {
+			return "", false, err
+		}
 	}
 
 	return "", false, nil
@@ -2714,6 +2753,9 @@ func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, boo
 			"internal_name": internalName,
 			"node_id":       trigger.GetNodeId(),
 		}).Error("Failed to send RECORDING_SEGMENT trigger to Decklog")
+		if shouldSurfaceDecklogError(trigger) {
+			return "", false, err
+		}
 	}
 
 	return "", false, nil

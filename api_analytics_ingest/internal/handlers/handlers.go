@@ -288,6 +288,94 @@ func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
 	return nil
 }
 
+// HandleRawMistTriggerMessage ingests Decklog's audit republish of the
+// original MistTrigger envelope into the periscope.raw_mist_triggers
+// ClickHouse table. The dedupe key is (node_id, trigger_type,
+// source_request_id) — duplicate Kafka deliveries collapse on the table's
+// ReplacingMergeTree(ingested_at_ms) via argMax-on-read. See
+// docs/architecture/trigger-durability.md.
+func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg kafka.Message) error {
+	var trigger pb.MistTrigger
+	if err := proto.Unmarshal(msg.Value, &trigger); err != nil {
+		h.logger.WithError(err).WithField("topic", msg.Topic).Error("Failed to unmarshal raw MistTrigger; dropping poison message")
+		return nil
+	}
+
+	sourceRequestID := trigger.GetRequestId()
+	if sourceRequestID == "" {
+		// Headers may carry it as a fallback (Decklog stamps both).
+		if v, ok := msg.Headers["source_event_id"]; ok {
+			sourceRequestID = v
+		}
+	}
+	if sourceRequestID == "" {
+		h.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Warn("Skipping raw MistTrigger with empty source_request_id")
+		return nil
+	}
+
+	nodeID := trigger.GetNodeId()
+	if nodeID == "" {
+		if v, ok := msg.Headers["node_id"]; ok {
+			nodeID = v
+		}
+	}
+	triggerType := trigger.GetTriggerType()
+	if triggerType == "" {
+		if v, ok := msg.Headers["trigger_type"]; ok {
+			triggerType = v
+		}
+	}
+	tenantID := trigger.GetTenantId()
+	if tenantID == "" {
+		if v, ok := msg.Headers["tenant_id"]; ok {
+			tenantID = v
+		}
+	}
+	clusterID := trigger.GetClusterId()
+
+	receivedAtMS := trigger.GetTimestamp()
+	if receivedAtMS == 0 {
+		receivedAtMS = time.Now().UnixMilli()
+	} else if receivedAtMS < 1_000_000_000_000 {
+		receivedAtMS *= 1000
+	}
+	ingestedAtMS := time.Now().UnixMilli()
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO periscope.raw_mist_triggers (
+			node_id, trigger_type, source_request_id,
+			payload, tenant_id, cluster_id,
+			received_at_ms, forwarded_at_ms, ingested_at_ms, schema_version
+		)`)
+	if err != nil {
+		return fmt.Errorf("raw_mist_triggers prepare: %w", err)
+	}
+	if err := batch.Append(
+		nodeID,
+		triggerType,
+		sourceRequestID,
+		msg.Value, // raw protobuf payload — round-trippable
+		tenantID,
+		clusterID,
+		receivedAtMS,
+		ingestedAtMS, // forwarded_at_ms ≈ ingest time; producer doesn't stamp it today
+		ingestedAtMS,
+		int32(trigger.GetSchemaVersion()),
+	); err != nil {
+		return fmt.Errorf("raw_mist_triggers append: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("raw_mist_triggers send: %w", err)
+	}
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("raw_mist_triggers", "inserted").Inc()
+	}
+	return nil
+}
+
 func (h *AnalyticsHandler) skipEvent(event kafka.AnalyticsEvent, reason string) error {
 	fields := logging.Fields{
 		"event_type": event.EventType,

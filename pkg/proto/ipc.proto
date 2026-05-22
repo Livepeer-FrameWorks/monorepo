@@ -179,6 +179,15 @@ message ControlMessage {
     DVRStopRequest dvr_stop_request = 21;
     MistTrigger mist_trigger = 24;
     MistTriggerResponse mist_trigger_response = 25;
+    // Foghorn → Helmsman: durable ack for non-blocking final/accounting
+    // triggers (USER_END, STREAM_END, PUSH_END, RECORDING_END,
+    // RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE,
+    // PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). Sent only after Decklog's
+    // SendEvent returns success, which only happens after the Kafka publish
+    // commits — so a positive ack means the trigger is durably ingested.
+    // Helmsman keeps its WAL entry pending until this lands; on negative
+    // retryable ack, backoff+resend with the same stable RequestId.
+    MistTriggerAck mist_trigger_ack = 150;
     ConfigSeed config_seed = 29;
     // Helmsman to Foghorn: per-seed apply result for TLS/Caddy activation.
     // Gates Navigator's DNS membership decisions.
@@ -569,6 +578,38 @@ message MistTriggerResponse {
   string response = 2;        // What to return to MistServer (empty string aborts for blocking triggers)
   bool abort = 3;             // Explicit abort flag
   IngestErrorCode error_code = 4;
+}
+
+// MistTriggerAck is Foghorn's durable acknowledgement for non-blocking
+// final-event triggers. Helmsman persists each such trigger to its local
+// WAL before responding 200 OK to Mist and waits for this ack before
+// truncating the WAL row.
+//
+// Positive ack (success=true) means Decklog's SendEvent returned nil for
+// this trigger, which itself only happens after the Kafka publish commits —
+// the trigger is durably ingested.
+//
+// Negative ack (success=false) carries retryable + error_code so Helmsman
+// can decide whether to backoff+resend (same request_id) or move the row
+// to dead-letter. Transient failures (timeout, downstream unavailable,
+// Kafka publish error) are retryable=true; permanent failures (parse
+// error, schema violation, tenant deleted) are retryable=false.
+message MistTriggerAck {
+  string request_id = 1;       // Stable source_event_id from the originating MistTrigger
+  bool success = 2;
+  bool retryable = 3;          // Only meaningful when success=false
+  TriggerAckErrorCode error_code = 4;
+  string error_message = 5;    // Operator-facing detail; never customer-visible
+}
+
+enum TriggerAckErrorCode {
+  TRIGGER_ACK_ERROR_NONE = 0;
+  TRIGGER_ACK_ERROR_INTERNAL = 1;          // Retryable
+  TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE = 2; // Retryable
+  TRIGGER_ACK_ERROR_KAFKA_PUBLISH = 3;     // Retryable
+  TRIGGER_ACK_ERROR_PARSE = 4;             // Non-retryable
+  TRIGGER_ACK_ERROR_SCHEMA = 5;            // Non-retryable
+  TRIGGER_ACK_ERROR_TENANT_MISSING = 6;    // Non-retryable
 }
 
 enum IngestErrorCode {

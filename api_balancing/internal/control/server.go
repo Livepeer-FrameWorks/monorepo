@@ -2308,6 +2308,80 @@ type MistTriggerProcessor interface {
 	ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error)
 }
 
+// triggerTypesNeedingDurableAck enumerates final/accounting Mist triggers
+// that Helmsman persists to a local WAL before acking Mist. Foghorn must
+// emit a MistTriggerAck for these whether or not they are blocking, so
+// the WAL can be truncated. Any trigger type not in this set follows the
+// pre-existing flow (blocking → MistTriggerResponse; non-blocking → no
+// ack).
+var triggerTypesNeedingDurableAck = map[string]struct{}{
+	"USER_END":                            {},
+	"STREAM_END":                          {},
+	"PUSH_END":                            {},
+	"RECORDING_END":                       {},
+	"RECORDING_SEGMENT":                   {},
+	"LIVEPEER_SEGMENT_COMPLETE":           {},
+	"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {},
+}
+
+// classifyTriggerError maps a processor error to the ack error_code and
+// retryable flag Helmsman uses to decide between backoff-and-resend vs
+// dead-letter.
+func classifyTriggerError(err error) (pb.TriggerAckErrorCode, bool) {
+	if err == nil {
+		return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_NONE, false
+	}
+	if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
+		switch ingestErr.Code {
+		case pb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY,
+			pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED,
+			pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED,
+			pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
+			pb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED,
+			pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP:
+			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_SCHEMA, false
+		case pb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
+			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE, true
+		default:
+			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_INTERNAL, true
+		}
+	}
+	// Decklog client / Kafka publish errors and everything else are
+	// assumed transient. Helmsman will retry with the same source_event_id;
+	// downstream dedupe (raw_mist_triggers + canonical ledger argMax)
+	// collapses duplicates.
+	return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_KAFKA_PUBLISH, true
+}
+
+// sendMistTriggerAck delivers the durable ack back to Helmsman on the
+// same control stream. Caller invokes for any trigger in
+// triggerTypesNeedingDurableAck regardless of blocking flag.
+func sendMistTriggerAck(stream pb.HelmsmanControl_ConnectServer, requestID string, err error, logger logging.Logger) {
+	if stream == nil {
+		return
+	}
+	code, retryable := classifyTriggerError(err)
+	ack := &pb.MistTriggerAck{
+		RequestId: requestID,
+		Success:   err == nil,
+		Retryable: retryable,
+		ErrorCode: code,
+	}
+	if err != nil {
+		ack.ErrorMessage = err.Error()
+	}
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_MistTriggerAck{MistTriggerAck: ack},
+	}
+	if sendErr := stream.Send(msg); sendErr != nil {
+		logger.WithFields(logging.Fields{
+			"request_id": requestID,
+			"error":      sendErr,
+		}).Warn("Failed to send MistTriggerAck; Helmsman will retry from WAL")
+	}
+}
+
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
 func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	if trigger != nil {
@@ -2323,6 +2397,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	triggerType := trigger.GetTriggerType()
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()
+	_, needsDurableAck := triggerTypesNeedingDurableAck[triggerType]
 
 	logger.WithFields(logging.Fields{
 		"trigger_type":   triggerType,
@@ -2344,6 +2419,9 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 				Abort:     true,
 			}
 			sendMistTriggerResponse(stream, response, logger)
+		}
+		if needsDurableAck {
+			sendMistTriggerAck(stream, requestID, fmt.Errorf("processor not configured"), logger)
 		}
 		return
 	}
@@ -2372,6 +2450,9 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}
+		if needsDurableAck {
+			sendMistTriggerAck(stream, requestID, err, logger)
+		}
 		return
 	}
 
@@ -2381,8 +2462,12 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		incMistTrigger(triggerType, blocking, "processed_ok")
 	}
 
-	// For non-blocking triggers, we're done
+	// For non-blocking triggers, we're done — unless the trigger type
+	// requires a durable ack (Helmsman has a WAL row waiting).
 	if !blocking {
+		if needsDurableAck {
+			sendMistTriggerAck(stream, requestID, nil, logger)
+		}
 		logger.WithFields(logging.Fields{
 			"trigger_type": triggerType,
 			"request_id":   requestID,
@@ -2398,6 +2483,12 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	}
 
 	sendMistTriggerResponse(stream, response, logger)
+	if needsDurableAck {
+		// A blocking trigger that also needs durable ack: send both. The
+		// blocking response is what Mist waits on; the ack is what
+		// Helmsman uses to truncate its WAL row.
+		sendMistTriggerAck(stream, requestID, nil, logger)
+	}
 
 	logger.WithFields(logging.Fields{
 		"trigger_type": triggerType,

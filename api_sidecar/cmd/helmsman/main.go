@@ -163,6 +163,13 @@ func main() {
 		// Node management (local agent/CLI)
 		r.GET("/node/mode", handlers.HandleGetNodeMode)
 		r.POST("/node/mode", handlers.HandleSetNodeMode)
+
+		// Durable trigger WAL inspection + replay. Operators hit these
+		// during incident response to see what's awaiting Foghorn's ack
+		// and to kick the forwarder without waiting for the periodic
+		// tick. See docs/architecture/trigger-durability.md.
+		r.GET("/triggers/wal", handlers.HandleTriggerWALStatus)
+		r.POST("/triggers/wal/replay", handlers.HandleTriggerWALReplay)
 	}
 
 	// Edge API — read-only endpoints for tray app / CLI, authenticated via Foghorn

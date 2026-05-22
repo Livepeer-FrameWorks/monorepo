@@ -211,6 +211,16 @@ func main() {
 	}
 	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("periscope-ingest-service", serviceHandler))
 
+	// Raw MistTrigger audit/replay topic. Decklog republishes the original
+	// MistTrigger envelope for the seven final/accounting trigger types so
+	// Periscope can populate raw_mist_triggers for incident recovery and
+	// reparse. Configurable via RAW_MIST_TRIGGERS_KAFKA_TOPIC; set to "-"
+	// to disable consumption on this instance.
+	rawTriggersTopic := strings.TrimSpace(config.GetEnv("RAW_MIST_TRIGGERS_KAFKA_TOPIC", "analytics.raw_mist_triggers"))
+	if rawTriggersTopic != "" && rawTriggersTopic != "-" {
+		consumer.AddHandler(rawTriggersTopic, wrapWithDLQ("periscope-ingest-raw-triggers", analyticsHandler.HandleRawMistTriggerMessage))
+	}
+
 	// Mirrored-topic subscriptions. MIRROR_REGION_PREFIXES is a comma-
 	// separated list of region IDs (e.g. "us-east,ap-tokyo"); each adds
 	// {region}.analytics_events and {region}.service_events to the

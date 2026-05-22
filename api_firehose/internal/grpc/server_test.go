@@ -110,6 +110,7 @@ func TestSendEventPublishesAnalyticsEvent(t *testing.T) {
 	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
 	trigger := &pb.MistTrigger{
 		TriggerType: "PUSH_END",
+		RequestId:   "source-event-push",
 		TenantId:    proto.String(tenantID),
 		TriggerPayload: &pb.MistTrigger_PushEnd{
 			PushEnd: &pb.PushEndTrigger{},
@@ -138,6 +139,38 @@ func TestSendEventPublishesAnalyticsEvent(t *testing.T) {
 	}
 }
 
+func TestSendEventUsesStableEventIDForDurableTrigger(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
+	trigger := &pb.MistTrigger{
+		TriggerType: "USER_END",
+		RequestId:   "source-event-abc",
+		TenantId:    proto.String(tenantID),
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+		},
+	}
+
+	if _, err := server.SendEvent(context.Background(), trigger); err != nil {
+		t.Fatalf("first SendEvent: %v", err)
+	}
+	if _, err := server.SendEvent(context.Background(), trigger); err != nil {
+		t.Fatalf("second SendEvent: %v", err)
+	}
+	if len(producer.publishCalls) != 2 {
+		t.Fatalf("expected 2 publishes, got %d", len(producer.publishCalls))
+	}
+	want := stableMistTriggerEventID(trigger)
+	if producer.publishCalls[0].EventID != want {
+		t.Fatalf("first event_id = %q, want %q", producer.publishCalls[0].EventID, want)
+	}
+	if producer.publishCalls[1].EventID != want {
+		t.Fatalf("second event_id = %q, want %q", producer.publishCalls[1].EventID, want)
+	}
+}
+
 func TestSendEventReturnsPublishError(t *testing.T) {
 	publishErr := errors.New("publish failed")
 	producer := &fakeProducer{publishErr: publishErr}
@@ -146,6 +179,7 @@ func TestSendEventReturnsPublishError(t *testing.T) {
 	tenantID := "1d2ed4fd-1f2c-4b02-9531-412bde6c45ab"
 	trigger := &pb.MistTrigger{
 		TriggerType: "PUSH_END",
+		RequestId:   "source-event-nil-metrics",
 		TenantId:    proto.String(tenantID),
 		TriggerPayload: &pb.MistTrigger_PushEnd{
 			PushEnd: &pb.PushEndTrigger{},
@@ -158,6 +192,33 @@ func TestSendEventReturnsPublishError(t *testing.T) {
 	}
 	if len(producer.publishCalls) != 1 {
 		t.Fatalf("expected 1 publish attempt, got %d", len(producer.publishCalls))
+	}
+}
+
+func TestSendEventReturnsRawJournalPublishError(t *testing.T) {
+	produceErr := errors.New("raw publish failed")
+	producer := &fakeProducer{produceErr: produceErr}
+	server := newTestServer(producer)
+
+	tenantID := "1d2ed4fd-1f2c-4b02-9531-412bde6c45ab"
+	trigger := &pb.MistTrigger{
+		TriggerType: "USER_END",
+		RequestId:   "source-event-raw-error",
+		TenantId:    proto.String(tenantID),
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+		},
+	}
+
+	_, err := server.SendEvent(context.Background(), trigger)
+	if err == nil {
+		t.Fatal("expected raw journal publish error")
+	}
+	if len(producer.publishCalls) != 1 {
+		t.Fatalf("expected typed publish before raw error, got %d", len(producer.publishCalls))
+	}
+	if len(producer.produceCalls) != 1 {
+		t.Fatalf("expected 1 raw publish attempt, got %d", len(producer.produceCalls))
 	}
 }
 
@@ -1015,6 +1076,7 @@ func TestSendEventNilMetrics(t *testing.T) {
 	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	trigger := &pb.MistTrigger{
 		TriggerType: "PUSH_END",
+		RequestId:   "source-event-nil-metrics",
 		TenantId:    proto.String(tenantID),
 		TriggerPayload: &pb.MistTrigger_PushEnd{
 			PushEnd: &pb.PushEndTrigger{},

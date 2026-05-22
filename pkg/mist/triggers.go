@@ -135,7 +135,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 	mistTrigger := &pb.MistTrigger{
 		TriggerType: string(triggerType),
 		NodeId:      nodeID,
-		Timestamp:   time.Now().Unix(),
+		Timestamp:   time.Now().UnixMilli(),
 		Blocking:    triggerType.IsBlocking(),
 		RequestId:   uuid.NewString(),
 	}

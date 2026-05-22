@@ -91,6 +91,9 @@ func main() {
 		AllowInsecure:      allowInsecure,
 		ServiceToken:       serviceToken,
 		ServiceEventsTopic: serviceEventsTopic,
+		// Raw MistTrigger audit topic. Set DECKLOG_RAW_TRIGGERS_TOPIC=- to
+		// disable; default is analytics.raw_mist_triggers.
+		RawTriggersTopic: config.GetEnv("DECKLOG_RAW_TRIGGERS_TOPIC", ""),
 		// Envelope identity for this Decklog instance — backfills onto
 		// events that arrive without source_region / source_cluster_id
 		// already set. Empty when running outside a regional deployment.

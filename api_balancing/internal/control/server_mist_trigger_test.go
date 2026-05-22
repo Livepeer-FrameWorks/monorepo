@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
@@ -13,6 +14,7 @@ import (
 
 type captureMistTriggerProcessor struct {
 	last *pb.MistTrigger
+	err  error
 }
 
 func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ string) (string, bool, error) {
@@ -21,7 +23,7 @@ func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ strin
 
 func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error) {
 	c.last = trigger
-	return "", false, nil
+	return "", false, c.err
 }
 
 func TestProcessMistTrigger_PopulatesLocalClusterIDWhenMissing(t *testing.T) {
@@ -56,6 +58,48 @@ func TestProcessMistTrigger_PopulatesLocalClusterIDWhenMissing(t *testing.T) {
 	}
 	if capture.last.GetClusterId() != "cluster-local" {
 		t.Fatalf("expected cluster_id to default to local cluster, got %q", capture.last.GetClusterId())
+	}
+}
+
+func TestProcessMistTrigger_DurableAckReportsProcessorError(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevLocalClusterID := localClusterID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localClusterID = prevLocalClusterID
+	})
+
+	mistTriggerProcessor = &captureMistTriggerProcessor{err: errors.New("decklog publish failed")}
+	localClusterID = "cluster-local"
+	stream := &captureStream{}
+
+	trigger := &pb.MistTrigger{
+		TriggerType: "USER_END",
+		Blocking:    false,
+		RequestId:   "req-failed",
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{StreamName: "live+abc"},
+		},
+	}
+
+	processMistTrigger(trigger, "node-1", stream, logging.Logger(logrus.New()))
+
+	msg := stream.lastSent()
+	if msg == nil {
+		t.Fatal("expected durable ack")
+	}
+	ack := msg.GetMistTriggerAck()
+	if ack == nil {
+		t.Fatalf("expected MistTriggerAck, got %T", msg.GetPayload())
+	}
+	if ack.GetSuccess() {
+		t.Fatal("expected negative ack")
+	}
+	if !ack.GetRetryable() {
+		t.Fatal("expected processor error to be retryable")
+	}
+	if ack.GetRequestId() != "req-failed" {
+		t.Fatalf("expected request id req-failed, got %q", ack.GetRequestId())
 	}
 }
 

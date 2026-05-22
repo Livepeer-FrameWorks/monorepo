@@ -45,6 +45,8 @@ Examples of “push” signals:
 
 Helmsman receives these over HTTP, parses them, and forwards to Foghorn as a typed `pb.MistTrigger`.
 
+For final/accounting triggers (`USER_END`, `STREAM_END`, `PUSH_END`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists the parsed trigger to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` (which Foghorn only sends after Decklog's Kafka publish commits). See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation is `sha256(node_id || trigger_type || payload_raw)` in `MistTrigger.RequestId`; Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
+
 ### B) MistServer Poller (state snapshots)
 
 Some “state” is better polled (or only available via Mist APIs), e.g.:

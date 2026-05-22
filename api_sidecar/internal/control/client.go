@@ -174,6 +174,7 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	if blockingGraceMs > 0 {
 		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
 	}
+	initTriggerForwarder(logger)
 	go func() {
 		backoff := time.Second
 		const maxBackoff = 30 * time.Second
@@ -790,6 +791,9 @@ func runClient(addr string, logger logging.Logger) error {
 
 	// Re-send any messages queued during disconnect
 	drainOutbox(stream)
+	// Kick the durable trigger forwarder so pending WAL entries get a
+	// fresh send pass without waiting for the periodic tick.
+	wakeupTriggerForwarder()
 	defer func() {
 		clearConn()
 		ControlStreamStatus.Set(0)
@@ -828,6 +832,8 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleVodDelete(logger, x.VodDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_MistTriggerResponse:
 				go handleMistTriggerResponse(x.MistTriggerResponse)
+			case *pb.ControlMessage_MistTriggerAck:
+				go handleMistTriggerAck(x.MistTriggerAck)
 			case *pb.ControlMessage_Error:
 				if errMsg := x.Error; errMsg != nil {
 					code := errMsg.GetCode()

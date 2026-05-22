@@ -62,4 +62,41 @@ var (
 			Help:      "Whether Helmsman is connected to Foghorn control stream (1=connected, 0=disconnected)",
 		},
 	)
+
+	// TriggerWALPending is the canonical "is anything stuck?" signal for
+	// the durable forwarder. Sampled by the forwarder loop on every tick;
+	// also updated on every Append/Ack so quick incidents don't have to
+	// wait for the next tick to be visible.
+	TriggerWALPending = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "helmsman",
+			Name:      "trigger_wal_pending",
+			Help:      "Number of durable Mist triggers awaiting positive ack from Foghorn",
+		},
+	)
+
+	// TriggerWALAppends counts WAL writes from Helmsman's HTTP handlers,
+	// before any forward attempt. Labels: trigger_type, status:"appended"
+	// (fresh source_event_id), "duplicate" (idempotent re-delivery from
+	// Mist), "error" (fsync/write failure).
+	TriggerWALAppends = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "helmsman",
+			Name:      "trigger_wal_appends_total",
+			Help:      "Durable trigger WAL append outcomes",
+		},
+		[]string{"trigger_type", "status"},
+	)
+
+	// TriggerAckOutcomes counts MistTriggerAck messages received from
+	// Foghorn. Labels: trigger_type, outcome:"success" / "retryable" /
+	// "non_retryable" / "timeout".
+	TriggerAckOutcomes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "helmsman",
+			Name:      "trigger_ack_outcomes_total",
+			Help:      "Durable MistTriggerAck outcomes received from Foghorn",
+		},
+		[]string{"trigger_type", "outcome"},
+	)
 )

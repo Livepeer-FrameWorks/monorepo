@@ -87,3 +87,33 @@ cards:
              round(missing_ingest_node / nullIf(events, 0), 4) AS missing_ratio
       FROM periscope.artifact_events
       WHERE timestamp >= now() - INTERVAL 24 HOUR
+
+  - slug: periscope.raw-mist-triggers-by-type
+    name: Raw Mist triggers by type
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT trigger_type,
+             count() AS rows,
+             uniqExact(source_request_id) AS logical_triggers,
+             rows - logical_triggers AS duplicate_deliveries,
+             max(toDateTime(received_at_ms / 1000)) AS last_received
+      FROM periscope.raw_mist_triggers
+      WHERE toDateTime(received_at_ms / 1000) >= now() - INTERVAL 24 HOUR
+      GROUP BY trigger_type
+      ORDER BY logical_triggers DESC
+
+  - slug: periscope.raw-mist-trigger-ingest-lag
+    name: Raw Mist trigger ingest lag
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT trigger_type,
+             quantile(0.5)((ingested_at_ms - received_at_ms) / 1000.0) AS p50_seconds,
+             quantile(0.95)((ingested_at_ms - received_at_ms) / 1000.0) AS p95_seconds,
+             quantile(0.99)((ingested_at_ms - received_at_ms) / 1000.0) AS p99_seconds,
+             count() AS rows
+      FROM periscope.raw_mist_triggers
+      WHERE toDateTime(received_at_ms / 1000) >= now() - INTERVAL 24 HOUR
+      GROUP BY trigger_type
+      ORDER BY p95_seconds DESC

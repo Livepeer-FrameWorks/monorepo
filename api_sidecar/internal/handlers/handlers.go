@@ -16,6 +16,7 @@ import (
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/leases"
+	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -40,6 +41,11 @@ var (
 )
 
 var sendMistTrigger = control.SendMistTrigger
+
+// sendDurableMistTrigger is the indirection tests stub to intercept the
+// durable-path send. Production callers go through forwardDurable, which
+// stamps source_event_id and dispatches via this variable.
+var sendDurableMistTrigger = control.SendDurableMistTrigger
 
 // VideoExtensions lists file extensions recognized as video container formats.
 var VideoExtensions = []string{".mp4", ".webm", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".flv"}
@@ -67,6 +73,27 @@ func applyTenantContext(trigger *pb.MistTrigger) {
 	if tenantID := config.GetTenantID(); tenantID != "" {
 		trigger.TenantId = &tenantID
 	}
+}
+
+// forwardDurable persists a final/accounting trigger to the local WAL
+// after stamping the stable source_event_id on RequestId for Foghorn ack
+// correlation and a deterministic UUID on EventId for downstream Periscope
+// dedupe. Returns the stable id so callers can include it in structured logs.
+func forwardDurable(triggerType string, body []byte, mistTrigger *pb.MistTrigger) (string, error) {
+	nodeID := control.GetCurrentNodeID()
+	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body)
+	mistTrigger.RequestId = sourceEventID
+	mistTrigger.EventId = storage.ComputeTypedEventID(sourceEventID)
+	return sourceEventID, sendDurableMistTrigger(mistTrigger)
+}
+
+func respondDurableEnqueueError(c *gin.Context, log logging.Logger, triggerType, sourceEventID string, err error) {
+	incMistWebhook(triggerType, "wal_error")
+	log.WithFields(logging.Fields{
+		"source_event_id": sourceEventID,
+		"error":           err,
+	}).Error("Failed to durably enqueue final trigger; refusing to acknowledge")
+	c.String(http.StatusServiceUnavailable, "trigger not durably recorded")
 }
 
 // Init initializes the handlers with logger, metrics, and node identity.
@@ -1205,16 +1232,15 @@ func HandlePushEnd(c *gin.Context) {
 		}
 	}
 
-	// Forward trigger to Foghorn via gRPC (non-blocking)
+	// Durably persist before responding to Mist; forwarder drains the WAL
+	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
 	applyTenantContext(mistTrigger)
-	_, err = sendMistTrigger(mistTrigger, logger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerPushEnd), body, mistTrigger)
 	if err != nil {
-		incMistWebhook("PUSH_END", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to forward PUSH_END to Foghorn")
+		respondDurableEnqueueError(c, logger, "PUSH_END", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("PUSH_END", "success")
+		incMistWebhook("PUSH_END", "durably_enqueued")
 	}
 
 	c.String(http.StatusOK, "OK")
@@ -1374,16 +1400,15 @@ func HandleStreamEnd(c *gin.Context) {
 		releaseSourceLeaseForStream(se.GetStreamName())
 	}
 
-	// Forward trigger to Foghorn via gRPC (non-blocking)
+	// Durably persist before responding to Mist; forwarder drains the WAL
+	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
 	applyTenantContext(mistTrigger)
-	_, err = sendMistTrigger(mistTrigger, logger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerStreamEnd), body, mistTrigger)
 	if err != nil {
-		incMistWebhook("STREAM_END", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to forward STREAM_END to Foghorn")
+		respondDurableEnqueueError(c, logger, "STREAM_END", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("STREAM_END", "success")
+		incMistWebhook("STREAM_END", "durably_enqueued")
 	}
 
 	c.String(http.StatusOK, "OK")
@@ -1529,16 +1554,15 @@ func HandleUserEnd(c *gin.Context) {
 		}
 	}
 
-	// Forward trigger to Foghorn via gRPC (non-blocking)
+	// Durably persist before responding to Mist; forwarder drains the WAL
+	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
 	applyTenantContext(mistTrigger)
-	_, err = sendMistTrigger(mistTrigger, logger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerUserEnd), body, mistTrigger)
 	if err != nil {
-		incMistWebhook("USER_END", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to forward USER_END to Foghorn")
+		respondDurableEnqueueError(c, logger, "USER_END", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("USER_END", "success")
+		incMistWebhook("USER_END", "durably_enqueued")
 	}
 
 	c.String(http.StatusOK, "OK")
@@ -1623,15 +1647,15 @@ func HandleRecordingEnd(c *gin.Context) {
 		return
 	}
 
-	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, err = control.SendMistTrigger(mistTrigger, logger)
+	// Durably persist before responding to Mist; forwarder drains the WAL
+	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
+	applyTenantContext(mistTrigger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerRecordingEnd), body, mistTrigger)
 	if err != nil {
-		incMistWebhook("RECORDING_END", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to forward RECORDING_END to Foghorn")
+		respondDurableEnqueueError(c, logger, "RECORDING_END", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("RECORDING_END", "success")
+		incMistWebhook("RECORDING_END", "durably_enqueued")
 	}
 
 	if rec := mistTrigger.GetRecordingComplete(); rec != nil && rec.FilePath != "" {
@@ -1663,15 +1687,18 @@ func HandleRecordingSegment(c *gin.Context) {
 		return
 	}
 
-	// Forward to Foghorn for analytics (fire-and-forget with error logging)
-	go func() {
-		if _, err := control.SendMistTrigger(mistTrigger, logger); err != nil {
-			incMistWebhook("RECORDING_SEGMENT", "forward_error")
-			logger.WithError(err).WithField("trigger_type", "RECORDING_SEGMENT").Error("Failed to send RECORDING_SEGMENT trigger to Foghorn")
-		} else {
-			incMistWebhook("RECORDING_SEGMENT", "success")
-		}
-	}()
+	// Durably persist before responding to Mist; forwarder drains the WAL
+	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka). No goroutine
+	// needed — the WAL append is sub-millisecond and the actual send runs
+	// off the forwarder goroutine.
+	applyTenantContext(mistTrigger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerRecordingSegment), body, mistTrigger)
+	if err != nil {
+		respondDurableEnqueueError(c, logger, "RECORDING_SEGMENT", sourceEventID, err)
+		return
+	} else {
+		incMistWebhook("RECORDING_SEGMENT", "durably_enqueued")
+	}
 
 	// Trigger immediate sync in DVR Manager
 	// Note: DVR billing is storage-based (via storage_snapshot), not process-based
@@ -2080,11 +2107,26 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 		RenditionsJson:    stringPtr(renditionsJson),
 	}
 
-	if err := control.SendProcessBillingEvent(billingEvent); err != nil {
-		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "forward_error")
-		logger.WithError(err).Warn("Failed to send Livepeer billing event to Foghorn")
+	// Build canonical MistTrigger so Foghorn's durable-ack dispatch matches
+	// on trigger_type = LIVEPEER_SEGMENT_COMPLETE. The forwardDurable
+	// helper stamps the stable source_event_id on RequestId and the
+	// deterministic typed UUID on EventId.
+	billingTrigger := &pb.MistTrigger{
+		TriggerType: string(mist.TriggerLivepeerSegmentComplete),
+		NodeId:      control.GetCurrentNodeID(),
+		Timestamp:   time.Now().UnixMilli(),
+		Blocking:    false,
+		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+			ProcessBilling: billingEvent,
+		},
+	}
+	applyTenantContext(billingTrigger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerLivepeerSegmentComplete), body, billingTrigger)
+	if err != nil {
+		respondDurableEnqueueError(c, logger, "LIVEPEER_SEGMENT_COMPLETE", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "success")
+		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "durably_enqueued")
 	}
 
 	c.String(http.StatusOK, "OK")
@@ -2245,11 +2287,26 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		IsFinal:             boolPtr(isFinalBool),
 	}
 
-	if err := control.SendProcessBillingEvent(billingEvent); err != nil {
-		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "forward_error")
-		logger.WithError(err).Warn("Failed to send MistProcAV billing event to Foghorn")
+	// Build canonical MistTrigger so Foghorn's durable-ack dispatch matches
+	// on trigger_type = PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE. forwardDurable
+	// stamps the stable source_event_id on RequestId; the raw body is the
+	// source hash input.
+	billingTrigger := &pb.MistTrigger{
+		TriggerType: string(mist.TriggerProcessAVSegmentComplete),
+		NodeId:      control.GetCurrentNodeID(),
+		Timestamp:   time.Now().UnixMilli(),
+		Blocking:    false,
+		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+			ProcessBilling: billingEvent,
+		},
+	}
+	applyTenantContext(billingTrigger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerProcessAVSegmentComplete), body, billingTrigger)
+	if err != nil {
+		respondDurableEnqueueError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", sourceEventID, err)
+		return
 	} else {
-		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "success")
+		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "durably_enqueued")
 	}
 
 	c.String(http.StatusOK, "OK")

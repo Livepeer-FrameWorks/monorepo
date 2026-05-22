@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,12 +34,18 @@ func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {
 
 func stubSendMistTrigger(t *testing.T, fn func(*pb.MistTrigger) (*control.MistTriggerResult, error)) {
 	t.Helper()
-	original := sendMistTrigger
+	originalSend := sendMistTrigger
+	originalDurable := sendDurableMistTrigger
 	sendMistTrigger = func(trigger *pb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
 		return fn(trigger)
 	}
+	sendDurableMistTrigger = func(trigger *pb.MistTrigger) error {
+		_, err := fn(trigger)
+		return err
+	}
 	t.Cleanup(func() {
-		sendMistTrigger = original
+		sendMistTrigger = originalSend
+		sendDurableMistTrigger = originalDurable
 	})
 }
 
@@ -168,6 +175,21 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 				t.Fatalf("expected trigger not to be forwarded")
 			}
 		})
+	}
+}
+
+func TestDurableTriggerHandlerRefusesWalFailure(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+		return nil, errors.New("wal unavailable")
+	})
+
+	ctx, recorder := newWebhookContext("sess-1\nvod+abc123\nHLS\n192.0.2.20\n10\n20\n30\ntag-a")
+	HandleUserEnd(ctx)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", recorder.Code)
 	}
 }
 

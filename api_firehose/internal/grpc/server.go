@@ -41,6 +41,12 @@ type DecklogServer struct {
 	logger             logging.Logger
 	metrics            *DecklogMetrics
 	serviceEventsTopic string
+	// rawTriggersTopic is the audit/replay topic that carries the original
+	// MistTrigger envelope (one Kafka record per trigger Periscope ingests
+	// into raw_mist_triggers). Decklog publishes to this topic only for
+	// final/accounting triggers — see triggerTypesForRawJournal. Empty
+	// disables raw-journal publishing.
+	rawTriggersTopic string
 	// SourceRegion / SourceClusterID identify this Decklog instance for
 	// envelope v2 backfill. When a producer emits an event without stamping
 	// source_region or source_cluster_id, Decklog fills them with these
@@ -54,8 +60,13 @@ type DecklogServer struct {
 // inline in NewDecklogServerWithConfig.
 type DecklogServerConfig struct {
 	ServiceEventsTopic string
-	SourceRegion       string
-	SourceClusterID    string
+	// RawTriggersTopic is the Kafka topic where Decklog republishes the
+	// raw MistTrigger envelope for final/accounting triggers. Periscope
+	// consumes it into the raw_mist_triggers audit table. Default
+	// "analytics.raw_mist_triggers"; set to "-" to disable.
+	RawTriggersTopic string
+	SourceRegion     string
+	SourceClusterID  string
 }
 
 func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, serviceEventsTopic string) *DecklogServer {
@@ -67,14 +78,37 @@ func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging
 	if topic == "" {
 		topic = "service_events"
 	}
+	rawTopic := cfg.RawTriggersTopic
+	switch rawTopic {
+	case "":
+		rawTopic = "analytics.raw_mist_triggers"
+	case "-":
+		rawTopic = ""
+	}
 	return &DecklogServer{
 		producer:           producer,
 		logger:             logger,
 		metrics:            metrics,
 		serviceEventsTopic: topic,
+		rawTriggersTopic:   rawTopic,
 		sourceRegion:       cfg.SourceRegion,
 		sourceClusterID:    cfg.SourceClusterID,
 	}
+}
+
+// triggerTypesForRawJournal mirrors the set Foghorn acks durably and
+// Helmsman WALs. Decklog republishes the raw MistTrigger envelope to
+// rawTriggersTopic only for these trigger types so the audit table
+// stays focused on final/accounting facts. Keep in sync with
+// api_balancing/internal/control/server.go::triggerTypesNeedingDurableAck.
+var triggerTypesForRawJournal = map[string]struct{}{
+	"USER_END":                            {},
+	"STREAM_END":                          {},
+	"PUSH_END":                            {},
+	"RECORDING_END":                       {},
+	"RECORDING_SEGMENT":                   {},
+	"LIVEPEER_SEGMENT_COMPLETE":           {},
+	"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {},
 }
 
 // convertProtobufToKafkaEvent converts any protobuf message to kafka.AnalyticsEvent with transparent JSON serialization
@@ -138,6 +172,19 @@ func isValidUUID(s string) bool {
 
 func generateEventID() string {
 	return uuid.New().String()
+}
+
+func stableMistTriggerEventID(trigger *pb.MistTrigger) string {
+	if trigger == nil {
+		return ""
+	}
+	if eventID := trigger.GetEventId(); isValidUUID(eventID) {
+		return eventID
+	}
+	if sourceEventID := trigger.GetRequestId(); sourceEventID != "" {
+		return uuid.NewSHA1(uuid.NameSpaceURL, []byte("frameworks:mist-trigger:"+sourceEventID)).String()
+	}
+	return ""
 }
 
 // SendServiceEvent handles service-plane events and publishes to the service_events topic
@@ -473,6 +520,9 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 	if v := trigger.GetCausationId(); v != "" {
 		analyticsEvent.CausationID = v
 	}
+	if v := stableMistTriggerEventID(trigger); v != "" {
+		analyticsEvent.EventID = v
+	}
 
 	// Note: stream-level fields are in the protobuf data, not top-level Kafka fields
 
@@ -511,7 +561,70 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 		"event_id":     analyticsEvent.EventID,
 	}).Debug("Event sent to Kafka")
 
+	// For final/accounting triggers, republish the raw MistTrigger envelope
+	// to the audit topic so Periscope can populate raw_mist_triggers. If this
+	// fails, return the error so Helmsman's WAL retries. The typed event_id is
+	// deterministic for durable triggers, so retrying cannot double-insert the
+	// typed fact downstream.
+	if err := s.publishRawMistTrigger(trigger, tenantID); err != nil {
+		return nil, err
+	}
+
 	return &emptypb.Empty{}, nil
+}
+
+// publishRawMistTrigger forwards the original MistTrigger envelope to the
+// audit/replay topic. Scoped to the seven final/accounting trigger types
+// in triggerTypesForRawJournal so the table stays focused.
+func (s *DecklogServer) publishRawMistTrigger(trigger *pb.MistTrigger, tenantID string) error {
+	if s.rawTriggersTopic == "" {
+		return nil
+	}
+	triggerType := trigger.GetTriggerType()
+	if _, ok := triggerTypesForRawJournal[triggerType]; !ok {
+		return nil
+	}
+	sourceEventID := trigger.GetRequestId()
+	if sourceEventID == "" {
+		// Without the stable source_event_id we cannot dedupe downstream;
+		// fail the durable path rather than acking an unkeyed final trigger.
+		if s.metrics != nil && s.metrics.KafkaMessages != nil {
+			s.metrics.KafkaMessages.WithLabelValues(s.rawTriggersTopic, "publish", "missing_source_id").Inc()
+		}
+		return fmt.Errorf("missing source_event_id for raw MistTrigger")
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"trigger_type":    triggerType,
+			"source_event_id": sourceEventID,
+		}).Warn("Failed to marshal MistTrigger for raw journal")
+		if s.metrics != nil && s.metrics.KafkaMessages != nil {
+			s.metrics.KafkaMessages.WithLabelValues(s.rawTriggersTopic, "publish", "marshal_error").Inc()
+		}
+		return fmt.Errorf("marshal raw MistTrigger: %w", err)
+	}
+	headers := map[string]string{
+		"trigger_type":    triggerType,
+		"node_id":         trigger.GetNodeId(),
+		"source_event_id": sourceEventID,
+		"tenant_id":       tenantID,
+	}
+	if err := s.producer.ProduceMessage(s.rawTriggersTopic, []byte(sourceEventID), payload, headers); err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"trigger_type":    triggerType,
+			"source_event_id": sourceEventID,
+			"topic":           s.rawTriggersTopic,
+		}).Warn("Failed to publish raw MistTrigger to audit topic")
+		if s.metrics != nil && s.metrics.KafkaMessages != nil {
+			s.metrics.KafkaMessages.WithLabelValues(s.rawTriggersTopic, "publish", "error").Inc()
+		}
+		return fmt.Errorf("publish raw MistTrigger: %w", err)
+	}
+	if s.metrics != nil && s.metrics.KafkaMessages != nil {
+		s.metrics.KafkaMessages.WithLabelValues(s.rawTriggersTopic, "publish", "success").Inc()
+	}
+	return nil
 }
 
 // SendGatewayTelemetry handles per-orchestrator telemetry from Livepeer
@@ -686,6 +799,11 @@ type GRPCServerConfig struct {
 	ServiceToken  string
 	// ServiceEventsTopic overrides the topic for ServiceEvent publishing.
 	ServiceEventsTopic string
+	// RawTriggersTopic overrides the topic Decklog uses to republish the
+	// original MistTrigger envelope for the seven final/accounting trigger
+	// types. Empty falls back to "analytics.raw_mist_triggers"; "-" disables
+	// the journal entirely.
+	RawTriggersTopic string
 	// SourceRegion / SourceClusterID identify this Decklog instance for
 	// envelope v2 backfill. Empty values mean "no backfill at this instance"
 	// and the consumer-side dedupe relies on producer-stamped values.
@@ -732,6 +850,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	server := grpc.NewServer(opts...)
 	pb.RegisterDecklogServiceServer(server, NewDecklogServerWithConfig(cfg.Producer, cfg.Logger, cfg.Metrics, DecklogServerConfig{
 		ServiceEventsTopic: cfg.ServiceEventsTopic,
+		RawTriggersTopic:   cfg.RawTriggersTopic,
 		SourceRegion:       cfg.SourceRegion,
 		SourceClusterID:    cfg.SourceClusterID,
 	}))

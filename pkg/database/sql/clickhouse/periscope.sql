@@ -7,6 +7,40 @@ CREATE DATABASE IF NOT EXISTS periscope;
 USE periscope;
 
 -- ============================================================================
+-- RAW MIST TRIGGER JOURNAL
+-- ----------------------------------------------------------------------------
+-- Durable record of every Mist trigger received at the edge (api_sidecar
+-- Helmsman). Helmsman persists a local WAL entry before responding 200 OK
+-- to Mist, then drains the WAL via the existing HelmsmanControl bidi stream
+-- and waits for a MistTriggerAck before truncating. This table is the
+-- analytics-side projection of that journal — re-deliveries collide on
+-- source_request_id (sha256(node_id || trigger_type || payload_raw)), so
+-- ReplacingMergeTree(ingested_at_ms) + argMax-on-read collapses duplicates.
+--
+-- Currently scoped to PR0's seven final-event triggers (USER_END,
+-- STREAM_END, PUSH_END, RECORDING_END, RECORDING_SEGMENT,
+-- LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). The
+-- table schema accepts any trigger_type so the WAL can be extended later
+-- without DDL changes.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS raw_mist_triggers (
+    node_id LowCardinality(String),
+    trigger_type LowCardinality(String),
+    source_request_id String,        -- sha256 hex of (node_id || trigger_type || payload_raw)
+    payload String CODEC(ZSTD(3)),   -- raw protobuf MistTrigger envelope from Decklog
+    tenant_id String DEFAULT '',     -- enriched by Foghorn before Decklog publish
+    cluster_id LowCardinality(String) DEFAULT '',
+    received_at_ms Int64,            -- Helmsman-side wall clock at WAL append
+    forwarded_at_ms Int64,           -- Helmsman-side wall clock at first successful send
+    ingested_at_ms Int64,            -- Periscope-side wall clock at INSERT (version)
+    schema_version Int32 DEFAULT 0
+) ENGINE = ReplacingMergeTree(ingested_at_ms)
+PARTITION BY toYYYYMM(toDateTime(received_at_ms / 1000))
+ORDER BY (node_id, trigger_type, source_request_id)
+TTL toDateTime(received_at_ms / 1000) + INTERVAL 30 DAY;
+
+-- ============================================================================
 -- CORE STREAM EVENT LOG (normalized lifecycle + notable events)
 -- ============================================================================
 
