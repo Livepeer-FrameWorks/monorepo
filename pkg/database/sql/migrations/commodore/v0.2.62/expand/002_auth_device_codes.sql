@@ -4,16 +4,16 @@
 -- user_id / tenant_id stay NULL until the user approves; status transitions
 -- pending -> approved | denied | expired.
 --
--- device_code is stored as SHA-256 hash (BYTEA, 32 bytes); raw device_code
--- never hits disk. user_code is short, dash-formatted (e.g. ABCD-EFGH) and
--- stored plaintext because it is shown to the user.
+-- device_code is stored as SHA-256 hex (VARCHAR(64)); raw device_code never
+-- hits disk. user_code is short, dash-formatted (e.g. ABCD-EFGH) and stored
+-- plaintext because it is shown to the user.
 
 CREATE TABLE IF NOT EXISTS commodore.auth_device_codes (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id             UUID,
     user_id               UUID,
     client_id             VARCHAR(64) NOT NULL,
-    device_code_hash      BYTEA NOT NULL,
+    device_code_hash      VARCHAR(64) NOT NULL,
     user_code             VARCHAR(32) NOT NULL,
     scope                 VARCHAR(64) NOT NULL DEFAULT 'account',
     status                VARCHAR(16) NOT NULL DEFAULT 'pending'

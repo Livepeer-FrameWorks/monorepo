@@ -500,9 +500,19 @@ func main() {
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/forgot-password", authHandlers.ForgotPassword())
 		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/reset-password", authHandlers.ResetPassword())
 
+		// Native-client browser-handoff (RFC 8252 + RFC 7636 PKCE) and
+		// device-code grant (RFC 8628). Public endpoints called by the tray
+		// loopback receiver and the CLI; the matching webapp consent
+		// endpoints are protected and live in the authProtected group below.
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/oauth/token", authHandlers.OAuthToken())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/device/start", authHandlers.DeviceStart())
+		server.HandleOptionalTrailingSlash(auth, http.MethodPost, "/device/poll", authHandlers.DevicePoll())
+
 		// Protected auth endpoints (require JWT from cookie or header)
 		authProtected := auth.Group("", middleware.RequireJWTAuth([]byte(jwtSecret)))
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/logout", authHandlers.Logout())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/authorize/complete", authHandlers.AuthorizeComplete())
+		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/device/approve", authHandlers.DeviceApprove())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me", authHandlers.GetMe())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPatch, "/me", authHandlers.UpdateMe())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me/newsletter", authHandlers.GetNewsletterStatus())

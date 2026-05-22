@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS commodore.auth_authorization_codes (
     tenant_id             UUID NOT NULL,
     user_id               UUID NOT NULL,
     client_id             VARCHAR(64) NOT NULL,
-    code_hash             BYTEA NOT NULL,
+    code_hash             VARCHAR(64) NOT NULL,  -- SHA-256 hex of raw code
     code_challenge        VARCHAR(128) NOT NULL,
     code_challenge_method VARCHAR(16) NOT NULL,
     redirect_uri          TEXT NOT NULL,
@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS commodore.auth_device_codes (
     tenant_id             UUID,
     user_id               UUID,
     client_id             VARCHAR(64) NOT NULL,
-    device_code_hash      BYTEA NOT NULL,
+    device_code_hash      VARCHAR(64) NOT NULL,  -- SHA-256 hex of raw device_code
     user_code             VARCHAR(32) NOT NULL,
     scope                 VARCHAR(64) NOT NULL DEFAULT 'account',
     status                VARCHAR(16) NOT NULL DEFAULT 'pending'

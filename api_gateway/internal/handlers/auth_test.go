@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +34,11 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 		{name: "reset password", handler: h.ResetPassword()},
 		{name: "update me", handler: h.UpdateMe()},
 		{name: "update newsletter", handler: h.UpdateNewsletter()},
+		{name: "authorize complete", handler: h.AuthorizeComplete()},
+		{name: "oauth token", handler: h.OAuthToken()},
+		{name: "device start", handler: h.DeviceStart()},
+		{name: "device poll", handler: h.DevicePoll()},
+		{name: "device approve", handler: h.DeviceApprove()},
 	}
 
 	for _, tc := range tests {
@@ -49,6 +55,84 @@ func TestAuthHandlers_InvalidJSONBindingsReturnBadRequest(t *testing.T) {
 			}
 			if !strings.Contains(rec.Body.String(), "invalid request") {
 				t.Fatalf("body: expected invalid request error, got %q", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestHandleBotCheckError locks the gRPC-to-HTTP mapping for Turnstile
+// failures. The Commodore turnstile branch returns codes.PermissionDenied
+// with message containing "bot verification"; the gateway must surface this
+// as HTTP 403 + error_code=BOT_CHECK_FAILED so the webapp can render a
+// distinct message instead of the generic "invalid credentials" 401.
+// Any drift here regresses the user-visible bot-check experience and the
+// tray's eventual debug story.
+func TestHandleBotCheckError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		err         error
+		wantHandled bool
+		wantStatus  int
+		wantCode    string
+	}{
+		{
+			name:        "bot check failure produces 403 + BOT_CHECK_FAILED",
+			err:         status.Error(codes.PermissionDenied, "bot verification failed"),
+			wantHandled: true,
+			wantStatus:  http.StatusForbidden,
+			wantCode:    "BOT_CHECK_FAILED",
+		},
+		{
+			name:        "other PermissionDenied passes through (not bot-check)",
+			err:         status.Error(codes.PermissionDenied, "account suspended"),
+			wantHandled: false,
+		},
+		{
+			name:        "Unauthenticated passes through",
+			err:         status.Error(codes.Unauthenticated, "invalid credentials"),
+			wantHandled: false,
+		},
+		{
+			name:        "plain error passes through",
+			err:         errors.New("network sad"),
+			wantHandled: false,
+		},
+		{
+			name:        "nil passes through",
+			err:         nil,
+			wantHandled: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+
+			got := handleBotCheckError(c, tc.err)
+			if got != tc.wantHandled {
+				t.Fatalf("handleBotCheckError() = %v, want %v", got, tc.wantHandled)
+			}
+			if !tc.wantHandled {
+				if rec.Code != http.StatusOK && rec.Code != 0 {
+					t.Fatalf("handler should not have written a response; got status %d", rec.Code)
+				}
+				return
+			}
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status: got %d, want %d", rec.Code, tc.wantStatus)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal body: %v (raw=%q)", err, rec.Body.String())
+			}
+			if body["error_code"] != tc.wantCode {
+				t.Fatalf("error_code: got %q, want %q", body["error_code"], tc.wantCode)
+			}
+			if body["error"] == "" {
+				t.Fatal("error message must be non-empty")
 			}
 		})
 	}

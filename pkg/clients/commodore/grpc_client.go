@@ -857,6 +857,39 @@ func (c *GRPCClient) LinkEmail(ctx context.Context, email, password string) (*pb
 	})
 }
 
+// CompleteAuthorization mints a single-use PKCE authorization code for the
+// signed-in user. Called by the gateway on behalf of the webapp /authorize
+// page; identity fields come from the gateway session, not the client body.
+func (c *GRPCClient) CompleteAuthorization(ctx context.Context, req *pb.CompleteAuthorizationRequest) (*pb.CompleteAuthorizationResponse, error) {
+	return c.user.CompleteAuthorization(ctx, req)
+}
+
+// ExchangeAuthorizationCode redeems a PKCE authorization code + verifier for
+// a session (access + refresh tokens). Called from the native client's
+// loopback receiver.
+func (c *GRPCClient) ExchangeAuthorizationCode(ctx context.Context, req *pb.ExchangeAuthorizationCodeRequest) (*pb.AuthResponse, error) {
+	return c.user.ExchangeAuthorizationCode(ctx, req)
+}
+
+// StartDeviceAuthorization initiates a RFC 8628 device-code grant.
+func (c *GRPCClient) StartDeviceAuthorization(ctx context.Context, req *pb.StartDeviceAuthorizationRequest) (*pb.StartDeviceAuthorizationResponse, error) {
+	return c.user.StartDeviceAuthorization(ctx, req)
+}
+
+// PollDeviceAuthorization polls for completion of a device-code grant. While
+// pending, the gRPC error carries one of the RFC 8628 §3.5 markers as its
+// message: AUTHORIZATION_PENDING, SLOW_DOWN, ACCESS_DENIED, EXPIRED_TOKEN.
+func (c *GRPCClient) PollDeviceAuthorization(ctx context.Context, req *pb.PollDeviceAuthorizationRequest) (*pb.AuthResponse, error) {
+	return c.user.PollDeviceAuthorization(ctx, req)
+}
+
+// ApproveDeviceAuthorization stamps the signed-in user's identity onto a
+// pending device-code row. Called by the gateway on behalf of the webapp
+// /device page after the user confirms the displayed user_code.
+func (c *GRPCClient) ApproveDeviceAuthorization(ctx context.Context, req *pb.ApproveDeviceAuthorizationRequest) (*pb.ApproveDeviceAuthorizationResponse, error) {
+	return c.user.ApproveDeviceAuthorization(ctx, req)
+}
+
 // ============================================================================
 // DEVELOPER/API TOKEN OPERATIONS
 // ============================================================================

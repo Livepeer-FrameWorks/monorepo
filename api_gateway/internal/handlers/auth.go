@@ -41,6 +41,22 @@ type behaviorJSON struct {
 	Typed       bool  `json:"typed"`
 }
 
+// handleBotCheckError writes a distinct HTTP 403 + BOT_CHECK_FAILED response
+// when Commodore signalled a bot-verification failure, and returns true to
+// short-circuit the caller. Returns false for any other error so the caller
+// can continue with its normal error handling.
+func handleBotCheckError(c *gin.Context, err error) bool {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.PermissionDenied || !strings.Contains(st.Message(), "bot verification") {
+		return false
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error":      "browser verification required",
+		"error_code": "BOT_CHECK_FAILED",
+	})
+	return true
+}
+
 // parseBehavior converts JSON behavior string to proto BehaviorData
 func parseBehavior(behaviorStr string) *pb.BehaviorData {
 	if behaviorStr == "" {
@@ -105,6 +121,9 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 			h.logger.WithError(err).Debug("Login failed")
 			if isAuthServiceUnavailable(err) {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			if handleBotCheckError(c, err) {
 				return
 			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
@@ -318,6 +337,9 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 			}),
 		})
 		if err != nil {
+			if handleBotCheckError(c, err) {
+				return
+			}
 			h.logger.WithError(err).Error("Registration failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "registration failed"})
 			return
@@ -515,6 +537,248 @@ func (h *AuthHandlers) ForgotPassword() gin.HandlerFunc {
 }
 
 // ResetPassword handles password reset
+// AuthorizeComplete handles POST /auth/authorize/complete — the webapp
+// /authorize page calls this after the signed-in user clicks "Approve". The
+// user_id/tenant_id forwarded to Commodore come from the verified JWT
+// session (gateway's authInterceptor propagates them via gRPC metadata);
+// the client cannot supply them.
+func (h *AuthHandlers) AuthorizeComplete() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			ClientID            string `json:"client_id" binding:"required"`
+			RedirectURI         string `json:"redirect_uri" binding:"required"`
+			CodeChallenge       string `json:"code_challenge" binding:"required"`
+			CodeChallengeMethod string `json:"code_challenge_method" binding:"required"`
+			Scope               string `json:"scope"`
+			State               string `json:"state"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.CompleteAuthorization(c.Request.Context(), &pb.CompleteAuthorizationRequest{
+			ClientId:            req.ClientID,
+			RedirectUri:         req.RedirectURI,
+			CodeChallenge:       req.CodeChallenge,
+			CodeChallengeMethod: req.CodeChallengeMethod,
+			Scope:               req.Scope,
+			State:               req.State,
+		})
+		if err != nil {
+			h.logger.WithError(err).Debug("CompleteAuthorization failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, ok := status.FromError(err)
+			if ok && st.Code() == codes.InvalidArgument {
+				c.JSON(http.StatusBadRequest, gin.H{"error": st.Message()})
+				return
+			}
+			if ok && st.Code() == codes.PermissionDenied {
+				c.JSON(http.StatusForbidden, gin.H{"error": st.Message()})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "authorization failed"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":       resp.Code,
+			"expires_at": resp.ExpiresAt.AsTime(),
+		})
+	}
+}
+
+// OAuthToken handles POST /auth/oauth/token — the native client's loopback
+// receiver calls this with the PKCE authorization code and verifier to obtain
+// a real session. Tokens are returned in the body (not cookies) because the
+// native client stores them in OS Keychain/credential store.
+func (h *AuthHandlers) OAuthToken() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Code         string `json:"code" binding:"required"`
+			CodeVerifier string `json:"code_verifier" binding:"required"`
+			ClientID     string `json:"client_id" binding:"required"`
+			RedirectURI  string `json:"redirect_uri" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.ExchangeAuthorizationCode(c.Request.Context(), &pb.ExchangeAuthorizationCodeRequest{
+			Code:         req.Code,
+			CodeVerifier: req.CodeVerifier,
+			ClientId:     req.ClientID,
+			RedirectUri:  req.RedirectURI,
+		})
+		if err != nil {
+			h.logger.WithError(err).Debug("ExchangeAuthorizationCode failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, _ := status.FromError(err)
+			switch st.Code() {
+			case codes.Unauthenticated, codes.PermissionDenied:
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_grant"})
+			case codes.AlreadyExists:
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_grant", "error_description": "authorization code already used"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "token exchange failed"})
+			}
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"access_token":  resp.Token,
+			"refresh_token": resp.RefreshToken,
+			"token_type":    "Bearer",
+			"expires_at":    resp.ExpiresAt.AsTime(),
+			"user":          userToJSON(resp.User),
+		})
+	}
+}
+
+// DeviceStart handles POST /auth/device/start — CLI begins a device-code
+// grant. No authentication required.
+func (h *AuthHandlers) DeviceStart() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			ClientID string `json:"client_id" binding:"required"`
+			Scope    string `json:"scope"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.StartDeviceAuthorization(c.Request.Context(), &pb.StartDeviceAuthorizationRequest{
+			ClientId: req.ClientID,
+			Scope:    req.Scope,
+		})
+		if err != nil {
+			h.logger.WithError(err).Debug("StartDeviceAuthorization failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, _ := status.FromError(err)
+			if st.Code() == codes.PermissionDenied || st.Code() == codes.InvalidArgument {
+				c.JSON(http.StatusBadRequest, gin.H{"error": st.Message()})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "device authorization failed"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"device_code":               resp.DeviceCode,
+			"user_code":                 resp.UserCode,
+			"verification_uri":          resp.VerificationUri,
+			"verification_uri_complete": resp.VerificationUriComplete,
+			"expires_in":                resp.ExpiresInSeconds,
+			"interval":                  resp.IntervalSeconds,
+		})
+	}
+}
+
+// DevicePoll handles POST /auth/device/poll — CLI polls for completion. On
+// approval, returns access + refresh tokens in body. On pending markers,
+// returns HTTP 400/429 with the RFC 8628 §3.5 error code.
+func (h *AuthHandlers) DevicePoll() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			DeviceCode string `json:"device_code" binding:"required"`
+			ClientID   string `json:"client_id" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.PollDeviceAuthorization(c.Request.Context(), &pb.PollDeviceAuthorizationRequest{
+			DeviceCode: req.DeviceCode,
+			ClientId:   req.ClientID,
+		})
+		if err != nil {
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, _ := status.FromError(err)
+			marker := st.Message()
+			switch marker {
+			case "AUTHORIZATION_PENDING":
+				c.JSON(http.StatusBadRequest, gin.H{"error": "authorization_pending", "error_code": marker})
+			case "SLOW_DOWN":
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "slow_down", "error_code": marker})
+			case "ACCESS_DENIED":
+				c.JSON(http.StatusForbidden, gin.H{"error": "access_denied", "error_code": marker})
+			case "EXPIRED_TOKEN":
+				c.JSON(http.StatusGone, gin.H{"error": "expired_token", "error_code": marker})
+			default:
+				h.logger.WithError(err).Debug("PollDeviceAuthorization failed")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "device poll failed"})
+			}
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"access_token":  resp.Token,
+			"refresh_token": resp.RefreshToken,
+			"token_type":    "Bearer",
+			"expires_at":    resp.ExpiresAt.AsTime(),
+			"user":          userToJSON(resp.User),
+		})
+	}
+}
+
+// DeviceApprove handles POST /auth/device/approve — the webapp /device page
+// calls this after the signed-in user confirms the displayed user_code.
+// user_id/tenant_id come from the verified JWT session.
+func (h *AuthHandlers) DeviceApprove() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			UserCode string `json:"user_code" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.ApproveDeviceAuthorization(c.Request.Context(), &pb.ApproveDeviceAuthorizationRequest{
+			UserCode: req.UserCode,
+		})
+		if err != nil {
+			h.logger.WithError(err).Debug("ApproveDeviceAuthorization failed")
+			if isAuthServiceUnavailable(err) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication service temporarily unavailable"})
+				return
+			}
+			st, _ := status.FromError(err)
+			switch st.Code() {
+			case codes.NotFound:
+				c.JSON(http.StatusNotFound, gin.H{"error": st.Message()})
+			case codes.InvalidArgument:
+				c.JSON(http.StatusBadRequest, gin.H{"error": st.Message()})
+			case codes.FailedPrecondition:
+				c.JSON(http.StatusConflict, gin.H{"error": st.Message()})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "device approval failed"})
+			}
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":   resp.Success,
+			"client_id": resp.ClientId,
+		})
+	}
+}
+
 func (h *AuthHandlers) ResetPassword() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
@@ -657,11 +921,11 @@ func (h *AuthHandlers) GetNewsletterStatus() gin.HandlerFunc {
 }
 
 // userToJSON converts a proto User to a JSON-friendly map
-func userToJSON(u *pb.User) map[string]interface{} {
+func userToJSON(u *pb.User) map[string]any {
 	if u == nil {
 		return nil
 	}
-	result := map[string]interface{}{
+	result := map[string]any{
 		"id":          u.Id,
 		"tenant_id":   u.TenantId,
 		"email":       u.Email,

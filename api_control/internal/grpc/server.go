@@ -5,7 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -3274,7 +3277,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
 			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
@@ -3282,13 +3285,13 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 				"client_ip":   clientIP,
 				"error_codes": turnstileResp.ErrorCodes,
 			}).Warn("Login Turnstile verification failed")
-			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 		}
 	} else {
 		// Fallback: behavioral validation when Turnstile not configured
 		if !validateBehavior(req) {
 			s.logger.WithField("email", email).Warn("Login behavioral bot check failed")
-			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 		}
 	}
 
@@ -3387,7 +3390,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
 			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
@@ -3395,13 +3398,13 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 				"client_ip":   clientIP,
 				"error_codes": turnstileResp.ErrorCodes,
 			}).Warn("Turnstile verification failed")
-			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 		}
 	} else {
 		// Fallback: behavioral validation when Turnstile not configured
 		if !validateBehavior(req) {
 			s.logger.WithField("email", email).Warn("Behavioral bot check failed")
-			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 		}
 	}
 
@@ -3727,6 +3730,501 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	}, nil
 }
 
+// ============================================================================
+// BROWSER-HANDOFF + DEVICE LOGIN (Tray / CLI)
+// ============================================================================
+// The tray uses RFC 7636 PKCE over a RFC 8252 loopback redirect. The CLI uses
+// the RFC 8628 Device Authorization Grant. Both flows return the same
+// AuthResponse shape as Login — short-lived access token + refresh token —
+// so the native client holds a real user session, not a long-lived API key.
+//
+// Identity-bearing fields (user_id, tenant_id) on session-protected RPCs are
+// sourced from the gateway's verified JWT context, never from the client body.
+// ============================================================================
+
+const (
+	authorizationCodeTTL   = 10 * time.Minute
+	deviceCodeTTL          = 10 * time.Minute
+	deviceCodePollInterval = 5 * time.Second
+)
+
+// validateAuthorizationClient checks that the (client_id, redirect_uri) pair
+// is one of the known native-client configurations. Fails closed for any
+// unknown client_id so callers can't request tokens for clients we don't
+// recognize.
+func validateAuthorizationClient(clientID, redirectURI string) error {
+	switch clientID {
+	case "tray-mac":
+		u, err := url.Parse(redirectURI)
+		if err != nil || u.Scheme != "http" {
+			return status.Error(codes.InvalidArgument, "redirect_uri must be an http loopback URL")
+		}
+		host := u.Hostname()
+		if host != "127.0.0.1" && host != "::1" {
+			return status.Error(codes.InvalidArgument, "redirect_uri host must be 127.0.0.1 or ::1")
+		}
+		if u.Path != "/callback" {
+			return status.Error(codes.InvalidArgument, "redirect_uri path must be /callback")
+		}
+		return nil
+	default:
+		return status.Error(codes.PermissionDenied, "unknown client_id")
+	}
+}
+
+// CompleteAuthorization persists a single-use PKCE authorization code bound
+// to the caller's code_challenge. Called by the gateway on behalf of the
+// webapp /authorize page after the signed-in user approves the request.
+func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *pb.CompleteAuthorizationRequest) (*pb.CompleteAuthorizationResponse, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if req.GetClientId() == "" || req.GetRedirectUri() == "" || req.GetCodeChallenge() == "" {
+		return nil, status.Error(codes.InvalidArgument, "client_id, redirect_uri and code_challenge required")
+	}
+	if req.GetCodeChallengeMethod() != "S256" {
+		return nil, status.Error(codes.InvalidArgument, "code_challenge_method must be S256")
+	}
+	if validateErr := validateAuthorizationClient(req.GetClientId(), req.GetRedirectUri()); validateErr != nil {
+		return nil, validateErr
+	}
+
+	scope := req.GetScope()
+	if scope == "" {
+		scope = "account"
+	}
+
+	code, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate authorization code: %v", err)
+	}
+	codeHash := hashToken(code)
+	expiresAt := time.Now().Add(authorizationCodeTTL)
+
+	var state sql.NullString
+	if reqState := req.GetState(); reqState != "" {
+		state = sql.NullString{String: reqState, Valid: true}
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.auth_authorization_codes
+			(tenant_id, user_id, client_id, code_hash, code_challenge, code_challenge_method,
+			 redirect_uri, scope, state, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, tenantID, userID, req.GetClientId(), codeHash,
+		req.GetCodeChallenge(), req.GetCodeChallengeMethod(),
+		req.GetRedirectUri(), scope, state, expiresAt)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to persist authorization code")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.CompleteAuthorizationResponse{
+		Code:      code,
+		ExpiresAt: timestamppb.New(expiresAt),
+	}, nil
+}
+
+// ExchangeAuthorizationCode redeems a one-time PKCE authorization code for a
+// session (access + refresh tokens). The code_verifier is hashed with SHA-256
+// and constant-time compared against the stored code_challenge. The code is
+// marked consumed in the same transaction that issues the refresh token, so
+// a successful exchange is atomic and a second exchange returns AlreadyExists.
+func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *pb.ExchangeAuthorizationCodeRequest) (*pb.AuthResponse, error) {
+	if req.GetCode() == "" || req.GetCodeVerifier() == "" || req.GetClientId() == "" || req.GetRedirectUri() == "" {
+		return nil, status.Error(codes.InvalidArgument, "code, code_verifier, client_id and redirect_uri required")
+	}
+
+	codeHash := hashToken(req.GetCode())
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer s.rollbackTx(tx)
+
+	var rowID, userID, tenantID string
+	var storedChallenge, challengeMethod, storedClientID, storedRedirectURI string
+	var consumedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, user_id, tenant_id, code_challenge, code_challenge_method,
+		       client_id, redirect_uri, consumed_at
+		FROM commodore.auth_authorization_codes
+		WHERE code_hash = $1 AND expires_at > NOW()
+		FOR UPDATE
+	`, codeHash).Scan(&rowID, &userID, &tenantID, &storedChallenge, &challengeMethod,
+		&storedClientID, &storedRedirectURI, &consumedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unauthenticated, "invalid or expired authorization code")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if consumedAt.Valid {
+		return nil, status.Error(codes.AlreadyExists, "authorization code already used")
+	}
+	if storedClientID != req.GetClientId() || storedRedirectURI != req.GetRedirectUri() {
+		return nil, status.Error(codes.PermissionDenied, "client_id or redirect_uri mismatch")
+	}
+	if challengeMethod != "S256" {
+		return nil, status.Error(codes.Internal, "unsupported code_challenge_method")
+	}
+
+	h := sha256.Sum256([]byte(req.GetCodeVerifier()))
+	computed := base64.RawURLEncoding.EncodeToString(h[:])
+	if subtle.ConstantTimeCompare([]byte(computed), []byte(storedChallenge)) != 1 {
+		return nil, status.Error(codes.PermissionDenied, "code_verifier mismatch")
+	}
+
+	if _, execErr := tx.ExecContext(ctx, `
+		UPDATE commodore.auth_authorization_codes
+		SET consumed_at = NOW() WHERE id = $1
+	`, rowID); execErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to mark code consumed: %v", execErr)
+	}
+
+	resp, err := s.issueUserSessionTx(ctx, tx, userID, tenantID, "pkce")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	}
+	return resp, nil
+}
+
+func (s *CommodoreServer) rollbackTx(tx *sql.Tx) {
+	if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		s.logger.WithError(rollbackErr).Debug("transaction rollback failed")
+	}
+}
+
+// issueUserSessionTx issues a new access + refresh token pair for the given
+// user inside an open transaction. The caller is responsible for committing.
+// Returns the same AuthResponse shape as Login.
+func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*pb.AuthResponse, error) {
+	var user commodoreUserRecord
+	err := scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
+		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
+		FROM commodore.users WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID), &user)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unauthenticated, "user not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !user.IsActive {
+		return nil, status.Error(codes.Unauthenticated, "account deactivated")
+	}
+
+	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	token, err := auth.GenerateJWT(userID, tenantID, user.Email, user.Role, jwtSecret)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
+
+	refreshToken, err := generateRandomString(40)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate refresh token: %v", err)
+	}
+	refreshHash := hashToken(refreshToken)
+	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, tenantID, userID, refreshHash, refreshExpiry); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
+	}
+
+	expiresAt := time.Now().Add(15 * time.Minute)
+	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, authType, "", "", "")
+
+	return &pb.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user.toProtoUser(userID, tenantID),
+		ExpiresAt:    timestamppb.New(expiresAt),
+	}, nil
+}
+
+// Crockford-style base32 alphabet (drops I, L, O, U) so user_codes can be
+// read aloud without ambiguity. 32 chars = no modulo bias from random bytes.
+var userCodeEncoding = base32.NewEncoding("0123456789ABCDEFGHJKMNPQRSTVWXYZ").WithPadding(base32.NoPadding)
+
+// generateUserCode returns an 8-character dash-formatted code (e.g. "9XKM-3PNZ").
+func generateUserCode() (string, error) {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	enc := userCodeEncoding.EncodeToString(b[:])
+	if len(enc) < 8 {
+		return "", fmt.Errorf("unexpected user_code length %d", len(enc))
+	}
+	return enc[:4] + "-" + enc[4:8], nil
+}
+
+// normalizeUserCode strips non-alphanumeric characters, uppercases, and
+// re-inserts the canonical dash so a user typing "abcd efgh" or "abcdefgh"
+// matches the stored "ABCD-EFGH".
+func normalizeUserCode(input string) string {
+	var clean strings.Builder
+	for _, r := range strings.ToUpper(input) {
+		if (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') {
+			clean.WriteRune(r)
+		}
+	}
+	s := clean.String()
+	if len(s) != 8 {
+		return ""
+	}
+	return s[:4] + "-" + s[4:]
+}
+
+// StartDeviceAuthorization initiates a device-code grant for a CLI/headless
+// client. Returns a (device_code, user_code) pair plus the verification URL.
+// No session required — the user authenticates in a browser at /device.
+func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.StartDeviceAuthorizationRequest) (*pb.StartDeviceAuthorizationResponse, error) {
+	clientID := req.GetClientId()
+	if clientID == "" {
+		return nil, status.Error(codes.InvalidArgument, "client_id required")
+	}
+	// Known device-grant clients. Add new ones explicitly; fail closed for unknowns.
+	if clientID != "cli" && clientID != "tray-mac" {
+		return nil, status.Error(codes.PermissionDenied, "unknown client_id")
+	}
+
+	scope := req.GetScope()
+	if scope == "" {
+		scope = "account"
+	}
+
+	deviceCode, err := generateSecureToken(32)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate device_code: %v", err)
+	}
+	deviceCodeHash := hashToken(deviceCode)
+	expiresAt := time.Now().Add(deviceCodeTTL)
+
+	// Retry up to 5 times on user_code unique violation. Collision odds at
+	// 32^8 are vanishingly small, but be defensive in case of clock skew /
+	// long-lived pending codes.
+	var userCode string
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		userCode, err = generateUserCode()
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to generate user_code: %v", err)
+		}
+		_, err = s.db.ExecContext(ctx, `
+			INSERT INTO commodore.auth_device_codes
+				(client_id, device_code_hash, user_code, scope, status,
+				 poll_interval_seconds, expires_at)
+			VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+		`, clientID, deviceCodeHash, userCode, scope,
+			int(deviceCodePollInterval.Seconds()), expiresAt)
+		if err == nil {
+			break
+		}
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			continue
+		}
+		return nil, status.Errorf(codes.Internal, "failed to persist device_code: %v", err)
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to allocate unique user_code: %v", err)
+	}
+
+	verificationURI := s.deviceVerificationBaseURL()
+	verificationURIComplete := verificationURI + "?user_code=" + url.QueryEscape(userCode)
+
+	return &pb.StartDeviceAuthorizationResponse{
+		DeviceCode:              deviceCode,
+		UserCode:                userCode,
+		VerificationUri:         verificationURI,
+		VerificationUriComplete: verificationURIComplete,
+		ExpiresInSeconds:        int32(deviceCodeTTL.Seconds()),
+		IntervalSeconds:         int32(deviceCodePollInterval.Seconds()),
+	}, nil
+}
+
+// deviceVerificationBaseURL returns the URL the user visits to approve a
+// device code. Configured via DEVICE_VERIFICATION_URL env var (set by ops);
+// falls back to a placeholder so misconfigured environments fail loudly.
+func (s *CommodoreServer) deviceVerificationBaseURL() string {
+	if v := os.Getenv("DEVICE_VERIFICATION_URL"); v != "" {
+		return v
+	}
+	return "https://app.frameworks.network/device"
+}
+
+// PollDeviceAuthorization is called by the CLI on the returned interval. While
+// the user_code is unapproved, returns one of the RFC 8628 §3.5 markers:
+// AUTHORIZATION_PENDING, SLOW_DOWN, ACCESS_DENIED, EXPIRED_TOKEN. On approval
+// returns a normal AuthResponse and consumes the device_code row.
+func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *pb.PollDeviceAuthorizationRequest) (*pb.AuthResponse, error) {
+	if req.GetDeviceCode() == "" || req.GetClientId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "device_code and client_id required")
+	}
+
+	deviceCodeHash := hashToken(req.GetDeviceCode())
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer s.rollbackTx(tx)
+
+	var rowID, storedClientID, dbStatus string
+	var userID, tenantID sql.NullString
+	var expiresAt time.Time
+	var lastPolledAt sql.NullTime
+	var pollInterval int
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, client_id, status, user_id, tenant_id, expires_at, last_polled_at, poll_interval_seconds
+		FROM commodore.auth_device_codes
+		WHERE device_code_hash = $1
+		FOR UPDATE
+	`, deviceCodeHash).Scan(&rowID, &storedClientID, &dbStatus, &userID, &tenantID,
+		&expiresAt, &lastPolledAt, &pollInterval)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if storedClientID != req.GetClientId() {
+		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
+	}
+
+	now := time.Now()
+	if now.After(expiresAt) || dbStatus == "expired" {
+		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "EXPIRED_TOKEN")
+	}
+	if dbStatus == "denied" {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
+	}
+	if dbStatus == "pending" {
+		// SLOW_DOWN: client polled before its returned interval elapsed.
+		if lastPolledAt.Valid && now.Sub(lastPolledAt.Time) < time.Duration(pollInterval)*time.Second {
+			if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET last_polled_at = NOW() WHERE id = $1`, rowID); execErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
+			}
+			if commitErr := tx.Commit(); commitErr != nil {
+				return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+			}
+			return nil, status.Error(codes.FailedPrecondition, "SLOW_DOWN")
+		}
+		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET last_polled_at = NOW() WHERE id = $1`, rowID); execErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
+	}
+	if dbStatus != "approved" || !userID.Valid || !tenantID.Valid {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
+	}
+
+	// Approved — issue session and consume the row (DELETE so a re-poll
+	// returns ACCESS_DENIED on missing row).
+	resp, err := s.issueUserSessionTx(ctx, tx, userID.String, tenantID.String, "device_code")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM commodore.auth_device_codes WHERE id = $1`, rowID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to consume device_code: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	}
+	return resp, nil
+}
+
+// ApproveDeviceAuthorization marks a pending device-code row as approved and
+// stamps the calling user's identity onto it. Called by the gateway on behalf
+// of the webapp /device page after the signed-in user confirms the displayed
+// user_code. user_id / tenant_id MUST come from the gateway session.
+func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *pb.ApproveDeviceAuthorizationRequest) (*pb.ApproveDeviceAuthorizationResponse, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	normalized := normalizeUserCode(req.GetUserCode())
+	if normalized == "" {
+		return nil, status.Error(codes.InvalidArgument, "invalid user_code")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer s.rollbackTx(tx)
+
+	var rowID, clientID, dbStatus string
+	var expiresAt time.Time
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, client_id, status, expires_at
+		FROM commodore.auth_device_codes
+		WHERE user_code = $1
+		FOR UPDATE
+	`, normalized).Scan(&rowID, &clientID, &dbStatus, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "user_code not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if time.Now().After(expiresAt) {
+		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
+	}
+	if dbStatus != "pending" {
+		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE commodore.auth_device_codes
+		SET user_id = $1, tenant_id = $2, status = 'approved', approved_at = NOW()
+		WHERE id = $3
+	`, userID, tenantID, rowID); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to approve device_code: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+	}
+
+	return &pb.ApproveDeviceAuthorizationResponse{
+		Success:  true,
+		ClientId: clientID,
+	}, nil
+}
+
 // VerifyEmail verifies a user's email address with a token
 func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *pb.VerifyEmailRequest) (*pb.VerifyEmailResponse, error) {
 	token := req.GetToken()
@@ -3792,10 +4290,10 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
 			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 			}
 		} else if !turnstileResp.Success {
-			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
 		}
 	}
 
