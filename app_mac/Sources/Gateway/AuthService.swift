@@ -49,7 +49,7 @@ class AuthService {
     }
 
     let callback = try await waitForBrowserCallback(from: server)
-    guard constantTimeEqual(callback.state, state) else {
+    if !callback.manual || !callback.state.isEmpty, !constantTimeEqual(callback.state, state) {
       throw AuthError.stateMismatch
     }
     if let error = callback.error {
@@ -82,6 +82,13 @@ class AuthService {
   func cancelBrowserLogin() {
     browserLoginServer?.stop()
     browserLoginServer = nil
+  }
+
+  func submitBrowserLoginCallback(_ value: String) throws {
+    guard let server = browserLoginServer else {
+      throw AuthError.noPendingBrowserLogin
+    }
+    server.submitManualCallback(try parseManualCallback(value))
   }
 
   // MARK: - Refresh
@@ -247,6 +254,30 @@ class AuthService {
     return "/\(trimmedPath)/\(component)"
   }
 
+  private func parseManualCallback(_ value: String) throws -> BrowserLoginCallback {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+      throw AuthError.invalidManualCallback
+    }
+    if let components = URLComponents(string: trimmed),
+       let items = components.queryItems,
+       items.contains(where: { $0.name == "code" || $0.name == "error" }) {
+      let field: (String) -> String? = { name in
+        items.first(where: { $0.name == name })?.value
+      }
+      return BrowserLoginCallback(
+        code: field("code"),
+        state: field("state") ?? "",
+        error: field("error"),
+        manual: true
+      )
+    }
+    guard !trimmed.contains(where: { $0.isWhitespace }) else {
+      throw AuthError.invalidManualCallback
+    }
+    return BrowserLoginCallback(code: trimmed, state: "", error: nil, manual: true)
+  }
+
   private func exchangeAuthorizationCode(
     code: String,
     verifier: String,
@@ -394,6 +425,8 @@ enum AuthError: LocalizedError {
   case missingCallbackCode
   case missingWebappURL
   case browserLoginTimedOut
+  case noPendingBrowserLogin
+  case invalidManualCallback
   case randomGenerationFailed(OSStatus)
 
   var errorDescription: String? {
@@ -408,6 +441,8 @@ enum AuthError: LocalizedError {
     case .missingCallbackCode: return "Browser sign in did not return an authorization code"
     case .missingWebappURL: return "Bridge did not return a webapp URL for browser sign in"
     case .browserLoginTimedOut: return "Browser sign in timed out"
+    case .noPendingBrowserLogin: return "Start browser sign in before submitting a code"
+    case .invalidManualCallback: return "Paste the full callback URL or authorization code"
     case .randomGenerationFailed(let status): return "Could not generate secure login nonce: \(status)"
     }
   }
@@ -417,6 +452,7 @@ private struct BrowserLoginCallback: Sendable {
   let code: String?
   let state: String
   let error: String?
+  let manual: Bool
 }
 
 private final class BrowserLoginCallbackServer: @unchecked Sendable {
@@ -460,6 +496,19 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
           return
         }
         self.callbackContinuation = continuation
+      }
+    }
+  }
+
+  func submitManualCallback(_ callback: BrowserLoginCallback) {
+    queue.async {
+      guard !self.completed else { return }
+      self.completed = true
+      if let continuation = self.callbackContinuation {
+        self.callbackContinuation = nil
+        continuation.resume(returning: callback)
+      } else {
+        self.pendingCallback = callback
       }
     }
   }
@@ -536,7 +585,8 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
     return BrowserLoginCallback(
       code: value("code"),
       state: value("state") ?? "",
-      error: value("error")
+      error: value("error"),
+      manual: false
     )
   }
 
