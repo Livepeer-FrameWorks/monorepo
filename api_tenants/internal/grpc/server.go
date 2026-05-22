@@ -5647,8 +5647,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"node %s already exists in cluster %s", nodeID, existingClusterID)
 		}
-		if err := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); err != nil {
-			return nil, err
+		if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); upsertErr != nil {
+			return nil, upsertErr
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
@@ -5687,8 +5687,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
 	}
 
-	if err := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); err != nil {
-		return nil, err
+	if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tenantID.String, nodeID, req); upsertErr != nil {
+		return nil, upsertErr
 	}
 
 	// Update token usage

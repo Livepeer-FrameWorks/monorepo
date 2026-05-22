@@ -293,7 +293,9 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if resp != nil {
 					_ = resp.Body.Close()
 				}
-				_ = persistHealthStatus(context.Background(), ii.id, status)
+				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
+					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
+				}
 			}(it)
 			continue
 		}
@@ -346,7 +348,9 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check passed")
 				}
 				serviceSummary.recordResult(ii.serviceID, status)
-				_ = persistHealthStatus(context.Background(), ii.id, status)
+				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
+					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
+				}
 			}(it)
 			continue
 		}
@@ -373,7 +377,9 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("TCP health check passed")
 				}
 				serviceSummary.recordResult(ii.serviceID, status)
-				_ = persistHealthStatus(context.Background(), ii.id, status)
+				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
+					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
+				}
 			}(it)
 			continue
 		}
