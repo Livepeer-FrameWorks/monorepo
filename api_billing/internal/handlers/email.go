@@ -2,13 +2,14 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
-	"net/smtp"
 	"os"
 	"strconv"
 	"time"
 
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -289,18 +290,15 @@ func (es *EmailService) SendAccountSuspendedEmail(tenantEmail, tenantName string
 
 // sendEmail sends an email via SMTP
 func (es *EmailService) sendEmail(to, subject, body string) error {
-	auth := smtp.PlainAuth("", es.smtpUser, es.smtpPassword, es.smtpHost)
-
-	fromHeader := es.fromEmail
-	if es.fromName != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", es.fromName, es.fromEmail)
-	}
-
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		fromHeader, to, subject, body)
-
-	addr := fmt.Sprintf("%s:%d", es.smtpHost, es.smtpPort)
-	err := smtp.SendMail(addr, auth, es.fromEmail, []string{to}, []byte(msg))
+	sender := emailpkg.NewSender(emailpkg.Config{
+		Host:     es.smtpHost,
+		Port:     strconv.Itoa(es.smtpPort),
+		User:     es.smtpUser,
+		Password: es.smtpPassword,
+		From:     es.fromEmail,
+		FromName: es.fromName,
+	})
+	err := sender.SendMail(context.Background(), to, subject, body)
 
 	if err != nil {
 		es.logger.WithFields(logging.Fields{

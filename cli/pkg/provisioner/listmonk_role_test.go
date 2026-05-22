@@ -21,6 +21,7 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 			"LISTMONK_ADMIN_USER":       "admin",
 			"LISTMONK_ADMIN_PASSWORD":   "from-sops",
 			"LISTMONK_FRONTEND_URL":     "https://listmonk.frameworks.network",
+			"FROM_EMAIL":                "newsletter@frameworks.network",
 		},
 	})
 
@@ -41,6 +42,9 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	}
 	if got := env["LISTMONK_app__root"]; got != "https://listmonk.frameworks.network" {
 		t.Fatalf("LISTMONK_app__root = %v, want public URL", got)
+	}
+	if got := env["LISTMONK_app__from_email"]; got != "newsletter@frameworks.network" {
+		t.Fatalf("LISTMONK_app__from_email = %v, want sender email", got)
 	}
 }
 

@@ -37,30 +37,12 @@ func NewSender(config Config) *Sender {
 
 func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) error {
 	addr := fmt.Sprintf("%s:%s", s.config.Host, s.config.Port)
-
-	fromHeader := s.config.From
-	if strings.TrimSpace(s.config.FromName) != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", s.config.FromName, s.config.From)
-	}
-
-	fromHeader = sanitizeHeader(fromHeader)
+	from := sanitizeHeader(s.config.From)
 	to = sanitizeHeader(to)
-	subject = sanitizeHeader(subject)
-
-	msg := []string{
-		fmt.Sprintf("From: %s", fromHeader),
-		fmt.Sprintf("To: %s", to),
-		fmt.Sprintf("Subject: %s", subject),
-		"MIME-Version: 1.0",
-		"Content-Type: text/html; charset=UTF-8",
-		"",
-		htmlBody,
-	}
-
-	body := []byte(strings.Join(msg, "\r\n"))
+	body := buildHTMLMessage(s.config, to, subject, htmlBody)
 
 	if s.auth != nil {
-		return smtp.SendMail(addr, s.auth, s.config.From, []string{to}, body)
+		return smtp.SendMail(addr, s.auth, from, []string{to}, body)
 	}
 
 	// No auth - connect directly
@@ -70,7 +52,7 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 	}
 	defer func() { _ = c.Close() }()
 
-	if errMail := c.Mail(s.config.From); errMail != nil {
+	if errMail := c.Mail(from); errMail != nil {
 		return fmt.Errorf("mail from: %w", errMail)
 	}
 
@@ -95,8 +77,29 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 	return c.Quit()
 }
 
+func buildHTMLMessage(config Config, to, subject, htmlBody string) []byte {
+	from := sanitizeHeader(config.From)
+	fromHeader := from
+	if name := sanitizeHeader(config.FromName); name != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", name, from)
+	}
+
+	msg := []string{
+		fmt.Sprintf("From: %s", fromHeader),
+		fmt.Sprintf("To: %s", sanitizeHeader(to)),
+		fmt.Sprintf("Subject: %s", sanitizeHeader(subject)),
+		"MIME-Version: 1.0",
+		"Content-Type: text/html; charset=UTF-8",
+		"",
+		htmlBody,
+	}
+
+	return []byte(strings.Join(msg, "\r\n"))
+}
+
 func sanitizeHeader(s string) string {
-	s = strings.ReplaceAll(s, "\r", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	return s
+	if idx := strings.IndexAny(s, "\r\n"); idx >= 0 {
+		s = s[:idx]
+	}
+	return strings.TrimSpace(s)
 }

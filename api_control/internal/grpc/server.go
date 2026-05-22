@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/smtp"
 	"net/url"
 	"os"
 	"sort"
@@ -36,6 +35,7 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -8611,9 +8611,15 @@ func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
   <p>If you did not create an account, you can ignore this email.</p>
 </body></html>`, verifyURL)
 
-	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", email, subject, body))
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, fromEmail, []string{email}, msg)
+	sender := emailpkg.NewSender(emailpkg.Config{
+		Host:     smtpHost,
+		Port:     smtpPort,
+		User:     smtpUser,
+		Password: smtpPass,
+		From:     fromEmail,
+		FromName: os.Getenv("FROM_NAME"),
+	})
+	return sender.SendMail(context.Background(), email, subject, body)
 }
 
 // sendPasswordResetEmail sends a password reset link
@@ -8651,9 +8657,15 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
   <p>If you did not request this, you can safely ignore this email.</p>
 </body></html>`, resetURL)
 
-	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", email, subject, body))
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, fromEmail, []string{email}, msg)
+	sender := emailpkg.NewSender(emailpkg.Config{
+		Host:     smtpHost,
+		Port:     smtpPort,
+		User:     smtpUser,
+		Password: smtpPass,
+		From:     fromEmail,
+		FromName: os.Getenv("FROM_NAME"),
+	})
+	return sender.SendMail(context.Background(), email, subject, body)
 }
 
 // ============================================================================

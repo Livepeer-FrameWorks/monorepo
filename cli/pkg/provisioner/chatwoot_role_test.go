@@ -20,6 +20,7 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 			"POSTGRES_CHATWOOT_PASSWORD": "chatwoot-secret",
 			"REDIS_CHATWOOT_ADDR":        "127.0.0.1:6380",
 			"REDIS_CHATWOOT_PASSWORD":    "redis secret",
+			"FROM_EMAIL":                 "support@frameworks.network",
 		},
 	})
 
@@ -36,6 +37,7 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 	assertEnv("POSTGRES_USERNAME", "chatwoot")
 	assertEnv("POSTGRES_PASSWORD", "chatwoot-secret")
 	assertEnv("REDIS_URL", "redis://:redis+secret@host.docker.internal:6380")
+	assertEnv("MAILER_SENDER_EMAIL", "support@frameworks.network")
 }
 
 func TestChatwootRoleVarsResolvesPinnedImageFromReleaseManifest(t *testing.T) {

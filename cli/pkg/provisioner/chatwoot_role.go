@@ -70,7 +70,7 @@ func chatwootEnvMap(config ServiceConfig) map[string]any {
 	if v := config.EnvVars["CHATWOOT_FRONTEND_URL"]; v != "" {
 		env["FRONTEND_URL"] = v
 	}
-	if v := config.EnvVars["CHATWOOT_MAILER_EMAIL"]; v != "" {
+	if v := firstNonEmptyEnv(config.EnvVars, "CHATWOOT_MAILER_EMAIL", "FROM_EMAIL"); v != "" {
 		env["MAILER_SENDER_EMAIL"] = v
 	}
 	return env
