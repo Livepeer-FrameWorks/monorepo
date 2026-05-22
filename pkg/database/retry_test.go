@@ -21,6 +21,7 @@ func TestIsRetryablePostgresError(t *testing.T) {
 		{"schema version text", errors.New("pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
 		{"wrapped grpc schema version text", errors.New("rpc error: code = Internal desc = database error: pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
 		{"read restart text", errors.New("pq: restart transaction: read restart required (40001)"), true},
+		{"yugabyte restart read text", errors.New("pq: Restart read required (query layer retry isn't possible because this is not the first command in the transaction.) (40001)"), true},
 		{"syntax", &pq.Error{Code: "42601"}, false},
 		{"non-transient 40001 text", errors.New("application error 40001"), false},
 		{"ordinary", errors.New("boom"), false},

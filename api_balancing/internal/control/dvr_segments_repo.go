@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/lib/pq"
 )
 
@@ -90,6 +91,21 @@ var dvrSegmentRecoveryInsertStatuses = map[string]struct{}{
 // concurrent inserts on the same artifact stay monotonic. The unique index
 // idx_foghorn_dvr_segments_sequence enforces the invariant.
 func InsertDVRSegment(
+	ctx context.Context,
+	artifactHash, segmentName, s3Key string,
+	mediaStartMs, mediaEndMs, durationMs int64,
+	allowRecoveryInsert bool,
+) (int64, error) {
+	var seq int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		seq, err = insertDVRSegmentOnce(ctx, artifactHash, segmentName, s3Key, mediaStartMs, mediaEndMs, durationMs, allowRecoveryInsert)
+		return err
+	})
+	return seq, err
+}
+
+func insertDVRSegmentOnce(
 	ctx context.Context,
 	artifactHash, segmentName, s3Key string,
 	mediaStartMs, mediaEndMs, durationMs int64,

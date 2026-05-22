@@ -407,6 +407,33 @@ func TestSyncMeshIncludesInfraDependencyPeersWithoutDNSAliases(t *testing.T) {
 	}
 }
 
+func TestMeshServiceRequirementsIncludesPrivateerCertificateDependencies(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	expectMeshRequirements(mock, "yuga-1")
+
+	dnsRequired, peerRequired, _, _, err := server.meshServiceRequirements(t.Context(), "yuga-1")
+	if err != nil {
+		t.Fatalf("meshServiceRequirements: %v", err)
+	}
+	for _, serviceID := range []string{"navigator", "quartermaster"} {
+		if _, ok := dnsRequired[serviceID]; !ok {
+			t.Fatalf("dnsRequired missing %s: %v", serviceID, sortedStringKeys(dnsRequired))
+		}
+		if _, ok := peerRequired[serviceID]; !ok {
+			t.Fatalf("peerRequired missing %s: %v", serviceID, sortedStringKeys(peerRequired))
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestSyncMeshIncludesReciprocalServiceConsumers(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

@@ -6398,8 +6398,8 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 }
 
 func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeID string) (map[string]struct{}, map[string]struct{}, map[string]struct{}, []topology.InfraDependency, error) {
-	dnsRequired := map[string]struct{}{"quartermaster": {}}
-	peerRequired := map[string]struct{}{"quartermaster": {}}
+	dnsRequired := map[string]struct{}{"navigator": {}, "quartermaster": {}}
+	peerRequired := map[string]struct{}{"navigator": {}, "quartermaster": {}}
 	globalPeerRequired := map[string]struct{}{}
 	var infraRequired []topology.InfraDependency
 	var localServices []string

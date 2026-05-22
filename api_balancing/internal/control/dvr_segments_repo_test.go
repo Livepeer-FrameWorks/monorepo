@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func TestInsertDVRSegment_HealsLostLocalWithMatchingTiming(t *testing.T) {
@@ -186,6 +187,44 @@ func TestInsertDVRSegment_ExistingPendingRetryReusesSequence(t *testing.T) {
 	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if seq != existingSeq {
+		t.Fatalf("expected existing sequence %d, got %d", existingSeq, seq)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInsertDVRSegment_RetriesWholeTransactionOnReadRestart(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+
+	const dvrHash = "dvr-retry"
+	const segmentName = "seg_012.ts"
+	const existingSeq = int64(12)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
+		WithArgs(dvrHash).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
+		WithArgs(dvrHash, segmentName).
+		WillReturnError(&pq.Error{Code: "40001", Message: "Restart read required"})
+	mock.ExpectRollback()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status FROM foghorn\.artifacts WHERE artifact_hash =`).
+		WithArgs(dvrHash).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
+		WithArgs(dvrHash, segmentName).
+		WillReturnRows(sqlmock.NewRows([]string{"sequence", "status", "media_start_ms", "media_end_ms", "duration_ms"}).
+			AddRow(existingSeq, "pending", int64(0), int64(6_000), int64(6_000)))
+	mock.ExpectCommit()
+
+	seq, err := InsertDVRSegment(context.Background(), dvrHash, segmentName, "s3/key", 0, 6_000, 6_000, false)
+	if err != nil {
+		t.Fatalf("unexpected error after retry: %v", err)
 	}
 	if seq != existingSeq {
 		t.Fatalf("expected existing sequence %d, got %d", existingSeq, seq)
