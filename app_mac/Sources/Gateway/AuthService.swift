@@ -7,7 +7,7 @@ import Security
 class AuthService {
   static let shared = AuthService()
   private let gateway = GatewayClient.shared
-  private let browserLoginTimeoutNanoseconds: UInt64 = 5 * 60 * 1_000_000_000
+  private let browserLoginTimeoutSeconds = 5 * 60
   private var browserLoginServer: BrowserLoginCallbackServer?
 
   private init() {}
@@ -23,7 +23,7 @@ class AuthService {
     let server = BrowserLoginCallbackServer()
     browserLoginServer?.stop()
     browserLoginServer = server
-    let port = try await server.start()
+    let port = try await server.start(lifetimeSeconds: browserLoginTimeoutSeconds)
 
     let redirectURI = "http://127.0.0.1:\(port)/callback"
     guard let authorizeURL = makeAuthorizeURL(
@@ -228,22 +228,7 @@ class AuthService {
   }
 
   private func waitForBrowserCallback(from server: BrowserLoginCallbackServer) async throws -> BrowserLoginCallback {
-    try await withThrowingTaskGroup(of: BrowserLoginCallback.self) { group in
-      group.addTask {
-        try await server.waitForCallback()
-      }
-      group.addTask { [browserLoginTimeoutNanoseconds] in
-        try await Task.sleep(nanoseconds: browserLoginTimeoutNanoseconds)
-        server.stop()
-        throw AuthError.browserLoginTimedOut
-      }
-
-      guard let callback = try await group.next() else {
-        throw AuthError.browserLoginTimedOut
-      }
-      group.cancelAll()
-      return callback
-    }
+    try await server.waitForCallback()
   }
 
   private func pathByAppending(_ component: String, to path: String) -> String {
@@ -424,7 +409,6 @@ enum AuthError: LocalizedError {
   case authorizationDenied(String)
   case missingCallbackCode
   case missingWebappURL
-  case browserLoginTimedOut
   case noPendingBrowserLogin
   case invalidManualCallback
   case randomGenerationFailed(OSStatus)
@@ -440,7 +424,6 @@ enum AuthError: LocalizedError {
     case .authorizationDenied(let message): return "Browser sign in was denied: \(message)"
     case .missingCallbackCode: return "Browser sign in did not return an authorization code"
     case .missingWebappURL: return "Bridge did not return a webapp URL for browser sign in"
-    case .browserLoginTimedOut: return "Browser sign in timed out"
     case .noPendingBrowserLogin: return "Start browser sign in before submitting a code"
     case .invalidManualCallback: return "Paste the full callback URL or authorization code"
     case .randomGenerationFailed(let status): return "Could not generate secure login nonce: \(status)"
@@ -463,7 +446,7 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
   private var pendingCallback: BrowserLoginCallback?
   private var completed = false
 
-  func start() async throws -> UInt16 {
+  func start(lifetimeSeconds: Int) async throws -> UInt16 {
     let params = NWParameters.tcp
     params.allowLocalEndpointReuse = false
     if let loopback = IPv4Address("127.0.0.1") {
@@ -483,6 +466,9 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
           self?.handleConnection(connection)
         }
         listener.start(queue: self.queue)
+        self.queue.asyncAfter(deadline: .now() + .seconds(lifetimeSeconds)) { [weak self] in
+          self?.expireIfStillPending()
+        }
       }
     }
   }
@@ -520,6 +506,14 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
       self.resumeStart(with: AuthCallbackError.cancelled)
       self.resumeCallback(with: AuthCallbackError.cancelled)
     }
+  }
+
+  private func expireIfStillPending() {
+    guard !completed else { return }
+    listener?.cancel()
+    listener = nil
+    resumeStart(with: AuthCallbackError.timedOut)
+    resumeCallback(with: AuthCallbackError.timedOut)
   }
 
   private func handleListenerState(_ state: NWListener.State) {
@@ -633,11 +627,13 @@ private final class BrowserLoginCallbackServer: @unchecked Sendable {
 private enum AuthCallbackError: LocalizedError {
   case cancelled
   case missingPort
+  case timedOut
 
   var errorDescription: String? {
     switch self {
     case .cancelled: return "Browser sign in was cancelled"
     case .missingPort: return "Browser sign in callback listener did not expose a port"
+    case .timedOut: return "Browser sign in timed out"
     }
   }
 }

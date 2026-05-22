@@ -15,7 +15,7 @@ struct LoginView: View {
       HStack {
         Text("Log In").font(.title2.bold())
         Spacer()
-        Button(action: cancelAndClose) {
+        Button(action: closePanel) {
           Image(systemName: "xmark.circle.fill")
             .foregroundStyle(.secondary)
         }
@@ -111,19 +111,6 @@ struct LoginView: View {
         }
       }
     }
-  }
-
-  private func cancelAndClose() {
-    cancelLogin()
-    closePanel()
-  }
-
-  private func cancelLogin() {
-    loginTask?.cancel()
-    loginTask = nil
-    AuthService.shared.cancelBrowserLogin()
-    isLoading = false
-    statusMessage = nil
   }
 
   private func submitManualCode() {
