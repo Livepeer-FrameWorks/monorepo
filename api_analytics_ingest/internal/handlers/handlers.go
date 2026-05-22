@@ -2395,6 +2395,10 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 
 	// Map status to stage (normalize proto enum to lowercase for ClickHouse)
 	stageStr := normalizeDVRStage(dvrData.GetStatus())
+	nodeID := dvrData.GetNodeId()
+	if nodeID == "" {
+		nodeID = mt.GetNodeId()
+	}
 
 	var expiresAt interface{}
 	var expiresAtTime interface{}
@@ -2440,7 +2444,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyString(dvrData.GetManifestPath()),
 		nilIfEmptyString(dvrData.GetManifestPath()), // file_path = manifest_path for DVR
 		nilIfZeroUint64(dvrData.GetSizeBytes()),
-		nilIfEmptyString(mt.GetNodeId()),
+		nilIfEmptyString(nodeID),
 		event.Timestamp,
 		expiresAtTime,
 		nilIfEmptyString(dvrData.GetStorageLocation()),
@@ -2503,7 +2507,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		"dvr",                                  // content_type
 		nilIfZeroInt64(dvrData.GetStartedAt()), // start_unix = DVR started_at
 		nilIfZeroInt64(dvrData.GetEndedAt()),   // stop_unix = DVR ended_at
-		mt.GetNodeId(),                         // ingest_node_id
+		nodeID,                                 // ingest_node_id
 		dvrData.GetManifestPath(),              // file_path
 		nilIfZeroUint64(dvrData.GetSizeBytes()),
 		message, // message

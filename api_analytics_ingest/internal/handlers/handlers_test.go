@@ -1266,6 +1266,54 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	}
 }
 
+func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	nodeID := "edge-eu-1"
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &pb.DVRLifecycleData{
+				Status:             pb.DVRLifecycleData_STATUS_STOPPED,
+				DvrHash:            "dvr-hash",
+				TenantId:           &tenantID,
+				StreamInternalName: stringPtr("demo-stream"),
+				NodeId:             &nodeID,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "dvr_lifecycle",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stateBatch := conn.batches["artifact_state_current"]
+	if stateBatch == nil || len(stateBatch.rows) != 1 {
+		t.Fatalf("expected artifact_state_current row, got %#v", stateBatch)
+	}
+	if got := stateBatch.rows[0][16]; got != nodeID {
+		t.Fatalf("processing_node_id = %#v, want %q", got, nodeID)
+	}
+
+	eventBatch := conn.batches["artifact_events"]
+	if eventBatch == nil || len(eventBatch.rows) != 1 {
+		t.Fatalf("expected artifact_events row, got %#v", eventBatch)
+	}
+	if got := eventBatch.rows[0][12]; got != nodeID {
+		t.Fatalf("ingest_node_id = %#v, want %q", got, nodeID)
+	}
+}
+
 func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

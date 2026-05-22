@@ -329,6 +329,13 @@ func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	if data.GetTenantId() != "" {
+		tenantID := data.GetTenantId()
+		trigger.TenantId = &tenantID
+	}
+	if data.GetSelectedNodeId() != "" {
+		trigger.NodeId = data.GetSelectedNodeId()
+	}
 	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
@@ -360,6 +367,13 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 	if data.GetStreamId() != "" {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
+	}
+	if data.GetTenantId() != "" {
+		tenantID := data.GetTenantId()
+		trigger.TenantId = &tenantID
+	}
+	if data.GetNodeId() != "" {
+		trigger.NodeId = data.GetNodeId()
 	}
 	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
@@ -405,6 +419,13 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	if data.GetTenantId() != "" {
+		tenantID := data.GetTenantId()
+		trigger.TenantId = &tenantID
+	}
+	if data.GetNodeId() != "" {
+		trigger.NodeId = data.GetNodeId()
+	}
 	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
@@ -448,6 +469,9 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 	if data.GetTenantId() != "" {
 		tenantID := data.GetTenantId()
 		trigger.TenantId = &tenantID
+	}
+	if data.GetNodeId() != "" {
+		trigger.NodeId = data.GetNodeId()
 	}
 	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)

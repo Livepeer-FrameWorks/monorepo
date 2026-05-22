@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"frameworks/api_balancing/internal/geo"
+	"frameworks/api_balancing/internal/state"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -52,6 +53,8 @@ type RoutingEvent struct {
 // LoadBalancingData with geo-bucketed coordinates, haversine distance,
 // and dual-tenant attribution.
 func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
+	EnrichRoutingEventNodeFromState(e)
+
 	// Geo-bucket coordinates for privacy
 	clientBucket, clientCentLat, clientCentLon, hasClient := geo.Bucket(e.ClientLat, e.ClientLon)
 	nodeBucket, nodeCentLat, nodeCentLon, hasNode := geo.Bucket(e.NodeLat, e.NodeLon)
@@ -124,6 +127,27 @@ func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
 	}
 
 	return data
+}
+
+func EnrichRoutingEventNodeFromState(e *RoutingEvent) {
+	if e == nil || e.SelectedNodeID == "" {
+		return
+	}
+	node := state.DefaultManager().GetNodeState(e.SelectedNodeID)
+	if node == nil {
+		return
+	}
+	if !geo.IsValidLatLon(e.NodeLat, e.NodeLon) && node.Latitude != nil && node.Longitude != nil {
+		e.NodeLat = *node.Latitude
+		e.NodeLon = *node.Longitude
+	}
+	if e.NodeName == "" {
+		if node.Location != "" {
+			e.NodeName = node.Location
+		} else {
+			e.NodeName = node.NodeID
+		}
+	}
 }
 
 // optStr returns a *string for non-empty values, nil otherwise.

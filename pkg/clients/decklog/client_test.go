@@ -219,6 +219,87 @@ func TestSendVodLifecycleCopiesTenantToEnvelope(t *testing.T) {
 	}
 }
 
+func TestSendLifecycleWrappersCopyIdentityToEnvelope(t *testing.T) {
+	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	streamID := "11111111-2222-3333-4444-555555555555"
+	nodeID := "edge-node-1"
+
+	tests := []struct {
+		name string
+		send func(*BatchedClient) error
+	}{
+		{
+			name: "load_balancing",
+			send: func(c *BatchedClient) error {
+				return c.SendLoadBalancing(&pb.LoadBalancingData{
+					SelectedNode:   "https://edge.example/view",
+					SelectedNodeId: &nodeID,
+					TenantId:       &tenantID,
+					StreamId:       &streamID,
+				})
+			},
+		},
+		{
+			name: "clip_lifecycle",
+			send: func(c *BatchedClient) error {
+				return c.SendClipLifecycle(&pb.ClipLifecycleData{
+					Stage:    pb.ClipLifecycleData_STAGE_DONE,
+					ClipHash: "clip-hash",
+					TenantId: &tenantID,
+					StreamId: &streamID,
+					NodeId:   &nodeID,
+				})
+			},
+		},
+		{
+			name: "dvr_lifecycle",
+			send: func(c *BatchedClient) error {
+				return c.SendDVRLifecycle(&pb.DVRLifecycleData{
+					Status:   pb.DVRLifecycleData_STATUS_STOPPED,
+					DvrHash:  "dvr-hash",
+					TenantId: &tenantID,
+					StreamId: &streamID,
+					NodeId:   &nodeID,
+				})
+			},
+		},
+		{
+			name: "vod_lifecycle",
+			send: func(c *BatchedClient) error {
+				return c.SendVodLifecycle(&pb.VodLifecycleData{
+					Status:   pb.VodLifecycleData_STATUS_COMPLETED,
+					VodHash:  "vod-hash",
+					TenantId: &tenantID,
+					NodeId:   &nodeID,
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeClient := &fakeDecklogServiceClient{}
+			client := &BatchedClient{
+				client: fakeClient,
+				logger: logging.NewLogger(),
+			}
+
+			if err := tt.send(client); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if fakeClient.lastTrigger == nil {
+				t.Fatal("expected SendEvent to receive a trigger")
+			}
+			if fakeClient.lastTrigger.GetTenantId() != tenantID {
+				t.Fatalf("envelope tenant = %q, want %q", fakeClient.lastTrigger.GetTenantId(), tenantID)
+			}
+			if fakeClient.lastTrigger.GetNodeId() != nodeID {
+				t.Fatalf("envelope node = %q, want %q", fakeClient.lastTrigger.GetNodeId(), nodeID)
+			}
+		})
+	}
+}
+
 func int64Pointer(v int64) *int64 {
 	return &v
 }
