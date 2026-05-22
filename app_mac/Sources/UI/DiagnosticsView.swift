@@ -7,19 +7,23 @@ struct DiagnosticsView: View {
   @State private var catalog: CLIMenuCatalog?
   @State private var commandCatalog: CLICommandCatalog?
   @State private var selectedActionKey = ""
-  @State private var selectedCatalogAction: CLIMenuAction?
+  @State private var selectedCatalogCommand: CLICommandEntry?
   @State private var loadingCatalog = false
   @State private var confirmingActionKey: String?
   @State private var commandSearch = ""
   @State private var showAllCommands = false
+  @State private var showOptionalCommandInputs = false
+  @State private var commandArgValues: [String: String] = [:]
+  @State private var commandFlagValues: [String: String] = [:]
+  @State private var commandBoolValues: [String: Bool] = [:]
 
   private var sections: [CLIMenuSection] {
     catalog?.sections ?? fallbackCatalog.sections
   }
 
   private var selectedAction: CLIMenuAction? {
-    if let selectedCatalogAction {
-      return selectedCatalogAction
+    if let selectedCatalogCommand {
+      return action(for: selectedCatalogCommand)
     }
     for section in sections {
       if let action = section.actions.first(where: { $0.key == selectedActionKey }) {
@@ -29,9 +33,20 @@ struct DiagnosticsView: View {
     return nil
   }
 
+  private var selectedActionCanRun: Bool {
+    guard let action = selectedAction else { return false }
+    if action.interactive {
+      return false
+    }
+    if let command = selectedCatalogCommand {
+      return missingRequiredInputs(for: command).isEmpty
+    }
+    return true
+  }
+
   private var commandResults: [CLICommandEntry] {
     let commands = (commandCatalog?.commands ?? [])
-      .filter { $0.runnable && ($0.hidden != true) }
+      .filter { $0.runnable && ($0.hidden != true) && $0.path.count > 1 }
     let query = commandSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let filtered: [CLICommandEntry]
     if query.isEmpty {
@@ -121,7 +136,7 @@ struct DiagnosticsView: View {
         .pickerStyle(.menu)
         .disabled(loadingCatalog || appState.isDiagnosticRunning)
         .onChange(of: selectedActionKey) { _, _ in
-          selectedCatalogAction = nil
+          selectedCatalogCommand = nil
           confirmingActionKey = nil
         }
 
@@ -131,11 +146,11 @@ struct DiagnosticsView: View {
           ProgressView().controlSize(.small)
         } else {
           Button(action: runSelectedAction) {
-            Image(systemName: confirmingActionKey == selectedActionKey ? "exclamationmark.triangle.fill" : "play.fill")
+            Image(systemName: confirmingActionKey == selectedAction?.key ? "exclamationmark.triangle.fill" : "play.fill")
           }
           .buttonStyle(.bordered)
           .controlSize(.small)
-          .disabled(selectedAction == nil || selectedAction?.interactive == true)
+          .disabled(!selectedActionCanRun)
         }
       }
 
@@ -160,6 +175,9 @@ struct DiagnosticsView: View {
               tag("interactive CLI", color: .tnPurple)
             }
           }
+          if let command = selectedCatalogCommand {
+            commandInputForm(command)
+          }
         }
       }
 
@@ -183,7 +201,7 @@ struct DiagnosticsView: View {
                   }
                 }
                 Spacer()
-                if commandNeedsInput(command) {
+                if commandHasInputs(command) {
                   Image(systemName: "ellipsis.rectangle")
                     .foregroundStyle(Color.tnOrange)
                 } else if let risk = command.risk, !risk.isEmpty {
@@ -259,6 +277,73 @@ struct DiagnosticsView: View {
       .clipShape(Capsule())
   }
 
+  @ViewBuilder
+  private func commandInputForm(_ command: CLICommandEntry) -> some View {
+    let arguments = command.arguments ?? []
+    let flags = commandFormFlags(command)
+    let requiredFlags = flags.filter { $0.required == true }
+    let optionalFlags = flags.filter { $0.required != true }
+
+    if !arguments.isEmpty || !flags.isEmpty {
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(arguments) { argument in
+          commandArgumentField(argument)
+        }
+        ForEach(requiredFlags) { flag in
+          commandFlagField(flag)
+        }
+        if !optionalFlags.isEmpty {
+          DisclosureGroup("Optional flags", isExpanded: $showOptionalCommandInputs) {
+            VStack(alignment: .leading, spacing: 8) {
+              ForEach(optionalFlags) { flag in
+                commandFlagField(flag)
+              }
+            }
+            .padding(.top, 6)
+          }
+          .font(.caption)
+        }
+      }
+      .padding(.top, 4)
+    }
+  }
+
+  @ViewBuilder
+  private func commandArgumentField(_ argument: CLICommandArgument) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(argument.required == true ? "\(argument.name) *" : argument.name)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+      TextField(argument.raw, text: argumentBinding(argument))
+        .textFieldStyle(.roundedBorder)
+        .font(.caption)
+    }
+  }
+
+  @ViewBuilder
+  private func commandFlagField(_ flag: CLICommandFlag) -> some View {
+    if flag.type == "bool" {
+      Toggle(commandFlagLabel(flag), isOn: boolBinding(flag))
+        .toggleStyle(.checkbox)
+        .font(.caption)
+    } else {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(commandFlagLabel(flag))
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+        TextField(commandFlagPlaceholder(flag), text: flagBinding(flag))
+          .textFieldStyle(.roundedBorder)
+          .font(.caption)
+        if let usage = flag.usage, !usage.isEmpty {
+          Text(usage)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+    }
+  }
+
   private func loadCatalog() {
     guard appState.cliAvailable else {
       catalog = nil
@@ -287,36 +372,139 @@ struct DiagnosticsView: View {
     if !allActions.contains(where: { $0.key == selectedActionKey }) {
       selectedActionKey = allActions.first?.key ?? ""
       confirmingActionKey = nil
-      selectedCatalogAction = nil
+      selectedCatalogCommand = nil
     }
   }
 
   private func selectCommand(_ command: CLICommandEntry) {
-    let args = Array(command.path.dropFirst())
-    let needsInput = commandNeedsInput(command)
-    selectedCatalogAction = CLIMenuAction(
+    selectedCatalogCommand = command
+    commandArgValues = [:]
+    commandFlagValues = [:]
+    commandBoolValues = defaultBoolValues(for: command)
+    showOptionalCommandInputs = false
+    confirmingActionKey = nil
+  }
+
+  private func action(for command: CLICommandEntry) -> CLIMenuAction {
+    var args = Array(command.path.dropFirst())
+    for argument in command.arguments ?? [] {
+      let value = commandArgValues[argument.name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !value.isEmpty {
+        args.append(value)
+      }
+    }
+    for flag in commandFormFlags(command) {
+      if flag.type == "bool" {
+        let defaultValue = flag.default == "true"
+        let value = commandBoolValues[flag.name] ?? defaultValue
+        if value != defaultValue {
+          args.append(value ? "--\(flag.name)" : "--\(flag.name)=false")
+        }
+      } else {
+        let value = commandFlagValues[flag.name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !value.isEmpty {
+          args.append("--\(flag.name)")
+          args.append(value)
+        }
+      }
+    }
+
+    let missing = missingRequiredInputs(for: command)
+    return CLIMenuAction(
       key: "catalog:" + command.command,
       label: command.command,
       description: command.short,
       args: args,
       longRunning: command.risk == "mutating",
-      risk: needsInput ? "needs input" : command.risk,
-      interactive: needsInput)
-    confirmingActionKey = nil
+      risk: missing.isEmpty ? command.risk : "needs input",
+      interactive: commandIsInteractive(command))
   }
 
-  private func commandNeedsInput(_ command: CLICommandEntry) -> Bool {
-    command.use.contains("<") || (command.flags ?? []).contains { $0.required == true }
+  private func commandHasInputs(_ command: CLICommandEntry) -> Bool {
+    !(command.arguments ?? []).isEmpty || !commandFormFlags(command).isEmpty
+  }
+
+  private func commandFormFlags(_ command: CLICommandEntry) -> [CLICommandFlag] {
+    (command.flags ?? []).filter { flag in
+      if flag.hidden == true || flag.deprecated != nil {
+        return false
+      }
+      return flag.source != "frameworks"
+    }
+  }
+
+  private func missingRequiredInputs(for command: CLICommandEntry) -> [String] {
+    var missing: [String] = []
+    for argument in command.arguments ?? [] where argument.required == true {
+      let value = commandArgValues[argument.name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if value.isEmpty {
+        missing.append(argument.name)
+      }
+    }
+    for flag in commandFormFlags(command) where flag.required == true && flag.type != "bool" {
+      let value = commandFlagValues[flag.name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if value.isEmpty {
+        missing.append("--\(flag.name)")
+      }
+    }
+    return missing
+  }
+
+  private func commandIsInteractive(_ command: CLICommandEntry) -> Bool {
+    command.command == "frameworks menu" || command.command == "frameworks setup"
+  }
+
+  private func defaultBoolValues(for command: CLICommandEntry) -> [String: Bool] {
+    var values: [String: Bool] = [:]
+    for flag in commandFormFlags(command) where flag.type == "bool" {
+      values[flag.name] = flag.default == "true"
+    }
+    return values
+  }
+
+  private func commandFlagLabel(_ flag: CLICommandFlag) -> String {
+    flag.required == true ? "--\(flag.name) *" : "--\(flag.name)"
+  }
+
+  private func commandFlagPlaceholder(_ flag: CLICommandFlag) -> String {
+    if let defaultValue = flag.default, !defaultValue.isEmpty {
+      return defaultValue
+    }
+    return "--\(flag.name)"
+  }
+
+  private func argumentBinding(_ argument: CLICommandArgument) -> Binding<String> {
+    Binding(
+      get: { commandArgValues[argument.name] ?? "" },
+      set: { commandArgValues[argument.name] = $0 }
+    )
+  }
+
+  private func flagBinding(_ flag: CLICommandFlag) -> Binding<String> {
+    Binding(
+      get: { commandFlagValues[flag.name] ?? "" },
+      set: { commandFlagValues[flag.name] = $0 }
+    )
+  }
+
+  private func boolBinding(_ flag: CLICommandFlag) -> Binding<Bool> {
+    Binding(
+      get: { commandBoolValues[flag.name] ?? (flag.default == "true") },
+      set: { commandBoolValues[flag.name] = $0 }
+    )
   }
 
   private func runSelectedAction() {
     guard !appState.isDiagnosticRunning, let action = selectedAction else { return }
-    guard !action.interactive else {
-      if action.risk == "needs input" {
-        appState.diagnosticOutput = "[inputs required]\nThis command needs arguments or required flags before the tray can run it:\n\(action.commandText)\n"
-      } else {
-        appState.diagnosticOutput = "[interactive CLI action]\nRun this in Terminal:\n\(action.commandText)\n"
+    if let command = selectedCatalogCommand {
+      let missing = missingRequiredInputs(for: command)
+      guard missing.isEmpty else {
+        appState.diagnosticOutput = "[inputs required]\nMissing: \(missing.joined(separator: ", "))\n\(action.commandText)\n"
+        return
       }
+    }
+    guard !action.interactive else {
+      appState.diagnosticOutput = "[interactive CLI action]\nRun this in Terminal:\n\(action.commandText)\n"
       return
     }
 

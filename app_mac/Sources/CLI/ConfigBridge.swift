@@ -87,7 +87,16 @@ struct CLICommandEntry: Decodable, Identifiable, Hashable {
   let hidden: Bool?
   let deprecated: String?
   let risk: String?
+  let arguments: [CLICommandArgument]?
   let flags: [CLICommandFlag]?
+}
+
+struct CLICommandArgument: Decodable, Identifiable, Hashable {
+  var id: String { name }
+  let name: String
+  let raw: String
+  let required: Bool?
+  let variadic: Bool?
 }
 
 struct CLICommandFlag: Decodable, Identifiable, Hashable {
@@ -98,6 +107,7 @@ struct CLICommandFlag: Decodable, Identifiable, Hashable {
   let `default`: String?
   let type: String?
   let scope: String
+  let source: String?
   let required: Bool?
   let hidden: Bool?
   let deprecated: String?

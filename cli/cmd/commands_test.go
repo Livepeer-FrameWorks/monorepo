@@ -51,12 +51,35 @@ func TestBuildCommandCatalogIncludesRootPersistentFlags(t *testing.T) {
 		}
 		for _, flag := range entry.Flags {
 			if flag.Name == "context" && flag.Scope == "inherited" {
+				if flag.Source != "frameworks" {
+					t.Fatalf("context flag source = %q, want frameworks", flag.Source)
+				}
 				return
 			}
 		}
 		t.Fatalf("context check missing inherited --context flag")
 	}
 	t.Fatalf("catalog missing context check")
+}
+
+func TestBuildCommandCatalogIncludesArguments(t *testing.T) {
+	t.Parallel()
+
+	catalog := buildCommandCatalog(NewRootCmd(), false)
+	for _, entry := range catalog.Commands {
+		if entry.Command != "frameworks admin bootstrap-tokens revoke" {
+			continue
+		}
+		if len(entry.Arguments) != 1 {
+			t.Fatalf("bootstrap token revoke arguments = %d, want 1", len(entry.Arguments))
+		}
+		arg := entry.Arguments[0]
+		if arg.Name != "id" || arg.Required || arg.Raw != "[id]" {
+			t.Fatalf("bootstrap token revoke argument = %+v, want optional id", arg)
+		}
+		return
+	}
+	t.Fatalf("catalog missing bootstrap token revoke")
 }
 
 func hasCatalogFlag(entry commandCatalogEntry, name string) bool {

@@ -14,16 +14,17 @@ type commandCatalog struct {
 }
 
 type commandCatalogEntry struct {
-	Path       []string             `json:"path"`
-	Command    string               `json:"command"`
-	Use        string               `json:"use"`
-	Short      string               `json:"short,omitempty"`
-	Long       string               `json:"long,omitempty"`
-	Runnable   bool                 `json:"runnable"`
-	Hidden     bool                 `json:"hidden,omitempty"`
-	Deprecated string               `json:"deprecated,omitempty"`
-	Risk       string               `json:"risk,omitempty"`
-	Flags      []commandCatalogFlag `json:"flags,omitempty"`
+	Path       []string                 `json:"path"`
+	Command    string                   `json:"command"`
+	Use        string                   `json:"use"`
+	Short      string                   `json:"short,omitempty"`
+	Long       string                   `json:"long,omitempty"`
+	Runnable   bool                     `json:"runnable"`
+	Hidden     bool                     `json:"hidden,omitempty"`
+	Deprecated string                   `json:"deprecated,omitempty"`
+	Risk       string                   `json:"risk,omitempty"`
+	Arguments  []commandCatalogArgument `json:"arguments,omitempty"`
+	Flags      []commandCatalogFlag     `json:"flags,omitempty"`
 }
 
 type commandCatalogFlag struct {
@@ -33,9 +34,17 @@ type commandCatalogFlag struct {
 	Default    string `json:"default,omitempty"`
 	Type       string `json:"type,omitempty"`
 	Scope      string `json:"scope"`
+	Source     string `json:"source,omitempty"`
 	Required   bool   `json:"required,omitempty"`
 	Hidden     bool   `json:"hidden,omitempty"`
 	Deprecated string `json:"deprecated,omitempty"`
+}
+
+type commandCatalogArgument struct {
+	Name     string `json:"name"`
+	Raw      string `json:"raw"`
+	Required bool   `json:"required,omitempty"`
+	Variadic bool   `json:"variadic,omitempty"`
 }
 
 func newCommandsCmd() *cobra.Command {
@@ -83,6 +92,7 @@ func buildCommandCatalog(root *cobra.Command, includeHidden bool) commandCatalog
 			Hidden:     c.Hidden,
 			Deprecated: c.Deprecated,
 			Risk:       inferCommandRisk(c),
+			Arguments:  commandArguments(c),
 			Flags:      commandFlags(c, includeHidden),
 		})
 		for _, child := range c.Commands() {
@@ -111,8 +121,8 @@ func catalogCommandRunnable(cmd *cobra.Command) bool {
 
 func commandFlags(cmd *cobra.Command, includeHidden bool) []commandCatalogFlag {
 	seen := map[string]bool{}
-	var flags []commandCatalogFlag
-	add := func(scope string, set *pflag.FlagSet) {
+	flags := []commandCatalogFlag{}
+	add := func(scope string, source *cobra.Command, set *pflag.FlagSet) {
 		set.VisitAll(func(flag *pflag.Flag) {
 			if seen[flag.Name] {
 				return
@@ -128,16 +138,59 @@ func commandFlags(cmd *cobra.Command, includeHidden bool) []commandCatalogFlag {
 				Default:    flag.DefValue,
 				Type:       flag.Value.Type(),
 				Scope:      scope,
+				Source:     source.CommandPath(),
 				Required:   flagRequired(flag),
 				Hidden:     flag.Hidden,
 				Deprecated: flag.Deprecated,
 			})
 		})
 	}
-	add("local", cmd.LocalNonPersistentFlags())
-	add("persistent", cmd.PersistentFlags())
-	add("inherited", cmd.InheritedFlags())
+	add("local", cmd, cmd.LocalNonPersistentFlags())
+	add("persistent", cmd, cmd.PersistentFlags())
+	for parent := cmd.Parent(); parent != nil; parent = parent.Parent() {
+		add("inherited", parent, parent.PersistentFlags())
+	}
 	return flags
+}
+
+func commandArguments(cmd *cobra.Command) []commandCatalogArgument {
+	fields := strings.Fields(cmd.Use)
+	if len(fields) <= 1 {
+		return nil
+	}
+	args := []commandCatalogArgument{}
+	for _, field := range fields[1:] {
+		arg, ok := commandArgument(field)
+		if ok {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
+func commandArgument(field string) (commandCatalogArgument, bool) {
+	raw := strings.Trim(strings.TrimSpace(field), ",")
+	if raw == "" {
+		return commandCatalogArgument{}, false
+	}
+	normalized := strings.ToLower(strings.Trim(raw, "[]<>"))
+	if normalized == "flags" || normalized == "options" || normalized == "command" || normalized == "commands" {
+		return commandCatalogArgument{}, false
+	}
+
+	required := !strings.HasPrefix(raw, "[")
+	name := strings.Trim(raw, "[]<>")
+	variadic := strings.Contains(name, "...")
+	name = strings.TrimPrefix(strings.TrimSuffix(name, "..."), "...")
+	if name == "" {
+		return commandCatalogArgument{}, false
+	}
+	return commandCatalogArgument{
+		Name:     name,
+		Raw:      raw,
+		Required: required,
+		Variadic: variadic,
+	}, true
 }
 
 func flagRequired(flag *pflag.Flag) bool {
