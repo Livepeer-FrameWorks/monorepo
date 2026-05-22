@@ -35,6 +35,17 @@ Run `frameworks config path --kind config` to print the canonical path the CLI i
 
 Note: the manifest-source flags (`--manifest`, `--gitops-dir`, `--github-repo`, `--github-ref`, `--cluster`, `--age-key`, `--github-app-id`, `--github-installation-id`, `--github-private-key`) are persistent on the `frameworks cluster` command group — set on any `cluster *` subcommand. They are not global.
 
+## Command Catalog
+
+`frameworks commands` prints the Cobra command tree for tools that need to
+discover available CLI paths and flags without hardcoding them.
+
+```bash
+frameworks commands
+frameworks commands --output json
+frameworks commands --include-hidden --output json
+```
+
 ## Personas and Access Modes
 
 `frameworks setup` creates a context with a persona and an access mode. The persona captures the operator's intent; the access mode controls how operator-originated CLI calls reach control-plane gRPC services.
@@ -413,6 +424,7 @@ frameworks cluster init postgres --manifest production.yaml
 | `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                |
 | `frameworks cluster skipper knowledge reset`            | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                    |
 | `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                             |
+| `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                            |
 | `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                              |
 | `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster upgrade` uses this when no explicit version is given.                                                                                                      |
 
@@ -439,6 +451,12 @@ frameworks cluster skipper posts --status draft --limit 25
 
 # Clear platform knowledge vectors and crawl cache before an embedding-model recrawl
 frameworks cluster skipper knowledge reset --yes
+
+# Adopt existing matching Metabase cards, then keep them managed by hash
+frameworks cluster metabase sync \
+  --url https://metabase.example.com \
+  --session-id "$METABASE_SESSION_ID" \
+  --adopt
 
 # Distribute a local GeoIP database and restart target services
 frameworks cluster sync-geoip \
@@ -512,6 +530,44 @@ frameworks cluster skipper posts [flags]
 ```bash
 frameworks cluster skipper posts
 frameworks cluster skipper posts --status draft --limit 25
+```
+
+### frameworks cluster metabase
+
+Manage repo-owned Metabase content for a cluster.
+
+### frameworks cluster metabase sync
+
+Sync the managed Periscope cards from `infrastructure/metabase/periscope_cards.yaml`
+to Metabase. The command creates missing cards and updates cards that still
+carry the Frameworks managed hash. Existing cards without that marker are left
+alone unless `--adopt` confirms the SQL already matches, or `--force` is used
+to replace them.
+
+**Usage:**
+
+```bash
+frameworks cluster metabase sync [flags]
+```
+
+**Flags:**
+
+- `--url string` - Metabase base URL (defaults to `METABASE_URL`)
+- `--session-id string` - Metabase session ID (defaults to `METABASE_SESSION_ID`)
+- `--api-key string` - Metabase API key (defaults to `METABASE_API_KEY`)
+- `--file string` - Managed card spec file
+- `--database string` / `--database-id int` - Target Metabase database
+- `--collection string` / `--collection-id int` - Target collection
+- `--dashboard string` / `--dashboard-id int` - Dashboard to attach cards to
+- `--dry-run` - Print intended changes without writing
+- `--adopt` - Mark matching unmanaged cards as Frameworks-managed
+- `--force` - Replace existing unmanaged cards
+
+**Examples:**
+
+```bash
+frameworks cluster metabase sync --url http://localhost:3001 --session-id "$METABASE_SESSION_ID" --dry-run
+frameworks cluster metabase sync --url https://metabase.example.com --api-key "$METABASE_API_KEY" --adopt
 ```
 
 ### frameworks cluster logs

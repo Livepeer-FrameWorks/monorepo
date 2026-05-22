@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
-		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
+		proto graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		validate-migrations verify-feature-registry release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
@@ -299,6 +299,10 @@ test:
 
 test-cli:
 	$(call run-go-tests,cli,$(SERVICE_DIR_cli))
+
+test-dashboards:
+	@echo "Running dashboard divergence checks..."
+	@cd cli && go test $(GO_TAG_FLAGS) ./pkg/dashcheck -count=1
 
 test-commodore:
 	$(call run-go-tests,commodore,$(SERVICE_DIR_commodore))

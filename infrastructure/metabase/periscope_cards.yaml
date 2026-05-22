@@ -1,0 +1,89 @@
+cards:
+  - slug: periscope.routing-decisions-by-selected-node
+    name: Routing decisions by selected node
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT coalesce(nullIf(selected_node_id, ''), selected_node) AS node,
+             count() AS decisions,
+             countIf(status = 'success') AS successes,
+             round(successes / nullIf(decisions, 0), 4) AS success_rate,
+             round(avgIf(routing_distance_km, routing_distance_km IS NOT NULL), 2) AS avg_distance_km,
+             max(timestamp) AS last_seen
+      FROM periscope.routing_decisions
+      WHERE timestamp >= now() - INTERVAL 24 HOUR
+      GROUP BY node
+      ORDER BY decisions DESC
+      LIMIT 25
+
+  - slug: periscope.routing-distance-by-selected-node
+    name: Routing distance by selected node
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT toStartOfHour(timestamp) AS hour,
+             coalesce(nullIf(selected_node_id, ''), selected_node) AS node,
+             round(avgIf(routing_distance_km, routing_distance_km IS NOT NULL), 2) AS avg_distance_km,
+             round(quantileIf(0.95)(routing_distance_km, routing_distance_km IS NOT NULL), 2) AS p95_distance_km,
+             count() AS decisions
+      FROM periscope.routing_decisions
+      WHERE timestamp >= now() - INTERVAL 7 DAY
+      GROUP BY hour, node
+      ORDER BY hour, node
+      LIMIT 500
+
+  - slug: periscope.routing-attribution-coverage
+    name: Routing attribution coverage
+    display: scalar
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT count() AS rows,
+             countIf(selected_node_id = '') AS missing_selected_node_id,
+             countIf(routing_distance_km IS NULL) AS missing_distance,
+             round(missing_selected_node_id / nullIf(rows, 0), 4) AS missing_node_ratio,
+             round(missing_distance / nullIf(rows, 0), 4) AS missing_distance_ratio
+      FROM periscope.routing_decisions
+      WHERE timestamp >= now() - INTERVAL 24 HOUR
+
+  - slug: periscope.artifact-state-by-processing-node
+    name: Artifact state by processing node
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT processing_node_id,
+             content_type,
+             stage,
+             count() AS artifacts,
+             round(sum(ifNull(size_bytes, 0)) / pow(1024, 3), 3) AS gib
+      FROM periscope.artifact_state_current FINAL
+      WHERE updated_at >= now() - INTERVAL 30 DAY
+      GROUP BY processing_node_id, content_type, stage
+      ORDER BY artifacts DESC
+      LIMIT 100
+
+  - slug: periscope.artifact-lifecycle-by-ingest-node
+    name: Artifact lifecycle by ingest node
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT toStartOfHour(timestamp) AS hour,
+             ingest_node_id,
+             content_type,
+             stage,
+             count() AS events
+      FROM periscope.artifact_events
+      WHERE timestamp >= now() - INTERVAL 7 DAY
+      GROUP BY hour, ingest_node_id, content_type, stage
+      ORDER BY hour DESC, events DESC
+      LIMIT 500
+
+  - slug: periscope.artifact-attribution-coverage
+    name: Artifact attribution coverage
+    display: scalar
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT count() AS events,
+             countIf(ingest_node_id = '') AS missing_ingest_node,
+             round(missing_ingest_node / nullIf(events, 0), 4) AS missing_ratio
+      FROM periscope.artifact_events
+      WHERE timestamp >= now() - INTERVAL 24 HOUR
