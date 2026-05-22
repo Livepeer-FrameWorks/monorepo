@@ -24,8 +24,13 @@
     go_service_internal_tls_cert_path: "{{ go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path) }}"
     go_service_internal_tls_key_path: "{{ go_service_env.GRPC_TLS_KEY_PATH | default(go_service_internal_tls_key_default_path) }}"
   when:
-    - go_service_internal_tls_cert_pem | length > 0
-    - go_service_internal_tls_key_pem | length > 0
+    - >
+      go_service_env.GRPC_TLS_CERT_PATH is defined or
+      go_service_env.GRPC_TLS_KEY_PATH is defined or
+      (
+        go_service_internal_tls_cert_pem | length > 0 and
+        go_service_internal_tls_key_pem | length > 0
+      )
 
 - name: Ensure internal gRPC certificate directory
   ansible.builtin.file:
@@ -36,8 +41,7 @@
     mode: "2750"
   when:
     - not ansible_check_mode
-    - go_service_internal_tls_cert_pem | length > 0
-    - go_service_internal_tls_key_pem | length > 0
+    - go_service_internal_tls_cert_path is defined
 
 - name: Stat existing bootstrap internal gRPC certificate
   ansible.builtin.stat:
@@ -169,6 +173,8 @@
         {{ go_service_internal_tls_temp_key.path | quote }} \
         {{ go_service_internal_tls_key_path | quote }}
     ) 9>"$lock_path"
+    chown privateer:{{ go_service_group | quote }} "$lock_path"
+    chmod 0600 "$lock_path"
     rm -f {{ go_service_internal_tls_temp_cert.path | quote }} {{ go_service_internal_tls_temp_key.path | quote }}
   args:
     executable: /bin/bash

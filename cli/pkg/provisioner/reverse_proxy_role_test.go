@@ -358,7 +358,8 @@ func TestPrivateerRoleLetsRuntimeRefreshPKIAndBootstrapUnhealthy(t *testing.T) {
 		`mode: "2750"`,
 		"normalize existing service certificate directories",
 		"normalize existing service certificate files",
-		`mode: "{{ (item.path | basename == 'tls.key') | ternary('0640', '0644') }}"`,
+		".tls.write.lock",
+		`mode: "{{ (item.path | basename == '.tls.write.lock') | ternary('0600', (item.path | basename == 'tls.key') | ternary('0640', '0644')) }}"`,
 	} {
 		if !strings.Contains(pki, want) {
 			t.Fatalf("privateer PKI tasks should keep /etc/frameworks traversable and runtime PKI writable; missing %q:\n%s", want, pki)
@@ -410,6 +411,8 @@ func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 		"flock -x 9",
 		"install -o privateer -g {{ go_service_group | quote }} -m 0644",
 		"install -o privateer -g {{ go_service_group | quote }} -m 0640",
+		"chown privateer:{{ go_service_group | quote }} \"$lock_path\"",
+		"chmod 0600 \"$lock_path\"",
 		"Fail when internal gRPC certificate and key do not match",
 	} {
 		if !strings.Contains(goServicePKI, want) {
