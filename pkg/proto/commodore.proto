@@ -1032,6 +1032,20 @@ service UserService {
 
   // Email linking (for wallet-only users to add email for postpaid upgrade)
   rpc LinkEmail(LinkEmailRequest) returns (LinkEmailResponse);
+
+  // Browser-handoff login for native clients such as the macOS tray. The webapp /authorize
+  // page completes Turnstile + password in the browser, then mints a one-time
+  // PKCE code which the native client exchanges for an AuthResponse session.
+  // See RFC 7636 (PKCE) + RFC 8252 (loopback).
+  rpc CompleteAuthorization(CompleteAuthorizationRequest) returns (CompleteAuthorizationResponse);
+  rpc ExchangeAuthorizationCode(ExchangeAuthorizationCodeRequest) returns (AuthResponse);
+
+  // Device Authorization Grant (RFC 8628) — CLI / headless interactive login.
+  // CLI starts the flow, the user confirms a short user_code in any browser,
+  // CLI polls until approved and receives an AuthResponse session.
+  rpc StartDeviceAuthorization(StartDeviceAuthorizationRequest) returns (StartDeviceAuthorizationResponse);
+  rpc PollDeviceAuthorization(PollDeviceAuthorizationRequest) returns (AuthResponse);
+  rpc ApproveDeviceAuthorization(ApproveDeviceAuthorizationRequest) returns (ApproveDeviceAuthorizationResponse);
 }
 
 // Matches pkg/api/commodore/types.go:LoginRequest (lines 85-88)
@@ -1940,4 +1954,82 @@ message SetStreamRetentionOverridesResponse {
   string stream_id = 1;
   optional int32 dvr_retention_days_override  = 2;
   optional int32 clip_retention_days_override = 3;
+}
+
+// ============================================================================
+// BROWSER-HANDOFF + DEVICE LOGIN (Tray / CLI)
+// ============================================================================
+// Identity-bearing fields (user_id, tenant_id) on session-protected RPCs are
+// derived from the gateway's verified JWT context — never from the client's
+// JSON body. The webapp must not send user_id; Commodore trusts only what the
+// gateway forwards after RequireJWTAuth has run.
+// ============================================================================
+
+// CompleteAuthorization: called by the gateway on behalf of the webapp
+// /authorize page after the signed-in user clicks "Approve". Persists a
+// single-use authorization code bound to the caller's PKCE code_challenge.
+message CompleteAuthorizationRequest {
+  string user_id = 1;                  // derived from gateway session, NOT body
+  string tenant_id = 2;                // derived from gateway session, NOT body
+  string client_id = 3;                // e.g. "tray-mac", "cli"
+  string redirect_uri = 4;             // loopback URL the tray is listening on
+  string code_challenge = 5;           // base64url(SHA256(verifier))
+  string code_challenge_method = 6;    // must be "S256"
+  string scope = 7;                    // e.g. "account"
+  string state = 8;                    // opaque client nonce (passed through, not validated server-side)
+}
+
+message CompleteAuthorizationResponse {
+  string code = 1;                     // opaque single-use authorization code (~600s TTL)
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// ExchangeAuthorizationCode: called by the tray loopback receiver after the
+// browser redirects back with ?code=... Returns the same AuthResponse shape
+// as Login — short-lived access token + long-lived refresh token. PKCE
+// verifier check binds the code to the originating tray process.
+message ExchangeAuthorizationCodeRequest {
+  string code = 1;
+  string code_verifier = 2;            // raw verifier (server SHA256s and compares to stored challenge)
+  string client_id = 3;
+  string redirect_uri = 4;             // must match the redirect_uri from CompleteAuthorization
+}
+
+// StartDeviceAuthorization: called by the CLI to begin a device-code login.
+// Returns a (device_code, user_code) pair plus the URL the user should open.
+// RFC 8628 §3.2.
+message StartDeviceAuthorizationRequest {
+  string client_id = 1;
+  string scope = 2;
+}
+
+message StartDeviceAuthorizationResponse {
+  string device_code = 1;              // opaque high-entropy string; hashed at rest
+  string user_code = 2;                // short, dash-formatted (e.g. "ABCD-EFGH")
+  string verification_uri = 3;         // base URL, e.g. "https://app/device"
+  string verification_uri_complete = 4;// includes ?user_code=...
+  int32 expires_in_seconds = 5;        // typically 600
+  int32 interval_seconds = 6;          // minimum poll interval (typically 5)
+}
+
+// PollDeviceAuthorization: called by the CLI on the interval returned above.
+// While the user_code is still pending, returns gRPC status with one of the
+// RFC 8628 §3.5 markers in the message: AUTHORIZATION_PENDING, SLOW_DOWN,
+// ACCESS_DENIED, EXPIRED_TOKEN. On approval, returns a normal AuthResponse.
+message PollDeviceAuthorizationRequest {
+  string device_code = 1;
+  string client_id = 2;
+}
+
+// ApproveDeviceAuthorization: called by the gateway on behalf of the webapp
+// /device page after the signed-in user confirms the displayed user_code.
+message ApproveDeviceAuthorizationRequest {
+  string user_id = 1;                  // derived from gateway session, NOT body
+  string tenant_id = 2;                // derived from gateway session, NOT body
+  string user_code = 3;
+}
+
+message ApproveDeviceAuthorizationResponse {
+  bool success = 1;
+  string client_id = 2;                // surfaced back to webapp so consent UI can name the requesting client
 }

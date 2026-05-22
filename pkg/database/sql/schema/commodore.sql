@@ -97,6 +97,71 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_users_email_ci
     WHERE email IS NOT NULL;
 
 -- ============================================================================
+-- BROWSER-HANDOFF + DEVICE LOGIN (Tray / CLI)
+-- ============================================================================
+-- Replaces native email/password forms in non-browser clients (the macOS tray
+-- and the CLI) so Cloudflare Turnstile keeps protecting the password surface.
+-- Tray uses OAuth 2.0 Authorization Code with PKCE over a loopback redirect
+-- (RFC 8252 + RFC 7636). CLI uses the Device Authorization Grant (RFC 8628).
+-- Existing commodore.api_tokens remain the automation escape hatch.
+
+-- PKCE authorization codes. Single-use; hashed at rest. consumed_at is set
+-- in the same transaction that issues the JWT.
+CREATE TABLE IF NOT EXISTS commodore.auth_authorization_codes (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id             UUID NOT NULL,
+    user_id               UUID NOT NULL,
+    client_id             VARCHAR(64) NOT NULL,
+    code_hash             BYTEA NOT NULL,
+    code_challenge        VARCHAR(128) NOT NULL,
+    code_challenge_method VARCHAR(16) NOT NULL,
+    redirect_uri          TEXT NOT NULL,
+    scope                 VARCHAR(64) NOT NULL DEFAULT 'account',
+    state                 TEXT,
+    expires_at            TIMESTAMP NOT NULL,
+    consumed_at           TIMESTAMP,
+    created_at            TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_hash
+    ON commodore.auth_authorization_codes(code_hash);
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_tenant
+    ON commodore.auth_authorization_codes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_expires
+    ON commodore.auth_authorization_codes(expires_at)
+    WHERE consumed_at IS NULL;
+
+-- Device Authorization Grant state. user_id/tenant_id stay NULL until the
+-- user confirms the user_code in a browser.
+CREATE TABLE IF NOT EXISTS commodore.auth_device_codes (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id             UUID,
+    user_id               UUID,
+    client_id             VARCHAR(64) NOT NULL,
+    device_code_hash      BYTEA NOT NULL,
+    user_code             VARCHAR(32) NOT NULL,
+    scope                 VARCHAR(64) NOT NULL DEFAULT 'account',
+    status                VARCHAR(16) NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+    poll_interval_seconds INTEGER NOT NULL DEFAULT 5,
+    last_polled_at        TIMESTAMP,
+    expires_at            TIMESTAMP NOT NULL,
+    approved_at           TIMESTAMP,
+    created_at            TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_device_hash
+    ON commodore.auth_device_codes(device_code_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_user_code
+    ON commodore.auth_device_codes(user_code);
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_user
+    ON commodore.auth_device_codes(user_id)
+    WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_expires
+    ON commodore.auth_device_codes(expires_at)
+    WHERE status = 'pending';
+
+-- ============================================================================
 -- WALLET-BASED IDENTITY (Agent Access / x402)
 -- ============================================================================
 -- Enables wallet-based authentication as alternative to email/password.
