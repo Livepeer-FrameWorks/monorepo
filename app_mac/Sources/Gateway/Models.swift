@@ -165,12 +165,13 @@ struct StreamEdge: Codable {
 struct StreamNode: Codable {
   let id: String
   let name: String
-  let isActive: Bool
-  let viewerCount: Int?
+  let metrics: StreamNodeMetrics?
 
-  enum CodingKeys: String, CodingKey {
-    case id, name
-    case isActive = "is_active"
-    case viewerCount = "viewer_count"
-  }
+  var isActive: Bool { metrics?.isLive ?? false }
+  var viewerCount: Int? { metrics?.currentViewers }
+}
+
+struct StreamNodeMetrics: Codable {
+  let isLive: Bool
+  let currentViewers: Int
 }

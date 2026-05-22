@@ -4,8 +4,6 @@ struct LoginView: View {
   @ObservedObject var appState: AppState
   var closePanel: () -> Void
 
-  @State private var email = ""
-  @State private var password = ""
   @State private var isLoading = false
   @State private var errorMessage: String?
 
@@ -22,13 +20,18 @@ struct LoginView: View {
       }
 
       VStack(spacing: 12) {
-        TextField("Email", text: $email)
+        TextField("Email", text: $appState.loginEmailDraft)
           .textFieldStyle(.roundedBorder)
           .textContentType(.emailAddress)
 
-        SecureField("Password", text: $password)
+        SecureField("Password", text: $appState.loginPasswordDraft)
           .textFieldStyle(.roundedBorder)
           .textContentType(.password)
+
+        if appState.currentContext.isEmpty {
+          TextField("Bridge URL", text: $appState.loginBridgeURLDraft)
+            .textFieldStyle(.roundedBorder)
+        }
 
         if let error = errorMessage {
           Text(error)
@@ -47,7 +50,7 @@ struct LoginView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(Color.tnAccent)
-        .disabled(email.isEmpty || password.isEmpty || isLoading)
+        .disabled(appState.loginEmailDraft.isEmpty || appState.loginPasswordDraft.isEmpty || isLoading)
         .keyboardShortcut(.defaultAction)
       }
 
@@ -75,9 +78,17 @@ struct LoginView: View {
   }
 
   private func login() {
-    let trimmed = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let email = appState.loginEmailDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let password = appState.loginPasswordDraft
+    let contextURL = appState.gatewayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let draftURL = appState.loginBridgeURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = contextURL.isEmpty ? draftURL : contextURL
+    guard !email.isEmpty && !password.isEmpty else {
+      errorMessage = "Email and password are required."
+      return
+    }
     guard !trimmed.isEmpty else {
-      errorMessage = "No active context. Run 'frameworks setup' in a terminal, then reopen."
+      errorMessage = "Bridge URL is required."
       return
     }
 
@@ -85,10 +96,16 @@ struct LoginView: View {
     errorMessage = nil
 
     GatewayClient.shared.baseURL = trimmed
+    appState.gatewayBaseURL = trimmed
 
     Task {
       do {
-        try await AuthService.shared.login(email: email, password: password, appState: appState)
+        try await AuthService.shared.login(
+          email: email,
+          password: password,
+          appState: appState
+        )
+        await ensureCLIContextIfNeeded(bridgeURL: trimmed)
         await MainActor.run {
           closePanel()
         }
@@ -97,6 +114,27 @@ struct LoginView: View {
           errorMessage = error.localizedDescription
           isLoading = false
         }
+      }
+    }
+  }
+
+  private func ensureCLIContextIfNeeded(bridgeURL: String) async {
+    let hasContext = await MainActor.run {
+      !appState.currentContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    guard !hasContext else { return }
+    guard await MainActor.run(body: { appState.cliAvailable }) else { return }
+    guard await ConfigBridge.shared.ensureUserContext(bridgeURL: bridgeURL) else { return }
+
+    let contexts = await ConfigBridge.shared.loadContexts()
+    let current = await ConfigBridge.shared.loadCurrentContext()
+
+    await MainActor.run {
+      appState.availableContexts = contexts.map(\.name)
+      if let current {
+        appState.currentContext = current.name
+        appState.gatewayBaseURL = current.endpoints.bridgeURL
+        GatewayClient.shared.baseURL = current.endpoints.bridgeURL
       }
     }
   }

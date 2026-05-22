@@ -9,13 +9,15 @@ class StreamService {
   func listStreams() async throws -> [StreamSummary] {
     let query = """
       query {
-        streamsConnection {
+        streamsConnection(page: { first: 50 }) {
           edges {
             node {
               id
               name
-              is_active
-              viewer_count
+              metrics {
+                isLive
+                currentViewers
+              }
             }
           }
           totalCount

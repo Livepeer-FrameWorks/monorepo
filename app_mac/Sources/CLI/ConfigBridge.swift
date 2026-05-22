@@ -59,6 +59,31 @@ actor ConfigBridge {
     return result.exitCode == 0
   }
 
+  func ensureUserContext(bridgeURL: String) async -> Bool {
+    let target = AppState.hostedContextName
+    let entries = await loadContexts()
+    let exists = entries.contains { $0.name == target }
+
+    if !exists {
+      guard let created = try? await CLIRunner.shared.run(["context", "create", target]),
+            created.exitCode == 0 else {
+        return false
+      }
+    }
+
+    guard let persona = try? await CLIRunner.shared.run(
+      ["context", "set-persona", "user", "--context", target]),
+      persona.exitCode == 0
+    else { return false }
+
+    guard let url = try? await CLIRunner.shared.run(
+      ["context", "set-url", "bridge", bridgeURL, "--context", target]),
+      url.exitCode == 0
+    else { return false }
+
+    return await switchContext(target)
+  }
+
   // rearmIfDeferred picks up the config file once `frameworks setup`
   // has created it on a fresh install, without requiring a tray
   // restart. armWatcher returns early when the file doesn't exist yet

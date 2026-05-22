@@ -6,33 +6,9 @@ class SkipperService {
 
   private init() {}
 
-  // Simple query mode — sends a question, gets a full response.
-  // TODO: streaming via GraphQL subscription (skipperChat) for token-by-token rendering
-  func ask(question: String, mode: String = "full") async throws -> String {
-    let query = """
-      mutation($input: SkipperChatInput!) {
-        skipperChat(input: $input) {
-          ... on SkipperDone {
-            content
-            conversationId
-          }
-        }
-      }
-      """
-
-    let variables: [String: Any] = [
-      "input": [
-        "message": question,
-        "mode": mode,
-      ]
-    ]
-
-    let response = try await gateway.graphql(
-      query: query,
-      variables: variables,
-      responseType: SkipperChatResponse.self)
-
-    return response.skipperChat.content ?? "No response"
+  // Skipper chat is subscription-only in the current GraphQL schema.
+  func ask(question _: String, mode _: String = "full") async throws -> String {
+    throw SkipperServiceError.subscriptionTransportRequired
   }
 
   func listConversations() async throws -> [SkipperConversation] {
@@ -53,15 +29,6 @@ class SkipperService {
   }
 }
 
-struct SkipperChatResponse: Codable {
-  let skipperChat: SkipperChatResult
-}
-
-struct SkipperChatResult: Codable {
-  let content: String?
-  let conversationId: String?
-}
-
 struct SkipperConversationsResponse: Codable {
   let skipperConversations: [SkipperConversation]
 }
@@ -70,4 +37,15 @@ struct SkipperConversation: Codable, Identifiable {
   let id: String
   let title: String?
   let updatedAt: String?
+}
+
+enum SkipperServiceError: LocalizedError {
+  case subscriptionTransportRequired
+
+  var errorDescription: String? {
+    switch self {
+    case .subscriptionTransportRequired:
+      return "Skipper chat now requires GraphQL subscription transport; the tray client is not wired for it yet."
+    }
+  }
 }

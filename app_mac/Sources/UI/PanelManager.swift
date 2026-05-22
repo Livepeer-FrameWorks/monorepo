@@ -14,6 +14,7 @@ enum PanelView {
 
 private class KeyablePanel: NSPanel {
   override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
 
   override func sendEvent(_ event: NSEvent) {
     if event.type == .leftMouseDown && !isKeyWindow {

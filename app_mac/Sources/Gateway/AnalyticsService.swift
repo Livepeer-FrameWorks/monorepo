@@ -14,7 +14,7 @@ class AnalyticsService {
             totalStreams
             activeStreams
             totalViewers
-            bandwidthUsed
+            egressGb
           }
         }
       }
@@ -39,5 +39,5 @@ struct AnalyticsOverview: Codable {
   let totalStreams: Int?
   let activeStreams: Int?
   let totalViewers: Int?
-  let bandwidthUsed: Int?
+  let egressGb: Double?
 }

@@ -2,11 +2,17 @@ import Foundation
 import Combine
 
 class AppState: ObservableObject {
+  static let hostedBridgeURL = "https://bridge.frameworks.network"
+  static let hostedContextName = "my-account"
+
   // Auth
   @Published var isAuthenticated = false
   @Published var userEmail: String?
   @Published var userId: String?
   @Published var tenantId: String?
+  @Published var loginEmailDraft = ""
+  @Published var loginPasswordDraft = ""
+  @Published var loginBridgeURLDraft = AppState.hostedBridgeURL
 
   // Edge
   @Published var edgeDetected = false

@@ -19,12 +19,13 @@ class GatewayClient {
 
   // MARK: - REST
 
-  func request(
+  func requestWithResponse(
     method: String,
     path: String,
     body: Data? = nil,
-    authenticated: Bool = true
-  ) async throws -> Data {
+    authenticated: Bool = true,
+    headers: [String: String] = [:]
+  ) async throws -> (Data, HTTPURLResponse) {
     let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       throw GatewayError.notConfigured
@@ -37,6 +38,10 @@ class GatewayClient {
     request.httpMethod = method
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("FrameWorks-Desktop/1.0", forHTTPHeaderField: "User-Agent")
+
+    for (key, value) in headers {
+      request.setValue(value, forHTTPHeaderField: key)
+    }
 
     if authenticated, let token = accessToken {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -56,6 +61,23 @@ class GatewayClient {
       throw GatewayError.httpError(httpResponse.statusCode, data)
     }
 
+    return (data, httpResponse)
+  }
+
+  func request(
+    method: String,
+    path: String,
+    body: Data? = nil,
+    authenticated: Bool = true,
+    headers: [String: String] = [:]
+  ) async throws -> Data {
+    let (data, _) = try await requestWithResponse(
+      method: method,
+      path: path,
+      body: body,
+      authenticated: authenticated,
+      headers: headers
+    )
     return data
   }
 
