@@ -45,7 +45,9 @@ Examples of “push” signals:
 
 Helmsman receives these over HTTP, parses them, and forwards to Foghorn as a typed `pb.MistTrigger`.
 
-For final/accounting triggers (`USER_END`, `STREAM_END`, `PUSH_END`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists the parsed trigger to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` (which Foghorn only sends after Decklog's Kafka publish commits). See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation is `sha256(node_id || trigger_type || payload_raw)` in `MistTrigger.RequestId`; Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
+For final/accounting triggers (`USER_END`, `STREAM_END`, `PUSH_END`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`), Helmsman persists the parsed trigger to a local write-ahead log before responding 200 OK to Mist, and a background forwarder retries until Foghorn returns a `MistTriggerAck` (which Foghorn only sends after Decklog's Kafka publish commits). See [trigger-durability.md](trigger-durability.md). The source id used for ack correlation is `sha256(node_id || NUL || trigger_type || NUL || payload_raw)` in `MistTrigger.RequestId`; Decklog derives the typed Kafka `event_id` from that source id as a deterministic UUID so Periscope's UUID-based fact tables stay idempotent.
+
+Once a final/accounting trigger lands in Kafka, Periscope ingests it into `raw_mist_triggers` (durable audit) and then projects it into per-meter `*_final` tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`). Those `*_final` tables are the billing source of truth for Mist-derived meters; storage billing integrates canonical `storage_snapshots` directly. Five-minute canonical ledgers (`viewer_usage_5m`, `stream_runtime_5m`, `storage_gb_seconds_5m`, `processing_5m`, `api_usage_5m`) feed analytics and dashboard rollups. See [finalized-fact-tables.md](finalized-fact-tables.md) and [meter-contracts.md](meter-contracts.md).
 
 ### B) MistServer Poller (state snapshots)
 
@@ -166,7 +168,7 @@ If you need to add a new event type, the switch lives in `api_analytics_ingest/i
 
 The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 
-- `viewer_connection_events`: Viewer connect/disconnect session events (billing source of truth).
+- `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers.
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
 - `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues).
 - `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.
@@ -174,7 +176,7 @@ The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 - `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`).
 - `artifact_events` and `artifact_state_current`: Clip/DVR lifecycle events + current artifact state.
 - `routing_decisions`: Load balancing decision telemetry (routing maps, etc.).
-- `processing_events`: Transcoding/processing usage events (billing + analytics).
+- `processing_events`: Transcoding/processing usage telemetry retained for diagnostics. The rated processing source is `processing_segments_final`, projected from durable Livepeer and AV segment-complete triggers.
 - `storage_snapshots` and `storage_events`: Storage capacity snapshots and lifecycle actions.
 - `federation_events`: Cross-cluster federation telemetry (peering, replication, artifact access, redirects) with geo coordinates (`local_lat`/`local_lon`/`remote_lat`/`remote_lon`).
 - `api_requests` and `api_events`: GraphQL/API usage aggregates + audit trail (from `service_events` / `api_request_batch`).
@@ -195,11 +197,9 @@ ClickHouse is the platform’s time-series/event store for analytics, optimized 
 
 ### Materialized views (rollups)
 
-Rollups exist so that “billing-critical” queries do not need to scan raw `viewer_connection_events` at read time:
+Rollups exist so dashboard queries do not scan canonical ledgers for common 24h/7d/30d ranges. They are not billing inputs. Billing walks finalized facts and canonical ledgers directly.
 
-- `viewer_hours_hourly` (hourly aggregation)
-- `tenant_viewer_daily` (daily tenant rollup)
-- `viewer_geo_hourly` (geo rollup)
+Public rollup names such as `tenant_usage_hourly`, `viewer_hours_hourly`, `viewer_geo_hourly`, `storage_usage_hourly`, `processing_hourly`, and `api_usage_hourly` are deduped read surfaces. If a refreshable materialized view uses `APPEND`, it writes into an internal store table and the public name collapses refresh versions before resolvers read it. A resolver must not query raw append targets.
 
 Realtime-like derived data:
 
@@ -219,7 +219,7 @@ The client-side QoE pipeline is rate-shaped at two points:
 This makes `client_qoe_samples` (and the derived `client_qoe_5m` MV) **diagnostic-only**, not the source of truth for viewer counts or billing:
 
 - `client_qoe_5m.active_sessions = count(DISTINCT session_id)` per 5-minute bucket is a _sampled_ metric. A session whose entire lifetime falls between two 60s polls produces no QoE rows and is invisible to this rollup.
-- For viewer counts and billing, read `viewer_connection_events` instead — that table is driven by `USER_NEW` / `USER_END` triggers from MistServer in real time and is authoritative.
+- For live viewer counts, use final connection lifecycle state derived from `USER_NEW` / `USER_END`. For billing, read `viewer_sessions_final` and derived canonical ledgers — sampled QoE rows are never authoritative.
 
 ## 6) Query: Periscope Query (gRPC API)
 
@@ -286,25 +286,31 @@ Key rule: do not broadcast raw client IP fields; redact before emit.
 
 ## 9) Billing / Metering
 
-Billing’s canonical source is viewer disconnect session data:
+Billing's canonical source is the finalized-fact tables (`viewer_sessions_final`, `stream_sessions_final`, `processing_segments_final`) plus direct hold-constant integration of canonical `storage_snapshots`. Default-priced meters are `delivered_minutes` and `storage_gb_seconds_cold`; `ingress_gb`, `egress_gb`, `storage_gb_seconds_hot`, and `media_seconds` are priceable but unrated by default. `media_seconds` carries plain codec and joint process/codec breakdowns in usage details so pricing can apply per-codec or per-workload multipliers without inventing one usage type per codec. See [meter-contracts.md](meter-contracts.md).
 
 ```
-USER_END / viewer disconnect
-  → ClickHouse viewer_connection_events (bytes_transferred, session_duration)
-  → hourly/daily rollups (MVs)
-  → Periscope Query billing summarizer
+USER_END / STREAM_END / segment-complete
+  → raw_mist_triggers (audit journal, see trigger-durability.md)
+  → *_final tables (append-only MergeTree, materialized via min/argMax on projection_version_ms)
+  → 5-min canonical ledgers (viewer_usage_5m, stream_runtime_5m, processing_5m, storage_gb_seconds_5m, api_usage_5m)
+  → Periscope billing scheduler (5-min aligned cursor, 2-min settlement lag, walks billable_at_ms)
   → Kafka billing.usage_reports
-  → Purser (Postgres usage_records)
+  → Purser (Postgres usage_records, value_kind='delta')
+  → rating engine → invoice line items
 ```
+
+Dashboards (24h/7d/30d) read separate refreshable-MV rollups (`tenant_usage_hourly/daily`, `viewer_geo_hourly/daily`, etc.) sourced from the same canonical ledgers. Billing never reads dashboard rollups; dashboards never read the billing cursor source. See [finalized-fact-tables.md](finalized-fact-tables.md).
+
+The dashboard rollup contract is part of the billing safety model: replacement refreshes must cover their full published retention, while append refreshes must write to internal versioned stores hidden behind deduped public names. A bounded replacement refresh silently truncates history and is not an acceptable release shape.
 
 Notes:
 
-- Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.).
-- "Peak bandwidth" must be derived from a rate table/rollup (e.g., `client_qoe_5m.avg_bw_out`), not cumulative byte counters.
+- Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.). Storage is stored as GiB-seconds internally and rated as GiB-hours (rating engine divides by 3600).
+- "Peak bandwidth" is default-unrated and derived from `client_qoe_5m.avg_bw_out`; custom/marketplace pricing can opt in with an explicit meter rule.
 
 ### Cross-cluster billing attribution
 
-In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. Periscope Query generates per-cluster `UsageSummary` records for Purser from the viewer rollups, enabling settlement of inter-cluster traffic.
+In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. Periscope Query generates per-cluster usage records for Purser from finalized facts and canonical ledgers, enabling settlement of inter-cluster traffic.
 
 See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on viewer connection events and viewer rollups; `cluster_id` only on stream lifecycle rows), and the settlement query.
 
@@ -339,9 +345,11 @@ Viewer session MV health:
 SELECT countIf(disconnected_at IS NULL) AS still_connected, count() AS total FROM periscope.viewer_sessions_current;
 ```
 
-Billing rollups populated:
+Canonical billing facts and dashboard rollups populated:
 
 ```sql
+SELECT count(), min(billable_at_ms), max(billable_at_ms) FROM periscope.viewer_sessions_final_v;
+SELECT window_start, sum(seconds_observed), sum(up_bytes_observed + down_bytes_observed) FROM periscope.viewer_usage_5m_v GROUP BY window_start ORDER BY window_start DESC LIMIT 12;
 SELECT day, sum(viewer_hours), sum(egress_gb) FROM periscope.tenant_viewer_daily GROUP BY day ORDER BY day DESC LIMIT 14;
 SELECT hour, sum(viewer_count), sum(egress_gb) FROM periscope.viewer_geo_hourly GROUP BY hour ORDER BY hour DESC LIMIT 48;
 ```

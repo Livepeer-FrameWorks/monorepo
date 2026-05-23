@@ -55,22 +55,24 @@ Notes:
 
 ## Attributes
 
-| Attribute        | Type      | Default  | Description                             |
-| ---------------- | --------- | -------- | --------------------------------------- |
-| `content-id`     | `string`  | `""`     | Playback ID                             |
-| `content-type`   | `string`  | —        | `"live"` · `"dvr"` · `"clip"` · `"vod"` |
-| `gateway-url`    | `string`  | Official | Gateway GraphQL endpoint override       |
-| `mist-url`       | `string`  | —        | Direct MistServer endpoint              |
-| `auth-token`     | `string`  | —        | Auth token                              |
-| `autoplay`       | `boolean` | `true`   | Auto-start playback                     |
-| `muted`          | `boolean` | `true`   | Start muted                             |
-| `playback-mode`  | `string`  | `"auto"` | `"auto"` · `"hls"` · `"webrtc"` · etc.  |
-| `stock-controls` | `boolean` | `false`  | Use native browser controls             |
-| `thumbnail-url`  | `string`  | —        | Poster / thumbnail URL                  |
-| `theme`          | `string`  | —        | Theme preset name                       |
-| `locale`         | `string`  | `"en"`   | UI language                             |
-| `debug`          | `boolean` | `false`  | Debug logging                           |
-| `dev-mode`       | `boolean` | `false`  | Show dev panel                          |
+| Attribute         | Type      | Default  | Description                             |
+| ----------------- | --------- | -------- | --------------------------------------- |
+| `content-id`      | `string`  | `""`     | Playback ID                             |
+| `content-type`    | `string`  | —        | `"live"` · `"dvr"` · `"clip"` · `"vod"` |
+| `gateway-url`     | `string`  | Official | Gateway GraphQL endpoint override       |
+| `mist-url`        | `string`  | —        | Direct MistServer endpoint              |
+| `auth-token`      | `string`  | —        | Auth token                              |
+| `autoplay`        | `boolean` | `true`   | Auto-start playback                     |
+| `muted`           | `boolean` | `true`   | Start muted                             |
+| `playback-mode`   | `string`  | `"auto"` | `"auto"` · `"hls"` · `"webrtc"` · etc.  |
+| `no-controls`     | `boolean` | `false`  | Hide the built-in controls              |
+| `stock-controls`  | `boolean` | `false`  | Use native browser controls             |
+| `native-controls` | `boolean` | `false`  | Alias for `stock-controls`              |
+| `thumbnail-url`   | `string`  | —        | Poster / thumbnail URL                  |
+| `theme`           | `string`  | —        | Theme preset name                       |
+| `locale`          | `string`  | `"en"`   | UI language                             |
+| `debug`           | `boolean` | `false`  | Debug logging                           |
+| `dev-mode`        | `boolean` | `false`  | Show dev panel                          |
 
 ## Methods
 

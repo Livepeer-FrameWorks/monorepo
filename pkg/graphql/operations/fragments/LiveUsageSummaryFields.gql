@@ -5,7 +5,7 @@ fragment LiveUsageSummaryFields on LiveUsageSummary {
   streamHours
   egressGb
   peakBandwidthMbps
-  averageStorageGb
+  displayStorageGb
   # Per-codec breakdown: Livepeer
   livepeerH264Seconds
   livepeerVp9Seconds

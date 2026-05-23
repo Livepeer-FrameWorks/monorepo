@@ -1036,11 +1036,11 @@ message LiveUsageSummary {
   google.protobuf.Timestamp period_start = 2;
   google.protobuf.Timestamp period_end = 3;
 
-  // Core metrics (matches UsageSummary)
+  // Core near-real-time metrics
   double stream_hours = 4;
   double egress_gb = 5;
   double peak_bandwidth_mbps = 6;
-  double average_storage_gb = 7;
+  double display_storage_gb = 7;
 
   // Per-codec breakdown: Livepeer
   double livepeer_h264_seconds = 8;
@@ -1056,25 +1056,25 @@ message LiveUsageSummary {
   double native_av_aac_seconds = 16;
   double native_av_opus_seconds = 17;
 
-  // Viewer metrics (matches UsageSummary)
+  // Viewer metrics
   int32 total_streams = 18;
   int32 total_viewers = 19;
   double viewer_hours = 20;
   int32 max_viewers = 21;
   int32 unique_users = 22;
 
-  // Segment/stream counts (from processing_daily)
+  // Segment/stream counts
   uint64 livepeer_segment_count = 23;
   uint32 livepeer_unique_streams = 24;
   uint64 native_av_segment_count = 25;
   uint32 native_av_unique_streams = 26;
 
-  // Geo enrichment (from viewer_connection_events)
+  // Geo enrichment
   int32 unique_countries = 27;
   int32 unique_cities = 28;
   repeated CountryMetric geo_breakdown = 29;
 
-  // Storage lifecycle - artifact counts (from artifact_events)
+  // Storage lifecycle - artifact counts
   uint32 clips_created = 30;
   uint32 clips_deleted = 31;
   uint32 dvr_created = 32;
@@ -1092,7 +1092,7 @@ message LiveUsageSummary {
   uint64 frozen_dvr_bytes = 40;
   uint64 frozen_vod_bytes = 41;
 
-  // Freeze/defrost operations (from storage_events)
+  // Freeze/defrost operations
   uint32 freeze_count = 42;
   uint64 freeze_bytes = 43;
   uint32 defrost_count = 44;
@@ -1166,7 +1166,7 @@ message AcquisitionCohortUsageRecord {
   google.protobuf.Timestamp cohort_month = 3;
   double viewer_hours = 4;
   double egress_gb = 5;
-  double processing_seconds = 6;
+  double media_seconds = 6;
 }
 
 message GetAcquisitionCohortUsageResponse {
@@ -1277,6 +1277,7 @@ message ViewerHoursHourly {
   int32 unique_viewers = 6;
   int64 total_session_seconds = 7;
   int64 total_bytes = 8;
+  int64 egress_bytes = 9;
 }
 
 message GetViewerHoursHourlyRequest {

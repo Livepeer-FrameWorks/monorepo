@@ -31,6 +31,10 @@ func (f *apiBatchFakeClickhouse) Query(_ context.Context, _ string, _ ...interfa
 	return &apiBatchFakeRows{}, nil
 }
 
+func (f *apiBatchFakeClickhouse) Exec(_ context.Context, _ string, _ ...interface{}) error {
+	return nil
+}
+
 type apiBatchFakeBatch struct {
 	appendErrAt int
 	appendCalls int
@@ -53,8 +57,10 @@ func (f *apiBatchFakeBatch) Send() error {
 
 type apiBatchFakeRows struct{}
 
-func (f *apiBatchFakeRows) Next() bool   { return false }
-func (f *apiBatchFakeRows) Close() error { return nil }
+func (f *apiBatchFakeRows) Next() bool                  { return false }
+func (f *apiBatchFakeRows) Close() error                { return nil }
+func (f *apiBatchFakeRows) Scan(_ ...interface{}) error { return nil }
+func (f *apiBatchFakeRows) Err() error                  { return nil }
 
 func TestProcessAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
 	batch := &apiBatchFakeBatch{appendErrAt: 2}

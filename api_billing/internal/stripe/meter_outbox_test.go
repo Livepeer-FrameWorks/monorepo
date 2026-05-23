@@ -118,13 +118,13 @@ func TestEnqueueMeterEvents_DistinctMetersDoNotCollapse(t *testing.T) {
 			"period_start", "period_end", "stripe_meter_event_name",
 		}).
 			AddRow(lineA.String(), "operator-eu-1", "delivered_minutes", "cluster_metered", "60000", periodStart, periodEnd, "meter.delivered_minutes").
-			AddRow(lineB.String(), "operator-eu-1", "average_storage_gb", "cluster_metered", "25", periodStart, periodEnd, "meter.average_storage_gb"))
+			AddRow(lineB.String(), "operator-eu-1", "storage_gb_seconds_hot", "cluster_metered", "25", periodStart, periodEnd, "meter.storage_gb_seconds_hot"))
 	mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
 		WithArgs("tenant-1", "operator-eu-1", "delivered_minutes", "meter.delivered_minutes", "60000",
 			periodStart, periodEnd, "inv-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.stripe_meter_events_outbox`).
-		WithArgs("tenant-1", "operator-eu-1", "average_storage_gb", "meter.average_storage_gb", "25",
+		WithArgs("tenant-1", "operator-eu-1", "storage_gb_seconds_hot", "meter.storage_gb_seconds_hot", "25",
 			periodStart, periodEnd, "inv-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

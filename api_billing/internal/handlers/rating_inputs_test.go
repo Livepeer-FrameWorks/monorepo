@@ -23,7 +23,7 @@ func dec(s string) decimal.Decimal {
 
 func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 	// Per-event prepaid path must never charge the monthly base fee.
-	in := buildRatingInputFromSummary(models.UsageSummary{ViewerHours: 100, GPUHours: 5}, "EUR", nil)
+	in := buildRatingInputFromSummary(models.UsageSummary{ViewerHours: 100}, "EUR", nil)
 	if !in.BasePrice.IsZero() {
 		t.Errorf("BasePrice = %s, want 0 (per-event path must never charge base fee)", in.BasePrice)
 	}
@@ -34,44 +34,102 @@ func TestBuildRatingInputFromSummary_BasePriceIsZero(t *testing.T) {
 	if got := in.Usage[rating.MeterDeliveredMinutes]; !got.Equal(wantMinutes) {
 		t.Errorf("delivered_minutes = %s, want %s", got, wantMinutes)
 	}
-	if got := in.Usage[rating.MeterAIGPUHours]; !got.Equal(dec("5")) {
-		t.Errorf("ai_gpu_hours = %s, want 5 (regression: per-event path must bill GPU)", got)
+}
+
+func TestBuildRatingInputFromSummary_IncludesPriceableOperationalMeters(t *testing.T) {
+	in := buildRatingInputFromSummary(models.UsageSummary{EgressGB: 12.5, PeakBandwidthMbps: 80}, "EUR", nil)
+	if got := in.Usage[rating.Meter("egress_gb")]; !got.Equal(dec("12.5")) {
+		t.Errorf("egress_gb = %s, want 12.5", got)
+	}
+	if got := in.Usage[rating.Meter("peak_bandwidth_mbps")]; !got.Equal(dec("80")) {
+		t.Errorf("peak_bandwidth_mbps = %s, want 80", got)
 	}
 }
 
-func TestUsageMapFromAggregates_ConvertsViewerHoursToMinutes(t *testing.T) {
+func TestBuildRatingInputFromSummary_MediaSecondsDoesNotDoubleCountBreakdownRollups(t *testing.T) {
+	in := buildRatingInputFromSummary(models.UsageSummary{
+		ProcessingSeconds: map[string]float64{
+			"Livepeer:h264": 100,
+			"AV:h264":       50,
+			"h264":          150,
+		},
+	}, "EUR", nil)
+	if got := in.Usage[rating.MeterMediaSeconds]; !got.Equal(dec("150")) {
+		t.Errorf("media_seconds = %s, want 150", got)
+	}
+	if got := in.Breakdowns[rating.MeterMediaSeconds]["h264"]; !got.Equal(dec("150")) {
+		t.Errorf("h264 breakdown = %s, want 150", got)
+	}
+	if got := in.Breakdowns[rating.MeterMediaSeconds]["Livepeer:h264"]; !got.Equal(dec("100")) {
+		t.Errorf("Livepeer:h264 breakdown = %s, want 100", got)
+	}
+	if got := in.Breakdowns[rating.MeterMediaSeconds]["AV:h264"]; !got.Equal(dec("50")) {
+		t.Errorf("AV:h264 breakdown = %s, want 50", got)
+	}
+}
+
+func TestBuildRatingInputFromSummary_IncludesUsageAdjustments(t *testing.T) {
+	in := buildRatingInputFromSummary(models.UsageSummary{
+		ViewerHours: 1,
+		UsageAdjustments: []models.UsageAdjustment{
+			{UsageType: "delivered_minutes", DeltaValue: -15},
+			{
+				UsageType:  "media_seconds",
+				DeltaValue: -30,
+				Details: models.JSONB{
+					"process_type":    "Livepeer",
+					"output_codec":    "h264",
+					"source_event_id": "event-1",
+				},
+			},
+		},
+	}, "EUR", nil)
+	if got := in.Usage[rating.MeterDeliveredMinutes]; !got.Equal(dec("45")) {
+		t.Errorf("delivered_minutes = %s, want 45", got)
+	}
+	if got := in.Usage[rating.MeterMediaSeconds]; !got.Equal(dec("-30")) {
+		t.Errorf("media_seconds = %s, want -30", got)
+	}
+	if got := in.Breakdowns[rating.MeterMediaSeconds]["h264"]; !got.Equal(dec("-30")) {
+		t.Errorf("h264 adjustment = %s, want -30", got)
+	}
+	if got := in.Breakdowns[rating.MeterMediaSeconds]["Livepeer:h264"]; !got.Equal(dec("-30")) {
+		t.Errorf("Livepeer:h264 adjustment = %s, want -30", got)
+	}
+}
+
+func TestUsageMapFromAggregates_PassesCanonicalMetersThrough(t *testing.T) {
 	usage := map[string]float64{
-		"viewer_hours":       1000,
-		"average_storage_gb": 50,
-		"gpu_hours":          12,
+		"delivered_minutes":      60000,
+		"storage_gb_seconds_hot": 50,
+		"media_seconds":          1800,
 	}
 	got := usageMapFromAggregates(usage)
 	if v := got[rating.MeterDeliveredMinutes]; !v.Equal(dec("60000")) {
-		t.Errorf("delivered_minutes = %s, want 60000 (1000h * 60)", v)
+		t.Errorf("delivered_minutes = %s, want 60000", v)
 	}
-	if v := got[rating.MeterAverageStorageGB]; !v.Equal(dec("50")) {
-		t.Errorf("average_storage_gb = %s, want 50", v)
+	if v := got[rating.MeterStorageGBSecondsHot]; !v.Equal(dec("50")) {
+		t.Errorf("storage_gb_seconds_hot = %s, want 50", v)
 	}
-	if v := got[rating.MeterAIGPUHours]; !v.Equal(dec("12")) {
-		t.Errorf("ai_gpu_hours = %s, want 12", v)
+	if v := got[rating.MeterMediaSeconds]; !v.Equal(dec("1800")) {
+		t.Errorf("media_seconds = %s, want 1800", v)
 	}
 }
 
-func TestCodecSecondsFromAggregates_SumsLivepeerAndNative(t *testing.T) {
-	usage := map[string]float64{
-		"livepeer_h264_seconds":  1200,
-		"native_av_h264_seconds": 600,
-		"livepeer_av1_seconds":   300,
-	}
-	got := codecSecondsFromAggregates(usage)
+func TestCodecSecondsFromCluster_FiltersZerosButKeepsCredits(t *testing.T) {
+	in := map[string]float64{"h264": 1800, "av1": 300, "hevc": 0, "vp9": -75}
+	got := codecSecondsFromCluster(in)
 	if v, ok := got["h264"]; !ok || !v.Equal(dec("1800")) {
 		t.Errorf("h264 = %v, want 1800", v)
 	}
 	if v, ok := got["av1"]; !ok || !v.Equal(dec("300")) {
 		t.Errorf("av1 = %v, want 300", v)
 	}
+	if v, ok := got["vp9"]; !ok || !v.Equal(dec("-75")) {
+		t.Errorf("vp9 = %v, want -75", v)
+	}
 	if _, ok := got["hevc"]; ok {
-		t.Errorf("hevc unexpectedly present (no usage data)")
+		t.Errorf("hevc unexpectedly present (zero value)")
 	}
 }
 
@@ -96,30 +154,30 @@ func TestCodecSecondsFromSummary_SumsBothSources(t *testing.T) {
 
 func TestFlattenUsageAcrossClusters_SumsPerMeter(t *testing.T) {
 	per := map[string]map[string]float64{
-		"":          {"average_storage_gb": 2.0, "viewer_hours": 1.0},
-		"cluster-a": {"viewer_hours": 3.0},
-		"cluster-b": {"viewer_hours": 4.5, "gpu_hours": 1.0},
+		"":          {"storage_gb_seconds_hot": 2.0, "delivered_minutes": 60.0},
+		"cluster-a": {"delivered_minutes": 180.0},
+		"cluster-b": {"delivered_minutes": 270.0, "media_seconds": 1200.0},
 	}
 	got := flattenUsageAcrossClusters(per)
-	if got["viewer_hours"] != 8.5 {
-		t.Errorf("viewer_hours = %v, want 8.5 (sum across clusters)", got["viewer_hours"])
+	if got["delivered_minutes"] != 510.0 {
+		t.Errorf("delivered_minutes = %v, want 510 (sum across clusters)", got["delivered_minutes"])
 	}
-	if got["average_storage_gb"] != 2.0 {
-		t.Errorf("average_storage_gb = %v, want 2.0", got["average_storage_gb"])
+	if got["storage_gb_seconds_hot"] != 2.0 {
+		t.Errorf("storage_gb_seconds_hot = %v, want 2.0", got["storage_gb_seconds_hot"])
 	}
-	if got["gpu_hours"] != 1.0 {
-		t.Errorf("gpu_hours = %v, want 1.0", got["gpu_hours"])
+	if got["media_seconds"] != 1200.0 {
+		t.Errorf("media_seconds = %v, want 1200.0", got["media_seconds"])
 	}
 }
 
 func TestClusterLineKey_LongClusterIDStaysWithinSchemaLimit(t *testing.T) {
 	longClusterID := "cluster-" +
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	got := clusterLineKey("meter:average_storage_gb", longClusterID, "202604")
+	got := clusterLineKey("meter:storage_gb_seconds_hot", longClusterID, "202604")
 	if len(got) > 128 {
 		t.Fatalf("line key length = %d, want <= 128 (%q)", len(got), got)
 	}
-	if got == "meter:average_storage_gb:"+longClusterID+":202604" {
+	if got == "meter:storage_gb_seconds_hot:"+longClusterID+":202604" {
 		t.Fatalf("long cluster id was not compacted")
 	}
 }
@@ -147,6 +205,35 @@ func TestMarketplaceLineSplitCents_UsesPlatformFeePolicy(t *testing.T) {
 	}
 	if operatorCents != 400 || platformCents != 100 {
 		t.Fatalf("split = operator %d platform %d, want 400/100", operatorCents, platformCents)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestMarketplaceLineSplitCents_HandlesNegativeCorrection(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	owner := uuid.New()
+	jm := &JobManager{db: mockDB}
+	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
+		WithArgs(owner, "cluster_metered").
+		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
+
+	operatorCents, platformCents, err := jm.marketplaceLineSplitCents(context.Background(), dec("-5.00"), &pricing.ClusterPricing{
+		Kind:          pricing.KindThirdPartyMarketplace,
+		OwnerTenantID: &owner,
+		PricingSource: pricing.SourceClusterMetered,
+	})
+	if err != nil {
+		t.Fatalf("marketplaceLineSplitCents: %v", err)
+	}
+	if operatorCents != -400 || platformCents != -100 {
+		t.Fatalf("split = operator %d platform %d, want -400/-100", operatorCents, platformCents)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

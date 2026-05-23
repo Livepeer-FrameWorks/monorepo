@@ -57,6 +57,7 @@ func TestTriggerHandlersApplyTenantContext(t *testing.T) {
 		body     string
 		handler  func(*gin.Context)
 		response string
+		raw      bool
 	}{
 		{
 			name:     "push_rewrite",
@@ -126,6 +127,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 		body     string
 		handler  func(*gin.Context)
 		response string
+		raw      bool
 	}{
 		{
 			name:     "push_rewrite",
@@ -150,6 +152,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			body:     "sess-1\nvod+abc123\nHLS\n192.0.2.20",
 			handler:  HandleUserEnd,
 			response: "OK",
+			raw:      true,
 		},
 	}
 
@@ -159,6 +162,14 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			called := false
 			stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
 				called = true
+				if test.raw {
+					if trigger.GetRawMistWebhook() == nil {
+						t.Fatalf("expected raw Mist webhook payload, got %T", trigger.GetTriggerPayload())
+					}
+					if string(trigger.GetRawMistWebhook().GetPayloadRaw()) != test.body {
+						t.Fatalf("raw payload mismatch: got %q", string(trigger.GetRawMistWebhook().GetPayloadRaw()))
+					}
+				}
 				return &control.MistTriggerResult{}, nil
 			})
 
@@ -171,8 +182,8 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 			if recorder.Body.String() != test.response {
 				t.Fatalf("expected response %q, got %q", test.response, recorder.Body.String())
 			}
-			if called {
-				t.Fatalf("expected trigger not to be forwarded")
+			if called != test.raw {
+				t.Fatalf("forwarded=%v, want %v", called, test.raw)
 			}
 		})
 	}

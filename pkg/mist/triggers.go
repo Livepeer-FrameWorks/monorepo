@@ -263,6 +263,23 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) > 7 {
 			trigger.Tags = params[7]
 		}
+		// MistServer src/session.cpp emits parallel comma-separated
+		// name and seconds arrays after `tags` for sessions that
+		// touched multiple streams/connectors/hosts. params[1..3]
+		// already carry the joined name list (verbatim from
+		// streamSummary/connectorSummary/hostSummary); params[8..10]
+		// carry the matching seconds-per-element. Pair them up so
+		// downstream can do per-element attribution. If lengths
+		// don't agree we drop the breakdown rather than mis-pair.
+		if len(params) > 8 && params[8] != "" {
+			trigger.HostTimes = pairSessionShares(params[3], params[8])
+		}
+		if len(params) > 9 && params[9] != "" {
+			trigger.ConnectorTimes = pairSessionShares(params[2], params[9])
+		}
+		if len(params) > 10 && params[10] != "" {
+			trigger.StreamTimes = pairSessionShares(params[1], params[10])
+		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_ViewerDisconnect{
 			ViewerDisconnect: trigger,
 		}
@@ -480,6 +497,31 @@ func ExtractInternalName(streamName string) string {
 		}
 	}
 	return streamName
+}
+
+// pairSessionShares pairs MistServer's parallel comma-separated USER_END
+// arrays (e.g. streamSummary="live+a,live+b" with streamTimes="120,45")
+// into typed SessionTimeShare entries. Returns nil if the two lists
+// disagree on length or any seconds entry fails to parse — the safer
+// default than misattributing time to the wrong element.
+func pairSessionShares(namesCSV, secondsCSV string) []*pb.SessionTimeShare {
+	names := strings.Split(namesCSV, ",")
+	secs := strings.Split(secondsCSV, ",")
+	if len(names) != len(secs) || len(names) == 0 {
+		return nil
+	}
+	out := make([]*pb.SessionTimeShare, 0, len(names))
+	for i, name := range names {
+		s, err := strconv.ParseUint(strings.TrimSpace(secs[i]), 10, 32)
+		if err != nil {
+			return nil
+		}
+		out = append(out, &pb.SessionTimeShare{
+			Name:    strings.TrimSpace(name),
+			Seconds: uint32(s),
+		})
+	}
+	return out
 }
 
 // IsBlocking returns whether the trigger type requires a blocking response

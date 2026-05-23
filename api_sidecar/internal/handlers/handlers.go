@@ -87,6 +87,23 @@ func forwardDurable(triggerType string, body []byte, mistTrigger *pb.MistTrigger
 	return sourceEventID, sendDurableMistTrigger(mistTrigger)
 }
 
+func forwardDurableParseFailure(triggerType string, body []byte, parseErr error) (string, error) {
+	rawTrigger := &pb.MistTrigger{
+		TriggerType: triggerType,
+		NodeId:      control.GetCurrentNodeID(),
+		Timestamp:   time.Now().UnixMilli(),
+		Blocking:    false,
+		TriggerPayload: &pb.MistTrigger_RawMistWebhook{
+			RawMistWebhook: &pb.RawMistWebhookTrigger{
+				PayloadRaw: body,
+				ParseError: parseErr.Error(),
+			},
+		},
+	}
+	applyTenantContext(rawTrigger)
+	return forwardDurable(triggerType, body, rawTrigger)
+}
+
 func respondDurableEnqueueError(c *gin.Context, log logging.Logger, triggerType, sourceEventID string, err error) {
 	incMistWebhook(triggerType, "wal_error")
 	log.WithFields(logging.Fields{
@@ -94,6 +111,12 @@ func respondDurableEnqueueError(c *gin.Context, log logging.Logger, triggerType,
 		"error":           err,
 	}).Error("Failed to durably enqueue final trigger; refusing to acknowledge")
 	c.String(http.StatusServiceUnavailable, "trigger not durably recorded")
+}
+
+func respondFinalTriggerReadError(c *gin.Context, log logging.Logger, triggerType string, err error) {
+	incMistWebhook(triggerType, "read_error")
+	log.WithError(err).Error("Failed to read final trigger body; refusing to acknowledge")
+	c.String(http.StatusServiceUnavailable, "trigger body not read")
 }
 
 // Init initializes the handlers with logger, metrics, and node identity.
@@ -1201,11 +1224,7 @@ func HandlePushEnd(c *gin.Context) {
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("PUSH_END", "read_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to read PUSH_END body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "PUSH_END", err)
 		return
 	}
 
@@ -1221,6 +1240,12 @@ func HandlePushEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse PUSH_END trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushEnd), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "PUSH_END", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("PUSH_END", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -1369,11 +1394,7 @@ func HandleStreamEnd(c *gin.Context) {
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("STREAM_END", "read_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to read STREAM_END body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "STREAM_END", err)
 		return
 	}
 
@@ -1389,6 +1410,12 @@ func HandleStreamEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse STREAM_END trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerStreamEnd), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "STREAM_END", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("STREAM_END", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -1509,11 +1536,7 @@ func HandleUserEnd(c *gin.Context) {
 	incMistWebhook("USER_END", "received")
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("USER_END", "read_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to read USER_END body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "USER_END", err)
 		return
 	}
 
@@ -1529,6 +1552,12 @@ func HandleUserEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse USER_END trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerUserEnd), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "USER_END", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("USER_END", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -1623,11 +1652,7 @@ func HandleRecordingEnd(c *gin.Context) {
 	incMistWebhook("RECORDING_END", "received")
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("RECORDING_END", "read_error")
-		logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to read RECORDING_END body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "RECORDING_END", err)
 		return
 	}
 
@@ -1643,6 +1668,12 @@ func HandleRecordingEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse RECORDING_END trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingEnd), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "RECORDING_END", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("RECORDING_END", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -1672,9 +1703,7 @@ func HandleRecordingSegment(c *gin.Context) {
 	incMistWebhook("RECORDING_SEGMENT", "received")
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("RECORDING_SEGMENT", "read_error")
-		logger.WithError(err).Error("Failed to read RECORDING_SEGMENT body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "RECORDING_SEGMENT", err)
 		return
 	}
 
@@ -1683,6 +1712,12 @@ func HandleRecordingSegment(c *gin.Context) {
 	if err != nil {
 		incMistWebhook("RECORDING_SEGMENT", "parse_error")
 		logger.WithError(err).Error("Failed to parse RECORDING_SEGMENT trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerRecordingSegment), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "RECORDING_SEGMENT", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("RECORDING_SEGMENT", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -2023,20 +2058,25 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "received")
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "read_error")
-		logger.WithError(err).Error("Failed to read LIVEPEER_SEGMENT_COMPLETE body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "LIVEPEER_SEGMENT_COMPLETE", err)
 		return
 	}
 
 	payloadStr := strings.TrimSpace(string(body))
 	params := strings.Split(payloadStr, "\n")
 	if len(params) < 15 {
+		parseErr := fmt.Errorf("LIVEPEER_SEGMENT_COMPLETE incomplete payload: got %d fields, want at least 15", len(params))
 		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "parse_error")
 		logger.WithFields(logging.Fields{
 			"payload":     payloadStr,
 			"param_count": len(params),
 		}).Warn("LIVEPEER_SEGMENT_COMPLETE incomplete payload")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerLivepeerSegmentComplete), body, parseErr)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "LIVEPEER_SEGMENT_COMPLETE", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -2086,12 +2126,17 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	speedFactorFloat, _ := strconv.ParseFloat(speedFactor, 64)
 
 	billingEvent := &pb.ProcessBillingEvent{
-		NodeId:            nodeName,
-		StreamName:        streamName,
-		ProcessType:       "Livepeer",
-		DurationMs:        durationMsInt,
-		Timestamp:         time.Now().Unix(),
-		TenantId:          stringPtr(config.GetTenantID()),
+		NodeId:      nodeName,
+		StreamName:  streamName,
+		ProcessType: "Livepeer",
+		DurationMs:  durationMsInt,
+		Timestamp:   time.Now().Unix(),
+		TenantId:    stringPtr(config.GetTenantID()),
+		// Mist's LIVEPEER_SEGMENT_COMPLETE payload reports rendition names,
+		// bytes, and dimensions, but not an output codec. Current Livepeer
+		// output is H.264; this must change with the Mist trigger payload if
+		// Livepeer starts emitting multiple codecs.
+		OutputCodec:       stringPtr("h264"),
 		LivepeerSessionId: stringPtr(livepeerSessionId),
 		SegmentNumber:     int32Ptr(safeInt32(segmentNumInt)),
 		SegmentStartMs:    int64Ptr(segmentStartMsInt),
@@ -2148,20 +2193,25 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "received")
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "read_error")
-		logger.WithError(err).Error("Failed to read PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE body")
-		c.String(http.StatusOK, "OK")
+		respondFinalTriggerReadError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", err)
 		return
 	}
 
 	payloadStr := strings.TrimSpace(string(body))
 	params := strings.Split(payloadStr, "\n")
 	if len(params) < 31 {
+		parseErr := fmt.Errorf("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE incomplete payload: got %d fields, want at least 31", len(params))
 		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "parse_error")
 		logger.WithFields(logging.Fields{
 			"payload":     payloadStr,
 			"param_count": len(params),
 		}).Warn("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE incomplete payload")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerProcessAVSegmentComplete), body, parseErr)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "durably_enqueued_parse_error")
 		c.String(http.StatusOK, "OK")
 		return
 	}

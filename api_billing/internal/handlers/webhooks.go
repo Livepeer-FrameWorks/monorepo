@@ -1716,7 +1716,6 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 		FROM purser.operator_credit_ledger
 		WHERE invoice_id = $1
 		  AND entry_type = 'accrual'
-		  AND source_type = 'invoice_line'
 	`, invoiceID)
 	if err != nil {
 		return fmt.Errorf("list operator accruals: %w", err)
@@ -1762,11 +1761,15 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 			),
 			inserted AS (
 				INSERT INTO purser.operator_credit_ledger (
-					source_type, invoice_line_item_id, entry_type, reverses_ledger_id,
+					source_type, invoice_line_item_id, storage_provider_usage_record_id,
+					usage_adjustment_id, stripe_invoice_id,
+					entry_type, reverses_ledger_id,
 					cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end,
 					currency, gross_cents, platform_fee_cents, payable_cents, status, notes
 				)
-			SELECT 'invoice_line', ol.invoice_line_item_id, 'clawback', ol.id,
+			SELECT ol.source_type, ol.invoice_line_item_id, ol.storage_provider_usage_record_id,
+			       ol.usage_adjustment_id, ol.stripe_invoice_id,
+			       'clawback', ol.id,
 			       ol.cluster_owner_tenant_id, ol.cluster_id, ol.invoice_id,
 			       ol.period_start, ol.period_end, ol.currency,
 				       -$2, -$3, -$4, 'clawed_back',
@@ -2407,8 +2410,14 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bo
 			}).Error("Failed to update invoice status")
 			return false, fmt.Errorf("failed to update invoice status: %w", updateErr)
 		}
-		if _, rowsErr := result.RowsAffected(); rowsErr != nil {
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
 			return false, fmt.Errorf("check invoice update rows: %w", rowsErr)
+		}
+		if rowsAffected > 0 {
+			if creditErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, "paid"); creditErr != nil {
+				return false, fmt.Errorf("persist operator credits: %w", creditErr)
+			}
 		}
 	}
 

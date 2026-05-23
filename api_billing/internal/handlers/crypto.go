@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_billing/internal/operator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -695,6 +696,9 @@ func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx
 	}
 	if rowsAffected == 0 {
 		return nil, fmt.Errorf("invoice %s is not payable for tenant %s", *wallet.InvoiceID, wallet.TenantID)
+	}
+	if err := operator.ComputeAndPersistCredits(ctx, dbTx, *wallet.InvoiceID, "paid"); err != nil {
+		return nil, fmt.Errorf("persist operator credits: %w", err)
 	}
 
 	return &payment, nil

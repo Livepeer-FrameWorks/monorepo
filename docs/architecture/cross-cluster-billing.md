@@ -10,8 +10,8 @@ Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> ValidateStreamKey -> cache {
 Viewer:     MistServer -> Foghorn (USER_NEW/END) -> cache hit: origin from cache
                                                   -> cache miss: ResolveIdentifier -> Quartermaster -> origin
 Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse
-                                                            -> viewer MV rollup with cluster_id + origin_cluster_id
-                                                            -> Periscope Query -> per-cluster UsageSummary -> Purser
+                                                            -> finalized facts + canonical ledgers
+                                                            -> Periscope Query -> per-cluster usage report -> Purser
 ```
 
 **Ingest path:** `sendTriggerToDecklog()` sets `trigger.ClusterId` from
@@ -19,36 +19,36 @@ Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse
 `ValidateStreamKeyResponse` (ingest) and `ResolveIdentifierResponse` (federated
 viewer cache-miss path).
 
-**Query path:** `generateTenantUsageSummary` reads `tenant_viewer_daily` grouped by
-`cluster_id` and `origin_cluster_id`, then attributes viewer/egress metrics to the
-serving `cluster_id` when present, falling back to `origin_cluster_id` and then the
-tenant's primary cluster for legacy rows. Non-cluster-scoped metrics (storage,
-processing, API calls) are attributed to the tenant's primary cluster.
+**Query path:** `generateTenantUsageSummary` reads finalized facts and canonical
+5-minute sources. Viewer minutes and network bytes come from
+`viewer_sessions_final`; processing comes from `processing_segments_final`; storage
+is integrated directly from canonical `storage_snapshots`; API usage comes from
+`api_usage_5m_v`.
+Cluster-scoped meters are emitted as one usage-report record per cluster. Operational
+tenant-level gauges attach to the tenant's primary cluster.
 
 ## ClickHouse Schema
 
-| Table / MV                 | Cluster columns                                          | Engine           |
-| -------------------------- | -------------------------------------------------------- | ---------------- |
-| `viewer_connection_events` | `cluster_id`, `origin_cluster_id`                        | MergeTree        |
-| `stream_event_log`         | `cluster_id`                                             | MergeTree        |
-| `viewer_hours_hourly` (MV) | `cluster_id`, `origin_cluster_id` in GROUP BY            | SummingMergeTree |
-| `tenant_viewer_daily` (MV) | `cluster_id`, `origin_cluster_id` in GROUP BY + ORDER BY | SummingMergeTree |
+| Table / view                 | Cluster columns                                  | Engine / role                                     |
+| ---------------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| `viewer_sessions_final`      | `cluster_id`, breakdown arrays from `USER_END`   | Append-only finalized facts                       |
+| `viewer_usage_5m`            | `cluster_id`                                     | Canonical 5-minute ledger                         |
+| `storage_gb_seconds_5m`      | `cluster_id`, storage provider attribution       | Canonical 5-minute ledger                         |
+| `processing_segments_final`  | `cluster_id`, `process_type`, `output_codec`     | Append-only finalized processing facts            |
+| `*_hourly` / `*_daily` views | cluster columns matching their canonical sources | Refreshable rollup stores with public dedup views |
 
-`origin_cluster_id` is included in ORDER BY keys for viewer rollup tables to prevent
-merge-collapse in AggregatingMergeTree/SummingMergeTree engines.
+Rollup tables are dashboard caches. Billing reads finalized facts or 5-minute
+ledgers directly.
 
 ## Settlement Query
 
-Cross-cluster traffic attribution from the pre-aggregated daily rollup:
-
-```sql
-SELECT cluster_id AS serving_cluster, origin_cluster_id AS content_cluster,
-       tenant_id, sum(viewer_hours), sum(egress_gb)
-FROM periscope.tenant_viewer_daily
-WHERE origin_cluster_id != '' AND origin_cluster_id != cluster_id
-  AND day BETWEEN ? AND ?
-GROUP BY serving_cluster, content_cluster, tenant_id
-```
+Customer invoice usage is grouped by the cluster that served or processed the
+metered work. Customer storage billing sums provider slices into
+customer-facing storage scope rows. The same billing pass persists the
+provider-keyed storage slices into `purser.storage_provider_usage_records`.
+Paid invoices allocate storage line revenue across those provider rows and
+write `operator_credit_ledger` accruals with
+`source_type='storage_provider_usage'`.
 
 ## Key Files
 
@@ -56,7 +56,7 @@ GROUP BY serving_cluster, content_cluster, tenant_id
 | ------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `api_balancing/internal/triggers`                | Sets `origin_cluster_id` in streamContext and triggers                               |
 | `api_analytics_ingest/internal/handlers`         | Extracts `cluster_id` + `origin_cluster_id` from MistTrigger into ClickHouse         |
-| `api_analytics_query/internal/handlers`          | Per-cluster billing summaries (`generateTenantUsageSummary`)                         |
+| `api_analytics_query/internal/handlers`          | Per-cluster billing records (`generateTenantUsageSummary`)                           |
 | `pkg/database/sql/clickhouse`                    | Schema with cluster columns and MVs                                                  |
 | `api_control/internal/grpc`                      | `ResolveIdentifier` enriches with cluster context via `resolveClusterRouteForTenant` |
 | `pkg/proto`                                      | `origin_cluster_id` field on `MistTrigger`                                           |
@@ -64,8 +64,8 @@ GROUP BY serving_cluster, content_cluster, tenant_id
 
 ## Gotchas
 
-- Legacy rows with empty `cluster_id` are attributed to the tenant's primary
-  cluster by analytics-query billing fallback logic.
+- Empty `cluster_id` on a rated row is an ingest/enrichment bug; billing fails closed
+  instead of guessing an attribution cluster.
 - Origin enrichment was coupled to Foghorn connectivity — `resolveFoghornForTenant`
   dialed Foghorn as a side-effect. Now decoupled via `resolveClusterRouteForTenant`
   which only contacts Quartermaster.

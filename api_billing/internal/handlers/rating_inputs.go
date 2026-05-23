@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/shopspring/decimal"
 
@@ -18,20 +19,34 @@ import (
 // Used by the per-event prepaid deduction path. BasePrice is zero; per-event
 // deductions never re-charge the monthly base fee.
 //
-// rules is the rule set the rating engine should apply. For the legacy
-// path it's tier.Rules; for the cluster-aware path it's the result of
-// pricing.ResolveClusterPricing for summary.ClusterID.
+// rules is the rule set the rating engine should apply. For tenant-tier
+// pricing it is tier.Rules; for cluster-aware pricing it is the result of
+// pricing.ResolveClusterPricing for summary.ClusterID. The usage map is seeded
+// from the summary fields Purser currently understands; rating itself stays
+// rule-driven so new persisted usage_records can be priced without changing
+// this helper.
 func buildRatingInputFromSummary(summary models.UsageSummary, currency string, rules []rating.Rule) rating.Input {
 	codecSeconds := codecSecondsFromSummary(summary)
-	processingSeconds := decimal.Zero
-	for _, secs := range codecSeconds {
-		processingSeconds = processingSeconds.Add(secs)
+	processingSeconds := decimal.NewFromFloat(totalCodecSeconds(summary))
+	usage := map[rating.Meter]decimal.Decimal{}
+	for meter, value := range buildUsageDataFromSummary(summary) {
+		m := rating.Meter(meter)
+		if !rating.ValidMeter(m) {
+			continue
+		}
+		usage[m] = decimal.NewFromFloat(value)
 	}
-	usage := map[rating.Meter]decimal.Decimal{
-		rating.MeterDeliveredMinutes:  decimal.NewFromFloat(summary.ViewerHours).Mul(decimal.NewFromInt(60)),
-		rating.MeterAverageStorageGB:  decimal.NewFromFloat(summary.AverageStorageGB),
-		rating.MeterAIGPUHours:        decimal.NewFromFloat(summary.GPUHours),
-		rating.MeterProcessingSeconds: processingSeconds,
+	usage[rating.MeterMediaSeconds] = processingSeconds
+	for _, adj := range summary.UsageAdjustments {
+		m := rating.Meter(adj.UsageType)
+		if !rating.ValidMeter(m) {
+			continue
+		}
+		delta := decimal.NewFromFloat(adj.DeltaValue)
+		usage[m] = usage[m].Add(delta)
+		if m == rating.MeterMediaSeconds {
+			addMediaAdjustmentCodecSeconds(codecSeconds, adj)
+		}
 	}
 
 	return rating.Input{
@@ -39,13 +54,77 @@ func buildRatingInputFromSummary(summary models.UsageSummary, currency string, r
 		BasePrice:    decimal.Zero,
 		Rules:        rules,
 		Usage:        usage,
+		Breakdowns:   map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
 		CodecSeconds: codecSeconds,
 	}
+}
+
+func addMediaAdjustmentCodecSeconds(out map[string]decimal.Decimal, adj models.UsageAdjustment) {
+	codec := adjustmentDetailString(adj.Details, "output_codec")
+	if codec == "" {
+		codec = adjustmentNestedDetailString(adj.Details, "natural_key", "output_codec")
+	}
+	if codec == "" {
+		return
+	}
+	processType := adjustmentDetailString(adj.Details, "process_type")
+	if processType == "" {
+		processType = adjustmentNestedDetailString(adj.Details, "natural_key", "process_type")
+	}
+	delta := decimal.NewFromFloat(adj.DeltaValue)
+	out[codec] = out[codec].Add(delta)
+	if processType != "" {
+		key := processType + ":" + codec
+		out[key] = out[key].Add(delta)
+	}
+}
+
+func adjustmentDetailString(details models.JSONB, key string) string {
+	if details == nil {
+		return ""
+	}
+	if v, ok := details[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func adjustmentNestedDetailString(details models.JSONB, outer, inner string) string {
+	if details == nil {
+		return ""
+	}
+	switch raw := details[outer].(type) {
+	case map[string]any:
+		if v, ok := raw[inner].(string); ok {
+			return v
+		}
+	case map[string]string:
+		return raw[inner]
+	}
+	return ""
 }
 
 // codecSecondsFromSummary sums Livepeer + native_av seconds per codec from a
 // single UsageSummary record.
 func codecSecondsFromSummary(s models.UsageSummary) map[string]decimal.Decimal {
+	if len(s.ProcessingSeconds) > 0 {
+		out := map[string]decimal.Decimal{}
+		useJointOnly := hasJointProcessingKeys(s.ProcessingSeconds)
+		for key, total := range s.ProcessingSeconds {
+			if useJointOnly && !isJointProcessingKey(key) {
+				continue
+			}
+			if total <= 0 {
+				continue
+			}
+			seconds := decimal.NewFromFloat(total)
+			out[key] = out[key].Add(seconds)
+			if _, codec, ok := strings.Cut(key, ":"); ok {
+				out[codec] = out[codec].Add(seconds)
+			}
+		}
+		return out
+	}
 	totals := map[string]float64{
 		"h264": s.LivepeerH264Seconds + s.NativeAvH264Seconds,
 		"hevc": s.LivepeerHEVCSeconds + s.NativeAvHEVCSeconds,
@@ -63,15 +142,28 @@ func codecSecondsFromSummary(s models.UsageSummary) map[string]decimal.Decimal {
 	return out
 }
 
-// codecSecondsFromAggregates sums livepeer_<codec>_seconds and
-// native_av_<codec>_seconds into a single per-codec map.
-func codecSecondsFromAggregates(usageData map[string]float64) map[string]decimal.Decimal {
-	codecs := []string{"h264", "hevc", "vp9", "av1", "aac", "opus"}
+// codecSecondsFromCluster turns the cluster's codec-breakdown map read from
+// usage_records.usage_details.codec_seconds into decimal quantities.
+func codecSecondsFromCluster(clusterCodecs map[string]float64) map[string]decimal.Decimal {
 	out := map[string]decimal.Decimal{}
-	for _, c := range codecs {
-		total := usageData["livepeer_"+c+"_seconds"] + usageData["native_av_"+c+"_seconds"]
-		if total > 0 {
-			out[c] = decimal.NewFromFloat(total)
+	for codec, total := range clusterCodecs {
+		if total != 0 {
+			out[codec] = decimal.NewFromFloat(total)
+		}
+	}
+	return out
+}
+
+func codecBreakdownsFromCluster(clusterBreakdowns map[string]map[string]float64) map[rating.Meter]map[string]decimal.Decimal {
+	out := map[rating.Meter]map[string]decimal.Decimal{}
+	for meter, codecs := range clusterBreakdowns {
+		m := rating.Meter(meter)
+		if !rating.ValidMeter(m) {
+			continue
+		}
+		breakdown := codecSecondsFromCluster(codecs)
+		if len(breakdown) > 0 {
+			out[m] = breakdown
 		}
 	}
 	return out

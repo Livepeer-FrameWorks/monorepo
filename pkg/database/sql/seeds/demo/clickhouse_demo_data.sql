@@ -926,286 +926,190 @@ FROM numbers(0, 336);
 -- 10. Backfill Aggregation Tables (MVs may not process bulk-inserted historical data)
 -- =================================================================================================
 
--- Backfill stream_analytics_daily from viewer_connection_events
-INSERT INTO periscope.stream_analytics_daily
-SELECT
-    toDate(timestamp) AS day,
-    tenant_id,
-    stream_id,
-    internal_name,
-    countIf(event_type = 'connect') AS total_views,
-    uniq(session_id) AS unique_viewers,
-    uniq(country_code) AS unique_countries,
-    uniq(city) AS unique_cities,
-    sum(bytes_transferred) AS egress_bytes
-FROM periscope.viewer_connection_events
-GROUP BY day, tenant_id, stream_id, internal_name;
+-- ============================================================================
+-- Legacy rollup backfills DISABLED (combined-release cutover).
+-- The rollup tables (tenant_viewer_daily, viewer_geo_hourly, processing_daily,
+-- api_usage_hourly/daily, etc.) are Refreshable MV destinations sourced
+-- from the canonical *_5m ledgers and *_final tables. Direct INSERTs into
+-- them would conflict with the MV refresh cycle.
+--
+-- Canonical pipeline note: the live system flows
+--   raw_mist_triggers → *_final → *_5m ledger → refreshable MV rollups.
+-- The demo seed cannot run the parser to project raw_mist_triggers into
+-- *_final, so it seeds the canonical fact tables directly below:
+--   viewer_sessions_final, stream_sessions_final, processing_segments_final,
+--   api_usage_5m (storage_snapshots is seeded earlier in this file).
+-- The viewer_connection_events / processing_events inserts stay for
+-- diagnostic event endpoints and support tooling. The rebuild workers
+-- in api_analytics_ingest fire every 5 minutes after boot and populate
+-- viewer_usage_5m / stream_runtime_5m / processing_5m /
+-- storage_gb_seconds_5m from the seeded *_final rows; refreshable
+-- rollups then pick those up on their own refresh cycles.
+-- ============================================================================
 
--- Backfill viewer_hours_hourly from viewer_connection_events
-INSERT INTO periscope.viewer_hours_hourly
+-- Finalized viewer sessions matching the viewer_connection_events seed
+-- above. Same session_id pattern, same geo distribution, same scale
+-- (2016 sessions = 7 days × 288 5-min buckets) so canonical billing and
+-- dashboards have data on first boot. duration_seconds /
+-- uploaded_bytes / downloaded_bytes are synthesized from the row number
+-- so the demo has variability without depending on the parser.
+INSERT INTO periscope.viewer_sessions_final (
+    tenant_id, node_id, session_id, source_event_id,
+    cluster_id, stream_id, stream_name, connector, host,
+    country_code, city, latitude, longitude, tags,
+    duration_seconds, uploaded_bytes, downloaded_bytes, seconds_connected,
+    source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
+    closed_reason, stream_times, connector_times, host_times, payload_raw
+)
 SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    origin_cluster_id,
-    stream_id,
-    internal_name,
-    country_code,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM periscope.viewer_connection_events
-WHERE event_type = 'disconnect'
-GROUP BY hour, tenant_id, cluster_id, origin_cluster_id, stream_id, internal_name, country_code;
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001'                              AS tenant_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number%3) AS node_id,
+    concat('session-', toString(number))                                AS session_id,
+    concat('sha256:', hex(murmurHash3_128(toString(number))))           AS source_event_id,
+    'central-primary'                                                    AS cluster_id,
+    toUUID('5eedfeed-11fe-ca57-feed-11feca570001')                       AS stream_id,
+    'demo_live_stream_001'                                               AS stream_name,
+    arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + number%3)                AS connector,
+    'demo-host.frameworks.local'                                         AS host,
+    arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) AS country_code,
+    multiIf(
+        number%12 < 4, arrayElement(['New York', 'Los Angeles', 'Chicago', 'San Francisco'], 1 + number%4),
+        number%12 < 6, arrayElement(['Amsterdam', 'Rotterdam'], 1 + number%2),
+        number%12 < 8, arrayElement(['London', 'Manchester'], 1 + number%2),
+        number%12 < 9, arrayElement(['Berlin', 'Munich'], 1 + number%2),
+        number%12 < 11, arrayElement(['Tokyo', 'Osaka'], 1 + number%2),
+        'Singapore'
+    )                                                                    AS city,
+    0.0                                                                  AS latitude,
+    0.0                                                                  AS longitude,
+    ''                                                                   AS tags,
+    toUInt32(60 + number%1800)                                           AS duration_seconds,           -- 1-30 min
+    toUInt64(1024*1024 * (10 + number%50))                               AS uploaded_bytes,             -- 10-60 MB
+    toUInt64(1024*1024 * (50 + number%500))                              AS downloaded_bytes,           -- 50-550 MB
+    toUInt64(60 + number%1800)                                           AS seconds_connected,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000          AS source_started_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000 + (60 + number%1800) * 1000 AS source_ended_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000 + 100   AS edge_received_at_ms,
+    toUnixTimestamp(now()) * 1000                                        AS projection_version_ms,
+    'final'                                                              AS closed_reason,
+    []                                                                   AS stream_times,
+    []                                                                   AS connector_times,
+    []                                                                   AS host_times,
+    ''                                                                   AS payload_raw
+FROM numbers(0, 2016);
 
--- Backfill tenant_viewer_daily from viewer_hours_hourly
-INSERT INTO periscope.tenant_viewer_daily
+-- Finalized stream sessions matching the viewer-session demo data, so
+-- stream_runtime_5m's rebuilder has STREAM_END facts to project from.
+INSERT INTO periscope.stream_sessions_final (
+    tenant_id, node_id, stream_id, source_event_id,
+    cluster_id, stream_name,
+    downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
+    source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
+    closed_reason, payload_raw
+)
 SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    cluster_id,
-    origin_cluster_id,
-    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
-    toUInt32(uniqMerge(unique_viewers)) AS unique_viewers,
-    toUInt32(count()) AS total_sessions,
-    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
-FROM periscope.viewer_hours_hourly
-GROUP BY day, tenant_id, cluster_id, origin_cluster_id;
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001'                              AS tenant_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number%3) AS node_id,
+    toUUID('5eedfeed-11fe-ca57-feed-11feca570001')                       AS stream_id,
+    concat('sha256:', hex(murmurHash3_128(concat('stream-', toString(number))))) AS source_event_id,
+    'central-primary'                                                    AS cluster_id,
+    'demo_live_stream_001'                                               AS stream_name,
+    toUInt64(1024*1024 * (50 + number%500))                              AS downloaded_bytes,
+    toUInt64(1024*1024 * (10 + number%50))                               AS uploaded_bytes,
+    toUInt32(5 + number%200)                                             AS total_viewers,
+    toUInt32(1)                                                          AS total_inputs,
+    toUInt32(1 + number%4)                                               AS total_outputs,
+    toUInt32(900 + number%2700)                                          AS viewer_seconds,
+    toUnixTimestamp(now() - INTERVAL ((number + 1) * 5) MINUTE) * 1000   AS source_started_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000          AS source_ended_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000 + 100   AS edge_received_at_ms,
+    toUnixTimestamp(now()) * 1000                                        AS projection_version_ms,
+    'final'                                                              AS closed_reason,
+    ''                                                                   AS payload_raw
+FROM numbers(0, 504);  -- ~7 days of 20-min stream sessions
 
--- Backfill viewer_geo_hourly from viewer_hours_hourly
-INSERT INTO periscope.viewer_geo_hourly
+-- Finalized processing segments — one row per virtual segment over 7
+-- days × ~12 segments/hour, split across Livepeer (h264/hevc) and AV
+-- (h264/aac). source_event_id is the canonical natural key now that
+-- AV virtual segments don't carry a real segment_number.
+INSERT INTO periscope.processing_segments_final (
+    tenant_id, node_id, stream_id, process_type, output_codec, track_type, segment_number,
+    source_event_id,
+    cluster_id, stream_name, input_codec, media_seconds,
+    width, height, rendition_count, input_bytes, output_bytes_total, turnaround_ms, speed_factor,
+    is_final,
+    source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
+    payload_raw
+)
 SELECT
-    hour,
-    tenant_id,
-    country_code,
-    toUInt32(uniqMerge(unique_viewers)) AS viewer_count,
-    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
-    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
-FROM periscope.viewer_hours_hourly
-GROUP BY hour, tenant_id, country_code;
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001'                              AS tenant_id,
+    arrayElement(['edge-node-1', 'edge-ashburn', 'edge-singapore'], 1 + number%3) AS node_id,
+    toUUID('5eedfeed-11fe-ca57-feed-11feca570001')                       AS stream_id,
+    arrayElement(['Livepeer', 'Livepeer', 'AV', 'AV'], 1 + number%4)     AS process_type,
+    arrayElement(['h264', 'hevc', 'h264', 'aac'], 1 + number%4)          AS output_codec,
+    arrayElement(['video', 'video', 'video', 'audio'], 1 + number%4)     AS track_type,
+    toInt32(number)                                                      AS segment_number,
+    concat('sha256:', hex(murmurHash3_128(concat('seg-', toString(number))))) AS source_event_id,
+    'central-primary'                                                    AS cluster_id,
+    'demo_live_stream_001'                                               AS stream_name,
+    'h264'                                                               AS input_codec,
+    5.0                                                                  AS media_seconds,
+    1920                                                                 AS width,
+    1080                                                                 AS height,
+    3                                                                    AS rendition_count,
+    toInt64(1024*1024)                                                   AS input_bytes,
+    toInt64(512*1024 * (1 + number%3))                                   AS output_bytes_total,
+    toInt64(200 + number%300)                                            AS turnaround_ms,
+    1.0 + 0.1 * (number%5)                                               AS speed_factor,
+    toUInt8(1)                                                           AS is_final,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000          AS source_started_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000 + 5000  AS source_ended_at_ms,
+    toUnixTimestamp(now() - INTERVAL (number * 5) MINUTE) * 1000 + 100   AS edge_received_at_ms,
+    toUnixTimestamp(now()) * 1000                                        AS projection_version_ms,
+    ''                                                                   AS payload_raw
+FROM numbers(0, 2016);
 
--- Backfill stream_health_5m from stream_health_samples
-INSERT INTO periscope.stream_health_5m
+-- Canonical api_usage_5m so the api_usage_hourly/daily rollups have a
+-- source. Per-bucket scalar counts plus AggregateFunction states for
+-- unique users/tokens (uniqCombinedStateForEachIfNotEmpty isn't a real
+-- function in CH; we emit empty state arrays for the demo and rely on
+-- uniqCombinedMerge to return 0).
+INSERT INTO periscope.api_usage_5m (
+    window_start, tenant_id, auth_type, operation_type, operation_name,
+    requests, errors, duration_ms, complexity,
+    unique_users_state, unique_tokens_state,
+    projection_version_ms
+)
 SELECT
-    toStartOfFiveMinutes(timestamp) AS timestamp_5m,
-    tenant_id,
-    stream_id,
-    internal_name,
-    node_id,
-    countIf(buffer_state = 'DRY') AS rebuffer_count,
-    countIf(has_issues = 1) AS issue_count,
-    NULL AS sample_issues,
-    ifNull(avg(bitrate), 0) AS avg_bitrate,
-    ifNull(avg(fps), 0) AS avg_fps,
-    ifNull(avg(buffer_health), 0) AS avg_buffer_health,
-    avg(frame_jitter_ms) AS avg_frame_jitter_ms,
-    max(frame_jitter_ms) AS max_frame_jitter_ms,
-    countIf(buffer_state = 'DRY') AS buffer_dry_count,
-    '720p' AS quality_tier
-FROM periscope.stream_health_samples
-GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
-
--- Backfill node_performance_5m from node_metrics_samples
-INSERT INTO periscope.node_performance_5m
-SELECT
-    toStartOfFiveMinutes(timestamp) AS timestamp_5m,
-    tenant_id, cluster_id, node_id,
-    sum(cpu_usage), count(), max(cpu_usage),
-    sum(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)), count(),
-    max(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)),
-    max(bandwidth_in), min(bandwidth_in),
-    max(bandwidth_out), min(bandwidth_out),
-    sum(toFloat32(connections_current)), count(),
-    max(connections_current)
-FROM periscope.node_metrics_samples
-GROUP BY timestamp_5m, tenant_id, cluster_id, node_id;
-
--- Backfill processing_hourly from processing_events
-INSERT INTO periscope.processing_hourly
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    process_type,
-    lower(coalesce(output_codec, 'unknown')) AS output_codec,
-    coalesce(track_type, 'video') AS track_type,
-    sumState(duration_ms) AS total_duration_ms,
-    countState() AS segment_count,
-    uniqState(stream_id) AS unique_streams
-FROM periscope.processing_events
-GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
-
--- Backfill client_qoe_5m from client_qoe_samples
-INSERT INTO periscope.client_qoe_5m
-SELECT
-    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
-    tenant_id,
-    stream_id,
-    internal_name,
-    node_id,
-    count(DISTINCT session_id) as active_sessions,
-    avg(bandwidth_in) AS avg_bw_in,
-    avg(bandwidth_out) AS avg_bw_out,
-    avg(connection_time) AS avg_connection_time,
-    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
-FROM periscope.client_qoe_samples
-GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
-
--- Backfill tenant_usage_5m from viewer_connection_events
-INSERT INTO periscope.tenant_usage_5m
-SELECT
-    toStartOfFiveMinute(timestamp) AS timestamp_5m,
-    tenant_id,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM periscope.viewer_connection_events
-WHERE event_type = 'disconnect'
-GROUP BY timestamp_5m, tenant_id;
-
--- Backfill viewer_city_hourly from viewer_connection_events
-INSERT INTO periscope.viewer_city_hourly
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    stream_id,
-    internal_name,
-    country_code,
-    city,
-    anyState(latitude) AS latitude,
-    anyState(longitude) AS longitude,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM periscope.viewer_connection_events
-WHERE event_type = 'disconnect' AND city != ''
-GROUP BY hour, tenant_id, stream_id, internal_name, country_code, city;
-
--- Backfill tenant_analytics_daily from viewer_connection_events
-INSERT INTO periscope.tenant_analytics_daily
-SELECT
-    toDate(timestamp) AS day,
-    tenant_id,
-    uniq(stream_id) AS total_streams,
-    countIf(event_type = 'connect') AS total_views,
-    uniq(session_id) AS unique_viewers,
-    sum(bytes_transferred) AS egress_bytes
-FROM periscope.viewer_connection_events
-GROUP BY day, tenant_id;
-
--- Backfill node_metrics_1h from node_metrics_samples
-INSERT INTO periscope.node_metrics_1h
-SELECT
-    toStartOfHour(timestamp) AS timestamp_1h,
-    tenant_id, cluster_id, node_id,
-    sum(cpu_usage), count(), max(cpu_usage),
-    sum(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)), count(),
-    max(if(ram_max > 0, toFloat32(ram_current) / ram_max * 100, 0)),
-    sum(if(disk_total_bytes > 0, toFloat32(disk_used_bytes) / disk_total_bytes * 100, 0)), count(),
-    max(if(disk_total_bytes > 0, toFloat32(disk_used_bytes) / disk_total_bytes * 100, 0)),
-    sum(if(shm_total_bytes > 0, toFloat32(shm_used_bytes) / shm_total_bytes * 100, 0)), count(),
-    max(if(shm_total_bytes > 0, toFloat32(shm_used_bytes) / shm_total_bytes * 100, 0)),
-    max(bandwidth_in), min(bandwidth_in),
-    max(bandwidth_out), min(bandwidth_out),
-    sum(is_healthy), count()
-FROM periscope.node_metrics_samples
-GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
-
--- Backfill storage_usage_hourly from storage_snapshots
-INSERT INTO periscope.storage_usage_hourly
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    avgState(total_bytes) AS avg_total_bytes,
-    avgState(clip_bytes) AS avg_clip_bytes,
-    avgState(dvr_bytes) AS avg_dvr_bytes,
-    avgState(vod_bytes) AS avg_vod_bytes
-FROM periscope.storage_snapshots
-GROUP BY hour, tenant_id, cluster_id;
-
--- Backfill processing_daily from processing_hourly
-INSERT INTO periscope.processing_daily
-SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    cluster_id,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS livepeer_hevc_seconds,
-    toUInt64(countMergeIf(segment_count, process_type = 'Livepeer')) AS livepeer_segment_count,
-    toUInt32(uniqMergeIf(unique_streams, process_type = 'Livepeer')) AS livepeer_unique_streams,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'h264') / 1000.0 AS native_av_h264_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'vp9') / 1000.0 AS native_av_vp9_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'av1') / 1000.0 AS native_av_av1_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS native_av_hevc_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'aac') / 1000.0 AS native_av_aac_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'opus') / 1000.0 AS native_av_opus_seconds,
-    toUInt64(countMergeIf(segment_count, process_type = 'AV')) AS native_av_segment_count,
-    toUInt32(uniqMergeIf(unique_streams, process_type = 'AV')) AS native_av_unique_streams,
-    sumMergeIf(total_duration_ms, track_type = 'audio') / 1000.0 AS audio_seconds,
-    sumMergeIf(total_duration_ms, track_type = 'video') / 1000.0 AS video_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
-FROM periscope.processing_hourly
-GROUP BY day, tenant_id, cluster_id;
-
--- Backfill api_usage_hourly from api_requests
-INSERT INTO periscope.api_usage_hourly
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    auth_type,
-    operation_type,
-    coalesce(operation_name, '') AS operation_name,
-    sumState(toUInt64(request_count)) AS total_requests,
-    sumState(toUInt64(error_count)) AS total_errors,
-    sumState(toUInt64(total_duration_ms)) AS total_duration_ms,
-    sumState(toUInt64(total_complexity)) AS total_complexity,
-    uniqCombinedArrayState(user_hashes) AS unique_users,
-    uniqCombinedArrayState(token_hashes) AS unique_tokens
-FROM periscope.api_requests
-GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
-
--- Backfill api_usage_daily from api_usage_hourly
-INSERT INTO periscope.api_usage_daily
-SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    auth_type,
-    operation_type,
-    operation_name,
-    sumMergeState(total_requests) AS total_requests,
-    sumMergeState(total_errors) AS total_errors,
-    sumMergeState(total_duration_ms) AS total_duration_ms,
-    sumMergeState(total_complexity) AS total_complexity,
-    uniqCombinedMergeState(unique_users) AS unique_users,
-    uniqCombinedMergeState(unique_tokens) AS unique_tokens
-FROM periscope.api_usage_hourly
-GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
+    toDateTime(toStartOfFiveMinute(now() - INTERVAL (number * 5) MINUTE)) AS window_start,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001'                                AS tenant_id,
+    arrayElement(['api_key', 'jwt'], 1 + number%2)                        AS auth_type,
+    arrayElement(['query', 'mutation'], 1 + number%2)                     AS operation_type,
+    arrayElement(['GetUsage', 'GetStreamHealth', 'CreateAsset'], 1 + number%3) AS operation_name,
+    toUInt64(50 + number%500)                                             AS requests,
+    toUInt64(number%5)                                                    AS errors,
+    toUInt64(100 + number%900)                                            AS duration_ms,
+    toUInt64(10 + number%50)                                              AS complexity,
+    uniqCombinedState(toUInt64(number%17))                                AS unique_users_state,
+    uniqCombinedState(toUInt64(number%23))                                AS unique_tokens_state,
+    toUnixTimestamp(now()) * 1000                                         AS projection_version_ms
+FROM numbers(0, 2016);
+-- ============================================================================
 
 -- =================================================================================================
 -- 11. Materialized View Finalization (compact aggregated data)
 -- =================================================================================================
 OPTIMIZE TABLE periscope.stream_viewer_5m FINAL;
 OPTIMIZE TABLE periscope.stream_health_5m FINAL;
-OPTIMIZE TABLE periscope.stream_analytics_daily FINAL;
-OPTIMIZE TABLE periscope.viewer_hours_hourly FINAL;
-OPTIMIZE TABLE periscope.viewer_geo_hourly FINAL;
-OPTIMIZE TABLE periscope.viewer_city_hourly FINAL;
 OPTIMIZE TABLE periscope.quality_tier_daily FINAL;
 OPTIMIZE TABLE periscope.client_qoe_5m FINAL;
-OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
-OPTIMIZE TABLE periscope.processing_hourly FINAL;
 OPTIMIZE TABLE periscope.node_performance_5m FINAL;
-OPTIMIZE TABLE periscope.tenant_viewer_daily FINAL;
-OPTIMIZE TABLE periscope.tenant_usage_5m FINAL;
-OPTIMIZE TABLE periscope.tenant_analytics_daily FINAL;
 OPTIMIZE TABLE periscope.node_metrics_1h FINAL;
-OPTIMIZE TABLE periscope.storage_usage_hourly FINAL;
-OPTIMIZE TABLE periscope.processing_daily FINAL;
-OPTIMIZE TABLE periscope.api_usage_hourly FINAL;
-OPTIMIZE TABLE periscope.api_usage_daily FINAL;
+-- Rollup tables populated by refreshable MVs; OPTIMIZE happens internally
+-- on refresh swap, so no manual compaction is needed here for:
+--   tenant_viewer_daily, tenant_usage_hourly/daily, tenant_analytics_daily,
+--   stream_analytics_daily, stream_connection_hourly, stream_runtime_*,
+--   viewer_hours_hourly, viewer_geo_hourly/daily, viewer_city_hourly/daily,
+--   storage_usage_hourly/daily, processing_hourly/daily, api_usage_hourly/daily.
 OPTIMIZE TABLE periscope.routing_cluster_hourly FINAL;
 OPTIMIZE TABLE periscope.federation_hourly FINAL;

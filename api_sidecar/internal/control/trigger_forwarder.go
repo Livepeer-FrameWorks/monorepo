@@ -62,9 +62,10 @@ func initTriggerForwarder(logger logging.Logger) {
 // SendDurableMistTrigger persists a trigger to the WAL and notifies the
 // forwarder. Returns once the durable write has fsynced — handlers can
 // then safely respond 200 OK to Mist. The trigger MUST have RequestId
-// set to a stable source_event_id (sha256(node_id || trigger_type ||
-// payload_raw)); duplicate deliveries from Mist with the same id collide
-// on disk and are forwarded at most once.
+// set to a stable source_event_id
+// (sha256(node_id || NUL || trigger_type || NUL || payload_raw)); duplicate
+// deliveries from Mist with the same id collide on disk and are forwarded at
+// most once.
 func SendDurableMistTrigger(trigger *pb.MistTrigger) error {
 	if !triggerForwarderStarted.Load() || triggerWAL == nil {
 		return errTriggerForwarderUnready

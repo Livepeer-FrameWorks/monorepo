@@ -435,6 +435,8 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		if payload.ProcessBilling.TenantId != nil {
 			tenantID = *payload.ProcessBilling.TenantId
 		}
+	case *pb.MistTrigger_RawMistWebhook:
+		eventType = "raw_mist_webhook"
 	case *pb.MistTrigger_StorageSnapshot:
 		eventType = "storage_snapshot"
 		if payload.StorageSnapshot.TenantId != nil {

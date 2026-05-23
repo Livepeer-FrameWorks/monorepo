@@ -92,7 +92,7 @@ func (s *Scheduler) TriggerBillingUpdate() error {
 	return s.billingSummarizer.ProcessPendingUsage(context.Background())
 }
 
-// TriggerCustomPeriodSummary triggers usage summarization for a custom time period (Legacy/Debug)
+// TriggerCustomPeriodSummary manually summarizes an explicit period.
 func (s *Scheduler) TriggerCustomPeriodSummary(startTime, endTime time.Time) error {
 	s.logger.WithFields(logging.Fields{
 		"start_time": startTime,

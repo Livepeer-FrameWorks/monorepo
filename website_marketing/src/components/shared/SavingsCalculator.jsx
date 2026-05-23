@@ -9,12 +9,11 @@ const formatNumber = (n) =>
   new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n);
 
 const PRICING_PLANS = [
-  { name: "Supporter", price: 79, includedMin: 120000, overPerMin: 0.00055, includedGpu: 10 },
-  { name: "Developer", price: 249, includedMin: 500000, overPerMin: 0.00052, includedGpu: 50 },
-  { name: "Production", price: 999, includedMin: 2000000, overPerMin: 0.0005, includedGpu: 250 },
+  { name: "Supporter", price: 79, includedMin: 120000, overPerMin: 0.00055 },
+  { name: "Developer", price: 249, includedMin: 500000, overPerMin: 0.00052 },
+  { name: "Production", price: 999, includedMin: 2000000, overPerMin: 0.0005 },
 ];
 
-const GPU_OVERAGE_PER_HOUR = 1.5;
 const ENTERPRISE_MIN_THRESHOLD = 5_000_000;
 
 const Calculator = ({ className, variant = "default" }) => {
@@ -22,7 +21,6 @@ const Calculator = ({ className, variant = "default" }) => {
   const [viewers, setViewers] = useState(100);
   const [hoursPerDay, setHoursPerDay] = useState(2);
   const [daysPerMonth, setDaysPerMonth] = useState(30);
-  const [gpuHoursMonthly, setGpuHoursMonthly] = useState(0);
   const [edgeOffloadPercent, setEdgeOffloadPercent] = useState(0);
   const idPrefix = useId();
 
@@ -31,13 +29,11 @@ const Calculator = ({ className, variant = "default" }) => {
     hoursPerDay: `${idPrefix}-hours`,
     daysPerMonth: `${idPrefix}-days`,
     edgeOffloadPercent: `${idPrefix}-offload`,
-    gpuHoursMonthly: `${idPrefix}-gpu-hours`,
   };
 
   const safeViewers = clamp(Number(viewers) || 0, 0, 10000000);
   const safeHoursPerDay = clamp(Number(hoursPerDay) || 0, 0, 24);
   const safeDaysPerMonth = clamp(Number(daysPerMonth) || 0, 0, 31);
-  const safeGpuHours = clamp(Number(gpuHoursMonthly) || 0, 0, 100000000);
   const safeOffload = clamp(Number(edgeOffloadPercent) || 0, 0, 100);
 
   const minutes = useMemo(
@@ -50,23 +46,19 @@ const Calculator = ({ className, variant = "default" }) => {
     const estimates = PRICING_PLANS.map((p) => {
       const overMin = Math.max(0, billableMinutes - p.includedMin);
       const deliveryOverageCost = overMin * p.overPerMin;
-      const overGpu = Math.max(0, safeGpuHours - p.includedGpu);
-      const gpuOverageCost = overGpu * GPU_OVERAGE_PER_HOUR;
-      const total = p.price + deliveryOverageCost + gpuOverageCost;
+      const total = p.price + deliveryOverageCost;
       return {
         plan: p.name,
         base: p.price,
         includedMin: p.includedMin,
         overMin,
         deliveryOverageCost,
-        overGpu,
-        gpuOverageCost,
         total,
         billableMinutes,
       };
     });
     return estimates.reduce((min, e) => (min && min.total <= e.total ? min : e), null);
-  }, [minutes, safeOffload, safeGpuHours]);
+  }, [minutes, safeOffload]);
 
   // Enterprise threshold: switch to custom quote messaging at high volumes
   const isEnterpriseVolume = minutes > ENTERPRISE_MIN_THRESHOLD;
@@ -81,7 +73,7 @@ const Calculator = ({ className, variant = "default" }) => {
     >
       <div className="pricing-calculator__header">
         <h3>Pricing calculator</h3>
-        <p>Estimate monthly spend by plugging in viewers, runtime, and GPU workloads.</p>
+        <p>Estimate monthly spend by plugging in viewers, runtime, and edge offload.</p>
       </div>
       <div className="pricing-calculator__grid">
         <div className="pricing-calculator__inputs">
@@ -161,7 +153,7 @@ const Calculator = ({ className, variant = "default" }) => {
               />
             </div>
           </div>
-          <div className="pricing-calculator__row pricing-calculator__row--split">
+          <div className="pricing-calculator__row">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label htmlFor={ids.edgeOffloadPercent} className="pricing-calculator__label">
@@ -187,33 +179,6 @@ const Calculator = ({ className, variant = "default" }) => {
               />
               <div className="pricing-calculator__hint">
                 Offloaded minutes are not billed by FrameWorks.
-              </div>
-            </div>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label htmlFor={ids.gpuHoursMonthly} className="pricing-calculator__label">
-                  GPU hrs/mo
-                </Label>
-                <Input
-                  id={ids.gpuHoursMonthly}
-                  type="number"
-                  className="w-20 h-9 text-sm"
-                  value={safeGpuHours}
-                  min={0}
-                  max={500}
-                  onChange={(e) => setGpuHoursMonthly(e.target.value)}
-                />
-              </div>
-              <Slider
-                value={[safeGpuHours]}
-                onValueChange={([val]) => setGpuHoursMonthly(val)}
-                min={0}
-                max={500}
-                step={5}
-                className="w-full"
-              />
-              <div className="pricing-calculator__hint">
-                Included by tier: 10/50/250 hrs. Overage €{formatNumber(GPU_OVERAGE_PER_HOUR)}/hr.
               </div>
             </div>
           </div>
@@ -242,7 +207,8 @@ const Calculator = ({ className, variant = "default" }) => {
               <span>FrameWorks estimate (cheapest option)</span>
               <InfoTooltip>
                 Delivery is priced per minute. Offload to your own edges to shrink billable minutes.
-                GPU hours are separate; overage is charged per hour. Enterprise: custom quote.
+                Advanced processing (AI, V2V, compositing) is in pilot — contact sales. Enterprise:
+                custom quote.
               </InfoTooltip>
             </div>
             <div className="pricing-calculator__metric">
@@ -257,10 +223,6 @@ const Calculator = ({ className, variant = "default" }) => {
               <li>
                 <span>Delivery overage</span>
                 <span>€{formatNumber(bestEstimate.deliveryOverageCost)}</span>
-              </li>
-              <li>
-                <span>GPU overage</span>
-                <span>€{formatNumber(bestEstimate.gpuOverageCost)}</span>
               </li>
             </ul>
             <div className="pricing-calculator__panel-total">

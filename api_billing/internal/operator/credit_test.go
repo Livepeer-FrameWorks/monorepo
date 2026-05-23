@@ -3,12 +3,22 @@ package operator
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
 )
+
+func expectNoStorageProviderCredits(mock sqlmock.Sqlmock, invoiceID string) {
+	mock.ExpectQuery(`all_provider_rows`).
+		WithArgs(invoiceID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}))
+}
 
 // TestManualReviewIsHardHold verifies that an invoice in manual_review status
 // produces zero ledger writes — no SELECT, no INSERT — so a held invoice
@@ -37,6 +47,32 @@ func TestManualReviewIsHardHold(t *testing.T) {
 	}
 }
 
+// TestPendingInvoiceWritesNoLedgerRows verifies that marketplace revenue
+// starts only after the customer invoice is paid.
+func TestPendingInvoiceWritesNoLedgerRows(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+		t.Fatalf("ComputeAndPersistCredits: %v", err)
+	}
+	mock.ExpectCommit()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 // TestNoMarketplaceLinesNoLedgerRows verifies that an invoice with only
 // platform_official / tenant_private lines (which are filtered out at the
 // SELECT level) results in zero INSERTs.
@@ -53,9 +89,10 @@ func TestNoMarketplaceLinesNoLedgerRows(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
 		}))
+	expectNoStorageProviderCredits(mock, "inv-1")
 
 	tx, _ := db.BeginTx(context.Background(), nil)
-	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
 		t.Fatalf("ComputeAndPersistCredits: %v", err)
 	}
 	mock.ExpectCommit()
@@ -95,9 +132,49 @@ func TestMarketplaceLineProducesAccrualHeld(t *testing.T) {
 			periodStart, periodEnd, "EUR",
 			int64(500), int64(100), int64(400), "held").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNoStorageProviderCredits(mock, "inv-1")
 
 	tx, _ := db.BeginTx(context.Background(), nil)
-	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
+		t.Fatalf("ComputeAndPersistCredits: %v", err)
+	}
+	mock.ExpectCommit()
+	_ = tx.Commit()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestNegativeMarketplaceLineProducesReversalAccrual(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	owner := uuid.New()
+	lineID := uuid.New()
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}).AddRow(lineID.String(), "operator-eu-1", owner.String(), int64(-400), int64(-100), "EUR", periodStart, periodEnd))
+	mock.ExpectQuery(`FROM purser\.cluster_owners`).
+		WithArgs(owner).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "payout_eligible"}).AddRow("approved", true))
+	mock.ExpectExec(`INSERT INTO purser\.operator_credit_ledger`).
+		WithArgs(lineID, owner, "operator-eu-1", "inv-1",
+			periodStart, periodEnd, "EUR",
+			int64(-500), int64(-100), int64(-400), "accruing").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNoStorageProviderCredits(mock, "inv-1")
+
+	tx, _ := db.BeginTx(context.Background(), nil)
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
 		t.Fatalf("ComputeAndPersistCredits: %v", err)
 	}
 	mock.ExpectCommit()
@@ -136,9 +213,10 @@ func TestMarketplaceLineApprovedOperatorAccrues(t *testing.T) {
 			periodStart, periodEnd, "EUR",
 			int64(500), int64(100), int64(400), "accruing").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNoStorageProviderCredits(mock, "inv-1")
 
 	tx, _ := db.BeginTx(context.Background(), nil)
-	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
 		t.Fatalf("ComputeAndPersistCredits: %v", err)
 	}
 	mock.ExpectCommit()
@@ -177,9 +255,10 @@ func TestSuspendedOperatorStaysHeld(t *testing.T) {
 			periodStart, periodEnd, "EUR",
 			int64(500), int64(100), int64(400), "held").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNoStorageProviderCredits(mock, "inv-1")
 
 	tx, _ := db.BeginTx(context.Background(), nil)
-	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
 		t.Fatalf("ComputeAndPersistCredits: %v", err)
 	}
 	mock.ExpectCommit()
@@ -218,9 +297,154 @@ func TestStampedLineSplitIsUsed(t *testing.T) {
 			periodStart, periodEnd, "EUR",
 			int64(1000), int64(250), int64(750), "held").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectNoStorageProviderCredits(mock, "inv-1")
 
 	tx, _ := db.BeginTx(context.Background(), nil)
-	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "pending"); err != nil {
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
+		t.Fatalf("ComputeAndPersistCredits: %v", err)
+	}
+	mock.ExpectCommit()
+	_ = tx.Commit()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestStorageProviderUsageProducesProviderAccrual(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	owner := uuid.New()
+	recordID := uuid.New()
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}))
+	mock.ExpectQuery(`all_provider_rows`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}).AddRow("storage_provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(1000)))
+	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
+		WithArgs(owner, "storage_provider_usage").
+		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
+	mock.ExpectQuery(`FROM purser\.cluster_owners`).
+		WithArgs(owner).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "payout_eligible"}).AddRow("approved", true))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO purser.operator_credit_ledger (`)).
+		WithArgs(recordID, owner, "operator-eu-1", "inv-1",
+			periodStart, periodEnd, "EUR",
+			int64(1000), int64(200), int64(800), "accruing",
+			"edge_disk", "storage_gb_seconds_hot").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	tx, _ := db.BeginTx(context.Background(), nil)
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
+		t.Fatalf("ComputeAndPersistCredits: %v", err)
+	}
+	mock.ExpectCommit()
+	_ = tx.Commit()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestStorageProviderUsageAllocatesOnlyProviderShare(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	owner := uuid.New()
+	recordID := uuid.New()
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}))
+	mock.ExpectQuery(`all_provider_rows`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}).AddRow("storage_provider_usage", recordID.String(), owner.String(), "operator-eu-1", "edge_disk", "storage_gb_seconds_hot", "EUR", periodStart, periodEnd, int64(500)))
+	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
+		WithArgs(owner, "storage_provider_usage").
+		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
+	mock.ExpectQuery(`FROM purser\.cluster_owners`).
+		WithArgs(owner).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "payout_eligible"}).AddRow("approved", true))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO purser.operator_credit_ledger (`)).
+		WithArgs(recordID, owner, "operator-eu-1", "inv-1",
+			periodStart, periodEnd, "EUR",
+			int64(500), int64(100), int64(400), "accruing",
+			"edge_disk", "storage_gb_seconds_hot").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	tx, _ := db.BeginTx(context.Background(), nil)
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
+		t.Fatalf("ComputeAndPersistCredits: %v", err)
+	}
+	mock.ExpectCommit()
+	_ = tx.Commit()
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestStorageProviderAdjustmentProducesProviderAccrual(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	owner := uuid.New()
+	adjustmentID := uuid.New()
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 4, 1, 0, 5, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}))
+	mock.ExpectQuery(`all_provider_rows`).
+		WithArgs("inv-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"source_type", "source_id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}).AddRow("usage_adjustment", adjustmentID.String(), owner.String(), "operator-eu-1", "s3", "storage_gb_seconds_cold", "EUR", periodStart, periodEnd, int64(-500)))
+	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
+		WithArgs(owner, "storage_provider_usage").
+		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
+	mock.ExpectQuery(`FROM purser\.cluster_owners`).
+		WithArgs(owner).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "payout_eligible"}).AddRow("approved", true))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO purser.operator_credit_ledger (`)).
+		WithArgs(adjustmentID, owner, "operator-eu-1", "inv-1",
+			periodStart, periodEnd, "EUR",
+			int64(-500), int64(-100), int64(-400), "accruing",
+			"s3", "storage_gb_seconds_cold").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	tx, _ := db.BeginTx(context.Background(), nil)
+	if err := ComputeAndPersistCredits(context.Background(), tx, "inv-1", "paid"); err != nil {
 		t.Fatalf("ComputeAndPersistCredits: %v", err)
 	}
 	mock.ExpectCommit()

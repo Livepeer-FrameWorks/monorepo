@@ -642,9 +642,6 @@ models:
   UsageRecord:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.UsageRecord
-  UsageSummary:
-    model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.UsageSummary
   LiveUsageSummary:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.LiveUsageSummary

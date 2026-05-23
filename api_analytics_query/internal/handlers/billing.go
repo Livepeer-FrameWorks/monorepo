@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha1"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +48,6 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	// Initialize Kafka producer
 	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
 	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
-	// Assuming logger is compatible or creating a new one for the client
 	kLogger := logrus.New()
 
 	kafkaProducer, err := kafka.NewKafkaProducer(brokers, billingTopic, "periscope-query", kLogger)
@@ -77,8 +78,20 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	}
 }
 
-// SummarizeUsageForPeriod aggregates usage data for all tenants for a given time period
+// SummarizeUsageForPeriod aggregates usage data for all tenants for a given time period.
+// It emits the same canonical 5-minute rows as the cursor path; callers that need a
+// wider range get one validated slice at a time.
 func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Time) error {
+	startTime = startTime.UTC()
+	endTime = endTime.UTC()
+	const billingCursorAlignment = 5 * time.Minute
+	if !endTime.After(startTime) {
+		return fmt.Errorf("invalid summary period: end_time must be after start_time")
+	}
+	if !startTime.Equal(startTime.Truncate(billingCursorAlignment)) || !endTime.Equal(endTime.Truncate(billingCursorAlignment)) {
+		return fmt.Errorf("invalid summary period: start_time and end_time must be aligned to 5-minute boundaries")
+	}
+
 	bs.logger.WithFields(logging.Fields{
 		"start_time": startTime,
 		"end_time":   endTime,
@@ -90,54 +103,103 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 		return fmt.Errorf("failed to get active tenants: %w", err)
 	}
 
-	var summaries []models.UsageSummary
+	for sliceStart := startTime; sliceStart.Before(endTime); sliceStart = sliceStart.Add(billingCursorAlignment) {
+		sliceEnd := sliceStart.Add(billingCursorAlignment)
+		if sliceEnd.After(endTime) {
+			sliceEnd = endTime
+		}
+		var summaries []models.UsageSummary
+		var failedTenants []string
 
-	// Generate usage summary for each tenant
-	for _, tenantID := range tenants {
-		tenantSummaries, summaryErr := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
-		if summaryErr != nil {
-			bs.logger.WithError(summaryErr).WithField("tenant_id", tenantID).Error("Failed to generate usage summary for tenant")
-			continue
+		for _, tenantID := range tenants {
+			tenantSummaries, summaryErr := bs.generateTenantUsageSummary(tenantID, sliceStart, sliceEnd)
+			if summaryErr != nil {
+				bs.logger.WithError(summaryErr).WithFields(logging.Fields{
+					"tenant_id": tenantID,
+					"start":     sliceStart,
+					"end":       sliceEnd,
+				}).Error("Failed to generate usage summary for tenant")
+				failedTenants = append(failedTenants, tenantID)
+				continue
+			}
+
+			for _, s := range tenantSummaries {
+				summaries = append(summaries, *s)
+			}
+		}
+		if len(failedTenants) > 0 {
+			return fmt.Errorf("failed to generate usage summaries for %s in %s/%s", strings.Join(failedTenants, ","), sliceStart.Format(time.RFC3339), sliceEnd.Format(time.RFC3339))
 		}
 
-		for _, s := range tenantSummaries {
-			summaries = append(summaries, *s)
-		}
-	}
+		if len(summaries) > 0 {
+			if err = bs.sendUsageToPurser(summaries); err != nil {
+				return fmt.Errorf("failed to send usage to Purser: %w", err)
+			}
 
-	// Send summaries to Purser
-	if len(summaries) > 0 {
-		err = bs.sendUsageToPurser(summaries)
-		if err != nil {
-			return fmt.Errorf("failed to send usage to Purser: %w", err)
+			bs.logger.WithFields(logging.Fields{
+				"summary_count": len(summaries),
+				"start":         sliceStart,
+				"end":           sliceEnd,
+			}).Info("Successfully sent usage summaries to Purser")
 		}
-
-		bs.logger.WithField("summary_count", len(summaries)).Info("Successfully sent usage summaries to Purser")
 	}
 
 	return nil
 }
 
-// getActiveTenants retrieves all active tenant IDs from the analytics data
+// getActiveTenants retrieves all active tenant IDs from the canonical
+// finalized-fact tables and storage snapshots that the billing path
+// reads. Sourcing from these tables (not stream_event_log /
+// artifact_events) guarantees that any tenant the rated meters can see
+// is also a tenant the cursor walks.
 func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
-	// Query ClickHouse for active tenants across all relevant tables
-	// We check stream_event_log (streaming), storage_snapshots (disk usage), and artifact_events (activity)
 	rows, err := bs.clickhouse.QueryContext(context.Background(), `
 		SELECT DISTINCT tenant_id FROM (
-			SELECT tenant_id FROM periscope.stream_event_log
-			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+			SELECT tenant_id FROM periscope.viewer_sessions_final
+			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.storage_snapshots
-			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+			SELECT tenant_id FROM periscope.processing_segments_final
+			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.artifact_events
-			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+			SELECT tenant_id FROM periscope.stream_sessions_final
+			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+
+			UNION ALL
+
+			SELECT tenant_id
+			FROM (
+				SELECT
+					tenant_id, cluster_id, storage_scope,
+					storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+					argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
+				FROM periscope.storage_snapshots
+				GROUP BY tenant_id, cluster_id, storage_scope,
+				         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+			)
+			WHERE total_bytes > 0
+
+			UNION ALL
+
+			SELECT tenant_id FROM periscope.stream_runtime_5m
+			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+
+			UNION ALL
+
+			SELECT tenant_id FROM periscope.api_usage_5m
+			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+
+			UNION ALL
+
+			SELECT JSONExtractString(natural_key_json, 'tenant_id') AS tenant_id
+			FROM periscope.projection_divergences
+			WHERE observed_at_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 		)
 		WHERE tenant_id IS NOT NULL
+		AND tenant_id != ''
 		AND tenant_id NOT IN (
 			'00000000-0000-0000-0000-000000000000',
 			'00000000-0000-0000-0000-000000000001',
@@ -155,50 +217,73 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 	for rows.Next() {
 		var tenantID string
 		if err := rows.Scan(&tenantID); err != nil {
-			bs.logger.WithError(err).Error("Failed to scan tenant ID")
-			continue
+			return nil, fmt.Errorf("scan active tenant: %w", err)
 		}
 		tenants = append(tenants, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active tenants: %w", err)
 	}
 
 	return tenants, nil
 }
 
-// generateTenantUsageSummary creates usage summaries for a specific tenant and time period.
-// Returns one UsageSummary per cluster that has viewer/egress data. Non-cluster-scoped metrics
-// (storage, processing, API) are attributed to the primary cluster.
+// generateTenantUsageSummary creates one usage summary per cluster that has
+// canonical usage in the period. Tenant-wide gauges attach to the primary
+// cluster; meters with source cluster identity stay cluster-scoped.
 func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTime, endTime time.Time) ([]*models.UsageSummary, error) {
 	ctx := context.Background()
 
 	// Get tenant's primary cluster ID from Quartermaster API (not direct DB access!)
 	primaryClusterID, err := bs.getTenantPrimaryCluster(tenantID)
 	if err != nil {
-		bs.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get tenant cluster info, using default")
-		primaryClusterID = "global-primary"
+		return nil, fmt.Errorf("failed to resolve tenant primary cluster: %w", err)
 	}
 
-	// Derive viewer-based metrics from stream_event_log (total_viewers from Foghorn state snapshots)
-	var maxViewers, totalStreams int
-	var streamHours float64
-	err = bs.clickhouse.QueryRowContext(ctx, `
+	type clusterStreamRuntimeMetrics struct {
+		MaxViewers   int
+		TotalStreams int
+		StreamHours  float64
+	}
+	clusterStreamRuntime := map[string]clusterStreamRuntimeMetrics{}
+	streamRows, err := bs.clickhouse.QueryContext(ctx, `
 		SELECT
-			COALESCE(max(total_viewers), 0) as max_viewers,
-			COALESCE(uniq(internal_name), 0) as total_streams,
-			COALESCE(countDistinct(concat(internal_name, toString(toStartOfHour(timestamp)))), 0) as stream_hours
-		FROM periscope.stream_event_log
+			cluster_id,
+			COALESCE(toInt32(max(peak_viewers)), 0)             AS max_viewers,
+			COALESCE(toInt32(uniqCombined(stream_id)), 0)       AS total_streams,
+			COALESCE(sum(active_seconds) / 3600.0, 0)           AS stream_hours
+		FROM periscope.stream_runtime_5m_v
 		WHERE tenant_id = ?
-		AND timestamp BETWEEN ? AND ?
-		AND total_viewers IS NOT NULL
-	`, tenantID, startTime, endTime).Scan(
-		&maxViewers, &totalStreams, &streamHours,
-	)
+		  AND window_start >= ?
+		  AND window_start <  ?
+		GROUP BY cluster_id
+	`, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		return nil, fmt.Errorf("failed to query viewer metrics from ClickHouse: %w", err)
+		return nil, fmt.Errorf("failed to query stream runtime metrics from ClickHouse: %w", err)
+	} else if err == nil {
+		defer func() { _ = streamRows.Close() }()
+		for streamRows.Next() {
+			var cid string
+			var m clusterStreamRuntimeMetrics
+			if scanErr := streamRows.Scan(&cid, &m.MaxViewers, &m.TotalStreams, &m.StreamHours); scanErr != nil {
+				return nil, fmt.Errorf("scan stream runtime row: %w", scanErr)
+			}
+			if cid == "" {
+				return nil, fmt.Errorf("stream runtime row missing cluster_id for tenant %s", tenantID)
+			}
+			m.StreamHours = sanitizeFloat(m.StreamHours)
+			clusterStreamRuntime[cid] = m
+		}
+		if iterErr := streamRows.Err(); iterErr != nil {
+			return nil, fmt.Errorf("iterate stream runtime rows: %w", iterErr)
+		}
 	}
 
-	// Derive egress and viewer metrics from tenant_viewer_daily, grouped by cluster_id.
+	// Derive finalized viewer and bandwidth metrics from USER_END projections,
+	// grouped by cluster_id.
 	// Each cluster that served viewers gets its own UsageSummary.
 	type clusterViewerMetrics struct {
+		IngressGB     float64
 		EgressGB      float64
 		ViewerHours   float64
 		UniqueViewers int
@@ -212,9 +297,10 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
 	}
 	for _, metric := range viewerMetrics {
-		m := clusterViewerMetrics{EgressGB: metric.EgressGB, ViewerHours: metric.ViewerHours, UniqueViewers: metric.UniqueViewers}
+		m := clusterViewerMetrics{IngressGB: metric.IngressGB, EgressGB: metric.EgressGB, ViewerHours: metric.ViewerHours, UniqueViewers: metric.UniqueViewers}
 		cid := attributedViewerClusterID(metric.ClusterID, metric.OriginClusterID, primaryClusterID)
 		if existing, ok := clusterMetrics[cid]; ok {
+			existing.IngressGB += m.IngressGB
 			existing.EgressGB += m.EgressGB
 			existing.ViewerHours += m.ViewerHours
 			existing.UniqueViewers += m.UniqueViewers
@@ -235,33 +321,51 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND timestamp_5m BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		bs.logger.WithError(err).Info("Failed to query peak bandwidth from client_qoe_5m, defaulting to 0")
-		peakBandwidth = 0
+		return nil, fmt.Errorf("failed to query peak bandwidth from ClickHouse: %w", err)
 	}
 
 	// Calculate Month-to-Date (MTD) Unique Users for correct MAX aggregation in Billing
 	firstOfMonth := time.Date(startTime.Year(), startTime.Month(), 1, 0, 0, 0, 0, startTime.Location())
 	var uniqueUsers int
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT COALESCE(uniq(session_id), 0) as unique_users
-		FROM periscope.viewer_connection_events
+		WITH sessions AS (
+			SELECT
+				tenant_id, node_id, session_id,
+				argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
+				argMax(closed_reason, projection_version_ms) AS closed_reason
+			FROM periscope.viewer_sessions_final
+			WHERE tenant_id = ?
+			  AND projection_version_ms < ?
+			GROUP BY tenant_id, node_id, session_id
+		)
+		SELECT COALESCE(uniqCombined(session_id), 0) as unique_users
+		FROM sessions
 		WHERE tenant_id = ?
-		AND timestamp BETWEEN ? AND ?
-	`, tenantID, firstOfMonth, endTime).Scan(&uniqueUsers)
+		  AND closed_reason = 'final'
+		  AND source_ended_at_ms >= ?
+		  AND source_ended_at_ms <  ?
+	`, tenantID, endTime.UnixMilli(), tenantID, firstOfMonth.UnixMilli(), endTime.UnixMilli()).Scan(&uniqueUsers)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		bs.logger.WithError(err).Warn("Failed to query unique users (MTD) from ClickHouse, defaulting to 0")
-		uniqueUsers = 0
+		return nil, fmt.Errorf("failed to query finalized unique users from ClickHouse: %w", err)
 	}
 
-	// Query ClickHouse for average storage usage per cluster. cluster_id
-	// flows from the MistTrigger envelope into storage_snapshots and the
-	// storage_usage_hourly rollup so each cluster's storage can be billed
-	// to the right pricing model. Empty cluster_id falls back to the
-	// tenant's primary cluster.
-	clusterStorageGB := bs.queryClusterStorageGB(ctx, tenantID, startTime, endTime, primaryClusterID)
-	clusterProcessing := bs.queryClusterProcessingSeconds(ctx, tenantID, startTime, endTime, primaryClusterID)
+	clusterStorageProviderUsage, err := bs.queryClusterStorageProviderUsage(ctx, tenantID, startTime, endTime, primaryClusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query provider storage GiB-seconds from ClickHouse: %w", err)
+	}
+	clusterStorageGB := storageMetricsFromProviderUsage(clusterStorageProviderUsage)
+	usageAdjustments, err := bs.queryUsageAdjustments(ctx, tenantID, startTime, endTime, primaryClusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query usage adjustments from ClickHouse: %w", err)
+	}
+	clusterProcessing, err := bs.queryClusterProcessingSeconds(ctx, tenantID, startTime, endTime, primaryClusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query processing seconds from ClickHouse: %w", err)
+	}
 
-	// API usage aggregates from api_usage_hourly (Gateway API summaries)
+	// API usage aggregates from the canonical 5-minute ledger. These are
+	// operational rows in Purser, but keeping them on the canonical path
+	// avoids hidden rollup dependencies in the billing summarizer.
 	var apiRequests, apiErrors, apiDurationMs, apiComplexity float64
 	var apiBreakdown []models.APIUsageBreakdown
 	breakdownIndex := map[string]int{}
@@ -270,19 +374,20 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			auth_type,
 			operation_type,
 			operation_name,
-			COALESCE(sumMerge(total_requests), 0) as total_requests,
-			COALESCE(sumMerge(total_errors), 0) as total_errors,
-			COALESCE(sumMerge(total_duration_ms), 0) as total_duration_ms,
-			COALESCE(sumMerge(total_complexity), 0) as total_complexity,
-			COALESCE(uniqCombinedMerge(unique_users), 0) as unique_users,
-			COALESCE(uniqCombinedMerge(unique_tokens), 0) as unique_tokens
-		FROM api_usage_hourly
+			COALESCE(sum(requests), 0)                              AS total_requests,
+			COALESCE(sum(errors), 0)                                AS total_errors,
+			COALESCE(sum(duration_ms), 0)                           AS total_duration_ms,
+			COALESCE(sum(complexity), 0)                            AS total_complexity,
+			COALESCE(uniqCombinedMerge(unique_users_state), 0)      AS unique_users,
+			COALESCE(uniqCombinedMerge(unique_tokens_state), 0)     AS unique_tokens
+		FROM periscope.api_usage_5m_v
 		WHERE tenant_id = ?
-		AND hour BETWEEN ? AND ?
+		  AND window_start >= ?
+		  AND window_start <  ?
 		GROUP BY auth_type, operation_type, operation_name
 	`, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		bs.logger.WithError(err).Warn("Failed to query API usage aggregates, defaulting to 0")
+		return nil, fmt.Errorf("failed to query API usage aggregates from ClickHouse: %w", err)
 	} else if err == nil {
 		defer func() { _ = apiRows.Close() }()
 		for apiRows.Next() {
@@ -300,7 +405,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 				&uniqueUsers,
 				&uniqueTokens,
 			); scanErr != nil {
-				continue
+				return nil, fmt.Errorf("scan API usage row: %w", scanErr)
 			}
 			if operationName.Valid {
 				breakdown.OperationName = operationName.String
@@ -319,24 +424,33 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			apiDurationMs += breakdown.DurationMs
 			apiComplexity += breakdown.Complexity
 		}
+		if iterErr := apiRows.Err(); iterErr != nil {
+			return nil, fmt.Errorf("iterate API usage rows: %w", iterErr)
+		}
 	}
 
 	totalStorageGB := 0.0
-	for _, gb := range clusterStorageGB {
-		totalStorageGB += gb
+	for _, sm := range clusterStorageGB {
+		totalStorageGB += sm.GBSecondsHot + sm.GBSecondsCold
 	}
 	totalProcessingSeconds := 0.0
 	for _, proc := range clusterProcessing {
 		totalProcessingSeconds += proc.Total()
 	}
-	hasUsage := streamHours != 0 ||
+	totalStreamHours := 0.0
+	totalStreamCount := 0
+	for _, stream := range clusterStreamRuntime {
+		totalStreamHours += stream.StreamHours
+		totalStreamCount += stream.TotalStreams
+	}
+	hasUsage := totalStreamHours != 0 ||
 		totalEgressGB != 0 ||
 		totalViewerHours != 0 ||
 		totalStorageGB != 0 ||
+		len(clusterStorageProviderUsage) != 0 ||
+		len(usageAdjustments) != 0 ||
 		totalProcessingSeconds != 0 ||
 		peakBandwidth != 0 ||
-		totalStreams != 0 ||
-		maxViewers != 0 ||
 		totalUniqueViewers != 0 ||
 		uniqueUsers != 0 ||
 		apiRequests != 0 ||
@@ -366,27 +480,61 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			clusterMetrics[cid] = &clusterViewerMetrics{}
 		}
 	}
+	for cid := range clusterStorageProviderUsage {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
+	for cid := range usageAdjustments {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
 	for cid := range clusterProcessing {
 		if _, ok := clusterMetrics[cid]; !ok {
 			clusterMetrics[cid] = &clusterViewerMetrics{}
 		}
 	}
+	for cid := range clusterStreamRuntime {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
 
+	// Period seconds for converting GiB-seconds to average GiB held over the
+	// window for display-only summary fields. Purser rates the per-scope
+	// GiB-seconds fields below.
+	periodSeconds := endTime.Sub(startTime).Seconds()
+	if periodSeconds <= 0 {
+		periodSeconds = 1
+	}
 	for cid, vm := range clusterMetrics {
+		sm := clusterStorageGB[cid]
+		// The per-scope GBSeconds fields are what Purser emits as distinct
+		// usage_records (cold=rated, hot=operational). DisplayStorageGB is a
+		// display-only summary for consumers that need one average value.
+		displayAvgGB := (sm.GBSecondsHot + sm.GBSecondsCold) / periodSeconds
+
 		summary := &models.UsageSummary{
-			TenantID:         tenantID,
-			ClusterID:        cid,
-			Period:           period,
-			EgressGB:         sanitizeFloat(vm.EgressGB),
-			ViewerHours:      sanitizeFloat(vm.ViewerHours),
-			TotalViewers:     vm.UniqueViewers,
-			AverageStorageGB: clusterStorageGB[cid], // already sanitized at scan time
-			Timestamp:        now,
+			TenantID:             tenantID,
+			ClusterID:            cid,
+			Period:               period,
+			IngressGB:            sanitizeFloat(vm.IngressGB),
+			EgressGB:             sanitizeFloat(vm.EgressGB),
+			ViewerHours:          sanitizeFloat(vm.ViewerHours),
+			TotalViewers:         vm.UniqueViewers,
+			DisplayStorageGB:     displayAvgGB,
+			StorageGBSecondsHot:  sm.GBSecondsHot,
+			StorageGBSecondsCold: sm.GBSecondsCold,
+			StorageProviderUsage: clusterStorageProviderUsage[cid],
+			UsageAdjustments:     usageAdjustments[cid],
+			Timestamp:            now,
 		}
 
 		// Per-cluster processing seconds. Each cluster's transcoding work
 		// is attributed to that cluster's pricing model.
 		if proc, ok := clusterProcessing[cid]; ok {
+			summary.ProcessingSeconds = proc.ProcessCodecSeconds
 			summary.LivepeerH264Seconds = sanitizeFloat(proc.LivepeerH264Seconds)
 			summary.LivepeerVP9Seconds = sanitizeFloat(proc.LivepeerVP9Seconds)
 			summary.LivepeerAV1Seconds = sanitizeFloat(proc.LivepeerAV1Seconds)
@@ -399,14 +547,17 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			summary.NativeAvOpusSeconds = sanitizeFloat(proc.NativeAvOpusSeconds)
 		}
 
+		if stream, ok := clusterStreamRuntime[cid]; ok {
+			summary.StreamHours = stream.StreamHours
+			summary.TotalStreams = stream.TotalStreams
+			summary.MaxViewers = stream.MaxViewers
+		}
+
 		// Tenant-level metrics still attach to the primary cluster
 		// (peaks, API counters, MTD unique users — these aren't naturally
 		// cluster-scoped).
 		if cid == primaryClusterID {
-			summary.StreamHours = sanitizeFloat(streamHours)
 			summary.PeakBandwidthMbps = sanitizeFloat(peakBandwidth)
-			summary.TotalStreams = totalStreams
-			summary.MaxViewers = maxViewers
 			summary.UniqueUsers = uniqueUsers
 			summary.APIRequests = sanitizeFloat(apiRequests)
 			summary.APIErrors = sanitizeFloat(apiErrors)
@@ -421,10 +572,10 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	bs.logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
 		"cluster_count":   len(summaries),
-		"stream_hours":    streamHours,
+		"stream_hours":    totalStreamHours,
 		"total_egress_gb": totalEgressGB,
 		"viewer_hours":    totalViewerHours,
-		"total_streams":   totalStreams,
+		"total_streams":   totalStreamCount,
 	}).Info("Generated usage summaries for tenant")
 
 	return summaries, nil
@@ -442,118 +593,638 @@ type clusterProcessingMetrics struct {
 	NativeAvHEVCSeconds float64
 	NativeAvAACSeconds  float64
 	NativeAvOpusSeconds float64
+	ProcessCodecSeconds map[string]float64
 }
 
 // Total returns the sum across all codecs — useful for a quick has-data check.
 func (c clusterProcessingMetrics) Total() float64 {
+	if len(c.ProcessCodecSeconds) > 0 {
+		total := 0.0
+		for _, seconds := range c.ProcessCodecSeconds {
+			total += seconds
+		}
+		return total
+	}
 	return c.LivepeerH264Seconds + c.LivepeerVP9Seconds + c.LivepeerAV1Seconds + c.LivepeerHEVCSeconds +
 		c.NativeAvH264Seconds + c.NativeAvVP9Seconds + c.NativeAvAV1Seconds + c.NativeAvHEVCSeconds +
 		c.NativeAvAACSeconds + c.NativeAvOpusSeconds
 }
 
+func (c *clusterProcessingMetrics) add(processType, codec string, seconds float64) {
+	codec = normalizedProcessingCodec(codec)
+	if codec == "" || seconds == 0 {
+		return
+	}
+	if c.ProcessCodecSeconds == nil {
+		c.ProcessCodecSeconds = map[string]float64{}
+	}
+	c.ProcessCodecSeconds[processType+":"+codec] += seconds
+	switch processType {
+	case "Livepeer":
+		switch codec {
+		case "h264":
+			c.LivepeerH264Seconds += seconds
+		case "vp9":
+			c.LivepeerVP9Seconds += seconds
+		case "av1":
+			c.LivepeerAV1Seconds += seconds
+		case "hevc":
+			c.LivepeerHEVCSeconds += seconds
+		}
+	case "AV":
+		switch codec {
+		case "h264":
+			c.NativeAvH264Seconds += seconds
+		case "vp9":
+			c.NativeAvVP9Seconds += seconds
+		case "av1":
+			c.NativeAvAV1Seconds += seconds
+		case "hevc":
+			c.NativeAvHEVCSeconds += seconds
+		case "aac":
+			c.NativeAvAACSeconds += seconds
+		case "opus":
+			c.NativeAvOpusSeconds += seconds
+		}
+	}
+}
+
+func normalizedProcessingCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "h265":
+		return "hevc"
+	default:
+		return strings.ToLower(strings.TrimSpace(codec))
+	}
+}
+
 // queryClusterProcessingSeconds returns processing-second totals grouped by
 // cluster_id for the period. Empty cluster_id is bucketed under the
 // tenant's primary cluster.
-func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) map[string]clusterProcessingMetrics {
+func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string]clusterProcessingMetrics, error) {
 	out := map[string]clusterProcessingMetrics{}
+	// source_event_id is the logical fact identity. process_type, codec,
+	// and track are materialized fields that may be corrected by replay;
+	// grouping by them here would double-bill a format correction.
 	rows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT cluster_id,
-		       COALESCE(sum(livepeer_h264_seconds), 0) as livepeer_h264_seconds,
-		       COALESCE(sum(livepeer_vp9_seconds), 0)  as livepeer_vp9_seconds,
-		       COALESCE(sum(livepeer_av1_seconds), 0)  as livepeer_av1_seconds,
-		       COALESCE(sum(livepeer_hevc_seconds), 0) as livepeer_hevc_seconds,
-		       COALESCE(sum(native_av_h264_seconds), 0) as native_av_h264_seconds,
-		       COALESCE(sum(native_av_vp9_seconds), 0)  as native_av_vp9_seconds,
-		       COALESCE(sum(native_av_av1_seconds), 0)  as native_av_av1_seconds,
-		       COALESCE(sum(native_av_hevc_seconds), 0) as native_av_hevc_seconds,
-		       COALESCE(sum(native_av_aac_seconds), 0)  as native_av_aac_seconds,
-		       COALESCE(sum(native_av_opus_seconds), 0) as native_av_opus_seconds
-		FROM processing_daily
-		WHERE tenant_id = ?
-		AND day BETWEEN toDate(?) AND toDate(?)
-		GROUP BY cluster_id
-	`, tenantID, startTime, endTime)
+		WITH window_candidates AS (
+			SELECT
+				tenant_id, node_id, stream_id, source_event_id,
+				min(projection_version_ms) AS proj_first_in_window,
+				argMax(process_type,   projection_version_ms) AS process_type,
+				argMax(output_codec,   projection_version_ms) AS output_codec,
+				argMax(track_type,     projection_version_ms) AS track_type,
+				argMax(cluster_id,     projection_version_ms) AS cluster_id,
+				argMax(media_seconds,  projection_version_ms) AS media_seconds
+			FROM periscope.processing_segments_final
+			WHERE tenant_id = ?
+			  AND projection_version_ms >= ?
+			  AND projection_version_ms <  ?
+			GROUP BY tenant_id, node_id, stream_id, source_event_id
+		)
+		SELECT
+			c.cluster_id AS cluster_id,
+			c.process_type AS process_type,
+			c.output_codec AS output_codec,
+			sum(c.media_seconds) AS media_seconds
+		FROM window_candidates c
+		LEFT ANTI JOIN (
+			SELECT DISTINCT tenant_id, node_id, stream_id, source_event_id
+			FROM periscope.processing_segments_final
+			WHERE tenant_id = ?
+			  AND projection_version_ms < ?
+			  AND (tenant_id, node_id, stream_id, source_event_id) IN (
+			      SELECT tenant_id, node_id, stream_id, source_event_id FROM window_candidates
+			  )
+		) prior USING (tenant_id, node_id, stream_id, source_event_id)
+		GROUP BY c.cluster_id, c.process_type, c.output_codec
+	`, tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil {
-		if !errors.Is(err, database.ErrNoRows) {
-			bs.logger.WithError(err).Info("Failed to query processing_daily per cluster, defaulting to 0")
-		}
-		return out
+		return nil, fmt.Errorf("processing_segments_final per cluster: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var cid string
-		var m clusterProcessingMetrics
-		if scanErr := rows.Scan(&cid,
-			&m.LivepeerH264Seconds, &m.LivepeerVP9Seconds, &m.LivepeerAV1Seconds, &m.LivepeerHEVCSeconds,
-			&m.NativeAvH264Seconds, &m.NativeAvVP9Seconds, &m.NativeAvAV1Seconds, &m.NativeAvHEVCSeconds,
-			&m.NativeAvAACSeconds, &m.NativeAvOpusSeconds); scanErr != nil {
-			bs.logger.WithError(scanErr).Warn("Failed to scan processing row")
-			continue
+		var cid, processType, outputCodec string
+		var mediaSeconds float64
+		if scanErr := rows.Scan(&cid, &processType, &outputCodec, &mediaSeconds); scanErr != nil {
+			return nil, fmt.Errorf("scan processing row: %w", scanErr)
 		}
 		if cid == "" {
 			cid = primaryClusterID
 		}
-		// Sum into existing entry if cluster appears more than once.
 		existing := out[cid]
-		existing.LivepeerH264Seconds += m.LivepeerH264Seconds
-		existing.LivepeerVP9Seconds += m.LivepeerVP9Seconds
-		existing.LivepeerAV1Seconds += m.LivepeerAV1Seconds
-		existing.LivepeerHEVCSeconds += m.LivepeerHEVCSeconds
-		existing.NativeAvH264Seconds += m.NativeAvH264Seconds
-		existing.NativeAvVP9Seconds += m.NativeAvVP9Seconds
-		existing.NativeAvAV1Seconds += m.NativeAvAV1Seconds
-		existing.NativeAvHEVCSeconds += m.NativeAvHEVCSeconds
-		existing.NativeAvAACSeconds += m.NativeAvAACSeconds
-		existing.NativeAvOpusSeconds += m.NativeAvOpusSeconds
+		existing.add(processType, outputCodec, sanitizeFloat(mediaSeconds))
 		out[cid] = existing
 	}
 	if iterErr := rows.Err(); iterErr != nil {
-		bs.logger.WithError(iterErr).Warn("Failed to iterate processing rows")
+		return nil, fmt.Errorf("iterate processing rows: %w", iterErr)
+	}
+	return out, nil
+}
+
+// clusterStorageMetrics carries per-scope GiB-seconds for one cluster so
+// the billing emitter can write distinct rated lines for cold (S3) and
+// operational lines for hot (edge cache). See meter-contracts.md.
+type clusterStorageMetrics struct {
+	GBSecondsHot  float64
+	GBSecondsCold float64
+}
+
+func storageUsageType(scope string) string {
+	if scope == "cold" {
+		return "storage_gb_seconds_cold"
+	}
+	return "storage_gb_seconds_hot"
+}
+
+func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string][]models.StorageProviderUsage, error) {
+	out := map[string][]models.StorageProviderUsage{}
+	periodSeconds := endTime.Sub(startTime).Seconds()
+	if periodSeconds <= 0 {
+		return out, nil
+	}
+	rows, err := bs.clickhouse.QueryContext(ctx, `
+		WITH points AS (
+			SELECT
+				tenant_id, cluster_id, storage_scope,
+				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+				? AS point_ts,
+				argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
+			FROM periscope.storage_snapshots
+			WHERE tenant_id = ?
+			  AND timestamp <= ?
+			  AND ingested_at_ms < ?
+			GROUP BY tenant_id, cluster_id, storage_scope,
+			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+
+			UNION ALL
+
+			SELECT
+				tenant_id, cluster_id, storage_scope,
+				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+				timestamp AS point_ts,
+				argMax(total_bytes, ingested_at_ms) AS total_bytes
+			FROM periscope.storage_snapshots
+			WHERE tenant_id = ?
+			  AND timestamp > ?
+			  AND timestamp < ?
+			  AND ingested_at_ms < ?
+			GROUP BY tenant_id, cluster_id, storage_scope,
+			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+			         point_ts
+
+			UNION ALL
+
+			SELECT
+				tenant_id, cluster_id, storage_scope,
+				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+				? AS point_ts,
+				argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
+			FROM periscope.storage_snapshots
+			WHERE tenant_id = ?
+			  AND timestamp < ?
+			  AND ingested_at_ms < ?
+			GROUP BY tenant_id, cluster_id, storage_scope,
+			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+		),
+		segments AS (
+			SELECT
+				cluster_id,
+				storage_provider_tenant_id,
+				storage_provider_cluster_id,
+				storage_backend,
+				storage_scope,
+				point_ts,
+				total_bytes,
+				lead(point_ts, 1, point_ts) OVER (
+					PARTITION BY tenant_id, cluster_id, storage_scope,
+					             storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+					ORDER BY point_ts
+				) AS next_ts
+			FROM points
+		)
+		SELECT
+			cluster_id,
+			storage_provider_tenant_id,
+			storage_provider_cluster_id,
+			storage_backend,
+			storage_scope,
+			sum((toFloat64(total_bytes) / pow(1024, 3)) * dateDiff('second', point_ts, next_ts)) AS gb_seconds
+		FROM segments
+		WHERE next_ts > point_ts
+		  AND total_bytes != 0
+		GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
+		         storage_backend, storage_scope
+		HAVING gb_seconds != 0
+	`, startTime, tenantID, startTime, endTime.UnixMilli(),
+		tenantID, startTime, endTime, endTime.UnixMilli(),
+		endTime, tenantID, endTime, endTime.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("storage snapshots provider usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var rec models.StorageProviderUsage
+		var clusterID string
+		if scanErr := rows.Scan(
+			&clusterID,
+			&rec.StorageProviderTenantID,
+			&rec.StorageProviderClusterID,
+			&rec.StorageBackend,
+			&rec.StorageScope,
+			&rec.GBSeconds,
+		); scanErr != nil {
+			return nil, fmt.Errorf("scan storage provider row: %w", scanErr)
+		}
+		if clusterID == "" {
+			clusterID = primaryClusterID
+		}
+		rec.CustomerClusterID = clusterID
+		rec.UsageType = storageUsageType(rec.StorageScope)
+		rec.GBSeconds = sanitizeFloat(rec.GBSeconds)
+		out[clusterID] = append(out[clusterID], rec)
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("iterate storage provider rows: %w", iterErr)
+	}
+	return out, nil
+}
+
+func storageMetricsFromProviderUsage(providerUsage map[string][]models.StorageProviderUsage) map[string]clusterStorageMetrics {
+	out := map[string]clusterStorageMetrics{}
+	for clusterID, records := range providerUsage {
+		v := out[clusterID]
+		for _, rec := range records {
+			switch rec.StorageScope {
+			case "cold":
+				v.GBSecondsCold += sanitizeFloat(rec.GBSeconds)
+			default:
+				v.GBSecondsHot += sanitizeFloat(rec.GBSeconds)
+			}
+		}
+		out[clusterID] = v
 	}
 	return out
 }
 
-// queryClusterStorageGB returns avg storage in GB grouped by cluster_id for
-// the period. Empty cluster_id is bucketed under the tenant's primary
-// cluster. Errors degrade silently to an empty map so the rest of the
-// summary can still emit.
-func (bs *BillingSummarizer) queryClusterStorageGB(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) map[string]float64 {
-	out := map[string]float64{}
+func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string][]models.UsageAdjustment, error) {
+	out := map[string][]models.UsageAdjustment{}
 	rows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT cluster_id,
-		       if(
-			       isFinite(avgMerge(avg_total_bytes)) AND avgMerge(avg_total_bytes) > 0,
-			       avgMerge(avg_total_bytes) / (1024*1024*1024),
-			       0
-		       ) as avg_storage_gb
-		FROM storage_usage_hourly
-		WHERE tenant_id = ?
-		AND hour BETWEEN ? AND ?
-		GROUP BY cluster_id
-	`, tenantID, startTime, endTime)
+		SELECT observed_at_ms, table_name, meter, field,
+		       natural_key_json, prior_value_json, new_value_json, source_event_id
+		FROM periscope.projection_divergences
+		WHERE observed_at_ms >= ?
+		  AND observed_at_ms <  ?
+		  AND table_name IN ('storage_gb_seconds_5m', 'viewer_sessions_final', 'stream_sessions_final', 'processing_segments_final')
+		  AND JSONExtractString(natural_key_json, 'tenant_id') = ?
+	`, startTime.UnixMilli(), endTime.UnixMilli(), tenantID)
 	if err != nil {
-		if !errors.Is(err, database.ErrNoRows) {
-			bs.logger.WithError(err).Info("Failed to query storage_usage_hourly per cluster, defaulting to 0")
-		}
-		return out
+		return nil, fmt.Errorf("projection_divergences query: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+
 	for rows.Next() {
-		var cid string
-		var gb float64
-		if scanErr := rows.Scan(&cid, &gb); scanErr != nil {
-			bs.logger.WithError(scanErr).Warn("Failed to scan storage row")
+		var observedAtMS int64
+		var tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string
+		if scanErr := rows.Scan(&observedAtMS, &tableName, &meter, &field, &naturalKeyJSON, &priorValueJSON, &newValueJSON, &sourceEventID); scanErr != nil {
+			return nil, fmt.Errorf("scan projection divergence: %w", scanErr)
+		}
+		alreadyBilled, billableErr := bs.divergenceAlreadyCursored(ctx, tableName, naturalKeyJSON, startTime)
+		if billableErr != nil {
+			return nil, billableErr
+		}
+		if !alreadyBilled {
 			continue
 		}
-		if cid == "" {
-			cid = primaryClusterID
+		adjustments, buildErr := usageAdjustmentsFromProjectionDivergence(
+			tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, observedAtMS, primaryClusterID, startTime, endTime,
+		)
+		if buildErr != nil {
+			return nil, buildErr
 		}
-		out[cid] += sanitizeFloat(gb)
+		for _, adjustment := range adjustments {
+			if adjustment.DeltaValue == 0 {
+				continue
+			}
+			out[adjustment.ClusterID] = append(out[adjustment.ClusterID], adjustment)
+		}
 	}
 	if iterErr := rows.Err(); iterErr != nil {
-		bs.logger.WithError(iterErr).Warn("Failed to iterate storage rows")
+		return nil, fmt.Errorf("iterate projection divergences: %w", iterErr)
 	}
-	return out
+	return out, nil
+}
+
+func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tableName, naturalKeyJSON string, sliceStart time.Time) (bool, error) {
+	var naturalKey map[string]any
+	if err := json.Unmarshal([]byte(naturalKeyJSON), &naturalKey); err != nil {
+		return false, fmt.Errorf("parse projection divergence natural key: %w", err)
+	}
+
+	queryFirstProjection := func(query string, args ...any) (bool, error) {
+		var firstProjectionMS int64
+		if err := bs.clickhouse.QueryRowContext(ctx, query, args...).Scan(&firstProjectionMS); err != nil {
+			return false, err
+		}
+		if firstProjectionMS == 0 {
+			return false, fmt.Errorf("projection divergence references %s key with no source projection: %s", tableName, naturalKeyJSON)
+		}
+		return firstProjectionMS < sliceStart.UnixMilli(), nil
+	}
+
+	switch tableName {
+	case "viewer_sessions_final":
+		return queryFirstProjection(`
+			SELECT if(count() = 0, 0, min(projection_version_ms))
+			FROM periscope.viewer_sessions_final
+			WHERE tenant_id = toUUID(?)
+			  AND node_id = ?
+			  AND session_id = ?
+		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"))
+	case "processing_segments_final":
+		return queryFirstProjection(`
+			SELECT if(count() = 0, 0, min(projection_version_ms))
+			FROM periscope.processing_segments_final
+			WHERE tenant_id = toUUID(?)
+			  AND node_id = ?
+			  AND stream_id = toUUID(?)
+			  AND source_event_id = ?
+		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
+	case "stream_sessions_final":
+		return queryFirstProjection(`
+			SELECT if(count() = 0, 0, min(projection_version_ms))
+			FROM periscope.stream_sessions_final
+			WHERE tenant_id = toUUID(?)
+			  AND node_id = ?
+			  AND stream_id = toUUID(?)
+			  AND source_event_id = ?
+		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
+	case "storage_gb_seconds_5m":
+		windowStart, err := time.Parse(time.RFC3339, stringFromJSONMap(naturalKey, "window_start"))
+		if err != nil {
+			return false, fmt.Errorf("parse storage divergence window_start: %w", err)
+		}
+		if windowStart.Before(sliceStart) {
+			return true, nil
+		}
+		return queryFirstProjection(`
+			SELECT if(count() = 0, 0, min(projection_version_ms))
+			FROM periscope.storage_gb_seconds_5m
+			WHERE tenant_id = toUUID(?)
+			  AND cluster_id = ?
+			  AND storage_scope = ?
+			  AND storage_provider_tenant_id = ?
+			  AND storage_provider_cluster_id = ?
+			  AND storage_backend = ?
+			  AND window_start = parseDateTimeBestEffort(?)
+		`,
+			stringFromJSONMap(naturalKey, "tenant_id"),
+			stringFromJSONMap(naturalKey, "cluster_id"),
+			stringFromJSONMap(naturalKey, "storage_scope"),
+			stringFromJSONMap(naturalKey, "storage_provider_tenant_id"),
+			stringFromJSONMap(naturalKey, "storage_provider_cluster_id"),
+			stringFromJSONMap(naturalKey, "storage_backend"),
+			stringFromJSONMap(naturalKey, "window_start"),
+		)
+	default:
+		return false, fmt.Errorf("unsupported projection divergence table %q", tableName)
+	}
+}
+
+type projectionAdjustmentDelta struct {
+	usageType         string
+	clusterID         string
+	deltaValue        float64
+	processType       string
+	outputCodec       string
+	sourcePeriodStart time.Time
+	sourcePeriodEnd   time.Time
+}
+
+func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string, observedAtMS int64, primaryClusterID string, adjustmentPeriodStart, adjustmentPeriodEnd time.Time) ([]models.UsageAdjustment, error) {
+	var naturalKey map[string]any
+	if err := json.Unmarshal([]byte(naturalKeyJSON), &naturalKey); err != nil {
+		return nil, fmt.Errorf("parse projection divergence natural key: %w", err)
+	}
+	var priorValue any
+	if err := json.Unmarshal([]byte(priorValueJSON), &priorValue); err != nil {
+		return nil, fmt.Errorf("parse projection divergence prior value: %w", err)
+	}
+	var newValue any
+	if err := json.Unmarshal([]byte(newValueJSON), &newValue); err != nil {
+		return nil, fmt.Errorf("parse projection divergence new value: %w", err)
+	}
+
+	clusterID := stringFromJSONMap(naturalKey, "cluster_id")
+	if clusterID == "" {
+		clusterID = primaryClusterID
+	}
+
+	deltas, err := adjustmentDeltasFromProjectionDivergence(tableName, field, naturalKey, priorValue, newValue, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]models.UsageAdjustment, 0, len(deltas))
+	for _, delta := range deltas {
+		if delta.clusterID == "" {
+			delta.clusterID = primaryClusterID
+		}
+		sourceMaterial := fmt.Sprintf("%s|%s|%s|%s|%s|%f|%s|%s|%s|%s|%s|%s", tableName, meter, field, delta.usageType, delta.clusterID, delta.deltaValue, delta.processType, delta.outputCodec, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID)
+		sourceHash := sha1.Sum([]byte(sourceMaterial))
+		details := models.JSONB{
+			"table_name":       tableName,
+			"meter":            meter,
+			"field":            field,
+			"natural_key":      naturalKey,
+			"prior_value":      priorValue,
+			"new_value":        newValue,
+			"observed_at_ms":   observedAtMS,
+			"source_event_id":  sourceEventID,
+			"correction_scope": "additive_delta",
+		}
+		if delta.processType != "" {
+			details["process_type"] = delta.processType
+		}
+		if delta.outputCodec != "" {
+			details["output_codec"] = delta.outputCodec
+		}
+		if !delta.sourcePeriodStart.IsZero() && !delta.sourcePeriodEnd.IsZero() {
+			details["source_period"] = map[string]string{"start": delta.sourcePeriodStart.Format(time.RFC3339), "end": delta.sourcePeriodEnd.Format(time.RFC3339)}
+		}
+		out = append(out, models.UsageAdjustment{
+			SourceSystem: "periscope.projection_divergences",
+			SourceID:     fmt.Sprintf("%x", sourceHash),
+			UsageType:    delta.usageType,
+			ClusterID:    delta.clusterID,
+			DeltaValue:   sanitizeFloat(delta.deltaValue),
+			PeriodStart:  adjustmentPeriodStart,
+			PeriodEnd:    adjustmentPeriodEnd,
+			Reason:       "projection_divergence",
+			Details:      details,
+		})
+	}
+	return out, nil
+}
+
+func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKey map[string]any, priorValue, newValue any, clusterID string) ([]projectionAdjustmentDelta, error) {
+	switch tableName {
+	case "storage_gb_seconds_5m":
+		sourceStart, err := time.Parse(time.RFC3339, stringFromJSONMap(naturalKey, "window_start"))
+		if err != nil {
+			return nil, fmt.Errorf("parse storage divergence window_start: %w", err)
+		}
+		scope := stringFromJSONMap(naturalKey, "storage_scope")
+		priorMap, priorOK := priorValue.(map[string]any)
+		newMap, newOK := newValue.(map[string]any)
+		if !priorOK || !newOK {
+			return nil, fmt.Errorf("storage divergence values must be JSON objects")
+		}
+		return []projectionAdjustmentDelta{{
+			usageType:         storageUsageType(scope),
+			clusterID:         clusterID,
+			deltaValue:        floatFromJSONMap(newMap, "gb_seconds") - floatFromJSONMap(priorMap, "gb_seconds"),
+			sourcePeriodStart: sourceStart,
+			sourcePeriodEnd:   sourceStart.Add(5 * time.Minute),
+		}}, nil
+	case "viewer_sessions_final":
+		switch field {
+		case "duration_seconds":
+			return []projectionAdjustmentDelta{{usageType: "delivered_minutes", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / 60.0}}, nil
+		case "uploaded_bytes":
+			return []projectionAdjustmentDelta{{usageType: "ingress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / math.Pow(1024, 3)}}, nil
+		case "downloaded_bytes":
+			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / math.Pow(1024, 3)}}, nil
+		case "cluster_id":
+			priorMap, priorOK := priorValue.(map[string]any)
+			newMap, newOK := newValue.(map[string]any)
+			if !priorOK || !newOK {
+				return nil, fmt.Errorf("viewer cluster divergence values must be JSON objects")
+			}
+			priorCluster := stringFromJSONMap(priorMap, "cluster_id")
+			newCluster := stringFromJSONMap(newMap, "cluster_id")
+			return []projectionAdjustmentDelta{
+				{usageType: "delivered_minutes", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "duration_seconds") / 60.0},
+				{usageType: "ingress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "uploaded_bytes") / math.Pow(1024, 3)},
+				{usageType: "egress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "downloaded_bytes") / math.Pow(1024, 3)},
+				{usageType: "delivered_minutes", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "duration_seconds") / 60.0},
+				{usageType: "ingress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "uploaded_bytes") / math.Pow(1024, 3)},
+				{usageType: "egress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "downloaded_bytes") / math.Pow(1024, 3)},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported viewer divergence field %q", field)
+		}
+	case "stream_sessions_final":
+		switch field {
+		case "runtime_seconds":
+			return []projectionAdjustmentDelta{{usageType: "stream_runtime_seconds", clusterID: clusterID, deltaValue: floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)}}, nil
+		case "cluster_id":
+			priorMap, priorOK := priorValue.(map[string]any)
+			newMap, newOK := newValue.(map[string]any)
+			if !priorOK || !newOK {
+				return nil, fmt.Errorf("stream cluster divergence values must be JSON objects")
+			}
+			priorCluster := stringFromJSONMap(priorMap, "cluster_id")
+			newCluster := stringFromJSONMap(newMap, "cluster_id")
+			return []projectionAdjustmentDelta{
+				{usageType: "stream_runtime_seconds", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "runtime_seconds")},
+				{usageType: "stream_runtime_seconds", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "runtime_seconds")},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported stream divergence field %q", field)
+		}
+	case "processing_segments_final":
+		switch field {
+		case "media_seconds":
+			return []projectionAdjustmentDelta{{
+				usageType:   "media_seconds",
+				clusterID:   clusterID,
+				deltaValue:  floatFromJSONValue(newValue) - floatFromJSONValue(priorValue),
+				processType: stringFromJSONMap(naturalKey, "process_type"),
+				outputCodec: stringFromJSONMap(naturalKey, "output_codec"),
+			}}, nil
+		case "cluster_id":
+			priorMap, priorOK := priorValue.(map[string]any)
+			newMap, newOK := newValue.(map[string]any)
+			if !priorOK || !newOK {
+				return nil, fmt.Errorf("processing cluster divergence values must be JSON objects")
+			}
+			return []projectionAdjustmentDelta{
+				{
+					usageType:   "media_seconds",
+					clusterID:   stringFromJSONMap(priorMap, "cluster_id"),
+					deltaValue:  -floatFromJSONMap(priorMap, "media_seconds"),
+					processType: stringFromJSONMap(priorMap, "process_type"),
+					outputCodec: stringFromJSONMap(priorMap, "output_codec"),
+				},
+				{
+					usageType:   "media_seconds",
+					clusterID:   stringFromJSONMap(newMap, "cluster_id"),
+					deltaValue:  floatFromJSONMap(newMap, "media_seconds"),
+					processType: stringFromJSONMap(newMap, "process_type"),
+					outputCodec: stringFromJSONMap(newMap, "output_codec"),
+				},
+			}, nil
+		case "identity":
+			priorMap, priorOK := priorValue.(map[string]any)
+			newMap, newOK := newValue.(map[string]any)
+			if !priorOK || !newOK {
+				return nil, fmt.Errorf("processing identity divergence values must be JSON objects")
+			}
+			return []projectionAdjustmentDelta{
+				{
+					usageType:   "media_seconds",
+					clusterID:   stringFromJSONMap(priorMap, "cluster_id"),
+					deltaValue:  -floatFromJSONMap(priorMap, "media_seconds"),
+					processType: stringFromJSONMap(priorMap, "process_type"),
+					outputCodec: stringFromJSONMap(priorMap, "output_codec"),
+				},
+				{
+					usageType:   "media_seconds",
+					clusterID:   stringFromJSONMap(newMap, "cluster_id"),
+					deltaValue:  floatFromJSONMap(newMap, "media_seconds"),
+					processType: stringFromJSONMap(newMap, "process_type"),
+					outputCodec: stringFromJSONMap(newMap, "output_codec"),
+				},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported processing divergence field %q", field)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported projection divergence table %q", tableName)
+	}
+}
+
+func stringFromJSONMap(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func floatFromJSONMap(m map[string]any, key string) float64 {
+	return floatFromJSONValue(m[key])
+}
+
+func floatFromJSONValue(v any) float64 {
+	switch v := v.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case uint32:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	default:
+		return 0
+	}
 }
 
 func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID string) string {
@@ -569,109 +1240,72 @@ func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID stri
 type tenantViewerMetricRow struct {
 	ClusterID       string
 	OriginClusterID string
+	IngressGB       float64
 	EgressGB        float64
 	ViewerHours     float64
 	UniqueViewers   int
 }
 
 func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantViewerMetricRow, error) {
-	queries := []struct {
-		name  string
-		query string
-		scan  func(*sql.Rows) (tenantViewerMetricRow, error)
-	}{
-		{
-			name: "cluster_and_origin",
-			query: `
-				SELECT
-					cluster_id,
-					origin_cluster_id,
-					COALESCE(sum(egress_gb), 0) as egress_gb,
-					COALESCE(sum(viewer_hours), 0) as viewer_hours,
-					COALESCE(sum(unique_viewers), 0) as unique_viewers
-				FROM periscope.tenant_viewer_daily
-				WHERE tenant_id = ?
-				AND day BETWEEN toDate(?) AND toDate(?)
-				GROUP BY cluster_id, origin_cluster_id
-			`,
-			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
-				var row tenantViewerMetricRow
-				err := rows.Scan(&row.ClusterID, &row.OriginClusterID, &row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
-				return row, err
-			},
-		},
-		{
-			name: "cluster_only",
-			query: `
-				SELECT
-					cluster_id,
-					COALESCE(sum(egress_gb), 0) as egress_gb,
-					COALESCE(sum(viewer_hours), 0) as viewer_hours,
-					COALESCE(sum(unique_viewers), 0) as unique_viewers
-				FROM periscope.tenant_viewer_daily
-				WHERE tenant_id = ?
-				AND day BETWEEN toDate(?) AND toDate(?)
-				GROUP BY cluster_id
-			`,
-			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
-				var row tenantViewerMetricRow
-				err := rows.Scan(&row.ClusterID, &row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
-				return row, err
-			},
-		},
-		{
-			name: "tenant_only",
-			query: `
-				SELECT
-					COALESCE(sum(egress_gb), 0) as egress_gb,
-					COALESCE(sum(viewer_hours), 0) as viewer_hours,
-					COALESCE(sum(unique_viewers), 0) as unique_viewers
-				FROM periscope.tenant_viewer_daily
-				WHERE tenant_id = ?
-				AND day BETWEEN toDate(?) AND toDate(?)
-			`,
-			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
-				var row tenantViewerMetricRow
-				err := rows.Scan(&row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
-				return row, err
-			},
-		},
+	// Walks billable_at_ms over viewer_sessions_final using the two-step
+	// CTE + LEFT ANTI JOIN pattern from docs/architecture/meter-contracts.md:
+	// each session bills exactly once when its min(projection_version_ms)
+	// first lands in the cursor window; later reprojections don't re-bill
+	// because the anti-join filters out natural keys with an earlier
+	// projection.
+	rows, err := bs.clickhouse.QueryContext(ctx, `
+		WITH window_candidates AS (
+			SELECT
+				tenant_id, node_id, session_id,
+				min(projection_version_ms) AS proj_first_in_window,
+				argMax(cluster_id,       projection_version_ms) AS cluster_id,
+				argMax(duration_seconds, projection_version_ms) AS duration_seconds,
+				argMax(uploaded_bytes,   projection_version_ms) AS uploaded_bytes,
+				argMax(downloaded_bytes, projection_version_ms) AS downloaded_bytes,
+				argMax(closed_reason,    projection_version_ms) AS closed_reason
+			FROM periscope.viewer_sessions_final
+			WHERE tenant_id = ?
+			  AND projection_version_ms >= ?
+			  AND projection_version_ms <  ?
+			GROUP BY tenant_id, node_id, session_id
+		)
+		SELECT
+			c.cluster_id AS cluster_id,
+			''           AS origin_cluster_id,
+			sum(c.uploaded_bytes) / pow(1024, 3)                      AS ingress_gb,
+			sum(c.downloaded_bytes) / pow(1024, 3)                    AS egress_gb,
+			sum(c.duration_seconds) / 3600.0                          AS viewer_hours,
+			toInt64(uniqCombined(c.session_id))                       AS unique_viewers
+		FROM window_candidates c
+		LEFT ANTI JOIN (
+			SELECT DISTINCT tenant_id, node_id, session_id
+			FROM periscope.viewer_sessions_final
+			WHERE tenant_id = ?
+			  AND projection_version_ms < ?
+			  AND (tenant_id, node_id, session_id) IN (
+			      SELECT tenant_id, node_id, session_id FROM window_candidates
+			  )
+		) prior USING (tenant_id, node_id, session_id)
+		WHERE c.closed_reason = 'final'
+		GROUP BY c.cluster_id
+	`, tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
 
-	for i, q := range queries {
-		rows, err := bs.clickhouse.QueryContext(ctx, q.query, tenantID, startTime, endTime)
-		if err != nil {
-			if i < len(queries)-1 && isMissingColumnCompatibilityError(err) {
-				bs.logger.WithError(err).WithField("query_variant", q.name).Warn("tenant_viewer_daily schema not yet upgraded on this node, retrying with compatibility query")
-				continue
-			}
-			return nil, err
+	var out []tenantViewerMetricRow
+	for rows.Next() {
+		var row tenantViewerMetricRow
+		if scanErr := rows.Scan(&row.ClusterID, &row.OriginClusterID, &row.IngressGB, &row.EgressGB, &row.ViewerHours, &row.UniqueViewers); scanErr != nil {
+			return nil, fmt.Errorf("scan viewer metric row: %w", scanErr)
 		}
-		defer rows.Close()
-
-		var out []tenantViewerMetricRow
-		for rows.Next() {
-			row, scanErr := q.scan(rows)
-			if scanErr != nil {
-				continue
-			}
-			out = append(out, row)
-		}
-		return out, nil
+		out = append(out, row)
 	}
-
-	return nil, nil
-}
-
-func isMissingColumnCompatibilityError(err error) bool {
-	if err == nil {
-		return false
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate viewer metric rows: %w", err)
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unknown expression") ||
-		strings.Contains(msg, "unknown identifier") ||
-		strings.Contains(msg, "missing columns") ||
-		strings.Contains(msg, "there is no column")
+	return out, nil
 }
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API
@@ -693,7 +1327,7 @@ func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, e
 		return pbTenant.GetPrimaryClusterId(), nil
 	}
 
-	return "global-primary", nil // Default fallback when no primary cluster is set
+	return "", fmt.Errorf("tenant %s has no primary_cluster_id", tenantID)
 }
 
 // sendUsageToPurser sends usage summaries to the Purser billing service via Kafka
@@ -782,15 +1416,18 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 		return fmt.Errorf("failed to get active tenants: %w", err)
 	}
 
+	var failedTenants []string
 	for _, tenantID := range tenants {
 		if err := bs.processTenantPendingUsage(ctx, tenantID); err != nil {
 			bs.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to process pending usage for tenant")
-			// Continue to next tenant
+			failedTenants = append(failedTenants, tenantID)
 		}
+	}
+	if len(failedTenants) > 0 {
+		return fmt.Errorf("failed to process pending usage for tenants: %s", strings.Join(failedTenants, ","))
 	}
 	return nil
 }
-
 func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tenantID string) error {
 	// Get last processed timestamp from cursor
 	var lastProcessed time.Time
@@ -819,67 +1456,87 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		return fmt.Errorf("failed to query cursor: %w", err)
 	}
 
-	// Target end time is Now (truncated to minute for stability)
-	targetEnd := time.Now().Truncate(time.Minute)
+	// Canonical billing cursor: 5-minute aligned with 2-minute settlement
+	// lag. Anything within `settlementLag` of now is still considered
+	// "in-flight" — the canonical-ledger projection may not have settled
+	// yet — so we deliberately don't emit it. See
+	// docs/architecture/meter-contracts.md.
+	const (
+		billingCursorAlignment = 5 * time.Minute
+		billingSettlementLag   = 2 * time.Minute
+	)
+	targetEnd := time.Now().Add(-billingSettlementLag).Truncate(billingCursorAlignment)
 
-	// If no new data to process (e.g. run too frequent), skip
-	if targetEnd.Sub(lastProcessed) < 1*time.Minute {
+	// Snap any minute-aligned lastProcessed value up to the next 5-minute
+	// boundary so emissions stay aligned with the canonical meter contract.
+	if rem := lastProcessed.Sub(lastProcessed.Truncate(billingCursorAlignment)); rem > 0 {
+		lastProcessed = lastProcessed.Truncate(billingCursorAlignment).Add(billingCursorAlignment)
+	}
+
+	// If no new aligned window to process, skip.
+	if !targetEnd.After(lastProcessed) {
 		return nil
 	}
 
-	// Generate summary for the incremental period
-	summaries, err := bs.generateTenantUsageSummary(tenantID, lastProcessed, targetEnd)
+	// Walk the cursor in exact 5-minute slices. A single call from
+	// lastProcessed to targetEnd can span hours/days on first-run, after
+	// downtime, or following a manual cursor reset; emitting a single
+	// wide-window summary makes Purser stamp it as hourly/daily and
+	// quarantine the rated meters. Each slice emits a minute_5 summary
+	// and advances the cursor independently so a mid-walk failure stops
+	// where it landed instead of replaying the full window.
+	sliceStart := lastProcessed
+	for sliceStart.Before(targetEnd) {
+		sliceEnd := sliceStart.Add(billingCursorAlignment)
+		if sliceEnd.After(targetEnd) {
+			sliceEnd = targetEnd
+		}
+		if sendErr := bs.processBillingSlice(ctx, tenantID, sliceStart, sliceEnd); sendErr != nil {
+			return sendErr
+		}
+		sliceStart = sliceEnd
+	}
+
+	bs.logger.WithFields(logging.Fields{
+		"tenant_id": tenantID,
+		"start":     lastProcessed,
+		"end":       targetEnd,
+	}).Info("Successfully processed pending usage")
+	return nil
+}
+
+// processBillingSlice generates the usage summary for one 5-minute aligned
+// window, ships it to Purser, then advances the per-tenant cursor. Splitting
+// this out keeps the slice-walk loop above readable and ensures the cursor
+// advances exactly once per slice.
+func (bs *BillingSummarizer) processBillingSlice(ctx context.Context, tenantID string, sliceStart, sliceEnd time.Time) error {
+	summaries, err := bs.generateTenantUsageSummary(tenantID, sliceStart, sliceEnd)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
 	if len(summaries) > 0 {
-		// Send to Purser
-		var flat []models.UsageSummary
+		flat := make([]models.UsageSummary, 0, len(summaries))
 		for _, s := range summaries {
 			flat = append(flat, *s)
 		}
 		if sendErr := bs.sendUsageToPurser(flat); sendErr != nil {
 			return fmt.Errorf("failed to send usage to Purser: %w", sendErr)
 		}
-
-		// Update cursor ONLY after successful send
-		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			_, execErr := bs.yugaDB.ExecContext(ctx, `
-				UPDATE periscope.billing_cursors 
-				SET last_processed_at = $1, updated_at = NOW()
-				WHERE tenant_id = $2
-			`, targetEnd, tenantID)
-			return execErr
-		})
-		if err != nil {
-			return fmt.Errorf("failed to update cursor: %w", err)
-		}
-
-		bs.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"start":     lastProcessed,
-			"end":       targetEnd,
-		}).Info("Successfully processed pending usage")
-	} else {
-		// Advance cursor even when no usage summary is emitted
-		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			_, execErr := bs.yugaDB.ExecContext(ctx, `
-				UPDATE periscope.billing_cursors 
-				SET last_processed_at = $1, updated_at = NOW()
-				WHERE tenant_id = $2
-			`, targetEnd, tenantID)
-			return execErr
-		})
-		if err != nil {
-			return fmt.Errorf("failed to update cursor: %w", err)
-		}
-		bs.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"start":     lastProcessed,
-			"end":       targetEnd,
-		}).Info("No usage summary emitted; cursor advanced")
 	}
 
+	// Cursor advances after every slice — even empty ones — so a steady
+	// stream of zero-usage 5-min windows still moves the cursor forward.
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		_, execErr := bs.yugaDB.ExecContext(ctx, `
+			UPDATE periscope.billing_cursors
+			SET last_processed_at = $1, updated_at = NOW()
+			WHERE tenant_id = $2
+		`, sliceEnd, tenantID)
+		return execErr
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update cursor: %w", err)
+	}
 	return nil
 }

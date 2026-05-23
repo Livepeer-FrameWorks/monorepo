@@ -30,6 +30,12 @@ type PeriscopeMetrics struct {
 	KafkaMessages           *prometheus.CounterVec
 	KafkaDuration           *prometheus.HistogramVec
 	KafkaLag                *prometheus.GaugeVec
+	// ProjectionDivergences counts cases where a new projection of an
+	// already-seen logical fact carries a different rated field value
+	// beyond the per-meter epsilon. The row is still written (append
+	// invariant), and the audit is also written to
+	// periscope.projection_divergences. Labels: table, meter, field.
+	ProjectionDivergences *prometheus.CounterVec
 }
 
 // AnalyticsHandler handles analytics events
@@ -47,11 +53,14 @@ type clickhouseBatch interface {
 type clickhouseRows interface {
 	Next() bool
 	Close() error
+	Scan(dest ...interface{}) error
+	Err() error
 }
 
 type clickhouseConn interface {
 	PrepareBatch(ctx context.Context, query string) (clickhouseBatch, error)
 	Query(ctx context.Context, query string, args ...interface{}) (clickhouseRows, error)
+	Exec(ctx context.Context, query string, args ...interface{}) error
 }
 
 type envelopeColumns struct {
@@ -99,6 +108,10 @@ func (c clickhouseNativeConn) PrepareBatch(ctx context.Context, query string) (c
 
 func (c clickhouseNativeConn) Query(ctx context.Context, query string, args ...interface{}) (clickhouseRows, error) {
 	return c.conn.Query(ctx, query, args...)
+}
+
+func (c clickhouseNativeConn) Exec(ctx context.Context, query string, args ...interface{}) error {
+	return c.conn.Exec(ctx, query, args...)
 }
 
 // NewAnalyticsHandler creates a new analytics handler
@@ -370,8 +383,21 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("raw_mist_triggers send: %w", err)
 	}
-	if h.metrics != nil {
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("raw_mist_triggers", "inserted").Inc()
+	}
+
+	// Project final-fact rows for the trigger types Decklog republished
+	// here. Append-only projection per meter-contracts.md. Returning the
+	// projection error retries the Kafka message; the raw journal insert
+	// above is idempotent on source_request_id, and the final-fact
+	// projection is billing-critical.
+	if err := h.projectFinalFact(ctx, &trigger, sourceRequestID, receivedAtMS); err != nil {
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"trigger_type":    triggerType,
+			"source_event_id": sourceRequestID,
+		}).Warn("Final-fact projection failed; retrying raw trigger message")
+		return fmt.Errorf("project final fact: %w", err)
 	}
 	return nil
 }
@@ -412,8 +438,10 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO storage_snapshots (
 			timestamp, node_id, tenant_id, cluster_id, storage_scope,
+			storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
 			total_bytes, file_count, dvr_bytes, clip_bytes, vod_bytes,
-			frozen_dvr_bytes, frozen_clip_bytes, frozen_vod_bytes
+			frozen_dvr_bytes, frozen_clip_bytes, frozen_vod_bytes,
+			ingested_at_ms
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch for storage_snapshots: %v", err)
@@ -432,6 +460,34 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 
 	clusterID := mt.GetClusterId()
 
+	// Provider attribution: the emitter (Foghorn for cold, Helmsman for hot)
+	// stamps `storage_provider_tenant_id` etc. on the snapshot. Missing
+	// provider IDs are kept empty so downstream settlement can distinguish
+	// explicit provider attribution from unattributed storage.
+	providerTenantID := storageSnapshot.GetStorageProviderTenantId()
+	providerClusterID := storageSnapshot.GetStorageProviderClusterId()
+	storageBackend := storageSnapshot.GetStorageBackend()
+	if storageBackend == "" {
+		if storageScope == "cold" {
+			storageBackend = "s3"
+		} else {
+			storageBackend = "edge_disk"
+		}
+	}
+	if providerTenantID == "" {
+		h.logger.WithFields(logging.Fields{
+			"event_id":      event.EventID,
+			"node_id":       storageSnapshot.GetNodeId(),
+			"storage_scope": storageScope,
+		}).Warn("storage_snapshot missing storage_provider_tenant_id; defaulting to empty (counts as platform attribution downstream)")
+	}
+
+	// ingested_at_ms stamps this pass's wall-clock time so the storage
+	// rebuilder can cursor on ingest time, not the source `timestamp`.
+	// Late-arriving snapshots (where ingest happens minutes/hours after
+	// the recorded timestamp) still land in a future rebuilder pass.
+	ingestedAtMS := time.Now().UnixMilli()
+
 	for _, usage := range storageSnapshot.GetUsage() {
 		if !isValidUUIDString(usage.GetTenantId()) {
 			h.logger.WithFields(logging.Fields{
@@ -447,6 +503,9 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 			usage.GetTenantId(),
 			clusterID,
 			storageScope,
+			providerTenantID,
+			providerClusterID,
+			storageBackend,
 			usage.GetTotalBytes(),
 			usage.GetFileCount(),
 			usage.GetDvrBytes(),
@@ -455,6 +514,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 			usage.GetFrozenDvrBytes(),
 			usage.GetFrozenClipBytes(),
 			usage.GetFrozenVodBytes(),
+			ingestedAtMS,
 		); err != nil {
 			h.logger.Errorf("Failed to append to storage_snapshots batch: %v", err)
 			return err

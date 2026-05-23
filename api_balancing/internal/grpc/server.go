@@ -4340,7 +4340,7 @@ func authorizeNodeLifecycle(ctx context.Context, ns *state.NodeState) error {
 //
 // Fails open on Purser/DB errors — admission should not break on infra
 // blips. The cap is per-tenant, point-in-time, and orthogonal to the
-// average_storage_gb billing meter (which is time-averaged and drives
+// storage_gb_seconds_cold billing meter (which is time-weighted and drives
 // invoice lines, not admission).
 func (s *FoghornGRPCServer) checkStorageEntitlement(ctx context.Context, tenantID string, additionalBytes int64) error {
 	if s.purserClient == nil || tenantID == "" {

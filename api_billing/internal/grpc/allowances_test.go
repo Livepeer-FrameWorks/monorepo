@@ -69,11 +69,10 @@ func TestComputeAllowancesFreeTierWithUsage(t *testing.T) {
 		WithArgs(tierID, "delivered_minutes").
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(10000.0, 0.0, "free"))
-	// Usage source is viewer_hours; delivered_minutes is derived (viewer_hours*60).
-	// Tenant has 58.333 viewer-hours → 3500 delivered minutes used.
+	// Allowance usage includes canonical records plus applied corrections.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(58.333333333))
+		WithArgs(tenantID, start, end, tenantID, start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(3500.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
 	if len(got) != 1 {
@@ -86,8 +85,8 @@ func TestComputeAllowancesFreeTierWithUsage(t *testing.T) {
 	if a.Included != 10000 {
 		t.Errorf("included: got %v want 10000", a.Included)
 	}
-	if a.Used < 3499.9 || a.Used > 3500.1 {
-		t.Errorf("used: got %v want ~3500 (viewer_hours*60)", a.Used)
+	if a.Used != 3500 {
+		t.Errorf("used: got %v want 3500", a.Used)
 	}
 	if a.Exhausted {
 		t.Error("expected not exhausted")
@@ -117,10 +116,10 @@ func TestComputeAllowancesFreeTierExhausted(t *testing.T) {
 		WithArgs(tierID, "delivered_minutes").
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(10000.0, 0.0, "free"))
-	// 250 viewer_hours = 15000 delivered minutes (over the 10000 included).
+	// 15000 delivered minutes — over the 10000 included.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(250.0))
+		WithArgs(tenantID, start, end, tenantID, start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(15000.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
 	if len(got) != 1 {
@@ -156,7 +155,7 @@ func TestComputeAllowancesPaidTierNotFreeFlag(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(120000.0, 0.002, "supporter"))
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end).
+		WithArgs(tenantID, start, end, tenantID, start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(833.333))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)
@@ -168,10 +167,9 @@ func TestComputeAllowancesPaidTierNotFreeFlag(t *testing.T) {
 	}
 }
 
-// TestComputeAllowancesPaidTierWithZeroPricedMeter pins the policy that a paid
-// tier with a coincidentally zero-priced meter (e.g. processing_seconds at $0
-// for trial period) is NOT treated as free-tier for admission. Without the
-// tier-identity check this regressed silently — see the P1 review finding.
+// TestComputeAllowancesPaidTierWithZeroPricedMeter pins the policy that a
+// paid tier with a zero-priced meter is not treated as free-tier for
+// admission; admission policy follows the tier identity.
 func TestComputeAllowancesPaidTierWithZeroPricedMeter(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -190,7 +188,7 @@ func TestComputeAllowancesPaidTierWithZeroPricedMeter(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"included_quantity", "unit_price", "tier_name"}).
 			AddRow(120000.0, 0.0, "supporter"))
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, start, end).
+		WithArgs(tenantID, start, end, tenantID, start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"sum"}).AddRow(2200.0))
 
 	got := server.computeAllowances(context.Background(), tenantID, tierID, start, end)

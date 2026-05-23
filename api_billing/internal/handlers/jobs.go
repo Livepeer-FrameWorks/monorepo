@@ -233,9 +233,6 @@ func (jm *JobManager) Start(ctx context.Context) {
 	// NOTE: Crypto sweeps happen OFFLINE with the master seed
 	// The server only has xpub - cannot sign transactions
 
-	// Start usage rollup + purge job
-	go jm.runUsageRollups(ctx)
-
 	// Start wallet cleanup job
 	go jm.runWalletCleanup(ctx)
 
@@ -407,35 +404,121 @@ func (jm *JobManager) getTenantBillingModel(ctx context.Context, tenantID string
 	return billingModel, err
 }
 
-// buildUsageDataFromSummary extracts usage metrics from a UsageSummary into a map
-// suitable for charge calculation. Reused by both prepaid and postpaid flows.
+// buildUsageDataFromSummary maps a UsageSummary onto the canonical
+// usage_types written to purser.usage_records.
+//
+// Priceable meters: delivered_minutes, ingress_gb, egress_gb,
+// storage_gb_seconds_hot/cold, and media_seconds. Operational gauges use
+// the same canonical 5-minute delta envelope so public usage APIs never
+// mix noncanonical or malformed rows with billable data.
+//
+// Per-codec processing breakdown does NOT get its own usage_type — it
+// travels in usage_details.codec_seconds and is consumed by the
+// codec_multiplier rating model. See docs/architecture/meter-contracts.md.
 func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
-	return map[string]float64{
-		"stream_hours":           summary.StreamHours,
-		"viewer_hours":           summary.ViewerHours,
-		"egress_gb":              summary.EgressGB,
+	data := map[string]float64{
+		"delivered_minutes":       summary.ViewerHours * 60,
+		"ingress_gb":              summary.IngressGB,
+		"egress_gb":               summary.EgressGB,
+		"storage_gb_seconds_hot":  summary.StorageGBSecondsHot,
+		"storage_gb_seconds_cold": summary.StorageGBSecondsCold,
+		"media_seconds":           totalCodecSeconds(summary),
+		// Operational/display metrics.
+		"stream_runtime_seconds": summary.StreamHours * 3600,
 		"peak_bandwidth_mbps":    summary.PeakBandwidthMbps,
-		"average_storage_gb":     summary.AverageStorageGB,
 		"max_viewers":            float64(summary.MaxViewers),
 		"total_streams":          float64(summary.TotalStreams),
 		"total_viewers":          float64(summary.TotalViewers),
 		"unique_users":           float64(summary.UniqueUsers),
-		"livepeer_h264_seconds":  summary.LivepeerH264Seconds,
-		"livepeer_vp9_seconds":   summary.LivepeerVP9Seconds,
-		"livepeer_av1_seconds":   summary.LivepeerAV1Seconds,
-		"livepeer_hevc_seconds":  summary.LivepeerHEVCSeconds,
-		"native_av_h264_seconds": summary.NativeAvH264Seconds,
-		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
-		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
-		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
-		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
-		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
-		"gpu_hours":              summary.GPUHours,
 		"api_requests":           summary.APIRequests,
 		"api_errors":             summary.APIErrors,
 		"api_duration_ms":        summary.APIDurationMs,
 		"api_complexity":         summary.APIComplexity,
 	}
+	for meter, value := range summary.Meters {
+		if _, exists := data[meter]; exists && data[meter] != 0 {
+			continue
+		}
+		data[meter] = value
+	}
+	return data
+}
+
+// totalCodecSeconds returns total processed input seconds across all
+// codecs and processing types. The per-codec/per-process breakdown is
+// preserved in usage_details and consumed by ModelCodecMultiplier.
+func totalCodecSeconds(s models.UsageSummary) float64 {
+	if len(s.ProcessingSeconds) > 0 {
+		total := 0.0
+		useJointOnly := hasJointProcessingKeys(s.ProcessingSeconds)
+		for key, seconds := range s.ProcessingSeconds {
+			if useJointOnly && !isJointProcessingKey(key) {
+				continue
+			}
+			total += seconds
+		}
+		return total
+	}
+	return s.LivepeerH264Seconds + s.LivepeerVP9Seconds + s.LivepeerAV1Seconds + s.LivepeerHEVCSeconds +
+		s.NativeAvH264Seconds + s.NativeAvVP9Seconds + s.NativeAvAV1Seconds + s.NativeAvHEVCSeconds +
+		s.NativeAvAACSeconds + s.NativeAvOpusSeconds
+}
+
+func processingDetailsFromSummary(summary models.UsageSummary) (map[string]float64, map[string]float64) {
+	processCodec := map[string]float64{}
+	if len(summary.ProcessingSeconds) > 0 {
+		useJointOnly := hasJointProcessingKeys(summary.ProcessingSeconds)
+		for key, seconds := range summary.ProcessingSeconds {
+			if useJointOnly && !isJointProcessingKey(key) {
+				continue
+			}
+			if seconds > 0 {
+				processCodec[key] += seconds
+			}
+		}
+	} else {
+		addProcessCodecSeconds(processCodec, "Livepeer", "h264", summary.LivepeerH264Seconds)
+		addProcessCodecSeconds(processCodec, "Livepeer", "hevc", summary.LivepeerHEVCSeconds)
+		addProcessCodecSeconds(processCodec, "Livepeer", "vp9", summary.LivepeerVP9Seconds)
+		addProcessCodecSeconds(processCodec, "Livepeer", "av1", summary.LivepeerAV1Seconds)
+		addProcessCodecSeconds(processCodec, "AV", "h264", summary.NativeAvH264Seconds)
+		addProcessCodecSeconds(processCodec, "AV", "hevc", summary.NativeAvHEVCSeconds)
+		addProcessCodecSeconds(processCodec, "AV", "vp9", summary.NativeAvVP9Seconds)
+		addProcessCodecSeconds(processCodec, "AV", "av1", summary.NativeAvAV1Seconds)
+		addProcessCodecSeconds(processCodec, "AV", "aac", summary.NativeAvAACSeconds)
+		addProcessCodecSeconds(processCodec, "AV", "opus", summary.NativeAvOpusSeconds)
+	}
+
+	codecSeconds := map[string]float64{}
+	for key, seconds := range processCodec {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			codecSeconds[parts[1]] += seconds
+		}
+		codecSeconds[key] += seconds
+	}
+	return codecSeconds, processCodec
+}
+
+func hasJointProcessingKeys(values map[string]float64) bool {
+	for key := range values {
+		if isJointProcessingKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func isJointProcessingKey(key string) bool {
+	_, _, ok := strings.Cut(key, ":")
+	return ok
+}
+
+func addProcessCodecSeconds(out map[string]float64, processType, codec string, seconds float64) {
+	if seconds <= 0 {
+		return
+	}
+	out[processType+":"+codec] += seconds
 }
 
 func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
@@ -465,10 +548,16 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 
 	// Resolve cluster pricing for the summary's cluster. The Kafka usage
 	// summary already carries summary.ClusterID; the resolver picks the
-	// effective rules per cluster pricing model. Empty cluster_id (legacy
-	// data) falls through to tier rules.
+	// effective rules per cluster pricing model. Empty cluster_id usage falls
+	// through to tier rules.
 	rules := tier.Rules
 	currency := tier.Currency
+	if currency == "" {
+		currency = billing.DefaultCurrency()
+	}
+	if currency != billing.DefaultCurrency() {
+		return fmt.Errorf("prepaid balance currency %s cannot settle usage priced in %s", billing.DefaultCurrency(), currency)
+	}
 	if summary.ClusterID != "" {
 		resolver := jm.pricingResolver()
 		if resolver != nil {
@@ -482,40 +571,22 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 			})
 			switch {
 			case errors.Is(resolveErr, pricing.ErrCustomPricingMissingForCluster):
-				// Defense in depth: gateway routes subscription via
-				// Purser.CreateClusterSubscription which rejects custom
-				// pricing without metered_rates. If we still see usage on
-				// such a cluster, it's a misconfiguration that needs ops
-				// attention. Skip the deduction (don't poison-pill Kafka)
-				// but make it loud: ERROR + metric.
 				if metrics != nil {
 					metrics.BillingCalculations.WithLabelValues("prepaid", "custom_pricing_missing").Inc()
 				}
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":  summary.TenantID,
-					"cluster_id": summary.ClusterID,
-					"period":     summary.Period,
-				}).Error("Skipping prepaid deduction: cluster has unconfigured custom pricing — fix cluster_pricing.metered_rates and reconcile")
-				return nil
+				return fmt.Errorf("prepaid usage on cluster %s has unconfigured custom pricing", summary.ClusterID)
 			case errors.Is(resolveErr, pricing.ErrAmbiguousClusterOwnership):
 				if metrics != nil {
 					metrics.BillingCalculations.WithLabelValues("prepaid", "ambiguous_cluster_ownership").Inc()
 				}
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":  summary.TenantID,
-					"cluster_id": summary.ClusterID,
-				}).Error("Skipping prepaid deduction: cluster ownership ambiguous (no platform_official, no owner_tenant_id)")
-				return nil
+				return fmt.Errorf("prepaid usage on cluster %s has ambiguous ownership", summary.ClusterID)
 			case resolveErr != nil:
 				return fmt.Errorf("resolve cluster pricing for %s: %w", summary.ClusterID, resolveErr)
 			}
-			rules = resolved.MeteredRules
-			// Use the resolver's currency: a cluster priced in a
-			// different currency from the tenant's tier would otherwise
-			// fail the rating engine's currency-match invariant.
-			if resolved.Currency != "" {
-				currency = resolved.Currency
+			if resolved.Currency != "" && resolved.Currency != currency {
+				return fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", summary.ClusterID, resolved.Currency, currency)
 			}
+			rules = resolved.MeteredRules
 		}
 	}
 
@@ -524,25 +595,20 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}
-	if res.UsageAmount.IsZero() || res.UsageAmount.IsNegative() {
+	if res.UsageAmount.IsZero() {
 		return nil
 	}
 
-	// Convert UsageAmount to micro-cents (10^-8 of a currency unit) so sub-cent
-	// usage accumulates against the per-tenant remainder column instead of
-	// being truncated. The deduction commits whole cents from
-	// (carried_remainder + new_micro); any residual stays as new_remainder.
 	microPerUnit := decimal.NewFromInt(1_000_000)
 	desiredMicro := res.UsageAmount.Mul(microPerUnit).Round(0).IntPart()
-	if desiredMicro <= 0 {
+	if desiredMicro == 0 {
 		return nil
 	}
 
-	// Deduct from prepaid balance
 	referenceID := usageSummaryReferenceID(summary)
 	previousBalance, newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsageMicro(ctx, summary.TenantID, desiredMicro, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
 	if err != nil {
-		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
+		return fmt.Errorf("failed to apply prepaid usage amount: %w", err)
 	}
 	if !applied {
 		jm.logger.WithFields(logging.Fields{
@@ -553,14 +619,14 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		return nil
 	}
 
-	deductedCents := previousBalance - newBalanceCents
+	appliedCents := previousBalance - newBalanceCents
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":         summary.TenantID,
 		"period":            summary.Period,
 		"requested_micro":   desiredMicro,
-		"deducted_cents":    deductedCents,
+		"applied_cents":     appliedCents,
 		"new_balance_cents": newBalanceCents,
-	}).Info("Deducted prepaid usage")
+	}).Info("Applied prepaid usage amount")
 
 	if jm.thresholdEnforcer != nil {
 		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, summary.TenantID, previousBalance, newBalanceCents); err != nil {
@@ -808,11 +874,13 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 // boundary instead of being truncated to zero.
 const microPerCent = int64(10_000)
 
-// deductPrepaidBalanceForUsageMicro deducts prepaid usage in micro-cents
-// (10^-8 of a currency unit). The fractional residual is carried in
-// prepaid_balances.balance_remainder_micro across deductions so micro-events
-// don't structurally leak revenue. Returns previous and new balances in cents
-// (the residual is private to the prepaid balance row).
+// deductPrepaidBalanceForUsageMicro applies a signed prepaid usage amount in
+// micro-cents (10^-8 of a currency unit). Positive amounts debit balance;
+// negative correction amounts credit balance. The fractional residual is
+// carried in prepaid_balances.balance_remainder_micro across events so
+// sub-cent usage and credits do not structurally leak revenue. Returns
+// previous and new balances in cents (the residual is private to the prepaid
+// balance row).
 //
 // Idempotency is keyed on (tenant_id, reference_type='usage_summary', reference_id);
 // duplicate calls return applied=false.
@@ -843,11 +911,17 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		return 0, 0, false, scanErr
 	}
 
-	// Accumulate the residual; commit whole cents, carry the rest.
+	// Accumulate the residual; commit whole cents, carry the rest. Go integer
+	// division truncates toward zero, so normalize negative residuals to keep
+	// balance_remainder_micro in [0, microPerCent).
 	totalMicro := currentRemainder + amountMicro
-	deductCents := totalMicro / microPerCent
+	appliedCents := totalMicro / microPerCent
 	newRemainder := totalMicro % microPerCent
-	newBalance := currentBalance - deductCents
+	if newRemainder < 0 {
+		appliedCents--
+		newRemainder += microPerCent
+	}
+	newBalance := currentBalance - appliedCents
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
@@ -857,7 +931,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		ON CONFLICT (tenant_id, reference_type, reference_id)
 			WHERE reference_type = 'usage_summary'
 		DO NOTHING
-	`, tenantID, -deductCents, newBalance, description, referenceID)
+	`, tenantID, -appliedCents, newBalance, description, referenceID)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -1191,11 +1265,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			continue
 		}
 
-		// Aggregate rollup-able usage metrics for billing period
-		// - SUM: flow metrics (viewer_hours, egress_gb, *_seconds)
-		// - AVG: average_storage_gb
-		// - MAX: peak_bandwidth_mbps, max_viewers
-		// - SKIP: unique counts (from Periscope enrichment only - cannot roll up 5-min windows)
+		// Aggregate canonical usage metrics for the billing period. SUM handles
+		// flow/delta meters; MAX handles peak gauges; unique counts are skipped
+		// here and come from Periscope enrichment because scalar windows cannot
+		// be summed into unique users.
 		// Fetch usage partitioned by cluster_id. A scan/query failure must
 		// abort this tenant's invoice: rating against an empty/partial usage
 		// map underbills.
@@ -1204,10 +1277,15 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
 			continue
 		}
+		perClusterCodecBreakdowns, codecErr := jm.collectInvoiceCodecBreakdowns(ctx, tenantID, periodStart, periodEnd)
+		if codecErr != nil {
+			jm.logger.WithError(codecErr).WithField("tenant_id", tenantID).Error("Failed to collect codec breakdown; skipping invoice for this period")
+			continue
+		}
 		usageData := flattenUsageAcrossClusters(perClusterUsage)
 
 		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid
-		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage)
+		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterCodecBreakdowns)
 		if ratingErr != nil {
 			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
 			continue
@@ -1364,6 +1442,22 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
 			if txErr != nil {
 				return txErr
+			}
+			if status != "manual_review" {
+				_, txErr = tx.ExecContext(ctx, `
+					UPDATE purser.usage_adjustments
+					SET applied_invoice_id = $1,
+					    updated_at = NOW()
+					WHERE tenant_id = $2
+					  AND period_start < $4
+					  AND period_end > $3
+					  AND status = 'applied'
+					  AND value_kind = 'correction_delta'
+					  AND applied_invoice_id IS NULL
+				`, invoiceID, tenantID, periodStart, periodEnd)
+				if txErr != nil {
+					return fmt.Errorf("mark usage adjustments applied to invoice: %w", txErr)
+				}
 			}
 			// Operator credit ledger: write accrual rows for marketplace
 			// lines in the same tx as the invoice finalization. The
@@ -2266,152 +2360,6 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 	}).Info("Pending tier downgrade applied")
 }
 
-func (jm *JobManager) runUsageRollups(ctx context.Context) {
-	jm.logger.Info("Starting usage rollup job")
-
-	for {
-		nextRun := nextUTCStart(1)
-		timer := time.NewTimer(time.Until(nextRun))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-jm.stopCh:
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-
-		if err := jm.rollupAndPurgeUsage(ctx); err != nil {
-			jm.logger.WithError(err).Error("Usage rollup job failed")
-		}
-	}
-}
-
-func (jm *JobManager) rollupAndPurgeUsage(ctx context.Context) error {
-	now := time.Now()
-	hourlyCutoff := now.Add(-7 * 24 * time.Hour)
-	dailyCutoff := now.Add(-90 * 24 * time.Hour)
-
-	if err := jm.rollupUsageRecords(ctx, "hourly", "daily", "day", "1 day", hourlyCutoff); err != nil {
-		return err
-	}
-	if err := jm.rollupUsageRecords(ctx, "daily", "monthly", "month", "1 month", dailyCutoff); err != nil {
-		return err
-	}
-
-	if err := jm.purgeUsageRecords(ctx, "hourly", now.Add(-8*24*time.Hour)); err != nil {
-		return err
-	}
-	if err := jm.purgeUsageRecords(ctx, "daily", now.Add(-91*24*time.Hour)); err != nil {
-		return err
-	}
-
-	jm.logger.Info("Usage rollup + purge completed")
-	return nil
-}
-
-func (jm *JobManager) rollupUsageRecords(ctx context.Context, fromGranularity, toGranularity, truncUnit, interval string, cutoff time.Time) error {
-	// Defense-in-depth: these values are string-formatted into SQL below.
-	// Keep the allowed set explicit so callers can't accidentally widen input surface.
-	switch truncUnit {
-	case "day", "month":
-	default:
-		return fmt.Errorf("invalid truncUnit: %s", truncUnit)
-	}
-	switch interval {
-	case "1 day", "1 month":
-	default:
-		return fmt.Errorf("invalid interval: %s", interval)
-	}
-	switch toGranularity {
-	case "daily", "monthly":
-	default:
-		return fmt.Errorf("invalid toGranularity: %s", toGranularity)
-	}
-
-	maxTypes := "'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users', 'unique_users_period', 'livepeer_unique_streams', 'native_av_unique_streams'"
-	avgTypes := "'average_storage_gb'"
-	query := fmt.Sprintf(`
-		WITH base AS (
-			SELECT tenant_id, cluster_id, usage_type,
-			       date_trunc('%s', period_start) AS period_start,
-			       date_trunc('%s', period_start) + INTERVAL '%s' AS period_end,
-			       usage_value
-			FROM purser.usage_records
-			WHERE granularity = $1
-			  AND period_start < $2
-		),
-		meta AS (
-			SELECT DISTINCT ON (tenant_id, cluster_id, period_start)
-			       tenant_id, cluster_id, period_start, usage_details
-			FROM (
-				SELECT tenant_id, cluster_id,
-				       date_trunc('%s', period_start) AS period_start,
-				       usage_details, created_at
-				FROM purser.usage_records
-				WHERE granularity = $1
-				  AND period_start < $2
-				  AND usage_details IS NOT NULL
-				  AND usage_details ? 'geo_breakdown'
-			) latest
-			ORDER BY tenant_id, cluster_id, period_start, created_at DESC
-		),
-		aggregated AS (
-			SELECT tenant_id, cluster_id, usage_type, period_start, period_end,
-			       CASE
-			           WHEN usage_type IN (%s) THEN MAX(usage_value)
-			           WHEN usage_type IN (%s) THEN AVG(usage_value)
-			           ELSE SUM(usage_value)
-			       END AS usage_value
-			FROM base
-			GROUP BY tenant_id, cluster_id, usage_type, period_start, period_end
-		)
-		INSERT INTO purser.usage_records (
-			tenant_id, cluster_id, usage_type, usage_value, usage_details,
-			period_start, period_end, granularity, created_at
-		)
-		SELECT a.tenant_id, a.cluster_id, a.usage_type, a.usage_value,
-		       COALESCE(m.usage_details, '{}'::jsonb),
-		       a.period_start, a.period_end, '%s', NOW()
-		FROM aggregated a
-		LEFT JOIN meta m
-		  ON m.tenant_id = a.tenant_id
-		 AND m.cluster_id = a.cluster_id
-		 AND m.period_start = a.period_start
-		ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
-			usage_value = EXCLUDED.usage_value,
-			usage_details = EXCLUDED.usage_details,
-			granularity = EXCLUDED.granularity,
-			updated_at = NOW()
-	`, truncUnit, truncUnit, interval, truncUnit, maxTypes, avgTypes, toGranularity)
-
-	_, err := jm.db.ExecContext(ctx, query, fromGranularity, cutoff)
-	if err != nil {
-		return fmt.Errorf("rollup %s -> %s failed: %w", fromGranularity, toGranularity, err)
-	}
-
-	jm.logger.WithFields(logging.Fields{
-		"from":   fromGranularity,
-		"to":     toGranularity,
-		"cutoff": cutoff,
-	}).Info("Rolled up usage records")
-
-	return nil
-}
-
-func (jm *JobManager) purgeUsageRecords(ctx context.Context, granularity string, cutoff time.Time) error {
-	_, err := jm.db.ExecContext(ctx, `
-		DELETE FROM purser.usage_records
-		WHERE granularity = $1
-		  AND period_start < $2
-	`, granularity, cutoff)
-	if err != nil {
-		return fmt.Errorf("purge %s usage records failed: %w", granularity, err)
-	}
-	return nil
-}
-
 func nextUTCStart(hour int) time.Time {
 	now := time.Now().UTC()
 	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.UTC)
@@ -2661,99 +2609,68 @@ func (jm *JobManager) cleanupExpiredWallets(ctx context.Context) {
 // and rates them through the billing engine.
 // ============================================================================
 
+func parseUsageSummaryPeriod(summary models.UsageSummary) (time.Time, time.Time, string, error) {
+	parts := strings.Split(summary.Period, "/")
+	if len(parts) != 2 {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("invalid usage period %q", summary.Period)
+	}
+	periodStart, err := time.Parse(time.RFC3339, parts[0])
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("parse usage period start %q: %w", parts[0], err)
+	}
+	periodEnd, err := time.Parse(time.RFC3339, parts[1])
+	if err != nil {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("parse usage period end %q: %w", parts[1], err)
+	}
+	if !periodEnd.After(periodStart) {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("non-positive usage period %q", summary.Period)
+	}
+
+	granularity := "minute_5"
+	duration := periodEnd.Sub(periodStart)
+	switch {
+	case duration >= 28*24*time.Hour:
+		granularity = "monthly"
+	case duration >= 24*time.Hour:
+		granularity = "daily"
+	case duration >= time.Hour:
+		granularity = "hourly"
+	}
+	return periodStart, periodEnd, granularity, nil
+}
+
 // processUsageSummary processes a single usage summary and stores it in the usage records table
 func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.UsageSummary, source string) error {
-	// Parse the period to get the actual start and end time of usage
-	// Format is expected to be "start_time_rfc3339/end_time_rfc3339"
-	var periodStart, periodEnd time.Time
-	parts := strings.Split(summary.Period, "/")
-	if len(parts) >= 2 {
-		var err error
-		periodStart, err = time.Parse(time.RFC3339, parts[0])
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"tenant_id": summary.TenantID,
-				"period":    summary.Period,
-				"source":    source,
-				"err":       err,
-			}).Warn("Failed to parse usage period start")
-		}
-		periodEnd, err = time.Parse(time.RFC3339, parts[1])
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"tenant_id": summary.TenantID,
-				"period":    summary.Period,
-				"source":    source,
-				"err":       err,
-			}).Warn("Failed to parse usage period end")
-		}
-	} else if len(parts) >= 1 {
-		// Try to parse at least start time
-		var err error
-		periodStart, err = time.Parse(time.RFC3339, parts[0])
-		if err == nil {
-			// Default end time to start time if not provided
-			periodEnd = periodStart
-		} else {
-			jm.logger.WithFields(logging.Fields{
-				"tenant_id": summary.TenantID,
-				"period":    summary.Period,
-				"source":    source,
-				"err":       err,
-			}).Warn("Failed to parse usage period")
-		}
-	}
-
-	// Fallback if parsing fails
-	if periodStart.IsZero() || periodEnd.IsZero() {
-		// Use timestamp for period start/end fallback
-		periodStart = summary.Timestamp
-		periodEnd = summary.Timestamp
-
-		jm.logger.WithFields(logging.Fields{
-			"tenant_id": summary.TenantID,
-			"period":    summary.Period,
-		}).Warn("Failed to parse period for usage window, falling back to timestamp")
-	}
-
-	granularity := "hourly"
-	if !periodEnd.IsZero() && !periodStart.IsZero() {
-		duration := periodEnd.Sub(periodStart)
-		if duration >= 28*24*time.Hour {
-			granularity = "monthly"
-		} else if duration >= 24*time.Hour {
-			granularity = "daily"
-		}
+	periodStart, periodEnd, granularity, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
 	}
 
 	// Use shared helper for usage data extraction
 	usageTypes := buildUsageDataFromSummary(summary)
 
-	// Build usage details JSONB
+	codecSeconds, processCodecSeconds := processingDetailsFromSummary(summary)
+	processSeconds := map[string]float64{}
+	for key, seconds := range processCodecSeconds {
+		processType, _, ok := strings.Cut(key, ":")
+		if ok {
+			processSeconds[processType] += seconds
+		}
+	}
 	usageDetails := models.JSONB{
-		"max_viewers":   summary.MaxViewers,
-		"total_viewers": summary.TotalViewers,
-		"total_streams": summary.TotalStreams,
-		"unique_users":  summary.UniqueUsers,
-		"source":        source,
-		// Per-codec breakdown: Livepeer
-		"livepeer_h264_seconds": summary.LivepeerH264Seconds,
-		"livepeer_vp9_seconds":  summary.LivepeerVP9Seconds,
-		"livepeer_av1_seconds":  summary.LivepeerAV1Seconds,
-		"livepeer_hevc_seconds": summary.LivepeerHEVCSeconds,
-		// Per-codec breakdown: Native AV
-		"native_av_h264_seconds": summary.NativeAvH264Seconds,
-		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
-		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
-		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
-		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
-		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
-		// API usage aggregates
-		"api_requests":    summary.APIRequests,
-		"api_errors":      summary.APIErrors,
-		"api_duration_ms": summary.APIDurationMs,
-		"api_complexity":  summary.APIComplexity,
-		"api_breakdown":   summary.APIBreakdown,
+		"max_viewers":           summary.MaxViewers,
+		"total_viewers":         summary.TotalViewers,
+		"total_streams":         summary.TotalStreams,
+		"unique_users":          summary.UniqueUsers,
+		"source":                source,
+		"codec_seconds":         codecSeconds,
+		"process_seconds":       processSeconds,
+		"process_codec_seconds": processCodecSeconds,
+		"api_requests":          summary.APIRequests,
+		"api_errors":            summary.APIErrors,
+		"api_duration_ms":       summary.APIDurationMs,
+		"api_complexity":        summary.APIComplexity,
+		"api_breakdown":         summary.APIBreakdown,
 	}
 
 	// Upsert each usage type
@@ -2762,15 +2679,43 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			continue
 		}
 
+		// Per-record validation: rated meters must come in as 5-minute
+		// delta rows on aligned period boundaries. Mismatches go to
+		// purser.usage_records_quarantine with the rejection reason so
+		// operators can inspect; the bad row is NOT written to
+		// usage_records and therefore never billed. See
+		// docs/architecture/meter-contracts.md.
+		valueKind := "delta"
+		if rejection := validateUsageRecord(usageType, usageValue, periodStart, periodEnd, granularity, valueKind); rejection != "" {
+			if _, qErr := jm.db.ExecContext(ctx, `
+				INSERT INTO purser.usage_records_quarantine
+					(tenant_id, cluster_id, usage_type, usage_value, usage_details,
+					 period_start, period_end, granularity, value_kind,
+					 rejected_reason, source, raw_payload)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails,
+				periodStart, periodEnd, granularity, valueKind, rejection, source, usageDetails); qErr != nil {
+				jm.logger.WithError(qErr).WithFields(logging.Fields{
+					"tenant_id":  summary.TenantID,
+					"usage_type": usageType,
+				}).Warn("Failed to write usage_records_quarantine row")
+			}
+			if metrics != nil && metrics.UsageQuarantine != nil {
+				metrics.UsageQuarantine.WithLabelValues(usageType, rejection).Inc()
+			}
+			continue
+		}
+
 		_, err := jm.db.ExecContext(ctx, `
-			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, value_kind, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
 				usage_value = EXCLUDED.usage_value,
 				usage_details = EXCLUDED.usage_details,
 				granularity = EXCLUDED.granularity,
+				value_kind = EXCLUDED.value_kind,
 				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, periodStart, periodEnd, granularity)
+		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, periodStart, periodEnd, granularity, valueKind)
 
 		if err != nil {
 			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
@@ -2780,7 +2725,167 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		}
 	}
 
+	if err := jm.persistStorageProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); err != nil {
+		return err
+	}
+	if err := jm.persistUsageAdjustments(ctx, summary, source); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (jm *JobManager) persistStorageProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
+	if rejection := validateCanonicalUsageWindow(periodStart, periodEnd, granularity, "delta"); rejection != "" {
+		return fmt.Errorf("reject storage provider usage for non-canonical period: %s", rejection)
+	}
+	for _, rec := range summary.StorageProviderUsage {
+		if rec.GBSeconds <= 0 {
+			continue
+		}
+		if rec.CustomerClusterID == "" {
+			rec.CustomerClusterID = summary.ClusterID
+		}
+		if rec.UsageType == "" {
+			switch rec.StorageScope {
+			case "cold":
+				rec.UsageType = string(rating.MeterStorageGBSecondsCld)
+			default:
+				rec.UsageType = string(rating.MeterStorageGBSecondsHot)
+			}
+		}
+		if !rating.ValidMeter(rating.Meter(rec.UsageType)) {
+			return fmt.Errorf("invalid storage provider usage_type %q", rec.UsageType)
+		}
+		details := models.JSONB{
+			"source":                      source,
+			"customer_cluster_id":         rec.CustomerClusterID,
+			"storage_provider_tenant_id":  rec.StorageProviderTenantID,
+			"storage_provider_cluster_id": rec.StorageProviderClusterID,
+			"storage_backend":             rec.StorageBackend,
+			"storage_scope":               rec.StorageScope,
+		}
+		_, err := jm.db.ExecContext(ctx, `
+			INSERT INTO purser.storage_provider_usage_records (
+				usage_tenant_id, customer_cluster_id,
+				storage_provider_tenant_id, storage_provider_cluster_id,
+				storage_backend, storage_scope, usage_type, gb_seconds,
+				period_start, period_end, granularity, value_kind, source, usage_details
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, 'minute_5', 'delta', $11, $12
+			)
+			ON CONFLICT (
+				usage_tenant_id, customer_cluster_id,
+				storage_provider_tenant_id, storage_provider_cluster_id,
+				storage_backend, storage_scope, usage_type,
+				period_start, period_end
+			) DO UPDATE SET
+				gb_seconds = EXCLUDED.gb_seconds,
+				granularity = EXCLUDED.granularity,
+				value_kind = EXCLUDED.value_kind,
+				source = EXCLUDED.source,
+				usage_details = EXCLUDED.usage_details,
+				updated_at = NOW()
+		`, summary.TenantID, rec.CustomerClusterID,
+			rec.StorageProviderTenantID, rec.StorageProviderClusterID,
+			rec.StorageBackend, rec.StorageScope, rec.UsageType, rec.GBSeconds,
+			periodStart, periodEnd, source, details)
+		if err != nil {
+			return fmt.Errorf("upsert storage provider usage %s/%s: %w", rec.StorageProviderTenantID, rec.UsageType, err)
+		}
+	}
+	return nil
+}
+
+func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary models.UsageSummary, source string) error {
+	for _, adj := range summary.UsageAdjustments {
+		if adj.DeltaValue == 0 {
+			continue
+		}
+		if !rating.ValidMeter(rating.Meter(adj.UsageType)) {
+			return fmt.Errorf("invalid usage adjustment usage_type %q", adj.UsageType)
+		}
+		if adj.SourceSystem == "" || adj.SourceID == "" {
+			return fmt.Errorf("usage adjustment missing source identity for %s", adj.UsageType)
+		}
+		if adj.ClusterID == "" {
+			adj.ClusterID = summary.ClusterID
+		}
+		if adj.PeriodStart.IsZero() || adj.PeriodEnd.IsZero() || !adj.PeriodEnd.After(adj.PeriodStart) {
+			return fmt.Errorf("usage adjustment %s has invalid period", adj.SourceID)
+		}
+		if adj.Details == nil {
+			adj.Details = models.JSONB{}
+		}
+		adj.Details["source"] = source
+		_, err := jm.db.ExecContext(ctx, `
+			INSERT INTO purser.usage_adjustments (
+				tenant_id, cluster_id, usage_type, delta_value,
+				period_start, period_end, value_kind, status,
+				source_system, source_id, reason, details
+			) VALUES (
+				$1, $2, $3, $4,
+				$5, $6, 'correction_delta', 'applied',
+				$7, $8, $9, $10
+			)
+			ON CONFLICT (source_system, source_id) DO UPDATE SET
+				tenant_id = EXCLUDED.tenant_id,
+				cluster_id = EXCLUDED.cluster_id,
+				usage_type = EXCLUDED.usage_type,
+				delta_value = EXCLUDED.delta_value,
+				period_start = EXCLUDED.period_start,
+				period_end = EXCLUDED.period_end,
+				status = EXCLUDED.status,
+				reason = EXCLUDED.reason,
+				details = EXCLUDED.details,
+				updated_at = NOW()
+		`, summary.TenantID, adj.ClusterID, adj.UsageType, adj.DeltaValue,
+			adj.PeriodStart, adj.PeriodEnd, adj.SourceSystem, adj.SourceID, adj.Reason, adj.Details)
+		if err != nil {
+			return fmt.Errorf("upsert usage adjustment %s: %w", adj.SourceID, err)
+		}
+	}
+	return nil
+}
+
+// validateUsageRecord checks per-meter constraints. Returns "" on
+// success or a rejection_reason string on failure.
+func validateUsageRecord(usageType string, usageValue float64, periodStart, periodEnd time.Time, granularity, valueKind string) string {
+	if usageValue < 0 {
+		return "negative_value"
+	}
+	if !rating.ValidMeter(rating.Meter(usageType)) {
+		return "invalid_meter"
+	}
+	if rejection := validateCanonicalUsageWindow(periodStart, periodEnd, granularity, valueKind); rejection != "" {
+		return rejection
+	}
+	return ""
+}
+
+func validateCanonicalUsageWindow(periodStart, periodEnd time.Time, granularity, valueKind string) string {
+	if periodEnd.IsZero() || periodStart.IsZero() {
+		return "missing_period"
+	}
+	if !periodEnd.After(periodStart) {
+		return "non_positive_period"
+	}
+	if valueKind != "delta" {
+		return "value_kind_mismatch"
+	}
+	if granularity != "minute_5" {
+		return "granularity_unsupported"
+	}
+	if periodEnd.Sub(periodStart) != 5*time.Minute {
+		return "period_duration_mismatch"
+	}
+	// 5-min boundary alignment check.
+	const fiveMin = 5 * 60
+	if periodStart.Unix()%fiveMin != 0 || periodEnd.Unix()%fiveMin != 0 {
+		return "period_misaligned"
+	}
+	return ""
 }
 
 // updateInvoiceDraft creates or updates an invoice draft for the tenant based on usage
@@ -2834,6 +2939,10 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if err != nil {
 		return fmt.Errorf("collect invoice usage: %w", err)
 	}
+	perClusterCodecBreakdowns, err := jm.collectInvoiceCodecBreakdowns(ctx, tenantID, periodStart, periodEnd)
+	if err != nil {
+		return fmt.Errorf("collect invoice codec breakdown: %w", err)
+	}
 	usageTotals := flattenUsageAcrossClusters(perClusterUsage)
 
 	// Provider-managed base detection: external recurring subscription owns
@@ -2854,7 +2963,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
 	// as decimal strings; float64 never touches the cents.
-	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage)
+	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterCodecBreakdowns)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}

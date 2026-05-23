@@ -121,7 +121,6 @@ import { Player } from "@livepeer-frameworks/player-react";
   gateway-url="https://your-bridge/graphql"
   autoplay
   muted
-  controls
 ></fw-player>
 ```
 
@@ -257,7 +256,7 @@ The player ships a prebuilt stylesheet (plain CSS, copied to `dist/player.css`):
 
 Key design constraints:
 
-- Styles are wrapped in a dedicated CSS layer: `@layer fw-player` (host app styles win by default).
+- Component styles are scoped through `fw-*` classes rather than a CSS layer, so wrapper packages remain styled even when host apps do not run Tailwind over package sources.
 - Tokens are scoped to `.fw-player-surface` (no `:root` pollution).
 - UI follows the same “slabs / seams” philosophy as the dashboard (`docs/standards/design-system.md`).
 

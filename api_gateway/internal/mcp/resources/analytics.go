@@ -140,7 +140,7 @@ func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, 
 		s := resp.Summary
 		usage.Streaming.ViewerHours = int64(s.ViewerHours)
 		usage.Streaming.PeakConcurrent = int(s.MaxViewers)
-		usage.Storage.TotalBytes = int64(s.AverageStorageGb * 1024 * 1024 * 1024)
+		usage.Storage.TotalBytes = int64(s.DisplayStorageGb * 1024 * 1024 * 1024)
 		// Sum all transcoding (Livepeer + Native AV) in minutes
 		totalTranscodeSeconds := s.LivepeerH264Seconds + s.LivepeerVp9Seconds + s.LivepeerAv1Seconds + s.LivepeerHevcSeconds +
 			s.NativeAvH264Seconds + s.NativeAvVp9Seconds + s.NativeAvAv1Seconds + s.NativeAvHevcSeconds

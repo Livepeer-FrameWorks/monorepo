@@ -8097,11 +8097,11 @@ type LiveUsageSummary struct {
 	TenantId    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	PeriodStart *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=period_start,json=periodStart,proto3" json:"period_start,omitempty"`
 	PeriodEnd   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=period_end,json=periodEnd,proto3" json:"period_end,omitempty"`
-	// Core metrics (matches UsageSummary)
+	// Core near-real-time metrics
 	StreamHours       float64 `protobuf:"fixed64,4,opt,name=stream_hours,json=streamHours,proto3" json:"stream_hours,omitempty"`
 	EgressGb          float64 `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
 	PeakBandwidthMbps float64 `protobuf:"fixed64,6,opt,name=peak_bandwidth_mbps,json=peakBandwidthMbps,proto3" json:"peak_bandwidth_mbps,omitempty"`
-	AverageStorageGb  float64 `protobuf:"fixed64,7,opt,name=average_storage_gb,json=averageStorageGb,proto3" json:"average_storage_gb,omitempty"`
+	DisplayStorageGb  float64 `protobuf:"fixed64,7,opt,name=display_storage_gb,json=displayStorageGb,proto3" json:"display_storage_gb,omitempty"`
 	// Per-codec breakdown: Livepeer
 	LivepeerH264Seconds float64 `protobuf:"fixed64,8,opt,name=livepeer_h264_seconds,json=livepeerH264Seconds,proto3" json:"livepeer_h264_seconds,omitempty"`
 	LivepeerVp9Seconds  float64 `protobuf:"fixed64,9,opt,name=livepeer_vp9_seconds,json=livepeerVp9Seconds,proto3" json:"livepeer_vp9_seconds,omitempty"`
@@ -8114,22 +8114,22 @@ type LiveUsageSummary struct {
 	NativeAvHevcSeconds float64 `protobuf:"fixed64,15,opt,name=native_av_hevc_seconds,json=nativeAvHevcSeconds,proto3" json:"native_av_hevc_seconds,omitempty"`
 	NativeAvAacSeconds  float64 `protobuf:"fixed64,16,opt,name=native_av_aac_seconds,json=nativeAvAacSeconds,proto3" json:"native_av_aac_seconds,omitempty"`
 	NativeAvOpusSeconds float64 `protobuf:"fixed64,17,opt,name=native_av_opus_seconds,json=nativeAvOpusSeconds,proto3" json:"native_av_opus_seconds,omitempty"`
-	// Viewer metrics (matches UsageSummary)
+	// Viewer metrics
 	TotalStreams int32   `protobuf:"varint,18,opt,name=total_streams,json=totalStreams,proto3" json:"total_streams,omitempty"`
 	TotalViewers int32   `protobuf:"varint,19,opt,name=total_viewers,json=totalViewers,proto3" json:"total_viewers,omitempty"`
 	ViewerHours  float64 `protobuf:"fixed64,20,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
 	MaxViewers   int32   `protobuf:"varint,21,opt,name=max_viewers,json=maxViewers,proto3" json:"max_viewers,omitempty"`
 	UniqueUsers  int32   `protobuf:"varint,22,opt,name=unique_users,json=uniqueUsers,proto3" json:"unique_users,omitempty"`
-	// Segment/stream counts (from processing_daily)
+	// Segment/stream counts
 	LivepeerSegmentCount  uint64 `protobuf:"varint,23,opt,name=livepeer_segment_count,json=livepeerSegmentCount,proto3" json:"livepeer_segment_count,omitempty"`
 	LivepeerUniqueStreams uint32 `protobuf:"varint,24,opt,name=livepeer_unique_streams,json=livepeerUniqueStreams,proto3" json:"livepeer_unique_streams,omitempty"`
 	NativeAvSegmentCount  uint64 `protobuf:"varint,25,opt,name=native_av_segment_count,json=nativeAvSegmentCount,proto3" json:"native_av_segment_count,omitempty"`
 	NativeAvUniqueStreams uint32 `protobuf:"varint,26,opt,name=native_av_unique_streams,json=nativeAvUniqueStreams,proto3" json:"native_av_unique_streams,omitempty"`
-	// Geo enrichment (from viewer_connection_events)
+	// Geo enrichment
 	UniqueCountries int32            `protobuf:"varint,27,opt,name=unique_countries,json=uniqueCountries,proto3" json:"unique_countries,omitempty"`
 	UniqueCities    int32            `protobuf:"varint,28,opt,name=unique_cities,json=uniqueCities,proto3" json:"unique_cities,omitempty"`
 	GeoBreakdown    []*CountryMetric `protobuf:"bytes,29,rep,name=geo_breakdown,json=geoBreakdown,proto3" json:"geo_breakdown,omitempty"`
-	// Storage lifecycle - artifact counts (from artifact_events)
+	// Storage lifecycle - artifact counts
 	ClipsCreated uint32 `protobuf:"varint,30,opt,name=clips_created,json=clipsCreated,proto3" json:"clips_created,omitempty"`
 	ClipsDeleted uint32 `protobuf:"varint,31,opt,name=clips_deleted,json=clipsDeleted,proto3" json:"clips_deleted,omitempty"`
 	DvrCreated   uint32 `protobuf:"varint,32,opt,name=dvr_created,json=dvrCreated,proto3" json:"dvr_created,omitempty"`
@@ -8144,7 +8144,7 @@ type LiveUsageSummary struct {
 	FrozenClipBytes uint64 `protobuf:"varint,39,opt,name=frozen_clip_bytes,json=frozenClipBytes,proto3" json:"frozen_clip_bytes,omitempty"`
 	FrozenDvrBytes  uint64 `protobuf:"varint,40,opt,name=frozen_dvr_bytes,json=frozenDvrBytes,proto3" json:"frozen_dvr_bytes,omitempty"`
 	FrozenVodBytes  uint64 `protobuf:"varint,41,opt,name=frozen_vod_bytes,json=frozenVodBytes,proto3" json:"frozen_vod_bytes,omitempty"`
-	// Freeze/defrost operations (from storage_events)
+	// Freeze/defrost operations
 	FreezeCount   uint32 `protobuf:"varint,42,opt,name=freeze_count,json=freezeCount,proto3" json:"freeze_count,omitempty"`
 	FreezeBytes   uint64 `protobuf:"varint,43,opt,name=freeze_bytes,json=freezeBytes,proto3" json:"freeze_bytes,omitempty"`
 	DefrostCount  uint32 `protobuf:"varint,44,opt,name=defrost_count,json=defrostCount,proto3" json:"defrost_count,omitempty"`
@@ -8225,9 +8225,9 @@ func (x *LiveUsageSummary) GetPeakBandwidthMbps() float64 {
 	return 0
 }
 
-func (x *LiveUsageSummary) GetAverageStorageGb() float64 {
+func (x *LiveUsageSummary) GetDisplayStorageGb() float64 {
 	if x != nil {
-		return x.AverageStorageGb
+		return x.DisplayStorageGb
 	}
 	return 0
 }
@@ -8995,15 +8995,15 @@ func (x *GetAcquisitionCohortUsageRequest) GetCohortMonth() *timestamppb.Timesta
 }
 
 type AcquisitionCohortUsageRecord struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Day               *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=day,proto3" json:"day,omitempty"`
-	SignupChannel     string                 `protobuf:"bytes,2,opt,name=signup_channel,json=signupChannel,proto3" json:"signup_channel,omitempty"`
-	CohortMonth       *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=cohort_month,json=cohortMonth,proto3" json:"cohort_month,omitempty"`
-	ViewerHours       float64                `protobuf:"fixed64,4,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
-	EgressGb          float64                `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
-	ProcessingSeconds float64                `protobuf:"fixed64,6,opt,name=processing_seconds,json=processingSeconds,proto3" json:"processing_seconds,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Day           *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=day,proto3" json:"day,omitempty"`
+	SignupChannel string                 `protobuf:"bytes,2,opt,name=signup_channel,json=signupChannel,proto3" json:"signup_channel,omitempty"`
+	CohortMonth   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=cohort_month,json=cohortMonth,proto3" json:"cohort_month,omitempty"`
+	ViewerHours   float64                `protobuf:"fixed64,4,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
+	EgressGb      float64                `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
+	MediaSeconds  float64                `protobuf:"fixed64,6,opt,name=media_seconds,json=mediaSeconds,proto3" json:"media_seconds,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AcquisitionCohortUsageRecord) Reset() {
@@ -9071,9 +9071,9 @@ func (x *AcquisitionCohortUsageRecord) GetEgressGb() float64 {
 	return 0
 }
 
-func (x *AcquisitionCohortUsageRecord) GetProcessingSeconds() float64 {
+func (x *AcquisitionCohortUsageRecord) GetMediaSeconds() float64 {
 	if x != nil {
-		return x.ProcessingSeconds
+		return x.MediaSeconds
 	}
 	return 0
 }
@@ -9644,6 +9644,7 @@ type ViewerHoursHourly struct {
 	UniqueViewers       int32                  `protobuf:"varint,6,opt,name=unique_viewers,json=uniqueViewers,proto3" json:"unique_viewers,omitempty"`
 	TotalSessionSeconds int64                  `protobuf:"varint,7,opt,name=total_session_seconds,json=totalSessionSeconds,proto3" json:"total_session_seconds,omitempty"`
 	TotalBytes          int64                  `protobuf:"varint,8,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	EgressBytes         int64                  `protobuf:"varint,9,opt,name=egress_bytes,json=egressBytes,proto3" json:"egress_bytes,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -9730,6 +9731,13 @@ func (x *ViewerHoursHourly) GetTotalSessionSeconds() int64 {
 func (x *ViewerHoursHourly) GetTotalBytes() int64 {
 	if x != nil {
 		return x.TotalBytes
+	}
+	return 0
+}
+
+func (x *ViewerHoursHourly) GetEgressBytes() int64 {
+	if x != nil {
+		return x.EgressBytes
 	}
 	return 0
 }
@@ -16530,7 +16538,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\fstream_hours\x18\x04 \x01(\x01R\vstreamHours\x12\x1b\n" +
 	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\x12.\n" +
 	"\x13peak_bandwidth_mbps\x18\x06 \x01(\x01R\x11peakBandwidthMbps\x12,\n" +
-	"\x12average_storage_gb\x18\a \x01(\x01R\x10averageStorageGb\x122\n" +
+	"\x12display_storage_gb\x18\a \x01(\x01R\x10displayStorageGb\x122\n" +
 	"\x15livepeer_h264_seconds\x18\b \x01(\x01R\x13livepeerH264Seconds\x120\n" +
 	"\x14livepeer_vp9_seconds\x18\t \x01(\x01R\x12livepeerVp9Seconds\x120\n" +
 	"\x14livepeer_av1_seconds\x18\n" +
@@ -16616,14 +16624,14 @@ const file_periscope_proto_rawDesc = "" +
 	"\x0esignup_channel\x18\x02 \x01(\tH\x00R\rsignupChannel\x88\x01\x01\x12B\n" +
 	"\fcohort_month\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampH\x01R\vcohortMonth\x88\x01\x01B\x11\n" +
 	"\x0f_signup_channelB\x0f\n" +
-	"\r_cohort_month\"\xa1\x02\n" +
+	"\r_cohort_month\"\x97\x02\n" +
 	"\x1cAcquisitionCohortUsageRecord\x12,\n" +
 	"\x03day\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x03day\x12%\n" +
 	"\x0esignup_channel\x18\x02 \x01(\tR\rsignupChannel\x12=\n" +
 	"\fcohort_month\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcohortMonth\x12!\n" +
 	"\fviewer_hours\x18\x04 \x01(\x01R\vviewerHours\x12\x1b\n" +
-	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\x12-\n" +
-	"\x12processing_seconds\x18\x06 \x01(\x01R\x11processingSeconds\"f\n" +
+	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\x12#\n" +
+	"\rmedia_seconds\x18\x06 \x01(\x01R\fmediaSeconds\"f\n" +
 	"!GetAcquisitionCohortUsageResponse\x12A\n" +
 	"\arecords\x18\x01 \x03(\v2'.periscope.AcquisitionCohortUsageRecordR\arecords\"\xe5\x04\n" +
 	"\x0eStreamHealth5m\x12\x0e\n" +
@@ -16690,7 +16698,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\n" +
 	"pagination\x18\x01 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\x126\n" +
-	"\arecords\x18\x02 \x03(\v2\x1c.periscope.NodePerformance5mR\arecords\"\xac\x02\n" +
+	"\arecords\x18\x02 \x03(\v2\x1c.periscope.NodePerformance5mR\arecords\"\xcf\x02\n" +
 	"\x11ViewerHoursHourly\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\x04hour\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x04hour\x12\x1b\n" +
@@ -16700,7 +16708,8 @@ const file_periscope_proto_rawDesc = "" +
 	"\x0eunique_viewers\x18\x06 \x01(\x05R\runiqueViewers\x122\n" +
 	"\x15total_session_seconds\x18\a \x01(\x03R\x13totalSessionSeconds\x12\x1f\n" +
 	"\vtotal_bytes\x18\b \x01(\x03R\n" +
-	"totalBytes\"\xdd\x01\n" +
+	"totalBytes\x12!\n" +
+	"\fegress_bytes\x18\t \x01(\x03R\vegressBytes\"\xdd\x01\n" +
 	"\x1bGetViewerHoursHourlyRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x00R\bstreamId\x88\x01\x01\x120\n" +

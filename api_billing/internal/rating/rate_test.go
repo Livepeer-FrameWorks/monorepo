@@ -24,52 +24,53 @@ func supporterRules() []Rule {
 			IncludedQuantity: dec("120000"), UnitPrice: dec("0.000550"),
 		},
 		{
-			Meter: MeterAverageStorageGB, Model: ModelAllUsage, Currency: "EUR",
+			// Cold S3 storage is the customer-facing storage product per
+			// meter-contracts.md. Hot edge storage is operational (cache
+			// optimization) and has no default rule.
+			Meter: MeterStorageGBSecondsCld, Model: ModelAllUsage, Currency: "EUR",
 			UnitPrice: dec("0.035000"),
-		},
-		{
-			Meter: MeterAIGPUHours, Model: ModelTieredGraduated, Currency: "EUR",
-			IncludedQuantity: dec("10"), UnitPrice: dec("1.500000"),
 		},
 	}
 }
 
 func TestRate_Supporter_StorageNeverUsesRetentionDays(t *testing.T) {
 	// Retention is an entitlement, not an allowance on the storage meter.
-	// 100 GB stored must bill 100 × €0.035, not 10 × €0.035.
+	// Storage is stored as GiB-seconds internally and rated as GiB-hours.
+	// 100 GiB held for one hour = 360_000 GiB-seconds → 100 GiB-hours →
+	// 100 × €0.035 = €3.50 (no retention-days subtraction).
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("79.00"),
 		Rules:     supporterRules(),
 		Usage: map[Meter]decimal.Decimal{
-			MeterAverageStorageGB: dec("100"),
+			MeterStorageGBSecondsCld: dec("360000"), // 100 GB × 3600 s
 		},
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
 	}
 
-	storage := findLine(t, res.UsageLines, "meter:average_storage_gb")
-	wantAmount := dec("3.50") // 100 × 0.035
+	storage := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
+	wantAmount := dec("3.50") // 100 GiB-hours × 0.035
 	if !storage.Amount.Equal(wantAmount) {
 		t.Errorf("storage amount = %s, want %s", storage.Amount, wantAmount)
 	}
 	if !storage.BillableQuantity.Equal(dec("100")) {
-		t.Errorf("storage billable = %s, want 100 (no retention-days subtraction)", storage.BillableQuantity)
+		t.Errorf("storage billable = %s GiB-hours, want 100", storage.BillableQuantity)
 	}
 }
 
-func TestRate_Supporter_GPUSubtractsIncluded(t *testing.T) {
+func TestRate_Supporter_DeliveredMinutesSubtractsIncluded(t *testing.T) {
 	// Included quantities are rating rules and reduce billable usage before
-	// money is calculated. Supporter includes 10 GPU hours.
+	// money is calculated. Supporter includes 120,000 delivered minutes.
 	cases := []struct {
 		name      string
-		gpuHours  string
+		minutes   string
 		wantUsage string // total UsageAmount
 	}{
-		{"under included", "5", "0.00"},
-		{"at boundary", "10", "0.00"},
-		{"two hours over", "12", "3.00"}, // 2 × 1.50
+		{"under included", "60000", "0.000000"},
+		{"at boundary", "120000", "0.000000"},
+		{"two thousand over", "122000", "1.100000"}, // 2000 × 0.000550
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,7 +79,7 @@ func TestRate_Supporter_GPUSubtractsIncluded(t *testing.T) {
 				BasePrice: dec("79.00"),
 				Rules:     supporterRules(),
 				Usage: map[Meter]decimal.Decimal{
-					MeterAIGPUHours: dec(tc.gpuHours),
+					MeterDeliveredMinutes: dec(tc.minutes),
 				},
 			})
 			if err != nil {
@@ -99,7 +100,7 @@ func TestRate_BaseAndUsageSplit(t *testing.T) {
 		BasePrice: dec("79.00"),
 		Rules:     supporterRules(),
 		Usage: map[Meter]decimal.Decimal{
-			MeterAIGPUHours: dec("12"),
+			MeterDeliveredMinutes: dec("125000"), // 5000 over included
 		},
 	})
 	if err != nil {
@@ -108,11 +109,11 @@ func TestRate_BaseAndUsageSplit(t *testing.T) {
 	if !res.BaseAmount.Equal(dec("79.00")) {
 		t.Errorf("BaseAmount = %s, want 79.00", res.BaseAmount)
 	}
-	if !res.UsageAmount.Equal(dec("3.00")) {
-		t.Errorf("UsageAmount = %s, want 3.00", res.UsageAmount)
+	if !res.UsageAmount.Equal(dec("2.750000")) { // 5000 × 0.000550
+		t.Errorf("UsageAmount = %s, want 2.750000", res.UsageAmount)
 	}
-	if !res.TotalAmount.Equal(dec("82.00")) {
-		t.Errorf("TotalAmount = %s, want 82.00", res.TotalAmount)
+	if !res.TotalAmount.Equal(dec("81.75")) {
+		t.Errorf("TotalAmount = %s, want 81.75", res.TotalAmount)
 	}
 	if res.BaseLine.LineKey != LineKeyBaseSubscription {
 		t.Errorf("BaseLine.LineKey = %q, want %q", res.BaseLine.LineKey, LineKeyBaseSubscription)
@@ -173,7 +174,7 @@ func TestRate_DeliveredMinutesGraduated(t *testing.T) {
 
 func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 	rules := []Rule{{
-		Meter: MeterProcessingSeconds, Model: ModelCodecMultiplier, Currency: "EUR",
+		Meter: MeterMediaSeconds, Model: ModelCodecMultiplier, Currency: "EUR",
 		UnitPrice: dec("0.001"),
 		Config: map[string]any{
 			"codec_multipliers": map[string]any{
@@ -196,7 +197,7 @@ func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 	if got, want := len(res.UsageLines), 2; got != want {
 		t.Fatalf("usage lines = %d, want %d", got, want)
 	}
-	h264 := findLine(t, res.UsageLines, "meter:processing_seconds:codec:h264")
+	h264 := findLine(t, res.UsageLines, "meter:media_seconds:codec:h264")
 	if !h264.Amount.Equal(dec("0.06")) { // 60 min × 0.001 × 1.0
 		t.Errorf("h264 amount = %s, want 0.06", h264.Amount)
 	}
@@ -206,7 +207,7 @@ func TestRate_CodecMultiplier_PerCodecLineItems(t *testing.T) {
 	if !h264.BillableQuantity.Mul(h264.UnitPrice).Equal(h264.Amount) {
 		t.Errorf("h264 audit invariant: %s × %s != %s", h264.BillableQuantity, h264.UnitPrice, h264.Amount)
 	}
-	av1 := findLine(t, res.UsageLines, "meter:processing_seconds:codec:av1")
+	av1 := findLine(t, res.UsageLines, "meter:media_seconds:codec:av1")
 	if !av1.Amount.Equal(dec("0.12")) { // 60 min × 0.001 × 2.0
 		t.Errorf("av1 amount = %s, want 0.12", av1.Amount)
 	}
@@ -247,7 +248,7 @@ func TestRate_EmptyRuleCurrencyRejected(t *testing.T) {
 	}
 }
 
-func TestRate_RejectsNegativeInputs(t *testing.T) {
+func TestRate_RejectsNegativePricesAndAllowances(t *testing.T) {
 	cases := []struct {
 		name string
 		in   Input
@@ -257,15 +258,6 @@ func TestRate_RejectsNegativeInputs(t *testing.T) {
 			in: Input{
 				Currency:  "EUR",
 				BasePrice: dec("-1"),
-			},
-		},
-		{
-			name: "negative usage",
-			in: Input{
-				Currency:  "EUR",
-				BasePrice: dec("0"),
-				Rules:     supporterRules(),
-				Usage:     map[Meter]decimal.Decimal{MeterAverageStorageGB: dec("-1")},
 			},
 		},
 		{
@@ -285,22 +277,9 @@ func TestRate_RejectsNegativeInputs(t *testing.T) {
 				Currency:  "EUR",
 				BasePrice: dec("0"),
 				Rules: []Rule{{
-					Meter: MeterAverageStorageGB, Model: ModelAllUsage, Currency: "EUR",
+					Meter: MeterStorageGBSecondsHot, Model: ModelAllUsage, Currency: "EUR",
 					UnitPrice: dec("-0.001"),
 				}},
-			},
-		},
-		{
-			name: "negative codec seconds",
-			in: Input{
-				Currency:  "EUR",
-				BasePrice: dec("0"),
-				Rules: []Rule{{
-					Meter: MeterProcessingSeconds, Model: ModelCodecMultiplier, Currency: "EUR",
-					UnitPrice: dec("0.001"),
-					Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0}},
-				}},
-				CodecSeconds: map[string]decimal.Decimal{"h264": dec("-60")},
 			},
 		},
 	}
@@ -311,6 +290,83 @@ func TestRate_RejectsNegativeInputs(t *testing.T) {
 				t.Fatal("Rate err = nil, want validation error")
 			}
 		})
+	}
+}
+
+func TestRate_NegativeAllUsageCreatesCreditLine(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:     MeterStorageGBSecondsCld,
+			Model:     ModelAllUsage,
+			Currency:  "EUR",
+			UnitPrice: dec("0.035"),
+		}},
+		Usage: map[Meter]decimal.Decimal{MeterStorageGBSecondsCld: dec("-3600")},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
+	if !line.BillableQuantity.Equal(dec("-1")) {
+		t.Errorf("billable = %s GiB-hours, want -1", line.BillableQuantity)
+	}
+	if !line.Amount.Equal(dec("-0.035")) {
+		t.Errorf("amount = %s, want -0.035", line.Amount)
+	}
+}
+
+func TestRate_NegativeGraduatedUsageCreatesCreditLine(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:            MeterDeliveredMinutes,
+			Model:            ModelTieredGraduated,
+			Currency:         "EUR",
+			IncludedQuantity: dec("120000"),
+			UnitPrice:        dec("0.000550"),
+		}},
+		Usage: map[Meter]decimal.Decimal{MeterDeliveredMinutes: dec("-100")},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:delivered_minutes")
+	if !line.IncludedQuantity.IsZero() {
+		t.Errorf("included = %s, want 0 for correction credit", line.IncludedQuantity)
+	}
+	if !line.BillableQuantity.Equal(dec("-100")) {
+		t.Errorf("billable = %s, want -100", line.BillableQuantity)
+	}
+	if !line.Amount.Equal(dec("-0.055000")) {
+		t.Errorf("amount = %s, want -0.055000", line.Amount)
+	}
+}
+
+func TestRate_NegativeCodecBreakdownCreatesCreditLine(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:     MeterMediaSeconds,
+			Model:     ModelCodecMultiplier,
+			Currency:  "EUR",
+			UnitPrice: dec("0.001"),
+			Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0}},
+		}},
+		CodecSeconds: map[string]decimal.Decimal{"h264": dec("-60")},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:media_seconds:codec:h264")
+	if !line.Quantity.Equal(dec("-1")) {
+		t.Errorf("quantity = %s minutes, want -1", line.Quantity)
+	}
+	if !line.Amount.Equal(dec("-0.001")) {
+		t.Errorf("amount = %s, want -0.001", line.Amount)
 	}
 }
 
@@ -330,15 +386,71 @@ func TestRate_UnknownModelRejected(t *testing.T) {
 	}
 }
 
+func TestRate_CustomMeterAndQuantityDivisor(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:     Meter("ai_transcription_seconds"),
+			Model:     ModelAllUsage,
+			Currency:  "EUR",
+			UnitPrice: dec("0.02"),
+			Config:    map[string]any{"rated_quantity_divisor": "60", "description": "AI transcription"},
+		}},
+		Usage: map[Meter]decimal.Decimal{Meter("ai_transcription_seconds"): dec("180")},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:ai_transcription_seconds")
+	if line.Description != "AI transcription" {
+		t.Errorf("description = %q, want AI transcription", line.Description)
+	}
+	if !line.Quantity.Equal(dec("3")) {
+		t.Errorf("quantity = %s, want 3", line.Quantity)
+	}
+	if !line.Amount.Equal(dec("0.06")) {
+		t.Errorf("amount = %s, want 0.06", line.Amount)
+	}
+}
+
+func TestRate_CodecMultiplierUsesMeterScopedBreakdown(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:     Meter("video_rendition_seconds"),
+			Model:     ModelCodecMultiplier,
+			Currency:  "EUR",
+			UnitPrice: dec("0.10"),
+			Config:    map[string]any{"codec_multipliers": map[string]any{"h264": 1.0, "av1": 3.0}},
+		}},
+		Usage: map[Meter]decimal.Decimal{Meter("video_rendition_seconds"): dec("240")},
+		Breakdowns: map[Meter]map[string]decimal.Decimal{
+			Meter("video_rendition_seconds"): {"h264": dec("120"), "av1": dec("60")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	h264 := findLine(t, res.UsageLines, "meter:video_rendition_seconds:codec:h264")
+	if !h264.Amount.Equal(dec("0.2")) {
+		t.Errorf("h264 amount = %s, want 0.2", h264.Amount)
+	}
+	av1 := findLine(t, res.UsageLines, "meter:video_rendition_seconds:codec:av1")
+	if !av1.Amount.Equal(dec("0.3")) {
+		t.Errorf("av1 amount = %s, want 0.3", av1.Amount)
+	}
+}
+
 func TestRate_Determinism(t *testing.T) {
 	in := Input{
 		Currency:  "EUR",
 		BasePrice: dec("79.00"),
 		Rules:     supporterRules(),
 		Usage: map[Meter]decimal.Decimal{
-			MeterDeliveredMinutes: dec("200000"),
-			MeterAverageStorageGB: dec("100"),
-			MeterAIGPUHours:       dec("12"),
+			MeterDeliveredMinutes:    dec("200000"),
+			MeterStorageGBSecondsCld: dec("360000"),
 		},
 	}
 	first, err := Rate(in)

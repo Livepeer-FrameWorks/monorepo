@@ -115,6 +115,17 @@ func TestConfirmInvoicePaymentUpdatesPendingIntent(t *testing.T) {
 	mock.ExpectExec("UPDATE purser.billing_invoices").
 		WithArgs(sqlmock.AnyArg(), "invoice-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("FROM purser.invoice_line_items li").
+		WithArgs("invoice-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}))
+	mock.ExpectQuery(`WITH storage_lines`).
+		WithArgs("invoice-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}))
 	mock.ExpectRollback()
 
 	cm := &CryptoMonitor{db: mockDB, logger: logrus.New()}

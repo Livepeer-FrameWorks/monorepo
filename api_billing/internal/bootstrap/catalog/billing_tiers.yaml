@@ -24,7 +24,7 @@
 #   pricing_rules: rated meter behaviors. One per (meter, tier).
 #     model: tiered_graduated -- (qty - included_quantity) * unit_price
 #     model: all_usage        -- qty * unit_price
-#     model: codec_multiplier -- per-codec processing fee using config.codec_multipliers
+#     model: codec_multiplier -- processing fee using config.codec_multipliers keyed by codec or process:codec
 #     unit_price stored as string for decimal precision.
 #
 #   features: opaque feature flags consumed by the application layer.
@@ -60,13 +60,9 @@ tiers:
         model: tiered_graduated
         included_quantity: 0
         unit_price: "0.00055"
-      - meter: average_storage_gb
+      - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.035"
-      - meter: ai_gpu_hours
-        model: tiered_graduated
-        included_quantity: 0
-        unit_price: "1.50"
     tier_level: 0
     is_enterprise: false
     is_default_prepaid: true
@@ -98,7 +94,7 @@ tiers:
       dvr_max_entries: 600
       dvr_allow_cluster_extension: false
       # storage_limit_gb is the hard runtime cap on current durable bytes.
-      # The matching pricing rule (average_storage_gb included_quantity: 10)
+      # The matching pricing rule (storage_gb_seconds_cold included_quantity: 7200)
       # is for invoice-line visibility only — billing is time-averaged, this
       # entitlement is point-in-time. New durable writes (recordings, VOD
       # uploads, clip exports) are rejected once a tenant's current artifact
@@ -113,13 +109,12 @@ tiers:
         model: tiered_graduated
         included_quantity: 10000
         unit_price: "0"
-      - meter: average_storage_gb
+      - meter: storage_gb_seconds_cold
         model: tiered_graduated
-        included_quantity: 10
-        unit_price: "0"
-      - meter: ai_gpu_hours
-        model: tiered_graduated
-        included_quantity: 0
+        # 7200 GiB-hours = 10 GiB held continuously for 30 days. The rating
+        # engine subtracts included_quantity from GiB-hours (after the
+        # GiB-seconds → GiB-hour conversion), so this value is in GiB-hours.
+        included_quantity: 7200
         unit_price: "0"
     tier_level: 1
     is_enterprise: false
@@ -130,7 +125,7 @@ tiers:
 
   - tier_name: supporter
     display_name: Supporter
-    description: 120K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.
+    description: 120K delivered mins, hosted LB, custom subdomain. ~100-300 viewers.
     base_price: 79.00
     currency: EUR
     billing_period: monthly
@@ -154,13 +149,9 @@ tiers:
         model: tiered_graduated
         included_quantity: 120000
         unit_price: "0.00055"
-      - meter: average_storage_gb
+      - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.035"
-      - meter: ai_gpu_hours
-        model: tiered_graduated
-        included_quantity: 10
-        unit_price: "1.50"
     tier_level: 2
     is_enterprise: false
     is_default_prepaid: false
@@ -170,7 +161,7 @@ tiers:
 
   - tier_name: developer
     display_name: Developer
-    description: 500K delivered mins, 50 GPU-hrs (priority), team features, advanced analytics. ~500-1K viewers.
+    description: 500K delivered mins, team features, advanced analytics. ~500-1K viewers.
     base_price: 249.00
     currency: EUR
     billing_period: monthly
@@ -194,13 +185,9 @@ tiers:
         model: tiered_graduated
         included_quantity: 500000
         unit_price: "0.00052"
-      - meter: average_storage_gb
+      - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.030"
-      - meter: ai_gpu_hours
-        model: tiered_graduated
-        included_quantity: 50
-        unit_price: "1.50"
     tier_level: 3
     is_enterprise: false
     is_default_prepaid: false
@@ -210,7 +197,7 @@ tiers:
 
   - tier_name: production
     display_name: Production
-    description: 2M delivered mins, 250 GPU-hrs, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.
+    description: 2M delivered mins, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.
     base_price: 999.00
     currency: EUR
     billing_period: monthly
@@ -236,13 +223,9 @@ tiers:
         model: tiered_graduated
         included_quantity: 2000000
         unit_price: "0.00050"
-      - meter: average_storage_gb
+      - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.025"
-      - meter: ai_gpu_hours
-        model: tiered_graduated
-        included_quantity: 250
-        unit_price: "1.50"
     tier_level: 4
     is_enterprise: false
     is_default_prepaid: false

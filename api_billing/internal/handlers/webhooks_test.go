@@ -194,6 +194,17 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	mock.ExpectExec(`UPDATE purser\.billing_invoices[\s\S]*COALESCE\(SUM[\s\S]*currency = i\.currency[\s\S]*>= i\.amount`).
 		WithArgs(sqlmock.AnyArg(), "invoice-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`FROM purser\.invoice_line_items li`).
+		WithArgs("invoice-2").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "cluster_id", "cluster_owner_tenant_id", "operator_credit_cents", "platform_fee_cents", "currency", "period_start", "period_end",
+		}))
+	mock.ExpectQuery(`WITH storage_lines`).
+		WithArgs("invoice-2").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "storage_provider_tenant_id", "storage_provider_cluster_id", "storage_backend",
+			"usage_type", "currency", "period_start", "period_end", "allocated_gross_cents",
+		}))
 	mock.ExpectCommit()
 	mock.ExpectQuery(`SELECT bi\.tenant_id, bi\.amount, bi\.currency, ts\.billing_email`).
 		WithArgs("invoice-2").

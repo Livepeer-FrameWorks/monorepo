@@ -548,6 +548,7 @@ message MistTrigger {
     FederationEventData federation_event_data = 36;
     StreamProcessTrigger stream_process = 38;
     ClientLifecycleBatch client_lifecycle_batch = 39;
+    RawMistWebhookTrigger raw_mist_webhook = 40;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -571,6 +572,15 @@ message MistTrigger {
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
+}
+
+// RawMistWebhookTrigger preserves a final/accounting Mist webhook that
+// Helmsman could not parse into its typed protobuf payload. It exists so
+// final triggers are still durably journaled and operator-visible instead
+// of being acknowledged and lost when the local parser lags MistServer.
+message RawMistWebhookTrigger {
+  bytes payload_raw = 1;
+  string parse_error = 2;
 }
 
 message MistTriggerResponse {
@@ -637,8 +647,22 @@ message StorageSnapshot {
   optional string location = 4;
   optional NodeCapabilities capabilities = 5;
   repeated TenantStorageUsage usage = 6;
-  // hot = node-local cache, cold = S3 (frozen) totals
+  // hot = node-local cache (operational by default), cold = S3 (frozen,
+  // rated by default). See docs/architecture/meter-contracts.md.
   optional string storage_scope = 7;
+
+  // Provider attribution for marketplace settlement. The customer's
+  // `tenant_id` on TenantStorageUsage is the *usage* tenant. These
+  // fields identify who owns the underlying *storage capacity*:
+  //   - cold/S3 snapshots emitted by Foghorn: provider = the platform
+  //     tenant operating the S3 bucket (typically frameworks).
+  //   - hot edge snapshots: provider = the cluster/node owner; on the
+  //     marketplace this may be a third-party operator, not frameworks.
+  // Customer billing rates the usage tenant; marketplace settlement uses
+  // these provider dimensions to route payouts/credits to the capacity owner.
+  optional string storage_provider_tenant_id = 8;
+  optional string storage_provider_cluster_id = 9;
+  optional string storage_backend = 10; // 's3' | 'edge_disk' | 'r2' | 'gcs' | 'unknown'
 }
 
 message TenantStorageUsage {
@@ -1313,6 +1337,26 @@ message ViewerDisconnectTrigger {
   optional GeoBucket client_bucket = 16;
   optional GeoBucket node_bucket = 17;
   optional string stream_id = 18; // Enriched by Foghorn (UUID)
+
+  // MistServer USER_END breakdown arrays (preserved from
+  // src/session.cpp's emission of streamSummary / connectorSummary /
+  // hostSummary alongside streamTimes / connectorTimes / hostTimes).
+  // For multi-stream sessions the scalar `stream_name`, `connector`,
+  // and `host` fields above carry the comma-joined summary string;
+  // these arrays expose the actual per-element seconds so downstream
+  // attribution can split a single session across the streams /
+  // connectors / hosts it touched.
+  repeated SessionTimeShare stream_times = 19;
+  repeated SessionTimeShare connector_times = 20;
+  repeated SessionTimeShare host_times = 21;
+}
+
+// SessionTimeShare is one (name, seconds) entry from a MistServer
+// USER_END breakdown array. `name` is the stream / connector / host
+// identifier; `seconds` is the time the viewer spent on it.
+message SessionTimeShare {
+  string name = 1;
+  uint32 seconds = 2;
 }
 
 message StreamBufferTrigger {
@@ -2405,8 +2449,8 @@ message OrchestratorTranscodeOutcome {
 }
 
 // Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
-// separate because pricing meters and consumers differ (GPU-hour vs delivered
-// minutes are not interchangeable).
+// separate because pricing meters and consumers differ — AI billing is in
+// pilot and tracked under the processing meter contract, not delivered minutes.
 message OrchestratorAIOutcome {
   string orch_addr = 1;
   string orch_url = 2;

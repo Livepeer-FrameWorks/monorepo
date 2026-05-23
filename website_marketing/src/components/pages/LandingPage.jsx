@@ -153,7 +153,7 @@ const LandingPage = () => {
 
   const paidPlanHighlights = [
     "Custom subdomains and hosted load balancers",
-    "Reserved GPU hours and bandwidth pools",
+    "Reserved processing capacity and bandwidth pools",
     "Team collaboration and advanced analytics",
     "Priority support with 24/7 options",
   ];
@@ -201,7 +201,7 @@ const LandingPage = () => {
       price: "€50+",
       period: "/month",
       description:
-        "GPU-intensive features like AI processing and multi-stream compositing, plus hosted services and enterprise support.",
+        "Advanced processing like AI workloads and multi-stream compositing, plus hosted services and enterprise support.",
       features: paidPlanHighlights,
       ctaType: "internal",
       ctaLabel: "Compare paid tiers",
@@ -752,7 +752,7 @@ const LandingPage = () => {
                     Pricing
                   </>
                 }
-                subtitle="Start free with self-hosting. Upgrade for GPU features, hosted services, and enterprise support when you need more."
+                subtitle="Start free with self-hosting. Upgrade for advanced processing, hosted services, and enterprise support when you need more."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

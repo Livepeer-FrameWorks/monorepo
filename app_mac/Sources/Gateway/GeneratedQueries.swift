@@ -187,7 +187,7 @@ enum GQL {
     streamHours
     egressGb
     peakBandwidthMbps
-    averageStorageGb
+    displayStorageGb
     # Per-codec breakdown: Livepeer
     livepeerH264Seconds
     livepeerVp9Seconds
@@ -583,75 +583,6 @@ enum GQL {
   }
   """
 
-  static let UsageSummaryFields = """
-  fragment UsageSummaryFields on UsageSummary {
-    clusterId
-    period
-    periodStart
-    periodEnd
-    timestamp
-    granularity
-    # Flow metrics
-    streamHours
-    egressGb
-    peakBandwidthMbps
-    # Storage
-    averageStorageGb
-    # Per-codec breakdown: Livepeer (external gateway)
-    livepeerH264Seconds
-    livepeerVp9Seconds
-    livepeerAv1Seconds
-    livepeerHevcSeconds
-    # Per-codec breakdown: Native AV (local processing)
-    nativeAvH264Seconds
-    nativeAvVp9Seconds
-    nativeAvAv1Seconds
-    nativeAvHevcSeconds
-    nativeAvAacSeconds
-    nativeAvOpusSeconds
-    # Viewer metrics
-    totalStreams
-    totalViewers
-    viewerHours
-    maxViewers
-    uniqueUsers
-    # Segment/stream counts
-    livepeerSegmentCount
-    livepeerUniqueStreams
-    nativeAvSegmentCount
-    nativeAvUniqueStreams
-    # Geo enrichment
-    uniqueCountries
-    uniqueCities
-    geoBreakdown {
-      countryCode
-      viewerCount
-      viewerHours
-      egressGb
-    }
-    # Storage lifecycle - artifact counts
-    clipsCreated
-    clipsDeleted
-    dvrCreated
-    dvrDeleted
-    vodCreated
-    vodDeleted
-    # Storage - hot (bytes)
-    clipBytes
-    dvrBytes
-    vodBytes
-    # Storage - cold/frozen (bytes)
-    frozenClipBytes
-    frozenDvrBytes
-    frozenVodBytes
-    # Freeze/defrost operations
-    freezeCount
-    freezeBytes
-    defrostCount
-    defrostBytes
-  }
-  """
-
   static let ValidationErrorFields = """
   fragment ValidationErrorFields on ValidationError {
     __typename
@@ -975,7 +906,7 @@ enum GQL {
   """
 
   static let GetBillingStatus = """
-  # Fetch complete billing status including current tier, subscription, and usage summary
+  # Fetch billing status, live usage, and the current invoice preview.
   query GetBillingStatus {
     billingStatus {
       billingStatus
@@ -1044,9 +975,6 @@ enum GQL {
         dueDate
         periodStart
         periodEnd
-        usageSummary {
-          ...UsageSummaryFields
-        }
         lineItems {
           lineKey
           meter

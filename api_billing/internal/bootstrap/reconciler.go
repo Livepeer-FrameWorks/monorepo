@@ -377,7 +377,7 @@ func reconcileTierPricingRules(ctx context.Context, exec DBTX, tierID, tierCurre
 
 func validateCatalogPricingRule(rule CatalogPricingRule, tierCurrency string) error {
 	if !rating.ValidMeter(rating.Meter(rule.Meter)) {
-		return fmt.Errorf("pricing rule meter %q is not supported", rule.Meter)
+		return fmt.Errorf("pricing rule meter %q is invalid", rule.Meter)
 	}
 	if !rating.ValidModel(rating.Model(rule.Model)) {
 		return fmt.Errorf("pricing rule %q model %q is not supported", rule.Meter, rule.Model)

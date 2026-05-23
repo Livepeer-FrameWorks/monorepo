@@ -41,6 +41,7 @@ func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
 		true,                            // includeBasePrice
 		true,                            // baseProviderManaged — Stripe/Mollie owns the base
 		map[string]map[string]float64{}, // no usage → no resolver call
+		map[string]map[string]map[string]float64{}, // no codec breakdown
 	)
 	if err != nil {
 		t.Fatalf("rateInvoiceForTenant: %v", err)
@@ -76,6 +77,7 @@ func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
 		true,                            // includeBasePrice
 		false,                           // baseProviderManaged — Purser owns the base
 		map[string]map[string]float64{}, // no usage
+		map[string]map[string]map[string]float64{}, // no codec breakdown
 	)
 	if err != nil {
 		t.Fatalf("rateInvoiceForTenant: %v", err)

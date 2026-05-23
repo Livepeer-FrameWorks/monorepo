@@ -29,6 +29,7 @@ var (
 type PurserMetrics struct {
 	BillingCalculations      *prometheus.CounterVec
 	UsageRecords             *prometheus.CounterVec
+	UsageQuarantine          *prometheus.CounterVec // labels: usage_type, reason
 	WebhookSignatureFailures *prometheus.CounterVec
 }
 

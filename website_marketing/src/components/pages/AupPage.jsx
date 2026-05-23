@@ -6,7 +6,7 @@ const rules = [
   "Do not upload, stream, or distribute unlawful, infringing, or abusive content.",
   "Do not probe, overload, or disrupt FrameWorks infrastructure, APIs, or other customers.",
   "Do not attempt to bypass security controls or access data that is not yours.",
-  "Respect shared beta resources—GPU and bandwidth allocations are provided on a fair-use basis.",
+  "Respect shared beta resources—processing and bandwidth allocations are provided on a fair-use basis.",
   "Do not re-sell or share accounts without written permission.",
 ];
 

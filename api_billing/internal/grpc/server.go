@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
+	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/tieraccess"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -721,10 +722,13 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 }
 
 // loadStoragePricing returns the tenant's marginal storage pricing for the
-// average_storage_gb meter. Returns nil when the tier has no rule. Drives the
-// per-asset cost projection on the storage browser.
+// customer-facing cold (S3) storage product. Returns nil when the tier has
+// no rule. Drives the per-asset cost projection on the storage browser.
+// Both unit_price and included_quantity are in GiB-hours — the rating engine
+// converts GiB-seconds → GiB-hours via toRatedUnits before subtracting the
+// included allowance, so the catalog and the wire are in the same unit.
 func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *pb.StoragePricing {
-	const meter = "average_storage_gb"
+	const meter = "storage_gb_seconds_cold"
 	var (
 		included  float64
 		unitPrice float64
@@ -752,10 +756,10 @@ func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *p
 		return nil
 	}
 	return &pb.StoragePricing{
-		IncludedGb:          included,
-		UnitPricePerGbMonth: unitPrice,
-		Currency:            currency,
-		Model:               model,
+		IncludedGbHours:    included,
+		UnitPricePerGbHour: unitPrice,
+		Currency:           currency,
+		Model:              model,
 	}
 }
 
@@ -820,20 +824,15 @@ func resolveCurrentPeriod(start, end sql.NullTime, now time.Time) (time.Time, ti
 }
 
 // computeAllowances loads the tenant's tier pricing rule for delivered_minutes
-// and the corresponding current-period viewer_hours usage, returning a single
-// allowance snapshot. delivered_minutes is a derived meter: usage_records
-// stores viewer_hours, and the rating engine multiplies by 60 at rate time
-// (see api_billing/internal/handlers/rating_inputs.go and cluster_rating.go).
-// The allowance check must read from the same source — querying
-// usage_type='delivered_minutes' always returns zero.
+// and the corresponding current-period usage, returning a single allowance
+// snapshot.
 //
 // is_free_tier is set from the tier identity (tier_name == 'free'), not from
 // the meter's unit_price. A paid tier with a coincidentally zero-priced meter
 // is not "free" for admission purposes.
 //
-// v1 scope: delivered_minutes only — surfaced via
-// GetTenantBillingStatusResponse.Allowances so Foghorn PUSH_REWRITE can apply
-// load-aware admission without a second RPC.
+// Surfaced via GetTenantBillingStatusResponse.Allowances so Foghorn
+// PUSH_REWRITE can apply load-aware admission without a second RPC.
 func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*pb.MeterAllowance {
 	const meter = "delivered_minutes"
 
@@ -861,24 +860,39 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 		return nil
 	}
 
-	var viewerHours float64
+	var used float64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(usage_value), 0)::double precision
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND usage_type = 'viewer_hours'
-		  AND period_start < $3
-		  AND period_end > $2
-	`, tenantID, periodStart, periodEnd).Scan(&viewerHours); err != nil {
+		SELECT COALESCE(SUM(value), 0)::double precision
+		FROM (
+			SELECT usage_value::double precision AS value
+			FROM purser.usage_records
+			WHERE tenant_id = $1
+			  AND usage_type = 'delivered_minutes'
+			  AND value_kind = 'delta'
+			  AND granularity = 'minute_5'
+			  AND period_start < $3
+			  AND period_end > $2
+
+			UNION ALL
+
+			SELECT delta_value::double precision AS value
+			FROM purser.usage_adjustments
+			WHERE tenant_id = $4
+			  AND usage_type = 'delivered_minutes'
+			  AND value_kind = 'correction_delta'
+			  AND status = 'applied'
+			  AND period_start < $6
+			  AND period_end > $5
+		) allowance_usage
+	`, tenantID, periodStart, periodEnd, tenantID, periodStart, periodEnd).Scan(&used); err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"meter":     meter,
 			"error":     err,
-		}).Warn("Failed to sum current-period viewer_hours for delivered-minute allowance")
+		}).Warn("Failed to sum current-period delivered_minutes for allowance")
 		return nil
 	}
 
-	used := viewerHours * 60
 	remaining := included - used
 	if remaining < 0 {
 		remaining = 0
@@ -992,7 +1006,8 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 		return nil, status.Errorf(codes.InvalidArgument, "invalid cursor: %v", err)
 	}
 
-	// Build WHERE clause
+	// Build WHERE clause over the user-facing canonical usage surface:
+	// minute_5 delta rows plus applied correction deltas.
 	args := []any{tenantID}
 	whereClause := "WHERE tenant_id = $1"
 	argIdx := 2
@@ -1037,7 +1052,18 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	// Get records with keyset pagination (including usage_details)
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, cluster_id, usage_type, usage_value, usage_details, created_at, period_start, period_end, granularity
-		FROM purser.usage_records
+		FROM (
+			SELECT id, tenant_id, cluster_id, usage_type, usage_value, usage_details, created_at, period_start, period_end, granularity
+			FROM purser.usage_records
+			WHERE value_kind = 'delta' AND granularity = 'minute_5'
+
+			UNION ALL
+
+			SELECT id, tenant_id, NULLIF(cluster_id, '') AS cluster_id, usage_type, delta_value AS usage_value,
+			       details AS usage_details, created_at, period_start, period_end, 'minute_5' AS granularity
+			FROM purser.usage_adjustments
+			WHERE status = 'applied' AND value_kind = 'correction_delta'
+		) usage_surface
 		%s
 		ORDER BY %s %s, id %s
 		LIMIT $%d
@@ -1061,8 +1087,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 
 		err := rows.Scan(&rec.Id, &rec.TenantId, &clusterID, &rec.UsageType, &rec.UsageValue, &usageDetailsBytes, &createdAt, &periodStart, &periodEnd, &granularity)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan usage record")
-			continue
+			return nil, status.Errorf(codes.Internal, "scan usage record: %v", err)
 		}
 
 		if clusterID.Valid {
@@ -1088,6 +1113,9 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 		}
 
 		records = append(records, &rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate usage records: %v", err)
 	}
 
 	// Determine pagination info
@@ -1132,7 +1160,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	return resp, nil
 }
 
-// GetUsageAggregates returns rollup-backed usage aggregates for charts
+// GetUsageAggregates rolls canonical 5-minute usage_records into chart buckets.
 func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageAggregatesRequest) (*pb.GetUsageAggregatesResponse, error) {
 	tenantID := req.GetTenantId()
 	ctxTenantID := middleware.GetTenantID(ctx)
@@ -1158,8 +1186,17 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	if granularity == "" {
 		granularity = "daily"
 	}
+	var bucketExpr, bucketInterval string
 	switch granularity {
-	case "hourly", "daily", "monthly":
+	case "hourly":
+		bucketExpr = "date_trunc('hour', period_start)"
+		bucketInterval = "INTERVAL '1 hour'"
+	case "daily":
+		bucketExpr = "date_trunc('day', period_start)"
+		bucketInterval = "INTERVAL '1 day'"
+	case "monthly":
+		bucketExpr = "date_trunc('month', period_start)"
+		bucketInterval = "INTERVAL '1 month'"
 	default:
 		return nil, status.Error(codes.InvalidArgument, "invalid granularity")
 	}
@@ -1167,21 +1204,51 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	start := req.GetTimeRange().GetStart().AsTime()
 	end := req.GetTimeRange().GetEnd().AsTime()
 
-	whereClause := "WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2 AND granularity = $4"
-	args := []any{tenantID, start, end, granularity}
-	argIdx := 5
+	whereClause := "WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2"
+	args := []any{tenantID, start, end}
+	argIdx := 4
 
 	if len(req.GetUsageTypes()) > 0 {
 		whereClause += fmt.Sprintf(" AND usage_type = ANY($%d)", argIdx)
 		args = append(args, pq.Array(req.GetUsageTypes()))
+		argIdx++
 	}
+	granularityArgIdx := argIdx
 
 	query := fmt.Sprintf(`
-		SELECT usage_type, period_start, period_end, usage_value, granularity
-		FROM purser.usage_records
-		%s
-		ORDER BY period_start ASC, usage_type ASC
-	`, whereClause)
+		WITH bucketed AS (
+			SELECT
+				usage_type,
+				%s AS bucket_start,
+				usage_value
+			FROM (
+				SELECT tenant_id, usage_type, usage_value, period_start, period_end
+				FROM purser.usage_records
+				WHERE value_kind = 'delta' AND granularity = 'minute_5'
+
+				UNION ALL
+
+				SELECT tenant_id, usage_type, delta_value AS usage_value, period_start, period_end
+				FROM purser.usage_adjustments
+				WHERE status = 'applied' AND value_kind = 'correction_delta'
+			) usage_surface
+			%s
+		)
+		SELECT
+			usage_type,
+			bucket_start AS period_start,
+			bucket_start + %s AS period_end,
+			CASE
+				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers')
+					THEN MAX(usage_value)
+				ELSE SUM(usage_value)
+			END AS usage_value,
+			$%d::text AS granularity
+		FROM bucketed
+		GROUP BY usage_type, bucket_start
+		ORDER BY bucket_start ASC, usage_type ASC
+	`, bucketExpr, whereClause, bucketInterval, granularityArgIdx)
+	args = append(args, granularity)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1195,7 +1262,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 		var usageValue float64
 		var periodStart, periodEnd sql.NullTime
 		if err := rows.Scan(&usageType, &periodStart, &periodEnd, &usageValue, &rowGranularity); err != nil {
-			continue
+			return nil, status.Errorf(codes.Internal, "scan usage aggregate: %v", err)
 		}
 		agg := &pb.UsageAggregate{
 			UsageType:   usageType,
@@ -1209,6 +1276,9 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 			agg.PeriodEnd = timestamppb.New(periodEnd.Time)
 		}
 		aggregates = append(aggregates, agg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate usage aggregates: %v", err)
 	}
 
 	return &pb.GetUsageAggregatesResponse{Aggregates: aggregates}, nil
@@ -1779,7 +1849,7 @@ func validatePricingOverrideRule(rule *pb.PricingRule) error {
 		return errors.New("rule is nil")
 	}
 	if !rating.ValidMeter(rating.Meter(rule.GetMeter())) {
-		return fmt.Errorf("unsupported meter %q", rule.GetMeter())
+		return fmt.Errorf("invalid meter %q", rule.GetMeter())
 	}
 	if rule.GetModel() != "" && !rating.ValidModel(rating.Model(rule.GetModel())) {
 		return fmt.Errorf("unsupported model %q", rule.GetModel())
@@ -1934,15 +2004,11 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		invoice.PeriodEnd = timestamppb.New(periodEnd.Time)
 	}
 
-	// Convert usage_details JSONB to protobuf Struct and typed fields
+	// Convert usage_details JSONB to protobuf Struct.
 	if len(usageDetailsBytes) > 0 {
 		var detailsMap map[string]any
 		if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
 			invoice.UsageDetails = mapToProtoStruct(detailsMap)
-			invoice.UsageSummary = parseUsageDetailsToSummary(detailsMap, invoice.TenantId, invoice.PeriodStart, invoice.PeriodEnd)
-			if invoice.UsageSummary != nil {
-				invoice.UsageSummary.GeoBreakdown = parseGeoBreakdown(detailsMap)
-			}
 		}
 	}
 	lineItems, lineErr := s.loadInvoiceLineItems(ctx, invoice.Id, invoice.TenantId)
@@ -2059,15 +2125,11 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 		if periodEnd.Valid {
 			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
 		}
-		// Convert usage_details JSONB to protobuf Struct and typed fields
+		// Convert usage_details JSONB to protobuf Struct.
 		if len(usageDetails) > 0 {
 			var details map[string]any
 			if json.Unmarshal(usageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
-				inv.UsageSummary = parseUsageDetailsToSummary(details, inv.TenantId, inv.PeriodStart, inv.PeriodEnd)
-				if inv.UsageSummary != nil {
-					inv.UsageSummary.GeoBreakdown = parseGeoBreakdown(details)
-				}
 			}
 		}
 		lineItems, lineErr := s.loadInvoiceLineItems(ctx, inv.Id, inv.TenantId)
@@ -2844,8 +2906,8 @@ func (s *PurserServer) GetPaymentMethods(ctx context.Context, req *pb.GetPayment
 	}, nil
 }
 
-// GetBillingStatus returns full billing status for a tenant including subscription,
-// tier, pending invoices, recent payments, and usage summary
+// GetBillingStatus returns subscription, tier, pending invoices, recent
+// payments, and available payment methods for a tenant.
 func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingStatusRequest) (*pb.BillingStatusResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -2869,12 +2931,6 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 	recentPayments, err := s.getRecentPayments(ctx, tenantID, 5)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get recent payments: %v", err)
-	}
-
-	// Get usage summary for current month
-	usageSummary, err := s.getCurrentMonthUsageSummary(ctx, tenantID)
-	if err != nil {
-		s.logger.WithError(err).Info("Failed to get usage summary")
 	}
 
 	// Calculate outstanding amount
@@ -2902,7 +2958,6 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 		Currency:          currency,
 		PendingInvoices:   pendingInvoices,
 		RecentPayments:    recentPayments,
-		UsageSummary:      usageSummary,
 		PaymentMethods:    s.getAvailablePaymentMethods(ctx),
 	}
 
@@ -3242,87 +3297,6 @@ func (s *PurserServer) getSubscriptionPeriod(ctx context.Context, tenantID strin
 	return periodStart, periodEnd
 }
 
-// getCurrentMonthUsageSummary gets aggregated usage for current billing period
-func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID string) (*pb.UsageSummary, error) {
-	now := time.Now()
-	periodStart, periodEnd := s.getSubscriptionPeriod(ctx, tenantID, now)
-
-	var streamHours, viewerHours, egressGb, peakBandwidthMbps, averageStorageGb float64
-	var livepeerH264, livepeerVp9, livepeerAv1, livepeerHevc float64
-	var nativeAvH264, nativeAvVp9, nativeAvAv1, nativeAvHevc, nativeAvAac, nativeAvOpus float64
-	var gpuHours float64
-	var totalStreams, totalViewers, maxViewers, uniqueUsers int32
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-			COALESCE(SUM(CASE WHEN usage_type = 'stream_hours' THEN usage_value ELSE 0 END), 0) as stream_hours,
-			COALESCE(SUM(CASE WHEN usage_type = 'viewer_hours' THEN usage_value ELSE 0 END), 0) as viewer_hours,
-			COALESCE(SUM(CASE WHEN usage_type = 'egress_gb' THEN usage_value ELSE 0 END), 0) as egress_gb,
-			COALESCE(MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END), 0) as peak_bandwidth_mbps,
-			COALESCE(AVG(CASE WHEN usage_type = 'average_storage_gb' THEN usage_value END), 0) as average_storage_gb,
-			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_h264_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_h264_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_vp9_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_vp9_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_av1_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_av1_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_hevc_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_hevc_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_h264_seconds' THEN usage_value ELSE 0 END), 0) as native_av_h264_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_vp9_seconds' THEN usage_value ELSE 0 END), 0) as native_av_vp9_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_av1_seconds' THEN usage_value ELSE 0 END), 0) as native_av_av1_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_hevc_seconds' THEN usage_value ELSE 0 END), 0) as native_av_hevc_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_aac_seconds' THEN usage_value ELSE 0 END), 0) as native_av_aac_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'native_av_opus_seconds' THEN usage_value ELSE 0 END), 0) as native_av_opus_seconds,
-			COALESCE(SUM(CASE WHEN usage_type = 'gpu_hours' THEN usage_value ELSE 0 END), 0) as gpu_hours,
-			COALESCE(MAX(CASE WHEN usage_type = 'total_streams' THEN usage_value ELSE 0 END), 0)::int as total_streams,
-			COALESCE(MAX(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
-			COALESCE(MAX(CASE WHEN usage_type = 'max_viewers' THEN usage_value ELSE 0 END), 0)::int as max_viewers,
-			COALESCE(MAX(CASE WHEN usage_type = 'unique_users' THEN usage_value ELSE 0 END), 0)::int as unique_users
-		FROM purser.usage_records
-		WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2
-	`, tenantID, periodStart, periodEnd).Scan(
-		&streamHours, &viewerHours, &egressGb, &peakBandwidthMbps, &averageStorageGb,
-		&livepeerH264, &livepeerVp9, &livepeerAv1, &livepeerHevc,
-		&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc, &nativeAvAac, &nativeAvOpus,
-		&gpuHours,
-		&totalStreams, &totalViewers, &maxViewers, &uniqueUsers,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	period := periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339)
-	granularity := "hourly"
-	if duration := periodEnd.Sub(periodStart); duration >= 28*24*time.Hour {
-		granularity = "monthly"
-	} else if duration >= 24*time.Hour {
-		granularity = "daily"
-	}
-
-	return &pb.UsageSummary{
-		TenantId:            tenantID,
-		Period:              period,
-		Granularity:         granularity,
-		StreamHours:         streamHours,
-		EgressGb:            egressGb,
-		PeakBandwidthMbps:   peakBandwidthMbps,
-		AverageStorageGb:    averageStorageGb,
-		LivepeerH264Seconds: livepeerH264,
-		LivepeerVp9Seconds:  livepeerVp9,
-		LivepeerAv1Seconds:  livepeerAv1,
-		LivepeerHevcSeconds: livepeerHevc,
-		NativeAvH264Seconds: nativeAvH264,
-		NativeAvVp9Seconds:  nativeAvVp9,
-		NativeAvAv1Seconds:  nativeAvAv1,
-		NativeAvHevcSeconds: nativeAvHevc,
-		NativeAvAacSeconds:  nativeAvAac,
-		NativeAvOpusSeconds: nativeAvOpus,
-		GpuHours:            gpuHours,
-		TotalStreams:        totalStreams,
-		TotalViewers:        totalViewers,
-		ViewerHours:         viewerHours,
-		MaxViewers:          maxViewers,
-		UniqueUsers:         uniqueUsers,
-	}, nil
-}
-
 // scanBillingAddress scans JSONB into BillingAddress proto
 func scanBillingAddress(data []byte) *pb.BillingAddress {
 	if len(data) == 0 {
@@ -3375,23 +3349,43 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		return nil, status.Error(codes.InvalidArgument, "start_date and end_date required")
 	}
 
-	// Query aggregated usage by type using precise timestamp boundaries.
-	// Aggregation must match invoice generation (jobs.go:generateMonthlyInvoices)
-	// or preview will disagree with the actual bill: AVG storage / MAX peak /
-	// SUM everything else.
+	// Aggregate canonical-meter deltas by cluster and usage_type. Cost
+	// previews must use the same cluster-aware pricing resolver as invoice
+	// finalization, otherwise marketplace/custom cluster pricing would
+	// preview one amount and invoice another.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT usage_type,
+		WITH usage_rows AS (
+			SELECT COALESCE(cluster_id, '') AS cluster_id,
+			       usage_type,
+			       usage_value AS value
+			FROM purser.usage_records
+			WHERE tenant_id = $1
+			  AND period_start < ($3::date + INTERVAL '1 day')
+			  AND period_end > $2::date
+			  AND value_kind = 'delta'
+			  AND granularity = 'minute_5'
+
+			UNION ALL
+
+			SELECT COALESCE(cluster_id, '') AS cluster_id,
+			       usage_type,
+			       delta_value AS value
+			FROM purser.usage_adjustments
+			WHERE tenant_id = $1
+			  AND period_start < ($3::date + INTERVAL '1 day')
+			  AND period_end > $2::date
+			  AND status = 'applied'
+			  AND value_kind = 'correction_delta'
+		)
+		SELECT cluster_id,
+		       usage_type,
 		       CASE
-		           WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
-		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
-		           ELSE SUM(usage_value)
+		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers') THEN MAX(value)
+		           ELSE SUM(value)
 		       END AS total
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND period_start < ($3::date + INTERVAL '1 day')
-		  AND period_end > $2::date
-		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
-		GROUP BY usage_type
+		FROM usage_rows
+		WHERE usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+		GROUP BY cluster_id, usage_type
 	`, tenantID, startDate, endDate)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -3399,16 +3393,97 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 	defer func() { _ = rows.Close() }()
 
 	usage := make(map[string]float64)
+	perClusterUsage := map[string]map[string]float64{}
 	for rows.Next() {
-		var usageType string
+		var clusterID, usageType string
 		var total float64
-		if scanErr := rows.Scan(&usageType, &total); scanErr != nil {
+		if scanErr := rows.Scan(&clusterID, &usageType, &total); scanErr != nil {
 			return nil, status.Errorf(codes.Internal, "scan usage row: %v", scanErr)
 		}
-		usage[usageType] = total
+		usage[usageType] += total
+		if perClusterUsage[clusterID] == nil {
+			perClusterUsage[clusterID] = map[string]float64{}
+		}
+		perClusterUsage[clusterID][usageType] = total
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return nil, status.Errorf(codes.Internal, "iterate usage rows: %v", rowsErr)
+	}
+
+	// Codec breakdowns live in usage_details.codec_seconds; group by cluster
+	// and meter so codec_multiplier pricing is applied under the same
+	// cluster pricing model as the parent media_seconds row.
+	perClusterCodecBreakdowns := map[string]map[string]map[string]float64{}
+	codecRows, codecErr := s.db.QueryContext(ctx, `
+		WITH usage_codec_rows AS (
+			SELECT COALESCE(ur.cluster_id, '') AS cluster_id,
+			       ur.usage_type,
+			       kv.key,
+			       kv.value::float8 AS seconds
+			FROM purser.usage_records ur
+			CROSS JOIN LATERAL jsonb_each_text(COALESCE(ur.usage_details->'codec_seconds', '{}'::jsonb)) AS kv(key, value)
+			WHERE ur.tenant_id = $1
+			  AND ur.period_start < ($3::date + INTERVAL '1 day')
+			  AND ur.period_end > $2::date
+			  AND ur.value_kind = 'delta'
+			  AND ur.granularity = 'minute_5'
+		),
+		adjustment_base AS (
+			SELECT COALESCE(ua.cluster_id, '') AS cluster_id,
+			       ua.usage_type,
+			       ua.delta_value::float8 AS seconds,
+			       NULLIF(COALESCE(ua.details #>> '{output_codec}', ua.details #>> '{natural_key,output_codec}'), '') AS output_codec,
+			       NULLIF(COALESCE(ua.details #>> '{process_type}', ua.details #>> '{natural_key,process_type}'), '') AS process_type
+			FROM purser.usage_adjustments ua
+			WHERE ua.tenant_id = $1
+			  AND ua.period_start < ($3::date + INTERVAL '1 day')
+			  AND ua.period_end > $2::date
+			  AND ua.status = 'applied'
+			  AND ua.value_kind = 'correction_delta'
+			  AND ua.usage_type = 'media_seconds'
+		),
+		adjustment_codec_rows AS (
+			SELECT cluster_id, usage_type, output_codec AS key, seconds
+			FROM adjustment_base
+			WHERE output_codec IS NOT NULL
+
+			UNION ALL
+
+			SELECT cluster_id, usage_type, process_type || ':' || output_codec AS key, seconds
+			FROM adjustment_base
+			WHERE output_codec IS NOT NULL AND process_type IS NOT NULL
+		)
+		SELECT cluster_id,
+		       usage_type,
+		       key,
+		       COALESCE(SUM(seconds), 0) AS seconds
+		FROM (
+			SELECT * FROM usage_codec_rows
+			UNION ALL
+			SELECT * FROM adjustment_codec_rows
+		) codec_rows
+		GROUP BY cluster_id, usage_type, key
+	`, tenantID, startDate, endDate)
+	if codecErr != nil {
+		return nil, status.Errorf(codes.Internal, "query codec breakdown: %v", codecErr)
+	}
+	defer func() { _ = codecRows.Close() }()
+	for codecRows.Next() {
+		var clusterID, usageType, key string
+		var seconds float64
+		if scanErr := codecRows.Scan(&clusterID, &usageType, &key, &seconds); scanErr != nil {
+			return nil, status.Errorf(codes.Internal, "scan codec breakdown: %v", scanErr)
+		}
+		if perClusterCodecBreakdowns[clusterID] == nil {
+			perClusterCodecBreakdowns[clusterID] = map[string]map[string]float64{}
+		}
+		if perClusterCodecBreakdowns[clusterID][usageType] == nil {
+			perClusterCodecBreakdowns[clusterID][usageType] = map[string]float64{}
+		}
+		perClusterCodecBreakdowns[clusterID][usageType][key] = seconds
+	}
+	if rowsErr := codecRows.Err(); rowsErr != nil {
+		return nil, status.Errorf(codes.Internal, "iterate codec breakdown: %v", rowsErr)
 	}
 
 	// Rate via the engine. Same path as monthly invoice / draft / prepaid;
@@ -3437,23 +3512,80 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		return resp, nil
 	}
 
-	in := buildRatingInputForUsage(usage, tier)
-	res, err := rating.Rate(in)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rate usage: %v", err)
-	}
 	// Preview line_items are metered only — base subscription is a fixed
 	// monthly fee separately surfaced via BaseAmount, not a per-period charge.
-	for _, line := range res.UsageLines {
-		resp.LineItems = append(resp.LineItems, lineItemToProto(line))
-		amount, _ := line.Amount.Float64()
-		if line.Meter != "" {
-			resp.Costs[string(line.Meter)] += amount
+	usageAmount := decimal.Zero
+	asOf := time.Now()
+	if parsedStart, parseErr := time.Parse("2006-01-02", startDate); parseErr == nil {
+		asOf = parsedStart
+	}
+	periodSuffix := asOf.Format("200601")
+	clusterIDs := make([]string, 0, len(perClusterUsage))
+	for clusterID := range perClusterUsage {
+		clusterIDs = append(clusterIDs, clusterID)
+	}
+	slices.Sort(clusterIDs)
+	for _, clusterID := range clusterIDs {
+		clusterUsage := perClusterUsage[clusterID]
+		var (
+			resolved   *pricing.ClusterPricing
+			resolveErr error
+		)
+		if clusterID == "" {
+			resolved = &pricing.ClusterPricing{
+				Model:              pricing.ModelTierInherit,
+				Kind:               pricing.KindPlatformOfficial,
+				Currency:           tier.Currency,
+				MeteredRules:       tier.Rules,
+				PricingSource:      pricing.SourceTier,
+				IsPlatformOfficial: true,
+			}
+		} else {
+			resolved, resolveErr = pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
+				DB:                s.db,
+				QM:                s.quartermasterClient,
+				ConsumingTenantID: tenantID,
+				ClusterID:         clusterID,
+				AsOf:              asOf,
+				TierRules:         tier.Rules,
+				TierCurrency:      tier.Currency,
+			})
+			if resolveErr != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "resolve cluster pricing for %s: %v", clusterID, resolveErr)
+			}
+		}
+		if resolved.Currency != resp.Currency {
+			return nil, status.Errorf(codes.FailedPrecondition, "cluster %s prices in %s but response currency is %s", clusterID, resolved.Currency, resp.Currency)
+		}
+		in := buildRatingInputForUsage(clusterUsage, perClusterCodecBreakdowns[clusterID], resolved.Currency, decimal.Zero, resolved.MeteredRules)
+		res, rateErr := rating.Rate(in)
+		if rateErr != nil {
+			return nil, status.Errorf(codes.Internal, "rate usage for cluster %s: %v", clusterID, rateErr)
+		}
+		for _, line := range res.UsageLines {
+			suffixed := line
+			if clusterID != "" {
+				suffixed.LineKey = clusterScopedLineKey(line.LineKey, clusterID, periodSuffix)
+			}
+			protoLine := lineItemToProto(suffixed)
+			if clusterID != "" {
+				protoLine.ClusterId = clusterID
+				protoLine.ClusterKind = string(resolved.Kind)
+				protoLine.PricingSource = string(resolved.PricingSource)
+				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, protoLine.ClusterKind)
+			}
+			resp.LineItems = append(resp.LineItems, protoLine)
+			amount, _ := suffixed.Amount.Float64()
+			if suffixed.Meter != "" {
+				resp.Costs[string(suffixed.Meter)] += amount
+			}
+			usageAmount = usageAmount.Add(suffixed.Amount)
 		}
 	}
-	resp.BaseAmount = res.BaseAmount.String()
-	resp.UsageAmount = res.UsageAmount.String()
-	resp.TotalCost, _ = res.UsageAmount.Float64() // = sum of line_items, matches Costs map
+	enrichLineItemClusterNames(ctx, s, resp.LineItems)
+	resp.BaseAmount = tier.BasePrice.String()
+	resp.UsageAmount = usageAmount.String()
+	resp.TotalCost, _ = usageAmount.Float64() // = sum of line_items, matches Costs map
 	return resp, nil
 }
 
@@ -3850,14 +3982,36 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 	}
 
 	pricingModel := req.GetPricingModel()
-	if pricingModel == "" {
-		pricingModel = "tier_inherit"
+	pricingModelProvided := pricingModel != ""
+	validModels := []string{"free_unmetered", "metered", "monthly", "tier_inherit", "custom"}
+	if pricingModelProvided && !slices.Contains(validModels, pricingModel) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pricing_model: %s", pricingModel)
 	}
 
-	// Validate pricing model
-	validModels := []string{"free_unmetered", "metered", "monthly", "tier_inherit", "custom"}
+	var existingModel string
+	var existingMeteredRates sql.NullString
+	existingPricing := false
+	err := s.db.QueryRowContext(ctx, `
+		SELECT pricing_model, metered_rates::text
+		FROM purser.cluster_pricing
+		WHERE cluster_id = $1
+	`, clusterID).Scan(&existingModel, &existingMeteredRates)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, status.Errorf(codes.Internal, "failed to read existing cluster pricing: %v", err)
+	default:
+		existingPricing = true
+	}
+	if !pricingModelProvided {
+		if existingPricing {
+			pricingModel = existingModel
+		} else {
+			pricingModel = "tier_inherit"
+		}
+	}
 	if !slices.Contains(validModels, pricingModel) {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pricing_model: %s", pricingModel)
+		return nil, status.Errorf(codes.FailedPrecondition, "existing cluster pricing has invalid pricing_model: %s", pricingModel)
 	}
 
 	// Build upsert query
@@ -3885,22 +4039,33 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 		allowFreeTier = *req.AllowFreeTier
 	}
 
-	// Marshal JSONB fields. Validate metered_rates shape at write time so
-	// the rating engine never sees a malformed config later (which would
-	// otherwise fail invoice rating with no per-cluster context).
+	// Marshal JSONB fields. Validate metered_rates at write time so the
+	// rating engine never sees a malformed or empty metered/custom config.
 	var meteredRatesBytes, defaultQuotasBytes []byte
+	var ratesMap map[string]any
 	if req.MeteredRates != nil {
-		ratesMap := req.MeteredRates.AsMap()
-		if validateErr := validateMeteredRatesShape(ratesMap, pricingModel); validateErr != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "metered_rates: %v", validateErr)
-		}
+		ratesMap = req.MeteredRates.AsMap()
 		marshaled, marshalErr := json.Marshal(ratesMap)
 		if marshalErr != nil {
 			return nil, status.Errorf(codes.Internal, "marshal metered_rates: %v", marshalErr)
 		}
 		meteredRatesBytes = marshaled
-	} else {
+	} else if existingPricing && (pricingModel == "metered" || pricingModel == "custom" || !pricingModelProvided) {
+		if existingMeteredRates.Valid && existingMeteredRates.String != "" {
+			if unmarshalErr := json.Unmarshal([]byte(existingMeteredRates.String), &ratesMap); unmarshalErr != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "existing metered_rates invalid JSON: %v", unmarshalErr)
+			}
+			meteredRatesBytes = []byte(existingMeteredRates.String)
+		}
+	}
+	if ratesMap == nil {
+		ratesMap = map[string]any{}
+	}
+	if meteredRatesBytes == nil {
 		meteredRatesBytes = []byte("{}")
+	}
+	if validateErr := pricing.ValidateMeteredRates(ratesMap, pricing.Model(pricingModel)); validateErr != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "metered_rates: %v", validateErr)
 	}
 	if req.DefaultQuotas != nil {
 		defaultQuotasBytes, _ = json.Marshal(req.DefaultQuotas.AsMap())
@@ -3910,7 +4075,7 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 
 	// Upsert cluster pricing
 	var pricingID string
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO purser.cluster_pricing (
 			cluster_id, pricing_model, base_price, currency,
 			required_tier_level, allow_free_tier, metered_rates, default_quotas,
@@ -3940,51 +4105,6 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 
 	// Return the updated pricing
 	return s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
-}
-
-// validateMeteredRatesShape rejects metered_rates JSON that the rating
-// engine would later choke on. The contract: each meter key maps to an
-// object with a numeric/string unit_price; optional model (defaults to
-// all_usage), included_quantity, config. metered/custom must have at
-// least one entry; tier_inherit/free_unmetered/monthly accept empty.
-func validateMeteredRatesShape(rates map[string]any, pricingModel string) error {
-	requiresRates := pricingModel == "metered" || pricingModel == "custom"
-	if requiresRates && len(rates) == 0 {
-		return fmt.Errorf("pricing_model %q requires at least one entry", pricingModel)
-	}
-	validMeters := map[string]bool{
-		"delivered_minutes":  true,
-		"average_storage_gb": true,
-		"ai_gpu_hours":       true,
-		"processing_seconds": true,
-	}
-	for meter, raw := range rates {
-		if !validMeters[meter] {
-			return fmt.Errorf("unsupported meter %q (allowed: delivered_minutes, average_storage_gb, ai_gpu_hours, processing_seconds)", meter)
-		}
-		row, ok := raw.(map[string]any)
-		if !ok {
-			return fmt.Errorf("meter %q must be an object with unit_price; got %T", meter, raw)
-		}
-		if _, hasPrice := row["unit_price"]; !hasPrice {
-			return fmt.Errorf("meter %q missing required unit_price", meter)
-		}
-		// unit_price accepts string or numeric.
-		switch v := row["unit_price"].(type) {
-		case string, float64, float32, int, int64:
-			// ok
-		default:
-			return fmt.Errorf("meter %q unit_price must be string or number; got %T", meter, v)
-		}
-		if model, ok := row["model"].(string); ok && model != "" {
-			switch model {
-			case "all_usage", "tiered_graduated", "codec_multiplier":
-			default:
-				return fmt.Errorf("meter %q model %q not supported (allowed: all_usage, tiered_graduated, codec_multiplier)", meter, model)
-			}
-		}
-	}
-	return nil
 }
 
 // ListClusterPricings returns pricing configs for clusters owned by a tenant
@@ -7522,50 +7642,6 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 	}, nil
 }
 
-// ============================================================================
-// INVOICE HELPERS - Parse usage_details and generate typed fields
-// ============================================================================
-
-// parseUsageDetailsToSummary extracts typed UsageSummary from usage_details JSON
-func parseUsageDetailsToSummary(usageDetails map[string]any, tenantID string, periodStart, periodEnd *timestamppb.Timestamp) *pb.UsageSummary {
-	if usageDetails == nil {
-		return nil
-	}
-
-	summary := &pb.UsageSummary{
-		TenantId:            tenantID,
-		StreamHours:         floatFromUsage(usageDetails, "stream_hours"),
-		EgressGb:            floatFromUsage(usageDetails, "egress_gb"),
-		PeakBandwidthMbps:   floatFromUsage(usageDetails, "peak_bandwidth_mbps"),
-		AverageStorageGb:    floatFromUsage(usageDetails, "average_storage_gb"),
-		LivepeerH264Seconds: floatFromUsage(usageDetails, "livepeer_h264_seconds"),
-		LivepeerVp9Seconds:  floatFromUsage(usageDetails, "livepeer_vp9_seconds"),
-		LivepeerAv1Seconds:  floatFromUsage(usageDetails, "livepeer_av1_seconds"),
-		LivepeerHevcSeconds: floatFromUsage(usageDetails, "livepeer_hevc_seconds"),
-		NativeAvH264Seconds: floatFromUsage(usageDetails, "native_av_h264_seconds"),
-		NativeAvVp9Seconds:  floatFromUsage(usageDetails, "native_av_vp9_seconds"),
-		NativeAvAv1Seconds:  floatFromUsage(usageDetails, "native_av_av1_seconds"),
-		NativeAvHevcSeconds: floatFromUsage(usageDetails, "native_av_hevc_seconds"),
-		NativeAvAacSeconds:  floatFromUsage(usageDetails, "native_av_aac_seconds"),
-		NativeAvOpusSeconds: floatFromUsage(usageDetails, "native_av_opus_seconds"),
-		GpuHours:            floatFromUsage(usageDetails, "gpu_hours"),
-		TotalStreams:        int32(floatFromUsage(usageDetails, "total_streams")),
-		TotalViewers:        int32(floatFromUsage(usageDetails, "total_viewers")),
-		ViewerHours:         floatFromUsage(usageDetails, "viewer_hours"),
-		MaxViewers:          int32(floatFromUsage(usageDetails, "max_viewers")),
-		UniqueUsers:         int32(floatFromUsage(usageDetails, "unique_users")),
-	}
-
-	if periodStart != nil && periodEnd != nil {
-		start := periodStart.AsTime()
-		end := periodEnd.AsTime()
-		summary.Period = start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339)
-		summary.Granularity = deriveGranularity(start, end)
-	}
-
-	return summary
-}
-
 // loadInvoiceLineItems reads persisted line items from purser.invoice_line_items.
 // New invoices always populate this table via the rating engine; an empty result
 // for an invoice is itself an integrity signal — the writer is supposed to
@@ -7667,82 +7743,4 @@ func pricingLabelFor(pricingSource, clusterKind string) string {
 	default:
 		return ""
 	}
-}
-
-// parseGeoBreakdown extracts CountryMetrics from usage_details
-func parseGeoBreakdown(usageDetails map[string]any) []*pb.CountryMetrics {
-	geoRaw, ok := usageDetails["geo_breakdown"]
-	if !ok {
-		return nil
-	}
-
-	geoList, ok := geoRaw.([]any)
-	if !ok {
-		return nil
-	}
-
-	var result []*pb.CountryMetrics
-	for _, item := range geoList {
-		geoMap, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		result = append(result, &pb.CountryMetrics{
-			CountryCode: stringFromUsage(geoMap, "country_code"),
-			ViewerCount: int32(floatFromUsage(geoMap, "viewer_count")),
-			ViewerHours: floatFromUsage(geoMap, "viewer_hours"),
-			EgressGb:    floatFromUsage(geoMap, "egress_gb"),
-		})
-	}
-	return result
-}
-
-func floatFromUsage(m map[string]any, key string) float64 {
-	if m == nil {
-		return 0
-	}
-	v, ok := m[key]
-	if !ok {
-		return 0
-	}
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int32:
-		return float64(val)
-	case int64:
-		return float64(val)
-	case json.Number:
-		f, _ := val.Float64()
-		return f
-	default:
-		return 0
-	}
-}
-
-func stringFromUsage(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func deriveGranularity(start, end time.Time) string {
-	duration := end.Sub(start)
-	if duration >= 28*24*time.Hour {
-		return "monthly"
-	}
-	if duration >= 24*time.Hour {
-		return "daily"
-	}
-	return "hourly"
 }

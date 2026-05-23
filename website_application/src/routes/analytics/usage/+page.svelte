@@ -14,7 +14,6 @@
     GetProcessingUsageStore,
     GetAPIUsageConnectionStore,
     BillingTierFieldsStore,
-    UsageSummaryFieldsStore,
     LiveUsageSummaryFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
@@ -43,7 +42,6 @@
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
-  const usageSummaryFragmentStore = new UsageSummaryFieldsStore();
   const liveUsageFragmentStore = new LiveUsageSummaryFieldsStore();
 
   // Types from Houdini
@@ -61,11 +59,12 @@
 
   interface AggregatedUsage {
     stream_hours: number;
+    ingress_gb: number;
     egress_gb: number;
     peak_bandwidth_mbps: number;
     total_streams: number;
     total_viewers: number;
-    peak_viewers: number;
+    max_viewers: number;
     period: string;
   }
 
@@ -76,11 +75,12 @@
 
   let usageData = $state<AggregatedUsage>({
     stream_hours: 0,
+    ingress_gb: 0,
     egress_gb: 0,
     peak_bandwidth_mbps: 0,
     total_streams: 0,
     total_viewers: 0,
-    peak_viewers: 0,
+    max_viewers: 0,
     period: "",
   });
 
@@ -93,21 +93,14 @@
 
   let invoicePreview = $derived(billingData?.invoicePreview ?? null);
 
-  // Unmask fragment data for usageSummary using get() pattern (from invoice preview)
-  let usageSummary = $derived(
-    billingData?.invoicePreview?.usageSummary
-      ? get(fragment(billingData.invoicePreview.usageSummary, usageSummaryFragmentStore))
-      : null
-  );
-
-  // Calculate total viewers for geo breakdown percentage (geoBreakdown is on UsageSummary)
-  let geoBreakdown = $derived(usageSummary?.geoBreakdown ?? []);
-  let geoTotalViewers = $derived(geoBreakdown.reduce((sum, c) => sum + c.viewerCount, 0));
-
   // Unmask live usage summary
   let liveUsage = $derived(
     billingData?.liveUsage ? get(fragment(billingData.liveUsage, liveUsageFragmentStore)) : null
   );
+
+  // Calculate total viewers for geo breakdown percentage from the live usage surface.
+  let geoBreakdown = $derived(liveUsage?.geoBreakdown ?? []);
+  let geoTotalViewers = $derived(geoBreakdown.reduce((sum, c) => sum + c.viewerCount, 0));
 
   function moneyNumber(value: unknown): number {
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -309,21 +302,45 @@
   let usageAggregateSeries = $derived.by(() => {
     const aggregates = $usageAggregatesStore.data?.usageAggregates ?? [];
 
-    const buildSeries = (usageType: string): UsageTrendPoint[] => {
+    const bucketSeconds = (
+      periodStart: string | Date | null | undefined,
+      periodEnd: string | Date | null | undefined
+    ) => {
+      if (!periodStart || !periodEnd) return 0;
+      const start = new Date(periodStart).getTime();
+      const end = new Date(periodEnd).getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+      return (end - start) / 1000;
+    };
+
+    const buildSeries = (
+      usageType: string,
+      mapValue: (
+        value: number,
+        entry: { periodStart?: string | Date | null; periodEnd?: string | Date | null }
+      ) => number = (value) => value
+    ): UsageTrendPoint[] => {
       return aggregates
         .filter((entry) => entry.usageType === usageType)
         .map((entry) => ({
           timestamp: entry.periodStart ?? entry.periodEnd ?? "",
-          viewers: entry.usageValue ?? 0,
+          viewers: mapValue(entry.usageValue ?? 0, entry),
         }))
         .filter((entry) => entry.timestamp)
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     };
 
     return {
-      streamHours: buildSeries("stream_hours"),
+      streamHours: buildSeries("stream_runtime_seconds").map((point) => ({
+        ...point,
+        viewers: point.viewers / 3600,
+      })),
+      ingressGb: buildSeries("ingress_gb"),
       egressGb: buildSeries("egress_gb"),
-      recordingGb: buildSeries("average_storage_gb"),
+      recordingGb: buildSeries("storage_gb_seconds_cold", (value, entry) => {
+        const seconds = bucketSeconds(entry.periodStart, entry.periodEnd);
+        return seconds > 0 ? value / seconds : 0;
+      }),
     };
   });
 
@@ -357,13 +374,14 @@
             timeRange: { start: range.start, end: range.end },
             granularity: aggregateGranularity,
             usageTypes: [
-              "stream_hours",
+              "stream_runtime_seconds",
+              "ingress_gb",
               "egress_gb",
-              "average_storage_gb",
+              "storage_gb_seconds_cold",
               "peak_bandwidth_mbps",
               "total_streams",
               "total_viewers",
-              "peak_viewers",
+              "max_viewers",
             ],
           },
         }),
@@ -412,8 +430,11 @@
         const aggregated = aggregates.reduce(
           (acc: AggregatedUsage, entry) => {
             switch (entry.usageType) {
-              case "stream_hours":
-                acc.stream_hours += entry.usageValue;
+              case "stream_runtime_seconds":
+                acc.stream_hours += entry.usageValue / 3600;
+                break;
+              case "ingress_gb":
+                acc.ingress_gb += entry.usageValue;
                 break;
               case "egress_gb":
                 acc.egress_gb += entry.usageValue;
@@ -424,8 +445,8 @@
               case "total_streams":
                 acc.total_streams = Math.max(acc.total_streams, entry.usageValue);
                 break;
-              case "peak_viewers":
-                acc.peak_viewers = Math.max(acc.peak_viewers, entry.usageValue);
+              case "max_viewers":
+                acc.max_viewers = Math.max(acc.max_viewers, entry.usageValue);
                 break;
               case "total_viewers":
                 acc.total_viewers = Math.max(acc.total_viewers, entry.usageValue);
@@ -435,11 +456,12 @@
           },
           {
             stream_hours: 0,
+            ingress_gb: 0,
             egress_gb: 0,
             peak_bandwidth_mbps: 0,
             total_streams: 0,
             total_viewers: 0,
-            peak_viewers: 0,
+            max_viewers: 0,
             period: `${range.days} days`,
           }
         );
@@ -448,8 +470,11 @@
         const aggregated = usageRecords.reduce(
           (acc: AggregatedUsage, record: UsageRecord) => {
             switch (record.usageType) {
-              case "stream_hours":
-                acc.stream_hours += record.usageValue;
+              case "stream_runtime_seconds":
+                acc.stream_hours += record.usageValue / 3600;
+                break;
+              case "ingress_gb":
+                acc.ingress_gb += record.usageValue;
                 break;
               case "egress_gb":
                 acc.egress_gb += record.usageValue;
@@ -460,19 +485,20 @@
               case "total_streams":
                 acc.total_streams = Math.max(acc.total_streams, record.usageValue);
                 break;
-              case "peak_viewers":
-                acc.peak_viewers = Math.max(acc.peak_viewers, record.usageValue);
+              case "max_viewers":
+                acc.max_viewers = Math.max(acc.max_viewers, record.usageValue);
                 break;
             }
             return acc;
           },
           {
             stream_hours: 0,
+            ingress_gb: 0,
             egress_gb: 0,
             peak_bandwidth_mbps: 0,
             total_streams: 0,
             total_viewers: 0,
-            peak_viewers: 0,
+            max_viewers: 0,
             period: `${range.days} days`,
           }
         );
@@ -689,16 +715,25 @@
             <DashboardMetricCard
               icon={RadioIcon}
               iconColor="text-success"
+              value={`${formatNumber(usageData.ingress_gb)} GB`}
+              valueColor="text-success"
+              label="Ingress"
+            />
+          </div>
+          <div>
+            <DashboardMetricCard
+              icon={RadioIcon}
+              iconColor="text-success"
               value={`${formatNumber(usageData.egress_gb)} GB`}
               valueColor="text-success"
-              label="Bandwidth Out"
+              label="Egress"
             />
           </div>
           <div>
             <DashboardMetricCard
               icon={UsersIcon}
               iconColor="text-accent-purple"
-              value={formatNumber(usageData.peak_viewers)}
+              value={formatNumber(usageData.max_viewers)}
               valueColor="text-accent-purple"
               label="Peak Viewers"
             />
@@ -715,7 +750,7 @@
         </GridSeam>
 
         <!-- Usage Trends -->
-        {#if usageAggregateSeries.streamHours.length > 0 || usageAggregateSeries.egressGb.length > 0 || usageAggregateSeries.recordingGb.length > 0}
+        {#if usageAggregateSeries.streamHours.length > 0 || usageAggregateSeries.ingressGb.length > 0 || usageAggregateSeries.egressGb.length > 0 || usageAggregateSeries.recordingGb.length > 0}
           <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
             <div class="slab-header">
               <div class="flex items-center gap-2">
@@ -737,25 +772,36 @@
                     />
                   </div>
                 {/if}
+                {#if usageAggregateSeries.ingressGb.length > 0}
+                  <div class="border border-border/30 bg-muted/10 p-3">
+                    <div class="text-xs text-muted-foreground mb-2">Ingress (GB)</div>
+                    <ViewerTrendChart
+                      data={usageAggregateSeries.ingressGb}
+                      height={180}
+                      seriesLabel="Ingress (GB)"
+                      valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                    />
+                  </div>
+                {/if}
                 {#if usageAggregateSeries.egressGb.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
-                    <div class="text-xs text-muted-foreground mb-2">Bandwidth (GB)</div>
+                    <div class="text-xs text-muted-foreground mb-2">Egress (GB)</div>
                     <ViewerTrendChart
                       data={usageAggregateSeries.egressGb}
                       height={180}
-                      seriesLabel="Bandwidth (GB)"
+                      seriesLabel="Egress (GB)"
                       valueFormatter={(value) => `${value.toFixed(1)} GB`}
                     />
                   </div>
                 {/if}
                 {#if usageAggregateSeries.recordingGb.length > 0}
                   <div class="border border-border/30 bg-muted/10 p-3">
-                    <div class="text-xs text-muted-foreground mb-2">Recording Storage (GB)</div>
+                    <div class="text-xs text-muted-foreground mb-2">Recording Storage (GiB)</div>
                     <ViewerTrendChart
                       data={usageAggregateSeries.recordingGb}
                       height={180}
-                      seriesLabel="Recording (GB)"
-                      valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                      seriesLabel="Recording (GiB)"
+                      valueFormatter={(value) => `${value.toFixed(1)} GiB`}
                     />
                   </div>
                 {/if}
@@ -963,7 +1009,7 @@
           </div>
 
           <!-- Billing Period Engagement Slab -->
-          {#if usageSummary}
+          {#if liveUsage}
             <div class="slab">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
@@ -987,27 +1033,25 @@
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Viewer Hours</span>
                     <span class="font-medium text-foreground"
-                      >{formatViewerHours(
-                        liveUsage?.viewerHours ?? usageSummary.viewerHours
-                      )}h</span
+                      >{formatViewerHours(liveUsage.viewerHours)}h</span
                     >
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Total Viewers</span>
                     <span class="font-medium text-foreground"
-                      >{formatNumber(usageSummary.totalViewers)}</span
+                      >{formatNumber(liveUsage.totalViewers)}</span
                     >
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Peak Viewers</span>
                     <span class="font-medium text-accent-purple"
-                      >{formatNumber(usageSummary.maxViewers)}</span
+                      >{formatNumber(liveUsage.maxViewers)}</span
                     >
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Unique Users</span>
                     <span class="font-medium text-foreground">
-                      {formatNumber(liveUsage?.uniqueUsers ?? usageSummary.uniqueUsers ?? 0)}
+                      {formatNumber(liveUsage.uniqueUsers ?? 0)}
                     </span>
                   </div>
                 </div>
@@ -1016,17 +1060,17 @@
 
             <!-- Processing Usage Slab -->
             {@const livepeerSeconds =
-              (liveUsage?.livepeerH264Seconds ?? usageSummary.livepeerH264Seconds ?? 0) +
-              (liveUsage?.livepeerVp9Seconds ?? usageSummary.livepeerVp9Seconds ?? 0) +
-              (liveUsage?.livepeerAv1Seconds ?? usageSummary.livepeerAv1Seconds ?? 0) +
-              (liveUsage?.livepeerHevcSeconds ?? usageSummary.livepeerHevcSeconds ?? 0)}
+              (liveUsage.livepeerH264Seconds ?? 0) +
+              (liveUsage.livepeerVp9Seconds ?? 0) +
+              (liveUsage.livepeerAv1Seconds ?? 0) +
+              (liveUsage.livepeerHevcSeconds ?? 0)}
             {@const nativeAvSeconds =
-              (liveUsage?.nativeAvH264Seconds ?? usageSummary.nativeAvH264Seconds ?? 0) +
-              (liveUsage?.nativeAvVp9Seconds ?? usageSummary.nativeAvVp9Seconds ?? 0) +
-              (liveUsage?.nativeAvAv1Seconds ?? usageSummary.nativeAvAv1Seconds ?? 0) +
-              (liveUsage?.nativeAvHevcSeconds ?? usageSummary.nativeAvHevcSeconds ?? 0) +
-              (liveUsage?.nativeAvAacSeconds ?? usageSummary.nativeAvAacSeconds ?? 0) +
-              (liveUsage?.nativeAvOpusSeconds ?? usageSummary.nativeAvOpusSeconds ?? 0)}
+              (liveUsage.nativeAvH264Seconds ?? 0) +
+              (liveUsage.nativeAvVp9Seconds ?? 0) +
+              (liveUsage.nativeAvAv1Seconds ?? 0) +
+              (liveUsage.nativeAvHevcSeconds ?? 0) +
+              (liveUsage.nativeAvAacSeconds ?? 0) +
+              (liveUsage.nativeAvOpusSeconds ?? 0)}
             {@const hasProcessingUsage = livepeerSeconds > 0 || nativeAvSeconds > 0}
             {#if hasProcessingUsage}
               <div class="slab">
@@ -1079,44 +1123,44 @@
                     {/if}
 
                     <!-- Per-codec breakdown -->
-                    {#if usageSummary}
+                    {#if liveUsage}
                       {@const codecData = [
                         {
                           codec: "H.264",
                           seconds:
-                            (usageSummary.livepeerH264Seconds ?? 0) +
-                            (usageSummary.nativeAvH264Seconds ?? 0),
+                            (liveUsage.livepeerH264Seconds ?? 0) +
+                            (liveUsage.nativeAvH264Seconds ?? 0),
                           color: "bg-blue-500",
                         },
                         {
                           codec: "VP9",
                           seconds:
-                            (usageSummary.livepeerVp9Seconds ?? 0) +
-                            (usageSummary.nativeAvVp9Seconds ?? 0),
+                            (liveUsage.livepeerVp9Seconds ?? 0) +
+                            (liveUsage.nativeAvVp9Seconds ?? 0),
                           color: "bg-purple-500",
                         },
                         {
                           codec: "AV1",
                           seconds:
-                            (usageSummary.livepeerAv1Seconds ?? 0) +
-                            (usageSummary.nativeAvAv1Seconds ?? 0),
+                            (liveUsage.livepeerAv1Seconds ?? 0) +
+                            (liveUsage.nativeAvAv1Seconds ?? 0),
                           color: "bg-green-500",
                         },
                         {
                           codec: "HEVC",
                           seconds:
-                            (usageSummary.livepeerHevcSeconds ?? 0) +
-                            (usageSummary.nativeAvHevcSeconds ?? 0),
+                            (liveUsage.livepeerHevcSeconds ?? 0) +
+                            (liveUsage.nativeAvHevcSeconds ?? 0),
                           color: "bg-orange-500",
                         },
                         {
                           codec: "AAC",
-                          seconds: usageSummary.nativeAvAacSeconds ?? 0,
+                          seconds: liveUsage.nativeAvAacSeconds ?? 0,
                           color: "bg-pink-500",
                         },
                         {
                           codec: "Opus",
-                          seconds: usageSummary.nativeAvOpusSeconds ?? 0,
+                          seconds: liveUsage.nativeAvOpusSeconds ?? 0,
                           color: "bg-cyan-500",
                         },
                       ].filter((c) => c.seconds > 0)}
@@ -1540,8 +1584,8 @@
           </div>
 
           <!-- Storage Activity Slab -->
-          {#if usageSummary || liveUsage}
-            {@const storageSource = usageSummary ?? liveUsage}
+          {#if liveUsage}
+            {@const storageSource = liveUsage}
             {@const hasStorageActivity =
               (storageSource?.clipsCreated ?? 0) > 0 ||
               (storageSource?.dvrCreated ?? 0) > 0 ||
@@ -1793,7 +1837,7 @@
           {/if}
 
           <!-- Geographic Distribution Slab (Full Table) -->
-          {#if usageSummary?.geoBreakdown && usageSummary.geoBreakdown.length > 0}
+          {#if liveUsage?.geoBreakdown && liveUsage.geoBreakdown.length > 0}
             <div class="slab col-span-full">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
@@ -1801,7 +1845,7 @@
                   <h3>Top Regions</h3>
                 </div>
                 <span class="text-xs text-muted-foreground">
-                  {usageSummary.uniqueCountries} countries, {usageSummary.uniqueCities} cities
+                  {liveUsage.uniqueCountries} countries, {liveUsage.uniqueCities} cities
                 </span>
               </div>
               <div class="slab-body--flush overflow-x-auto">
@@ -1818,7 +1862,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each usageSummary.geoBreakdown as country (country.countryCode)}
+                    {#each liveUsage.geoBreakdown as country (country.countryCode)}
                       {@const pct =
                         geoTotalViewers > 0 ? (country.viewerCount / geoTotalViewers) * 100 : 0}
                       <tr class="border-b border-border/30 hover:bg-muted/10">

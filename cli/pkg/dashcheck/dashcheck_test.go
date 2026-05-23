@@ -515,7 +515,8 @@ var sqlIgnoredTokens = lowerSet(
 	"select", "from", "where", "group", "by", "order", "limit", "as", "and", "or",
 	"is", "not", "null", "interval", "hour", "day", "final", "desc", "asc",
 	"count", "countif", "round", "avgif", "quantileif", "nullif", "coalesce",
-	"max", "min", "sum", "ifnull", "pow", "tostartofhour", "now",
+	"max", "min", "sum", "ifnull", "pow", "tostartofhour", "now", "todatetime",
+	"uniqexact", "quantile",
 )
 
 func stripSQLComments(content string) string {

@@ -49,12 +49,21 @@ func tierRulesEUR() []rating.Rule {
 			UnitPrice:        dec("0.00055"),
 		},
 		{
-			Meter:            rating.MeterAverageStorageGB,
+			Meter:            rating.MeterStorageGBSecondsHot,
 			Model:            rating.ModelTieredGraduated,
 			Currency:         "EUR",
 			IncludedQuantity: dec("100"),
 			UnitPrice:        dec("0.02"),
 		},
+	}
+}
+
+func TestRulesFromMeteredRatesRejectsMissingUnitPrice(t *testing.T) {
+	_, err := buildMeteredRules(map[string]any{
+		"delivered_minutes": map[string]any{"model": string(rating.ModelAllUsage)},
+	}, "EUR")
+	if err == nil {
+		t.Fatal("expected missing unit_price error")
 	}
 }
 
@@ -77,9 +86,8 @@ func expectHistoryRow(mock sqlmock.Sqlmock, clusterID, model, currency, basePric
 	return versionID
 }
 
-// TestEquivalence_TierInherit_NoHistoryRow asserts that for a platform-official
-// cluster with no cluster_pricing row, the resolver returns the tenant's tier
-// rules unchanged. This is the core legacy-compat invariant.
+// TestEquivalence_TierInherit_NoHistoryRow asserts that a platform-official
+// cluster with no cluster_pricing row is priced by the tenant's tier rules.
 func TestEquivalence_TierInherit_NoHistoryRow(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -208,7 +216,7 @@ func TestThirdParty_NoHistoryRow_FailsClosed(t *testing.T) {
 
 // TestEquivalence_TierInherit_RatingMatches is the CI-gated invariant: for a
 // tier_inherit cluster, the rating Result computed via the resolver path must
-// be identical to the legacy direct LoadEffectiveTier+Rate path. This locks
+// be identical to direct tier-only rating. This locks
 // in the "no behavior change for existing tenants" guarantee.
 func TestEquivalence_TierInherit_RatingMatches(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -240,11 +248,11 @@ func TestEquivalence_TierInherit_RatingMatches(t *testing.T) {
 	}
 
 	usage := map[rating.Meter]decimal.Decimal{
-		rating.MeterDeliveredMinutes: dec("250000"),
-		rating.MeterAverageStorageGB: dec("75"),
+		rating.MeterDeliveredMinutes:    dec("250000"),
+		rating.MeterStorageGBSecondsHot: dec("75"),
 	}
 
-	legacy, err := rating.Rate(rating.Input{
+	tierOnly, err := rating.Rate(rating.Input{
 		Currency:    "EUR",
 		BasePrice:   dec("19.99"),
 		Rules:       tierRules,
@@ -253,7 +261,7 @@ func TestEquivalence_TierInherit_RatingMatches(t *testing.T) {
 		PeriodEnd:   asOf.AddDate(0, 1, 0),
 	})
 	if err != nil {
-		t.Fatalf("legacy rate: %v", err)
+		t.Fatalf("tier-only rate: %v", err)
 	}
 
 	derived, err := rating.Rate(rating.Input{
@@ -268,19 +276,19 @@ func TestEquivalence_TierInherit_RatingMatches(t *testing.T) {
 		t.Fatalf("derived rate: %v", err)
 	}
 
-	if !legacy.TotalAmount.Equal(derived.TotalAmount) {
-		t.Errorf("TotalAmount diverges: legacy=%s derived=%s", legacy.TotalAmount, derived.TotalAmount)
+	if !tierOnly.TotalAmount.Equal(derived.TotalAmount) {
+		t.Errorf("TotalAmount diverges: tier-only=%s derived=%s", tierOnly.TotalAmount, derived.TotalAmount)
 	}
-	if !legacy.UsageAmount.Equal(derived.UsageAmount) {
-		t.Errorf("UsageAmount diverges: legacy=%s derived=%s", legacy.UsageAmount, derived.UsageAmount)
+	if !tierOnly.UsageAmount.Equal(derived.UsageAmount) {
+		t.Errorf("UsageAmount diverges: tier-only=%s derived=%s", tierOnly.UsageAmount, derived.UsageAmount)
 	}
-	if len(legacy.UsageLines) != len(derived.UsageLines) {
-		t.Fatalf("UsageLines length: legacy=%d derived=%d", len(legacy.UsageLines), len(derived.UsageLines))
+	if len(tierOnly.UsageLines) != len(derived.UsageLines) {
+		t.Fatalf("UsageLines length: tier-only=%d derived=%d", len(tierOnly.UsageLines), len(derived.UsageLines))
 	}
-	for i := range legacy.UsageLines {
-		l, d := legacy.UsageLines[i], derived.UsageLines[i]
+	for i := range tierOnly.UsageLines {
+		l, d := tierOnly.UsageLines[i], derived.UsageLines[i]
 		if l.LineKey != d.LineKey || !l.Amount.Equal(d.Amount) || !l.Quantity.Equal(d.Quantity) {
-			t.Errorf("line %d diverges:\n legacy=%+v\n derived=%+v", i, l, d)
+			t.Errorf("line %d diverges:\n tier-only=%+v\n derived=%+v", i, l, d)
 		}
 	}
 
@@ -578,12 +586,12 @@ func TestMonthly_AccessOnly(t *testing.T) {
 // TestZeroPricedProcessingEmitsLine is the regression test for the
 // self-hosted/free-transcoding visibility bug: zeroPricedRulesFromTier
 // must convert codec_multiplier to all_usage AND the writer must populate
-// Usage[processing_seconds] so the converted rule emits a line. Without
+// Usage[media_seconds] so the converted rule emits a line. Without
 // either change, free transcoding silently disappears from invoices.
 func TestZeroPricedProcessingEmitsLine(t *testing.T) {
 	tierRules := []rating.Rule{
 		{
-			Meter:     rating.MeterProcessingSeconds,
+			Meter:     rating.MeterMediaSeconds,
 			Model:     rating.ModelCodecMultiplier,
 			Currency:  "EUR",
 			UnitPrice: dec("0.001"),
@@ -601,14 +609,14 @@ func TestZeroPricedProcessingEmitsLine(t *testing.T) {
 	}
 
 	// Now drive the rating engine with the zeroed rule and a non-zero
-	// processing_seconds Usage value. The line MUST emit at $0.00 — that
+	// media_seconds Usage value. The line MUST emit at $0.00 — that
 	// is the customer-visible "self-hosted: 0.00" invariant.
 	res, err := rating.Rate(rating.Input{
 		Currency:  "EUR",
 		BasePrice: decimal.Zero,
 		Rules:     zeroed,
 		Usage: map[rating.Meter]decimal.Decimal{
-			rating.MeterProcessingSeconds: dec("3600"),
+			rating.MeterMediaSeconds: dec("3600"),
 		},
 	})
 	if err != nil {

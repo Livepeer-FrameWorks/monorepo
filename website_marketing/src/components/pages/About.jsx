@@ -61,7 +61,7 @@ const About = () => {
       summary:
         "FrameWorks ships the first public demo environment and onboarding flow in time for IBC Amsterdam.",
       points: [
-        "IBC showcase highlights CDN + hosted GPU pipelines with telemetry.",
+        "IBC showcase highlights CDN + hosted processing pipelines with telemetry.",
         "Sales-engineering loop; from demo interest into structured pilots.",
         "Partner roadmap aligned with MistServer + Livepeer field feedback captured during the conference.",
       ],
@@ -89,7 +89,7 @@ const About = () => {
         "Grow the core team, expand infrastructure regions, and deepen enterprise integrations.",
       points: [
         "Expand SRE and solutions engineering headcount to support multi-region customer rollouts.",
-        "Broaden GPU orchestration and AI automation capabilities.",
+        "Broaden advanced-processing orchestration and AI automation capabilities.",
         "Acquire ASN and expand the network across various data centers.",
       ],
     },
@@ -103,7 +103,7 @@ const About = () => {
         "Deliver a federated CDN and marketplace so operators can exchange bandwidth & compute.",
       points: [
         "Ensure the network is open & accessible, and lessen our role as the central gatekeeper.",
-        "Expose FrameWorks policy engine so operators trade bandwidth, GPU, and AI workloads securely.",
+        "Expose FrameWorks policy engine so operators trade bandwidth and processing workloads securely.",
         "Maintain public-domain licensing so any team can extend, self-host, and interoperate without friction.",
       ],
     },

@@ -88,6 +88,7 @@ func main() {
 	handlerMetrics := &handlers.PurserMetrics{
 		BillingCalculations:      metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
 		UsageRecords:             metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
+		UsageQuarantine:          metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
 		WebhookSignatureFailures: metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
 	}
 

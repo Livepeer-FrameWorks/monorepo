@@ -54,7 +54,7 @@ const freeTier = {
     "Full self-hosted stack, 10K delivered min/mo, 10 GB storage, 3 streams / 200 viewers, 7-day DVR",
   ],
   limitations: [
-    "No SLA during beta, no GPU hours for AI workloads, fair-use admission caps burst above quota",
+    "No SLA during beta, no advanced processing (AI workloads), fair-use admission caps burst above quota",
   ],
   badge: "No Surprise Bills",
   ctaLabel: "Start Free",
@@ -69,18 +69,10 @@ const paidTiers = [
     price: "€79",
     period: "/month",
     dailyCost: "~€2.63/day",
-    description:
-      "120K delivered minutes, 10 GPU-hours, hosted load balancer, and a custom subdomain.",
+    description: "120K delivered minutes, hosted load balancer, and a custom subdomain.",
     features: [
       <span key="delivery">
         120,000 delivered minutes included <InfoTooltip>Overage €0.00055/min</InfoTooltip>
-      </span>,
-      <span key="gpu">
-        10 GPU-hours for AI workloads{" "}
-        <InfoTooltip>
-          Live transcription, V2V, automated highlights. Overage €1.50/hr. Standard transcoding and
-          multiview compositing are bundled in delivered minutes.
-        </InfoTooltip>
       </span>,
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
@@ -101,18 +93,10 @@ const paidTiers = [
     price: "€249",
     period: "/month",
     dailyCost: "~€8.30/day",
-    description:
-      "500K delivered minutes, 50 GPU-hours with priority, team features, and advanced analytics.",
+    description: "500K delivered minutes, team features, and advanced analytics.",
     features: [
       <span key="delivery">
         500,000 delivered minutes included <InfoTooltip>Overage €0.00052/min</InfoTooltip>
-      </span>,
-      <span key="gpu">
-        50 GPU-hours for AI workloads (priority){" "}
-        <InfoTooltip>
-          Live transcription, V2V, automated highlights. Overage €1.50/hr. Standard transcoding and
-          multiview compositing are bundled in delivered minutes.
-        </InfoTooltip>
       </span>,
       "Team collaboration features",
       "Advanced analytics",
@@ -130,18 +114,10 @@ const paidTiers = [
     price: "€999",
     period: "/month",
     dailyCost: "~€33.30/day",
-    description:
-      "2M delivered minutes, 250 GPU-hours, SLA-backed 24/7 support, and dedicated capacity options.",
+    description: "2M delivered minutes, SLA-backed 24/7 support, and dedicated capacity options.",
     features: [
       <span key="delivery">
         2,000,000 delivered minutes included <InfoTooltip>Overage €0.00050/min</InfoTooltip>
-      </span>,
-      <span key="gpu">
-        250 GPU-hours for AI workloads{" "}
-        <InfoTooltip>
-          Live transcription, V2V, automated highlights. Overage €1.50/hr. Dedicated options quoted.
-          Standard transcoding and multiview compositing are bundled in delivered minutes.
-        </InfoTooltip>
       </span>,
       "SLA & 24/7 support",
       "Dedicated capacity options",
@@ -162,7 +138,7 @@ const enterpriseTier = {
   bullets: [
     "Custom feature development and white-label solutions",
     "Private deployments or co-managed operations with our engineers",
-    "Committed bandwidth and GPU pools with reserved capacity",
+    "Committed bandwidth and processing capacity with reserved capacity",
     "Custom SLAs with training, consulting, and on-call support",
     "Flexible billing arrangements tailored to your organization",
   ],
@@ -182,7 +158,7 @@ const payAsYouGo = {
   ],
 };
 
-const gpuFeatureMatrix = [
+const processingFeatureMatrix = [
   {
     feature: "Transcoding",
     description: "Real-time video transcoding to multiple formats and bitrates.",
@@ -196,7 +172,7 @@ const gpuFeatureMatrix = [
   {
     feature: "Live AI Processing",
     description:
-      "AI transcription, video analysis, automated highlights, and real-time V2V transformations. Metered against your GPU-hour allowance.",
+      "AI transcription, video analysis, automated highlights, and real-time V2V transformations. Pilot access — pricing finalized once the processing meter contract lands.",
     status: "pipeline",
     statusNote: "Internal and pilot workloads only — request access via Contact.",
     tiers: {
@@ -209,7 +185,7 @@ const gpuFeatureMatrix = [
   {
     feature: "Multi-stream compositing",
     description:
-      "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes — no separate GPU-hour charge.",
+      "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes.",
     status: "pipeline",
     statusNote: "Internal and pilot workloads only — request access via Contact.",
     tiers: {
@@ -235,13 +211,13 @@ const deploymentOptions = [
     tagline: "We run everything",
     tone: "accent",
     icon: CloudIcon,
-    summary: "Ingest, delivery, GPUs, and ops — fully managed.",
+    summary: "Ingest, delivery, processing, and ops — fully managed.",
     modal: {
       description:
-        "Let FrameWorks run ingest, delivery, observability, and GPU orchestration while your team focuses on product. You keep full visibility.",
+        "Let FrameWorks run ingest, delivery, observability, and advanced-processing orchestration while your team focuses on product. You keep full visibility.",
       bullets: [
         "SLO-backed operations with shared runbooks and direct-to-engineer escalation.",
-        "Managed load balancers, CDN federation, and GPU scheduling with per-tier usage breakdowns.",
+        "Managed load balancers, CDN federation, and advanced-processing scheduling with per-tier usage breakdowns.",
         "Service credits to expand into new regions, workloads, or codecs without retooling pipelines.",
       ],
     },
@@ -258,7 +234,7 @@ const deploymentOptions = [
         "Federate your POPs with FrameWorks so you can shift workloads between your sites and ours with one control plane and one set of dashboards.",
       bullets: [
         "Automatic failover and traffic steering with full audit trails and policy controls.",
-        "Unified dashboards for bandwidth, viewer load, GPU draw, and AI usage across every region.",
+        "Unified dashboards for bandwidth, viewer load, processing load, and AI usage across every region.",
         "Per-minute burst pricing with line-item dashboards for finance and network ops.",
       ],
     },
@@ -277,7 +253,7 @@ const deploymentOptions = [
       bullets: [
         "Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.",
         "Joint dashboards, runbooks, and on-call assistance without surrendering shell access.",
-        "Optional burst into hosted GPU, CDN, or orchestration capacity when traffic surges.",
+        "Optional burst into hosted processing, CDN, or orchestration capacity when traffic surges.",
       ],
     },
   },
@@ -293,7 +269,7 @@ const deploymentOptions = [
         "Design custom deployments alongside our engineers when you need dedicated capacity, compliance, and co-managed operations across regulated environments.",
       bullets: [
         "Security and compliance reviews aligned to your policies with artifact-ready evidence packs.",
-        "Custom SLAs, reserved GPU/edge pools, and direct engineer-to-engineer escalation.",
+        "Custom SLAs, reserved processing and edge pools, and direct engineer-to-engineer escalation.",
         "Automation, training, billing, and reporting tailored to your internal tooling and finance flows.",
       ],
     },
@@ -304,17 +280,17 @@ const faqs = [
   {
     question: "What does beta pricing include?",
     answer:
-      "Generous allowances, transparent overages, and shared GPU capacity. As we scale, pricing may adjust, but you keep the allowances you signed up for throughout beta.",
+      "Generous allowances, transparent overages, and shared processing capacity. As we scale, pricing may adjust, but you keep the allowances you signed up for throughout beta.",
   },
   {
     question: "Can I mix self-hosted and hosted workloads?",
     answer:
-      "Yes. Every tier includes self-hosting. Supporter and above add hosted load balancers and GPU capacity. You can operate your own edge while tapping FrameWorks or Livepeer compute on demand.",
+      "Yes. Every tier includes self-hosting. Supporter and above add hosted load balancers and advanced processing on demand. You can operate your own edge while tapping FrameWorks or Livepeer compute as you need it.",
   },
   {
     question: "When should I upgrade to Production?",
     answer:
-      "Upgrade once you have steady audiences, need dedicated GPU time, or require SLA-backed response. Production is tuned for 2,000–5,000 concurrent viewers with reserved capacity.",
+      "Upgrade once you have steady audiences, need dedicated processing capacity, or require SLA-backed response. Production is tuned for 2,000–5,000 concurrent viewers with reserved capacity.",
   },
   {
     question: "How does the hosted load balancer work?",
@@ -478,12 +454,12 @@ const Pricing = () => {
 
   const paidCards = tierCards;
 
-  const gpuColumns = tierColumns.map((tier) => ({
+  const processingColumns = tierColumns.map((tier) => ({
     key: tier.key,
     label: tier.label,
   }));
 
-  const gpuRows = gpuFeatureMatrix.map((entry) => {
+  const processingRows = processingFeatureMatrix.map((entry) => {
     const tierCells = tierColumns.reduce(
       (acc, tier) => ({
         ...acc,
@@ -495,9 +471,9 @@ const Pricing = () => {
     return {
       key: entry.feature,
       label: (
-        <div className="pricing-gpu-feature">
-          <span className="pricing-gpu-feature__title">{entry.feature}</span>
-          <p className="pricing-gpu-feature__copy">{entry.description}</p>
+        <div className="pricing-processing-feature">
+          <span className="pricing-processing-feature__title">{entry.feature}</span>
+          <p className="pricing-processing-feature__copy">{entry.description}</p>
           {entry.status ? (
             <StatusTag status={entry.status} note={entry.statusNote} className="mt-1" />
           ) : null}
@@ -526,7 +502,7 @@ const Pricing = () => {
             pricing
           </>
         }
-        description="Start hosted, go hybrid, or run everything yourself. Every tier supports self-hosting; higher tiers add hosted services, reserved pools, and GPU processing."
+        description="Start hosted, go hybrid, or run everything yourself. Every tier supports self-hosting; higher tiers add hosted services, reserved pools, and advanced processing."
         support={
           <IconList
             items={pricingHeroHighlights.map((highlight) => {
@@ -613,7 +589,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Paid tiers"
                 title="Scale beyond free"
-                subtitle="Add hosted services, GPU allowances, and enterprise capabilities as your workloads scale."
+                subtitle="Add hosted services, advanced processing, and enterprise capabilities as your workloads scale."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -754,13 +730,13 @@ const Pricing = () => {
             >
               <HeadlineStack
                 eyebrow="Advanced processing"
-                title="GPU-accelerated features across every tier"
-                subtitle="AI workloads (transcription, V2V, highlights) draw from your GPU-hour allowance. Standard transcoding and multiview compositing are bundled in delivered minutes."
+                title="Advanced processing capabilities"
+                subtitle="AI workloads (transcription, V2V, highlights) and multi-stream compositing are in pilot — request access via Contact. Standard transcoding is bundled in delivered minutes. Pricing finalized once the processing meter contract lands."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
               />
-              <ComparisonTable columns={gpuColumns} rows={gpuRows} tone="accent" />
+              <ComparisonTable columns={processingColumns} rows={processingRows} tone="accent" />
             </MarketingBand>
           </motion.div>
         </SectionContainer>
@@ -892,7 +868,7 @@ const Pricing = () => {
           <MarketingFinalCTA
             eyebrow="Next steps"
             title="Two ways to start"
-            description="Launch the FrameWorks stack on your own hardware, or partner with us for managed deployments and GPU capacity."
+            description="Launch the FrameWorks stack on your own hardware, or partner with us for managed deployments and advanced processing."
             variant="band"
             primaryAction={{
               label: "Start Free",

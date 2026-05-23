@@ -50,8 +50,7 @@ func twoTierFixture() []CatalogTier {
 			Entitlements:    map[string]any{"recording_retention_days": 30},
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
-				{Meter: "average_storage_gb", Model: "tiered_graduated", UnitPrice: "0"},
-				{Meter: "ai_gpu_hours", Model: "tiered_graduated", UnitPrice: "0"},
+				{Meter: "storage_gb_seconds_hot", Model: "tiered_graduated", UnitPrice: "0"},
 			},
 			TierLevel:         1,
 			IsDefaultPostpaid: true,
@@ -108,11 +107,11 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 		t.Error("supporter has no pricing rules")
 	}
 	for _, rule := range supporter.PricingRules {
-		if rule.Meter == "average_storage_gb" && rule.Model != "all_usage" {
-			t.Errorf("supporter storage rule model = %q, want all_usage (no included GB)", rule.Model)
+		if rule.Meter == "storage_gb_seconds_cold" && rule.Model != "all_usage" {
+			t.Errorf("supporter storage rule model = %q, want all_usage (no included GiB-hours)", rule.Model)
 		}
-		if rule.Meter == "ai_gpu_hours" && rule.IncludedQuantity != 10 {
-			t.Errorf("supporter GPU included = %v, want 10", rule.IncludedQuantity)
+		if rule.Meter == "delivered_minutes" && rule.IncludedQuantity != 120000 {
+			t.Errorf("supporter delivered_minutes included = %v, want 120000", rule.IncludedQuantity)
 		}
 	}
 
@@ -132,7 +131,7 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 	if got := free.Entitlements["max_concurrent_viewers"]; got != 200 {
 		t.Errorf("free max_concurrent_viewers entitlement = %v, want 200", got)
 	}
-	if got, want := len(free.PricingRules), 3; got != want {
+	if got, want := len(free.PricingRules), 2; got != want {
 		t.Fatalf("free pricing rules = %d, want %d", got, want)
 	}
 	for _, rule := range free.PricingRules {
@@ -142,12 +141,16 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 		if rule.Meter == "delivered_minutes" && rule.IncludedQuantity != 10000 {
 			t.Errorf("free delivered minutes included = %v, want 10000", rule.IncludedQuantity)
 		}
-		if rule.Meter == "average_storage_gb" {
+		if rule.Meter == "storage_gb_seconds_cold" {
 			if rule.Model != "tiered_graduated" {
 				t.Errorf("free storage model = %q, want tiered_graduated (visibility line with included quantity)", rule.Model)
 			}
-			if rule.IncludedQuantity != 10 {
-				t.Errorf("free storage included = %v, want 10 (GB-month invoice allowance; runtime cap is separate storage_limit_gb entitlement)", rule.IncludedQuantity)
+			// 7200 GiB-hours = 10 GiB held for 30 days. Rating subtracts
+			// included_quantity from GiB-hours (after the GiB-seconds → GiB-hour
+			// conversion in toRatedUnits), so the catalog value is in GiB-hours.
+			// Runtime cap is a separate storage_limit_gb entitlement.
+			if rule.IncludedQuantity != 7200 {
+				t.Errorf("free storage included = %v, want 7200 GiB-hours (10 GiB × 30 days)", rule.IncludedQuantity)
 			}
 		}
 	}

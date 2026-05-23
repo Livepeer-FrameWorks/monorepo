@@ -139,7 +139,7 @@ message GetTenantBillingStatusRequest {
 // Per-meter allowance snapshot for the tenant's current billing period.
 // Surfaced through GetTenantBillingStatusResponse so admission paths (Foghorn
 // PUSH_REWRITE via Commodore ValidateStreamKey) can apply load-aware policy
-// without a second RPC. v1 scope: delivered_minutes only.
+// without a second RPC.
 message MeterAllowance {
   string meter = 1;          // e.g. "delivered_minutes"
   double included = 2;       // included_quantity from the tier rule
@@ -171,33 +171,38 @@ message GetTenantBillingStatusResponse {
   // Hard runtime cap on the tenant's current durable artifact bytes.
   // 0 = unlimited (paid tier or entitlement unset). Foghorn rejects new
   // durable writes (DVR start, clip export, VOD upload) once the tenant's
-  // current artifact bytes meet this cap. Distinct from average_storage_gb
-  // billing meter — that drives invoice lines, this drives admission.
+  // current artifact bytes meet this cap. Distinct from the time-weighted
+  // storage_gb_seconds_cold billing meter — that drives invoice lines, this
+  // drives admission.
   int64 storage_limit_bytes = 8;
   // Tenant-plan fair-use caps resolved from tier entitlements. These are not
   // media-cluster capacity; Foghorn still computes cluster load dynamically
   // from edge state. nil/zero fields mean unlimited.
   quartermaster.TenantResourceLimits tenant_resource_limits = 9;
   // Marginal storage pricing for the tenant's current tier. Drives the
-  // customer-facing cost projection on the storage browser ("this clip costs
-  // you ~$X/day"). Computed as the marginal $/GB-month above any included
-  // free allotment; callers multiply by asset bytes / 1 GB and divide by 30
-  // for per-day. Nil for tenants on tiers without a storage meter (e.g.
-  // self-hosted clusters fully tenant-private).
+  // customer-facing cost projection on the storage browser ("this clip
+  // costs you ~$X/day"). Priced as marginal $/GiB-hour above any free
+  // GiB-hour allotment; callers compute per-day as unit_price × 24 and
+  // per-month as per-day × 30. Nil for tenants on tiers without a
+  // storage meter (e.g. self-hosted clusters fully tenant-private).
   StoragePricing storage_pricing = 10;
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
-// Reflects the tenant's tier-level pricing_rule for the average_storage_gb
-// meter; if the tier has no rule, all three fields are zero.
+// Reflects the tenant's tier-level pricing_rule for the
+// storage_gb_seconds_cold meter (the customer-facing S3 storage product);
+// if the tier has no rule, all three fields are zero.
 message StoragePricing {
-  // Free allotment per billing period, in GB. Usage at or below this level
-  // is rated at zero; the UI may surface "first <included_gb> GB free".
-  double included_gb = 1;
-  // Marginal price per GB-month above included_gb, in the tier's currency.
-  // The UI projects per-asset cost as (bytes / 1 GB) * unit_price_per_gb_month.
-  double unit_price_per_gb_month = 2;
-  // Currency for unit_price_per_gb_month (e.g. "EUR", "USD").
+  // Free allotment per billing period, in GiB-hours (the same unit the
+  // rating engine subtracts from after the GiB-seconds → GiB-hour
+  // conversion). E.g. 7200 ≈ "10 GB held for 30 days." Usage at or
+  // below this level is rated at zero; the UI may surface "first N
+  // GiB-hours free".
+  double included_gb_hours = 1;
+  // Marginal price per GiB-hour above included_gb_hours, in the tier's
+  // currency. The UI projects per-asset day/month cost from this hourly rate.
+  double unit_price_per_gb_hour = 2;
+  // Currency for unit_price_per_gb_hour (e.g. "EUR", "USD").
   string currency = 3;
   // Pricing model identifier from tier_pricing_rules.model
   // ("tiered_graduated", "all_usage"). UI may display "first N GB free"
@@ -267,7 +272,7 @@ message BillingTier {
 // PricingRule is one priced behavior on a tier (or override on a subscription).
 // Mirrors purser.tier_pricing_rules.
 message PricingRule {
-  string meter = 1;             // delivered_minutes | average_storage_gb | ai_gpu_hours | processing_seconds
+  string meter = 1;             // canonical or marketplace-defined meter key
   string model = 2;             // tiered_graduated | all_usage | codec_multiplier
   string currency = 3;          // ISO 4217
   string included_quantity = 4; // decimal as string
@@ -578,7 +583,8 @@ message Invoice {
   google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
   google.protobuf.Timestamp period_start = 13; // json:"period_start"
   google.protobuf.Timestamp period_end = 14;   // json:"period_end"
-  UsageSummary usage_summary = 16;            // Typed usage data (replaces parsing usage_details)
+  reserved 16;
+  reserved "usage_summary";
   repeated LineItem line_items = 17;          // Generated invoice line items
 }
 
@@ -648,7 +654,8 @@ message BillingStatusResponse {
   string currency = 7;
   repeated Invoice pending_invoices = 8; // Pending invoices awaiting payment
   repeated Payment recent_payments = 9;  // Last 5 payments
-  UsageSummary usage_summary = 10;       // Current month usage aggregation (typed)
+  reserved 10;
+  reserved "usage_summary";
   repeated string payment_methods = 11;  // Public methods: card, crypto_eth, crypto_usdc, bank_transfer
 }
 
@@ -670,101 +677,13 @@ message Payment {
 // USAGE MESSAGES
 // ============================================================================
 
-message UsageIngestRequest {
-  repeated UsageSummary usage_summaries = 1; // json:"usage_summaries"
-  string source = 2;                    // json:"source"
-  int64 timestamp = 3;                  // json:"timestamp"
-}
-
 // CountryMetrics represents viewer metrics for a single country
-// Used in geo_breakdown for rich billing/email summaries
+// Used in live geo breakdowns.
 message CountryMetrics {
   string country_code = 1;              // ISO 2-letter country code
   int32 viewer_count = 2;               // Unique viewers from this country
   double viewer_hours = 3;              // Total viewer-hours from this country
   double egress_gb = 5;                 // Bandwidth egress from this country
-}
-
-// Usage summary from Periscope (15-minute interval aggregations)
-message UsageSummary {
-  string tenant_id = 1;
-  string cluster_id = 2;
-  string period = 3;
-  google.protobuf.Timestamp timestamp = 4;
-  string granularity = 5;
-
-  // Core billing metrics
-  double stream_hours = 6;
-  double egress_gb = 7;
-  double peak_bandwidth_mbps = 8;
-  double average_storage_gb = 9;
-
-  // Per-codec breakdown: Livepeer
-  double livepeer_h264_seconds = 10;
-  double livepeer_vp9_seconds = 11;
-  double livepeer_av1_seconds = 12;
-  double livepeer_hevc_seconds = 13;
-
-  // Per-codec breakdown: Native AV
-  double native_av_h264_seconds = 14;
-  double native_av_vp9_seconds = 15;
-  double native_av_av1_seconds = 16;
-  double native_av_hevc_seconds = 17;
-  double native_av_aac_seconds = 18;
-  double native_av_opus_seconds = 19;
-
-  // Viewer metrics
-  int32 total_streams = 20;
-  int32 total_viewers = 21;
-  double viewer_hours = 22;
-  int32 max_viewers = 23;
-  int32 unique_users = 24;
-
-  // Segment/stream counts (from processing_daily)
-  uint64 livepeer_segment_count = 25;
-  uint32 livepeer_unique_streams = 26;
-  uint64 native_av_segment_count = 27;
-  uint32 native_av_unique_streams = 28;
-
-  // Geo enrichment
-  int32 unique_countries = 29;
-  int32 unique_cities = 30;
-  repeated CountryMetrics geo_breakdown = 31;
-
-  // Storage lifecycle - artifact counts
-  uint32 clips_created = 32;
-  uint32 clips_deleted = 33;
-  uint32 dvr_created = 34;
-  uint32 dvr_deleted = 35;
-  uint32 vod_created = 36;
-  uint32 vod_deleted = 37;
-
-  // Storage lifecycle - bytes by type (hot storage)
-  uint64 clip_bytes = 38;
-  uint64 dvr_bytes = 39;
-  uint64 vod_bytes = 40;
-
-  // Storage lifecycle - frozen bytes (cold storage)
-  uint64 frozen_clip_bytes = 41;
-  uint64 frozen_dvr_bytes = 42;
-  uint64 frozen_vod_bytes = 43;
-
-  // Freeze/defrost operations
-  uint32 freeze_count = 44;
-  uint64 freeze_bytes = 45;
-  uint32 defrost_count = 46;
-  uint64 defrost_bytes = 47;
-
-  // AI GPU compute, in hours. Producers attribute GPU usage from AI workloads
-  // here so per-event prepaid deduction can bill it in real time and the
-  // monthly aggregation path picks it up via processUsageSummary.
-  double gpu_hours = 48;
-}
-
-message UsageIngestResponse {
-  int32 processed_count = 1;            // json:"processed_count"
-  bool success = 2;                     // json:"success"
-  string error = 3;                     // json:"error,omitempty"
 }
 
 message GetUsageRecordsRequest {
@@ -799,7 +718,7 @@ message UsageRecordsResponse {
 message GetUsageAggregatesRequest {
   string tenant_id = 1;
   common.TimeRange time_range = 2;      // required time range
-  string granularity = 3;              // hourly, daily, monthly
+  string granularity = 3;              // hourly, daily, monthly chart bucket
   repeated string usage_types = 4;     // optional filter
 }
 

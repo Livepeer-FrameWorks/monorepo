@@ -151,53 +151,44 @@ func TestWrapClickhouseError(t *testing.T) {
 	})
 }
 
-func TestGetLiveUsageSummaryPartialFailure(t *testing.T) {
+func TestGetLiveUsageSummaryPartialFailureFailsClosed(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
 		"FROM tenant_usage_5m": errors.New("query failed"),
 	})
 
-	resp, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
+	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
 		TenantId: "tenant-1",
 		TimeRange: &pb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
 	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if resp == nil || resp.Summary == nil {
-		t.Fatal("expected summary response")
-	}
-	if resp.Summary.UniqueUsers != 0 {
-		t.Fatalf("expected fallback unique users to be 0, got %d", resp.Summary.UniqueUsers)
+	if err == nil {
+		t.Fatal("expected error on partial live usage source failure")
 	}
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
 		t.Fatalf("unmet mock expectations: %v", mockErr)
 	}
 }
 
-func TestGetLiveUsageSummaryTimeoutFallback(t *testing.T) {
+func TestGetLiveUsageSummaryTimeoutFailsClosed(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
 		"FROM client_qoe_5m": context.DeadlineExceeded,
 	})
 
-	resp, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
+	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
 		TenantId: "tenant-1",
 		TimeRange: &pb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
 	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if resp.Summary.PeakBandwidthMbps != 0 {
-		t.Fatalf("expected peak bandwidth fallback to be 0, got %f", resp.Summary.PeakBandwidthMbps)
+	if err == nil {
+		t.Fatal("expected error on live usage timeout")
 	}
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
 		t.Fatalf("unmet mock expectations: %v", mockErr)
@@ -208,17 +199,18 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
-		"FROM stream_event_log":         sql.ErrConnDone,
-		"FROM tenant_usage_5m":          sql.ErrConnDone,
-		"FROM client_qoe_5m":            sql.ErrConnDone,
-		"FROM storage_usage_hourly":     sql.ErrConnDone,
-		"FROM processing_daily":         sql.ErrConnDone,
-		"FROM viewer_connection_events": sql.ErrConnDone,
-		"FROM viewer_geo_hourly":        sql.ErrConnDone,
-		"FROM artifact_events":          sql.ErrConnDone,
-		"storage_scope = 'hot'":         sql.ErrConnDone,
-		"storage_scope = 'cold'":        sql.ErrConnDone,
-		"FROM storage_events":           sql.ErrConnDone,
+		`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`:   sql.ErrConnDone,
+		`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`: sql.ErrConnDone,
+		"FROM tenant_usage_5m":                                 sql.ErrConnDone,
+		"FROM client_qoe_5m":                                   sql.ErrConnDone,
+		"FROM storage_usage_hourly":                            sql.ErrConnDone,
+		"FROM processing_daily":                                sql.ErrConnDone,
+		`FROM viewer_geo_hourly[\s\S]*FROM viewer_city_hourly`: sql.ErrConnDone,
+		"FROM viewer_geo_hourly":                               sql.ErrConnDone,
+		"FROM artifact_events":                                 sql.ErrConnDone,
+		"storage_scope = 'hot'":                                sql.ErrConnDone,
+		"storage_scope = 'cold'":                               sql.ErrConnDone,
+		"FROM storage_events":                                  sql.ErrConnDone,
 	})
 
 	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
@@ -272,10 +264,11 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 		mock.ExpectQuery(pattern).WillReturnRows(sqlmock.NewRows(columns).AddRow(rowValues...))
 	}
 
-	expectQuery("FROM stream_event_log", []string{"max_viewers", "total_streams", "stream_hours"}, []any{int64(0), int64(0), float64(0)})
-	expectQuery("FROM tenant_usage_5m", []string{"total_session_seconds", "total_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
+	expectQuery(`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`, []string{"max_viewers", "total_streams"}, []any{int32(0), int32(0)})
+	expectQuery(`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`, []string{"stream_hours"}, []any{float64(0)})
+	expectQuery("FROM tenant_usage_5m", []string{"total_session_seconds", "egress_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
 	expectQuery("FROM client_qoe_5m", []string{"peak_bandwidth"}, []any{float64(0)})
-	expectQuery("FROM storage_usage_hourly", []string{"avg_total_bytes"}, []any{uint64(0)})
+	expectQuery("FROM storage_usage_hourly", []string{"gb_seconds"}, []any{float64(0)})
 	expectQuery("FROM processing_daily", []string{
 		"livepeer_h264", "livepeer_vp9", "livepeer_av1", "livepeer_hevc",
 		"native_av_h264", "native_av_vp9", "native_av_av1", "native_av_hevc",
@@ -289,7 +282,7 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 		uint64(0), uint64(0),
 		uint32(0), uint32(0),
 	})
-	expectQuery("FROM viewer_connection_events", []string{"unique_countries", "unique_cities"}, []any{int32(0), int32(0)})
+	expectQuery(`FROM viewer_geo_hourly[\s\S]*FROM viewer_city_hourly`, []string{"unique_countries", "unique_cities"}, []any{int32(0), int32(0)})
 
 	if err, ok := overrides["FROM viewer_geo_hourly"]; ok {
 		mock.ExpectQuery("FROM viewer_geo_hourly").WillReturnError(err)

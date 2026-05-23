@@ -143,7 +143,7 @@ const Contact = () => {
     {
       question: "Do you offer commercial support?",
       answer:
-        "Yes. We provide enterprise support with SLAs, custom development, managed hosting, and priority GPU access. Reach out to discuss enterprise pricing and requirements.",
+        "Yes. We provide enterprise support with SLAs, custom development, managed hosting, and priority access to advanced processing. Reach out to discuss enterprise pricing and requirements.",
     },
     {
       question: "Can I run FrameWorks entirely on my own infrastructure?",

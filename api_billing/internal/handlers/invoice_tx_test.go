@@ -93,9 +93,9 @@ func TestPersistInvoiceLineItems_SweepsStaleLines(t *testing.T) {
 		WithArgs("inv-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow(rating.LineKeyBaseSubscription).
-			AddRow("meter:ai_gpu_hours")) // stale row from a prior run
+			AddRow("meter:legacy_removed_meter")) // stale row from a prior run
 	mock.ExpectExec(`DELETE FROM purser\.invoice_line_items WHERE invoice_id = \$1 AND tenant_id = \$2 AND line_key = \$3`).
-		WithArgs("inv-1", "tenant-1", "meter:ai_gpu_hours").
+		WithArgs("inv-1", "tenant-1", "meter:legacy_removed_meter").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := persistInvoiceLineItems(context.Background(), mockDB, "inv-1", "tenant-1", res); err != nil {

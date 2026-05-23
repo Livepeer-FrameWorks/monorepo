@@ -14,10 +14,10 @@ USE periscope;
 -- to Mist, then drains the WAL via the existing HelmsmanControl bidi stream
 -- and waits for a MistTriggerAck before truncating. This table is the
 -- analytics-side projection of that journal — re-deliveries collide on
--- source_request_id (sha256(node_id || trigger_type || payload_raw)), so
+-- source_request_id (sha256(node_id || NUL || trigger_type || NUL || payload_raw)), so
 -- ReplacingMergeTree(ingested_at_ms) + argMax-on-read collapses duplicates.
 --
--- Currently scoped to PR0's seven final-event triggers (USER_END,
+-- Currently scoped to the seven final-event triggers (USER_END,
 -- STREAM_END, PUSH_END, RECORDING_END, RECORDING_SEGMENT,
 -- LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). The
 -- table schema accepts any trigger_type so the WAL can be extended later
@@ -27,7 +27,7 @@ USE periscope;
 CREATE TABLE IF NOT EXISTS raw_mist_triggers (
     node_id LowCardinality(String),
     trigger_type LowCardinality(String),
-    source_request_id String,        -- sha256 hex of (node_id || trigger_type || payload_raw)
+    source_request_id String,        -- sha256 hex of (node_id || NUL || trigger_type || NUL || payload_raw)
     payload String CODEC(ZSTD(3)),   -- raw protobuf MistTrigger envelope from Decklog
     tenant_id String DEFAULT '',     -- enriched by Foghorn before Decklog publish
     cluster_id LowCardinality(String) DEFAULT '',
@@ -550,226 +550,6 @@ SELECT
 FROM client_qoe_samples
 GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
--- ============================================================================
--- VIEWER USAGE ROLLUPS
--- ============================================================================
-
--- Tenant-level usage rollup (5-minute) for live billing dashboards
-CREATE TABLE IF NOT EXISTS tenant_usage_5m (
-    timestamp_5m DateTime,
-    tenant_id UUID,
-    unique_viewers AggregateFunction(uniq, String),
-    total_session_seconds AggregateFunction(sum, UInt64),
-    total_bytes AggregateFunction(sum, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(timestamp_5m)
-ORDER BY (timestamp_5m, tenant_id)
-TTL timestamp_5m + INTERVAL 30 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_5m_mv TO tenant_usage_5m AS
-SELECT
-    toStartOfFiveMinute(timestamp) AS timestamp_5m,
-    tenant_id,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM viewer_connection_events
-WHERE event_type = 'disconnect'
-GROUP BY timestamp_5m, tenant_id;
-
-CREATE TABLE IF NOT EXISTS stream_connection_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    stream_id UUID,
-    internal_name String,
-    total_bytes AggregateFunction(sum, UInt64),
-    unique_viewers AggregateFunction(uniq, String),
-    total_sessions AggregateFunction(count, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, stream_id)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv TO stream_connection_hourly AS
-SELECT
-    toStartOfHour(timestamp) as hour,
-    tenant_id,
-    stream_id,
-    internal_name,
-    sumState(bytes_transferred) as total_bytes,
-    uniqState(session_id) as unique_viewers,
-    countState() as total_sessions
-FROM viewer_connection_events
-GROUP BY hour, tenant_id, stream_id, internal_name;
-
-CREATE TABLE IF NOT EXISTS viewer_hours_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    cluster_id LowCardinality(String) DEFAULT '',
-    origin_cluster_id LowCardinality(String) DEFAULT '',
-    stream_id UUID,
-    internal_name String,
-    country_code FixedString(2),
-    unique_viewers AggregateFunction(uniq, String),
-    total_session_seconds AggregateFunction(sum, UInt64),
-    total_bytes AggregateFunction(sum, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, cluster_id, origin_cluster_id, stream_id, country_code)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_hours_hourly_mv TO viewer_hours_hourly AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    origin_cluster_id,
-    stream_id,
-    internal_name,
-    country_code,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM viewer_connection_events
-WHERE event_type = 'disconnect'
-GROUP BY hour, tenant_id, cluster_id, origin_cluster_id, stream_id, internal_name, country_code;
-
-CREATE TABLE IF NOT EXISTS tenant_viewer_daily (
-    day Date,
-    tenant_id UUID,
-    cluster_id LowCardinality(String) DEFAULT '',
-    origin_cluster_id LowCardinality(String) DEFAULT '',
-    viewer_hours Float64,
-    unique_viewers UInt32,
-    total_sessions UInt32,
-    egress_gb Float64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id, cluster_id, origin_cluster_id)
-TTL day + INTERVAL 730 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv TO tenant_viewer_daily AS
-SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    cluster_id,
-    origin_cluster_id,
-    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
-    toUInt32(uniqMerge(unique_viewers)) AS unique_viewers,
-    toUInt32(count()) AS total_sessions,
-    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
-FROM viewer_hours_hourly
-GROUP BY day, tenant_id, cluster_id, origin_cluster_id;
-
-CREATE TABLE IF NOT EXISTS viewer_geo_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    country_code FixedString(2),
-    viewer_count UInt32,
-    viewer_hours Float64,
-    egress_gb Float64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, country_code)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_hourly_mv TO viewer_geo_hourly AS
-SELECT
-    hour,
-    tenant_id,
-    country_code,
-    toUInt32(uniqMerge(unique_viewers)) AS viewer_count,
-    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
-    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
-FROM viewer_hours_hourly
-GROUP BY hour, tenant_id, country_code;
-
-CREATE TABLE IF NOT EXISTS viewer_city_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    stream_id UUID,
-    internal_name String,
-    country_code FixedString(2),
-    city LowCardinality(String),
-    latitude AggregateFunction(any, Float64),
-    longitude AggregateFunction(any, Float64),
-    unique_viewers AggregateFunction(uniq, String),
-    total_session_seconds AggregateFunction(sum, UInt64),
-    total_bytes AggregateFunction(sum, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, stream_id, country_code, city)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_city_hourly_mv TO viewer_city_hourly AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    stream_id,
-    internal_name,
-    country_code,
-    city,
-    anyState(latitude) AS latitude,
-    anyState(longitude) AS longitude,
-    uniqState(session_id) AS unique_viewers,
-    sumState(toUInt64(session_duration)) AS total_session_seconds,
-    sumState(bytes_transferred) AS total_bytes
-FROM viewer_connection_events
-WHERE event_type = 'disconnect' AND city != ''
-GROUP BY hour, tenant_id, stream_id, internal_name, country_code, city;
-
--- Daily analytics rollups
-CREATE TABLE IF NOT EXISTS tenant_analytics_daily (
-    day Date,
-    tenant_id UUID,
-    total_streams UInt32,
-    total_views UInt64,
-    unique_viewers UInt32,
-    egress_bytes UInt64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id)
-TTL day + INTERVAL 730 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_analytics_daily_mv TO tenant_analytics_daily AS
-SELECT
-    toDate(timestamp) AS day,
-    tenant_id,
-    uniq(stream_id) AS total_streams,
-    countIf(event_type = 'connect') AS total_views,
-    uniq(session_id) AS unique_viewers,
-    sum(bytes_transferred) AS egress_bytes
-FROM viewer_connection_events
-GROUP BY day, tenant_id;
-
-CREATE TABLE IF NOT EXISTS stream_analytics_daily (
-    day Date,
-    tenant_id UUID,
-    stream_id UUID,
-    internal_name String,
-    total_views UInt64,
-    unique_viewers UInt32,
-    unique_countries UInt16,
-    unique_cities UInt16,
-    egress_bytes UInt64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id, stream_id)
-TTL day + INTERVAL 730 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS stream_analytics_daily_mv TO stream_analytics_daily AS
-SELECT
-    toDate(timestamp) AS day,
-    tenant_id,
-    stream_id,
-    internal_name,
-    countIf(event_type = 'connect') AS total_views,
-    uniq(session_id) AS unique_viewers,
-    uniq(country_code) AS unique_countries,
-    uniq(city) AS unique_cities,
-    sum(bytes_transferred) AS egress_bytes
-FROM viewer_connection_events
-GROUP BY day, tenant_id, stream_id, internal_name;
 
 -- ============================================================================
 -- ROUTING DECISIONS
@@ -1170,6 +950,16 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
     cluster_id LowCardinality(String) DEFAULT '',
     storage_scope LowCardinality(String) DEFAULT 'hot',
 
+    -- Provider attribution. The `tenant_id` above is the usage tenant
+    -- (the customer); these three columns identify who owns the
+    -- underlying storage capacity. Marketplace settlement keys off
+    -- them to route payouts to capacity owners. For cold snapshots
+    -- emitted by Foghorn this is the platform/cluster operator; for
+    -- hot edge snapshots from Helmsman it's the node's owning tenant.
+    storage_provider_tenant_id LowCardinality(String) DEFAULT '',
+    storage_provider_cluster_id LowCardinality(String) DEFAULT '',
+    storage_backend LowCardinality(String) DEFAULT 'unknown',
+
     total_bytes UInt64,
     file_count UInt32,
 
@@ -1179,39 +969,19 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
 
     frozen_dvr_bytes UInt64 DEFAULT 0,
     frozen_clip_bytes UInt64 DEFAULT 0,
-    frozen_vod_bytes UInt64 DEFAULT 0
+    frozen_vod_bytes UInt64 DEFAULT 0,
+
+    -- Ingest wall-clock when periscope wrote this row, in ms since
+    -- epoch. The storage rebuilder cursors on this column (not on the
+    -- source `timestamp`) so a snapshot that lands minutes or hours
+    -- after its recorded `timestamp` is still picked up by the next
+    -- rebuilder pass instead of being permanently skipped.
+    ingested_at_ms Int64 DEFAULT toUnixTimestamp64Milli(now64(3))
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, tenant_id, node_id)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Storage usage hourly rollup (must be after storage_snapshots table).
--- cluster_id is part of the GROUP BY so the rollup feeds per-cluster
--- average_storage_gb usage_records for cluster-aware billing.
-CREATE TABLE IF NOT EXISTS storage_usage_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    cluster_id LowCardinality(String) DEFAULT '',
-    avg_total_bytes AggregateFunction(avg, UInt64),
-    avg_clip_bytes AggregateFunction(avg, UInt64),
-    avg_dvr_bytes AggregateFunction(avg, UInt64),
-    avg_vod_bytes AggregateFunction(avg, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, cluster_id)
-TTL hour + INTERVAL 90 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_hourly_mv TO storage_usage_hourly AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    avgState(total_bytes) AS avg_total_bytes,
-    avgState(clip_bytes) AS avg_clip_bytes,
-    avgState(dvr_bytes) AS avg_dvr_bytes,
-    avgState(vod_bytes) AS avg_vod_bytes
-FROM storage_snapshots
-GROUP BY hour, tenant_id, cluster_id;
 
 CREATE TABLE IF NOT EXISTS storage_events (
     timestamp DateTime,
@@ -1312,95 +1082,6 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
-CREATE TABLE IF NOT EXISTS processing_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    cluster_id LowCardinality(String) DEFAULT '',
-    process_type LowCardinality(String),
-    output_codec LowCardinality(String),
-    track_type LowCardinality(String),
-
-    total_duration_ms AggregateFunction(sum, Int64),
-    segment_count AggregateFunction(count, UInt64),
-    unique_streams AggregateFunction(uniq, UUID)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, cluster_id, process_type, output_codec, track_type)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS processing_hourly_mv TO processing_hourly AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    cluster_id,
-    process_type,
-    lower(coalesce(output_codec, 'unknown')) AS output_codec,
-    coalesce(track_type, 'video') AS track_type,
-    sumState(duration_ms) AS total_duration_ms,
-    countState() AS segment_count,
-    uniqState(stream_id) AS unique_streams
-FROM processing_events
-GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
-
-CREATE TABLE IF NOT EXISTS processing_daily (
-    day Date,
-    tenant_id UUID,
-    cluster_id LowCardinality(String) DEFAULT '',
-
-    livepeer_h264_seconds Float64,
-    livepeer_vp9_seconds Float64,
-    livepeer_av1_seconds Float64,
-    livepeer_hevc_seconds Float64,
-    livepeer_segment_count UInt64,
-    livepeer_unique_streams UInt32,
-
-    native_av_h264_seconds Float64,
-    native_av_vp9_seconds Float64,
-    native_av_av1_seconds Float64,
-    native_av_hevc_seconds Float64,
-    native_av_aac_seconds Float64,
-    native_av_opus_seconds Float64,
-    native_av_segment_count UInt64,
-    native_av_unique_streams UInt32,
-
-    audio_seconds Float64,
-    video_seconds Float64,
-
-    livepeer_seconds Float64,
-    native_av_seconds Float64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
--- cluster_id is part of the sort key so SummingMergeTree merges rows
--- per cluster, not across clusters. Without this, two clusters'
--- processing seconds collapse into one daily row.
-ORDER BY (day, tenant_id, cluster_id)
-TTL day + INTERVAL 730 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS processing_daily_mv TO processing_daily AS
-SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    cluster_id,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS livepeer_hevc_seconds,
-    toUInt64(countMergeIf(segment_count, process_type = 'Livepeer')) AS livepeer_segment_count,
-    toUInt32(uniqMergeIf(unique_streams, process_type = 'Livepeer')) AS livepeer_unique_streams,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'h264') / 1000.0 AS native_av_h264_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'vp9') / 1000.0 AS native_av_vp9_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'av1') / 1000.0 AS native_av_av1_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS native_av_hevc_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'aac') / 1000.0 AS native_av_aac_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'opus') / 1000.0 AS native_av_opus_seconds,
-    toUInt64(countMergeIf(segment_count, process_type = 'AV')) AS native_av_segment_count,
-    toUInt32(uniqMergeIf(unique_streams, process_type = 'AV')) AS native_av_unique_streams,
-    sumMergeIf(total_duration_ms, track_type = 'audio') / 1000.0 AS audio_seconds,
-    sumMergeIf(total_duration_ms, track_type = 'video') / 1000.0 AS video_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
-    sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
-FROM processing_hourly
-GROUP BY day, tenant_id, cluster_id;
 
 -- ============================================================================
 -- INGEST ERRORS (DLQ)
@@ -1462,74 +1143,6 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Hourly rollups for API usage
--- Uses AggregatingMergeTree to support unique actor counts without re-scanning raw requests
-CREATE TABLE IF NOT EXISTS api_usage_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    auth_type LowCardinality(String),
-    operation_type LowCardinality(String),
-    operation_name LowCardinality(String) DEFAULT '',
-    total_requests AggregateFunction(sum, UInt64),
-    total_errors AggregateFunction(sum, UInt64),
-    total_duration_ms AggregateFunction(sum, UInt64),
-    total_complexity AggregateFunction(sum, UInt64),
-    unique_users AggregateFunction(uniqCombined, UInt64),
-    unique_tokens AggregateFunction(uniqCombined, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, auth_type, operation_type, operation_name)
-TTL hour + INTERVAL 365 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_hourly_mv TO api_usage_hourly AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    auth_type,
-    operation_type,
-    coalesce(operation_name, '') AS operation_name,
-    sumState(toUInt64(request_count)) AS total_requests,
-    sumState(toUInt64(error_count)) AS total_errors,
-    sumState(toUInt64(total_duration_ms)) AS total_duration_ms,
-    sumState(toUInt64(total_complexity)) AS total_complexity,
-    uniqCombinedArrayState(user_hashes) AS unique_users,
-    uniqCombinedArrayState(token_hashes) AS unique_tokens
-FROM api_requests
-GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
-
--- Daily rollups for billing and analytics
-CREATE TABLE IF NOT EXISTS api_usage_daily (
-    day Date,
-    tenant_id UUID,
-    auth_type LowCardinality(String),
-    operation_type LowCardinality(String),
-    operation_name LowCardinality(String) DEFAULT '',
-    total_requests AggregateFunction(sum, UInt64),
-    total_errors AggregateFunction(sum, UInt64),
-    total_duration_ms AggregateFunction(sum, UInt64),
-    total_complexity AggregateFunction(sum, UInt64),
-    unique_users AggregateFunction(uniqCombined, UInt64),
-    unique_tokens AggregateFunction(uniqCombined, UInt64)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id, auth_type, operation_type, operation_name)
-TTL day + INTERVAL 730 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_daily_mv TO api_usage_daily AS
-SELECT
-    toDate(hour) AS day,
-    tenant_id,
-    auth_type,
-    operation_type,
-    operation_name,
-    sumMergeState(total_requests) AS total_requests,
-    sumMergeState(total_errors) AS total_errors,
-    sumMergeState(total_duration_ms) AS total_duration_ms,
-    sumMergeState(total_complexity) AS total_complexity,
-    uniqCombinedMergeState(unique_users) AS unique_users,
-    uniqCombinedMergeState(unique_tokens) AS unique_tokens
-FROM api_usage_hourly
-GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
 
 -- ============================================================================
 -- TENANT ACQUISITION EVENTS (signup attribution)
@@ -1902,3 +1515,1539 @@ SELECT
     maxIf(latency_ms, success = 1) AS max_latency_ms
 FROM orchestrator_ai_outcomes
 GROUP BY timestamp_1h, tenant_id, cluster_owner_tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip;
+
+-- ============================================================================
+-- FINALIZED FACT TABLES + 5-MIN CANONICAL LEDGERS
+-- ----------------------------------------------------------------------------
+-- Projection model — applies to every *_final and 5-min ledger table below.
+--
+-- 1. Physically append-only MergeTree. Each parser/rebuilder pass writes a
+--    new row; multiple projection rows per logical fact coexist on disk.
+-- 2. Readers materialize the logical fact via min/argMax on
+--    projection_version_ms. Each table has a *_v view next to it that wraps
+--    the GROUP BY natural_key + min/argMax read pattern.
+-- 3. billable_at_ms is DERIVED, not stored. It is min(projection_version_ms)
+--    over the projection rows of a logical fact. the billing cursor walks
+--    this value.
+-- 4. ORDER BY puts (tenant_id, projection_version_ms) first so the hot
+--    billing cursor's WHERE projection_version_ms ∈ [start, end) hits the
+--    sort index after per-tenant pruning. Natural-key columns trail.
+-- 5. PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000)) — the
+--    billing cursor's time predicate prunes to overlapping calendar months.
+-- 6. Supports pure replay (same logical fact, repeated projections)
+--    through the normal parser path. Material billing corrections — a
+--    parser pass that changes a rated field's value after the row has
+--    been cursored past — are emitted as additive Purser adjustments
+--    from projection_divergences, never by mutating the original row.
+--
+-- See docs/architecture/meter-contracts.md for the full contract.
+-- ============================================================================
+
+-- viewer_sessions_final: one logical row per Mist USER_END accepted by
+-- Periscope. Natural key (tenant_id, node_id, session_id). Append-only
+-- projections; viewer_sessions_final_v materializes the logical fact.
+--
+-- Source proto: pkg/proto/ipc.proto ViewerDisconnectTrigger. Multi-stream
+-- sessions land with parallel (name, seconds) tuples in stream_times /
+-- connector_times / host_times — MistServer src/session.cpp already emits
+-- these arrays for sessions that touched multiple streams/connectors/hosts.
+CREATE TABLE IF NOT EXISTS viewer_sessions_final (
+    -- Natural key
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    session_id String,
+
+    -- Stable cross-pipeline identity
+    source_event_id String,            -- sha256(node_id || NUL || trigger_type || NUL || payload_raw); same as raw_mist_triggers
+
+    -- Enrichment
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    stream_name String DEFAULT '',
+    connector LowCardinality(String) DEFAULT '',
+    host String DEFAULT '',
+    country_code FixedString(2) DEFAULT '\0\0',
+    city LowCardinality(String) DEFAULT '',
+    latitude Float64 DEFAULT 0,
+    longitude Float64 DEFAULT 0,
+    tags String DEFAULT '',
+
+    -- Counters
+    duration_seconds UInt32 DEFAULT 0,
+    uploaded_bytes UInt64 DEFAULT 0,
+    downloaded_bytes UInt64 DEFAULT 0,
+    seconds_connected UInt64 DEFAULT 0, -- enrichment override of duration when present
+
+    -- Time model (see projection-model note at top of section)
+    source_started_at_ms Int64,
+    source_ended_at_ms Int64,
+    edge_received_at_ms Int64,         -- Helmsman WAL accept; audit only
+    projection_version_ms Int64,       -- parser-pass wall clock; cursor uses min() of this
+
+    closed_reason LowCardinality(String) DEFAULT 'final', -- 'final' for USER_END; anomalous closes live in viewer_sessions_anomalous
+
+    -- USER_END breakdown arrays from MistServer src/session.cpp. Multi-stream
+    -- sessions land here as parallel arrays (name + seconds) so per-stream /
+    -- per-host / per-connector attribution can split the session correctly
+    -- instead of dumping all minutes on the first entry of the comma-joined
+    -- summary string. Empty for single-element sessions.
+    stream_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
+    connector_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
+    host_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
+
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, node_id, session_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
+
+CREATE VIEW IF NOT EXISTS viewer_sessions_final_v AS
+SELECT
+    tenant_id, node_id, session_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(source_event_id,       projection_version_ms) AS source_event_id,
+    argMax(cluster_id,            projection_version_ms) AS cluster_id,
+    argMax(stream_id,             projection_version_ms) AS stream_id,
+    argMax(stream_name,           projection_version_ms) AS stream_name,
+    argMax(connector,             projection_version_ms) AS connector,
+    argMax(host,                  projection_version_ms) AS host,
+    argMax(country_code,          projection_version_ms) AS country_code,
+    argMax(city,                  projection_version_ms) AS city,
+    argMax(latitude,              projection_version_ms) AS latitude,
+    argMax(longitude,             projection_version_ms) AS longitude,
+    argMax(tags,                  projection_version_ms) AS tags,
+    argMax(duration_seconds,      projection_version_ms) AS duration_seconds,
+    argMax(uploaded_bytes,        projection_version_ms) AS uploaded_bytes,
+    argMax(downloaded_bytes,      projection_version_ms) AS downloaded_bytes,
+    argMax(seconds_connected,     projection_version_ms) AS seconds_connected,
+    argMax(source_started_at_ms,  projection_version_ms) AS source_started_at_ms,
+    argMax(source_ended_at_ms,    projection_version_ms) AS source_ended_at_ms,
+    argMax(edge_received_at_ms,   projection_version_ms) AS edge_received_at_ms,
+    max(projection_version_ms) AS latest_projection_version_ms,
+    argMax(closed_reason,         projection_version_ms) AS closed_reason,
+    -- USER_END breakdown arrays from MistServer src/session.cpp. Multi-stream
+    -- sessions land here as parallel (name, seconds) tuples so per-stream /
+    -- per-connector / per-host attribution can split a single session across
+    -- the elements it touched. Empty array for single-element sessions.
+    argMax(stream_times,          projection_version_ms) AS stream_times,
+    argMax(connector_times,       projection_version_ms) AS connector_times,
+    argMax(host_times,            projection_version_ms) AS host_times
+FROM viewer_sessions_final
+GROUP BY tenant_id, node_id, session_id;
+
+-- stream_sessions_final: one logical row per Mist STREAM_END accepted by
+-- Periscope. Source proto: StreamEndTrigger.
+CREATE TABLE IF NOT EXISTS stream_sessions_final (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    stream_id UUID,                    -- enriched by Foghorn; natural-key column
+    source_event_id String,
+
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_name String DEFAULT '',
+
+    -- Stream-end counters
+    downloaded_bytes Int64 DEFAULT 0,
+    uploaded_bytes Int64 DEFAULT 0,
+    total_viewers Int64 DEFAULT 0,
+    total_inputs Int64 DEFAULT 0,
+    total_outputs Int64 DEFAULT 0,
+    viewer_seconds Int64 DEFAULT 0,
+
+    source_started_at_ms Int64,
+    source_ended_at_ms Int64,
+    edge_received_at_ms Int64,
+    projection_version_ms Int64,
+
+    closed_reason LowCardinality(String) DEFAULT 'final',
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
+
+CREATE VIEW IF NOT EXISTS stream_sessions_final_v AS
+SELECT
+    tenant_id, node_id, stream_id, source_event_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(cluster_id,            projection_version_ms) AS cluster_id,
+    argMax(stream_name,           projection_version_ms) AS stream_name,
+    argMax(downloaded_bytes,      projection_version_ms) AS downloaded_bytes,
+    argMax(uploaded_bytes,        projection_version_ms) AS uploaded_bytes,
+    argMax(total_viewers,         projection_version_ms) AS total_viewers,
+    argMax(total_inputs,          projection_version_ms) AS total_inputs,
+    argMax(total_outputs,         projection_version_ms) AS total_outputs,
+    argMax(viewer_seconds,        projection_version_ms) AS viewer_seconds,
+    argMax(source_started_at_ms,  projection_version_ms) AS source_started_at_ms,
+    argMax(source_ended_at_ms,    projection_version_ms) AS source_ended_at_ms,
+    argMax(edge_received_at_ms,   projection_version_ms) AS edge_received_at_ms,
+    max(projection_version_ms) AS latest_projection_version_ms,
+    argMax(closed_reason,         projection_version_ms) AS closed_reason
+FROM stream_sessions_final
+GROUP BY tenant_id, node_id, stream_id, source_event_id;
+
+-- processing_segments_final: one logical row per LIVEPEER_SEGMENT_COMPLETE
+-- or PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE event. Explicit natural key — the
+-- segment_dedupe_key column is a debug-convenience hash, NOT the dedupe
+-- identity. Future debugging should not need to reverse-engineer a hash.
+--
+CREATE TABLE IF NOT EXISTS processing_segments_final (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    stream_id UUID,
+    process_type LowCardinality(String),    -- 'Livepeer' | 'AV' | 'FFmpeg'
+    output_codec LowCardinality(String),
+    track_type LowCardinality(String),      -- 'audio' | 'video'
+    segment_number Int32,
+
+    -- Identity. source_event_id = sha256(node_id || NUL || trigger_type || NUL || payload_raw)
+    -- from raw_mist_triggers; unique per Mist trigger and therefore per
+    -- logical segment for both Livepeer and AV-virtual-segment events. AV
+    -- triggers carry no real segment_number, so dedupe MUST key on
+    -- source_event_id. segment_dedupe_key stays as a debug-convenience
+    -- compact hash; segment_number stays informational.
+    source_event_id String,
+    segment_dedupe_key UInt64 DEFAULT cityHash64(source_event_id),
+
+    -- Common
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_name String DEFAULT '',
+    input_codec LowCardinality(String) DEFAULT '',
+    media_seconds Float64 DEFAULT 0,
+
+    -- Livepeer-specific
+    width Int32 DEFAULT 0,
+    height Int32 DEFAULT 0,
+    rendition_count Int32 DEFAULT 0,
+    input_bytes Int64 DEFAULT 0,
+    output_bytes_total Int64 DEFAULT 0,
+    turnaround_ms Int64 DEFAULT 0,
+    speed_factor Float64 DEFAULT 0,
+    livepeer_session_id String DEFAULT '',
+
+    -- MistProcAV-specific
+    input_frames Int64 DEFAULT 0,
+    output_frames Int64 DEFAULT 0,
+    input_frames_delta Int64 DEFAULT 0,
+    output_frames_delta Int64 DEFAULT 0,
+    input_bytes_delta Int64 DEFAULT 0,
+    output_bytes_delta Int64 DEFAULT 0,
+    rtf_in Float64 DEFAULT 0,
+    rtf_out Float64 DEFAULT 0,
+    is_final UInt8 DEFAULT 0,
+
+    source_started_at_ms Int64,
+    source_ended_at_ms Int64,
+    edge_received_at_ms Int64,
+    projection_version_ms Int64,
+
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id, process_type, output_codec, track_type)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
+
+CREATE VIEW IF NOT EXISTS processing_segments_final_v AS
+SELECT
+    tenant_id, node_id, stream_id,
+    argMax(process_type, projection_version_ms) AS process_type,
+    argMax(output_codec, projection_version_ms) AS output_codec,
+    argMax(track_type, projection_version_ms) AS track_type,
+    source_event_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(segment_number,        projection_version_ms) AS segment_number,
+    argMax(segment_dedupe_key,    projection_version_ms) AS segment_dedupe_key,
+    argMax(cluster_id,            projection_version_ms) AS cluster_id,
+    argMax(stream_name,           projection_version_ms) AS stream_name,
+    argMax(input_codec,           projection_version_ms) AS input_codec,
+    argMax(media_seconds,         projection_version_ms) AS media_seconds,
+    argMax(width,                 projection_version_ms) AS width,
+    argMax(height,                projection_version_ms) AS height,
+    argMax(rendition_count,       projection_version_ms) AS rendition_count,
+    argMax(input_bytes,           projection_version_ms) AS input_bytes,
+    argMax(output_bytes_total,    projection_version_ms) AS output_bytes_total,
+    argMax(turnaround_ms,         projection_version_ms) AS turnaround_ms,
+    argMax(speed_factor,          projection_version_ms) AS speed_factor,
+    argMax(livepeer_session_id,   projection_version_ms) AS livepeer_session_id,
+    argMax(input_frames,          projection_version_ms) AS input_frames,
+    argMax(output_frames,         projection_version_ms) AS output_frames,
+    argMax(input_frames_delta,    projection_version_ms) AS input_frames_delta,
+    argMax(output_frames_delta,   projection_version_ms) AS output_frames_delta,
+    argMax(input_bytes_delta,     projection_version_ms) AS input_bytes_delta,
+    argMax(output_bytes_delta,    projection_version_ms) AS output_bytes_delta,
+    argMax(rtf_in,                projection_version_ms) AS rtf_in,
+    argMax(rtf_out,               projection_version_ms) AS rtf_out,
+    argMax(is_final,              projection_version_ms) AS is_final,
+    argMax(source_started_at_ms,  projection_version_ms) AS source_started_at_ms,
+    argMax(source_ended_at_ms,    projection_version_ms) AS source_ended_at_ms,
+    argMax(edge_received_at_ms,   projection_version_ms) AS edge_received_at_ms,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM processing_segments_final
+GROUP BY tenant_id, node_id, stream_id, source_event_id;
+
+-- ============================================================================
+-- ANOMALY TABLES — stale closes and operator-visible non-billable facts.
+-- ----------------------------------------------------------------------------
+-- Physically separate from *_final so rated billing reads cannot reach them.
+-- The stale-close worker in api_sidecar writes here when a session/stream
+-- lingers past stale_close_timeout without a real USER_END/STREAM_END.
+-- Operational meters (e.g. stale_session_minutes) read from these tables.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS viewer_sessions_anomalous (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    session_id String,
+
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    stream_name String DEFAULT '',
+
+    estimated_duration_seconds UInt32 DEFAULT 0, -- helmsman best-effort guess
+    observed_first_at_ms Int64 DEFAULT 0,
+    observed_last_at_ms Int64 DEFAULT 0,
+    closed_at_ms Int64,
+    closed_reason LowCardinality(String) DEFAULT 'stale', -- 'stale' | 'orphan' | 'parser_error'
+    projection_version_ms Int64,
+
+    notes String DEFAULT ''
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
+ORDER BY (tenant_id, closed_at_ms, node_id, session_id)
+TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
+
+CREATE TABLE IF NOT EXISTS stream_sessions_anomalous (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    stream_id UUID,
+
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_name String DEFAULT '',
+
+    estimated_duration_seconds UInt32 DEFAULT 0,
+    observed_first_at_ms Int64 DEFAULT 0,
+    observed_last_at_ms Int64 DEFAULT 0,
+    closed_at_ms Int64,
+    closed_reason LowCardinality(String) DEFAULT 'stale',
+    projection_version_ms Int64,
+
+    notes String DEFAULT ''
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
+ORDER BY (tenant_id, closed_at_ms, node_id, stream_id)
+TTL toDateTime(closed_at_ms / 1000) + INTERVAL 365 DAY;
+
+-- ============================================================================
+-- 5-MIN CANONICAL LEDGERS — analytics-side projection of final facts.
+-- ----------------------------------------------------------------------------
+-- Same projection model as the *_final tables. Each ledger row is a
+-- 5-minute-bucketed aggregate computed by a rebuild worker; reruns append
+-- new projection rows. The *_v view materializes the logical row.
+--
+-- The schema and rebuild workers ship together;
+-- see api_analytics_ingest for the rebuilders.
+-- handles dashboards.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS ledger_rebuild_cursors (
+    ledger_name LowCardinality(String),
+    last_processed_projection_ms Int64,
+    updated_at_ms Int64
+) ENGINE = ReplacingMergeTree(updated_at_ms)
+ORDER BY ledger_name
+TTL toDateTime(updated_at_ms / 1000) + INTERVAL 365 DAY;
+
+CREATE TABLE IF NOT EXISTS viewer_usage_5m (
+    -- Natural key
+    window_start DateTime,             -- toStartOfFiveMinute boundary
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    node_id LowCardinality(String),
+    session_id String,
+
+    -- Allocated counters: overlap of session's [source_started_at_ms,
+    -- source_ended_at_ms) with this window, in seconds and bytes.
+    seconds_observed UInt32 DEFAULT 0,
+    up_bytes_observed UInt64 DEFAULT 0,
+    down_bytes_observed UInt64 DEFAULT 0,
+
+    -- Traceback
+    source_event_id String,             -- USER_END source_event_id that produced this row
+
+    projection_version_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, node_id, session_id, window_start)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE VIEW IF NOT EXISTS viewer_usage_5m_v AS
+SELECT
+    window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(seconds_observed,    projection_version_ms) AS seconds_observed,
+    argMax(up_bytes_observed,   projection_version_ms) AS up_bytes_observed,
+    argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed,
+    argMax(source_event_id,     projection_version_ms) AS source_event_id,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM viewer_usage_5m
+GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, session_id;
+
+CREATE TABLE IF NOT EXISTS stream_runtime_5m (
+    window_start DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID,
+    source_event_id String,             -- STREAM_END source_event_id
+
+    active_seconds UInt32 DEFAULT 0,
+    peak_viewers UInt32 DEFAULT 0,
+
+    projection_version_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, source_event_id, window_start)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE VIEW IF NOT EXISTS stream_runtime_5m_v AS
+SELECT
+    window_start, tenant_id, cluster_id, stream_id, source_event_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(active_seconds,  projection_version_ms) AS active_seconds,
+    argMax(peak_viewers,    projection_version_ms) AS peak_viewers,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM stream_runtime_5m
+GROUP BY window_start, tenant_id, cluster_id, stream_id, source_event_id;
+
+-- storage_gb_seconds_5m: time-weighted integration of storage_snapshots
+-- per (tenant, cluster, storage_scope, provider attribution) into
+-- 5-minute windows. Storage snapshots are themselves the immutable
+-- facts — no separate *_final table. The rebuild worker writes here
+-- directly. Provider attribution columns enable marketplace settlement
+-- routing without a second pass over the ledger.
+CREATE TABLE IF NOT EXISTS storage_gb_seconds_5m (
+    window_start DateTime,
+    tenant_id UUID,                                        -- usage tenant
+    cluster_id LowCardinality(String) DEFAULT '',
+    storage_scope LowCardinality(String) DEFAULT 'hot',    -- 'hot' | 'cold'
+    storage_provider_tenant_id LowCardinality(String) DEFAULT '',
+    storage_provider_cluster_id LowCardinality(String) DEFAULT '',
+    storage_backend LowCardinality(String) DEFAULT 'unknown',
+
+    gb_seconds Float64 DEFAULT 0,       -- ∫(total_bytes/GiB) dt across the 5-min window
+    file_count UInt64 DEFAULT 0,        -- argMax of snapshots within the window
+
+    projection_version_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend, window_start)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE VIEW IF NOT EXISTS storage_gb_seconds_5m_v AS
+SELECT
+    window_start, tenant_id, cluster_id, storage_scope,
+    storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(gb_seconds, projection_version_ms) AS gb_seconds,
+    argMax(file_count, projection_version_ms) AS file_count,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM storage_gb_seconds_5m
+GROUP BY window_start, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+
+-- processing_5m: 5-min bucketed aggregation of processing_segments_final.
+-- source_event_id is the canonical dedupe identity. Process, codec, track,
+-- and cluster are materialized fields so replayed attribution changes
+-- replace the prior shape in processing_5m_v.
+CREATE TABLE IF NOT EXISTS processing_5m (
+    window_start DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    process_type LowCardinality(String),
+    output_codec LowCardinality(String),
+    track_type LowCardinality(String),
+    source_event_id String,
+
+    media_seconds Float64 DEFAULT 0,
+
+    projection_version_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, cluster_id, process_type, output_codec, track_type, source_event_id, window_start)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE VIEW IF NOT EXISTS processing_5m_v AS
+SELECT
+    window_start, tenant_id,
+    argMax(cluster_id, projection_version_ms) AS cluster_id,
+    argMax(process_type, projection_version_ms) AS process_type,
+    argMax(output_codec, projection_version_ms) AS output_codec,
+    argMax(track_type, projection_version_ms) AS track_type,
+    source_event_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(media_seconds, projection_version_ms) AS media_seconds,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM processing_5m
+GROUP BY window_start, tenant_id, source_event_id;
+
+-- api_usage_5m: per-window scalar aggregates. Per-window unique-user/token
+-- counts are stored as exact UInt64 estimates from the rebuild worker's
+-- uniqCombined() over api_requests for that window stored as
+-- AggregateFunction(uniqCombined, UInt64) state columns so dashboards
+-- can merge across windows via uniqCombinedMerge. argMax on the state
+-- column picks the latest projection's state without re-finalizing it.
+CREATE TABLE IF NOT EXISTS api_usage_5m (
+    window_start DateTime,
+    tenant_id UUID,
+    auth_type LowCardinality(String),
+    operation_type LowCardinality(String),
+    operation_name LowCardinality(String) DEFAULT '',
+    requests UInt64 DEFAULT 0,
+    errors UInt64 DEFAULT 0,
+    duration_ms UInt64 DEFAULT 0,
+    complexity UInt64 DEFAULT 0,
+    unique_users_state AggregateFunction(uniqCombined, UInt64),
+    unique_tokens_state AggregateFunction(uniqCombined, UInt64),
+    projection_version_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, auth_type, operation_type, operation_name, window_start)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 365 DAY;
+
+-- unique_*_state columns are AggregateFunction(uniqCombined, …) — not
+-- argMaxState — so we pick the latest projection's state with argMax(value,
+-- key), which works on any column type including aggregate states.
+CREATE VIEW IF NOT EXISTS api_usage_5m_v AS
+SELECT
+    window_start, tenant_id, auth_type, operation_type, operation_name,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(requests,            projection_version_ms) AS requests,
+    argMax(errors,              projection_version_ms) AS errors,
+    argMax(duration_ms,         projection_version_ms) AS duration_ms,
+    argMax(complexity,          projection_version_ms) AS complexity,
+    argMax(unique_users_state,  projection_version_ms) AS unique_users_state,
+    argMax(unique_tokens_state, projection_version_ms) AS unique_tokens_state,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM api_usage_5m
+GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name;
+
+-- ============================================================================
+-- OPERATIONAL GUARDRAIL — projection divergence audit
+-- ----------------------------------------------------------------------------
+-- This guardrail runs on every finalized rated fact projection
+-- (viewer_sessions_final, stream_sessions_final, processing_segments_final).
+-- If a rated field's new value differs beyond a per-meter epsilon, the
+-- parser STILL writes the projection row (append invariant) but ALSO bumps
+-- a Prometheus counter and writes an audit row here.
+--
+-- This table is the source feed for explicit additive corrections outside
+-- the normal append-only parser path. The billing summarizer converts
+-- supported divergence types into Purser usage_adjustments.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS projection_divergences (
+    observed_at_ms Int64,
+    table_name LowCardinality(String),
+    meter LowCardinality(String),
+    field LowCardinality(String),
+    natural_key_json String CODEC(ZSTD(3)),
+    prior_value_json String CODEC(ZSTD(3)),
+    new_value_json String CODEC(ZSTD(3)),
+    source_event_id String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(observed_at_ms / 1000))
+ORDER BY (table_name, observed_at_ms, source_event_id)
+TTL toDateTime(observed_at_ms / 1000) + INTERVAL 90 DAY;
+-- Canonical-meter rollup tier. Each rollup is a *_store ReplacingMergeTree
+-- that the refreshable MV APPENDs into, plus a dedup VIEW under the
+-- public name that does argMax(col, refresh_version_ms) GROUP BY
+-- natural_key. Resolvers read the public-name VIEW; nothing reads
+-- *_store directly. Each MV scans recent projection-version changes and
+-- rewrites the affected source-time buckets into the append store.
+--
+-- Migration from earlier MV/table shapes is handled by
+-- pkg/database/sql/clickhouse/migrations/periscope/v0.2.64/contract/001.
+-- Greenfield init via this file installs the canonical shape directly.
+
+CREATE TABLE IF NOT EXISTS tenant_usage_5m_store (
+    window_start DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    seconds_observed UInt64 DEFAULT 0,
+    up_bytes UInt64 DEFAULT 0,
+    down_bytes UInt64 DEFAULT 0,
+    unique_sessions_state AggregateFunction(uniqCombined, String),
+    unique_streams_state AggregateFunction(uniqCombined, UUID),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (tenant_id, window_start, cluster_id)
+TTL window_start + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_5m_mv
+REFRESH EVERY 1 MINUTE APPEND TO tenant_usage_5m_store AS
+SELECT
+    window_start,
+    tenant_id,
+    cluster_id,
+    toUInt64(sum(seconds_observed))    AS seconds_observed,
+    toUInt64(sum(up_bytes_observed))   AS up_bytes,
+    toUInt64(sum(down_bytes_observed)) AS down_bytes,
+    uniqCombinedState(session_id)      AS unique_sessions_state,
+    uniqCombinedState(stream_id)       AS unique_streams_state,
+    now64(3)                           AS refresh_version_ms
+FROM viewer_usage_5m_v
+WHERE (window_start, tenant_id, cluster_id) IN (
+    SELECT DISTINCT window_start, tenant_id, cluster_id
+    FROM viewer_usage_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 HOUR)
+)
+GROUP BY window_start, tenant_id, cluster_id;
+
+CREATE VIEW IF NOT EXISTS tenant_usage_5m AS
+SELECT
+    window_start, tenant_id, cluster_id,
+    argMax(seconds_observed,      refresh_version_ms) AS seconds_observed,
+    argMax(up_bytes,              refresh_version_ms) AS up_bytes,
+    argMax(down_bytes,            refresh_version_ms) AS down_bytes,
+    argMax(unique_sessions_state, refresh_version_ms) AS unique_sessions_state,
+    argMax(unique_streams_state,  refresh_version_ms) AS unique_streams_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM tenant_usage_5m_store
+GROUP BY window_start, tenant_id, cluster_id;
+
+-- ----------------------------------------------------------------------------
+-- Hourly tier (24h/7d dashboards)
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS tenant_usage_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    seconds_observed UInt64 DEFAULT 0,
+    up_bytes UInt64 DEFAULT 0,
+    down_bytes UInt64 DEFAULT 0,
+    unique_sessions_state AggregateFunction(uniqCombined, String),
+    unique_streams_state AggregateFunction(uniqCombined, UUID),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, cluster_id)
+TTL hour + INTERVAL 730 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO tenant_usage_hourly_store AS
+SELECT
+    toStartOfHour(window_start) AS hour,
+    tenant_id,
+    cluster_id,
+    toUInt64(sum(seconds_observed))    AS seconds_observed,
+    toUInt64(sum(up_bytes_observed))   AS up_bytes,
+    toUInt64(sum(down_bytes_observed)) AS down_bytes,
+    uniqCombinedState(session_id)      AS unique_sessions_state,
+    uniqCombinedState(stream_id)       AS unique_streams_state,
+    now64(3)                           AS refresh_version_ms
+FROM viewer_usage_5m_v
+WHERE (hour, tenant_id, cluster_id) IN (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id
+    FROM viewer_usage_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, tenant_id, cluster_id;
+
+CREATE VIEW IF NOT EXISTS tenant_usage_hourly AS
+SELECT
+    hour, tenant_id, cluster_id,
+    argMax(seconds_observed,      refresh_version_ms) AS seconds_observed,
+    argMax(up_bytes,              refresh_version_ms) AS up_bytes,
+    argMax(down_bytes,            refresh_version_ms) AS down_bytes,
+    argMax(unique_sessions_state, refresh_version_ms) AS unique_sessions_state,
+    argMax(unique_streams_state,  refresh_version_ms) AS unique_streams_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM tenant_usage_hourly_store
+GROUP BY hour, tenant_id, cluster_id;
+
+CREATE TABLE IF NOT EXISTS viewer_hours_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    country_code FixedString(2) DEFAULT '\0\0',
+    total_session_seconds UInt64 DEFAULT 0,
+    total_bytes UInt64 DEFAULT 0,
+    egress_bytes UInt64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, cluster_id, stream_id, country_code)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_hours_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO viewer_hours_hourly_store AS
+SELECT
+    toStartOfHour(u.window_start) AS hour,
+    u.tenant_id,
+    u.cluster_id,
+    u.stream_id,
+    s.country_code,
+    toUInt64(sum(u.seconds_observed))                          AS total_session_seconds,
+    toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
+    toUInt64(sum(u.down_bytes_observed))                        AS egress_bytes,
+    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    now64(3)                                                   AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code) IN (
+    SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code
+    FROM viewer_usage_5m_v u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code;
+
+CREATE VIEW IF NOT EXISTS viewer_hours_hourly AS
+SELECT
+    hour, tenant_id, cluster_id, stream_id, country_code,
+    argMax(total_session_seconds, refresh_version_ms) AS total_session_seconds,
+    argMax(total_bytes,           refresh_version_ms) AS total_bytes,
+    argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
+    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM viewer_hours_hourly_store
+GROUP BY hour, tenant_id, cluster_id, stream_id, country_code;
+
+CREATE TABLE IF NOT EXISTS viewer_geo_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    country_code FixedString(2),
+    viewer_count UInt64 DEFAULT 0,
+    viewer_hours Float64 DEFAULT 0,
+    egress_gb Float64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, country_code)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO viewer_geo_hourly_store AS
+SELECT
+    toStartOfHour(u.window_start) AS hour,
+    u.tenant_id,
+    s.country_code,
+    toUInt64(uniqCombined(u.session_id))                            AS viewer_count,
+    sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
+    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
+    uniqCombinedState(u.session_id)                                 AS unique_viewers_state,
+    now64(3)                                                        AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (hour, u.tenant_id, s.country_code) IN (
+    SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, s.country_code
+    FROM viewer_usage_5m_v u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, u.tenant_id, s.country_code;
+
+CREATE VIEW IF NOT EXISTS viewer_geo_hourly AS
+SELECT
+    hour, tenant_id, country_code,
+    argMax(viewer_count,         refresh_version_ms) AS viewer_count,
+    argMax(viewer_hours,         refresh_version_ms) AS viewer_hours,
+    argMax(egress_gb,            refresh_version_ms) AS egress_gb,
+    argMax(unique_viewers_state, refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM viewer_geo_hourly_store
+GROUP BY hour, tenant_id, country_code;
+
+CREATE TABLE IF NOT EXISTS viewer_city_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    country_code FixedString(2),
+    city LowCardinality(String),
+    latitude Float64 DEFAULT 0,
+    longitude Float64 DEFAULT 0,
+    viewer_count UInt64 DEFAULT 0,
+    viewer_hours Float64 DEFAULT 0,
+    egress_gb Float64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, stream_id, country_code, city)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_city_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO viewer_city_hourly_store AS
+SELECT
+    toStartOfHour(u.window_start) AS hour,
+    u.tenant_id,
+    u.stream_id,
+    s.country_code,
+    s.city,
+    any(s.latitude)                                                 AS latitude,
+    any(s.longitude)                                                AS longitude,
+    toUInt64(uniqCombined(u.session_id))                            AS viewer_count,
+    sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
+    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
+    uniqCombinedState(u.session_id)                                 AS unique_viewers_state,
+    now64(3)                                                        AS refresh_version_ms
+FROM viewer_usage_5m_v u
+INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (hour, u.tenant_id, u.stream_id, s.country_code, s.city) IN (
+    SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id, s.country_code, s.city
+    FROM viewer_usage_5m_v u
+    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE s.city != ''
+      AND u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, u.tenant_id, u.stream_id, s.country_code, s.city;
+
+CREATE VIEW IF NOT EXISTS viewer_city_hourly AS
+SELECT
+    hour, tenant_id, stream_id, country_code, city,
+    argMax(latitude,             refresh_version_ms) AS latitude,
+    argMax(longitude,            refresh_version_ms) AS longitude,
+    argMax(viewer_count,         refresh_version_ms) AS viewer_count,
+    argMax(viewer_hours,         refresh_version_ms) AS viewer_hours,
+    argMax(egress_gb,            refresh_version_ms) AS egress_gb,
+    argMax(unique_viewers_state, refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM viewer_city_hourly_store
+GROUP BY hour, tenant_id, stream_id, country_code, city;
+
+CREATE TABLE IF NOT EXISTS stream_connection_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    total_bytes UInt64 DEFAULT 0,
+    total_sessions UInt64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, stream_id)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO stream_connection_hourly_store AS
+SELECT
+    toStartOfHour(u.window_start) AS hour,
+    u.tenant_id,
+    u.stream_id,
+    any(s.stream_name)                                         AS internal_name,
+    toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
+    toUInt64(uniqCombined(u.session_id))                       AS total_sessions,
+    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    now64(3)                                                   AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (hour, u.tenant_id, u.stream_id) IN (
+    SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id
+    FROM viewer_usage_5m_v u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, u.tenant_id, u.stream_id;
+
+CREATE VIEW IF NOT EXISTS stream_connection_hourly AS
+SELECT
+    hour, tenant_id, stream_id,
+    argMax(internal_name,        refresh_version_ms) AS internal_name,
+    argMax(total_bytes,          refresh_version_ms) AS total_bytes,
+    argMax(total_sessions,       refresh_version_ms) AS total_sessions,
+    argMax(unique_viewers_state, refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM stream_connection_hourly_store
+GROUP BY hour, tenant_id, stream_id;
+
+CREATE TABLE IF NOT EXISTS stream_runtime_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID,
+    runtime_seconds UInt64 DEFAULT 0,
+    peak_viewers UInt32 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, cluster_id, stream_id)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_runtime_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO stream_runtime_hourly_store AS
+SELECT
+    toStartOfHour(window_start) AS hour,
+    tenant_id,
+    cluster_id,
+    stream_id,
+    toUInt64(sum(active_seconds)) AS runtime_seconds,
+    toUInt32(max(peak_viewers))   AS peak_viewers,
+    now64(3)                      AS refresh_version_ms
+FROM stream_runtime_5m_v
+WHERE (hour, tenant_id, cluster_id, stream_id) IN (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, stream_id
+    FROM stream_runtime_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, tenant_id, cluster_id, stream_id;
+
+CREATE VIEW IF NOT EXISTS stream_runtime_hourly AS
+SELECT
+    hour, tenant_id, cluster_id, stream_id,
+    argMax(runtime_seconds, refresh_version_ms) AS runtime_seconds,
+    argMax(peak_viewers,    refresh_version_ms) AS peak_viewers,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM stream_runtime_hourly_store
+GROUP BY hour, tenant_id, cluster_id, stream_id;
+
+-- storage_usage_hourly/daily are defined below in the storage-provider
+-- attribution block so the rollup columns include
+-- (storage_provider_tenant_id, storage_provider_cluster_id, storage_backend)
+-- alongside the usage tenant.
+
+CREATE TABLE IF NOT EXISTS processing_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    process_type LowCardinality(String),
+    output_codec LowCardinality(String),
+    track_type LowCardinality(String),
+    media_seconds Float64 DEFAULT 0,
+    segment_count UInt64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, cluster_id, process_type, output_codec, track_type)
+TTL hour + INTERVAL 730 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS processing_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO processing_hourly_store AS
+SELECT
+    toStartOfHour(window_start) AS hour,
+    tenant_id,
+    cluster_id,
+    process_type,
+    output_codec,
+    track_type,
+    sum(media_seconds)                       AS media_seconds,
+    toUInt64(uniqCombined(source_event_id))  AS segment_count,
+    now64(3)                                 AS refresh_version_ms
+FROM processing_5m_v
+WHERE (hour, tenant_id, cluster_id, process_type, output_codec, track_type) IN (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, process_type, output_codec, track_type
+    FROM processing_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
+
+CREATE VIEW IF NOT EXISTS processing_hourly AS
+SELECT
+    hour, tenant_id, cluster_id, process_type, output_codec, track_type,
+    argMax(media_seconds, refresh_version_ms) AS media_seconds,
+    argMax(segment_count, refresh_version_ms) AS segment_count,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM processing_hourly_store
+GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
+
+CREATE TABLE IF NOT EXISTS processing_daily_store (
+    day Date,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    process_type LowCardinality(String),
+    output_codec LowCardinality(String),
+    track_type LowCardinality(String),
+    media_seconds Float64 DEFAULT 0,
+    segment_count UInt64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, cluster_id, process_type, output_codec, track_type)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS processing_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO processing_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    cluster_id,
+    process_type,
+    output_codec,
+    track_type,
+    sum(media_seconds) AS media_seconds,
+    sum(segment_count) AS segment_count,
+    now64(3)           AS refresh_version_ms
+FROM processing_hourly
+WHERE (day, tenant_id, cluster_id, process_type, output_codec, track_type) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, process_type, output_codec, track_type
+    FROM processing_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, cluster_id, process_type, output_codec, track_type;
+
+CREATE VIEW IF NOT EXISTS processing_daily AS
+SELECT
+    day, tenant_id, cluster_id, process_type, output_codec, track_type,
+    argMax(media_seconds, refresh_version_ms) AS media_seconds,
+    argMax(segment_count, refresh_version_ms) AS segment_count,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM processing_daily_store
+GROUP BY day, tenant_id, cluster_id, process_type, output_codec, track_type;
+
+CREATE TABLE IF NOT EXISTS api_usage_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    auth_type LowCardinality(String),
+    operation_type LowCardinality(String),
+    operation_name LowCardinality(String) DEFAULT '',
+    requests UInt64 DEFAULT 0,
+    errors UInt64 DEFAULT 0,
+    duration_ms UInt64 DEFAULT 0,
+    complexity UInt64 DEFAULT 0,
+    unique_users_state AggregateFunction(uniqCombined, UInt64),
+    unique_tokens_state AggregateFunction(uniqCombined, UInt64),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, auth_type, operation_type, operation_name)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO api_usage_hourly_store AS
+SELECT
+    toStartOfHour(window_start) AS hour,
+    tenant_id,
+    auth_type,
+    operation_type,
+    operation_name,
+    sum(requests)    AS requests,
+    sum(errors)      AS errors,
+    sum(duration_ms) AS duration_ms,
+    sum(complexity)  AS complexity,
+    uniqCombinedMergeState(unique_users_state)  AS unique_users_state,
+    uniqCombinedMergeState(unique_tokens_state) AS unique_tokens_state,
+    now64(3)                                    AS refresh_version_ms
+FROM api_usage_5m_v
+WHERE (hour, tenant_id, auth_type, operation_type, operation_name) IN (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, auth_type, operation_type, operation_name
+    FROM api_usage_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
+
+CREATE VIEW IF NOT EXISTS api_usage_hourly AS
+SELECT
+    hour, tenant_id, auth_type, operation_type, operation_name,
+    argMax(requests,            refresh_version_ms) AS requests,
+    argMax(errors,              refresh_version_ms) AS errors,
+    argMax(duration_ms,         refresh_version_ms) AS duration_ms,
+    argMax(complexity,          refresh_version_ms) AS complexity,
+    argMax(unique_users_state,  refresh_version_ms) AS unique_users_state,
+    argMax(unique_tokens_state, refresh_version_ms) AS unique_tokens_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM api_usage_hourly_store
+GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
+
+-- ----------------------------------------------------------------------------
+-- Daily tier (30d+ dashboards)
+-- ----------------------------------------------------------------------------
+
+-- ----------------------------------------------------------------------------
+-- Daily tier (30d+ dashboards). Each daily MV reads from the dedup VIEW of
+-- its hourly counterpart so the daily rollup sees a stable per-hour value
+-- regardless of how many refresh versions exist in the hourly _store.
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS tenant_usage_daily_store (
+    day Date,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    seconds_observed UInt64 DEFAULT 0,
+    up_bytes UInt64 DEFAULT 0,
+    down_bytes UInt64 DEFAULT 0,
+    unique_sessions_state AggregateFunction(uniqCombined, String),
+    unique_streams_state AggregateFunction(uniqCombined, UUID),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, cluster_id)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO tenant_usage_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    cluster_id,
+    sum(seconds_observed) AS seconds_observed,
+    sum(up_bytes)         AS up_bytes,
+    sum(down_bytes)       AS down_bytes,
+    uniqCombinedMergeState(unique_sessions_state) AS unique_sessions_state,
+    uniqCombinedMergeState(unique_streams_state)  AS unique_streams_state,
+    now64(3)                                      AS refresh_version_ms
+FROM tenant_usage_hourly
+WHERE (day, tenant_id, cluster_id) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id
+    FROM tenant_usage_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, cluster_id;
+
+CREATE VIEW IF NOT EXISTS tenant_usage_daily AS
+SELECT
+    day, tenant_id, cluster_id,
+    argMax(seconds_observed,      refresh_version_ms) AS seconds_observed,
+    argMax(up_bytes,              refresh_version_ms) AS up_bytes,
+    argMax(down_bytes,            refresh_version_ms) AS down_bytes,
+    argMax(unique_sessions_state, refresh_version_ms) AS unique_sessions_state,
+    argMax(unique_streams_state,  refresh_version_ms) AS unique_streams_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM tenant_usage_daily_store
+GROUP BY day, tenant_id, cluster_id;
+
+CREATE TABLE IF NOT EXISTS tenant_viewer_daily_store (
+    day Date,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    viewer_hours Float64 DEFAULT 0,
+    egress_gb Float64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    total_sessions UInt64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, cluster_id)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO tenant_viewer_daily_store AS
+SELECT
+    day,
+    tenant_id,
+    cluster_id,
+    sum(seconds_observed) / 3600.0            AS viewer_hours,
+    sum(down_bytes) / pow(1024, 3) AS egress_gb,
+    uniqCombinedMergeState(unique_sessions_state) AS unique_viewers_state,
+    uniqCombinedMerge(unique_sessions_state)  AS total_sessions,
+    now64(3)                                  AS refresh_version_ms
+FROM tenant_usage_daily
+WHERE (day, tenant_id, cluster_id) IN (
+    SELECT DISTINCT day, tenant_id, cluster_id
+    FROM tenant_usage_daily
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, cluster_id;
+
+CREATE VIEW IF NOT EXISTS tenant_viewer_daily AS
+SELECT
+    day, tenant_id, cluster_id,
+    argMax(viewer_hours,          refresh_version_ms) AS viewer_hours,
+    argMax(egress_gb,             refresh_version_ms) AS egress_gb,
+    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
+    argMax(total_sessions,        refresh_version_ms) AS total_sessions,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM tenant_viewer_daily_store
+GROUP BY day, tenant_id, cluster_id;
+
+CREATE TABLE IF NOT EXISTS tenant_analytics_daily_store (
+    day Date,
+    tenant_id UUID,
+    total_streams UInt64 DEFAULT 0,
+    total_views UInt64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    egress_bytes UInt64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_analytics_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO tenant_analytics_daily_store AS
+SELECT
+    day,
+    tenant_id,
+    uniqCombinedMerge(unique_streams_state)  AS total_streams,
+    uniqCombinedMerge(unique_sessions_state) AS total_views,
+    uniqCombinedMergeState(unique_sessions_state) AS unique_viewers_state,
+    sum(down_bytes)                          AS egress_bytes,
+    now64(3)                                 AS refresh_version_ms
+FROM tenant_usage_daily
+WHERE (day, tenant_id) IN (
+    SELECT DISTINCT day, tenant_id
+    FROM tenant_usage_daily
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id;
+
+CREATE VIEW IF NOT EXISTS tenant_analytics_daily AS
+SELECT
+    day, tenant_id,
+    argMax(total_streams,         refresh_version_ms) AS total_streams,
+    argMax(total_views,           refresh_version_ms) AS total_views,
+    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
+    argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM tenant_analytics_daily_store
+GROUP BY day, tenant_id;
+
+CREATE TABLE IF NOT EXISTS stream_analytics_daily_store (
+    day Date,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String DEFAULT '',
+    total_views UInt64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    unique_countries UInt32 DEFAULT 0,
+    unique_cities UInt32 DEFAULT 0,
+    egress_bytes UInt64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, stream_id)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_analytics_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO stream_analytics_daily_store AS
+SELECT
+    toDate(u.window_start) AS day,
+    u.tenant_id,
+    u.stream_id,
+    any(s.stream_name)                                         AS internal_name,
+    toUInt64(uniqCombined(u.session_id))                       AS total_views,
+    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    toUInt32(uniqCombined(s.country_code))                     AS unique_countries,
+    toUInt32(uniqCombined(s.city))                             AS unique_cities,
+    toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
+    now64(3)                                                   AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (day, u.tenant_id, u.stream_id) IN (
+    SELECT DISTINCT toDate(u.window_start) AS day, u.tenant_id, u.stream_id
+    FROM viewer_usage_5m_v u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY day, u.tenant_id, u.stream_id;
+
+CREATE VIEW IF NOT EXISTS stream_analytics_daily AS
+SELECT
+    day, tenant_id, stream_id,
+    argMax(internal_name,         refresh_version_ms) AS internal_name,
+    argMax(total_views,           refresh_version_ms) AS total_views,
+    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
+    argMax(unique_countries,      refresh_version_ms) AS unique_countries,
+    argMax(unique_cities,         refresh_version_ms) AS unique_cities,
+    argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM stream_analytics_daily_store
+GROUP BY day, tenant_id, stream_id;
+
+CREATE TABLE IF NOT EXISTS viewer_geo_daily_store (
+    day Date,
+    tenant_id UUID,
+    country_code FixedString(2),
+    viewer_count UInt64 DEFAULT 0,
+    viewer_hours Float64 DEFAULT 0,
+    egress_gb Float64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, country_code)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO viewer_geo_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    country_code,
+    uniqCombinedMerge(unique_viewers_state)      AS viewer_count,
+    sum(viewer_hours)                            AS viewer_hours,
+    sum(egress_gb)                               AS egress_gb,
+    uniqCombinedMergeState(unique_viewers_state) AS unique_viewers_state,
+    now64(3)                                     AS refresh_version_ms
+FROM viewer_geo_hourly
+WHERE (day, tenant_id, country_code) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, country_code
+    FROM viewer_geo_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, country_code;
+
+CREATE VIEW IF NOT EXISTS viewer_geo_daily AS
+SELECT
+    day, tenant_id, country_code,
+    argMax(viewer_count,         refresh_version_ms) AS viewer_count,
+    argMax(viewer_hours,         refresh_version_ms) AS viewer_hours,
+    argMax(egress_gb,            refresh_version_ms) AS egress_gb,
+    argMax(unique_viewers_state, refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM viewer_geo_daily_store
+GROUP BY day, tenant_id, country_code;
+
+CREATE TABLE IF NOT EXISTS viewer_city_daily_store (
+    day Date,
+    tenant_id UUID,
+    stream_id UUID,
+    country_code FixedString(2),
+    city LowCardinality(String),
+    viewer_count UInt64 DEFAULT 0,
+    viewer_hours Float64 DEFAULT 0,
+    egress_gb Float64 DEFAULT 0,
+    unique_viewers_state AggregateFunction(uniqCombined, String),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, stream_id, country_code, city)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_city_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO viewer_city_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    stream_id,
+    country_code,
+    city,
+    uniqCombinedMerge(unique_viewers_state)      AS viewer_count,
+    sum(viewer_hours)                            AS viewer_hours,
+    sum(egress_gb)                               AS egress_gb,
+    uniqCombinedMergeState(unique_viewers_state) AS unique_viewers_state,
+    now64(3)                                     AS refresh_version_ms
+FROM viewer_city_hourly
+WHERE (day, tenant_id, stream_id, country_code, city) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, stream_id, country_code, city
+    FROM viewer_city_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, stream_id, country_code, city;
+
+CREATE VIEW IF NOT EXISTS viewer_city_daily AS
+SELECT
+    day, tenant_id, stream_id, country_code, city,
+    argMax(viewer_count,         refresh_version_ms) AS viewer_count,
+    argMax(viewer_hours,         refresh_version_ms) AS viewer_hours,
+    argMax(egress_gb,            refresh_version_ms) AS egress_gb,
+    argMax(unique_viewers_state, refresh_version_ms) AS unique_viewers_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM viewer_city_daily_store
+GROUP BY day, tenant_id, stream_id, country_code, city;
+
+CREATE TABLE IF NOT EXISTS stream_runtime_daily_store (
+    day Date,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID,
+    runtime_seconds UInt64 DEFAULT 0,
+    peak_viewers UInt32 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, cluster_id, stream_id)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_runtime_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO stream_runtime_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    cluster_id,
+    stream_id,
+    sum(runtime_seconds) AS runtime_seconds,
+    max(peak_viewers)    AS peak_viewers,
+    now64(3)             AS refresh_version_ms
+FROM stream_runtime_hourly
+WHERE (day, tenant_id, cluster_id, stream_id) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, stream_id
+    FROM stream_runtime_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, cluster_id, stream_id;
+
+CREATE VIEW IF NOT EXISTS stream_runtime_daily AS
+SELECT
+    day, tenant_id, cluster_id, stream_id,
+    argMax(runtime_seconds, refresh_version_ms) AS runtime_seconds,
+    argMax(peak_viewers,    refresh_version_ms) AS peak_viewers,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM stream_runtime_daily_store
+GROUP BY day, tenant_id, cluster_id, stream_id;
+
+-- storage_usage_daily is defined below in the storage-provider attribution
+-- block so the rollup columns include provider attribution.
+
+-- processing_daily is defined alongside processing_hourly above; nothing else here.
+
+CREATE TABLE IF NOT EXISTS api_usage_daily_store (
+    day Date,
+    tenant_id UUID,
+    auth_type LowCardinality(String),
+    operation_type LowCardinality(String),
+    operation_name LowCardinality(String) DEFAULT '',
+    requests UInt64 DEFAULT 0,
+    errors UInt64 DEFAULT 0,
+    duration_ms UInt64 DEFAULT 0,
+    complexity UInt64 DEFAULT 0,
+    unique_users_state AggregateFunction(uniqCombined, UInt64),
+    unique_tokens_state AggregateFunction(uniqCombined, UInt64),
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, auth_type, operation_type, operation_name)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO api_usage_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    auth_type,
+    operation_type,
+    operation_name,
+    sum(requests)    AS requests,
+    sum(errors)      AS errors,
+    sum(duration_ms) AS duration_ms,
+    sum(complexity)  AS complexity,
+    uniqCombinedMergeState(unique_users_state)  AS unique_users_state,
+    uniqCombinedMergeState(unique_tokens_state) AS unique_tokens_state,
+    now64(3)                                    AS refresh_version_ms
+FROM api_usage_hourly
+WHERE (day, tenant_id, auth_type, operation_type, operation_name) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, auth_type, operation_type, operation_name
+    FROM api_usage_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
+
+CREATE VIEW IF NOT EXISTS api_usage_daily AS
+SELECT
+    day, tenant_id, auth_type, operation_type, operation_name,
+    argMax(requests,            refresh_version_ms) AS requests,
+    argMax(errors,              refresh_version_ms) AS errors,
+    argMax(duration_ms,         refresh_version_ms) AS duration_ms,
+    argMax(complexity,          refresh_version_ms) AS complexity,
+    argMax(unique_users_state,  refresh_version_ms) AS unique_users_state,
+    argMax(unique_tokens_state, refresh_version_ms) AS unique_tokens_state,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM api_usage_daily_store
+GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
+
+-- ============================================================================
+-- STORAGE PROVIDER ATTRIBUTION (combined release, late-stage swap)
+-- ----------------------------------------------------------------------------
+-- Adds storage_provider_tenant_id, storage_provider_cluster_id, and
+-- storage_backend to the 5m ledger and hourly/daily rollups. Customer
+-- invoices rate by usage tenant and serving cluster; settlement analytics
+-- can route by provider using the same canonical storage facts.
+-- Default behavior unchanged: customer invoice rates by usage tenant_id;
+-- cold is rated, hot is operational-but-priceable. See
+-- docs/architecture/meter-contracts.md.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS storage_usage_hourly_store (
+    hour DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    storage_scope LowCardinality(String) DEFAULT 'hot',
+    storage_provider_tenant_id LowCardinality(String) DEFAULT '',
+    storage_provider_cluster_id LowCardinality(String) DEFAULT '',
+    storage_backend LowCardinality(String) DEFAULT 'unknown',
+    gb_seconds Float64 DEFAULT 0,
+    gb_hours Float64 DEFAULT 0,
+    avg_gb Float64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(hour)
+ORDER BY (tenant_id, hour, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_hourly_mv
+REFRESH EVERY 5 MINUTE APPEND TO storage_usage_hourly_store AS
+SELECT
+    toStartOfHour(window_start) AS hour,
+    tenant_id,
+    cluster_id,
+    storage_scope,
+    storage_provider_tenant_id,
+    storage_provider_cluster_id,
+    storage_backend,
+    sum(gb_seconds)            AS gb_seconds,
+    sum(gb_seconds) / 3600.0   AS gb_hours,
+    sum(gb_seconds) / 3600.0   AS avg_gb,
+    now64(3)                   AS refresh_version_ms
+FROM storage_gb_seconds_5m_v
+WHERE (hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+    FROM storage_gb_seconds_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+)
+GROUP BY hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+
+CREATE VIEW IF NOT EXISTS storage_usage_hourly AS
+SELECT
+    hour, tenant_id, cluster_id, storage_scope,
+    storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+    argMax(gb_seconds, refresh_version_ms) AS gb_seconds,
+    argMax(gb_hours,   refresh_version_ms) AS gb_hours,
+    argMax(avg_gb,     refresh_version_ms) AS avg_gb,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM storage_usage_hourly_store
+GROUP BY hour, tenant_id, cluster_id, storage_scope,
+         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+
+CREATE TABLE IF NOT EXISTS storage_usage_daily_store (
+    day Date,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    storage_scope LowCardinality(String) DEFAULT 'hot',
+    storage_provider_tenant_id LowCardinality(String) DEFAULT '',
+    storage_provider_cluster_id LowCardinality(String) DEFAULT '',
+    storage_backend LowCardinality(String) DEFAULT 'unknown',
+    gb_seconds Float64 DEFAULT 0,
+    gb_hours Float64 DEFAULT 0,
+    refresh_version_ms DateTime64(3)
+) ENGINE = ReplacingMergeTree(refresh_version_ms)
+PARTITION BY toYYYYMM(day)
+ORDER BY (tenant_id, day, cluster_id, storage_provider_tenant_id, storage_provider_cluster_id, storage_scope, storage_backend)
+TTL day + INTERVAL 1825 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_daily_mv
+REFRESH EVERY 1 HOUR APPEND TO storage_usage_daily_store AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    cluster_id,
+    storage_scope,
+    storage_provider_tenant_id,
+    storage_provider_cluster_id,
+    storage_backend,
+    sum(gb_seconds)          AS gb_seconds,
+    sum(gb_seconds) / 3600.0 AS gb_hours,
+    now64(3)                 AS refresh_version_ms
+FROM storage_usage_hourly
+WHERE (day, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN (
+    SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+    FROM storage_usage_hourly
+    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+)
+GROUP BY day, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+
+CREATE VIEW IF NOT EXISTS storage_usage_daily AS
+SELECT
+    day, tenant_id, cluster_id, storage_scope,
+    storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+    argMax(gb_seconds, refresh_version_ms) AS gb_seconds,
+    argMax(gb_hours,   refresh_version_ms) AS gb_hours,
+    max(refresh_version_ms) AS latest_refresh_version_ms
+FROM storage_usage_daily_store
+GROUP BY day, tenant_id, cluster_id, storage_scope,
+         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;

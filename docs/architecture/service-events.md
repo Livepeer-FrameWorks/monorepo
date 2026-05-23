@@ -144,13 +144,14 @@ Event types are string constants emitted by services. The list below reflects cu
 
 - `api_events` (audit log for service_events topic, sanitized for support events)
 - `api_requests` (raw usage batches from `api_request_batch`)
-- `api_usage_hourly` / `api_usage_daily` (rollups from `api_requests`)
+- `api_usage_5m` (canonical operational ledger)
+- `api_usage_hourly` / `api_usage_daily` (dashboard rollups from `api_usage_5m`)
 
 **Periscope Query**
 
-- Aggregates `api_usage_hourly` for the billing period.
-- Adds `api_requests`, `api_errors`, `api_duration_ms`, `api_complexity`, and `api_breakdown` to UsageSummary.
-  - `api_breakdown` includes `auth_type`, `operation_type`, `operation_name`, `unique_users`, `unique_tokens`.
+- Reads `api_usage_5m_v` for the billing-report path and dashboard rollups for longer API analytics views.
+- Emits `api_requests`, `api_errors`, `api_duration_ms`, and `api_complexity` as canonical usage records.
+- Persists API breakdown detail in `usage_details`: `auth_type`, `operation_type`, `operation_name`, `unique_users`, and `unique_tokens`.
 
 **Purser**
 

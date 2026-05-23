@@ -17,12 +17,118 @@ import (
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
 type sqlArgFunc func(driver.Value) bool
 
 func (f sqlArgFunc) Match(v driver.Value) bool {
 	return f(v)
+}
+
+func TestValidateUsageRecordAllowsCustomCanonicalMeter(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+
+	got := validateUsageRecord("ai_transcription_seconds", 180, start, end, "minute_5", "delta")
+	if got != "" {
+		t.Fatalf("validateUsageRecord custom meter = %q, want accepted", got)
+	}
+}
+
+func TestValidateUsageRecordRejectsMalformedMeter(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+
+	got := validateUsageRecord("Bad-Meter", 180, start, end, "minute_5", "delta")
+	if got != "invalid_meter" {
+		t.Fatalf("validateUsageRecord malformed meter = %q, want invalid_meter", got)
+	}
+}
+
+func TestValidateUsageRecordRequiresDeltaForPriceableMetrics(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+
+	got := validateUsageRecord("egress_gb", 3.5, start, end, "hourly", "gauge")
+	if got != "value_kind_mismatch" {
+		t.Fatalf("validateUsageRecord egress gauge = %q, want value_kind_mismatch", got)
+	}
+}
+
+func TestValidateUsageRecordRequiresCanonicalWindowForOperationalMeters(t *testing.T) {
+	got := validateUsageRecord("max_viewers", 42, time.Time{}, time.Time{}, "hourly", "gauge")
+	if got != "missing_period" {
+		t.Fatalf("validateUsageRecord operational gauge = %q, want missing_period", got)
+	}
+}
+
+func TestBuildUsageDataFromSummaryIncludesGenericMeters(t *testing.T) {
+	got := buildUsageDataFromSummary(models.UsageSummary{
+		Meters: map[string]float64{
+			"ai_detection_seconds": 42,
+			"egress_gb":            99,
+		},
+		EgressGB: 12,
+	})
+	if got["ai_detection_seconds"] != 42 {
+		t.Fatalf("ai_detection_seconds = %v, want 42", got["ai_detection_seconds"])
+	}
+	if got["egress_gb"] != 12 {
+		t.Fatalf("egress_gb = %v, want typed field to win over generic duplicate", got["egress_gb"])
+	}
+}
+
+func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	summary := models.UsageSummary{
+		TenantID:  "00000000-0000-0000-0000-000000000001",
+		ClusterID: "cluster-a",
+		Period:    start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
+		Timestamp: start,
+		StorageProviderUsage: []models.StorageProviderUsage{{
+			CustomerClusterID:        "cluster-a",
+			StorageProviderTenantID:  "provider-tenant",
+			StorageProviderClusterID: "provider-cluster",
+			StorageBackend:           "edge_disk",
+			StorageScope:             "hot",
+			UsageType:                "storage_gb_seconds_hot",
+			GBSeconds:                300,
+		}},
+		UsageAdjustments: []models.UsageAdjustment{{
+			SourceSystem: "periscope.projection_divergences",
+			SourceID:     "storage-correction-1",
+			UsageType:    "storage_gb_seconds_hot",
+			ClusterID:    "cluster-a",
+			DeltaValue:   -60,
+			PeriodStart:  start,
+			PeriodEnd:    end,
+			Reason:       "projection_divergence",
+			Details:      models.JSONB{"window_start": start.Format(time.RFC3339)},
+		}},
+	}
+
+	mock.ExpectExec(`INSERT INTO purser\.storage_provider_usage_records`).
+		WithArgs(summary.TenantID, "cluster-a", "provider-tenant", "provider-cluster", "edge_disk", "hot", "storage_gb_seconds_hot", 300.0, start, end, "kafka-test", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO purser\.usage_adjustments`).
+		WithArgs(summary.TenantID, "cluster-a", "storage_gb_seconds_hot", -60.0, start, end, "periscope.projection_divergences", "storage-correction-1", "projection_divergence", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
+		t.Fatalf("processUsageSummary: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
 }
 
 func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
@@ -36,27 +142,27 @@ func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
-	// Rows now carry cluster_id; legacy unattributed rows arrive as "".
+	// Rows carry cluster_id; unattributed rows arrive as "".
 	// Two distinct clusters split the same meter to verify partitioning.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs("tenant-1", start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "average_storage_gb", 2.5).
-			AddRow("cluster-a", "viewer_hours", 3.0).
-			AddRow("cluster-b", "viewer_hours", 1.5))
+			AddRow("", "storage_gb_seconds_hot", 2.5).
+			AddRow("cluster-a", "delivered_minutes", 180.0).
+			AddRow("cluster-b", "delivered_minutes", 90.0))
 
 	got, err := jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
 	if err != nil {
 		t.Fatalf("collectInvoiceUsage: %v", err)
 	}
-	if got[""]["average_storage_gb"] != 2.5 {
-		t.Errorf("legacy bucket missing average_storage_gb: %v", got[""])
+	if got[""]["storage_gb_seconds_hot"] != 2.5 {
+		t.Errorf("unattributed bucket missing storage_gb_seconds_hot: %v", got[""])
 	}
-	if got["cluster-a"]["viewer_hours"] != 3.0 {
-		t.Errorf("cluster-a viewer_hours = %v, want 3.0", got["cluster-a"]["viewer_hours"])
+	if got["cluster-a"]["delivered_minutes"] != 180.0 {
+		t.Errorf("cluster-a delivered_minutes = %v, want 180.0", got["cluster-a"]["delivered_minutes"])
 	}
-	if got["cluster-b"]["viewer_hours"] != 1.5 {
-		t.Errorf("cluster-b viewer_hours = %v, want 1.5", got["cluster-b"]["viewer_hours"])
+	if got["cluster-b"]["delivered_minutes"] != 90.0 {
+		t.Errorf("cluster-b delivered_minutes = %v, want 90.0", got["cluster-b"]["delivered_minutes"])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
@@ -77,7 +183,7 @@ func TestCollectInvoiceUsageRowsErrorFailsClosed(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs("tenant-1", start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "viewer_hours", 3.0).
+			AddRow("", "delivered_minutes", 180.0).
 			RowError(0, errors.New("cursor failed")))
 
 	_, err = jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
@@ -114,7 +220,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
-			AddRow("average_storage_gb", "all_usage", currency, "0", "1.00", "{}"))
+			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", "{}"))
 	mock.ExpectQuery(`FROM purser\.subscription_pricing_overrides`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
@@ -132,12 +238,19 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-		// New per-cluster shape: rows now carry cluster_id. Empty cluster_id
-		// keeps the legacy platform-official path.
+		// New per-cluster shape: rows carry cluster_id. Empty cluster_id
+		// resolves through platform-official tier pricing.
+	// 7200 GiB-seconds = 2 GiB-hours under the GiB-seconds→GiB-hour
+	// rating conversion. The tier prices hot at $1/GiB-hour, so the
+	// resulting metered line is $2.00 — same as before, but the
+	// underlying ledger value reflects the canonical unit.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "average_storage_gb", 2.0))
+			AddRow("", "storage_gb_seconds_hot", 7200.0))
+	mock.ExpectQuery(`usage_details->'codec_seconds'`).
+		WithArgs(tenantID, periodStart, periodEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
@@ -163,7 +276,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WithArgs("invoice-1", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
-			AddRow("meter:average_storage_gb"))
+			AddRow("meter:storage_gb_seconds_hot"))
 	mock.ExpectCommit()
 
 	if err := jm.updateInvoiceDraft(context.Background(), tenantID); err != nil {
@@ -196,7 +309,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
-			AddRow("average_storage_gb", "all_usage", currency, "0", "1.00", "{}"))
+			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", "{}"))
 	mock.ExpectQuery(`FROM purser\.subscription_pricing_overrides`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
@@ -214,10 +327,15 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	// 7200 GiB-seconds = 2 GiB-hours under the GiB-seconds→GiB-hour
+	// rating conversion. Tier prices hot at $1/GiB-hour → $2 metered.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "average_storage_gb", 2.0))
+			AddRow("", "storage_gb_seconds_hot", 7200.0))
+	mock.ExpectQuery(`usage_details->'codec_seconds'`).
+		WithArgs(tenantID, periodStart, periodEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "key", "seconds"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"stripe_subscription_id", "mollie_subscription_id"}).
@@ -237,7 +355,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WithArgs("invoice-1", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
-			AddRow("meter:average_storage_gb"))
+			AddRow("meter:storage_gb_seconds_hot"))
 	mock.ExpectCommit()
 
 	if err := jm.updateInvoiceDraft(context.Background(), tenantID); err != nil {

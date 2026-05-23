@@ -47,4 +47,15 @@ describe("FwPlayer", () => {
 
     expect(player._useStockControls).toBe(true);
   });
+
+  it("disables wrapper and stock controls when no-controls is enabled", () => {
+    const player = new FwPlayer() as any;
+    player.noControls = true;
+    player.stockControls = true;
+    player.nativeControls = true;
+    player.pc.s.currentPlayerInfo = null;
+
+    expect(player._controlsEnabled).toBe(false);
+    expect(player._useStockControls).toBe(false);
+  });
 });

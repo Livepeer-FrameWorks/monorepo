@@ -289,7 +289,7 @@ func scanRule(scan func(...any) error) (rating.Rule, error) {
 
 func validateEffectiveRule(rule rating.Rule) error {
 	if !rating.ValidMeter(rule.Meter) {
-		return fmt.Errorf("unsupported meter %q", rule.Meter)
+		return fmt.Errorf("invalid meter %q", rule.Meter)
 	}
 	if !rating.ValidModel(rule.Model) {
 		return fmt.Errorf("unsupported model %q", rule.Model)

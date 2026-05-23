@@ -91,7 +91,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
     translations: options?.translations,
     autoplay: options?.autoplay !== false,
     muted: options?.muted !== false,
-    controls: options?.stockControls === true,
+    controls: options?.controls !== false && options?.stockControls === true,
     poster: thumbnailUrl || undefined,
     debug: options?.debug,
     onStateChange: (playerState) => {
@@ -193,7 +193,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
   // ============================================================================
   const primaryEndpoint = state.endpoints?.primary as EndpointInfo | undefined;
   const isLegacyPlayer = state.currentPlayerInfo?.shortname === "mist-legacy";
-  const useStockControls = options?.stockControls === true || isLegacyPlayer;
+  const controlsEnabled = options?.controls !== false;
+  const useStockControls = controlsEnabled && (options?.stockControls === true || isLegacyPlayer);
 
   // Title overlay visibility: show on hover or when paused
   const showTitleOverlay =
@@ -492,7 +493,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
                 {/* Player controls — custom children or default */}
                 {children
                   ? children
-                  : !useStockControls && (
+                  : controlsEnabled &&
+                    !useStockControls && (
                       <PlayerControls
                         currentTime={state.currentTime}
                         duration={state.duration}

@@ -90,8 +90,8 @@ type ClusterPricing struct {
 
 	// PriceVersionID is the cluster_pricing_history.version_id snapshot
 	// effective at the resolution timestamp. Stamped on every line so a
-	// later mid-period repricing remains auditable. uuid.Nil for clusters
-	// that have never had an explicit pricing config (legacy default).
+	// later mid-period repricing remains auditable. uuid.Nil when the
+	// platform-official cluster inherits tenant-tier pricing.
 	PriceVersionID uuid.UUID
 }
 

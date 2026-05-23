@@ -9,7 +9,8 @@ This document defines the authoritative units and semantics for all metrics in t
 | `_bytes`          | Cumulative byte count                           | `uploaded_bytes`, `downloaded_bytes` |
 | `_bps`            | Bits per second (rate)                          | `bandwidthInBps`, `bandwidthOutBps`  |
 | `_bytes_per_sec`  | Bytes per second (rate)                         | `up_speed`, `down_speed`             |
-| `_gb`             | **GiB** (bytes / 1024³) for billing rollups     | `egress_gb`, `average_storage_gb`    |
+| `_gb`             | **GiB** (bytes / 1024³)                         | `egress_gb`, `display_storage_gb`    |
+| `_gb_seconds`     | GiB-seconds for time-weighted storage meters    | `storage_gb_seconds_cold`            |
 | `_mbps`           | **Mibps** (bps / 1024²) for billing rate fields | `peak_bandwidth_mbps`                |
 | `_ms`             | Milliseconds                                    | `stream_buffer_ms`, `latency_ms`     |
 | `_pct` or `_rate` | Ratio 0.0-1.0                                   | `packet_loss_rate`, `buffer_health`  |
@@ -43,26 +44,25 @@ This document defines the authoritative units and semantics for all metrics in t
 
 ### 2. Viewer Session Metrics (Billing Source)
 
-**Source:** MistServer `USER_END` trigger → `viewer_connection_events` → MVs
+**Source:** MistServer `USER_END` trigger → `raw_mist_triggers` → `viewer_sessions_final` (append-only projection) → `viewer_usage_5m` ledger → billing cursor + dashboard rollups. See [meter-contracts.md](../architecture/meter-contracts.md).
 
 | Field               | Unit    | Type      | Description                                                       |
 | ------------------- | ------- | --------- | ----------------------------------------------------------------- |
 | `bytes_transferred` | bytes   | Counter   | Total bytes for session (`max(0, up_bytes) + max(0, down_bytes)`) |
 | `session_duration`  | seconds | Counter   | Session duration                                                  |
-| `egress_gb`         | GiB     | Aggregate | Sum of `bytes_transferred / (1024³)` (daily rollup)               |
-| `viewer_hours`      | hours   | Aggregate | Sum of duration / 3600 (daily rollup)                             |
-
-**Note:** Despite the name `egress_gb`, the current implementation derives it from `bytes_transferred` (up+down). Treat it as “bandwidth GiB” unless/until billing is changed to egress-only.
+| `ingress_gb`        | GiB     | Aggregate | Sum of uploaded bytes / 1024³ from finalized session facts        |
+| `egress_gb`         | GiB     | Aggregate | Sum of downloaded bytes / 1024³ from finalized session facts      |
+| `viewer_hours`      | hours   | Aggregate | Dashboard display value: sum of duration / 3600                   |
 
 **Aggregation Pipeline:**
 
 ```
 USER_END trigger (uploaded/downloaded bytes total)
-  → viewer_connection_events.bytes_transferred (ClickHouse)
-  → viewer_hours_hourly (MV aggregation)
-  → tenant_viewer_daily (MV daily rollup)
-  → billing.usage_reports (Kafka)
-  → purser.usage_records (PostgreSQL)
+  → raw_mist_triggers
+  → viewer_sessions_final
+  → viewer_usage_5m canonical ledger
+  → billing.usage_reports (Kafka, rated path)
+  → dashboard rollups (analytics path)
 ```
 
 ### 3. Stream Health Metrics (QoE)
@@ -100,7 +100,7 @@ USER_END trigger (uploaded/downloaded bytes total)
 
 ### 5. Platform Overview Metrics
 
-**Source:** `stream_state_current` (real-time snapshots) + rollups (`tenant_viewer_daily`, `client_qoe_5m`) via Periscope Query
+**Source:** `stream_state_current` (real-time snapshots) + canonical dashboard rollups (`tenant_usage_hourly/daily`, `client_qoe_5m`) via Periscope Query
 
 | Field                | Unit  | Type  | Description                            |
 | -------------------- | ----- | ----- | -------------------------------------- |
@@ -158,8 +158,8 @@ Point-in-time measurement that can go up or down.
 
 MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when the stream goes offline. **Do not store these as cumulative values.** Instead:
 
-- Use `USER_END` session data for accurate egress per stream
-- Aggregate from `viewer_connection_events` → `stream_analytics_daily`
+- Use `USER_END` session data projected into `viewer_sessions_final` / `viewer_usage_5m` for accurate bandwidth per stream
+- Aggregate from canonical ledgers into dashboard rollups such as `stream_analytics_daily`
 
 ## MistServer Data Sources
 
@@ -202,6 +202,7 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 | `primary_bitrate`  | kbps      | "6.0 Mbps"       | `value / 1000`              |
 | `buffer_health`    | 0.0-1.0   | "85%"            | `value * 100`               |
 | `packet_loss_rate` | 0.0-1.0   | "0.5%"           | `value * 100`               |
+| `ingress_gb`       | GiB       | "1.2 GiB"        | Display as-is               |
 | `egress_gb`        | GiB       | "1.2 GiB"        | Display as-is               |
 
 ### Rate vs Cumulative Display

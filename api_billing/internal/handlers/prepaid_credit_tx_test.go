@@ -288,6 +288,44 @@ func TestDeductPrepaidBalanceForUsageMicro_AccumulatesSubCent(t *testing.T) {
 	}
 }
 
+func TestDeductPrepaidBalanceForUsageMicro_AppliesNegativeCorrectionCredit(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	currency := billing.DefaultCurrency()
+	tenantID := "tenant-1"
+	refID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("negative-correction"))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
+		WithArgs(tenantID, currency).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT balance_cents, balance_remainder_micro FROM purser\.prepaid_balances`).
+		WithArgs(tenantID, currency).
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents", "balance_remainder_micro"}).AddRow(int64(10000), int64(0)))
+	mock.ExpectExec(`INSERT INTO purser\.balance_transactions`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.prepaid_balances\s+SET balance_cents`).
+		WithArgs(int64(10002), int64(5000), tenantID, currency).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	prev, newBal, applied, err := jm.deductPrepaidBalanceForUsageMicro(context.Background(), tenantID, -15000, "correction", refID)
+	if err != nil {
+		t.Fatalf("deductPrepaidBalanceForUsageMicro: %v", err)
+	}
+	if !applied || prev != 10000 || newBal != 10002 {
+		t.Errorf("negative correction: prev=%d new=%d applied=%v, want prev=10000 new=10002 applied=true", prev, newBal, applied)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
 // TestDeductPrepaidBalanceForUsageMicro_DuplicateReferenceNoOps verifies the
 // reference_id idempotency: duplicate calls don't re-debit the balance.
 func TestDeductPrepaidBalanceForUsageMicro_DuplicateReferenceNoOps(t *testing.T) {

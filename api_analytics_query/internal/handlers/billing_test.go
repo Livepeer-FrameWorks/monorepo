@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -65,28 +64,7 @@ func TestAttributedViewerClusterID(t *testing.T) {
 	}
 }
 
-func TestMissingColumnCompatibilityError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "unknown expression", err: fmt.Errorf("Code: 47, Unknown expression identifier origin_cluster_id"), want: true},
-		{name: "missing columns", err: fmt.Errorf("Code: 47, Missing columns: 'cluster_id'"), want: true},
-		{name: "other error", err: fmt.Errorf("connection refused"), want: false},
-		{name: "nil", err: nil, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isMissingColumnCompatibilityError(tt.err); got != tt.want {
-				t.Fatalf("isMissingColumnCompatibilityError() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestQueryTenantViewerMetricsFallsBackForLegacySchema(t *testing.T) {
+func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -97,14 +75,13 @@ func TestQueryTenantViewerMetricsFallsBackForLegacySchema(t *testing.T) {
 	start := time.Unix(1700000000, 0).UTC()
 	end := start.Add(time.Hour)
 
-	mock.ExpectQuery(`SELECT\s+cluster_id,\s+origin_cluster_id`).
-		WithArgs("tenant-1", start, end).
-		WillReturnError(fmt.Errorf("Code: 47, Unknown expression identifier `origin_cluster_id`"))
-
-	rows := sqlmock.NewRows([]string{"cluster_id", "egress_gb", "viewer_hours", "unique_viewers"}).
-		AddRow("cluster-a", 12.5, 3.0, 42)
-	mock.ExpectQuery(`SELECT\s+cluster_id,\s+COALESCE\(sum\(egress_gb\), 0\) as egress_gb`).
-		WithArgs("tenant-1", start, end).
+	// Canonical billing query is a two-step CTE + LEFT ANTI JOIN over
+	// viewer_sessions_final keyed on billable_at_ms. Mock expects the
+	// canonical query and returns one row per (cluster_id, origin_cluster_id).
+	rows := sqlmock.NewRows([]string{"cluster_id", "origin_cluster_id", "ingress_gb", "egress_gb", "viewer_hours", "unique_viewers"}).
+		AddRow("cluster-a", "", 1.25, 12.5, 3.0, int64(42))
+	mock.ExpectQuery(`WITH window_candidates AS`).
+		WithArgs("tenant-1", start.UnixMilli(), end.UnixMilli(), "tenant-1", start.UnixMilli()).
 		WillReturnRows(rows)
 
 	got, err := bs.queryTenantViewerMetrics(context.Background(), "tenant-1", start, end)
@@ -117,7 +94,7 @@ func TestQueryTenantViewerMetricsFallsBackForLegacySchema(t *testing.T) {
 	if got[0].ClusterID != "cluster-a" || got[0].OriginClusterID != "" {
 		t.Fatalf("unexpected cluster attribution row: %#v", got[0])
 	}
-	if got[0].EgressGB != 12.5 || got[0].ViewerHours != 3.0 || got[0].UniqueViewers != 42 {
+	if got[0].IngressGB != 1.25 || got[0].EgressGB != 12.5 || got[0].ViewerHours != 3.0 || got[0].UniqueViewers != 42 {
 		t.Fatalf("unexpected metric values: %#v", got[0])
 	}
 

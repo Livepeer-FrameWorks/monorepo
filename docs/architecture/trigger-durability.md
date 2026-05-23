@@ -58,7 +58,7 @@ Mist
     ↓
 api_sidecar/internal/handlers (Helmsman)
   - read body
-  - parse to *pb.MistTrigger
+  - parse to *pb.MistTrigger, or wrap parse failures as RawMistWebhookTrigger
   - applyTenantContext()
   - forwardDurable() — stamps source_event_id on RequestId,
                        stamps deterministic UUID on EventId,
@@ -106,13 +106,14 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - **api_balancing crashes during processing.** Helmsman's `awaitAck` times out after 30s, the next forwarder tick re-sends. Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
 - **WAL append fails.** Helmsman returns `503` for the trigger handler and emits `webhook_request_total{status="wal_error"}`. Final/accounting handlers must not acknowledge Mist as successfully accepted if the local durable write failed.
-- **Non-retryable error (parse/schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
+- **Helmsman parse/schema error after reading the body.** The raw body is wrapped in `RawMistWebhookTrigger` and durably journaled before `200 OK`, so MistServer parser drift cannot silently drop an accounting trigger. The raw envelope is operator-visible in `raw_mist_triggers`; typed final-fact projection simply skips it until the parser is fixed and the raw record is replayed.
+- **Downstream non-retryable error (schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
 - **Trigger hash collision.** Mist would have to deliver two distinct triggers with identical `(node_id, trigger_type, payload_raw)`. SHA-256 collision in practice means this is impossible.
 
 ## Operational handles
 
 - WAL directory pending file count is the canonical "is anything stuck?" signal.
-- `webhook_request_total{trigger_type, status}` carries `durably_enqueued` and `wal_error` statuses for each of the seven handlers.
+- `webhook_request_total{trigger_type, status}` carries `durably_enqueued`, `durably_enqueued_parse_error`, and `wal_error` statuses for each final/accounting handler.
 - `/internal/triggers/wal` lists pending rows and can kick an immediate drain. Replay is safe because retries use the same `source_event_id` and deterministic typed `event_id`; the WAL itself is idempotent by source id.
 
 ## Why not …

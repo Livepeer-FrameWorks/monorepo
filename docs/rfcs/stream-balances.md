@@ -183,7 +183,7 @@ Auto-apply discounts when usage exceeds thresholds.
 CREATE TABLE purser.volume_discount_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tier_id UUID REFERENCES purser.billing_tiers(id),  -- NULL = all tiers
-    metric TEXT NOT NULL,                -- 'delivered_minutes', 'storage_gb', 'gpu_hours'
+    metric TEXT NOT NULL,                -- 'delivered_minutes', 'storage_gb_seconds_cold', 'media_seconds'
     threshold BIGINT NOT NULL,           -- 1000000 (1M minutes)
     discount_percentage DECIMAL(5,2),    -- 10.00 (%)
     applies_to TEXT NOT NULL,            -- 'overage', 'base', 'all'

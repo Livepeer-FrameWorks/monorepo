@@ -138,7 +138,7 @@ func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, t
 	return &LiveMetrics{
 		ActiveStreams: summary.TotalStreams,
 		TotalViewers:  summary.TotalViewers,
-		StorageGB:     summary.AverageStorageGb,
+		StorageGB:     summary.DisplayStorageGb,
 	}
 }
 
@@ -222,10 +222,8 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients) 
 			return nil, fmt.Errorf("pricing rule %q has empty unit_price", rule.GetMeter())
 		}
 		switch rule.GetMeter() {
-		case "average_storage_gb":
-			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: "gb"}
-		case "ai_gpu_hours":
-			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: "gpu_hours"}
+		case "storage_gb_seconds_hot", "storage_gb_seconds_cold":
+			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: "gb_hour"}
 		default:
 			pricing.Resources[rule.GetMeter()] = ResourcePricing{UnitPrice: unitPrice, Unit: rule.GetMeter()}
 		}

@@ -10,25 +10,45 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Meter identifies a canonical metered quantity.
+// Meter identifies a canonical metered quantity. The rating engine treats the
+// name as data: new marketplace or advanced-processing meters do not require a
+// code change as long as producers write the same usage_type and pricing rules
+// reference that meter.
 type Meter string
 
 const (
-	MeterDeliveredMinutes  Meter = "delivered_minutes"
-	MeterAverageStorageGB  Meter = "average_storage_gb"
-	MeterAIGPUHours        Meter = "ai_gpu_hours"
-	MeterProcessingSeconds Meter = "processing_seconds"
+	MeterDeliveredMinutes    Meter = "delivered_minutes"
+	MeterIngressGB           Meter = "ingress_gb"
+	MeterEgressGB            Meter = "egress_gb"
+	MeterStorageGBSecondsHot Meter = "storage_gb_seconds_hot"
+	MeterStorageGBSecondsCld Meter = "storage_gb_seconds_cold"
+	MeterMediaSeconds        Meter = "media_seconds"
 )
 
-// ValidMeter reports whether m is one of the canonical meters the rating engine
-// understands.
+// ValidMeter reports whether m is a valid canonical meter key. Keep this
+// syntactic instead of an enum so cluster_pricing.metered_rates and future
+// meter producers can add product-shaped meters without widening a CHECK
+// constraint or rebuilding the rating package.
 func ValidMeter(m Meter) bool {
-	switch m {
-	case MeterDeliveredMinutes, MeterAverageStorageGB, MeterAIGPUHours, MeterProcessingSeconds:
-		return true
-	default:
+	s := string(m)
+	if len(s) == 0 || len(s) > 64 {
 		return false
 	}
+	for i, r := range s {
+		switch {
+		case i == 0 && r >= 'a' && r <= 'z':
+			continue
+		case i > 0 && r >= 'a' && r <= 'z':
+			continue
+		case i > 0 && r >= '0' && r <= '9':
+			continue
+		case i > 0 && r == '_':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Model identifies how a Rule converts usage to money.
@@ -60,18 +80,26 @@ type Rule struct {
 	Currency         string
 	IncludedQuantity decimal.Decimal
 	UnitPrice        decimal.Decimal
-	// Config carries model-specific extras. For ModelCodecMultiplier:
-	// {"codec_multipliers": {"h264": 1.0, "hevc": 1.5, ...}}
+	// Config carries model-specific extras. For ModelCodecMultiplier,
+	// codec_multipliers keys can be plain codecs ("h264") or joint
+	// process/codec keys ("Livepeer:h264", "AV:h264").
 	Config map[string]any
 }
 
 // Input is the rating engine's read-only input.
 type Input struct {
-	Currency     string
-	BasePrice    decimal.Decimal
-	Rules        []Rule
-	Usage        map[Meter]decimal.Decimal
-	CodecSeconds map[string]decimal.Decimal // per-codec seconds for processing_seconds
+	Currency  string
+	BasePrice decimal.Decimal
+	Rules     []Rule
+	Usage     map[Meter]decimal.Decimal
+	// Breakdowns carries model-specific dimensional quantities keyed by meter.
+	// For ModelCodecMultiplier, the inner map is breakdown key -> seconds;
+	// keys can be plain codecs or joint process/codec values.
+	Breakdowns map[Meter]map[string]decimal.Decimal
+	// CodecSeconds is a convenience shortcut for the per-codec breakdown of
+	// the media_seconds rule. Equivalent to Breakdowns[MeterMediaSeconds];
+	// callers may populate either, but Breakdowns wins if both are set.
+	CodecSeconds map[string]decimal.Decimal
 	PeriodStart  time.Time
 	PeriodEnd    time.Time
 }

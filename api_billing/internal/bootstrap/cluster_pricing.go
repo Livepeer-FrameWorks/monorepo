@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+
+	"frameworks/api_billing/internal/pricing"
 )
 
 // ReconcileClusterPricing upserts every ClusterPricing row in desired into
@@ -29,6 +31,9 @@ func ReconcileClusterPricing(ctx context.Context, exec DBTX, desired []ClusterPr
 		}
 		if !validPricingModel(cp.PricingModel) {
 			return Result{}, fmt.Errorf("ReconcileClusterPricing: cluster %q: invalid pricing_model %q", cp.ClusterID, cp.PricingModel)
+		}
+		if err := pricing.ValidateMeteredRates(cp.MeteredRates, pricing.Model(cp.PricingModel)); err != nil {
+			return Result{}, fmt.Errorf("ReconcileClusterPricing: cluster %q: %w", cp.ClusterID, err)
 		}
 		action, err := upsertClusterPricing(ctx, exec, cp)
 		if err != nil {

@@ -1,4 +1,4 @@
-# Fetch complete billing status including current tier, subscription, and usage summary
+# Fetch billing status, live usage, and the current invoice preview.
 query GetBillingStatus {
   billingStatus {
     billingStatus
@@ -67,9 +67,6 @@ query GetBillingStatus {
       dueDate
       periodStart
       periodEnd
-      usageSummary {
-        ...UsageSummaryFields
-      }
       lineItems {
         lineKey
         meter

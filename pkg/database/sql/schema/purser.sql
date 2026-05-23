@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS purser.tier_entitlements (
 -- One row per (tier, meter). model is one of:
 --   tiered_graduated  -- (qty - included_quantity) * unit_price
 --   all_usage         -- qty * unit_price
---   codec_multiplier  -- per-codec processing fee using config.codec_multipliers
+--   codec_multiplier  -- processing fee using config.codec_multipliers keyed by codec or process:codec
 CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tier_id UUID NOT NULL REFERENCES purser.billing_tiers(id) ON DELETE CASCADE,
@@ -298,7 +298,7 @@ CREATE TABLE IF NOT EXISTS purser.tier_pricing_rules (
     included_quantity NUMERIC(20,6) NOT NULL DEFAULT 0,
     unit_price NUMERIC(20,9) NOT NULL DEFAULT 0,
     config JSONB NOT NULL DEFAULT '{}',
-    CONSTRAINT chk_tier_pricing_meter CHECK (meter IN ('delivered_minutes', 'average_storage_gb', 'ai_gpu_hours', 'processing_seconds')),
+    CONSTRAINT chk_tier_pricing_meter CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$'),
     CONSTRAINT chk_tier_pricing_model CHECK (model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
     UNIQUE (tier_id, meter)
 );
@@ -399,7 +399,7 @@ CREATE TABLE IF NOT EXISTS purser.subscription_pricing_overrides (
     included_quantity NUMERIC(20,6),
     unit_price NUMERIC(20,9),
     config JSONB DEFAULT '{}',
-    CONSTRAINT chk_subscription_pricing_meter CHECK (meter IN ('delivered_minutes', 'average_storage_gb', 'ai_gpu_hours', 'processing_seconds')),
+    CONSTRAINT chk_subscription_pricing_meter CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$'),
     CONSTRAINT chk_subscription_pricing_model CHECK (model IS NULL OR model IN ('tiered_graduated', 'all_usage', 'codec_multiplier')),
     PRIMARY KEY (subscription_id, meter)
 );
@@ -466,12 +466,10 @@ CREATE INDEX IF NOT EXISTS idx_invoice_line_items_cluster ON purser.invoice_line
 -- Operator credit ledger: one accrual per priced third_party_marketplace
 -- line; clawbacks/adjustments reference the original via reverses_ledger_id.
 -- payable_cents is signed so SUM aggregates net.
--- A ledger row is sourced either from a usage-priced invoice line
--- (source_type='invoice_line', invoice_line_item_id set) or a Stripe
--- subscription invoice for a monthly cluster (source_type='stripe_subscription',
--- stripe_invoice_id set). The split exists because monthly cluster revenue
--- is collected entirely on the Stripe side and never produces a row in
--- purser.invoice_line_items.
+-- A ledger row is sourced from a usage-priced invoice line, provider-keyed
+-- storage usage, provider-keyed storage corrections, or a Stripe subscription
+-- invoice for a monthly cluster. Monthly cluster revenue is collected entirely
+-- on the Stripe side and never produces a row in purser.invoice_line_items.
 --
 -- Default status is 'held' so credits accumulate as a complete audit
 -- trail without auto-promoting to payable. Operator vetting flips the
@@ -481,6 +479,8 @@ CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_type VARCHAR(32) NOT NULL DEFAULT 'invoice_line',
     invoice_line_item_id UUID REFERENCES purser.invoice_line_items(id) ON DELETE CASCADE,
+    storage_provider_usage_record_id UUID,
+    usage_adjustment_id UUID,
     stripe_invoice_id VARCHAR(255),
     entry_type VARCHAR(16) NOT NULL,
     reverses_ledger_id UUID REFERENCES purser.operator_credit_ledger(id),
@@ -501,8 +501,10 @@ CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
     CONSTRAINT chk_op_credit_entry_type CHECK (entry_type IN ('accrual', 'clawback', 'adjustment')),
     CONSTRAINT chk_op_credit_status CHECK (status IN ('accruing', 'eligible', 'paid_out', 'clawed_back', 'held')),
     CONSTRAINT chk_op_credit_source CHECK (
-        (source_type = 'invoice_line'        AND invoice_line_item_id IS NOT NULL) OR
-        (source_type = 'stripe_subscription' AND stripe_invoice_id    IS NOT NULL)
+        (source_type = 'invoice_line'            AND invoice_line_item_id IS NOT NULL) OR
+        (source_type = 'storage_provider_usage'  AND storage_provider_usage_record_id IS NOT NULL) OR
+        (source_type = 'usage_adjustment'        AND usage_adjustment_id IS NOT NULL) OR
+        (source_type = 'stripe_subscription'     AND stripe_invoice_id    IS NOT NULL)
     ),
     CONSTRAINT chk_op_credit_reverses CHECK (
         (entry_type = 'accrual' AND reverses_ledger_id IS NULL) OR
@@ -514,6 +516,14 @@ CREATE TABLE IF NOT EXISTS purser.operator_credit_ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_invoice_line
     ON purser.operator_credit_ledger(invoice_line_item_id)
     WHERE entry_type = 'accrual' AND source_type = 'invoice_line';
+-- One accrual per provider-attributed storage usage slice.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_storage_provider_usage
+    ON purser.operator_credit_ledger(storage_provider_usage_record_id)
+    WHERE entry_type = 'accrual' AND source_type = 'storage_provider_usage';
+-- One accrual per provider-attributed storage correction.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_usage_adjustment
+    ON purser.operator_credit_ledger(usage_adjustment_id)
+    WHERE entry_type = 'accrual' AND source_type = 'usage_adjustment';
 -- One accrual per Stripe subscription invoice (Stripe enforces uniqueness on
 -- invoice_id; this index makes our writer idempotent on retry too).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_op_credit_accrual_stripe_invoice
@@ -529,10 +539,9 @@ CREATE INDEX IF NOT EXISTS idx_op_credit_payout_batch
 
 -- Per-tenant operator vetting / KYC / payout-eligibility state. Keyed by
 -- the owning tenant_id (Quartermaster's infrastructure_clusters.owner_tenant_id
--- joins here). Marketplace listings and CreateClusterSubscription gate on
--- status='approved' AND payout_eligible once marketplace launches; until
--- then the table is populated by ops via internal tooling and consulted by
--- the credit ledger writer to set ledger status.
+-- joins here). Marketplace listings, CreateClusterSubscription, and the
+-- credit ledger use status='approved' AND payout_eligible to decide whether
+-- operator revenue is payable or held.
 CREATE TABLE IF NOT EXISTS purser.cluster_owners (
     tenant_id UUID PRIMARY KEY,
     -- draft: row exists, KYC not started
@@ -565,9 +574,9 @@ CREATE INDEX IF NOT EXISTS idx_cluster_owners_status
 CREATE INDEX IF NOT EXISTS idx_cluster_owners_payout_eligible
     ON purser.cluster_owners(tenant_id) WHERE payout_eligible = TRUE;
 
--- Settlement skeleton. Real integration (bank transfer, Stripe Connect)
--- happens elsewhere; this table exists so payout_batch_id has a destination
--- and so reads can JOIN.
+-- Operator payout batches. Billing records accruals in operator_credit_ledger;
+-- settlement tooling inserts payout batches and advances ledger rows through
+-- eligible / paid_out status when funds are released.
 CREATE TABLE IF NOT EXISTS purser.operator_payouts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     cluster_owner_tenant_id UUID NOT NULL,
@@ -729,7 +738,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_topups_status ON purser.pending_topups(st
 -- USAGE TRACKING & METERING
 -- ============================================================================
 
--- Aggregated usage records for billing calculations
+-- Canonical usage records for billing calculations and usage APIs
 CREATE TABLE IF NOT EXISTS purser.usage_records (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -737,18 +746,74 @@ CREATE TABLE IF NOT EXISTS purser.usage_records (
     cluster_id VARCHAR(100) NOT NULL,
     
     -- ===== USAGE METRICS =====
-    usage_type VARCHAR(50) NOT NULL,         -- viewer_hours, average_storage_gb, gpu_hours, codec seconds, operational metrics
-    usage_value DECIMAL(15,6) NOT NULL DEFAULT 0,
+    usage_type VARCHAR(64) NOT NULL,         -- canonical meter key or operational metric key
+    usage_value DECIMAL(20,6) NOT NULL DEFAULT 0,
     usage_details JSONB DEFAULT '{}',        -- Additional usage metadata
+    -- value_kind labels the shape of usage_value. Rated billing rows are
+    -- canonical 5-minute deltas; the writer must explicitly set 'delta'
+    -- after passing the rated-meter validator. The fail-closed default
+    -- catches any writer that bypasses validateUsageRecord — the row
+    -- still lands (so debugging is possible) but billing excludes it
+    -- because invoice aggregation requires value_kind = 'delta'.
+    value_kind VARCHAR(20) NOT NULL DEFAULT 'ignored',
     
     -- ===== BILLING PERIOD =====
     period_start TIMESTAMP WITH TIME ZONE,   -- Granular start time
     period_end TIMESTAMP WITH TIME ZONE,     -- Granular end time
-    granularity VARCHAR(20) NOT NULL DEFAULT 'hourly', -- hourly, daily, monthly
+    granularity VARCHAR(20) NOT NULL DEFAULT 'minute_5',
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE (tenant_id, cluster_id, usage_type, period_start, period_end)
+);
+
+CREATE TABLE IF NOT EXISTS purser.storage_provider_usage_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    usage_tenant_id UUID NOT NULL,
+    customer_cluster_id VARCHAR(100) NOT NULL DEFAULT '',
+    storage_provider_tenant_id VARCHAR(100) NOT NULL DEFAULT '',
+    storage_provider_cluster_id VARCHAR(100) NOT NULL DEFAULT '',
+    storage_backend VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    storage_scope VARCHAR(20) NOT NULL,
+    usage_type VARCHAR(64) NOT NULL,
+    gb_seconds DECIMAL(20,6) NOT NULL DEFAULT 0,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    granularity VARCHAR(20) NOT NULL DEFAULT 'minute_5',
+    value_kind VARCHAR(20) NOT NULL DEFAULT 'delta',
+    source VARCHAR(64) NOT NULL DEFAULT 'kafka',
+    usage_details JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (
+        usage_tenant_id, customer_cluster_id,
+        storage_provider_tenant_id, storage_provider_cluster_id,
+        storage_backend, storage_scope, usage_type,
+        period_start, period_end
+    )
+);
+
+CREATE TABLE IF NOT EXISTS purser.usage_adjustments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL DEFAULT '',
+    usage_type VARCHAR(64) NOT NULL,
+    delta_value DECIMAL(20,6) NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    value_kind VARCHAR(20) NOT NULL DEFAULT 'correction_delta',
+    status VARCHAR(20) NOT NULL DEFAULT 'applied',
+    source_system VARCHAR(64) NOT NULL,
+    source_id VARCHAR(255) NOT NULL,
+    reason VARCHAR(255),
+    details JSONB NOT NULL DEFAULT '{}',
+    applied_invoice_id UUID REFERENCES purser.billing_invoices(id) ON DELETE SET NULL,
+    balance_transaction_id UUID REFERENCES purser.balance_transactions(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (source_system, source_id),
+    CONSTRAINT chk_usage_adjustments_status CHECK (status IN ('applied', 'ignored', 'pending')),
+    CONSTRAINT chk_usage_adjustments_value_kind CHECK (value_kind = 'correction_delta')
 );
 
 -- ============================================================================
@@ -759,6 +824,16 @@ CREATE INDEX IF NOT EXISTS idx_purser_usage_records_lookup ON purser.usage_recor
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at ON purser.usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_period ON purser.usage_records(tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_granularity_period ON purser.usage_records(tenant_id, granularity, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_provider_period
+    ON purser.storage_provider_usage_records(storage_provider_tenant_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_tenant_period
+    ON purser.storage_provider_usage_records(usage_tenant_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_storage_provider_usage_provider_cluster
+    ON purser.storage_provider_usage_records(storage_provider_cluster_id, storage_backend, period_start);
+CREATE INDEX IF NOT EXISTS idx_usage_adjustments_invoice_lookup
+    ON purser.usage_adjustments(tenant_id, period_start, period_end, status);
+CREATE INDEX IF NOT EXISTS idx_usage_adjustments_source
+    ON purser.usage_adjustments(source_system, source_id);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_period ON purser.billing_invoices(tenant_id, status, period_start);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_tenant_status_due ON purser.billing_invoices(tenant_id, status, due_date);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_invoices_tenant_period_unique
@@ -824,10 +899,12 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
 
     -- ===== METERED RATES (override tenant tier rates) =====
     -- Format: per-meter object with unit_price (required) and optional
-    -- model (defaults to all_usage), included_quantity, config:
+    -- model (defaults to all_usage), included_quantity, config. Meter names
+    -- are canonical usage_type keys, not a fixed enum:
     --   {
-    --     "delivered_minutes":  {"unit_price": "0.0005", "model": "tiered_graduated", "included_quantity": "0"},
-    --     "average_storage_gb": {"unit_price": "0.01"}
+    --     "delivered_minutes":        {"unit_price": "0.0005", "model": "tiered_graduated", "included_quantity": "0"},
+    --     "storage_gb_seconds_cold":  {"unit_price": "0.030"},
+    --     "ai_transcription_minutes": {"unit_price": "0.02"}
     --   }
     -- Validated at write time by SetClusterPricing; runtime shape must
     -- match validateMeteredRatesShape in api_billing/internal/grpc.
@@ -1579,3 +1656,64 @@ CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending
 
 CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_tenant
     ON purser.billing_event_outbox(tenant_id, created_at DESC);
+
+-- ============================================================================
+-- Meter validation surface
+-- ----------------------------------------------------------------------------
+-- The canonical billing path stamps every usage_records row with value_kind
+-- and runs per-record validation; mismatched submissions land in
+-- purser.usage_records_quarantine instead of usage_records.
+-- See docs/architecture/meter-contracts.md.
+-- ============================================================================
+
+-- value_kind labels what shape of value a usage_records row carries. Fail
+-- closed for fresh and upgraded schemas: producers must explicitly stamp
+-- 'delta' before a rated row can enter invoice aggregation.
+ALTER TABLE purser.usage_records
+    ADD COLUMN IF NOT EXISTS value_kind VARCHAR(20) NOT NULL DEFAULT 'ignored';
+
+-- Quarantine for rated submissions that fail the validator. Rows here
+-- are not billed; operators inspect via /admin/billing/quarantine.
+CREATE TABLE IF NOT EXISTS purser.usage_records_quarantine (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    cluster_id VARCHAR(100) NOT NULL DEFAULT '',
+    usage_type VARCHAR(64) NOT NULL,
+    usage_value DECIMAL(20,6) NOT NULL DEFAULT 0,
+    usage_details JSONB DEFAULT '{}',
+    period_start TIMESTAMP WITH TIME ZONE,
+    period_end TIMESTAMP WITH TIME ZONE,
+    granularity VARCHAR(20) NOT NULL DEFAULT '',
+    value_kind VARCHAR(20),
+    rejected_reason VARCHAR(100) NOT NULL,     -- 'unknown_meter' | 'granularity_mismatch' | 'value_kind_mismatch' | 'period_misaligned'
+    rejected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    source TEXT NOT NULL DEFAULT '',           -- 'kafka' | 'http' | etc.
+    raw_payload JSONB DEFAULT '{}'             -- original submission for forensic replay
+);
+
+CREATE INDEX IF NOT EXISTS idx_purser_usage_records_quarantine_tenant
+    ON purser.usage_records_quarantine(tenant_id, rejected_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_purser_usage_records_quarantine_reason
+    ON purser.usage_records_quarantine(rejected_reason, rejected_at DESC);
+
+-- ============================================================================
+-- Canonical-meter constraints
+-- ----------------------------------------------------------------------------
+-- Runs idempotently every schema-init. Pricing rule meter names are data, not
+-- enum values: marketplace operators and future advanced jobs can add
+-- canonical meter keys without widening a database CHECK constraint.
+-- ============================================================================
+
+-- Replace any older meter-name CHECK constraints with the canonical key shape.
+ALTER TABLE purser.tier_pricing_rules
+    DROP CONSTRAINT IF EXISTS chk_tier_pricing_meter;
+ALTER TABLE purser.tier_pricing_rules
+    ADD CONSTRAINT chk_tier_pricing_meter
+    CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$');
+
+ALTER TABLE purser.subscription_pricing_overrides
+    DROP CONSTRAINT IF EXISTS chk_subscription_pricing_meter;
+ALTER TABLE purser.subscription_pricing_overrides
+    ADD CONSTRAINT chk_subscription_pricing_meter
+    CHECK (meter ~ '^[a-z][a-z0-9_]{0,63}$');

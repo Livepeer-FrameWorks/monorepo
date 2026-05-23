@@ -40,7 +40,7 @@ type ResolveInputs struct {
 
 	// TierCurrency is the currency from the tenant's effective tier — used as
 	// the currency for cluster-priced rules whose stored row does not carry
-	// one (e.g. legacy rows).
+	// one.
 	TierCurrency string
 }
 
@@ -102,8 +102,8 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 	}
 
 	// No history row → cluster has never had an explicit pricing config.
-	// Preserve legacy behavior for platform clusters and fail closed for
-	// marketplace clusters because operator pricing must be explicit.
+	// Platform clusters inherit the tenant tier; marketplace clusters fail
+	// closed because operator pricing must be explicit.
 	if row == nil {
 		switch kind {
 		case KindPlatformOfficial:
@@ -132,6 +132,9 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 		out.PricingSource = SourceTier
 
 	case ModelMetered:
+		if err := ValidateMeteredRates(row.MeteredRates, row.Model); err != nil {
+			return nil, fmt.Errorf("metered rates for %s: %w", in.ClusterID, err)
+		}
 		rules, err := buildMeteredRules(row.MeteredRates, out.Currency)
 		if err != nil {
 			return nil, fmt.Errorf("metered rules for %s: %w", in.ClusterID, err)
@@ -140,10 +143,9 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 		out.PricingSource = SourceClusterMetered
 
 	case ModelMonthly:
-		// Access-only this pass per the plan: no usage line, no operator
-		// settlement. Metered usage on a monthly cluster (if anyone
-		// configures both) rates as zero-priced informational lines so it
-		// still appears on the invoice.
+		// Monthly cluster access is charged outside metered usage. Metered
+		// usage on a monthly cluster rates as zero-priced informational lines
+		// so it still appears on the invoice.
 		out.MeteredRules = zeroPricedRulesFromTier(in.TierRules, out.Currency)
 		out.PricingSource = SourceIncludedSubscription
 
@@ -158,8 +160,11 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 		}
 
 	case ModelCustom:
-		if len(row.MeteredRates) == 0 {
-			return nil, ErrCustomPricingMissingForCluster
+		if err := ValidateMeteredRates(row.MeteredRates, row.Model); err != nil {
+			if errors.Is(err, ErrCustomPricingMissingForCluster) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("custom rates for %s: %w", in.ClusterID, err)
 		}
 		rules, err := buildMeteredRules(row.MeteredRates, out.Currency)
 		if err != nil {
@@ -230,7 +235,7 @@ type historyRow struct {
 }
 
 // loadHistoryRow fetches the pricing config effective at asOf. Returns
-// (nil, nil) when no row exists for the cluster (legacy clusters).
+// (nil, nil) when no row exists for the cluster.
 func loadHistoryRow(ctx context.Context, db *sql.DB, clusterID string, asOf time.Time) (*historyRow, error) {
 	const q = `
 		SELECT version_id, pricing_model, currency, base_price::text, metered_rates::text
@@ -281,12 +286,51 @@ func loadHistoryRow(ctx context.Context, db *sql.DB, clusterID string, asOf time
 	return out, nil
 }
 
+func ValidateMeteredRates(rates map[string]any, clusterModel Model) error {
+	switch clusterModel {
+	case ModelMetered, ModelCustom:
+		if len(rates) == 0 {
+			if clusterModel == ModelCustom {
+				return ErrCustomPricingMissingForCluster
+			}
+			return errors.New("metered pricing requires at least one rate")
+		}
+	}
+	for meter, raw := range rates {
+		m := rating.Meter(meter)
+		if !rating.ValidMeter(m) {
+			return fmt.Errorf("invalid meter %q in metered_rates", meter)
+		}
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("metered_rates[%q] must be an object", meter)
+		}
+		modelStr, ok := row["model"].(string)
+		if !ok || modelStr == "" {
+			modelStr = string(rating.ModelAllUsage)
+		}
+		if !rating.ValidModel(rating.Model(modelStr)) {
+			return fmt.Errorf("metered_rates[%q].model: unsupported model %q", meter, modelStr)
+		}
+		if _, ok := row["unit_price"]; !ok || row["unit_price"] == nil {
+			return fmt.Errorf("metered_rates[%q].unit_price: required", meter)
+		}
+		if _, err := decimalField(row, "unit_price"); err != nil {
+			return fmt.Errorf("metered_rates[%q].unit_price: %w", meter, err)
+		}
+		if _, err := decimalField(row, "included_quantity"); err != nil {
+			return fmt.Errorf("metered_rates[%q].included_quantity: %w", meter, err)
+		}
+	}
+	return nil
+}
+
 // buildMeteredRules converts purser.cluster_pricing.metered_rates JSON into
 // rating.Rule values. The expected JSON shape is:
 //
 //	{
 //	  "delivered_minutes":   {"unit_price": "0.00050", "model": "tiered_graduated", "included_quantity": "0"},
-//	  "average_storage_gb":  {"unit_price": "0.0",     "model": "tiered_graduated"},
+//	  "storage_gb_seconds_hot":  {"unit_price": "0.0",     "model": "tiered_graduated"},
 //	  ...
 //	}
 //
@@ -302,7 +346,7 @@ func buildMeteredRules(rates map[string]any, currency string) ([]rating.Rule, er
 	for meter, raw := range rates {
 		m := rating.Meter(meter)
 		if !rating.ValidMeter(m) {
-			return nil, fmt.Errorf("pricing: unsupported meter %q in metered_rates", meter)
+			return nil, fmt.Errorf("pricing: invalid meter %q in metered_rates", meter)
 		}
 		row, ok := raw.(map[string]any)
 		if !ok {
@@ -311,6 +355,12 @@ func buildMeteredRules(rates map[string]any, currency string) ([]rating.Rule, er
 		modelStr, ok := row["model"].(string)
 		if !ok || modelStr == "" {
 			modelStr = string(rating.ModelAllUsage)
+		}
+		if !rating.ValidModel(rating.Model(modelStr)) {
+			return nil, fmt.Errorf("pricing: metered_rates[%q].model: unsupported model %q", meter, modelStr)
+		}
+		if _, ok := row["unit_price"]; !ok || row["unit_price"] == nil {
+			return nil, fmt.Errorf("pricing: metered_rates[%q].unit_price: required", meter)
 		}
 		unitPrice, err := decimalField(row, "unit_price")
 		if err != nil {
@@ -362,7 +412,7 @@ func decimalField(m map[string]any, key string) (decimal.Decimal, error) {
 // and quantity > 0 → billable_quantity > 0 → line is rendered with $0.00.
 //
 // codec_multiplier rules are converted to all_usage at zero price so the
-// engine reads from Usage[processing_seconds] (the writer populates this)
+// engine reads from Usage[rule.Meter] (the writer populates this)
 // rather than CodecSeconds. Without this conversion the rating engine's
 // codec-multiplier path early-exits when unit_price is zero, dropping the
 // informational line and silently hiding self-hosted/free transcoding.

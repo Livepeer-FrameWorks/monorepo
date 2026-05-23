@@ -44,6 +44,35 @@ func TestReconcileClusterPricingRejectsInvalidModel(t *testing.T) {
 	}
 }
 
+func TestReconcileClusterPricingRejectsMeterWithoutUnitPrice(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	bad := samplePricing()
+	bad.MeteredRates = map[string]any{
+		"delivered_minutes": map[string]any{"model": "all_usage"},
+	}
+	if _, err := ReconcileClusterPricing(context.Background(), db, []ClusterPricing{bad}); err == nil {
+		t.Fatal("expected error on missing unit_price")
+	}
+}
+
+func TestReconcileClusterPricingRejectsMeteredModelWithoutRates(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	bad := samplePricing()
+	bad.PricingModel = "metered"
+	bad.MeteredRates = map[string]any{}
+	if _, err := ReconcileClusterPricing(context.Background(), db, []ClusterPricing{bad}); err == nil {
+		t.Fatal("expected error on metered pricing without rates")
+	}
+}
+
 func TestReconcileClusterPricingRejectsEmptyClusterID(t *testing.T) {
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -54,6 +83,25 @@ func TestReconcileClusterPricingRejectsEmptyClusterID(t *testing.T) {
 	bad.ClusterID = ""
 	if _, err := ReconcileClusterPricing(context.Background(), db, []ClusterPricing{bad}); err == nil {
 		t.Fatal("expected error on empty cluster_id")
+	}
+}
+
+func TestCheckRejectsMeterWithoutUnitPrice(t *testing.T) {
+	bad := samplePricing()
+	bad.MeteredRates = map[string]any{
+		"delivered_minutes": map[string]any{"model": "all_usage"},
+	}
+	if err := Check(PurserSection{ClusterPricing: []ClusterPricing{bad}}, nil); err == nil {
+		t.Fatal("expected check error on missing unit_price")
+	}
+}
+
+func TestCheckRejectsMeteredModelWithoutRates(t *testing.T) {
+	bad := samplePricing()
+	bad.PricingModel = "custom"
+	bad.MeteredRates = map[string]any{}
+	if err := Check(PurserSection{ClusterPricing: []ClusterPricing{bad}}, nil); err == nil {
+		t.Fatal("expected check error on custom pricing without rates")
 	}
 }
 

@@ -40,6 +40,7 @@ export class FwPlayer extends LitElement {
   // React/Svelte use `stockControls` for native controls. Keep `controls` as a
   // compatibility no-op so WC parity does not hide custom controls/seekbar.
   @property({ type: Boolean }) controls = false;
+  @property({ type: Boolean, attribute: "no-controls" }) noControls = false;
   @property({ type: Boolean, attribute: "stock-controls" }) stockControls = false;
   @property({ type: Boolean, attribute: "native-controls" }) nativeControls = false;
   @property({ type: Boolean }) debug = false;
@@ -145,6 +146,7 @@ export class FwPlayer extends LitElement {
       changed.has("playbackTokenTransport") ||
       changed.has("autoplay") ||
       changed.has("muted") ||
+      changed.has("noControls") ||
       changed.has("stockControls") ||
       changed.has("nativeControls") ||
       changed.has("debug") ||
@@ -165,7 +167,7 @@ export class FwPlayer extends LitElement {
           : undefined,
         autoplay: this.autoplay,
         muted: this.muted,
-        controls: this.stockControls || this.nativeControls,
+        controls: this._useStockControls,
         poster: this.thumbnailUrl,
         debug: this.debug,
         locale: this.locale,
@@ -527,11 +529,16 @@ export class FwPlayer extends LitElement {
     return this.pc.t("waitingForStream");
   }
 
+  private get _controlsEnabled() {
+    return !this.noControls;
+  }
+
   private get _useStockControls() {
     return (
-      this.stockControls ||
-      this.nativeControls ||
-      this.pc.s.currentPlayerInfo?.shortname === "mist-legacy"
+      this._controlsEnabled &&
+      (this.stockControls ||
+        this.nativeControls ||
+        this.pc.s.currentPlayerInfo?.shortname === "mist-legacy")
     );
   }
 
@@ -857,7 +864,7 @@ export class FwPlayer extends LitElement {
             : nothing}
 
           <!-- Player controls: slot allows custom controls, fallback renders defaults -->
-          ${!this._useStockControls
+          ${this._controlsEnabled && !this._useStockControls
             ? html`
                 <slot name="controls">
                   <fw-player-controls

@@ -5956,127 +5956,6 @@ func (r *usageRecordResolver) PeriodEnd(ctx context.Context, obj *proto.UsageRec
 	return &t, nil
 }
 
-// PeriodStart is the resolver for the periodStart field.
-func (r *usageSummaryResolver) PeriodStart(ctx context.Context, obj *proto.UsageSummary) (*time.Time, error) {
-	start, _ := parsePeriodRange(obj.Period)
-	return start, nil
-}
-
-// PeriodEnd is the resolver for the periodEnd field.
-func (r *usageSummaryResolver) PeriodEnd(ctx context.Context, obj *proto.UsageSummary) (*time.Time, error) {
-	_, end := parsePeriodRange(obj.Period)
-	return end, nil
-}
-
-// Timestamp is the resolver for the timestamp field.
-func (r *usageSummaryResolver) Timestamp(ctx context.Context, obj *proto.UsageSummary) (*time.Time, error) {
-	if obj.Timestamp == nil {
-		return nil, nil
-	}
-	t := obj.Timestamp.AsTime()
-	return &t, nil
-}
-
-// LivepeerSegmentCount is the resolver for the livepeerSegmentCount field.
-func (r *usageSummaryResolver) LivepeerSegmentCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetLivepeerSegmentCount()), nil
-}
-
-// LivepeerUniqueStreams is the resolver for the livepeerUniqueStreams field.
-func (r *usageSummaryResolver) LivepeerUniqueStreams(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetLivepeerUniqueStreams()), nil
-}
-
-// NativeAvSegmentCount is the resolver for the nativeAvSegmentCount field.
-func (r *usageSummaryResolver) NativeAvSegmentCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetNativeAvSegmentCount()), nil
-}
-
-// NativeAvUniqueStreams is the resolver for the nativeAvUniqueStreams field.
-func (r *usageSummaryResolver) NativeAvUniqueStreams(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetNativeAvUniqueStreams()), nil
-}
-
-// ClipsCreated is the resolver for the clipsCreated field.
-func (r *usageSummaryResolver) ClipsCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetClipsCreated()), nil
-}
-
-// ClipsDeleted is the resolver for the clipsDeleted field.
-func (r *usageSummaryResolver) ClipsDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetClipsDeleted()), nil
-}
-
-// DvrCreated is the resolver for the dvrCreated field.
-func (r *usageSummaryResolver) DvrCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetDvrCreated()), nil
-}
-
-// DvrDeleted is the resolver for the dvrDeleted field.
-func (r *usageSummaryResolver) DvrDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetDvrDeleted()), nil
-}
-
-// VodCreated is the resolver for the vodCreated field.
-func (r *usageSummaryResolver) VodCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetVodCreated()), nil
-}
-
-// VodDeleted is the resolver for the vodDeleted field.
-func (r *usageSummaryResolver) VodDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetVodDeleted()), nil
-}
-
-// ClipBytes is the resolver for the clipBytes field.
-func (r *usageSummaryResolver) ClipBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetClipBytes()), nil
-}
-
-// DvrBytes is the resolver for the dvrBytes field.
-func (r *usageSummaryResolver) DvrBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetDvrBytes()), nil
-}
-
-// VodBytes is the resolver for the vodBytes field.
-func (r *usageSummaryResolver) VodBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetVodBytes()), nil
-}
-
-// FrozenClipBytes is the resolver for the frozenClipBytes field.
-func (r *usageSummaryResolver) FrozenClipBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetFrozenClipBytes()), nil
-}
-
-// FrozenDvrBytes is the resolver for the frozenDvrBytes field.
-func (r *usageSummaryResolver) FrozenDvrBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetFrozenDvrBytes()), nil
-}
-
-// FrozenVodBytes is the resolver for the frozenVodBytes field.
-func (r *usageSummaryResolver) FrozenVodBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetFrozenVodBytes()), nil
-}
-
-// FreezeCount is the resolver for the freezeCount field.
-func (r *usageSummaryResolver) FreezeCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetFreezeCount()), nil
-}
-
-// FreezeBytes is the resolver for the freezeBytes field.
-func (r *usageSummaryResolver) FreezeBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetFreezeBytes()), nil
-}
-
-// DefrostCount is the resolver for the defrostCount field.
-func (r *usageSummaryResolver) DefrostCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetDefrostCount()), nil
-}
-
-// DefrostBytes is the resolver for the defrostBytes field.
-func (r *usageSummaryResolver) DefrostBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
-	return int(obj.GetDefrostBytes()), nil
-}
-
 // Name is the resolver for the name field.
 func (r *userResolver) Name(ctx context.Context, obj *proto.User) (*string, error) {
 	if obj.FirstName != "" || obj.LastName != "" {
@@ -6264,8 +6143,7 @@ func (r *viewerHoursHourlyResolver) ViewerHours(ctx context.Context, obj *proto.
 
 // EgressGb is the resolver for the egressGb field.
 func (r *viewerHoursHourlyResolver) EgressGb(ctx context.Context, obj *proto.ViewerHoursHourly) (float64, error) {
-	// Computed: totalBytes / 1e9
-	return float64(obj.TotalBytes) / 1e9, nil
+	return float64(obj.GetEgressBytes()) / (1024 * 1024 * 1024), nil
 }
 
 // StreamID is the resolver for the streamId field.
@@ -6935,9 +6813,6 @@ func (r *Resolver) UsageAggregate() generated.UsageAggregateResolver {
 // UsageRecord returns generated.UsageRecordResolver implementation.
 func (r *Resolver) UsageRecord() generated.UsageRecordResolver { return &usageRecordResolver{r} }
 
-// UsageSummary returns generated.UsageSummaryResolver implementation.
-func (r *Resolver) UsageSummary() generated.UsageSummaryResolver { return &usageSummaryResolver{r} }
-
 // User returns generated.UserResolver implementation.
 func (r *Resolver) User() generated.UserResolver { return &userResolver{r} }
 
@@ -7082,7 +6957,6 @@ type trackListEventResolver struct{ *Resolver }
 type trackListUpdateResolver struct{ *Resolver }
 type usageAggregateResolver struct{ *Resolver }
 type usageRecordResolver struct{ *Resolver }
-type usageSummaryResolver struct{ *Resolver }
 type userResolver struct{ *Resolver }
 type viewerCountBucketResolver struct{ *Resolver }
 type viewerEndpointResolver struct{ *Resolver }

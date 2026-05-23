@@ -38,10 +38,10 @@ func resolveOperatorTenantID(ctx context.Context, requestedTenantID string) (str
 	return requestedTenantID, nil
 }
 
-// GetOperatorRevenue aggregates the operator_credit_ledger for the calling
-// tenant in the requested time range, returning per-cluster sums plus
-// totals. Currency is taken from the first row; mixed-currency operators are
-// rare but supported via per-cluster currency.
+// GetOperatorRevenue aggregates settled operator-credit states for the
+// calling tenant in the requested time range, returning per-cluster sums plus
+// totals. Held rows are audit-only and stay out of revenue views until the
+// operator is approved for payouts.
 func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperatorRevenueRequest) (*pb.GetOperatorRevenueResponse, error) {
 	tenantID, err := resolveOperatorTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -72,6 +72,7 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperat
 		WHERE cluster_owner_tenant_id = $1
 		  AND period_start < $3
 		  AND period_end > $2
+		  AND status IN ('accruing', 'eligible', 'paid_out', 'clawed_back')
 		  %s
 		GROUP BY cluster_id, currency
 		ORDER BY cluster_id
@@ -106,8 +107,8 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperat
 	return resp, nil
 }
 
-// ListOperatorClusters returns lifetime aggregates for every cluster the
-// tenant owns that has at least one ledger row.
+// ListOperatorClusters returns lifetime revenue aggregates for every cluster
+// the tenant owns that has at least one non-held ledger row.
 func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *pb.ListOperatorClustersRequest) (*pb.ListOperatorClustersResponse, error) {
 	tenantID, err := resolveOperatorTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -121,6 +122,7 @@ func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *pb.ListOpe
 		       COUNT(*) FILTER (WHERE entry_type = 'accrual')::int
 		FROM purser.operator_credit_ledger
 		WHERE cluster_owner_tenant_id = $1
+		  AND status IN ('accruing', 'eligible', 'paid_out', 'clawed_back')
 		GROUP BY cluster_id, currency
 		ORDER BY cluster_id
 	`, tenantID)

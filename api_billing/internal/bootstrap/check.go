@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"fmt"
 	"strings"
+
+	"frameworks/api_billing/internal/pricing"
 )
 
 // Check is the read-only validation pass `purser bootstrap --check` runs after
@@ -50,6 +52,9 @@ func Check(desired PurserSection, embedded []CatalogTier) error {
 			if _, err := parseMoney(cp.BasePrice); err != nil {
 				return fmt.Errorf("cluster_pricing %q: %w", cp.ClusterID, err)
 			}
+		}
+		if err := pricing.ValidateMeteredRates(cp.MeteredRates, pricing.Model(cp.PricingModel)); err != nil {
+			return fmt.Errorf("cluster_pricing %q: %w", cp.ClusterID, err)
 		}
 	}
 

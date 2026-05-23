@@ -1819,9 +1819,8 @@ type StorageArtifactsInput struct {
 
 // Marginal per-asset storage cost projection. Used by the customer-facing
 // storage browser to show "this clip costs you ~$0.01/day". The unit is
-// the tier's currency (typically EUR). PerDay = perMonth / 30; the cost
-// estimate is intentionally simple — multiply marginal $/GB-month by the
-// asset's byte count, render as the customer's currency.
+// the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
+// internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
 type StorageCostProjection struct {
 	PerDay   float64 `json:"perDay"`
 	PerMonth float64 `json:"perMonth"`
@@ -2410,7 +2409,7 @@ type VodAsset struct {
 	EffectiveRetention *EffectiveRetention `json:"effectiveRetention,omitempty"`
 	// Marginal storage cost for this asset on the tenant's tier. Null when
 	// the tenant has no storage meter (self-hosted, fully tenant-private
-	// cluster). Computed from sizeBytes × marginal $/GB-month.
+	// cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
 	StorageCost *StorageCostProjection `json:"storageCost,omitempty"`
 }
 

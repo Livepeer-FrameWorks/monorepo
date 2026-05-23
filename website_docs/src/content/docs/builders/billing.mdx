@@ -17,17 +17,21 @@ Paid plans are rated from metered usage. Prepaid balances are deducted as usage 
 
 Paid tiers use **resource-based billing**:
 
-| Resource              | What It Measures                          |
-| --------------------- | ----------------------------------------- |
-| **Delivered Minutes** | Total viewer playback time                |
-| **Storage**           | Average GB stored over the billing period |
+| Resource              | What It Measures              |
+| --------------------- | ----------------------------- |
+| **Delivered Minutes** | Total viewer playback time    |
+| **Cold Storage**      | Time-weighted durable storage |
 
-The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and ABR ladder generation. No separate encoding fees.
+The public beta catalog currently prices delivered minutes and cold storage. The billing engine is
+meter-based, so invoices can also carry separate line items for bandwidth, hot storage, processing
+formats, marketplace cluster rates, or advanced jobs when those meters are enabled for a tier or
+cluster.
 
 <Aside type="tip">
   **API requests are free.** Stream creation, analytics queries, configuration changes—all API
   operations cost nothing, though API traffic is still subject to request throttling. You only pay
-  when viewers watch, when recordings are stored, or when AI GPU workloads run.
+  when viewers watch or when recordings are stored under the public beta catalog. Advanced
+  processing (AI, V2V, compositing) is in pilot — see below.
 </Aside>
 
 ## Free Tier
@@ -56,7 +60,7 @@ Access to the shared Free service with the included allowances below. API reques
 
 **Seeded limitations:**
 
-- No GPU hours (no AI workloads)
+- No AI workloads
 - Watermarked player
 - Community support only
 - No SLA
@@ -68,31 +72,41 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 | Resource          | Rate         |
 | ----------------- | ------------ |
 | Delivered Minutes | €0.00055/min |
-| Storage (avg GB)  | €0.035/GB    |
-| GPU Hours         | €1.50/hr     |
+| Cold storage      | €0.035/GB-h  |
 
-GPU-hours apply to AI workloads (live transcription, V2V transformations, automated highlights).
-Standard transcoding and multiview compositing are bundled into delivered minutes.
+Standard transcoding and multiview compositing are bundled into delivered minutes. Advanced
+processing (AI workloads such as live transcription, V2V transformations, automated highlights)
+is in pilot — see [Advanced processing](#advanced-processing) below.
 
 ## Metered Tiers
 
 Paid tiers include monthly allocations with overage billing:
 
-| Tier       | Base   | Delivered Minutes | GPU Hours | Retention |
-| ---------- | ------ | ----------------- | --------- | --------- |
-| Supporter  | €79    | 120K              | 10        | 90 days   |
-| Developer  | €249   | 500K              | 50        | 180 days  |
-| Production | €999   | 2M                | 250       | 365 days  |
-| Enterprise | Custom | Custom            | Custom    | Custom    |
+| Tier       | Base   | Delivered Minutes | Retention |
+| ---------- | ------ | ----------------- | --------- |
+| Supporter  | €79    | 120K              | 90 days   |
+| Developer  | €249   | 500K              | 180 days  |
+| Production | €999   | 2M                | 365 days  |
+| Enterprise | Custom | Custom            | Custom    |
 
 **Overages (metered tiers):**
 
-| Tier       | Delivered Minutes | Storage (avg GB) | GPU Hours |
-| ---------- | ----------------- | ---------------- | --------- |
-| Supporter  | €0.00055/min      | €0.035/GB        | €1.50/hr  |
-| Developer  | €0.00052/min      | €0.030/GB        | €1.50/hr  |
-| Production | €0.00050/min      | €0.025/GB        | €1.50/hr  |
-| Enterprise | Custom            | Custom           | Custom    |
+| Tier       | Delivered Minutes | Cold storage |
+| ---------- | ----------------- | ------------ |
+| Supporter  | €0.00055/min      | €0.035/GB-h  |
+| Developer  | €0.00052/min      | €0.030/GB-h  |
+| Production | €0.00050/min      | €0.025/GB-h  |
+| Enterprise | Custom            | Custom       |
+
+## Advanced processing
+
+Advanced processing (AI workloads such as live transcription, video analysis, automated highlights,
+V2V transformations, and multi-stream compositing) is in **pilot**. These jobs use the same
+meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
+or marketplace offer.
+
+To request pilot access, [contact us](https://frameworks.network/contact). Standard transcoding
+and multi-stream compositing remain bundled into delivered minutes.
 
 ## Billing Models
 
@@ -110,7 +124,7 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 ### Postpaid
 
-Monthly subscription with included delivered-minute and GPU allocations. Storage is rated by average GB stored during the period. Overages are drafted during the billing period and invoiced at period end. Requires verified billing details.
+Monthly subscription with included delivered-minute allocations. Storage is rated by average GB stored during the period. Overages are drafted during the billing period and invoiced at period end. Requires verified billing details.
 
 ## Topping Up
 
@@ -163,13 +177,13 @@ All invoices are available in your account. We retain transaction records for 10
 
 FrameWorks supports multiple deployment models with different billing characteristics:
 
-| Tier                   | Description                                                                                                                    | Billing                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.                            | Zero-priced metering with fair-use.                  |
-| **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                                        | Per-resource metering (delivered minutes + storage). |
-| **Dedicated**          | Isolated cluster with dedicated Foghorn and edges — operated by FrameWorks or self-hosted on-premise.                          | Custom pricing via `cluster_pricing`.                |
-| **Hybrid**             | Self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared. | Per-cluster usage attribution.                       |
-| **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.                             | Operator-set pricing via `cluster_subscriptions`.    |
+| Tier                   | Description                                                                                                                    | Billing                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.                            | Zero-priced metering with fair-use.                                                                  |
+| **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                                        | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
+| **Dedicated**          | Isolated cluster with dedicated Foghorn and edges — operated by FrameWorks or self-hosted on-premise.                          | Custom pricing via `cluster_pricing`.                                                                |
+| **Hybrid**             | Self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared. | Per-cluster usage attribution.                                                                       |
+| **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.                             | Operator-set pricing via `cluster_subscriptions`.                                                    |
 
 Usage is attributed per cluster: the analytics pipeline tags every event with `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). Billing summaries are generated per cluster for settlement.
 

@@ -38,6 +38,10 @@ pre-commit:
     demo-recordings:
       run: scripts/ensure-demo-recordings.sh
 
+    migration-version-guard:
+      glob: "pkg/database/{sql,sql/clickhouse}/migrations/**"
+      run: scripts/check-migration-version.sh {staged_files}
+
     no-binaries:
       run: |
         for f in {staged_files}; do

@@ -2398,7 +2398,7 @@ type DVRRequest {
   """
   Marginal storage cost for this recording on the tenant's tier. Null
   for tenants without a storage meter (self-hosted, fully tenant-private
-  clusters). Computed from sizeBytes × marginal $/GB-month.
+  clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
   """
   storageCost: StorageCostProjection
   # Lifecycle data (from Periscope via artifactStatesConnection)
@@ -2753,7 +2753,7 @@ type VodAsset implements Node {
   """
   Marginal storage cost for this asset on the tenant's tier. Null when
   the tenant has no storage meter (self-hosted, fully tenant-private
-  cluster). Computed from sizeBytes × marginal $/GB-month.
+  cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
   """
   storageCost: StorageCostProjection
 }
@@ -4785,7 +4785,7 @@ type BillingTier {
 A pricing rule: how a meter rates to money. Decimal fields are strings to preserve precision.
 """
 type PricingRule {
-  "Meter name (delivered_minutes, average_storage_gb, ai_gpu_hours, processing_seconds)."
+  "Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter)."
   meter: String!
   "Pricing model (tiered_graduated, all_usage, codec_multiplier)."
   model: String!
@@ -4857,8 +4857,6 @@ type Invoice {
   periodEnd: Time
   "Detailed usage breakdown (JSON)."
   usageDetails: JSON
-  "Aggregated usage summary."
-  usageSummary: UsageSummary
   "Individual line items on the invoice."
   lineItems: [LineItem!]!
 }
@@ -4960,11 +4958,11 @@ type LiveUsageSummary {
   periodStart: Time
   periodEnd: Time
 
-  # Core metrics (matches UsageSummary)
+  # Core live metrics
   streamHours: Float!
   egressGb: Float!
   peakBandwidthMbps: Float!
-  averageStorageGb: Float!
+  displayStorageGb: Float!
 
   # Per-codec breakdown: Livepeer
   livepeerH264Seconds: Float!
@@ -4980,80 +4978,6 @@ type LiveUsageSummary {
   nativeAvAacSeconds: Float!
   nativeAvOpusSeconds: Float!
 
-  # Viewer metrics (matches UsageSummary)
-  totalStreams: Int!
-  totalViewers: Int!
-  viewerHours: Float!
-  maxViewers: Int!
-  uniqueUsers: Int!
-
-  # Segment/stream counts (from processing_daily)
-  livepeerSegmentCount: Int!
-  livepeerUniqueStreams: Int!
-  nativeAvSegmentCount: Int!
-  nativeAvUniqueStreams: Int!
-
-  # Geo enrichment
-  uniqueCountries: Int!
-  uniqueCities: Int!
-  geoBreakdown: [CountryMetrics!]!
-
-  # Storage lifecycle - artifact counts
-  clipsCreated: Int!
-  clipsDeleted: Int!
-  dvrCreated: Int!
-  dvrDeleted: Int!
-  vodCreated: Int!
-  vodDeleted: Int!
-
-  # Storage - hot (bytes)
-  clipBytes: Int!
-  dvrBytes: Int!
-  vodBytes: Int!
-
-  # Storage - cold/frozen (bytes)
-  frozenClipBytes: Int!
-  frozenDvrBytes: Int!
-  frozenVodBytes: Int!
-
-  # Freeze/defrost operations
-  freezeCount: Int!
-  freezeBytes: Int!
-  defrostCount: Int!
-  defrostBytes: Int!
-}
-
-# Bound to proto.UsageSummary - billing metrics from Purser
-type UsageSummary {
-  clusterId: String
-  period: String!
-  periodStart: Time
-  periodEnd: Time
-  timestamp: Time
-  granularity: String
-
-  # Core billing metrics
-  streamHours: Float!
-  egressGb: Float!
-  peakBandwidthMbps: Float!
-
-  # Storage
-  averageStorageGb: Float!
-
-  # Per-codec breakdown: Livepeer (external gateway)
-  livepeerH264Seconds: Float!
-  livepeerVp9Seconds: Float!
-  livepeerAv1Seconds: Float!
-  livepeerHevcSeconds: Float!
-
-  # Per-codec breakdown: Native AV (local processing)
-  nativeAvH264Seconds: Float!
-  nativeAvVp9Seconds: Float!
-  nativeAvAv1Seconds: Float!
-  nativeAvHevcSeconds: Float!
-  nativeAvAacSeconds: Float!
-  nativeAvOpusSeconds: Float!
-
   # Viewer metrics
   totalStreams: Int!
   totalViewers: Int!
@@ -5061,7 +4985,7 @@ type UsageSummary {
   maxViewers: Int!
   uniqueUsers: Int!
 
-  # Segment/stream counts (from processing_daily)
+  # Segment/stream counts
   livepeerSegmentCount: Int!
   livepeerUniqueStreams: Int!
   nativeAvSegmentCount: Int!
@@ -5722,7 +5646,7 @@ type Clip implements Node {
   """
   Marginal storage cost for this clip on the tenant's tier. Null when
   the tenant has no storage meter (self-hosted, fully tenant-private
-  cluster). Computed from sizeBytes × marginal $/GB-month.
+  cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
   """
   storageCost: StorageCostProjection
 }
@@ -7357,9 +7281,8 @@ input SetStreamRetentionOverridesInput {
 """
 Marginal per-asset storage cost projection. Used by the customer-facing
 storage browser to show "this clip costs you ~$0.01/day". The unit is
-the tier's currency (typically EUR). PerDay = perMonth / 30; the cost
-estimate is intentionally simple — multiply marginal $/GB-month by the
-asset's byte count, render as the customer's currency.
+the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
+internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
 """
 type StorageCostProjection {
   perDay: Float!

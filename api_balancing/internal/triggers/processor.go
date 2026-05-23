@@ -889,9 +889,28 @@ func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, 
 		return p.handleStorageLifecycleData(trigger)
 	case *pb.MistTrigger_ProcessBilling:
 		return p.handleProcessBilling(trigger)
+	case *pb.MistTrigger_RawMistWebhook:
+		return p.handleRawMistWebhook(trigger)
 	default:
 		return "", trigger.GetBlocking(), fmt.Errorf("unsupported trigger payload type")
 	}
+}
+
+func (p *Processor) handleRawMistWebhook(trigger *pb.MistTrigger) (string, bool, error) {
+	if _, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_RawMistWebhook); !ok {
+		return "", false, fmt.Errorf("unexpected payload type for RawMistWebhook: %T", trigger.GetTriggerPayload())
+	}
+	if err := p.sendTriggerToDecklog(trigger); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"trigger_type":    trigger.GetTriggerType(),
+			"source_event_id": trigger.GetRequestId(),
+			"error":           err,
+		}).Error("Failed to send raw Mist webhook trigger to Decklog")
+		if shouldSurfaceDecklogError(trigger) {
+			return "", false, err
+		}
+	}
+	return "", false, nil
 }
 
 // handleProcessBilling forwards ProcessBillingEvent to Decklog
@@ -3344,14 +3363,24 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			tenantUsages = append(tenantUsages, tu)
 		}
 
+		// Provider attribution: hot edge cache lives on the node. The
+		// node's owning tenant is the storage provider (cluster owner on
+		// the marketplace, FrameWorks for platform clusters); the cluster
+		// they advertise this node into is the provider cluster. Backend
+		// is the on-disk edge cache. Settlement rating uses these to
+		// route marketplace payouts. See docs/architecture/meter-contracts.md.
+		hotProviderTenantID := p.ownerTenantID
 		storageSnapshot := &pb.StorageSnapshot{
-			NodeId:       nodeSnap.NodeID,
-			Timestamp:    time.Now().Unix(),
-			TenantId:     func() *string { s := snapshotTenantID; return &s }(),
-			Location:     func() *string { s := nodeLocation; return &s }(),
-			Capabilities: nodeCapabilities,
-			Usage:        tenantUsages,
-			StorageScope: stringPtr("hot"),
+			NodeId:                   nodeSnap.NodeID,
+			Timestamp:                time.Now().Unix(),
+			TenantId:                 func() *string { s := snapshotTenantID; return &s }(),
+			Location:                 func() *string { s := nodeLocation; return &s }(),
+			Capabilities:             nodeCapabilities,
+			Usage:                    tenantUsages,
+			StorageScope:             stringPtr("hot"),
+			StorageProviderTenantId:  func() *string { s := hotProviderTenantID; return &s }(),
+			StorageProviderClusterId: func() *string { s := p.clusterID; return &s }(),
+			StorageBackend:           stringPtr("edge_disk"),
 		}
 
 		// Send to Decklog
@@ -3360,6 +3389,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			NodeId:      nodeSnap.NodeID,
 			Timestamp:   time.Now().Unix(),
 			TenantId:    func() *string { s := snapshotTenantID; return &s }(),
+			ClusterId:   func() *string { s := p.clusterID; return &s }(),
 			TriggerPayload: &pb.MistTrigger_StorageSnapshot{
 				StorageSnapshot: storageSnapshot,
 			},
@@ -3399,12 +3429,19 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	}
 
 	coldTenantID := p.ownerTenantID
+	// Provider attribution: S3 freezer is operated by the cluster's owner
+	// tenant (FrameWorks for the platform clusters; the marketplace
+	// cluster operator for third-party clusters). Customer billing rates the
+	// usage tenant; settlement views can route by these provider fields.
 	coldSnapshot := &pb.StorageSnapshot{
-		NodeId:       "s3",
-		Timestamp:    time.Now().Unix(),
-		TenantId:     func() *string { s := coldTenantID; return &s }(),
-		Usage:        coldUsages,
-		StorageScope: stringPtr("cold"),
+		NodeId:                   "s3",
+		Timestamp:                time.Now().Unix(),
+		TenantId:                 func() *string { s := coldTenantID; return &s }(),
+		Usage:                    coldUsages,
+		StorageScope:             stringPtr("cold"),
+		StorageProviderTenantId:  func() *string { s := coldTenantID; return &s }(),
+		StorageProviderClusterId: func() *string { s := p.clusterID; return &s }(),
+		StorageBackend:           stringPtr("s3"),
 	}
 
 	coldTrigger := &pb.MistTrigger{
@@ -3412,6 +3449,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		NodeId:      "s3",
 		Timestamp:   time.Now().Unix(),
 		TenantId:    func() *string { s := coldTenantID; return &s }(),
+		ClusterId:   func() *string { s := p.clusterID; return &s }(),
 		TriggerPayload: &pb.MistTrigger_StorageSnapshot{
 			StorageSnapshot: coldSnapshot,
 		},

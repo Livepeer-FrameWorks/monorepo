@@ -254,7 +254,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Id:          "tier_demo_supporter",
 			TierName:    "supporter",
 			DisplayName: "Supporter",
-			Description: "120K delivered minutes, 10 GPU-hours, hosted load balancing, custom subdomain.",
+			Description: "120K delivered minutes, hosted load balancing, custom subdomain.",
 			BasePrice:   79.00,
 			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
@@ -273,7 +273,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Id:          "tier_demo_developer",
 			TierName:    "developer",
 			DisplayName: "Developer",
-			Description: "500K delivered minutes, 50 GPU-hours, team features, advanced analytics.",
+			Description: "500K delivered minutes, priority processing, team features, advanced analytics.",
 			BasePrice:   249.00,
 			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
@@ -292,7 +292,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Id:          "tier_demo_production",
 			TierName:    "production",
 			DisplayName: "Production",
-			Description: "2M delivered minutes, 250 GPU-hours, dedicated capacity, 24/7 support and SLA.",
+			Description: "2M delivered minutes, dedicated processing capacity, 24/7 support and SLA.",
 			BasePrice:   999.00,
 			Currency:    "EUR",
 			Features: &pb.BillingFeatures{
@@ -339,21 +339,15 @@ func GenerateInvoices() []*pb.Invoice {
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
+	codecSeconds1 := map[string]interface{}{"h264": 3600.0, "hevc": 100.0, "vp9": 800.0, "av1": 366.2, "aac": 150.0, "opus": 50.0}
+	processSeconds1 := map[string]interface{}{"Livepeer": 3245.7, "AV": 1820.5}
 	usageDetails1, _ := structpb.NewStruct(map[string]interface{}{
-		"viewer_hours":       708.33, // 42,500 delivered minutes / 60
-		"average_storage_gb": 15.2,
-		"stream_hours":       42.5,
-		// Per-codec processing (matches ClickHouse columns)
-		"livepeer_h264_seconds":  2400.0,
-		"livepeer_vp9_seconds":   500.0,
-		"livepeer_av1_seconds":   245.7,
-		"livepeer_hevc_seconds":  100.0,
-		"native_av_h264_seconds": 1200.0,
-		"native_av_vp9_seconds":  300.0,
-		"native_av_av1_seconds":  120.5,
-		"native_av_hevc_seconds": 0.0,
-		"native_av_aac_seconds":  150.0,
-		"native_av_opus_seconds": 50.0,
+		"delivered_minutes":       42500.0,
+		"storage_gb_seconds_cold": 54720.0,
+		"stream_runtime_seconds":  153000.0,
+		"media_seconds":           5066.2,
+		"codec_seconds":           codecSeconds1,
+		"process_seconds":         processSeconds1,
 		"tier_info": map[string]interface{}{
 			"tier_name":        "developer",
 			"display_name":     "Developer",
@@ -363,21 +357,15 @@ func GenerateInvoices() []*pb.Invoice {
 	})
 
 	// Build usage details for second invoice
+	codecSeconds2 := map[string]interface{}{"h264": 2700.0, "hevc": 75.0, "vp9": 550.0, "av1": 265.0, "aac": 120.0, "opus": 40.0}
+	processSeconds2 := map[string]interface{}{"Livepeer": 2405.0, "AV": 1345.0}
 	usageDetails2, _ := structpb.NewStruct(map[string]interface{}{
-		"viewer_hours":       583.33, // 35,000 delivered minutes / 60
-		"average_storage_gb": 19.0,
-		"stream_hours":       35.0,
-		// Per-codec processing
-		"livepeer_h264_seconds":  1800.0,
-		"livepeer_vp9_seconds":   350.0,
-		"livepeer_av1_seconds":   180.0,
-		"livepeer_hevc_seconds":  75.0,
-		"native_av_h264_seconds": 900.0,
-		"native_av_vp9_seconds":  200.0,
-		"native_av_av1_seconds":  85.0,
-		"native_av_hevc_seconds": 0.0,
-		"native_av_aac_seconds":  120.0,
-		"native_av_opus_seconds": 40.0,
+		"delivered_minutes":       35000.0,
+		"storage_gb_seconds_cold": 68400.0,
+		"stream_runtime_seconds":  126000.0,
+		"media_seconds":           3750.0,
+		"codec_seconds":           codecSeconds2,
+		"process_seconds":         processSeconds2,
 		"tier_info": map[string]interface{}{
 			"tier_name":        "developer",
 			"display_name":     "Developer",
@@ -402,62 +390,10 @@ func GenerateInvoices() []*pb.Invoice {
 			UpdatedAt:            timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			PeriodStart:          timestamppb.New(periodStart),
 			PeriodEnd:            timestamppb.New(periodEnd),
-			UsageSummary: &pb.UsageSummary{
-				TenantId:              DemoTenantID,
-				Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
-				Timestamp:             timestamppb.New(now.Add(-30 * 24 * time.Hour)),
-				Granularity:           "monthly",
-				StreamHours:           42.5,
-				EgressGb:              125.0,
-				PeakBandwidthMbps:     98.2,
-				AverageStorageGb:      15.2,
-				LivepeerH264Seconds:   2400.0,
-				LivepeerVp9Seconds:    500.0,
-				LivepeerAv1Seconds:    245.7,
-				LivepeerHevcSeconds:   100.0,
-				NativeAvH264Seconds:   1200.0,
-				NativeAvVp9Seconds:    300.0,
-				NativeAvAv1Seconds:    120.5,
-				NativeAvHevcSeconds:   0.0,
-				NativeAvAacSeconds:    150.0,
-				NativeAvOpusSeconds:   50.0,
-				TotalStreams:          38,
-				TotalViewers:          1450,
-				ViewerHours:           708.33,
-				MaxViewers:            412,
-				UniqueUsers:           1120,
-				LivepeerSegmentCount:  5120,
-				LivepeerUniqueStreams: 35,
-				NativeAvSegmentCount:  1980,
-				NativeAvUniqueStreams: 18,
-				UniqueCountries:       9,
-				UniqueCities:          52,
-				GeoBreakdown: []*pb.CountryMetrics{
-					{CountryCode: "US", ViewerCount: 620, ViewerHours: 295.0, EgressGb: 52.5},
-					{CountryCode: "GB", ViewerCount: 210, ViewerHours: 98.5, EgressGb: 18.2},
-					{CountryCode: "DE", ViewerCount: 175, ViewerHours: 82.0, EgressGb: 15.1},
-				},
-				ClipsCreated:    28,
-				ClipsDeleted:    10,
-				DvrCreated:      18,
-				DvrDeleted:      5,
-				VodCreated:      9,
-				VodDeleted:      3,
-				ClipBytes:       2_684_354_560,
-				DvrBytes:        6_442_450_944,
-				VodBytes:        12_884_901_888,
-				FrozenClipBytes: 1_610_612_736,
-				FrozenDvrBytes:  4_294_967_296,
-				FrozenVodBytes:  10_737_418_240,
-				FreezeCount:     15,
-				FreezeBytes:     5_368_709_120,
-				DefrostCount:    6,
-				DefrostBytes:    2_684_354_560,
-			},
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:current", Meter: "average_storage_gb", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:current", Meter: "storage_gb_seconds_cold", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
@@ -477,62 +413,10 @@ func GenerateInvoices() []*pb.Invoice {
 			UpdatedAt:            timestamppb.New(now.Add(-28 * 24 * time.Hour)),
 			PeriodStart:          timestamppb.New(periodStart.AddDate(0, -1, 0)),
 			PeriodEnd:            timestamppb.New(periodStart),
-			UsageSummary: &pb.UsageSummary{
-				TenantId:              DemoTenantID,
-				Period:                periodStart.AddDate(0, -1, 0).Format(time.RFC3339) + "/" + periodStart.Format(time.RFC3339),
-				Timestamp:             timestamppb.New(now.Add(-28 * 24 * time.Hour)),
-				Granularity:           "monthly",
-				StreamHours:           35.0,
-				EgressGb:              98.0,
-				PeakBandwidthMbps:     82.5,
-				AverageStorageGb:      19.0,
-				LivepeerH264Seconds:   1800.0,
-				LivepeerVp9Seconds:    350.0,
-				LivepeerAv1Seconds:    180.0,
-				LivepeerHevcSeconds:   75.0,
-				NativeAvH264Seconds:   900.0,
-				NativeAvVp9Seconds:    200.0,
-				NativeAvAv1Seconds:    85.0,
-				NativeAvHevcSeconds:   0.0,
-				NativeAvAacSeconds:    120.0,
-				NativeAvOpusSeconds:   40.0,
-				TotalStreams:          32,
-				TotalViewers:          1180,
-				ViewerHours:           583.33,
-				MaxViewers:            380,
-				UniqueUsers:           920,
-				LivepeerSegmentCount:  3850,
-				LivepeerUniqueStreams: 28,
-				NativeAvSegmentCount:  1420,
-				NativeAvUniqueStreams: 15,
-				UniqueCountries:       8,
-				UniqueCities:          45,
-				GeoBreakdown: []*pb.CountryMetrics{
-					{CountryCode: "US", ViewerCount: 490, ViewerHours: 225.0, EgressGb: 38.2},
-					{CountryCode: "GB", ViewerCount: 165, ViewerHours: 72.5, EgressGb: 14.8},
-					{CountryCode: "CA", ViewerCount: 120, ViewerHours: 55.0, EgressGb: 11.2},
-				},
-				ClipsCreated:    22,
-				ClipsDeleted:    12,
-				DvrCreated:      14,
-				DvrDeleted:      6,
-				VodCreated:      8,
-				VodDeleted:      4,
-				ClipBytes:       2_147_483_648,
-				DvrBytes:        5_368_709_120,
-				VodBytes:        10_737_418_240,
-				FrozenClipBytes: 1_073_741_824,
-				FrozenDvrBytes:  3_221_225_472,
-				FrozenVodBytes:  8_589_934_592,
-				FreezeCount:     10,
-				FreezeBytes:     4_294_967_296,
-				DefrostCount:    4,
-				DefrostBytes:    2_147_483_648,
-			},
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:previous", Meter: "average_storage_gb", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:previous", Meter: "storage_gb_seconds_cold", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
@@ -546,10 +430,11 @@ func GenerateInvoicePreview() *pb.Invoice {
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
 	usageDetails, _ := structpb.NewStruct(map[string]interface{}{
-		"viewer_hours":       4166.67,
-		"average_storage_gb": 23.5,
-		"stream_hours":       127.5,
-		"egress_gb":          456.78,
+		"delivered_minutes":       250000.2,
+		"storage_gb_seconds_cold": 84600.0,
+		"stream_runtime_seconds":  459000.0,
+		"ingress_gb":              82.0,
+		"egress_gb":               456.78,
 		"tier_info": map[string]interface{}{
 			"tier_name":        "developer",
 			"display_name":     "Developer",
@@ -573,70 +458,10 @@ func GenerateInvoicePreview() *pb.Invoice {
 		UpdatedAt:            timestamppb.New(now),
 		PeriodStart:          timestamppb.New(periodStart),
 		PeriodEnd:            timestamppb.New(periodEnd),
-		UsageSummary: &pb.UsageSummary{
-			TenantId:              DemoTenantID,
-			Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
-			Timestamp:             timestamppb.New(now),
-			Granularity:           "monthly",
-			StreamHours:           127.5,
-			EgressGb:              456.78,
-			PeakBandwidthMbps:     125.4,
-			AverageStorageGb:      23.5,
-			LivepeerH264Seconds:   2340.0,
-			LivepeerVp9Seconds:    480.0,
-			LivepeerAv1Seconds:    180.0,
-			LivepeerHevcSeconds:   120.0,
-			NativeAvH264Seconds:   840.0,
-			NativeAvVp9Seconds:    420.0,
-			NativeAvAv1Seconds:    180.0,
-			NativeAvHevcSeconds:   120.0,
-			NativeAvAacSeconds:    60.0,
-			NativeAvOpusSeconds:   60.0,
-			TotalStreams:          42,
-			TotalViewers:          1250,
-			ViewerHours:           4166.67,
-			MaxViewers:            347,
-			UniqueUsers:           980,
-			LivepeerSegmentCount:  4280,
-			LivepeerUniqueStreams: 38,
-			NativeAvSegmentCount:  1650,
-			NativeAvUniqueStreams: 22,
-			UniqueCountries:       7,
-			UniqueCities:          42,
-			GeoBreakdown: []*pb.CountryMetrics{
-				{CountryCode: "US", ViewerCount: 520, ViewerHours: 185.2, EgressGb: 62.4},
-				{CountryCode: "GB", ViewerCount: 180, ViewerHours: 68.5, EgressGb: 24.1},
-				{CountryCode: "DE", ViewerCount: 145, ViewerHours: 52.3, EgressGb: 18.7},
-				{CountryCode: "CA", ViewerCount: 95, ViewerHours: 38.2, EgressGb: 13.2},
-				{CountryCode: "AU", ViewerCount: 65, ViewerHours: 28.4, EgressGb: 9.8},
-				{CountryCode: "FR", ViewerCount: 55, ViewerHours: 22.1, EgressGb: 7.3},
-				{CountryCode: "JP", ViewerCount: 40, ViewerHours: 17.8, EgressGb: 4.8},
-			},
-			// Storage lifecycle - artifact counts
-			ClipsCreated: 24,
-			ClipsDeleted: 8,
-			DvrCreated:   15,
-			DvrDeleted:   3,
-			VodCreated:   7,
-			VodDeleted:   2,
-			// Storage - hot (bytes)
-			ClipBytes: 2_147_483_648,
-			DvrBytes:  5_368_709_120,
-			VodBytes:  10_737_418_240,
-			// Storage - cold/frozen (bytes)
-			FrozenClipBytes: 1_073_741_824,
-			FrozenDvrBytes:  3_221_225_472,
-			FrozenVodBytes:  8_589_934_592,
-			// Freeze/defrost operations
-			FreezeCount:  12,
-			FreezeBytes:  4_294_967_296,
-			DefrostCount: 5,
-			DefrostBytes: 2_147_483_648,
-		},
 		LineItems: demoLineItems(
 			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "250000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-			demoLineSpec{LineKey: "meter:average_storage_gb:demo-media:draft", Meter: "average_storage_gb", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:draft", Meter: "storage_gb_seconds_cold", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 		),
 	}
@@ -656,7 +481,7 @@ func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
 		StreamHours:       68.5,
 		EgressGb:          140.3,
 		PeakBandwidthMbps: 125.4,
-		AverageStorageGb:  18.4,
+		DisplayStorageGb:  18.4,
 
 		// Per-codec breakdown: Livepeer
 		LivepeerH264Seconds: 2340.0,
@@ -760,7 +585,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			Id:            "tier_demo_developer",
 			TierName:      "developer",
 			DisplayName:   "Developer",
-			Description:   "500K delivered minutes, 50 GPU-hours, team features, advanced analytics.",
+			Description:   "500K delivered minutes, priority processing, team features, advanced analytics.",
 			BasePrice:     249.00,
 			Currency:      "EUR",
 			BillingPeriod: "monthly",
@@ -790,50 +615,6 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 		PendingInvoices:   []*pb.Invoice{}, // Empty slice
 		RecentPayments:    []*pb.Payment{}, // Empty slice
 		PaymentMethods:    []string{"card", "crypto_usdc", "crypto_eth"},
-		UsageSummary: &pb.UsageSummary{
-			Period:              "1d",
-			Timestamp:           timestamppb.Now(),
-			Granularity:         "daily",
-			StreamHours:         42.5,
-			EgressGb:            25.4,
-			PeakBandwidthMbps:   156.8,
-			AverageStorageGb:    11.8,
-			LivepeerH264Seconds: 2400.0,
-			LivepeerVp9Seconds:  500.0,
-			LivepeerAv1Seconds:  245.7,
-			LivepeerHevcSeconds: 100.0,
-			NativeAvH264Seconds: 1200.0,
-			NativeAvVp9Seconds:  300.0,
-			NativeAvAv1Seconds:  120.5,
-			NativeAvHevcSeconds: 0.0,
-			NativeAvAacSeconds:  150.0,
-			NativeAvOpusSeconds: 50.0,
-			TotalStreams:        8,
-			TotalViewers:        1847,
-			ViewerHours:         156.3,
-			MaxViewers:          342,
-			UniqueUsers:         1203,
-			// Storage lifecycle - artifact counts
-			ClipsCreated: 12,
-			ClipsDeleted: 4,
-			DvrCreated:   8,
-			DvrDeleted:   2,
-			VodCreated:   3,
-			VodDeleted:   1,
-			// Storage - hot (bytes)
-			ClipBytes: 1_073_741_824,
-			DvrBytes:  2_684_354_560,
-			VodBytes:  5_368_709_120,
-			// Storage - cold/frozen (bytes)
-			FrozenClipBytes: 536_870_912,
-			FrozenDvrBytes:  1_610_612_736,
-			FrozenVodBytes:  4_294_967_296,
-			// Freeze/defrost operations
-			FreezeCount:  6,
-			FreezeBytes:  2_147_483_648,
-			DefrostCount: 2,
-			DefrostBytes: 1_073_741_824,
-		},
 	}
 }
 
@@ -847,41 +628,39 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		usageType string
 		value     float64
 		unit      string
+		details   map[string]interface{}
 	}{
 		// Core streaming metrics
-		{"stream_hours", 25, "hours"},
-		{"egress_gb", 1628, "GB"},
-		{"average_storage_gb", 37.25, "GB"},
-		{"peak_bandwidth_mbps", 850.5, "Mbps"},
-		{"total_streams", 1, "streams"},
-		{"total_viewers", 1847, "viewers"},
-		{"peak_viewers", 342, "viewers"},
-		{"unique_users", 1203, "users"},
-		// Per-codec processing: Livepeer (external gateway)
-		{"livepeer_h264_seconds", 2400.0, "seconds"},
-		{"livepeer_vp9_seconds", 500.0, "seconds"},
-		{"livepeer_av1_seconds", 245.7, "seconds"},
-		{"livepeer_hevc_seconds", 100.0, "seconds"},
-		// Per-codec processing: Native AV (local)
-		{"native_av_h264_seconds", 1200.0, "seconds"},
-		{"native_av_vp9_seconds", 300.0, "seconds"},
-		{"native_av_av1_seconds", 120.5, "seconds"},
-		{"native_av_hevc_seconds", 0.0, "seconds"},
-		{"native_av_aac_seconds", 150.0, "seconds"},
-		{"native_av_opus_seconds", 50.0, "seconds"},
+		{"stream_runtime_seconds", 90000, "seconds", nil},
+		{"ingress_gb", 284, "GB", nil},
+		{"egress_gb", 1628, "GB", nil},
+		{"storage_gb_seconds_cold", 134100, "GB-seconds", nil},
+		{"peak_bandwidth_mbps", 850.5, "Mbps", nil},
+		{"total_streams", 1, "streams", nil},
+		{"total_viewers", 1847, "viewers", nil},
+		{"max_viewers", 342, "viewers", nil},
+		{"unique_users", 1203, "users", nil},
+		{"media_seconds", 5066.2, "seconds", map[string]interface{}{
+			"codec_seconds":   map[string]interface{}{"h264": 3600.0, "hevc": 100.0, "vp9": 800.0, "av1": 366.2, "aac": 150.0, "opus": 50.0},
+			"process_seconds": map[string]interface{}{"Livepeer": 3245.7, "AV": 1820.5},
+		}},
 	}
 
 	records := make([]*pb.UsageRecord, len(usageData))
 
 	for i, data := range usageData {
 		// Build usage details as structpb.Struct
-		usageDetails, _ := structpb.NewStruct(map[string]interface{}{
+		details := map[string]interface{}{
 			"cost": map[string]interface{}{
 				"quantity":   data.value,
 				"unit_price": 0.5,
 				"unit":       data.unit,
 			},
-		})
+		}
+		for k, v := range data.details {
+			details[k] = v
+		}
+		usageDetails, _ := structpb.NewStruct(details)
 
 		periodStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Duration(i) * time.Hour)
 		periodEnd := periodStart.Add(time.Hour)
@@ -4942,10 +4721,8 @@ func demoLineDescription(lineKey string) string {
 		return "Base subscription"
 	case "meter:delivered_minutes":
 		return "Delivered minutes"
-	case "meter:average_storage_gb":
-		return "Recording storage (avg GB)"
-	case "meter:ai_gpu_hours":
-		return "AI GPU hours"
+	case "meter:storage_gb_seconds_cold":
+		return "Cold storage"
 	default:
 		return lineKey
 	}
@@ -4956,26 +4733,22 @@ func demoPricingRulesForTier(tierName string) []*pb.PricingRule {
 	case "payg":
 		return []*pb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.00055", ConfigJson: "{}"},
-			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
-			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1.50", ConfigJson: "{}"},
+			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
 		}
 	case "developer":
 		return []*pb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "500000", UnitPrice: "0.00052", ConfigJson: "{}"},
-			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.030", ConfigJson: "{}"},
-			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "50", UnitPrice: "1.50", ConfigJson: "{}"},
+			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.030", ConfigJson: "{}"},
 		}
 	case "production":
 		return []*pb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "2000000", UnitPrice: "0.00050", ConfigJson: "{}"},
-			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.025", ConfigJson: "{}"},
-			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "250", UnitPrice: "1.50", ConfigJson: "{}"},
+			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.025", ConfigJson: "{}"},
 		}
 	default:
 		return []*pb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "120000", UnitPrice: "0.00055", ConfigJson: "{}"},
-			{Meter: "average_storage_gb", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
-			{Meter: "ai_gpu_hours", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "10", UnitPrice: "1.50", ConfigJson: "{}"},
+			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
 		}
 	}
 }

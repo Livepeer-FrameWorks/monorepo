@@ -66,6 +66,7 @@ func main() {
 		ClickHouseInserts:       metricsCollector.NewCounter("clickhouse_inserts_total", "ClickHouse inserts", []string{"table", "status"}),
 		DuplicateEvents:         metricsCollector.NewCounter("duplicate_events_total", "Duplicate analytics events skipped", []string{"event_type"}),
 		DLQMessages:             metricsCollector.NewCounter("dlq_messages_total", "Messages sent to the DLQ", []string{"topic", "error_type"}),
+		ProjectionDivergences:   metricsCollector.NewCounter("projection_divergence_total", "Projection rows whose rated field value diverged from a prior projection beyond per-meter epsilon", []string{"table", "meter", "field"}),
 	}
 
 	// Create Kafka metrics
@@ -99,7 +100,7 @@ func main() {
 		dlqProducer = nil
 	}
 
-	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+	wrapConsumerHandler := func(consumerName string, handler func(context.Context, kafka.Message) error, useDLQ bool) func(context.Context, kafka.Message) error {
 		return func(ctx context.Context, msg kafka.Message) error {
 			start := time.Now()
 			err := handler(ctx, msg)
@@ -114,6 +115,9 @@ func main() {
 				metrics.KafkaMessages.WithLabelValues(msg.Topic, "consume", status).Inc()
 			}
 			if err != nil {
+				if !useDLQ {
+					return err
+				}
 				if dlqProducer == nil {
 					return err
 				}
@@ -170,6 +174,12 @@ func main() {
 			return nil
 		}
 	}
+	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+		return wrapConsumerHandler(consumerName, handler, true)
+	}
+	wrapRetryOnly := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+		return wrapConsumerHandler(consumerName, handler, false)
+	}
 
 	// Subscribe to local regional topics. Cross-region mirrored topics
 	// from MIRROR_REGION_PREFIXES are wired separately below.
@@ -218,7 +228,11 @@ func main() {
 	// to disable consumption on this instance.
 	rawTriggersTopic := strings.TrimSpace(config.GetEnv("RAW_MIST_TRIGGERS_KAFKA_TOPIC", "analytics.raw_mist_triggers"))
 	if rawTriggersTopic != "" && rawTriggersTopic != "-" {
-		consumer.AddHandler(rawTriggersTopic, wrapWithDLQ("periscope-ingest-raw-triggers", analyticsHandler.HandleRawMistTriggerMessage))
+		// Raw final-trigger projection is billing-critical. Let Kafka
+		// retry transient ClickHouse failures instead of committing the
+		// offset via DLQ; poison protobuf payloads are swallowed inside
+		// HandleRawMistTriggerMessage after logging.
+		consumer.AddHandler(rawTriggersTopic, wrapRetryOnly("periscope-ingest-raw-triggers", analyticsHandler.HandleRawMistTriggerMessage))
 	}
 
 	// Mirrored-topic subscriptions. MIRROR_REGION_PREFIXES is a comma-
@@ -264,6 +278,14 @@ func main() {
 	go func() {
 		consumerDone <- consumer.Start(ctx)
 	}()
+
+	// Start the canonical 5-min ledger rebuilders. Each runs on its own
+	// goroutine at LedgerRebuildInterval and projects the trailing window
+	// from its source table into the append-only ledger. See
+	// docs/architecture/meter-contracts.md.
+	ledgerScheduler := handlers.NewLedgerScheduler(analyticsHandler)
+	ledgerScheduler.Start(ctx)
+	logger.Info("Started 5-minute ledger rebuilders")
 
 	// Optional health check server
 	if config.GetEnvBool("ENABLE_HEALTH_ENDPOINT", true) {

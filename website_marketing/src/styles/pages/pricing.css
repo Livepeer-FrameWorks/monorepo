@@ -121,16 +121,16 @@
   .pricing-architecture-modal__panel {
     padding: 1.8rem 1.4rem;
   }
-  .pricing-gpu-feature {
+  .pricing-processing-feature {
     display: flex;
     flex-direction: column;
     gap: clamp(0.35rem, 0.6vw, 0.5rem);
   }
-  .pricing-gpu-feature__title {
+  .pricing-processing-feature__title {
     font-weight: 600;
     color: hsl(var(--foreground));
   }
-  .pricing-gpu-feature__copy {
+  .pricing-processing-feature__copy {
     margin: 0;
     font-size: 0.95rem;
     line-height: 1.6;

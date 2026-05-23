@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/shopspring/decimal"
 )
@@ -25,17 +26,14 @@ func Rate(in Input) (Result, error) {
 	if in.BasePrice.IsNegative() {
 		return Result{}, errors.New("rating: base price cannot be negative")
 	}
-	for meter, quantity := range in.Usage {
+	for meter := range in.Usage {
 		if !ValidMeter(meter) {
 			return Result{}, fmt.Errorf("rating: unsupported usage meter %q", meter)
 		}
-		if quantity.IsNegative() {
-			return Result{}, fmt.Errorf("rating: usage for meter %q cannot be negative", meter)
-		}
 	}
-	for codec, seconds := range in.CodecSeconds {
-		if seconds.IsNegative() {
-			return Result{}, fmt.Errorf("rating: codec seconds for %q cannot be negative", codec)
+	for meter := range in.Breakdowns {
+		if !ValidMeter(meter) {
+			return Result{}, fmt.Errorf("rating: unsupported breakdown meter %q", meter)
 		}
 	}
 
@@ -53,7 +51,7 @@ func Rate(in Input) (Result, error) {
 	usageLines := make([]LineItem, 0, len(in.Rules))
 	for _, rule := range in.Rules {
 		if !ValidMeter(rule.Meter) {
-			return Result{}, fmt.Errorf("rating: unsupported meter %q", rule.Meter)
+			return Result{}, fmt.Errorf("rating: invalid meter %q", rule.Meter)
 		}
 		if !ValidModel(rule.Model) {
 			return Result{}, fmt.Errorf("%w: %q (meter %q)", ErrUnknownModel, rule.Model, rule.Meter)
@@ -83,7 +81,7 @@ func Rate(in Input) (Result, error) {
 				usageLines = append(usageLines, line)
 			}
 		case ModelCodecMultiplier:
-			lines := rateCodecMultiplier(rule, in.CodecSeconds, currency)
+			lines := rateCodecMultiplier(rule, breakdownForMeter(in, rule.Meter), currency)
 			usageLines = append(usageLines, lines...)
 		}
 	}
@@ -107,13 +105,45 @@ func Rate(in Input) (Result, error) {
 	}, nil
 }
 
-// rateTieredGraduated charges (quantity - included) * unit_price.
+// toRatedUnits converts a rule's stored unit to its rated unit. Storage meters
+// are stored as GiB-seconds internally but priced per GiB-hour, so the engine
+// divides by 3600 before multiplying by unit_price. Custom meters can set
+// config.rated_quantity_divisor for the same behavior without code changes.
+func toRatedUnits(rule Rule, quantity decimal.Decimal) decimal.Decimal {
+	if divisor, ok := decimalFromAny(rule.Config["rated_quantity_divisor"]); ok && divisor.IsPositive() {
+		return quantity.Div(divisor)
+	}
+	switch rule.Meter {
+	case MeterStorageGBSecondsHot, MeterStorageGBSecondsCld:
+		return quantity.Div(decimal.NewFromInt(3600))
+	default:
+		return quantity
+	}
+}
+
+// rateTieredGraduated charges (quantity - included) * unit_price after
+// unit conversion for the meter (storage → GiB-hours, others pass through).
 // Returns ok=false when the line would be a $0 row with no meaningful info.
 func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (LineItem, bool) {
 	if quantity.IsZero() {
 		return LineItem{}, false
 	}
-	billable := quantity.Sub(rule.IncludedQuantity)
+	rated := toRatedUnits(rule, quantity)
+	if rated.IsNegative() {
+		amount := rated.Mul(rule.UnitPrice)
+		return LineItem{
+			LineKey:          "meter:" + string(rule.Meter),
+			Meter:            rule.Meter,
+			Description:      describeMeter(rule),
+			Quantity:         rated,
+			IncludedQuantity: decimal.Zero,
+			BillableQuantity: rated,
+			UnitPrice:        rule.UnitPrice,
+			Amount:           amount,
+			Currency:         currency,
+		}, true
+	}
+	billable := rated.Sub(rule.IncludedQuantity)
 	if billable.IsNegative() {
 		billable = decimal.Zero
 	}
@@ -123,8 +153,8 @@ func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (
 	return LineItem{
 		LineKey:          "meter:" + string(rule.Meter),
 		Meter:            rule.Meter,
-		Description:      describeMeter(rule.Meter),
-		Quantity:         quantity,
+		Description:      describeMeter(rule),
+		Quantity:         rated,
 		IncludedQuantity: rule.IncludedQuantity,
 		BillableQuantity: billable,
 		UnitPrice:        rule.UnitPrice,
@@ -133,19 +163,21 @@ func rateTieredGraduated(rule Rule, quantity decimal.Decimal, currency string) (
 	}, true
 }
 
-// rateAllUsage charges the full quantity at unit_price.
+// rateAllUsage charges the full quantity at unit_price, converted to the
+// meter's rated unit first.
 func rateAllUsage(rule Rule, quantity decimal.Decimal, currency string) (LineItem, bool) {
 	if quantity.IsZero() {
 		return LineItem{}, false
 	}
-	amount := quantity.Mul(rule.UnitPrice)
+	rated := toRatedUnits(rule, quantity)
+	amount := rated.Mul(rule.UnitPrice)
 	return LineItem{
 		LineKey:          "meter:" + string(rule.Meter),
 		Meter:            rule.Meter,
-		Description:      describeMeter(rule.Meter),
-		Quantity:         quantity,
+		Description:      describeMeter(rule),
+		Quantity:         rated,
 		IncludedQuantity: decimal.Zero,
-		BillableQuantity: quantity,
+		BillableQuantity: rated,
 		UnitPrice:        rule.UnitPrice,
 		Amount:           amount,
 		Currency:         currency,
@@ -198,19 +230,47 @@ func rateCodecMultiplier(rule Rule, codecSeconds map[string]decimal.Decimal, cur
 	return out
 }
 
-func describeMeter(m Meter) string {
-	switch m {
+func breakdownForMeter(in Input, meter Meter) map[string]decimal.Decimal {
+	if in.Breakdowns != nil {
+		if breakdown := in.Breakdowns[meter]; len(breakdown) > 0 {
+			return breakdown
+		}
+	}
+	if meter == MeterMediaSeconds {
+		return in.CodecSeconds
+	}
+	return nil
+}
+
+func describeMeter(rule Rule) string {
+	if desc, ok := rule.Config["description"].(string); ok && strings.TrimSpace(desc) != "" {
+		return strings.TrimSpace(desc)
+	}
+	switch rule.Meter {
 	case MeterDeliveredMinutes:
 		return "Delivered minutes"
-	case MeterAverageStorageGB:
-		return "Recording storage (avg GB)"
-	case MeterAIGPUHours:
-		return "AI GPU hours"
-	case MeterProcessingSeconds:
-		return "Transcoding"
+	case MeterEgressGB:
+		return "Bandwidth"
+	case MeterStorageGBSecondsHot:
+		return "Hot storage"
+	case MeterStorageGBSecondsCld:
+		return "Cold storage"
+	case MeterMediaSeconds:
+		return "Media processing"
 	default:
-		return string(m)
+		return humanizeMeter(rule.Meter)
 	}
+}
+
+func humanizeMeter(m Meter) string {
+	parts := strings.Split(string(m), "_")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func decimalFromAny(v any) (decimal.Decimal, bool) {

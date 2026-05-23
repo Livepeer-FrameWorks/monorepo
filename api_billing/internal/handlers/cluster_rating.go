@@ -55,30 +55,50 @@ type clusterRatingResult struct {
 }
 
 // collectInvoiceUsage aggregates usage_records grouped by (cluster_id,
-// usage_type) for one (tenant, period) tuple. Same per-meter aggregation as
-// before — AVG storage, MAX peak/max_viewers, SUM the rest, skip uniques —
-// but partitioned by cluster_id so cluster-aware rating can fan out.
+// usage_type) for one (tenant, period) tuple. MAX for peak meters, SUM
+// for the rest; uniques skipped (states can't be summed scalar). Only
+// canonical-ledger 'delta' rows are counted; non-delta rows stay out of
+// invoice aggregation.
 //
-// usage_records rows with empty cluster_id (legacy data before periscope set
-// the field) bucket under "" and are mapped by the resolver to
-// platform_official, preserving the previous billing behavior exactly.
+// usage_records rows with empty cluster_id bucket under "" and are mapped by
+// the resolver to platform_official.
 //
 // Returns (cluster_id → meter → aggregated_value). Errors abort the caller —
 // rating an invoice on partial usage underbills.
 func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string]map[string]float64, error) {
 	rows, err := jm.db.QueryContext(ctx, `
-		SELECT COALESCE(cluster_id, '') AS cluster_id,
+		WITH usage_rows AS (
+			SELECT COALESCE(cluster_id, '') AS cluster_id,
+			       usage_type,
+			       usage_value
+			FROM purser.usage_records
+			WHERE tenant_id = $1
+			  AND period_start < $3
+			  AND period_end > $2
+			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+			  AND value_kind = 'delta'
+			  AND granularity = 'minute_5'
+
+			UNION ALL
+
+			SELECT COALESCE(cluster_id, '') AS cluster_id,
+			       usage_type,
+			       delta_value AS usage_value
+			FROM purser.usage_adjustments
+			WHERE tenant_id = $1
+			  AND period_start < $3
+			  AND period_end > $2
+			  AND status = 'applied'
+			  AND value_kind = 'correction_delta'
+			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+		)
+		SELECT cluster_id,
 		       usage_type,
 		       CASE
-		           WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
 		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
 		           ELSE SUM(usage_value)
 		       END AS aggregated_value
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND period_start < $3
-		  AND period_end > $2
-		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+		FROM usage_rows
 		GROUP BY cluster_id, usage_type
 	`, tenantID, periodStart, periodEnd)
 	if err != nil {
@@ -104,10 +124,93 @@ func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, 
 	return out, nil
 }
 
+// collectInvoiceCodecBreakdowns extracts per-cluster, per-meter processing
+// seconds from usage_details.codec_seconds. Keys may be plain codec names
+// ("h264") or joint process/codec keys ("Livepeer:h264"), which lets cluster
+// pricing distinguish future processing modes without another usage_type.
+// Returns (cluster_id -> meter -> breakdown key -> seconds).
+func (jm *JobManager) collectInvoiceCodecBreakdowns(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string]map[string]map[string]float64, error) {
+	rows, err := jm.db.QueryContext(ctx, `
+		WITH usage_codec_rows AS (
+			SELECT COALESCE(ur.cluster_id, '') AS cluster_id,
+			       ur.usage_type,
+			       kv.key,
+			       kv.value::float8 AS seconds
+			FROM purser.usage_records ur
+			CROSS JOIN LATERAL jsonb_each_text(COALESCE(ur.usage_details->'codec_seconds', '{}'::jsonb)) AS kv(key, value)
+			WHERE ur.tenant_id = $1
+			  AND ur.period_start < $3
+			  AND ur.period_end > $2
+			  AND ur.value_kind = 'delta'
+			  AND ur.granularity = 'minute_5'
+			  AND ur.usage_details ? 'codec_seconds'
+		),
+		adjustment_base AS (
+			SELECT COALESCE(ua.cluster_id, '') AS cluster_id,
+			       ua.usage_type,
+			       ua.delta_value::float8 AS seconds,
+			       NULLIF(COALESCE(ua.details #>> '{output_codec}', ua.details #>> '{natural_key,output_codec}'), '') AS output_codec,
+			       NULLIF(COALESCE(ua.details #>> '{process_type}', ua.details #>> '{natural_key,process_type}'), '') AS process_type
+			FROM purser.usage_adjustments ua
+			WHERE ua.tenant_id = $1
+			  AND ua.period_start < $3
+			  AND ua.period_end > $2
+			  AND ua.status = 'applied'
+			  AND ua.value_kind = 'correction_delta'
+			  AND ua.usage_type = 'media_seconds'
+		),
+		adjustment_codec_rows AS (
+			SELECT cluster_id, usage_type, output_codec AS key, seconds
+			FROM adjustment_base
+			WHERE output_codec IS NOT NULL
+
+			UNION ALL
+
+			SELECT cluster_id, usage_type, process_type || ':' || output_codec AS key, seconds
+			FROM adjustment_base
+			WHERE output_codec IS NOT NULL AND process_type IS NOT NULL
+		)
+		SELECT cluster_id,
+		       usage_type,
+		       key,
+		       COALESCE(SUM(seconds), 0) AS seconds
+		FROM (
+			SELECT * FROM usage_codec_rows
+			UNION ALL
+			SELECT * FROM adjustment_codec_rows
+		) codec_rows
+		GROUP BY cluster_id, usage_type, key
+	`, tenantID, periodStart, periodEnd)
+	if err != nil {
+		return nil, fmt.Errorf("query codec_seconds: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]map[string]map[string]float64{}
+	for rows.Next() {
+		var clusterID, usageType, key string
+		var seconds float64
+		if err := rows.Scan(&clusterID, &usageType, &key, &seconds); err != nil {
+			return nil, fmt.Errorf("scan codec row: %w", err)
+		}
+		if out[clusterID] == nil {
+			out[clusterID] = map[string]map[string]float64{}
+		}
+		if out[clusterID][usageType] == nil {
+			out[clusterID][usageType] = map[string]float64{}
+		}
+		out[clusterID][usageType][key] += seconds
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate codec rows: %w", err)
+	}
+	return out, nil
+}
+
 // flattenUsageAcrossClusters returns the union of all per-cluster meter values
-// summed across clusters. Used when the caller needs a tenant-level view (e.g.
-// for the legacy usage_details JSON blob; presentation surfaces should read
-// invoice_line_items instead).
+// summed across clusters. Used when the caller needs a tenant-level
+// usage_details JSON blob; presentation surfaces should read invoice_line_items
+// instead.
 func flattenUsageAcrossClusters(perCluster map[string]map[string]float64) map[string]float64 {
 	out := map[string]float64{}
 	for _, perMeter := range perCluster {
@@ -143,13 +246,14 @@ func (jm *JobManager) rateInvoiceForTenant(
 	includeBasePrice bool,
 	baseProviderManaged bool,
 	perClusterUsage map[string]map[string]float64,
+	perClusterCodecBreakdowns map[string]map[string]map[string]float64,
 ) (*clusterRatingResult, error) {
 	if tier == nil {
 		return nil, errors.New("rateInvoiceForTenant: nil tier")
 	}
 
 	// The resolver is only required when at least one cluster has a real
-	// (non-empty) cluster_id. The empty-id legacy bucket never consults
+	// (non-empty) cluster_id. The empty-id unattributed bucket never consults
 	// Quartermaster.
 	resolver := jm.pricingResolver()
 	if resolver == nil {
@@ -211,10 +315,9 @@ func (jm *JobManager) rateInvoiceForTenant(
 			continue
 		}
 
-		// An empty cluster_id row is legacy: pre-cluster-attribution data.
-		// Skip the resolver and treat as the tenant's tier rules directly
-		// (platform_official). Avoids spurious Quartermaster lookups for
-		// empty IDs.
+		// An empty cluster_id row is unattributed. Skip the resolver and treat
+		// it as the tenant's tier rules directly (platform_official). Avoids
+		// spurious Quartermaster lookups for empty IDs.
 		var resolved *pricing.ClusterPricing
 		var resolveErr error
 		if cid == "" {
@@ -255,15 +358,22 @@ func (jm *JobManager) rateInvoiceForTenant(
 			}
 		}
 		out.ClustersByID[cid] = resolved
+		if resolved.Currency != tier.Currency {
+			out.ManualReviewReasons = append(out.ManualReviewReasons,
+				fmt.Sprintf("cluster %s: prices in %s but tenant invoice currency is %s", cid, resolved.Currency, tier.Currency))
+			continue
+		}
 
 		// Build a rating Input scoped to this cluster's usage and rules.
 		// BasePrice is zero — the base subscription is rated once above.
+		breakdowns := codecBreakdownsFromCluster(perClusterCodecBreakdowns[cid])
 		input := rating.Input{
 			Currency:     resolved.Currency,
 			BasePrice:    decimal.Zero,
 			Rules:        resolved.MeteredRules,
 			Usage:        usageMapFromAggregates(usageData),
-			CodecSeconds: codecSecondsFromAggregates(usageData),
+			Breakdowns:   breakdowns,
+			CodecSeconds: breakdowns[rating.MeterMediaSeconds],
 			PeriodStart:  periodStart,
 			PeriodEnd:    periodEnd,
 		}
@@ -325,28 +435,19 @@ func (jm *JobManager) rateInvoiceForTenant(
 }
 
 // usageMapFromAggregates derives the rating engine's per-meter usage map from
-// the flat usage_records aggregate map (one cluster's slice).
-//
-// processing_seconds is populated as the sum of all codec seconds across
-// Livepeer + native AV. The default tier rule for processing is
-// codec_multiplier and reads from CodecSeconds (not Usage), so this value
-// is unused on the priced path. It exists for the zero-priced path (free /
-// self-hosted), where the resolver converts codec_multiplier to all_usage
-// — that variant DOES read from Usage[processing_seconds] and would
-// otherwise emit no line, silently hiding self-hosted transcoding from the
-// invoice.
+// one cluster's usage_records aggregate. Every value is canonical and the map
+// is intentionally data-driven: a new priced usage_type can be rated as soon as
+// usage_records contains it and a pricing rule references it.
 func usageMapFromAggregates(usageData map[string]float64) map[rating.Meter]decimal.Decimal {
-	viewerHours := decimal.NewFromFloat(usageData["viewer_hours"])
-	processingSeconds := 0.0
-	for _, c := range []string{"h264", "hevc", "vp9", "av1", "aac", "opus"} {
-		processingSeconds += usageData["livepeer_"+c+"_seconds"] + usageData["native_av_"+c+"_seconds"]
+	out := make(map[rating.Meter]decimal.Decimal, len(usageData))
+	for meter, value := range usageData {
+		m := rating.Meter(meter)
+		if !rating.ValidMeter(m) {
+			continue
+		}
+		out[m] = decimal.NewFromFloat(value)
 	}
-	return map[rating.Meter]decimal.Decimal{
-		rating.MeterDeliveredMinutes:  viewerHours.Mul(decimal.NewFromInt(60)),
-		rating.MeterAverageStorageGB:  decimal.NewFromFloat(usageData["average_storage_gb"]),
-		rating.MeterAIGPUHours:        decimal.NewFromFloat(usageData["gpu_hours"]),
-		rating.MeterProcessingSeconds: decimal.NewFromFloat(processingSeconds),
-	}
+	return out
 }
 
 func clusterLineKey(baseKey, clusterID, periodSuffix string) string {
@@ -365,7 +466,7 @@ func clusterLineKey(baseKey, clusterID, periodSuffix string) string {
 }
 
 func (jm *JobManager) marketplaceLineSplitCents(ctx context.Context, amount decimal.Decimal, resolved *pricing.ClusterPricing) (operatorCreditCents, platformFeeCents int64, err error) {
-	if resolved == nil || resolved.Kind != pricing.KindThirdPartyMarketplace || resolved.OwnerTenantID == nil || !amount.IsPositive() {
+	if resolved == nil || resolved.Kind != pricing.KindThirdPartyMarketplace || resolved.OwnerTenantID == nil || amount.IsZero() {
 		return 0, 0, nil
 	}
 	grossCents := amount.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
@@ -373,8 +474,18 @@ func (jm *JobManager) marketplaceLineSplitCents(ctx context.Context, amount deci
 	if err != nil {
 		return 0, 0, err
 	}
-	platformFeeCents = (grossCents*int64(feeBps) + 5000) / 10000
+	platformFeeCents = signedBasisPointsCents(grossCents, feeBps)
 	return grossCents - platformFeeCents, platformFeeCents, nil
+}
+
+func signedBasisPointsCents(grossCents int64, feeBps int) int64 {
+	absGross := grossCents
+	sign := int64(1)
+	if absGross < 0 {
+		absGross = -absGross
+		sign = -1
+	}
+	return sign * ((absGross*int64(feeBps) + 5000) / 10000)
 }
 
 func (jm *JobManager) lookupPlatformFeeBps(ctx context.Context, ownerID uuid.UUID, pricingSource pricing.PricingSource) (int, error) {
