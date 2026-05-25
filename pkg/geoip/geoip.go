@@ -43,7 +43,9 @@ type GeoData struct {
 
 // Reader provides IP geolocation lookups using MMDB databases
 type Reader struct {
+	mu                  sync.RWMutex
 	db                  *geoip2.Reader
+	dbInfo              os.FileInfo
 	provider            string
 	requiresAttribution bool
 	attributionText     string
@@ -73,6 +75,7 @@ func NewReader(mmdbPath string) (*Reader, error) {
 
 	return &Reader{
 		db:                  db,
+		dbInfo:              statReaderPath(mmdbPath),
 		provider:            provider,
 		requiresAttribution: requiresAttribution,
 		attributionText:     attributionText,
@@ -107,7 +110,7 @@ func detectProvider(mmdbPath string) (provider string, requiresAttribution bool,
 // - IP is not found in database
 // - IP is a private/local address
 func (r *Reader) Lookup(ipStr string) *GeoData {
-	if r == nil || r.db == nil {
+	if r == nil {
 		return nil
 	}
 
@@ -127,8 +130,8 @@ func (r *Reader) Lookup(ipStr string) *GeoData {
 		return nil
 	}
 
-	record, err := r.db.City(ip)
-	if err != nil {
+	record, err := r.lookupCity(ip)
+	if err != nil || record == nil {
 		return nil
 	}
 
@@ -162,6 +165,108 @@ func (r *Reader) Lookup(ipStr string) *GeoData {
 	}
 
 	return geoData
+}
+
+func (r *Reader) lookupCity(ip net.IP) (*geoip2.City, error) {
+	if err := r.reloadIfChanged(); err != nil {
+		return nil, err
+	}
+
+	r.mu.RLock()
+	db := r.db
+	if db == nil {
+		r.mu.RUnlock()
+		return nil, nil
+	}
+
+	record, err := db.City(ip)
+	r.mu.RUnlock()
+	if err == nil {
+		return record, nil
+	}
+
+	// A lookup error after a GeoIP file refresh often means the reader still
+	// points at a replaced/truncated MMDB. Try one forced reopen before
+	// degrading this observation to unknown geo.
+	if reloadErr := r.reload(); reloadErr != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	db = r.db
+	if db == nil {
+		r.mu.RUnlock()
+		return nil, err
+	}
+	record, retryErr := db.City(ip)
+	r.mu.RUnlock()
+	return record, retryErr
+}
+
+func (r *Reader) reloadIfChanged() error {
+	r.mu.RLock()
+	changed := readerFileChanged(r.dbPath, r.dbInfo)
+	r.mu.RUnlock()
+	if !changed {
+		return nil
+	}
+	return r.reload()
+}
+
+func (r *Reader) reload() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	info := statReaderPath(r.dbPath)
+	if info == nil {
+		return nil
+	}
+	if !readerInfoChanged(info, r.dbInfo) && r.db != nil {
+		return nil
+	}
+
+	db, err := geoip2.Open(r.dbPath)
+	if err != nil {
+		return err
+	}
+	old := r.db
+	r.db = db
+	r.dbInfo = info
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
+}
+
+func statReaderPath(path string) os.FileInfo {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+func readerFileChanged(path string, old os.FileInfo) bool {
+	if old == nil {
+		return path != ""
+	}
+	info := statReaderPath(path)
+	if info == nil {
+		return false
+	}
+	return readerInfoChanged(info, old)
+}
+
+func readerInfoChanged(next, old os.FileInfo) bool {
+	if old == nil {
+		return next != nil
+	}
+	if next == nil {
+		return false
+	}
+	return next.Size() != old.Size() || !next.ModTime().Equal(old.ModTime()) || !os.SameFile(next, old)
 }
 
 // isPrivateIP checks if an IP address is private/local
@@ -213,15 +318,27 @@ func (r *Reader) GetDatabasePath() string {
 
 // Close closes the underlying database
 func (r *Reader) Close() error {
-	if r == nil || r.db == nil {
+	if r == nil {
 		return nil
 	}
-	return r.db.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.db == nil {
+		return nil
+	}
+	err := r.db.Close()
+	r.db = nil
+	return err
 }
 
 // IsLoaded returns true if a database is successfully loaded
 func (r *Reader) IsLoaded() bool {
-	return r != nil && r.db != nil
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.db != nil
 }
 
 // Shared reader singleton for process-wide reuse

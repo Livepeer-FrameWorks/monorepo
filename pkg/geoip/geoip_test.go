@@ -2,8 +2,11 @@ package geoip
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewReader(t *testing.T) {
@@ -219,6 +222,58 @@ func TestLookupIPFormats(t *testing.T) {
 				t.Errorf("Lookup() with no database should return nil, got %v", result)
 			}
 		})
+	}
+}
+
+func TestReaderInfoChangedDetectsAtomicReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "GeoLite2-City.mmdb")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatalf("write old mmdb: %v", err)
+	}
+	oldInfo := statReaderPath(path)
+	if oldInfo == nil {
+		t.Fatal("expected file info for old mmdb")
+	}
+
+	tmp := filepath.Join(dir, ".GeoLite2-City.mmdb.tmp")
+	if err := os.WriteFile(tmp, []byte("new-mmdb"), 0644); err != nil {
+		t.Fatalf("write replacement mmdb: %v", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("rename replacement mmdb: %v", err)
+	}
+
+	newInfo := statReaderPath(path)
+	if newInfo == nil {
+		t.Fatal("expected file info for replacement mmdb")
+	}
+	if !readerInfoChanged(newInfo, oldInfo) {
+		t.Fatalf("expected atomic replacement to be detected")
+	}
+}
+
+func TestReaderInfoChangedDetectsInPlaceRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "GeoLite2-City.mmdb")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatalf("write old mmdb: %v", err)
+	}
+	oldInfo := statReaderPath(path)
+	if oldInfo == nil {
+		t.Fatal("expected file info for old mmdb")
+	}
+
+	time.Sleep(time.Millisecond)
+	if err := os.WriteFile(path, []byte("updated-mmdb"), 0644); err != nil {
+		t.Fatalf("rewrite mmdb: %v", err)
+	}
+	newInfo := statReaderPath(path)
+	if newInfo == nil {
+		t.Fatal("expected file info for rewritten mmdb")
+	}
+	if !readerInfoChanged(newInfo, oldInfo) {
+		t.Fatalf("expected in-place rewrite to be detected")
 	}
 }
 

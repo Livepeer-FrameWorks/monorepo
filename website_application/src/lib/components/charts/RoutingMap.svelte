@@ -1173,18 +1173,6 @@
     }
   });
 
-  // Cheap deterministic hash so unknown-geo pins land at stable
-  // off-map positions across refreshes. Not cryptographic — just enough
-  // spread to avoid stacking pins for different orchs at one coord.
-  function hashStringForSpread(s: string): number {
-    let h = 2166136261;
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  }
-
   // At low zoom many vantages pile across a region; spread + glow can paint
   // over a continent. Scale icon and shadow with zoom so they only get loud
   // once the user is close enough to disambiguate them.
@@ -1199,8 +1187,6 @@
     if (vantage.latestLatencyMs >= 250) return "rgb(45, 150, 96)";
     return "rgb(34, 197, 94)";
   }
-
-  const UNKNOWN_GEO_ANCHOR: [number, number] = [-42, -145];
 
   function dedupeOrchestratorVantages(
     vantages: OrchestratorVantagePin[]
@@ -1231,17 +1217,13 @@
       return;
     }
 
-    const visibleVantages = dedupeOrchestratorVantages(vantages);
+    const visibleVantages = dedupeOrchestratorVantages(
+      vantages.filter(
+        (v) => Number.isFinite(v.lat) && Number.isFinite(v.lng) && (v.lat !== 0 || v.lng !== 0)
+      )
+    );
     const { size: orchSize, glow: orchGlow } = orchestratorSizeForZoom(map.getZoom());
     for (const v of visibleVantages) {
-      let lat = v.lat;
-      let lng = v.lng;
-      const unknownGeo = lat === 0 && lng === 0;
-      if (unknownGeo) {
-        const seed = hashStringForSpread(v.orchAddr + ":" + v.resolvedIp);
-        lat = UNKNOWN_GEO_ANCHOR[0] + ((seed >> 8) & 0xff) / 64.0;
-        lng = UNKNOWN_GEO_ANCHOR[1] + (seed & 0xff) / 64.0;
-      }
       const orchColor = orchestratorPinColor(v);
       const orchIcon = leaflet.divIcon({
         className: "node-dot-marker",
@@ -1249,7 +1231,7 @@
         iconSize: [orchSize, orchSize],
         iconAnchor: [orchSize / 2, orchSize / 2 + 1],
       });
-      const marker = leaflet.marker([lat, lng], { icon: orchIcon });
+      const marker = leaflet.marker([v.lat, v.lng], { icon: orchIcon });
       const rows = [
         detailRow("Orch", v.orchAddr, true),
         detailRow("IP", v.resolvedIp),
@@ -1257,9 +1239,6 @@
         detailRow("Latency", `${v.latestLatencyMs} ms`),
         detailRow("Score", v.score.toFixed(2)),
       ];
-      if (unknownGeo) {
-        rows.unshift(detailRow("Geo", "unknown"));
-      }
       const instanceRows: DetailRow[] = visibleVantages
         .filter((candidate) => candidate.orchAddr === v.orchAddr)
         .sort((a, b) => a.resolvedIp.localeCompare(b.resolvedIp))

@@ -21,6 +21,7 @@
   const setModeMutation = new SetNodeModeStore();
 
   let pending = $state<NodeOperationalMode$options | null>(null);
+  let selectedMode = $state<NodeOperationalMode$options | null>(null);
   let reason = $state("");
 
   const MODES: Array<{
@@ -54,6 +55,29 @@
     },
   ];
 
+  let selectedModeConfig = $derived(MODES.find((m) => m.mode === selectedMode) ?? null);
+
+  $effect(() => {
+    if (selectedMode === effectiveMode) {
+      selectedMode = null;
+    }
+  });
+
+  function selectMode(mode: NodeOperationalMode$options) {
+    if (mode === effectiveMode || pending !== null) {
+      return;
+    }
+    selectedMode = selectedMode === mode ? null : mode;
+  }
+
+  async function confirmSelection() {
+    if (!selectedMode) {
+      toast.info("Select a mode first");
+      return;
+    }
+    await apply(selectedMode);
+  }
+
   async function apply(mode: NodeOperationalMode$options) {
     if (mode === effectiveMode) {
       toast.info(`Already in ${mode.toLowerCase()}`);
@@ -73,6 +97,7 @@
         case "InfrastructureNode":
           toast.success(`${nodeName} is now ${mode.toLowerCase()}`);
           reason = "";
+          selectedMode = null;
           await onModeChanged?.();
           break;
         case "ValidationError":
@@ -98,6 +123,11 @@
       : tone === "warning"
         ? "bg-warning/15 text-warning"
         : "bg-destructive/15 text-destructive";
+  }
+
+  function modeButtonClass(mode: NodeOperationalMode$options) {
+    const selectedClass = selectedMode === mode ? "border-primary ring-2 ring-primary/25" : "";
+    return `h-auto w-full min-w-0 items-start justify-start whitespace-normal px-3 py-2.5 text-left ${selectedClass}`;
   }
 </script>
 
@@ -147,8 +177,9 @@
       <Button
         variant={m.mode === effectiveMode ? "default" : "outline"}
         disabled={pending !== null || m.mode === effectiveMode}
-        onclick={() => apply(m.mode)}
-        class="h-auto w-full min-w-0 items-start justify-start whitespace-normal px-3 py-2.5 text-left"
+        aria-pressed={selectedMode === m.mode}
+        onclick={() => selectMode(m.mode)}
+        class={modeButtonClass(m.mode)}
       >
         <Icon class="w-4 h-4 mr-2 shrink-0" />
         <div class="min-w-0 flex-1">
@@ -159,5 +190,37 @@
         </div>
       </Button>
     {/each}
+  </div>
+
+  <div
+    class="mt-3 flex flex-col gap-3 rounded-md border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between"
+  >
+    <div class="min-w-0">
+      {#if selectedModeConfig}
+        <div class="text-sm font-medium">Change to {selectedModeConfig.label}</div>
+        <div class="text-xs leading-snug text-muted-foreground">
+          {selectedModeConfig.description}
+        </div>
+      {:else}
+        <div class="text-sm font-medium">No mode selected</div>
+        <div class="text-xs leading-snug text-muted-foreground">
+          Current mode remains {effectiveMode.toLowerCase()}.
+        </div>
+      {/if}
+    </div>
+    <div class="flex shrink-0 gap-2">
+      {#if selectedModeConfig}
+        <Button variant="ghost" disabled={pending !== null} onclick={() => (selectedMode = null)}>
+          Cancel
+        </Button>
+      {/if}
+      <Button
+        variant={selectedModeConfig?.tone === "destructive" ? "destructive" : "default"}
+        disabled={!selectedModeConfig || pending !== null}
+        onclick={confirmSelection}
+      >
+        {pending !== null ? "Confirming..." : "Confirm"}
+      </Button>
+    </div>
   </div>
 </section>
