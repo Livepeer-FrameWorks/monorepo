@@ -3,8 +3,11 @@ package email
 import (
 	"context"
 	"fmt"
+	"mime"
+	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -78,23 +81,22 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 }
 
 func buildHTMLMessage(config Config, to, subject, htmlBody string) []byte {
-	from := sanitizeHeader(config.From)
-	fromHeader := from
-	if name := sanitizeHeader(config.FromName); name != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", name, from)
-	}
+	fromHeader := formatAddressHeader(config.FromName, config.From)
+	toHeader := formatAddressHeader("", to)
 
 	msg := []string{
 		fmt.Sprintf("From: %s", fromHeader),
-		fmt.Sprintf("To: %s", sanitizeHeader(to)),
-		fmt.Sprintf("Subject: %s", sanitizeHeader(subject)),
+		fmt.Sprintf("To: %s", toHeader),
+		fmt.Sprintf("Subject: %s", mime.QEncoding.Encode("UTF-8", sanitizeHeader(subject))),
+		fmt.Sprintf("Date: %s", time.Now().UTC().Format(time.RFC1123Z)),
 		"MIME-Version: 1.0",
 		"Content-Type: text/html; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
 		"",
 		htmlBody,
 	}
 
-	return []byte(strings.Join(msg, "\r\n"))
+	return []byte(strings.Join(msg, "\r\n") + "\r\n")
 }
 
 func sanitizeHeader(s string) string {
@@ -102,4 +104,12 @@ func sanitizeHeader(s string) string {
 		s = s[:idx]
 	}
 	return strings.TrimSpace(s)
+}
+
+func formatAddressHeader(displayName, address string) string {
+	addr := mail.Address{
+		Name:    sanitizeHeader(displayName),
+		Address: sanitizeHeader(address),
+	}
+	return addr.String()
 }

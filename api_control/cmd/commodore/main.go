@@ -208,6 +208,7 @@ func main() {
 
 		grpcServer := commodoregrpc.NewGRPCServer(commodoregrpc.CommodoreServerConfig{
 			DB:                   db,
+			DBMaxIdleConns:       dbConfig.MaxIdleConns,
 			Logger:               logger,
 			FoghornPool:          foghornPool,
 			QuartermasterClient:  quartermasterGRPCClient,

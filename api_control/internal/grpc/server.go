@@ -34,6 +34,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -114,6 +115,7 @@ type CommodoreServer struct {
 	pb.UnimplementedPushTargetServiceServer
 	pb.UnimplementedPlaybackAccessControlServiceServer
 	db                   *sql.DB
+	dbMaxIdleConns       int
 	logger               logging.Logger
 	foghornPool          *foghornclient.FoghornPool
 	quartermasterClient  *qmclient.GRPCClient
@@ -144,6 +146,26 @@ type CommodoreServer struct {
 	// project thumbnailAssets onto Stream/Clip/DVR/VOD rows without per-row
 	// network calls.
 	clusterURLs *clusterurls.Resolver
+}
+
+func (s *CommodoreServer) retryPostgres(ctx context.Context, fn func() error) error {
+	return fwdb.RetryPostgresWithHook(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func(error, int) {
+		s.recycleIdlePostgresConns()
+	}, fn)
+}
+
+func (s *CommodoreServer) recycleIdlePostgresConns() {
+	if s.db == nil || s.dbMaxIdleConns < 0 {
+		return
+	}
+	maxIdleConns := s.dbMaxIdleConns
+	if maxIdleConns <= 0 {
+		maxIdleConns = fwdb.DefaultConfig().MaxIdleConns
+	}
+	// database/sql has no CloseIdleConnections; dropping the idle limit forces
+	// stale Yugabyte catalog-cache connections out before the retry is replayed.
+	s.db.SetMaxIdleConns(0)
+	s.db.SetMaxIdleConns(maxIdleConns)
 }
 
 // clusterRoute caches the tenant -> cluster -> foghorn mapping.
@@ -475,6 +497,7 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *pb.User {
 // CommodoreServerConfig contains all dependencies for CommodoreServer
 type CommodoreServerConfig struct {
 	DB                   *sql.DB
+	DBMaxIdleConns       int
 	Logger               logging.Logger
 	FoghornPool          *foghornclient.FoghornPool
 	QuartermasterClient  *qmclient.GRPCClient
@@ -526,6 +549,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 
 	return &CommodoreServer{
 		db:                       cfg.DB,
+		dbMaxIdleConns:           cfg.DBMaxIdleConns,
 		logger:                   cfg.Logger,
 		foghornPool:              cfg.FoghornPool,
 		quartermasterClient:      cfg.QuartermasterClient,
@@ -1296,10 +1320,12 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, internalName, tenantID, ingestMode string
 	var requiresAuth bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, internal_name, tenant_id, requires_auth, ingest_mode
-		FROM commodore.streams WHERE playback_id = $1
-	`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode
+			FROM commodore.streams WHERE playback_id = $1
+		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -1392,13 +1418,15 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		enabled           bool
 		allowedClusterIDs pq.StringArray
 	)
-	err := s.db.QueryRowContext(ctx, `
-			SELECT s.id, s.tenant_id, s.ingest_mode,
-			       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
-			FROM commodore.streams s
-			JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-			WHERE s.internal_name = $1
-		`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled, &allowedClusterIDs)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+				SELECT s.id, s.tenant_id, s.ingest_mode,
+				       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
+				FROM commodore.streams s
+				JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
+				WHERE s.internal_name = $1
+			`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled, &allowedClusterIDs)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
@@ -1617,7 +1645,9 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 	}
 
 	// Update last used timestamp (best effort)
-	_, _ = s.db.ExecContext(ctx, `UPDATE commodore.api_tokens SET last_used_at = NOW() WHERE id = $1`, tokenID)
+	if _, updateErr := s.db.ExecContext(ctx, `UPDATE commodore.api_tokens SET last_used_at = NOW() WHERE id = $1`, tokenID); updateErr != nil {
+		s.logger.WithError(updateErr).Debug("Failed to update API token last_used_at")
+	}
 
 	// Look up user email and role for context
 	var email, role string
@@ -2224,11 +2254,13 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	var playbackID, artifactInternalName string
 	var streamID, originClusterID sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, stream_id, stream_internal_name, playback_id, internal_name, origin_cluster_id
-		FROM commodore.dvr_recordings
-		WHERE dvr_hash = $1
-	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT tenant_id, user_id, stream_id, stream_internal_name, playback_id, internal_name, origin_cluster_id
+			FROM commodore.dvr_recordings
+			WHERE dvr_hash = $1
+		`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveDVRHashResponse{
@@ -2337,11 +2369,13 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	var playbackID, artifactInternalName string
 	var title, description, originClusterID sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
-		FROM commodore.vod_assets
-		WHERE vod_hash = $1
-	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
+			FROM commodore.vod_assets
+			WHERE vod_hash = $1
+		`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveVodHashResponse{
@@ -2378,11 +2412,13 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 	}
 
 	var tenantID, userID, vodHash, playbackID, artifactInternalName string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, vod_hash, playback_id, internal_name
-		FROM commodore.vod_assets
-		WHERE id = $1
-	`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT tenant_id, user_id, vod_hash, playback_id, internal_name
+			FROM commodore.vod_assets
+			WHERE id = $1
+		`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveVodIDResponse{
@@ -2535,11 +2571,13 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *pb.
 		chapterID, artifactHash string
 		tenantID                string
 	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT chapter_id, tenant_id::text, artifact_hash
-		  FROM commodore.dvr_chapter_playback
-		 WHERE lower(playback_id::text) = lower($1)
-	`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT chapter_id, tenant_id::text, artifact_hash
+			  FROM commodore.dvr_chapter_playback
+			 WHERE lower(playback_id::text) = lower($1)
+		`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveChapterPlaybackIDResponse{Found: false}, nil
 	}
@@ -2572,11 +2610,13 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		originClusterID      sql.NullString
 		requiresAuth         bool
 	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-		FROM commodore.clips
-		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
+			FROM commodore.clips
+			WHERE playback_id = $1
+		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+	})
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
@@ -2607,13 +2647,15 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	originClusterID = sql.NullString{}
 	requiresAuth = false
 	var dvrSourceRequiresAuth sql.NullBool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-		       d.origin_cluster_id, s.requires_auth
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+	err = s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
+			       d.origin_cluster_id, s.requires_auth
+			FROM commodore.dvr_recordings d
+			LEFT JOIN commodore.streams s ON s.id = d.stream_id
+			WHERE d.playback_id = $1
+		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+	})
 	if err == nil {
 		// Missing source stream → treat as protected so a deleted-stream race
 		// does not silently expose what was once gated content.
@@ -2644,11 +2686,13 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
 	requiresAuth = false
-	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-		FROM commodore.vod_assets
-		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+	err = s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
+			FROM commodore.vod_assets
+			WHERE playback_id = $1
+		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+	})
 	if err == nil {
 		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
@@ -2700,11 +2744,13 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		originClusterID      sql.NullString
 		requiresAuth         bool
 	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-		FROM commodore.clips
-		WHERE internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+	err := s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
+			FROM commodore.clips
+			WHERE internal_name = $1
+		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+	})
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -2731,13 +2777,15 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	// 2. DVR
 	originClusterID = sql.NullString{}
 	var dvrSourceRequiresAuth sql.NullBool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-		       d.origin_cluster_id, s.requires_auth
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+	err = s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
+			       d.origin_cluster_id, s.requires_auth
+			FROM commodore.dvr_recordings d
+			LEFT JOIN commodore.streams s ON s.id = d.stream_id
+			WHERE d.internal_name = $1
+		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+	})
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -2764,11 +2812,13 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	// 3. VOD
 	streamID = sql.NullString{}
 	originClusterID = sql.NullString{}
-	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-		FROM commodore.vod_assets
-		WHERE internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+	err = s.retryPostgres(ctx, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
+			FROM commodore.vod_assets
+			WHERE internal_name = $1
+		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+	})
 	if err == nil {
 		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:           true,
@@ -3310,7 +3360,14 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Check account status
+	// Verify password
+	if !auth.CheckPassword(password, user.PasswordHash) {
+		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+	}
+
+	// Check account status only after proving the password, so login does not
+	// leak account state for incorrect credentials.
 	if !user.IsActive {
 		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "account_inactive")
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
@@ -3318,12 +3375,6 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	if !user.IsVerified {
 		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "email_not_verified")
 		return nil, status.Error(codes.Unauthenticated, "email not verified")
-	}
-
-	// Verify password
-	if !auth.CheckPassword(password, user.PasswordHash) {
-		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
-		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
 	// Update last login

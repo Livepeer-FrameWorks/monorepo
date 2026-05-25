@@ -52,6 +52,35 @@ func TestRetryPostgresRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestRetryPostgresWithHookRunsBeforeRetry(t *testing.T) {
+	attempts := 0
+	hookCalls := 0
+	err := RetryPostgresWithHook(context.Background(), 3, time.Nanosecond, func(err error, attempt int) {
+		hookCalls++
+		if attempt != 1 {
+			t.Fatalf("hook attempt = %d, want 1", attempt)
+		}
+		if !IsRetryablePostgresError(err) {
+			t.Fatalf("hook err = %v, want retryable", err)
+		}
+	}, func() error {
+		attempts++
+		if attempts < 2 {
+			return &pq.Error{Code: "40001"}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RetryPostgresWithHook returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hookCalls = %d, want 1", hookCalls)
+	}
+}
+
 func TestRetryPostgresDoesNotRetryPermanentError(t *testing.T) {
 	attempts := 0
 	wantErr := errors.New("permanent")

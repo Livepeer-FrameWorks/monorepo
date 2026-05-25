@@ -36,6 +36,10 @@ func IsRetryablePostgresError(err error) bool {
 }
 
 func RetryPostgres(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {
+	return RetryPostgresWithHook(ctx, attempts, baseDelay, nil, fn)
+}
+
+func RetryPostgresWithHook(ctx context.Context, attempts int, baseDelay time.Duration, onRetry func(error, int), fn func() error) error {
 	if attempts <= 0 {
 		attempts = DefaultRetryAttempts
 	}
@@ -47,6 +51,9 @@ func RetryPostgres(ctx context.Context, attempts int, baseDelay time.Duration, f
 		err = fn()
 		if !IsRetryablePostgresError(err) || attempt == attempts-1 {
 			return err
+		}
+		if onRetry != nil {
+			onRetry(err, attempt+1)
 		}
 		timer := time.NewTimer(baseDelay << attempt)
 		select {

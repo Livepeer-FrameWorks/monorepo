@@ -118,7 +118,12 @@
         // eslint-disable-next-line svelte/no-navigation-without-resolve
         goto(returnTo ?? resolve("/"));
       } else {
-        error = result.error || "Login failed";
+        const loginError = result.error || "Login failed";
+        if (loginError.toLowerCase().includes("not verified")) {
+          goto(resolve(`/verify-email?email=${encodeURIComponent(email)}`));
+          return;
+        }
+        error = loginError;
       }
     } catch (_err) {
       console.error("Login error:", _err);

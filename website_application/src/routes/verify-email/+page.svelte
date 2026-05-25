@@ -26,6 +26,7 @@
 
   onMount(async () => {
     const token = page.url.searchParams.get("token");
+    resendEmail = page.url.searchParams.get("email") ?? "";
 
     if (token) {
       // Verify the token
