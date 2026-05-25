@@ -139,7 +139,7 @@ Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by 
 | -------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
 | `viewer_connect` / `viewer_disconnect` | `processViewerConnection`     | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`)            |
 | `stream_buffer`                        | `processStreamBuffer`         | `stream_event_log` + `stream_health_samples`                                            |
-| `stream_end`                           | `processStreamEnd`            | `stream_event_log`                                                                      |
+| `stream_end`                           | `processStreamEnd`            | `stream_state_current` (`status='offline'`) + `stream_event_log`                        |
 | `push_rewrite`                         | `processPushRewrite`          | `stream_event_log`                                                                      |
 | `play_rewrite`                         | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
 | `stream_source`                        | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |

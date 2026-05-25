@@ -67,6 +67,9 @@ func TestConvertStreamAPI_FullPayload(t *testing.T) {
 	if slu.InternalName != "test" {
 		t.Fatalf("expected internal name 'test', got %q", slu.InternalName)
 	}
+	if slu.Status != "live" {
+		t.Fatalf("expected status 'live', got %q", slu.Status)
+	}
 	if slu.GetTotalViewers() != 42 {
 		t.Fatalf("expected 42 viewers, got %d", slu.GetTotalViewers())
 	}
@@ -136,8 +139,8 @@ func TestConvertStreamAPI_MinimalPayload(t *testing.T) {
 	if slu == nil {
 		t.Fatal("expected StreamLifecycleUpdate payload")
 	}
-	if slu.Status != "live" {
-		t.Fatalf("expected status 'live', got %q", slu.Status)
+	if slu.Status != "waiting" {
+		t.Fatalf("expected status 'waiting', got %q", slu.Status)
 	}
 	if slu.TotalViewers != nil {
 		t.Fatalf("expected nil viewers, got %d", slu.GetTotalViewers())
@@ -147,6 +150,22 @@ func TestConvertStreamAPI_MinimalPayload(t *testing.T) {
 	}
 	if slu.GetHasIssues() {
 		t.Fatal("expected no issues for nil data")
+	}
+}
+
+func TestConvertStreamAPI_ZeroInputPlaceholderIsNotLive(t *testing.T) {
+	streamData := map[string]interface{}{
+		"viewers": float64(0),
+		"inputs":  float64(0),
+	}
+
+	trigger := convertStreamAPIToMistTrigger("node-1", "live+pull", "pull", streamData, nil, nil, 0, logging.NewLogger())
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil {
+		t.Fatal("expected StreamLifecycleUpdate payload")
+	}
+	if slu.Status != "waiting" {
+		t.Fatalf("expected waiting status for zero-input placeholder, got %q", slu.Status)
 	}
 }
 

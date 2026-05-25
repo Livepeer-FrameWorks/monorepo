@@ -1266,6 +1266,145 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	}
 }
 
+func TestStreamEndWritesCurrentStateOffline(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	eventTime := time.Unix(1710000000, 0)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId:  &streamID,
+		NodeId:    "edge-eu-1",
+		ClusterId: stringPtr("media-eu-1"),
+		TriggerPayload: &pb.MistTrigger_StreamEnd{
+			StreamEnd: &pb.StreamEndTrigger{
+				StreamName:      "live+demo",
+				UploadedBytes:   int64Ptr(1024),
+				DownloadedBytes: int64Ptr(2048),
+				ViewerSeconds:   int64Ptr(300),
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "stream_end",
+		Timestamp: eventTime,
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stateBatch := conn.batches["stream_state_current"]
+	if stateBatch == nil || len(stateBatch.rows) != 1 {
+		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
+	}
+	stateRow := stateBatch.rows[0]
+	if stateRow[2] != "demo" {
+		t.Fatalf("expected normalized internal name demo, got %#v", stateRow[2])
+	}
+	if stateRow[3] != "edge-eu-1" {
+		t.Fatalf("expected node edge-eu-1, got %#v", stateRow[3])
+	}
+	if stateRow[4] != "offline" {
+		t.Fatalf("expected offline status, got %#v", stateRow[4])
+	}
+	if stateRow[5] != "EMPTY" {
+		t.Fatalf("expected EMPTY buffer state, got %#v", stateRow[5])
+	}
+	if stateRow[6] != uint32(0) || stateRow[7] != uint16(0) {
+		t.Fatalf("expected zero viewers/inputs, got viewers=%#v inputs=%#v", stateRow[6], stateRow[7])
+	}
+	if stateRow[8] != uint64(1024) || stateRow[9] != uint64(2048) || stateRow[10] != uint64(300) {
+		t.Fatalf("expected final byte/viewer counters, got uploaded=%#v downloaded=%#v viewerSeconds=%#v", stateRow[8], stateRow[9], stateRow[10])
+	}
+	if stateRow[24] != eventTime {
+		t.Fatalf("expected updated_at %v, got %#v", eventTime, stateRow[24])
+	}
+
+	eventBatch := conn.batches["stream_event_log"]
+	if eventBatch == nil || len(eventBatch.rows) != 1 {
+		t.Fatalf("expected stream_event_log row, got %#v", eventBatch)
+	}
+	if eventBatch.rows[0][7] != "stream_end" {
+		t.Fatalf("expected stream_end event row, got %#v", eventBatch.rows[0][7])
+	}
+}
+
+func TestStreamEndDuplicateStillRefreshesCurrentState(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	eventID := uuid.New()
+	conn.addDuplicate("stream_event_log", eventID)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_StreamEnd{
+			StreamEnd: &pb.StreamEndTrigger{StreamName: "live+demo"},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   eventID.String(),
+		EventType: "stream_end",
+		Timestamp: time.Unix(1710000060, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if batch := conn.batches["stream_state_current"]; batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected duplicate stream_end to refresh current state, got %#v", batch)
+	}
+	if batch := conn.batches["stream_event_log"]; batch != nil {
+		t.Fatalf("expected duplicate stream_end to skip event log insert, got %#v", batch.rows)
+	}
+}
+
+func TestStreamEndUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		NodeId: "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_StreamEnd{
+			StreamEnd: &pb.StreamEndTrigger{
+				StreamName: "live+demo",
+				StreamId:   stringPtr(streamID),
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "stream_end",
+		Timestamp: time.Unix(1710000120, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["stream_state_current"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected stream_state_current row, got %#v", batch)
+	}
+	if got := batch.rows[0][1]; got != uuid.MustParse(streamID) {
+		t.Fatalf("expected payload stream_id %s, got %#v", streamID, got)
+	}
+}
+
 func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

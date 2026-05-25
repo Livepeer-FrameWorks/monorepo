@@ -1027,6 +1027,12 @@ func nilIfZeroUint32(v uint32) interface{} {
 	}
 	return v
 }
+func nonNegativeUint64(v int64) uint64 {
+	if v <= 0 {
+		return 0
+	}
+	return uint64(v)
+}
 func nilIfZeroUint8(v int32) interface{} {
 	// Proto returns int32, convert to uint8 for ClickHouse
 	if v == 0 {
@@ -2120,20 +2126,81 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
-		return err
-	}
-	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
-		return nil
-	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamEnd)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for stream_end")
 	}
 	streamEnd := tp.StreamEnd
+	streamID := mt.GetStreamId()
+	if !isValidUUIDString(streamID) && isValidUUIDString(streamEnd.GetStreamId()) {
+		streamID = streamEnd.GetStreamId()
+	}
+	if err := h.requireStreamID(ctx, event, streamID); err != nil {
+		return err
+	}
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(streamEnd.GetStreamName())
 	env := analyticsEnvelopeColumns(event)
+	nodeID := mt.GetNodeId()
+	if nodeID == "" {
+		nodeID = streamEnd.GetNodeId()
+	}
+
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+			INSERT INTO stream_state_current (
+				tenant_id, stream_id, internal_name, node_id, status, buffer_state,
+				current_viewers, total_inputs, uploaded_bytes, downloaded_bytes,
+				viewer_seconds, has_issues, issues_description,
+				track_count, quality_tier, primary_width, primary_height,
+				primary_fps, primary_codec, primary_bitrate,
+				packets_sent, packets_lost, packets_retransmitted,
+				started_at, updated_at
+			)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare stream_state_current offline batch: %v", err)
+		return err
+	}
+	defer closeClickHouseBatch(stateBatch)
+
+	if appendErr := stateBatch.Append(
+		event.TenantID,
+		parseUUID(streamID),
+		internalName,
+		nodeID,
+		"offline",
+		"EMPTY",
+		uint32(0),
+		uint16(0),
+		nonNegativeUint64(streamEnd.GetUploadedBytes()),
+		nonNegativeUint64(streamEnd.GetDownloadedBytes()),
+		nonNegativeUint64(streamEnd.GetViewerSeconds()),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		event.Timestamp,
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append stream_state_current offline row: %v", appendErr)
+		return appendErr
+	}
+
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send stream_state_current offline batch: %v", sendErr)
+		return sendErr
+	}
+
+	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+		return nil
+	}
 
 	// Write to ClickHouse stream_events table using ONLY end-specific fields
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -2173,7 +2240,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),

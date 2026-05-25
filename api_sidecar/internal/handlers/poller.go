@@ -2124,10 +2124,14 @@ func interpretCapabilityFlag(value string, def bool) bool {
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf
 func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *pb.MistTrigger {
+	status := "waiting"
+	if streamAPIHasLiveMedia(streamData, trackDetails, trackCount) {
+		status = "live"
+	}
 	streamLifecycleUpdate := &pb.StreamLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,
-		Status:       "live",
+		Status:       status,
 	}
 
 	// Extract basic metrics from stream data
@@ -2387,6 +2391,16 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 			StreamLifecycleUpdate: streamLifecycleUpdate,
 		},
 	}
+}
+
+func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]any, trackCount int) bool {
+	if trackCount > 0 || len(trackDetails) > 0 {
+		return true
+	}
+	if inputs, ok := streamData["inputs"].(float64); ok && inputs > 0 {
+		return true
+	}
+	return false
 }
 
 // convertClientAPIToMistTrigger converts client API response data to a MistTrigger protobuf
