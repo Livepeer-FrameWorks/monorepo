@@ -18,10 +18,14 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
-    "./player.css": "./src/player.css"
+    "./player.css": {
+      "source": "./src/player.css",
+      "default": "./dist/player.css"
+    }
   },
   "scripts": {
-    "build": "svelte-package -i src -o dist",
+    "build": "svelte-package -i src -o dist && pnpm run build:css",
+    "build:css": "cp ../core/src/styles/player.css ./dist/player.css",
     "build:watch": "svelte-package -i src -o dist --watch",
     "type-check": "svelte-check",
     "test": "vitest run",

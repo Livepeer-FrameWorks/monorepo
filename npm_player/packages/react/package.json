@@ -15,10 +15,14 @@
       "types": "./dist/types/index.d.ts",
       "default": "./dist/esm/index.js"
     },
-    "./player.css": "./src/player.css"
+    "./player.css": {
+      "source": "./src/player.css",
+      "default": "./dist/player.css"
+    }
   },
   "scripts": {
-    "build": "pnpm run build:types && NODE_ENV=production rollup -c",
+    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
+    "build:css": "mkdir -p ./dist && cp ../core/src/styles/player.css ./dist/player.css",
     "build:watch": "NODE_ENV=development rollup -c --watch",
     "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
     "type-check": "tsc --noEmit",

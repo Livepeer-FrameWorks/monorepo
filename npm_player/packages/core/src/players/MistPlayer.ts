@@ -109,8 +109,7 @@ export class MistPlayerImpl extends BasePlayer {
         const mistOptions: any = {
           target: targetElement,
           fillSpace: true,
-          // MistServer's player.js has its own UI - always enable controls
-          controls: true,
+          controls: options.controls === true,
           // Use dev skin when devMode is enabled - shows MistServer's source selection UI
           skin: options.devMode ? "dev" : "default",
           // Only pass basic playback options
