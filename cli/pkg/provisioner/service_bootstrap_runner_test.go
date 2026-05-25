@@ -48,11 +48,14 @@ func TestRunServiceBootstrap_ValidateAcceptsEmptyYAML(t *testing.T) {
 	// any error EXCEPT a "YAML required" one.
 	err := RunServiceBootstrap(context.Background(), pool, ServiceBootstrapOptions{
 		Service: "purser",
-		Host:    inventory.Host{Name: "h", ExternalIP: "127.0.0.1"},
+		Host:    inventory.Host{},
 		Mode:    ServiceBootstrapModeValidate,
 	})
 	if err != nil && strings.Contains(err.Error(), "YAML required") {
 		t.Fatalf("validate mode should not require YAML, got %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "ExternalIP or Name") {
+		t.Fatalf("validate mode should advance past YAML validation before host validation, got %v", err)
 	}
 }
 

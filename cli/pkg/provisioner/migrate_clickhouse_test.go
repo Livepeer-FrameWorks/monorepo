@@ -33,10 +33,10 @@ func TestValidateClickHouseMigrationSetRequiresIfNotExists(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_bad.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
 			content:  "CREATE TABLE periscope.foo (id UUID) ENGINE = MergeTree ORDER BY id;",
 		},
 	}
@@ -56,10 +56,10 @@ func TestValidateClickHouseMigrationSetRejectsDropInExpand(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_bad.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
 			content:  "DROP TABLE periscope.example;",
 		},
 	}
@@ -76,10 +76,10 @@ func TestValidateClickHouseMigrationSetRejectsRenameInExpand(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_bad.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
 			content:  "RENAME TABLE periscope.a TO periscope.b;",
 		},
 	}
@@ -92,10 +92,10 @@ func TestValidateClickHouseMigrationSetRejectsModifyTypeInExpand(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_bad.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
 			content:  "ALTER TABLE periscope.example MODIFY COLUMN name LowCardinality(String);",
 		},
 	}
@@ -108,10 +108,10 @@ func TestValidateClickHouseMigrationSetRejectsMutationInExpand(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_bad.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_bad.sql",
 			content:  "ALTER TABLE periscope.example UPDATE name = '' WHERE 1;",
 		},
 	}
@@ -124,10 +124,10 @@ func TestValidateClickHouseMigrationSetAcceptsSafeExpand(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "expand",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/expand/001_ok.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/expand/001_ok.sql",
 			content:  "CREATE TABLE IF NOT EXISTS periscope.foo (id UUID) ENGINE = MergeTree ORDER BY id;\nALTER TABLE periscope.example ADD COLUMN IF NOT EXISTS name Nullable(String);",
 		},
 	}
@@ -140,10 +140,10 @@ func TestValidateClickHouseMigrationSetAcceptsContractDrop(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "contract",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/contract/001_drop.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/contract/001_drop.sql",
 			content:  "DROP TABLE periscope.legacy;",
 		},
 	}
@@ -156,10 +156,10 @@ func TestValidateClickHouseMigrationSetAcceptsPostdeployMutation(t *testing.T) {
 	migrations := []Migration{
 		{
 			Database: "periscope",
-			Version:  "v0.2.32",
+			Version:  "v0.3.1",
 			Phase:    "postdeploy",
 			Sequence: 1,
-			Path:     "clickhouse/migrations/periscope/v0.2.32/postdeploy/001_rebuild.sql",
+			Path:     "clickhouse/migrations/periscope/v0.3.1/postdeploy/001_rebuild.sql",
 			content:  "ALTER TABLE periscope.example UPDATE name = '' WHERE name IS NULL;",
 		},
 	}

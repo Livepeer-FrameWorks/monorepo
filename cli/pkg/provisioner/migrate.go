@@ -57,6 +57,12 @@ var migrationPhaseOrder = map[string]int{
 	"contract":   2,
 }
 
+const migrationPhaseSafetyFloor = "v0.2.65"
+
+func enforcesMigrationPhaseSafety(migration Migration) bool {
+	return compareSemver(migration.Version, migrationPhaseSafetyFloor) >= 0
+}
+
 var expandUnsafeSQLPatterns = []struct {
 	re      *regexp.Regexp
 	message string
@@ -200,7 +206,7 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 	issues := validateSequenceCollisions(migrations)
 	for _, migration := range migrations {
 		content := migration.content
-		if migration.Phase == "expand" {
+		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
 			for _, pattern := range expandUnsafeSQLPatterns {
 				if pattern.re.MatchString(content) {
 					issues = append(issues, MigrationValidationIssue{
@@ -294,55 +300,59 @@ func validateClickHouseMigrationSet(migrations []Migration) error {
 	for _, migration := range migrations {
 		content := migration.content
 
-		switch migration.Phase {
-		case "expand":
-			if chDropPattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "DROP statements belong in contract migrations",
-				})
-			}
-			if chRenamePattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "RENAME statements belong in contract migrations",
-				})
-			}
-			if chModifyTypePattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "ALTER TABLE … MODIFY COLUMN type rewrites are heavy in ClickHouse and belong in postdeploy",
-				})
-			}
-			if chMutationPattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "ALTER TABLE UPDATE/DELETE mutations belong in postdeploy or contract",
-				})
-			}
-		case "postdeploy":
-			if chDropPattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "DROP statements belong in contract migrations",
-				})
-			}
-			if chRenamePattern.MatchString(content) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "RENAME statements belong in contract migrations",
-				})
+		if enforcesMigrationPhaseSafety(migration) {
+			switch migration.Phase {
+			case "expand":
+				if chDropPattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "DROP statements belong in contract migrations",
+					})
+				}
+				if chRenamePattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "RENAME statements belong in contract migrations",
+					})
+				}
+				if chModifyTypePattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "ALTER TABLE … MODIFY COLUMN type rewrites are heavy in ClickHouse and belong in postdeploy",
+					})
+				}
+				if chMutationPattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "ALTER TABLE UPDATE/DELETE mutations belong in postdeploy or contract",
+					})
+				}
+			case "postdeploy":
+				if chDropPattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "DROP statements belong in contract migrations",
+					})
+				}
+				if chRenamePattern.MatchString(content) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "RENAME statements belong in contract migrations",
+					})
+				}
 			}
 		}
 
 		// Reconciliation requires IF NOT EXISTS on every CREATE so the same
 		// migration re-applies cleanly on a freshly-baselined cluster.
-		for _, stmt := range splitSQLStatements(content) {
-			if chCreateObjectPattern.MatchString(stmt) && !chIfNotExistsPattern.MatchString(stmt) {
-				issues = append(issues, MigrationValidationIssue{
-					Path:    migration.Path,
-					Message: "CREATE TABLE/VIEW/DICTIONARY must use IF NOT EXISTS for idempotent re-apply against an existing baseline",
-				})
+		if enforcesMigrationPhaseSafety(migration) {
+			for _, stmt := range splitSQLStatements(content) {
+				if chCreateObjectPattern.MatchString(stmt) && !chIfNotExistsPattern.MatchString(stmt) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "CREATE TABLE/VIEW/DICTIONARY must use IF NOT EXISTS for idempotent re-apply against an existing baseline",
+					})
+				}
 			}
 		}
 	}

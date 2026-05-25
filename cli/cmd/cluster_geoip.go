@@ -320,6 +320,10 @@ func downloadMaxMindDB(ctx context.Context, licenseKey, destPath string) error {
 }
 
 func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool *ssh.Pool, mmdbPath, remotePath string, services []string, restart bool, out io.Writer) (int, error) {
+	serviceNames, err := geoIPTargetServiceNames(manifest, services)
+	if err != nil {
+		return 0, err
+	}
 	targetHosts, err := geoIPTargetHosts(manifest, services)
 	if err != nil {
 		return 0, err
@@ -341,12 +345,20 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		if _, err := pool.Run(ctx, connCfg, fmt.Sprintf("mkdir -p %s", ssh.ShellQuote(filepath.Dir(remotePath)))); err != nil {
 			return uploaded, fmt.Errorf("prepare geoip directory on %s: %w", hostName, err)
 		}
+		remoteTmpPath := geoIPRemoteTempPath(remotePath, hostName)
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
 			LocalPath:  mmdbPath,
-			RemotePath: remotePath,
+			RemotePath: remoteTmpPath,
 			Mode:       0644,
 		}); err != nil {
-			return uploaded, fmt.Errorf("upload GeoIP MMDB to %s:%s: %w", hostName, remotePath, err)
+			return uploaded, fmt.Errorf("upload GeoIP MMDB to %s:%s: %w", hostName, remoteTmpPath, err)
+		}
+		publishCmd := atomicGeoIPPublishCommand(remoteTmpPath, remotePath, 0644)
+		if _, err := pool.Run(ctx, connCfg, publishCmd); err != nil {
+			if _, cleanupErr := pool.Run(ctx, connCfg, fmt.Sprintf("rm -f %s", ssh.ShellQuote(remoteTmpPath))); cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clean up remote GeoIP temp file %s: %v\n", remoteTmpPath, cleanupErr)
+			}
+			return uploaded, fmt.Errorf("publish GeoIP MMDB on %s:%s: %w", hostName, remotePath, err)
 		}
 		uploaded++
 
@@ -355,7 +367,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 
 		var restartTargets []string
-		for _, serviceName := range services {
+		for _, serviceName := range serviceNames {
 			svc, ok := manifest.Services[serviceName]
 			if !ok || !svc.Enabled {
 				continue
@@ -379,6 +391,23 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 
 	ux.Success(out, fmt.Sprintf("Uploaded GeoIP MMDB to %d host(s)", uploaded))
 	return uploaded, nil
+}
+
+func geoIPRemoteTempPath(remotePath, hostName string) string {
+	dir := filepath.Dir(remotePath)
+	base := filepath.Base(remotePath)
+	hostPart := strings.NewReplacer("/", "-", " ", "-").Replace(hostName)
+	return filepath.Join(dir, fmt.Sprintf(".%s.%s.%d.tmp", base, hostPart, time.Now().UnixNano()))
+}
+
+func atomicGeoIPPublishCommand(tmpPath, remotePath string, mode uint32) string {
+	return fmt.Sprintf(
+		"chmod %o %s && mv -f %s %s",
+		mode,
+		ssh.ShellQuote(tmpPath),
+		ssh.ShellQuote(tmpPath),
+		ssh.ShellQuote(remotePath),
+	)
 }
 
 func geoIPTargetHosts(manifest *inventory.Manifest, services []string) ([]string, error) {

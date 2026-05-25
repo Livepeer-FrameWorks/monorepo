@@ -188,8 +188,10 @@ func TestNativeVMAgentUnitDoesNotTemplateRestartIntoBearerTokenPath(t *testing.T
 	if strings.Contains(content, "bearerTokenFile=/etc/frameworks/telemetry/token{% endif %}") {
 		t.Fatal("vmagent bearer token flag must not end at an inline Jinja block; Ansible trim_blocks can concatenate Restart=always into the file path")
 	}
-	if !strings.Contains(content, "-remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token' if edge_telemetry_token") {
-		t.Fatalf("vmagent unit should keep bearer token flag conditional inside the ExecStart expression:\n%s", content)
+	if !strings.Contains(content, "edge_vmagent_bearer_token_arg: >-") ||
+		!strings.Contains(content, "-remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token") ||
+		!strings.Contains(content, "-remoteWrite.url={{ edge_telemetry_url }}{{ edge_vmagent_bearer_token_arg }}") {
+		t.Fatalf("vmagent unit should build the bearer token flag outside the systemd content and append only the variable in ExecStart:\n%s", content)
 	}
 }
 

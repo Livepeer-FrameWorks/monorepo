@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -107,6 +108,32 @@ func TestGeoIPTargetHostsAcceptsAliasedServiceName(t *testing.T) {
 	want := []string{"regional-eu-1"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("aliased target hosts = %v, want %v", got, want)
+	}
+}
+
+func TestGeoIPRemoteTempPathStaysBesideTarget(t *testing.T) {
+	got := geoIPRemoteTempPath("/usr/share/GeoIP/GeoLite2-City.mmdb", "regional/eu 1")
+	if !strings.HasPrefix(got, "/usr/share/GeoIP/.GeoLite2-City.mmdb.regional-eu-1.") {
+		t.Fatalf("temp path %q is not beside target with sanitized host", got)
+	}
+	if !strings.HasSuffix(got, ".tmp") {
+		t.Fatalf("temp path %q missing .tmp suffix", got)
+	}
+}
+
+func TestAtomicGeoIPPublishCommandMovesTempIntoPlace(t *testing.T) {
+	got := atomicGeoIPPublishCommand(
+		"/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp",
+		"/usr/share/GeoIP/GeoLite2-City.mmdb",
+		0644,
+	)
+	for _, want := range []string{
+		"chmod 644 '/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp'",
+		"mv -f '/usr/share/GeoIP/.GeoLite2-City.mmdb.tmp' '/usr/share/GeoIP/GeoLite2-City.mmdb'",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("publish command %q missing %q", got, want)
+		}
 	}
 }
 
