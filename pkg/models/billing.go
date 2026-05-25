@@ -243,11 +243,3 @@ type CryptoWallet struct {
 	CreatedAt     time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at" db:"updated_at"`
 }
-
-// UsageIngestRequest is the request payload from Periscope to Purser for usage
-// ingestion.
-type UsageIngestRequest struct {
-	UsageSummaries []UsageSummary `json:"usage_summaries" binding:"required"`
-	Source         string         `json:"source"`
-	Timestamp      time.Time      `json:"timestamp"`
-}

@@ -1343,10 +1343,10 @@ message GetTenantDailyStatsResponse {
 }
 
 // ============================================================================
-// Processing Usage (from process_billing and process_billing_daily tables)
+// Processing Usage
 // ============================================================================
 
-// Individual processing billing record (from process_billing table)
+// Individual processing record for analytics display.
 message ProcessingUsageRecord {
   string id = 1;
   google.protobuf.Timestamp timestamp = 2;
@@ -1414,7 +1414,7 @@ message ProcessingUsageRecord {
   optional int64 output_bitrate_bps = 69;
 }
 
-// Daily processing usage summary (from process_billing_daily table)
+// Daily processing usage summary.
 message ProcessingUsageSummary {
   google.protobuf.Timestamp date = 1;
   string tenant_id = 2;

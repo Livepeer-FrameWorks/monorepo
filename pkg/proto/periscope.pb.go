@@ -10270,7 +10270,7 @@ func (x *GetTenantDailyStatsResponse) GetStats() []*TenantDailyStat {
 	return nil
 }
 
-// Individual processing billing record (from process_billing table)
+// Individual processing record for analytics display.
 type ProcessingUsageRecord struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -10714,7 +10714,7 @@ func (x *ProcessingUsageRecord) GetOutputBitrateBps() int64 {
 	return 0
 }
 
-// Daily processing usage summary (from process_billing_daily table)
+// Daily processing usage summary.
 type ProcessingUsageSummary struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Date     *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=date,proto3" json:"date,omitempty"`

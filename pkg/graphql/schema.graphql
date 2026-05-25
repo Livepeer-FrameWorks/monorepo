@@ -4278,7 +4278,7 @@ type StorageEventsConnection {
 }
 
 # ============================================================================
-# Processing/Transcoding Usage (from process_billing table)
+# Processing/Transcoding Usage
 # ============================================================================
 
 # Detailed transcoding record for analytics display
