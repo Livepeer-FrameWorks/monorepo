@@ -203,6 +203,11 @@ func TestParseDiagnosticMetrics(t *testing.T) {
 			want:    map[string]float64{"avg_buffer_health": 2.5, "avg_fps": 28},
 		},
 		{
+			name:    "unknown fps is omitted",
+			content: `{"avg_buffer_health":2.5,"avg_fps":0}`,
+			want:    map[string]float64{"avg_buffer_health": 2.5},
+		},
+		{
 			name:    "nested metrics object (gateway DiagnosticResult)",
 			content: `{"status":"warning","metrics":{"avg_buffer_health":0.6,"avg_packet_loss_rate":0.03,"avg_bandwidth_out_bps":5000000},"analysis":"Buffer health degraded."}`,
 			want: map[string]float64{

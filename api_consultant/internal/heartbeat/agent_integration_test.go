@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"frameworks/api_consultant/internal/chat"
@@ -83,6 +84,60 @@ func TestThresholdCheckReturnViolations(t *testing.T) {
 	result := diagnostics.Triage(violations, nil, nil)
 	if result.Action != diagnostics.TriageInvestigate {
 		t.Fatalf("expected investigate, got %s", result.Action)
+	}
+}
+
+func TestSnapshotToMetricMapSkipsUnknownFPS(t *testing.T) {
+	metrics := snapshotToMetricMap(&healthSnapshot{
+		Health: &pb.StreamHealthSummary{
+			AvgFps:          0,
+			AvgBitrate:      5000000,
+			AvgBufferHealth: 3,
+		},
+	})
+	if _, ok := metrics["avg_fps"]; ok {
+		t.Fatal("expected unknown FPS to be omitted")
+	}
+
+	metrics = snapshotToMetricMap(&healthSnapshot{
+		Health: &pb.StreamHealthSummary{AvgFps: 29.97},
+	})
+	if got := metrics["avg_fps"]; got != 29.97 {
+		t.Fatalf("avg_fps = %v, want 29.97", got)
+	}
+}
+
+func TestInvestigationPromptTreatsZeroFPSAsUnknown(t *testing.T) {
+	prompt := buildInvestigationPrompt(&healthSnapshot{
+		TenantID:      "tenant-a",
+		ActiveStreams: 1,
+		Window:        15,
+		Health: &pb.StreamHealthSummary{
+			AvgFps:          0,
+			AvgBitrate:      5000000,
+			AvgBufferHealth: 1,
+			TotalIssueCount: 1,
+		},
+	}, "threshold", "buffer health degraded", nil, nil)
+
+	for _, want := range []string{
+		"Mist reports FPS as 0 when frame rate is unknown or dynamic",
+		"Local AV compatibility processing generates Opus",
+		"Thumbnail processing can add JPEG preview/sprite tracks",
+		"Avg FPS: unknown",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Avg FPS: 0.00") {
+		t.Fatalf("prompt should not present unknown FPS as zero:\n%s", prompt)
+	}
+	if !strings.Contains(investigationSystemPrompt, "Treat avg_fps/fps <= 0 as unknown") {
+		t.Fatal("system prompt is missing Mist FPS semantics")
+	}
+	if !strings.Contains(investigationSystemPrompt, "derived JPEG, thumbvtt, AAC, or Opus tracks") {
+		t.Fatal("system prompt is missing processing/track semantics")
 	}
 }
 

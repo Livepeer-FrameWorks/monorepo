@@ -72,7 +72,7 @@ USER_END trigger (uploaded/downloaded bytes total)
 | Field (ClickHouse `stream_health_samples`) | Unit        | Type  | Description                                                                  |
 | ------------------------------------------ | ----------- | ----- | ---------------------------------------------------------------------------- |
 | `bitrate`                                  | kbps        | Gauge | Primary video bitrate (`StreamTrack.bitrate_kbps`)                           |
-| `fps`                                      | frames/sec  | Gauge | Primary video FPS                                                            |
+| `fps`                                      | frames/sec  | Gauge | Primary video FPS; Mist `0` means unknown/dynamic and is treated as absent   |
 | `width` / `height`                         | pixels      | Gauge | Primary video dimensions                                                     |
 | `codec`                                    | string      | Gauge | Primary video codec                                                          |
 | `buffer_size`                              | ms          | Gauge | Overall buffer in ms (`StreamBufferTrigger.stream_buffer_ms`)                |

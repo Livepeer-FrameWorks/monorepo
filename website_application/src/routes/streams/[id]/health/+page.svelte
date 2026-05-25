@@ -234,7 +234,10 @@
     const totalBufferDry = health5mData.reduce((sum, d) => sum + (d.bufferDryCount ?? 0), 0);
     const avgBitrate =
       health5mData.reduce((sum, d) => sum + (d.avgBitrate ?? 0), 0) / health5mData.length;
-    const avgFps = health5mData.reduce((sum, d) => sum + (d.avgFps ?? 0), 0) / health5mData.length;
+    const fpsSamples = health5mData.map((d) => d.avgFps ?? 0).filter((fps) => fps > 0);
+    const avgFps = fpsSamples.length
+      ? fpsSamples.reduce((sum, fps) => sum + fps, 0) / fpsSamples.length
+      : null;
     return { totalRebuffers, totalIssues, totalBufferDry, avgBitrate, avgFps };
   });
 

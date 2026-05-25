@@ -247,7 +247,7 @@ SELECT
     countIf(has_issues = 1) AS issue_count,
     any(issues_description) AS sample_issues,
     ifNull(avg(bitrate), 0) AS avg_bitrate,
-    ifNull(avg(fps), 0) AS avg_fps,
+    ifNull(avgIf(fps, fps > 0), 0) AS avg_fps,
     ifNull(avg(buffer_health), 0) AS avg_buffer_health,
     avg(frame_jitter_ms) AS avg_frame_jitter_ms,
     max(frame_jitter_ms) AS max_frame_jitter_ms,
@@ -374,7 +374,7 @@ SELECT
     countIf(lower(primary_video_codec) LIKE '%vp9%') * 5 AS codec_vp9_minutes,
     countIf(lower(primary_video_codec) LIKE '%av1%') * 5 AS codec_av1_minutes,
     ifNull(toUInt32(avg(primary_video_bitrate)), 0) AS avg_bitrate,
-    ifNull(avg(primary_fps), 0) AS avg_fps
+    ifNull(avgIf(primary_fps, primary_fps > 0), 0) AS avg_fps
 FROM track_list_events
 WHERE track_count > 0
 GROUP BY day, tenant_id, stream_id, internal_name;

@@ -26,6 +26,16 @@ const (
 	defaultSummaryWindow     = 15 * time.Minute
 )
 
+const mistMetricSemantics = `Mist metric semantics:
+- Mist reports FPS as 0 when frame rate is unknown or dynamic. Treat avg_fps/fps <= 0 as unknown, not as a zero-frame stream, encoder stall, or health fault.
+- Only cite FPS as a root-cause signal when it is positive and explicitly below baseline or threshold.`
+
+const mistProcessingSemantics = `FrameWorks processing and track semantics:
+- Livepeer handles video ABR when a gateway is available; if no gateway is available, video ABR is stripped and audio/thumbnail processes may still run.
+- Local AV compatibility processing generates Opus when incoming audio is not Opus and AAC when incoming audio is not AAC. Treat those audio tracks/processes as expected compatibility work, not unexpected transcoding.
+- Thumbnail processing can add JPEG preview/sprite tracks and thumbvtt metadata. MistProcThumbs runs for live+, dvr+, and processing+ sources when thumbnail processing is enabled; vod+ boot is for .dtsh generation, not thumbnail creation.
+- Track inventory is diagnostic context. Do not blame derived JPEG, thumbvtt, AAC, or Opus tracks unless timing, buffer, packet loss, or processing error evidence also points there.`
+
 const investigationSystemPrompt = `You are Skipper's diagnostic agent.
 Use available tools to investigate issues, then produce a report in JSON with:
 {
@@ -36,7 +46,11 @@ Use available tools to investigate issues, then produce a report in JSON with:
     {"text": "recommendation", "confidence": "high|medium|low"}
   ]
 }
-Use tools when it helps confirm findings.`
+Use tools when it helps confirm findings.
+
+` + mistMetricSemantics + `
+
+` + mistProcessingSemantics
 
 type AgentConfig struct {
 	Interval          time.Duration
@@ -325,7 +339,9 @@ func snapshotToMetricMap(snapshot *healthSnapshot) map[string]float64 {
 	}
 	if h := snapshot.Health; h != nil {
 		m["avg_bitrate"] = h.GetAvgBitrate()
-		m["avg_fps"] = h.GetAvgFps()
+		if h.GetAvgFps() > 0 {
+			m["avg_fps"] = h.GetAvgFps()
+		}
 		m["avg_buffer_health"] = h.GetAvgBufferHealth()
 		m["total_rebuffer_count"] = float64(h.GetTotalRebufferCount())
 		m["total_issue_count"] = float64(h.GetTotalIssueCount())
@@ -501,6 +517,7 @@ func buildInvestigationPrompt(snapshot *healthSnapshot, trigger, reason string, 
 	qoe := snapshot.ClientQoE
 	var b strings.Builder
 	fmt.Fprintf(&b, "Tenant: %s\nTrigger: %s\nReason: %s\nWindow: last %s\n", snapshot.TenantID, trigger, reason, snapshot.Window)
+	fmt.Fprintf(&b, "\n%s\n\n%s\n", mistMetricSemantics, mistProcessingSemantics)
 
 	if triage != nil && len(triage.Deviations) > 0 {
 		b.WriteString("\nBaseline Deviations:\n")
@@ -531,7 +548,11 @@ func buildInvestigationPrompt(snapshot *healthSnapshot, trigger, reason string, 
 	b.WriteString("\nRaw Metrics:\n")
 	fmt.Fprintf(&b, "- Active streams: %d\n", snapshot.ActiveStreams)
 	fmt.Fprintf(&b, "- Avg bitrate: %.2f\n", health.GetAvgBitrate())
-	fmt.Fprintf(&b, "- Avg FPS: %.2f\n", health.GetAvgFps())
+	if health.GetAvgFps() > 0 {
+		fmt.Fprintf(&b, "- Avg FPS: %.2f\n", health.GetAvgFps())
+	} else {
+		b.WriteString("- Avg FPS: unknown\n")
+	}
 	fmt.Fprintf(&b, "- Avg buffer health: %.2f\n", health.GetAvgBufferHealth())
 	fmt.Fprintf(&b, "- Total rebuffer count: %d\n", health.GetTotalRebufferCount())
 	fmt.Fprintf(&b, "- Total issue count: %d\n", health.GetTotalIssueCount())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -426,6 +428,11 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 		Analysis:        analysis,
 		Recommendations: recommendations,
 	}
+	if metricsResp != nil {
+		if trackInventory := summarizeTrackInventory(metricsResp.GetMetrics()); len(trackInventory) > 0 {
+			result.Metrics["track_inventory"] = trackInventory
+		}
+	}
 
 	return toolSuccessJSON(result)
 }
@@ -662,6 +669,10 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 		logger.WithError(err).Warn("Failed to get stream health")
 		return toolError(fmt.Sprintf("Failed to fetch stream health: %v", err))
 	}
+	metricsResp, err := serviceClients.Periscope.GetStreamHealthMetrics(ctx, tenantID, &streamID, timeRange, &periscope.CursorPaginationOpts{First: 200})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to get stream health samples")
+	}
 
 	if len(resp.Records) == 0 {
 		result := DiagnosticResult{
@@ -676,12 +687,16 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 
 	var totalBitrate int64
 	var totalFPS float32
+	var fpsSamples int
 	var totalIssues int32
 	qualityTiers := make(map[string]int)
 
 	for _, record := range resp.Records {
 		totalBitrate += int64(record.AvgBitrate)
-		totalFPS += record.AvgFps
+		if record.AvgFps > 0 {
+			totalFPS += record.AvgFps
+			fpsSamples++
+		}
 		totalIssues += record.IssueCount
 		if record.QualityTier != "" {
 			qualityTiers[record.QualityTier]++
@@ -689,15 +704,20 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 	}
 
 	avgBitrate := totalBitrate / int64(len(resp.Records))
-	avgFPS := totalFPS / float32(len(resp.Records))
+	var avgFPS float32
+	avgFPSLabel := "unknown"
+	if fpsSamples > 0 {
+		avgFPS = totalFPS / float32(fpsSamples)
+		avgFPSLabel = fmt.Sprintf("%.1f", avgFPS)
+	}
 
 	status := "healthy"
-	analysis := fmt.Sprintf("Stream health is good. Avg bitrate: %d kbps, avg FPS: %.1f.", avgBitrate/1000, avgFPS)
+	analysis := fmt.Sprintf("Stream health is good. Avg bitrate: %d kbps, avg FPS: %s.", avgBitrate/1000, avgFPSLabel)
 	var recommendations []string
 
 	if totalIssues > int32(len(resp.Records)) {
 		status = "warning"
-		analysis = fmt.Sprintf("Stream has %d issues over the time range. Avg bitrate: %d kbps, avg FPS: %.1f.", totalIssues, avgBitrate/1000, avgFPS)
+		analysis = fmt.Sprintf("Stream has %d issues over the time range. Avg bitrate: %d kbps, avg FPS: %s.", totalIssues, avgBitrate/1000, avgFPSLabel)
 		recommendations = []string{
 			"Review sample issues in stream health dashboard",
 			"Check encoder stability",
@@ -708,7 +728,6 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 		Status: status,
 		Metrics: map[string]interface{}{
 			"avg_bitrate_kbps": avgBitrate / 1000,
-			"avg_fps":          avgFPS,
 			"total_issues":     totalIssues,
 			"quality_tiers":    qualityTiers,
 			"sample_count":     len(resp.Records),
@@ -717,8 +736,155 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 		Analysis:        analysis,
 		Recommendations: recommendations,
 	}
+	if fpsSamples > 0 {
+		result.Metrics["avg_fps"] = avgFPS
+	}
+	if metricsResp != nil {
+		if trackInventory := summarizeTrackInventory(metricsResp.GetMetrics()); len(trackInventory) > 0 {
+			result.Metrics["track_inventory"] = trackInventory
+		}
+	}
 
 	return toolSuccessJSON(result)
+}
+
+func summarizeTrackInventory(metrics []*pb.StreamHealthMetric) map[string]interface{} {
+	if len(metrics) == 0 {
+		return nil
+	}
+	summary := map[string]interface{}{}
+	videoCodecs := map[string]struct{}{}
+	audioCodecs := map[string]struct{}{}
+	metaCodecs := map[string]struct{}{}
+	derivedCodecs := map[string]struct{}{}
+	primaryAudioCodecs := map[string]struct{}{}
+	var maxTrackCount int32
+	samplesWithTracks := 0
+
+	for _, metric := range metrics {
+		if metric == nil {
+			continue
+		}
+		if metric.TrackCount != nil && metric.GetTrackCount() > maxTrackCount {
+			maxTrackCount = metric.GetTrackCount()
+		}
+		if codec := strings.TrimSpace(metric.GetPrimaryAudioCodec()); codec != "" {
+			primaryAudioCodecs[strings.ToUpper(codec)] = struct{}{}
+		}
+		tracks := tracksFromHealthMetric(metric)
+		if len(tracks) > 0 {
+			samplesWithTracks++
+		}
+		for _, track := range tracks {
+			codec := strings.TrimSpace(track.Codec)
+			if codec == "" {
+				continue
+			}
+			codecKey := strings.ToUpper(codec)
+			switch strings.ToLower(track.Type) {
+			case "video":
+				videoCodecs[codecKey] = struct{}{}
+			case "audio":
+				audioCodecs[codecKey] = struct{}{}
+			case "meta", "metadata":
+				metaCodecs[codecKey] = struct{}{}
+			}
+			switch strings.ToLower(codec) {
+			case "jpeg", "jpg", "thumbvtt":
+				derivedCodecs[codecKey] = struct{}{}
+			case "aac", "opus":
+				if strings.EqualFold(track.Type, "audio") {
+					derivedCodecs[codecKey] = struct{}{}
+				}
+			}
+		}
+	}
+
+	if maxTrackCount > 0 {
+		summary["max_track_count"] = maxTrackCount
+	}
+	if samplesWithTracks > 0 {
+		summary["samples_with_track_metadata"] = samplesWithTracks
+	}
+	if values := sortedKeys(videoCodecs); len(values) > 0 {
+		summary["video_codecs"] = values
+	}
+	if values := sortedKeys(audioCodecs); len(values) > 0 {
+		summary["audio_codecs"] = values
+	}
+	if values := sortedKeys(metaCodecs); len(values) > 0 {
+		summary["metadata_codecs"] = values
+	}
+	if values := sortedKeys(derivedCodecs); len(values) > 0 {
+		summary["expected_derived_codecs"] = values
+	}
+	if values := sortedKeys(primaryAudioCodecs); len(values) > 0 {
+		summary["primary_audio_codecs"] = values
+	}
+	if len(summary) > 0 {
+		summary["notes"] = []string{
+			"JPEG and thumbvtt tracks are expected when thumbnail processing is enabled.",
+			"AAC and Opus audio tracks can be expected compatibility outputs.",
+		}
+	}
+	return summary
+}
+
+type healthTrack struct {
+	Type  string
+	Codec string
+}
+
+func tracksFromHealthMetric(metric *pb.StreamHealthMetric) []healthTrack {
+	tracks := make([]healthTrack, 0, len(metric.GetTracks()))
+	for _, track := range metric.GetTracks() {
+		if track == nil {
+			continue
+		}
+		tracks = append(tracks, healthTrack{Type: track.GetTrackType(), Codec: track.GetCodec()})
+	}
+
+	raw := strings.TrimSpace(metric.GetTrackMetadata())
+	if raw == "" || raw == "{}" {
+		return tracks
+	}
+	var doc map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return tracks
+	}
+	rawTracks, ok := doc["tracks"].([]interface{})
+	if !ok {
+		return tracks
+	}
+	for _, item := range rawTracks {
+		obj, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tracks = append(tracks, healthTrack{
+			Type:  stringField(obj, "track_type", "trackType", "type"),
+			Codec: stringField(obj, "codec"),
+		})
+	}
+	return tracks
+}
+
+func stringField(obj map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := obj[key].(string); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func handleGetAnomalyReport(ctx context.Context, args GetAnomalyReportInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {

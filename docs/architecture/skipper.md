@@ -268,6 +268,8 @@ Welford online algorithm for running mean and standard deviation per `(tenant_id
 - **Deviations**: reported when current value exceeds `sigmaLimit` (default 2.0) standard deviations from the mean, with a `minSamples` guard (default 5) to avoid false positives during warmup
 - **Cleanup**: stale baselines (not updated in 7 days) are pruned each cycle
 - **Chat integration**: diagnostic tool results are enriched with baseline deviations and correlation hypotheses, falling back to tenant-wide baselines when stream-specific data is insufficient
+- **Mist FPS semantics**: `fps` / `avg_fps` values at or below zero mean unknown or dynamic frame rate. Skipper excludes those values from baselines and investigation inputs; FPS is only a fault signal when it is positive and below a known threshold or baseline.
+- **Mist track/processing semantics**: track inventory is diagnostic context. Expected derived work includes Livepeer video ABR, local AAC/Opus compatibility processes, and thumbnail processing that adds JPEG preview/sprite plus `thumbvtt` tracks. Skipper should not treat those tracks as unexpected by themselves; it needs timing, buffer, packet loss, or processing error evidence before blaming them.
 
 ### Correlator
 
@@ -276,9 +278,9 @@ Pure-Go pattern matcher. Maps deviation patterns to 5 known failure hypotheses:
 | Pattern             | Signals                                                                      |
 | ------------------- | ---------------------------------------------------------------------------- |
 | Network degradation | packet_loss↑, bandwidth_in↓, buffer_health↓                                  |
-| Encoder overload    | fps↓, bitrate↓ (absence of packet_loss boosts confidence)                    |
+| Encoder overload    | fps↓ when known, bitrate↓ (absence of packet_loss boosts confidence)         |
 | Viewer-side issues  | buffer_health↓, rebuffer_count↑ (absence of bandwidth_out boosts confidence) |
-| Ingest instability  | bitrate↓, fps↓, issue_count↑                                                 |
+| Ingest instability  | bitrate↓, fps↓ when known, issue_count↑                                      |
 | CDN pressure        | bandwidth_out↑, active_sessions↑, optional rebuffer↑ or buffer_health↓       |
 
 Confidence = matched signals / total signals, with an absence boost (+0.1) when a metric expected in competing hypotheses is absent.

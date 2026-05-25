@@ -817,16 +817,23 @@ func parseDiagnosticMetrics(content string) map[string]float64 {
 			if v, ok := src[key]; ok {
 				switch val := v.(type) {
 				case float64:
-					metrics[canonical] = val
+					addDiagnosticMetric(metrics, canonical, val)
 				case json.Number:
 					if f, err := val.Float64(); err == nil {
-						metrics[canonical] = f
+						addDiagnosticMetric(metrics, canonical, f)
 					}
 				}
 			}
 		}
 	}
 	return metrics
+}
+
+func addDiagnosticMetric(metrics map[string]float64, canonical string, value float64) {
+	if canonical == "avg_fps" && value <= 0 {
+		return
+	}
+	metrics[canonical] = value
 }
 
 type SearchKnowledgeInput struct {

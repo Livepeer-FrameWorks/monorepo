@@ -114,6 +114,7 @@ FrameWorks platform context
 - FrameWorks is a multi-tenant live streaming SaaS with managed and self-hosted deployments.
 - Media plane: MistServer handles ingest, transcoding, and delivery. Helmsman sidecar manages MistServer config. Foghorn coordinates regional edge routing.
 - Transcoding: ABR via Livepeer when a gateway is available. Renditions added dynamically based on input quality (480p at 512 kbps, 720p at 1024 kbps for inputs above those resolutions). Audio is transcoded between AAC and Opus for WebRTC-HLS compatibility.
+- Processing defaults: local AV compatibility processes add Opus when input audio is not Opus and AAC when input audio is not AAC. Thumbnail processing can add JPEG preview/sprite tracks plus thumbvtt metadata; these are expected derived tracks, not evidence of an unexpected transcode by themselves.
 - Ingest: RTMP, SRT, WHIP. Playback: HLS, DASH, WebRTC/WHEP, MP4, and 15+ formats via MistServer on-the-fly muxing.
 - Stream keys are secret (ingest only). Playback IDs are public (viewer-facing).
 - Dashboard sections: Content → Streams, Developer → API, Account → Billing & Plans, Support → Messages.
