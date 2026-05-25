@@ -50,8 +50,15 @@ const DEFAULT_CACHE_TTL_MS = 10000;
 // F3: Circuit breaker constants
 const CIRCUIT_BREAKER_THRESHOLD = 5; // Open after 5 consecutive failures
 const CIRCUIT_BREAKER_TIMEOUT_MS = 30000; // Half-open after 30 seconds
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 type CircuitBreakerState = "closed" | "open" | "half-open";
+type GraphQLErrorPayload = {
+  message?: string;
+  extensions?: {
+    code?: string;
+  };
+};
 
 const RESOLVE_VIEWER_QUERY = `
   query ResolveViewer($contentId: String!) {
@@ -67,21 +74,50 @@ const RESOLVE_VIEWER_QUERY = `
 // Helper Functions
 // ============================================================================
 
-/**
- * Fetch with exponential backoff retry logic.
- */
-async function fetchWithRetry(
+function getRetryDelay(initialDelay: number, attempt: number): number {
+  return initialDelay * Math.pow(2, attempt);
+}
+
+async function waitBeforeRetry(
+  logPrefix: string,
+  attempt: number,
+  maxRetries: number,
+  initialDelay: number
+): Promise<void> {
+  const delay = getRetryDelay(initialDelay, attempt);
+  console.warn(`[${logPrefix}] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
+  await new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function getFirstGraphQLError(payload: unknown): GraphQLErrorPayload | null {
+  const errors = (payload as { errors?: GraphQLErrorPayload[] })?.errors;
+  return Array.isArray(errors) && errors.length > 0 ? errors[0] : null;
+}
+
+function isRetryableGraphQLError(error: GraphQLErrorPayload): boolean {
+  const code = error.extensions?.code?.toUpperCase();
+  const message = (error.message || "").toLowerCase();
+
+  return (
+    code === "UNAVAILABLE" ||
+    code === "SERVICE_UNAVAILABLE" ||
+    message.includes("temporarily unavailable")
+  );
+}
+
+async function fetchResolvePayloadWithRetry(
   url: string,
   options: RequestInit,
   maxRetries: number,
   initialDelay: number
-): Promise<Response> {
+): Promise<unknown> {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    let response: Response | null = null;
+
     try {
-      const response = await fetch(url, options);
-      return response;
+      response = await fetch(url, options);
     } catch (e) {
       lastError = e instanceof Error ? e : new Error("Fetch failed");
 
@@ -90,13 +126,42 @@ async function fetchWithRetry(
         throw lastError;
       }
 
-      // Wait before retrying (exponential backoff)
       if (attempt < maxRetries - 1) {
-        const delay = initialDelay * Math.pow(2, attempt);
-        console.warn(`[GatewayClient] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        continue;
       }
     }
+
+    if (!response) {
+      throw lastError ?? new Error("Gateway unreachable after retries");
+    }
+
+    if (!response.ok) {
+      lastError = new Error(`Gateway GQL error ${response.status}`);
+
+      if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxRetries - 1) {
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        continue;
+      }
+
+      throw lastError;
+    }
+
+    const payload = await response.json();
+    const gqlError = getFirstGraphQLError(payload);
+
+    if (gqlError) {
+      lastError = new Error(gqlError.message || "GraphQL error");
+
+      if (isRetryableGraphQLError(gqlError) && attempt < maxRetries - 1) {
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        continue;
+      }
+
+      throw lastError;
+    }
+
+    return payload;
   }
 
   throw lastError ?? new Error("Gateway unreachable after retries");
@@ -315,7 +380,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     try {
       const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
 
-      const res = await fetchWithRetry(
+      const payload = await fetchResolvePayloadWithRetry(
         graphqlEndpoint,
         {
           method: "POST",
@@ -334,17 +399,14 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
         initialDelayMs
       );
 
-      if (!res.ok) {
-        throw new Error(`Gateway GQL error ${res.status}`);
-      }
-
-      const payload = await res.json();
-
-      if (payload.errors?.length) {
-        throw new Error(payload.errors[0]?.message || "GraphQL error");
-      }
-
-      const resp = payload.data?.resolveViewerEndpoint;
+      const resp = (payload as { data?: { resolveViewerEndpoint?: unknown } }).data
+        ?.resolveViewerEndpoint as
+        | {
+            primary?: ContentEndpoints["primary"];
+            fallbacks?: ContentEndpoints["fallbacks"];
+            metadata?: ContentEndpoints["metadata"];
+          }
+        | undefined;
       const primary = resp?.primary;
       const fallbacks = Array.isArray(resp?.fallbacks) ? resp.fallbacks : [];
 

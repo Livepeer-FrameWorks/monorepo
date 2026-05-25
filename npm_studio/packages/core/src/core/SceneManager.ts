@@ -69,6 +69,17 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   private frameProcessors: Map<string, any> = new Map();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private frameReaders: Map<string, ReadableStreamDefaultReader<any>> = new Map();
+  private frameFallbacks: Map<
+    string,
+    {
+      video: HTMLVideoElement;
+      stopped: boolean;
+      timer: number | null;
+      frameCallback: number | null;
+      busy: boolean;
+      canvas: HTMLCanvasElement | null;
+    }
+  > = new Map();
 
   // Output
   private outputCanvas: HTMLCanvasElement | null = null;
@@ -810,9 +821,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const MediaStreamTrackProcessorCtor = (globalThis as any).MediaStreamTrackProcessor;
     if (!MediaStreamTrackProcessorCtor) {
-      console.warn(
-        "[SceneManager] MediaStreamTrackProcessor not available, compositor will not work"
-      );
+      this.bindSourceViaVideoElement(sourceId, stream);
       return;
     }
 
@@ -847,6 +856,84 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     readFrame();
   }
 
+  private bindSourceViaVideoElement(sourceId: string, stream: MediaStream): void {
+    this.unbindSource(sourceId);
+
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+
+    const fallback = {
+      video,
+      stopped: false,
+      timer: null as number | null,
+      frameCallback: null as number | null,
+      busy: false,
+      canvas: null as HTMLCanvasElement | null,
+    };
+    this.frameFallbacks.set(sourceId, fallback);
+
+    const intervalMs = Math.max(16, Math.floor(1000 / Math.max(1, this.config.frameRate)));
+    let pushFrame: () => Promise<void>;
+
+    const schedule = () => {
+      if (fallback.stopped) return;
+      const rvfc = (video as any).requestVideoFrameCallback;
+      if (typeof rvfc === "function") {
+        fallback.frameCallback = rvfc.call(video, () => {
+          fallback.frameCallback = null;
+          void pushFrame();
+        });
+      } else {
+        fallback.timer = window.setTimeout(() => {
+          fallback.timer = null;
+          void pushFrame();
+        }, intervalMs);
+      }
+    };
+
+    const makeBitmap = async (): Promise<ImageBitmap | null> => {
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
+      if (video.videoWidth <= 0 || video.videoHeight <= 0) return null;
+      try {
+        return await createImageBitmap(video);
+      } catch {
+        const canvas = fallback.canvas ?? document.createElement("canvas");
+        fallback.canvas = canvas;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return await createImageBitmap(canvas);
+      }
+    };
+
+    pushFrame = async () => {
+      if (fallback.stopped) return;
+      if (!fallback.busy) {
+        fallback.busy = true;
+        try {
+          const bitmap = await makeBitmap();
+          if (bitmap) {
+            this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
+          }
+        } catch (error) {
+          console.warn("[SceneManager] Video-element frame extraction failed:", error);
+        } finally {
+          fallback.busy = false;
+        }
+      }
+      schedule();
+    };
+
+    void video.play().catch((error) => {
+      console.warn("[SceneManager] Video-element source playback failed:", error);
+    });
+    schedule();
+  }
+
   /**
    * Unbind a source from the compositor
    */
@@ -861,6 +948,21 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     const processor = this.frameProcessors.get(sourceId);
     if (processor) {
       this.frameProcessors.delete(sourceId);
+    }
+
+    const fallback = this.frameFallbacks.get(sourceId);
+    if (fallback) {
+      fallback.stopped = true;
+      if (fallback.timer !== null) {
+        clearTimeout(fallback.timer);
+      }
+      const cancelRVFC = (fallback.video as any).cancelVideoFrameCallback;
+      if (fallback.frameCallback !== null && typeof cancelRVFC === "function") {
+        cancelRVFC.call(fallback.video, fallback.frameCallback);
+      }
+      fallback.video.pause();
+      fallback.video.srcObject = null;
+      this.frameFallbacks.delete(sourceId);
     }
   }
 

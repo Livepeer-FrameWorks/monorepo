@@ -563,6 +563,8 @@ export interface WebCodecsPlayerOptions {
    * - 'native': Always use MediaStreamTrackGenerator (browser default)
    */
   renderMode?: RenderMode;
+  /** Override decoder worker URL for hosts that serve package assets from a custom path. */
+  workerUrl?: string | URL;
   /** Live catch-up tuning for Mist fast-forward behavior */
   liveCatchup?:
     | boolean

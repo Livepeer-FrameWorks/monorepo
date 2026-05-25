@@ -174,6 +174,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private isDestroyed = false;
   private debugging = false;
   private verboseDebugging = false;
+  private workerUrl: string | URL | null = null;
   private streamType: "live" | "vod" = "live";
   /** Payload format: 'avcc' for ws/video/raw, 'annexb' for ws/video/h264 */
   private payloadFormat: "avcc" | "annexb" = "avcc";
@@ -501,6 +502,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     const wcOptions = options as PlayerOptions & WebCodecsPlayerOptions;
     this.debugging = wcOptions.debug ?? wcOptions.devMode ?? false;
     this.verboseDebugging = wcOptions.verboseDebug ?? false;
+    this.workerUrl = wcOptions.workerUrl ?? null;
 
     // Determine stream type from server API (streamInfo.type), not MIME (source.type)
     this.streamType = isLiveStreamType(streamInfo?.type) ? "live" : "vod";
@@ -957,14 +959,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   // ============================================================================
 
   /**
-   * Try to load a worker from a URL with proper async error detection.
+   * Try to load a worker with proper async error detection.
    * new Worker() doesn't throw on invalid URLs - it fires error events async.
    */
-  private tryLoadWorker(url: string): Promise<Worker> {
+  private tryLoadWorker(createWorker: () => Worker): Promise<Worker> {
     return new Promise((resolve, reject) => {
       let worker: Worker;
       try {
-        worker = new Worker(url, { type: "module" });
+        worker = createWorker();
       } catch (e) {
         reject(e);
         return;
@@ -987,40 +989,62 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         resolve(worker);
       };
 
-      // Timeout: if no error after 500ms, assume loaded (worker may not send immediate message)
+      // Require an actual worker message; HTML fallbacks can fire their MIME error
+      // after construction, so a quiet timeout is not proof that the worker loaded.
       const timeout = setTimeout(() => {
         cleanup();
-        resolve(worker);
-      }, 500);
+        worker.terminate();
+        reject(new Error("Worker did not acknowledge startup"));
+      }, 2000);
 
       worker.addEventListener("error", onError);
       worker.addEventListener("message", onMessage);
+      worker.postMessage({ type: "debugging", value: true, uid: -1 });
     });
   }
 
   private async initializeWorker(): Promise<void> {
-    // Worker paths to try in order:
-    // 1. Dev server path (Vite plugin serves /workers/* from source)
-    // 2. Production npm package path (relative to built module)
-    const paths = ["/workers/decoder.worker.js"];
+    const candidates: Array<{ label: string; createWorker: () => Worker }> = [];
 
-    // Add production path (may fail in dev but that's ok)
-    try {
-      paths.push(new URL("../workers/decoder.worker.js", import.meta.url).href);
-    } catch {
-      // import.meta.url may not work in all environments
+    if (this.workerUrl) {
+      const url = this.workerUrl;
+      candidates.push({
+        label: String(url),
+        createWorker: () => new Worker(url, { type: "module" }),
+      });
     }
 
+    candidates.push(
+      {
+        label: "source worker",
+        createWorker: () =>
+          new Worker(new URL("./worker/decoder.worker.ts", import.meta.url), {
+            type: "module",
+          }),
+      },
+      {
+        label: "package dist worker",
+        createWorker: () =>
+          new Worker(new URL("../../../workers/decoder.worker.js", import.meta.url), {
+            type: "module",
+          }),
+      },
+      {
+        label: "/workers/decoder.worker.js",
+        createWorker: () => new Worker("/workers/decoder.worker.js", { type: "module" }),
+      }
+    );
+
     let lastError: Error | null = null;
-    for (const path of paths) {
+    for (const candidate of candidates) {
       try {
-        this.log(`Trying worker path: ${path}`);
-        this.worker = await this.tryLoadWorker(path);
-        this.log(`Worker loaded from: ${path}`);
+        this.log(`Trying worker path: ${candidate.label}`);
+        this.worker = await this.tryLoadWorker(candidate.createWorker);
+        this.log(`Worker loaded from: ${candidate.label}`);
         break;
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e));
-        this.log(`Worker path failed: ${path} - ${lastError.message}`, "warn");
+        this.log(`Worker path failed: ${candidate.label} - ${lastError.message}`, "warn");
       }
     }
 
@@ -2039,29 +2063,43 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   // ============================================================================
 
   async play(): Promise<void> {
+    if (this.isDestroyed) return;
+
     this._isPaused = false;
     this.wsController?.play();
     this.metadataWs?.notifyPlay();
-    this.sendToWorker({
-      type: "frametiming",
-      action: "setPaused",
-      paused: false,
-      uid: this.workerUidCounter++,
-    });
+    try {
+      await this.setFrameTimingPaused(false);
+    } catch (error) {
+      if (this.isDestroyed) return;
+      throw error;
+    }
+    if (this.isDestroyed) return;
     await this.videoElement?.play();
   }
 
   pause(): void {
+    if (this.isDestroyed) return;
+
     this._isPaused = true;
     this.wsController?.hold();
     this.metadataWs?.notifyPause();
-    this.sendToWorker({
-      type: "frametiming",
-      action: "setPaused",
-      paused: true,
-      uid: this.workerUidCounter++,
+    void this.setFrameTimingPaused(true).catch((error) => {
+      if (!this.isDestroyed) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`Frame timing pause update failed: ${message}`, "warn");
+      }
     });
     this.videoElement?.pause();
+  }
+
+  private async setFrameTimingPaused(paused: boolean): Promise<void> {
+    await this.sendToWorker({
+      type: "frametiming",
+      action: "setPaused",
+      paused,
+      uid: this.workerUidCounter++,
+    });
   }
 
   private finishStepPause(): void {

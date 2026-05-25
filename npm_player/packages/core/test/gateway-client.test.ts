@@ -415,6 +415,50 @@ describe("GatewayClient", () => {
       expect(callCount).toBe(2);
       client.destroy();
     });
+
+    it("retries on transient GraphQL availability errors", async () => {
+      let callCount = 0;
+      globalThis.fetch = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            ok: true,
+            json: async () => ({
+              errors: [
+                {
+                  message: "service temporarily unavailable",
+                  extensions: { code: "UNAVAILABLE" },
+                },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => makeGqlResponse({ nodeId: "n1" }) };
+      }) as unknown as typeof globalThis.fetch;
+
+      const client = new GatewayClient(makeConfig({ maxRetries: 2 }));
+      const result = await client.resolve();
+      expect(result.primary).toEqual({ nodeId: "n1" });
+      expect(callCount).toBe(2);
+      client.destroy();
+    });
+
+    it("retries on transient HTTP gateway errors", async () => {
+      let callCount = 0;
+      globalThis.fetch = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { ok: false, status: 503, json: async () => ({}) };
+        }
+        return { ok: true, json: async () => makeGqlResponse({ nodeId: "n1" }) };
+      }) as unknown as typeof globalThis.fetch;
+
+      const client = new GatewayClient(makeConfig({ maxRetries: 2 }));
+      const result = await client.resolve();
+      expect(result.primary).toEqual({ nodeId: "n1" });
+      expect(callCount).toBe(2);
+      client.destroy();
+    });
   });
 
   // ===========================================================================
