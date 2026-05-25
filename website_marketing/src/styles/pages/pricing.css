@@ -201,6 +201,35 @@
     margin-top: clamp(0.35rem, 0.8vw, 0.6rem);
     display: flex;
     align-items: flex-start;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .pricing-tier__actions > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .pricing-tier__actions .marketing-cta-cluster {
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .pricing-tier__actions .marketing-cta-cluster > * {
+    flex: 1 1 min(13rem, 100%);
+    min-width: 0;
+  }
+  .pricing-tier__actions .marketing-cta__button,
+  .pricing-tier__actions .cta-button {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+  }
+  .pricing-tier__actions .marketing-cta__link {
+    min-width: 0;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
   }
   .pricing-tier__details {
     display: flex;

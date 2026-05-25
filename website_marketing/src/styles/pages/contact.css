@@ -296,10 +296,19 @@
   }
 
   .contact-turnstile__widget {
-    display: inline-flex;
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
     padding: clamp(0.75rem, 1vw, 0.9rem);
     border-radius: 12px;
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
     background: rgba(var(--fx-rgb-14-18-30) / 0.75);
+  }
+
+  .contact-turnstile__widget > * {
+    flex: 0 0 auto;
   }
 }

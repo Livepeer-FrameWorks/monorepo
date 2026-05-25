@@ -38,7 +38,6 @@ import {
   GlobeAltIcon,
   CloudIcon,
   BuildingOfficeIcon,
-  ArrowTopRightOnSquareIcon,
   BanknotesIcon,
   CpuChipIcon,
 } from "@heroicons/react/24/outline";
@@ -873,18 +872,17 @@ const Pricing = () => {
             primaryAction={{
               label: "Start Free",
               href: config.appUrl,
-              icon: ArrowTopRightOnSquareIcon,
+              external: true,
             }}
             secondaryAction={[
               {
-                label: "Talk to our team",
-                to: "/contact",
+                label: "Browse Docs",
+                href: config.docsUrl,
+                external: true,
               },
               {
-                label: "View Open Source",
-                href: config.githubUrl,
-                icon: "auto",
-                external: true,
+                label: "Talk to our team",
+                to: "/contact",
               },
             ]}
           />

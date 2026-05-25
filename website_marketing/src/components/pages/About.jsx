@@ -580,14 +580,13 @@ const About = () => {
             }}
             secondaryAction={[
               {
-                label: "Talk to our team",
-                to: "/contact",
+                label: "Browse Docs",
+                href: config.docsUrl,
+                external: true,
               },
               {
-                label: "Source on GitHub",
-                href: config.githubUrl,
-                icon: "auto",
-                external: true,
+                label: "Talk to our team",
+                to: "/contact",
               },
             ]}
           />

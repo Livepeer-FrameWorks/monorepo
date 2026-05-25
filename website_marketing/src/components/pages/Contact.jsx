@@ -601,16 +601,13 @@ const Contact = () => {
           }}
           secondaryAction={[
             {
-              label: "Join the Discord",
-              href: config.discordUrl,
-              icon: "auto",
+              label: "Browse Docs",
+              href: config.docsUrl,
               external: true,
             },
             {
-              label: "Browse Docs",
-              href: `${config.appUrl.replace(/\/+$/, "")}/developer/api`,
-              icon: "auto",
-              external: true,
+              label: "Get in touch",
+              to: "/contact",
             },
           ]}
         />

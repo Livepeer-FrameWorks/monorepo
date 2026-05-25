@@ -831,20 +831,13 @@ const LandingPage = () => {
               }}
               secondaryAction={[
                 {
+                  label: "Browse Docs",
+                  href: config.docsUrl,
+                  external: true,
+                },
+                {
                   label: "Talk to our team",
                   to: "/contact",
-                },
-                {
-                  label: "Source on GitHub",
-                  href: config.githubUrl,
-                  icon: "auto",
-                  external: true,
-                },
-                {
-                  label: "Ask Skipper",
-                  href: `${config.appUrl}/skipper`,
-                  icon: "auto",
-                  external: true,
                 },
               ]}
             />

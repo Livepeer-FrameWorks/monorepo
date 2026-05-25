@@ -2566,13 +2566,16 @@
   .marketing-comparison-card__price {
     display: flex;
     align-items: baseline;
+    flex-wrap: wrap;
     gap: 0.45rem;
+    min-width: 0;
   }
 
   .marketing-comparison-card__amount {
     font-size: clamp(2.2rem, 3.2vw, 2.8rem);
     font-weight: 700;
     letter-spacing: -0.03em;
+    overflow-wrap: anywhere;
     background: linear-gradient(95deg, hsl(var(--brand-cyan)), hsl(var(--brand-green)));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -2623,6 +2626,28 @@
     flex-direction: column;
     gap: clamp(0.45rem, 0.8vw, 0.6rem);
     margin-top: auto;
+    min-width: 0;
+  }
+
+  .marketing-comparison-card__footer > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .marketing-comparison-card__footer .marketing-cta__button,
+  .marketing-comparison-card__footer .cta-button {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .marketing-comparison-card__footer .marketing-cta__link {
+    min-width: 0;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
   }
 
   .marketing-comparison-card__note {

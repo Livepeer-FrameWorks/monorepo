@@ -268,7 +268,7 @@
 
   .marketing-cta--band .marketing-cta__action-cell--slab {
     flex: 1 1 0;
-    overflow: hidden;
+    min-width: 0;
   }
 
   .marketing-cta--band .marketing-cta__action-cell--slab + .marketing-cta__action-cell--slab {
@@ -286,8 +286,16 @@
     transform: none !important;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    white-space: nowrap;
+    white-space: normal;
+    text-align: center;
     font-size: clamp(0.72rem, 1vw, 0.82rem);
+  }
+
+  .marketing-cta--band .marketing-cta__button--slab .marketing-cta__link {
+    min-width: 0;
+    justify-content: center;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
   }
 
   .marketing-cta--band .marketing-cta__action-cell--slab:first-child .marketing-cta__button--slab {
@@ -328,6 +336,7 @@
 
     .marketing-cta--band .marketing-cta__action-cell--slab {
       width: 100%;
+      flex-basis: auto;
     }
 
     .marketing-cta--band .marketing-cta__action-cell--slab + .marketing-cta__action-cell--slab {

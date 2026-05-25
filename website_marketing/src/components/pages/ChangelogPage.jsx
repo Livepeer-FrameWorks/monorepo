@@ -103,8 +103,9 @@ const ChangelogPage = () => {
           }}
           secondaryAction={[
             {
-              label: "Read the docs",
-              to: "/docs",
+              label: "Browse Docs",
+              href: config.docsUrl,
+              external: true,
             },
             {
               label: "Talk to our team",
