@@ -128,7 +128,6 @@ func main() {
 						default:
 						}
 					}
-					err = ctx.Err()
 				case <-timer.C:
 				}
 				if ctx.Err() != nil {
