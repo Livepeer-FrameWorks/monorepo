@@ -49,6 +49,9 @@
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
+- name: Apply caddy bootstrap
+  ansible.builtin.import_tasks: install-native-linux-caddy.yml
+
 - name: Apply helmsman install sub-role
   ansible.builtin.include_role:
     name: frameworks.infra.helmsman
@@ -198,9 +201,6 @@
   when:
     - not ansible_check_mode
     - edge_grpc_ca_bundle_stat.stat.exists | default(false)
-
-- name: Apply caddy bootstrap
-  ansible.builtin.import_tasks: install-native-linux-caddy.yml
 
 - name: Apply vmagent edge telemetry (when enabled)
   ansible.builtin.import_tasks: install-native-linux-vmagent.yml

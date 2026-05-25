@@ -40,7 +40,7 @@ Identical re-deliveries from Mist hash to the same id and collapse on the WAL fi
 
 `api_sidecar/internal/storage/trigger_wal.go`.
 
-- Directory: `FRAMEWORKS_TRIGGER_WAL_DIR`, falling back to `$XDG_CACHE_HOME/frameworks/trigger-wal` or `/tmp/frameworks-trigger-wal`.
+- Directory: `FRAMEWORKS_TRIGGER_WAL_DIR`; native edge provisioning sets it to `/var/lib/frameworks/helmsman/trigger-wal`. If unset, Helmsman falls back to `$XDG_CACHE_HOME/frameworks/trigger-wal` or `/tmp/frameworks-trigger-wal`.
 - One file per durable trigger: `<received_at_ms>-<source_event_id>.pb` containing the marshaled `pb.MistTrigger`.
 - Writes are atomic: write to `.tmp`, `fsync`, `rename` into place, then fsync the WAL directory. Append returns only after the file and directory entry are durable.
 - `Ack(source_event_id)` deletes the file (glob-on-id so any `received_at_ms` prefix works).

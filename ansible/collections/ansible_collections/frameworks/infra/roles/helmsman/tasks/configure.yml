@@ -1,4 +1,17 @@
 ---
+- name: Resolve Helmsman trigger WAL directory
+  ansible.builtin.set_fact:
+    helmsman_effective_trigger_wal_dir: >-
+      {{
+        helmsman_trigger_wal_dir
+        if helmsman_trigger_wal_dir | default('', true) | length > 0
+        else (
+          (helmsman_darwin_conf_dir | default(helmsman_darwin_system_conf_dir)) ~ '/helmsman/trigger-wal'
+          if ansible_facts.os_family == 'Darwin'
+          else helmsman_state_dir ~ '/trigger-wal'
+        )
+      }}
+
 - name: Build helmsman env map
   ansible.builtin.set_fact:
     helmsman_env_full: >-
@@ -13,6 +26,7 @@
         'MISTSERVER_URL': 'http://' ~ helmsman_mist_api_upstream,
         'MISTSERVER_HTTP_URL': 'http://' ~ helmsman_mist_http_upstream,
         'HELMSMAN_WEBHOOK_URL': 'http://' ~ helmsman_webhook_upstream,
+        'FRAMEWORKS_TRIGGER_WAL_DIR': helmsman_effective_trigger_wal_dir,
         'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
         'CADDY_CONFIG_PATH': helmsman_caddy_config_path,
         'MIST_API_USERNAME': helmsman_mist_api_user,

@@ -37,6 +37,8 @@ helmsman_env_file: /etc/frameworks/helmsman.env
 helmsman_systemd_name: frameworks-helmsman
 helmsman_unit_path: "/etc/systemd/system/{{ helmsman_systemd_name }}.service"
 helmsman_port: 18007
+helmsman_state_dir: /var/lib/frameworks/helmsman
+helmsman_trigger_wal_dir: ""
 
 # Set to true when helmsman_artifact_url ends with .zip; the role installs
 # unzip as a prereq before unarchive. Default auto-derives from the URL.

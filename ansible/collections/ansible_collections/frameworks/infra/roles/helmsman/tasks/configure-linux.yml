@@ -1,4 +1,12 @@
 ---
+- name: Ensure trigger WAL directory
+  ansible.builtin.file:
+    path: "{{ helmsman_effective_trigger_wal_dir }}"
+    state: directory
+    owner: "{{ helmsman_user }}"
+    group: "{{ helmsman_group }}"
+    mode: "0700"
+
 - name: Render env file
   ansible.builtin.copy:
     dest: "{{ helmsman_env_file }}"

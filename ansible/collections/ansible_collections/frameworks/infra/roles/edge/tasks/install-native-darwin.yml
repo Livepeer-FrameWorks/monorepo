@@ -103,6 +103,9 @@
     mistserver_api_password: "{{ edge_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
+- name: Apply caddy bootstrap (darwin)
+  ansible.builtin.import_tasks: install-native-darwin-caddy.yml
+
 - name: Apply helmsman install sub-role (darwin)
   ansible.builtin.include_role:
     name: frameworks.infra.helmsman
@@ -256,6 +259,3 @@
       HELMSMAN_TLS_CERT_PATH: "{{ edge_darwin_conf_dir }}/certs/cert.pem"
       HELMSMAN_TLS_KEY_PATH: "{{ edge_darwin_conf_dir }}/certs/key.pem"
     helmsman_darwin_domain: "{{ edge_darwin_domain }}"
-
-- name: Apply caddy bootstrap (darwin)
-  ansible.builtin.import_tasks: install-native-darwin-caddy.yml
