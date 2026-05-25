@@ -303,6 +303,44 @@ func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
 	}
 }
 
+func TestGetGeographicDistributionEmptyKnownGeo(t *testing.T) {
+	db, server, mock := newLiveUsageSummaryServer(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT country_code, uniqCombinedMerge\(unique_viewers_state\) as cnt[\s\S]*FROM periscope\.viewer_hours_hourly`).
+		WillReturnRows(sqlmock.NewRows([]string{"country_code", "cnt"}))
+	mock.ExpectQuery(`SELECT ifNull\(sum\(cnt\), 0\)[\s\S]*FROM \([\s\S]*FROM periscope\.viewer_hours_hourly`).
+		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(int64(0)))
+	mock.ExpectQuery(`SELECT city, country_code, uniqCombinedMerge\(unique_viewers_state\) as cnt,[\s\S]*FROM periscope\.viewer_city_hourly`).
+		WillReturnRows(sqlmock.NewRows([]string{"city", "country_code", "cnt", "lat", "lon"}))
+	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_city_hourly`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(int32(0)))
+	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqCombinedMerge\(unique_viewers_state\)[\s\S]*FROM periscope\.viewer_hours_hourly`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(int64(0), int64(0)))
+
+	resp, err := server.GetGeographicDistribution(context.Background(), &pb.GetGeographicDistributionRequest{
+		TenantId: "tenant-1",
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(time.Now().Add(-time.Hour)),
+			End:   timestamppb.New(time.Now()),
+		},
+		TopN: 10,
+	})
+	if err != nil {
+		t.Fatalf("GetGeographicDistribution: %v", err)
+	}
+	if len(resp.GetTopCountries()) != 0 || len(resp.GetTopCities()) != 0 {
+		t.Fatalf("expected empty known-geo distribution, got countries=%d cities=%d", len(resp.GetTopCountries()), len(resp.GetTopCities()))
+	}
+	if resp.GetTotalViewers() != 0 || resp.GetUniqueCountries() != 0 || resp.GetUniqueCities() != 0 {
+		t.Fatalf("expected zero counts, got total=%d countries=%d cities=%d", resp.GetTotalViewers(), resp.GetUniqueCountries(), resp.GetUniqueCities())
+	}
+
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
 func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))

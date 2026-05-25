@@ -1249,24 +1249,31 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		var countryCode string
 		var count int64
 		if scanErr := countryRows.Scan(&countryCode, &count); scanErr != nil {
-			continue
+			return nil, wrapClickhouseError(scanErr, "database error (countries)")
 		}
 		topCountries = append(topCountries, &pb.CountryMetric{
 			CountryCode: countryCode,
 			ViewerCount: int32(count),
 		})
 	}
+	if err := countryRows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error (countries)")
+	}
 
 	totalQuery := fmt.Sprintf(`
-		SELECT sum(cnt) FROM (
+		SELECT ifNull(sum(cnt), 0) FROM (
 			SELECT uniqCombinedMerge(unique_viewers_state) as cnt
 			FROM periscope.viewer_hours_hourly
 			%s AND country_code != ''
 			GROUP BY country_code
 		)
 	`, whereClause)
-	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
+	var totalViewersForPercentRow sql.NullInt64
+	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercentRow); queryErr != nil {
 		return nil, wrapClickhouseError(queryErr, "database error (countries)")
+	}
+	if totalViewersForPercentRow.Valid {
+		totalViewersForPercent = totalViewersForPercentRow.Int64
 	}
 
 	// Calculate percentages for countries
@@ -1280,7 +1287,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	// latitude/longitude are scalar in the rollup (not aggregate states).
 	cityQuery := fmt.Sprintf(`
 		SELECT city, country_code, uniqCombinedMerge(unique_viewers_state) as cnt,
-		       any(latitude) as lat, any(longitude) as lon
+		       ifNull(any(latitude), 0) as lat, ifNull(any(longitude), 0) as lon
 		FROM periscope.viewer_city_hourly
 		%s AND city != ''
 		GROUP BY city, country_code
@@ -1300,7 +1307,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		var count int64
 		var lat, lon float64
 		if err := cityRows.Scan(&city, &countryCode, &count, &lat, &lon); err != nil {
-			continue
+			return nil, wrapClickhouseError(err, "database error (cities)")
 		}
 		percentage := float32(0)
 		if totalViewersForPercent > 0 {
@@ -1314,6 +1321,9 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 			Latitude:    lat,
 			Longitude:   lon,
 		})
+	}
+	if err := cityRows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error (cities)")
 	}
 
 	// Unique cities from MV (city + country)
