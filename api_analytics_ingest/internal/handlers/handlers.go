@@ -3683,9 +3683,67 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 	return nil
 }
 
+type apiRequestBatchAuditSummary struct {
+	SourceNode      string         `json:"source_node"`
+	AggregateCount  int            `json:"aggregate_count"`
+	RequestCount    uint64         `json:"request_count"`
+	ErrorCount      uint64         `json:"error_count"`
+	TotalDurationMS uint64         `json:"total_duration_ms"`
+	TotalComplexity uint64         `json:"total_complexity"`
+	UserHashCount   int            `json:"user_hash_count"`
+	TokenHashCount  int            `json:"token_hash_count"`
+	AuthTypes       map[string]int `json:"auth_types"`
+	OperationTypes  map[string]int `json:"operation_types"`
+}
+
+func newAPIRequestBatchAuditSummary(sourceNode string) *apiRequestBatchAuditSummary {
+	return &apiRequestBatchAuditSummary{
+		SourceNode:     sourceNode,
+		AuthTypes:      map[string]int{},
+		OperationTypes: map[string]int{},
+	}
+}
+
+func (s *apiRequestBatchAuditSummary) add(aggMap map[string]interface{}) {
+	s.AggregateCount++
+	s.RequestCount += getUint64FromMap(aggMap, "request_count")
+	s.ErrorCount += getUint64FromMap(aggMap, "error_count")
+	s.TotalDurationMS += getUint64FromMap(aggMap, "total_duration_ms")
+	s.TotalComplexity += getUint64FromMap(aggMap, "total_complexity")
+	s.UserHashCount += len(getUint64SliceFromMap(aggMap, "user_hashes"))
+	s.TokenHashCount += len(getUint64SliceFromMap(aggMap, "token_hashes"))
+	if authType := getStringFromMap(aggMap, "auth_type"); authType != "" {
+		s.AuthTypes[authType]++
+	}
+	if operationType := getStringFromMap(aggMap, "operation_type"); operationType != "" {
+		s.OperationTypes[operationType]++
+	}
+}
+
 func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Context, event kafka.ServiceEvent, aggregates []interface{}, sourceNode string, batchTimestamp time.Time) error {
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "attempt").Inc()
+	}
+
+	summaries := map[uuid.UUID]*apiRequestBatchAuditSummary{}
+	for _, rawAgg := range aggregates {
+		aggMap, ok := rawAgg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tenantID := parseUUID(getStringFromMap(aggMap, "tenant_id"))
+		if tenantID == uuid.Nil {
+			continue
+		}
+		summary := summaries[tenantID]
+		if summary == nil {
+			summary = newAPIRequestBatchAuditSummary(sourceNode)
+			summaries[tenantID] = summary
+		}
+		summary.add(aggMap)
+	}
+	if len(summaries) == 0 {
+		return nil
 	}
 
 	env := serviceEnvelopeColumns(event)
@@ -3702,39 +3760,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 	}
 	defer closeClickHouseBatch(chBatch)
 
-	rowCount := 0
-	for _, rawAgg := range aggregates {
-		aggMap, ok := rawAgg.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tenantID := parseUUID(getStringFromMap(aggMap, "tenant_id"))
-		if tenantID == uuid.Nil {
-			continue
-		}
-
-		aggTimestamp := batchTimestamp
-		if ts, ok := getInt64FromMap(aggMap, "timestamp"); ok {
-			aggTimestamp = time.Unix(ts, 0)
-		}
-		userHashes := getUint64SliceFromMap(aggMap, "user_hashes")
-		tokenHashes := getUint64SliceFromMap(aggMap, "token_hashes")
-
-		details := map[string]interface{}{
-			"source_node":       sourceNode,
-			"auth_type":         getStringFromMap(aggMap, "auth_type"),
-			"operation_name":    getStringFromMap(aggMap, "operation_name"),
-			"operation_type":    getStringFromMap(aggMap, "operation_type"),
-			"request_count":     getUint64FromMap(aggMap, "request_count"),
-			"error_count":       getUint64FromMap(aggMap, "error_count"),
-			"total_duration_ms": getUint64FromMap(aggMap, "total_duration_ms"),
-			"total_complexity":  getUint64FromMap(aggMap, "total_complexity"),
-			"user_hash_count":   len(userHashes),
-			"token_hash_count":  len(tokenHashes),
-		}
-
-		detailsJSON, err := json.Marshal(details)
+	for tenantID, summary := range summaries {
+		detailsJSON, err := json.Marshal(summary)
 		if err != nil {
 			if h.metrics != nil {
 				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
@@ -3751,7 +3778,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			nilIfEmptyString(event.ResourceType),
 			nilIfEmptyString(event.ResourceID),
 			string(detailsJSON),
-			aggTimestamp,
+			batchTimestamp,
 			event.SourceClusterID,
 			env.sourceRegion,
 			env.streamOriginRegion,
@@ -3763,11 +3790,6 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			}
 			return err
 		}
-		rowCount++
-	}
-
-	if rowCount == 0 {
-		return nil
 	}
 
 	if err := chBatch.Send(); err != nil {
