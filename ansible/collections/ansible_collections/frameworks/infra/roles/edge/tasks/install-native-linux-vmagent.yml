@@ -65,6 +65,13 @@
     creates: "{{ edge_vmagent_install_sentinel }}"
   when: not ansible_check_mode
 
+- name: Set edge vmagent bearer token argument
+  ansible.builtin.set_fact:
+    edge_vmagent_bearer_token_arg: >-
+      {{ ' -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token'
+         if edge_telemetry_token | length > 0
+         else '' }}
+
 - name: Render vmagent systemd unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/frameworks-vmagent-edge.service
@@ -79,7 +86,10 @@
       User=frameworks
       Group=frameworks
       WorkingDirectory=/opt/frameworks/vmagent-edge
-      ExecStart=/opt/frameworks/vmagent-edge/vmagent -httpListenAddr=:8430 -promscrape.config=/etc/frameworks/vmagent-edge.yml -remoteWrite.url={{ edge_telemetry_url }}{{ ' -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token' if edge_telemetry_token | length > 0 else '' }}
+      ExecStart=/opt/frameworks/vmagent-edge/vmagent \
+        -httpListenAddr=:8430 \
+        -promscrape.config=/etc/frameworks/vmagent-edge.yml \
+        -remoteWrite.url={{ edge_telemetry_url }}{{ edge_vmagent_bearer_token_arg }}
       Restart=always
       RestartSec=5
       LimitNOFILE=1048576
