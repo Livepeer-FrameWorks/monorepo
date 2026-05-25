@@ -660,7 +660,10 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		for k, v := range data.details {
 			details[k] = v
 		}
-		usageDetails, _ := structpb.NewStruct(details)
+		usageDetails, err := structpb.NewStruct(details)
+		if err != nil {
+			usageDetails = &structpb.Struct{}
+		}
 
 		periodStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Duration(i) * time.Hour)
 		periodEnd := periodStart.Add(time.Hour)

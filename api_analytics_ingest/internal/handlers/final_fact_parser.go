@@ -166,8 +166,8 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 		payloadRaw:          payloadRaw,
 	}
 
-	if err := h.checkViewerSessionDivergence(ctx, row); err != nil {
-		return fmt.Errorf("viewer_sessions_final divergence guardrail: %w", err)
+	if divergenceErr := h.checkViewerSessionDivergence(ctx, row); divergenceErr != nil {
+		return fmt.Errorf("viewer_sessions_final divergence guardrail: %w", divergenceErr)
 	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -275,8 +275,8 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		closedReason:        "final",
 		payloadRaw:          payloadRaw,
 	}
-	if err := h.checkStreamSessionDivergence(ctx, row); err != nil {
-		return fmt.Errorf("stream_sessions_final divergence guardrail: %w", err)
+	if divergenceErr := h.checkStreamSessionDivergence(ctx, row); divergenceErr != nil {
+		return fmt.Errorf("stream_sessions_final divergence guardrail: %w", divergenceErr)
 	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -419,8 +419,8 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 		clusterID:     clusterID,
 		mediaSeconds:  rawDurationSeconds,
 	}
-	if err := h.checkProcessingSegmentDivergence(ctx, row); err != nil {
-		return fmt.Errorf("processing_segments_final divergence guardrail: %w", err)
+	if divergenceErr := h.checkProcessingSegmentDivergence(ctx, row); divergenceErr != nil {
+		return fmt.Errorf("processing_segments_final divergence guardrail: %w", divergenceErr)
 	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -535,8 +535,8 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate prior viewer session projection: %w", err)
+		if iterErr := rows.Err(); iterErr != nil {
+			return fmt.Errorf("iterate prior viewer session projection: %w", iterErr)
 		}
 		return nil
 	}
@@ -635,8 +635,8 @@ func (h *AnalyticsHandler) checkStreamSessionDivergence(ctx context.Context, row
 	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate prior stream session projection: %w", err)
+		if iterErr := rows.Err(); iterErr != nil {
+			return fmt.Errorf("iterate prior stream session projection: %w", iterErr)
 		}
 		return nil
 	}

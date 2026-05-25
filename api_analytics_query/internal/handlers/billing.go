@@ -22,6 +22,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const gibibyte = 1024 * 1024 * 1024
+
 // sanitizeFloat returns 0.0 if f is NaN or Inf, otherwise returns f
 func sanitizeFloat(f float64) float64 {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -1062,9 +1064,9 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 		case "duration_seconds":
 			return []projectionAdjustmentDelta{{usageType: "delivered_minutes", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / 60.0}}, nil
 		case "uploaded_bytes":
-			return []projectionAdjustmentDelta{{usageType: "ingress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / math.Pow(1024, 3)}}, nil
+			return []projectionAdjustmentDelta{{usageType: "ingress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / gibibyte}}, nil
 		case "downloaded_bytes":
-			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / math.Pow(1024, 3)}}, nil
+			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / gibibyte}}, nil
 		case "cluster_id":
 			priorMap, priorOK := priorValue.(map[string]any)
 			newMap, newOK := newValue.(map[string]any)
@@ -1075,11 +1077,11 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			newCluster := stringFromJSONMap(newMap, "cluster_id")
 			return []projectionAdjustmentDelta{
 				{usageType: "delivered_minutes", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "duration_seconds") / 60.0},
-				{usageType: "ingress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "uploaded_bytes") / math.Pow(1024, 3)},
-				{usageType: "egress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "downloaded_bytes") / math.Pow(1024, 3)},
+				{usageType: "ingress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "uploaded_bytes") / gibibyte},
+				{usageType: "egress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "downloaded_bytes") / gibibyte},
 				{usageType: "delivered_minutes", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "duration_seconds") / 60.0},
-				{usageType: "ingress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "uploaded_bytes") / math.Pow(1024, 3)},
-				{usageType: "egress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "downloaded_bytes") / math.Pow(1024, 3)},
+				{usageType: "ingress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "uploaded_bytes") / gibibyte},
+				{usageType: "egress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "downloaded_bytes") / gibibyte},
 			}, nil
 		default:
 			return nil, fmt.Errorf("unsupported viewer divergence field %q", field)
@@ -1166,7 +1168,10 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 }
 
 func stringFromJSONMap(m map[string]any, key string) string {
-	v, _ := m[key].(string)
+	v, ok := m[key].(string)
+	if !ok {
+		return ""
+	}
 	return v
 }
 
@@ -1187,10 +1192,16 @@ func floatFromJSONValue(v any) float64 {
 	case uint64:
 		return float64(v)
 	case json.Number:
-		f, _ := v.Float64()
+		f, err := v.Float64()
+		if err != nil {
+			return 0
+		}
 		return f
 	case string:
-		f, _ := strconv.ParseFloat(v, 64)
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0
+		}
 		return f
 	default:
 		return 0

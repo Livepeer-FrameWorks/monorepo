@@ -519,8 +519,8 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 		a.prevBytes = totalBytes
 		a.prevFileCount = uint64(fileCount)
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("storage_gb_seconds_5m iterate: %w", err)
+	if iterErr := rows.Err(); iterErr != nil {
+		return fmt.Errorf("storage_gb_seconds_5m iterate: %w", iterErr)
 	}
 
 	// No trailing integration: without a source-time snapshot at-or-after
@@ -600,17 +600,17 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 	}
 
 	record := func(priorGBSeconds float64, priorFileCount uint64) error {
-		priorValue, err := json.Marshal(map[string]any{"gb_seconds": priorGBSeconds, "file_count": priorFileCount})
-		if err != nil {
-			return fmt.Errorf("storage_gb_seconds_5m divergence prior: %w", err)
+		priorValue, marshalErr := json.Marshal(map[string]any{"gb_seconds": priorGBSeconds, "file_count": priorFileCount})
+		if marshalErr != nil {
+			return fmt.Errorf("storage_gb_seconds_5m divergence prior: %w", marshalErr)
 		}
-		newValue, err := json.Marshal(map[string]any{"gb_seconds": gbSeconds, "file_count": fileCount})
-		if err != nil {
-			return fmt.Errorf("storage_gb_seconds_5m divergence new: %w", err)
+		newValue, marshalErr := json.Marshal(map[string]any{"gb_seconds": gbSeconds, "file_count": fileCount})
+		if marshalErr != nil {
+			return fmt.Errorf("storage_gb_seconds_5m divergence new: %w", marshalErr)
 		}
 		sourceEventID := fmt.Sprintf("storage_gb_seconds_5m:%s", string(naturalKey))
-		if err := h.recordProjectionDivergence(ctx, observedAtMS, "storage_gb_seconds_5m", "storage_gb_seconds_"+scope, "projection", string(naturalKey), string(priorValue), string(newValue), sourceEventID); err != nil {
-			return fmt.Errorf("record storage_gb_seconds_5m divergence: %w", err)
+		if recordErr := h.recordProjectionDivergence(ctx, observedAtMS, "storage_gb_seconds_5m", "storage_gb_seconds_"+scope, "projection", string(naturalKey), string(priorValue), string(newValue), sourceEventID); recordErr != nil {
+			return fmt.Errorf("record storage_gb_seconds_5m divergence: %w", recordErr)
 		}
 		return nil
 	}

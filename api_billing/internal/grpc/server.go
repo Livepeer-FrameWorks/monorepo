@@ -1705,7 +1705,10 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update subscription: %v", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read update result: %v", err)
+	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
@@ -4049,9 +4052,9 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 	// Build upsert query
 	var basePrice sql.NullString
 	if req.BasePrice != nil {
-		parsedBasePrice, err := decimal.NewFromString(*req.BasePrice)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid base_price: %v", err)
+		parsedBasePrice, parseErr := decimal.NewFromString(*req.BasePrice)
+		if parseErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid base_price: %v", parseErr)
 		}
 		basePrice = sql.NullString{String: parsedBasePrice.Round(2).StringFixed(2), Valid: true}
 	}
