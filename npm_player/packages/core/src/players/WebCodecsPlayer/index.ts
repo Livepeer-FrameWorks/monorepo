@@ -1037,26 +1037,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       });
     }
 
-    candidates.push(
-      {
-        label: "package dist worker",
-        createWorker: () =>
-          new Worker(new URL("../../../workers/decoder.worker.js", import.meta.url), {
-            type: "module",
-          }),
-      },
-      {
-        label: "source worker",
-        createWorker: () =>
-          new Worker(new URL("./worker/decoder.worker.ts", import.meta.url), {
-            type: "module",
-          }),
-      },
-      {
-        label: "/workers/decoder.worker.js",
-        createWorker: () => new Worker("/workers/decoder.worker.js", { type: "module" }),
-      }
-    );
+    candidates.push({
+      label: "default worker",
+      createWorker: () =>
+        new Worker(new URL("./worker/decoder.worker.ts", import.meta.url), {
+          type: "module",
+        }),
+    });
 
     let lastError: Error | null = null;
     for (const candidate of candidates) {

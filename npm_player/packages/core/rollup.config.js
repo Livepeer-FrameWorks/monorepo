@@ -24,6 +24,29 @@ function wasmCopyPlugin() {
   };
 }
 
+function webCodecsWorkerUrlPlugin() {
+  const sourceWorkerUrl = 'new URL("./worker/decoder.worker.ts", import.meta.url)';
+  const distWorkerUrl = 'new URL("../../../workers/decoder.worker.js", import.meta.url)';
+
+  return {
+    name: "webcodecs-worker-url",
+    renderChunk(code, chunk) {
+      if (!chunk.facadeModuleId?.endsWith("src/players/WebCodecsPlayer/index.ts")) {
+        return null;
+      }
+
+      if (!code.includes(sourceWorkerUrl)) {
+        this.error("WebCodecs worker URL rewrite target was not found in the ESM output");
+      }
+
+      return {
+        code: code.replace(sourceWorkerUrl, distWorkerUrl),
+        map: null,
+      };
+    },
+  };
+}
+
 // Auto-externalize all dependencies and peerDependencies from package.json.
 // Library ESM builds must never resolve deps to filesystem paths.
 const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
@@ -69,6 +92,7 @@ export default [
         declarationDir: undefined,
         outDir: "dist/esm",
       }),
+      webCodecsWorkerUrlPlugin(),
       wasmCopyPlugin(),
     ],
   },
