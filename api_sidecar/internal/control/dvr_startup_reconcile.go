@@ -191,6 +191,8 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 	}
 
 	// Walk the matrix.
+	untrackedNoPDTSkipped := 0
+	missingNoPDTSkipped := 0
 	for _, name := range names {
 		d := disk[name]
 		pe, pePresent := playlist[name]
@@ -274,10 +276,7 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 			// No ledger row.
 			if d.present {
 				if !pePresent || !pe.hasPDT {
-					logger.WithFields(logging.Fields{
-						"dvr_hash": dvrHash,
-						"segment":  name,
-					}).Warn("Untracked segment file with no playlist PDT timing; skipping (cannot fabricate)")
+					untrackedNoPDTSkipped++
 					continue
 				}
 				reconcileInsertAndUpload(ctx, dvrHash, name, d.path, d.size, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
@@ -285,15 +284,24 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 				// File missing AND no ledger row. Only tombstone if the
 				// playlist gives us trustworthy timing.
 				if !pePresent || !pe.hasPDT {
-					logger.WithFields(logging.Fields{
-						"dvr_hash": dvrHash,
-						"segment":  name,
-					}).Warn("Missing segment with no playlist PDT timing; cannot create tombstone (skipping)")
+					missingNoPDTSkipped++
 					continue
 				}
 				reconcileInsertAndDrop(ctx, dvrHash, name, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
 			}
 		}
+	}
+	if untrackedNoPDTSkipped > 0 {
+		logger.WithFields(logging.Fields{
+			"dvr_hash":      dvrHash,
+			"segment_count": untrackedNoPDTSkipped,
+		}).Warn("Skipped untracked segment files with no playlist PDT timing; cannot fabricate ledger rows")
+	}
+	if missingNoPDTSkipped > 0 {
+		logger.WithFields(logging.Fields{
+			"dvr_hash":      dvrHash,
+			"segment_count": missingNoPDTSkipped,
+		}).Warn("Skipped missing segments with no playlist PDT timing; cannot create tombstones")
 	}
 	return nil
 }

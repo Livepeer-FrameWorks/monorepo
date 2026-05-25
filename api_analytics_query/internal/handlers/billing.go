@@ -157,22 +157,22 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 	rows, err := bs.clickhouse.QueryContext(context.Background(), `
 		SELECT DISTINCT tenant_id FROM (
-			SELECT tenant_id FROM periscope.viewer_sessions_final
+			SELECT toString(tenant_id) AS tenant_id FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.processing_segments_final
+			SELECT toString(tenant_id) AS tenant_id FROM periscope.processing_segments_final
 			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.stream_sessions_final
+			SELECT toString(tenant_id) AS tenant_id FROM periscope.stream_sessions_final
 			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id
+			SELECT toString(tenant_id) AS tenant_id
 			FROM (
 				SELECT
 					tenant_id, cluster_id, storage_scope,
@@ -186,12 +186,12 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.stream_runtime_5m
+			SELECT toString(tenant_id) AS tenant_id FROM periscope.stream_runtime_5m
 			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
 
-			SELECT tenant_id FROM periscope.api_usage_5m
+			SELECT toString(tenant_id) AS tenant_id FROM periscope.api_usage_5m
 			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 
 			UNION ALL
@@ -232,10 +232,10 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 
 func (bs *BillingSummarizer) getCursorTenants(ctx context.Context) ([]string, error) {
 	rows, err := bs.yugaDB.QueryContext(ctx, `
-		SELECT tenant_id
+		SELECT tenant_id::text
 		FROM periscope.billing_cursors
 		WHERE tenant_id IS NOT NULL
-		  AND tenant_id <> ''
+		  AND tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid
 		ORDER BY tenant_id
 	`)
 	if err != nil {
@@ -792,11 +792,11 @@ func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Contex
 			storage_provider_cluster_id,
 			storage_backend,
 			storage_scope,
-			sum(gb_seconds) AS gb_seconds
+			sum(gb_seconds) AS total_gb_seconds
 		FROM first_projections
-		WHERE gb_seconds != 0
 		GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
 		         storage_backend, storage_scope
+		HAVING total_gb_seconds != 0
 	`, tenantID, endTime.UnixMilli(), startTime.UnixMilli(), endTime.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("storage ledger provider usage: %w", err)

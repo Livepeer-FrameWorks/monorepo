@@ -2,11 +2,14 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -22,6 +25,32 @@ type PresignedClient struct {
 
 // ProgressCallback is called periodically during upload/download with bytes transferred
 type ProgressCallback func(bytesTransferred int64)
+
+var presignedURLPattern = regexp.MustCompile(`https?://[^\s"]+`)
+
+func sanitizePresignedRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("%s failed: %s", urlErr.Op, redactPresignedURLs(urlErr.Err.Error()))
+	}
+	return errors.New(redactPresignedURLs(err.Error()))
+}
+
+func redactPresignedURLs(text string) string {
+	return presignedURLPattern.ReplaceAllStringFunc(text, func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "[redacted-url]"
+		}
+		u.User = nil
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String() + "?[redacted]"
+	})
+}
 
 // NewPresignedClient creates a new presigned URL client for edge nodes.
 // This client contains NO credentials and cannot access S3 directly.
@@ -63,7 +92,7 @@ func (c *PresignedClient) UploadToPresignedURL(ctx context.Context, presignedURL
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("upload request failed: %w", err)
+		return fmt.Errorf("upload request failed: %w", sanitizePresignedRequestError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -106,7 +135,7 @@ func (c *PresignedClient) DownloadFromPresignedURL(ctx context.Context, presigne
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("download request failed: %w", err)
+		return 0, fmt.Errorf("download request failed: %w", sanitizePresignedRequestError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 

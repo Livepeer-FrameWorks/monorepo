@@ -67,9 +67,6 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 	if !ok {
 		return nil, fmt.Errorf("unexpected network orchestrator tenant scope type: %T", val)
 	}
-	if len(tenantIDs) == 0 {
-		return nil, fmt.Errorf("no livepeer gateway owner tenants available")
-	}
 	return tenantIDs, nil
 }
 

@@ -406,6 +406,7 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 	}
 
 	count := 0
+	skippedDVROrphans := 0
 	for _, c := range candidates {
 		if count >= r.batchSize || existing[c.hash] {
 			continue
@@ -417,10 +418,7 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		// not have a playlist or PDT timing, so it cannot reconstruct the
 		// ledger from this orphan-discovery context.
 		if c.assetType == "dvr" {
-			r.logger.WithFields(logging.Fields{
-				"artifact_hash": c.hash,
-				"node_id":       c.nodeID,
-			}).Warn("Skipping DVR orphan in generic discovery; ledger reconstruction is sidecar-owned")
+			skippedDVROrphans++
 			continue
 		}
 
@@ -477,6 +475,9 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 			"node_id":       c.nodeID,
 		}).Info("Indexed untracked edge artifact")
 		count++
+	}
+	if skippedDVROrphans > 0 {
+		r.logger.WithField("artifact_count", skippedDVROrphans).Info("Skipped DVR orphans in generic discovery; ledger reconstruction is sidecar-owned")
 	}
 	return count
 }

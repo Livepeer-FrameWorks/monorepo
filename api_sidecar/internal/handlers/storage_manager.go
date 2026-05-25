@@ -559,6 +559,10 @@ func (sm *StorageManager) checkAndManageStorage() error {
 		}
 
 		if err := sm.freezeAsset(context.Background(), candidate); err != nil {
+			if strings.Contains(err.Error(), "freeze not approved: asset_not_found") {
+				sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Warn("Skipping freeze candidate that is not cataloged")
+				continue
+			}
 			sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Error("Failed to freeze asset")
 			continue
 		}

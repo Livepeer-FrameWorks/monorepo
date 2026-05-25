@@ -3899,13 +3899,18 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	}
 
 	if err != nil {
-		logger.WithFields(logging.Fields{
+		entry := logger.WithFields(logging.Fields{
 			"asset_hash":  assetHash,
 			"asset_type":  assetType,
 			"lookup_hash": lookupHash,
 			"lookup_type": lookupType,
 			"error":       err,
-		}).Error("Asset not found in database or Commodore")
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			entry.Warn("Rejecting freeze permission for uncataloged asset")
+		} else {
+			entry.Error("Failed to resolve asset for freeze permission")
+		}
 		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,

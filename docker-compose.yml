@@ -407,6 +407,7 @@ services:
       "
       echo 'Creating Kafka topics...'
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${RAW_MIST_TRIGGERS_KAFKA_TOPIC:-analytics.raw_mist_triggers} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${SERVICE_EVENTS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic ${DECKLOG_DLQ_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
@@ -497,6 +498,7 @@ services:
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
       ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
+      DECKLOG_RAW_TRIGGERS_TOPIC: ${RAW_MIST_TRIGGERS_KAFKA_TOPIC:-analytics.raw_mist_triggers}
       PORT: ${DECKLOG_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
@@ -700,6 +702,7 @@ services:
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
       ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
+      RAW_MIST_TRIGGERS_KAFKA_TOPIC: ${RAW_MIST_TRIGGERS_KAFKA_TOPIC:-analytics.raw_mist_triggers}
       LOG_LEVEL: ${LOG_LEVEL}
       ENABLE_HEALTH_ENDPOINT: ${PERISCOPE_INGEST_ENABLE_HEALTH_ENDPOINT}
       HEALTH_PORT: ${PERISCOPE_INGEST_PORT}
@@ -1291,7 +1294,11 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:8123/ping && clickhouse-client --host localhost --port 9000 --query 'SELECT 1'",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1356,6 +1363,8 @@ services:
       SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY}
       FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:18092}
       # Database
+      # Rails prefers DATABASE_URL over POSTGRES_*; keep Chatwoot out of the platform database.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/chatwoot
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DATABASE: chatwoot
@@ -1410,6 +1419,8 @@ services:
       # Same as chatwoot main
       SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY}
       FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:18092}
+      # Rails prefers DATABASE_URL over POSTGRES_*; keep Chatwoot out of the platform database.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/chatwoot
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DATABASE: chatwoot
