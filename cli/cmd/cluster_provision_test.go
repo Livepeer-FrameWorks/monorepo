@@ -205,6 +205,34 @@ func TestBuildTaskConfigUsesFrozenReleaseVersion(t *testing.T) {
 	}
 }
 
+func TestBuildTaskConfigDoesNotUsePlatformReleaseAsInfrastructureVersion(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Channel: "v9.8.7",
+		Infrastructure: inventory.InfrastructureConfig{
+			ClickHouse: &inventory.ClickHouseConfig{
+				Enabled: true,
+				Mode:    "native",
+				Host:    "node-a",
+			},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Type:      "clickhouse",
+		ServiceID: "clickhouse",
+		Host:      "node-a",
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+	if cfg.Version != "stable" {
+		t.Fatalf("config version=%q, want release-channel placeholder for infra role resolution", cfg.Version)
+	}
+	if got := cfg.Metadata["platform_channel"]; got != "v9.8.7" {
+		t.Fatalf("platform_channel=%v, want v9.8.7", got)
+	}
+}
+
 func TestRunProvisionPhaseReportsOwnTimeout(t *testing.T) {
 	err := runProvisionPhase(context.Background(), time.Millisecond, "provision", func(ctx context.Context) error {
 		<-ctx.Done()

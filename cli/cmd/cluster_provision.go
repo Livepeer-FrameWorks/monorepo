@@ -2477,7 +2477,6 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 	if manifest != nil {
 		channel := manifest.ResolvedChannel()
-		config.Version = channel
 		config.Metadata["platform_channel"] = channel
 	}
 
@@ -2514,6 +2513,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if port, err := resolvePort(baseName, svc); err == nil && port != 0 {
 				config.Port = port
 			}
+			applyPlatformReleaseVersionDefault(&config, manifest.ResolvedChannel())
 		}
 		// Interface overrides
 		if _, iface, ok := serviceConfigForTask(manifest.Interfaces, task); ok {
@@ -2538,6 +2538,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if port, err := resolvePort(baseName, iface); err == nil && port != 0 {
 				config.Port = port
 			}
+			applyPlatformReleaseVersionDefault(&config, manifest.ResolvedChannel())
 		}
 		// Observability overrides
 		if _, obs, ok := serviceConfigForTask(manifest.Observability, task); ok {
@@ -2563,6 +2564,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if port, err := resolvePort(baseName, obs); err == nil && port != 0 {
 				config.Port = port
 			}
+			applyPlatformReleaseVersionDefault(&config, manifest.ResolvedChannel())
 		}
 		// Infrastructure overrides
 		switch task.Type {
@@ -3002,6 +3004,18 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	return config, nil
+}
+
+func applyPlatformReleaseVersionDefault(config *provisioner.ServiceConfig, platformVersion string) {
+	if config == nil {
+		return
+	}
+	switch strings.TrimSpace(config.Version) {
+	case "", "stable", "latest", "rc":
+		if trimmed := strings.TrimSpace(platformVersion); trimmed != "" {
+			config.Version = trimmed
+		}
+	}
 }
 
 func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool) error {
