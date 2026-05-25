@@ -389,8 +389,19 @@ func validateCatalogPricingRule(rule CatalogPricingRule, tierCurrency string) er
 	if ruleCurrency == "" {
 		return fmt.Errorf("pricing rule %q has no currency", rule.Meter)
 	}
-	if _, err := decimal.NewFromString(rule.UnitPrice); err != nil {
+	unitPrice, err := decimal.NewFromString(rule.UnitPrice)
+	if err != nil {
 		return fmt.Errorf("pricing rule %q unit_price %q: %w", rule.Meter, rule.UnitPrice, err)
+	}
+	if err := rating.ValidateRule(rating.Rule{
+		Meter:            rating.Meter(rule.Meter),
+		Model:            rating.Model(rule.Model),
+		Currency:         ruleCurrency,
+		IncludedQuantity: decimal.NewFromFloat(rule.IncludedQuantity),
+		UnitPrice:        unitPrice,
+		Config:           rule.Config,
+	}); err != nil {
+		return fmt.Errorf("pricing rule %q: %w", rule.Meter, err)
 	}
 	return nil
 }

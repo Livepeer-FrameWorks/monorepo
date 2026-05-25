@@ -67,6 +67,27 @@ func TestRulesFromMeteredRatesRejectsMissingUnitPrice(t *testing.T) {
 	}
 }
 
+func TestRulesFromMeteredRatesRejectsMissingModel(t *testing.T) {
+	_, err := buildMeteredRules(map[string]any{
+		"delivered_minutes": map[string]any{"unit_price": "0.00050"},
+	}, "EUR")
+	if err == nil {
+		t.Fatal("expected missing model error")
+	}
+}
+
+func TestRulesFromMeteredRatesRejectsBadCodecConfig(t *testing.T) {
+	_, err := buildMeteredRules(map[string]any{
+		"media_seconds": map[string]any{
+			"model":      string(rating.ModelCodecMultiplier),
+			"unit_price": "0.001",
+		},
+	}, "EUR")
+	if err == nil {
+		t.Fatal("expected codec_multiplier config error")
+	}
+}
+
 // expectNoHistoryRow registers a sqlmock expectation that the history
 // SELECT returns sql.ErrNoRows for the given cluster.
 func expectNoHistoryRow(mock sqlmock.Sqlmock, clusterID string) {

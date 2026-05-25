@@ -50,24 +50,12 @@ func Rate(in Input) (Result, error) {
 
 	usageLines := make([]LineItem, 0, len(in.Rules))
 	for _, rule := range in.Rules {
-		if !ValidMeter(rule.Meter) {
-			return Result{}, fmt.Errorf("rating: invalid meter %q", rule.Meter)
-		}
-		if !ValidModel(rule.Model) {
-			return Result{}, fmt.Errorf("%w: %q (meter %q)", ErrUnknownModel, rule.Model, rule.Meter)
-		}
-		if rule.Currency == "" {
-			return Result{}, fmt.Errorf("rating: rule for meter %q has empty currency", rule.Meter)
+		if err := ValidateRule(rule); err != nil {
+			return Result{}, fmt.Errorf("rating: %w", err)
 		}
 		if rule.Currency != currency {
 			return Result{}, fmt.Errorf("%w: rule for meter %q has currency %q, input has %q",
 				ErrCurrencyMismatch, rule.Meter, rule.Currency, currency)
-		}
-		if rule.IncludedQuantity.IsNegative() {
-			return Result{}, fmt.Errorf("rating: rule for meter %q has negative included quantity", rule.Meter)
-		}
-		if rule.UnitPrice.IsNegative() {
-			return Result{}, fmt.Errorf("rating: rule for meter %q has negative unit price", rule.Meter)
 		}
 		switch rule.Model {
 		case ModelTieredGraduated:

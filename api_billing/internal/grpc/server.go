@@ -1864,15 +1864,27 @@ func validatePricingOverrideRule(rule *pb.PricingRule) error {
 			}
 		}
 	}
+	included := decimal.Zero
 	if rule.GetIncludedQuantity() != "" {
-		if _, err := decimal.NewFromString(rule.GetIncludedQuantity()); err != nil {
+		d, err := decimal.NewFromString(rule.GetIncludedQuantity())
+		if err != nil {
 			return fmt.Errorf("included_quantity %q: %w", rule.GetIncludedQuantity(), err)
 		}
+		if d.IsNegative() {
+			return fmt.Errorf("included_quantity cannot be negative")
+		}
+		included = d
 	}
+	unitPrice := decimal.Zero
 	if rule.GetUnitPrice() != "" {
-		if _, err := decimal.NewFromString(rule.GetUnitPrice()); err != nil {
+		d, err := decimal.NewFromString(rule.GetUnitPrice())
+		if err != nil {
 			return fmt.Errorf("unit_price %q: %w", rule.GetUnitPrice(), err)
 		}
+		if d.IsNegative() {
+			return fmt.Errorf("unit_price cannot be negative")
+		}
+		unitPrice = d
 	}
 	config := rule.GetConfigJson()
 	if config == "" {
@@ -1880,6 +1892,26 @@ func validatePricingOverrideRule(rule *pb.PricingRule) error {
 	}
 	if !json.Valid([]byte(config)) {
 		return fmt.Errorf("config_json must be valid JSON")
+	}
+	var cfg map[string]any
+	if config != "{}" {
+		if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+			return fmt.Errorf("config_json must be a JSON object: %w", err)
+		}
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	if rule.GetModel() != "" {
+		if err := rating.ValidateRuleShape(rating.Rule{
+			Meter:            rating.Meter(rule.GetMeter()),
+			Model:            rating.Model(rule.GetModel()),
+			IncludedQuantity: included,
+			UnitPrice:        unitPrice,
+			Config:           cfg,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

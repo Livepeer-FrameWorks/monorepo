@@ -386,6 +386,23 @@ func TestRate_UnknownModelRejected(t *testing.T) {
 	}
 }
 
+func TestRate_CodecMultiplierRequiresMultipliers(t *testing.T) {
+	_, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("0"),
+		Rules: []Rule{{
+			Meter:     MeterMediaSeconds,
+			Model:     ModelCodecMultiplier,
+			Currency:  "EUR",
+			UnitPrice: dec("0.001"),
+		}},
+		CodecSeconds: map[string]decimal.Decimal{"h264": dec("60")},
+	})
+	if err == nil {
+		t.Fatal("expected codec_multiplier config error")
+	}
+}
+
 func TestRate_CustomMeterAndQuantityDivisor(t *testing.T) {
 	res, err := Rate(Input{
 		Currency:  "EUR",

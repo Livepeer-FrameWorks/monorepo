@@ -307,19 +307,31 @@ func ValidateMeteredRates(rates map[string]any, clusterModel Model) error {
 		}
 		modelStr, ok := row["model"].(string)
 		if !ok || modelStr == "" {
-			modelStr = string(rating.ModelAllUsage)
-		}
-		if !rating.ValidModel(rating.Model(modelStr)) {
-			return fmt.Errorf("metered_rates[%q].model: unsupported model %q", meter, modelStr)
+			return fmt.Errorf("metered_rates[%q].model: required", meter)
 		}
 		if _, ok := row["unit_price"]; !ok || row["unit_price"] == nil {
 			return fmt.Errorf("metered_rates[%q].unit_price: required", meter)
 		}
-		if _, err := decimalField(row, "unit_price"); err != nil {
+		unitPrice, err := decimalField(row, "unit_price")
+		if err != nil {
 			return fmt.Errorf("metered_rates[%q].unit_price: %w", meter, err)
 		}
-		if _, err := decimalField(row, "included_quantity"); err != nil {
+		included, err := decimalField(row, "included_quantity")
+		if err != nil {
 			return fmt.Errorf("metered_rates[%q].included_quantity: %w", meter, err)
+		}
+		cfg, err := configMapField(row, "config")
+		if err != nil {
+			return fmt.Errorf("metered_rates[%q].config: %w", meter, err)
+		}
+		if err := rating.ValidateRuleShape(rating.Rule{
+			Meter:            m,
+			Model:            rating.Model(modelStr),
+			IncludedQuantity: included,
+			UnitPrice:        unitPrice,
+			Config:           cfg,
+		}); err != nil {
+			return fmt.Errorf("metered_rates[%q]: %w", meter, err)
 		}
 	}
 	return nil
@@ -334,7 +346,7 @@ func ValidateMeteredRates(rates map[string]any, clusterModel Model) error {
 //	  ...
 //	}
 //
-// model defaults to all_usage if absent. unit_price is required.
+// model and unit_price are required.
 func buildMeteredRules(rates map[string]any, currency string) ([]rating.Rule, error) {
 	if currency == "" {
 		return nil, errors.New("pricing: currency is required to build metered rules")
@@ -354,10 +366,7 @@ func buildMeteredRules(rates map[string]any, currency string) ([]rating.Rule, er
 		}
 		modelStr, ok := row["model"].(string)
 		if !ok || modelStr == "" {
-			modelStr = string(rating.ModelAllUsage)
-		}
-		if !rating.ValidModel(rating.Model(modelStr)) {
-			return nil, fmt.Errorf("pricing: metered_rates[%q].model: unsupported model %q", meter, modelStr)
+			return nil, fmt.Errorf("pricing: metered_rates[%q].model: required", meter)
 		}
 		if _, ok := row["unit_price"]; !ok || row["unit_price"] == nil {
 			return nil, fmt.Errorf("pricing: metered_rates[%q].unit_price: required", meter)
@@ -370,20 +379,36 @@ func buildMeteredRules(rates map[string]any, currency string) ([]rating.Rule, er
 		if err != nil {
 			return nil, fmt.Errorf("pricing: metered_rates[%q].included_quantity: %w", meter, err)
 		}
-		var cfg map[string]any
-		if c, ok := row["config"].(map[string]any); ok {
-			cfg = c
+		cfg, err := configMapField(row, "config")
+		if err != nil {
+			return nil, fmt.Errorf("pricing: metered_rates[%q].config: %w", meter, err)
 		}
-		out = append(out, rating.Rule{
+		rule := rating.Rule{
 			Meter:            m,
 			Model:            rating.Model(modelStr),
 			Currency:         currency,
 			IncludedQuantity: included,
 			UnitPrice:        unitPrice,
 			Config:           cfg,
-		})
+		}
+		if err := rating.ValidateRule(rule); err != nil {
+			return nil, fmt.Errorf("pricing: metered_rates[%q]: %w", meter, err)
+		}
+		out = append(out, rule)
 	}
 	return out, nil
+}
+
+func configMapField(m map[string]any, key string) (map[string]any, error) {
+	raw, ok := m[key]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	cfg, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be an object")
+	}
+	return cfg, nil
 }
 
 func decimalField(m map[string]any, key string) (decimal.Decimal, error) {

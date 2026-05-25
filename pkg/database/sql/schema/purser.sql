@@ -898,16 +898,15 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
     currency VARCHAR(3) DEFAULT 'EUR',
 
     -- ===== METERED RATES (override tenant tier rates) =====
-    -- Format: per-meter object with unit_price (required) and optional
-    -- model (defaults to all_usage), included_quantity, config. Meter names
+    -- Format: per-meter object with model and unit_price required, plus
+    -- optional included_quantity and config. Meter names
     -- are canonical usage_type keys, not a fixed enum:
     --   {
     --     "delivered_minutes":        {"unit_price": "0.0005", "model": "tiered_graduated", "included_quantity": "0"},
-    --     "storage_gb_seconds_cold":  {"unit_price": "0.030"},
-    --     "ai_transcription_minutes": {"unit_price": "0.02"}
+    --     "storage_gb_seconds_cold":  {"unit_price": "0.030", "model": "all_usage"},
+    --     "ai_transcription_minutes": {"unit_price": "0.02", "model": "all_usage"}
     --   }
-    -- Validated at write time by SetClusterPricing; runtime shape must
-    -- match validateMeteredRatesShape in api_billing/internal/grpc.
+    -- Validated at write time by Purser's shared pricing validator.
     metered_rates JSONB DEFAULT '{}',
 
     -- ===== VISIBILITY & ACCESS RULES =====
@@ -917,8 +916,8 @@ CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
     -- is_platform_official moved to Quartermaster (infrastructure_clusters.is_platform_official)
     allow_free_tier BOOLEAN DEFAULT FALSE,       -- If platform_official, allow free tier access
 
-    -- ===== DEFAULT QUOTAS (for free_unmetered or as caps) =====
-    -- Format: {"max_streams": 2, "max_viewers": 50, "max_bandwidth_mbps": 100, "retention_days": 7}
+    -- ===== DEFAULT QUOTAS (billing metadata only) =====
+    -- Format: {"retention_days": 7}
     default_quotas JSONB DEFAULT '{}',
 
     created_at TIMESTAMP DEFAULT NOW(),

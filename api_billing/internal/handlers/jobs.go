@@ -534,6 +534,11 @@ func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
 // Uses rating.UsageAmount only, never TotalAmount, so per-event deductions
 // don't re-charge the monthly base subscription fee.
 func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary) error {
+	periodStart, _, _, err := parseUsageSummaryPeriod(summary)
+	if err != nil {
+		return err
+	}
+
 	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, summary.TenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", summary.TenantID).Debug("No active subscription for prepaid usage")
@@ -565,7 +570,7 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 				DB: jm.db, QM: resolver,
 				ConsumingTenantID: summary.TenantID,
 				ClusterID:         summary.ClusterID,
-				AsOf:              time.Now(),
+				AsOf:              periodStart,
 				TierRules:         tier.Rules,
 				TierCurrency:      tier.Currency,
 			})

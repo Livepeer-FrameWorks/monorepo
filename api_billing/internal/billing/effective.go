@@ -288,16 +288,7 @@ func scanRule(scan func(...any) error) (rating.Rule, error) {
 }
 
 func validateEffectiveRule(rule rating.Rule) error {
-	if !rating.ValidMeter(rule.Meter) {
-		return fmt.Errorf("invalid meter %q", rule.Meter)
-	}
-	if !rating.ValidModel(rule.Model) {
-		return fmt.Errorf("unsupported model %q", rule.Model)
-	}
-	if rule.Currency == "" {
-		return fmt.Errorf("currency is required")
-	}
-	return nil
+	return rating.ValidateRule(rule)
 }
 
 func decodeJSONMap(s string) (map[string]any, error) {

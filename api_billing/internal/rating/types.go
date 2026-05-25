@@ -5,6 +5,7 @@
 package rating
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -84,6 +85,54 @@ type Rule struct {
 	// codec_multipliers keys can be plain codecs ("h264") or joint
 	// process/codec keys ("Livepeer:h264", "AV:h264").
 	Config map[string]any
+}
+
+// ValidateRuleShape checks the durable pricing-rule fields that must be true
+// before a rule is written or rated. It deliberately does not require Currency
+// because cluster metered-rate JSON inherits currency from the cluster row.
+func ValidateRuleShape(rule Rule) error {
+	if !ValidMeter(rule.Meter) {
+		return fmt.Errorf("invalid meter %q", rule.Meter)
+	}
+	if !ValidModel(rule.Model) {
+		return fmt.Errorf("%w: %q (meter %q)", ErrUnknownModel, rule.Model, rule.Meter)
+	}
+	if rule.IncludedQuantity.IsNegative() {
+		return fmt.Errorf("rule for meter %q has negative included quantity", rule.Meter)
+	}
+	if rule.UnitPrice.IsNegative() {
+		return fmt.Errorf("rule for meter %q has negative unit price", rule.Meter)
+	}
+	if rule.Model == ModelCodecMultiplier {
+		multipliers, ok := rule.Config["codec_multipliers"].(map[string]any)
+		if !ok || len(multipliers) == 0 {
+			return fmt.Errorf("rule for meter %q requires config.codec_multipliers", rule.Meter)
+		}
+		for key, raw := range multipliers {
+			if key == "" {
+				return fmt.Errorf("rule for meter %q has an empty codec multiplier key", rule.Meter)
+			}
+			mult, ok := decimalFromAny(raw)
+			if !ok {
+				return fmt.Errorf("rule for meter %q codec multiplier %q is not numeric", rule.Meter, key)
+			}
+			if !mult.IsPositive() {
+				return fmt.Errorf("rule for meter %q codec multiplier %q must be positive", rule.Meter, key)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateRule checks a complete rating rule, including its currency.
+func ValidateRule(rule Rule) error {
+	if err := ValidateRuleShape(rule); err != nil {
+		return err
+	}
+	if rule.Currency == "" {
+		return fmt.Errorf("rule for meter %q has empty currency", rule.Meter)
+	}
+	return nil
 }
 
 // Input is the rating engine's read-only input.

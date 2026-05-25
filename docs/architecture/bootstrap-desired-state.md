@@ -323,12 +323,16 @@ that.
 ```yaml
 cluster_pricing:
   - cluster_id: media-central-primary
-    pricing_model: tiered
+    pricing_model: metered
     required_tier_level: 2
     allow_free_tier: false
     base_price: "29.00"
     currency: USD
-    metered_rates: { ... }
+    metered_rates:
+      delivered_minutes:
+        model: tiered_graduated
+        unit_price: "0.00055"
+        included_quantity: "0"
     default_quotas: { ... }
 ```
 
@@ -521,7 +525,7 @@ quartermaster:
 purser:
   cluster_pricing:
     - cluster_id: core-central-primary
-      pricing_model: tiered
+      pricing_model: tier_inherit
       required_tier_level: 2
 
 accounts:
@@ -556,7 +560,7 @@ quartermaster:
 purser:
   cluster_pricing:
     - cluster_id: northwind-private-eu
-      pricing_model: flat
+      pricing_model: monthly
       base_price: "499.00"
       currency: USD
   customer_billing:
