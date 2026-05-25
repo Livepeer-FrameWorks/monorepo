@@ -27,7 +27,7 @@ INSERT INTO quartermaster.infrastructure_clusters (
 )
 VALUES (
     'demo-media', 'Demo Media Cluster', 'edge', 'demo.frameworks.network',
-    10000, 1000000, 100000,
+    0, 0, 0,
     TRUE, TRUE,
     'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
 )
@@ -58,7 +58,7 @@ INSERT INTO quartermaster.infrastructure_clusters (
 VALUES (
     'demo-selfhosted', 'Demo Self-hosted Cluster', 'edge', 'selfhosted.demo.frameworks.network',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    200, 20000, 2000,
+    0, 0, 0,
     FALSE, FALSE,
     'private', 'Tenant-owned media cluster for local offload testing'
 )
@@ -374,12 +374,12 @@ INSERT INTO purser.cluster_pricing (
     (
         'central-primary', 'free_unmetered',
         TRUE, 0,
-        '{"max_streams": 5, "max_viewers": 500, "max_bandwidth_mbps": 100, "retention_days": 7}'
+        '{"retention_days": 7}'
     ),
     (
         'demo-selfhosted', 'free_unmetered',
         TRUE, 0,
-        '{"max_streams": 25, "max_viewers": 2500, "max_bandwidth_mbps": 1000, "retention_days": 30}'
+        '{"retention_days": 30}'
     )
 ON CONFLICT (cluster_id) DO UPDATE SET
     pricing_model = 'free_unmetered',

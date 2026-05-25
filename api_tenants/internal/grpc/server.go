@@ -1746,7 +1746,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
 			$4, '',
-			100, 10000, 1000,
+			0, 0, 0,
 			'private', 'free_unmetered', $5,
 			NULLIF($8, ''), $2, 'tenant_private', $7, ARRAY[$7]::TEXT[],
 			'unknown', true, $6, $6
@@ -9524,7 +9524,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
 			$4, '',
-			100, 10000, 1000,
+			0, 0, 0,
 			'private', 'free_unmetered', $5,
 			NULLIF($8, ''), $2, 'tenant_private', $7, ARRAY[$7]::TEXT[],
 			'unknown', true, $6, $6
