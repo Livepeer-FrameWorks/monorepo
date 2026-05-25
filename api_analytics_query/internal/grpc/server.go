@@ -2791,20 +2791,23 @@ func sanitizePlatformOverviewResponse(resp *pb.GetPlatformOverviewResponse) {
 // GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).
 func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetworkLiveStatsRequest) (*pb.GetNetworkLiveStatsResponse, error) {
 	type clusterStats struct {
-		activeStreams int32
-		viewers       int32
-		uploadBPS     uint64
-		downloadBPS   uint64
-		activeNodes   int32
+		activeStreams     int32
+		viewers           int32
+		uploadBPS         uint64
+		downloadBPS       uint64
+		egressCapacityBPS uint64
+		activeNodes       int32
 	}
 	statsMap := make(map[string]*clusterStats)
 
-	// Per-cluster node stats (bandwidth, health)
+	// Per-cluster node stats. Capacity sum excludes maintenance/draining nodes
+	// (they still report load but don't contribute available delivery capacity).
 	nodeQuery := `
 		SELECT
 			cluster_id,
 			COALESCE(sum(up_speed), 0),
 			COALESCE(sum(down_speed), 0),
+			COALESCE(sumIf(bw_limit, is_healthy = 1 AND operational_mode = 'normal'), 0),
 			countIf(is_healthy = 1)
 		FROM periscope.node_state_current FINAL
 		GROUP BY cluster_id
@@ -2818,7 +2821,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 	for rows.Next() {
 		var id string
 		var cs clusterStats
-		if scanErr := rows.Scan(&id, &cs.uploadBPS, &cs.downloadBPS, &cs.activeNodes); scanErr != nil {
+		if scanErr := rows.Scan(&id, &cs.uploadBPS, &cs.downloadBPS, &cs.egressCapacityBPS, &cs.activeNodes); scanErr != nil {
 			s.logger.WithError(scanErr).Warn("GetNetworkLiveStats: scan node row")
 			continue
 		}
@@ -2865,6 +2868,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 			UploadBytesPerSec:   cs.uploadBPS,
 			DownloadBytesPerSec: cs.downloadBPS,
 			ActiveNodes:         cs.activeNodes,
+			EgressCapacityBps:   cs.egressCapacityBPS,
 		})
 	}
 

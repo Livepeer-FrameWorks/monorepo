@@ -235,6 +235,74 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	}
 }
 
+func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+
+	// Two clusters:
+	//   edge-a: one healthy/normal node (counted) + one maintenance node (load
+	//   counted, capacity excluded) + one unhealthy node (capacity excluded).
+	//   edge-b: one healthy/normal node only.
+	// Aggregated by ClickHouse, the result the resolver scans is the per-cluster
+	// row: (cluster_id, sum(up_speed), sum(down_speed), sumIf(bw_limit,...), countIf(is_healthy=1)).
+	mock.ExpectQuery(`(?s)sumIf\(bw_limit, is_healthy = 1 AND operational_mode = 'normal'\).*FROM periscope\.node_state_current FINAL`).WillReturnRows(
+		sqlmock.NewRows([]string{"cluster_id", "up", "down", "egress_capacity_bps", "active_nodes"}).
+			// edge-a: up 700+200+50, down 100+30+5, capacity only from the healthy normal node (1.25 Gbps)
+			AddRow("edge-a", uint64(950), uint64(135), uint64(1_250_000_000), int32(2)).
+			// edge-b: single healthy normal 10 Gbps node, 500 up / 50 down
+			AddRow("edge-b", uint64(500), uint64(50), uint64(10_000_000_000), int32(1)),
+	)
+	mock.ExpectQuery(`FROM periscope\.stream_state_current`).WillReturnRows(
+		sqlmock.NewRows([]string{"cluster_id", "streams", "viewers"}).
+			AddRow("edge-a", int32(3), int32(120)).
+			AddRow("edge-b", int32(1), int32(40)),
+	)
+
+	resp, err := server.GetNetworkLiveStats(context.Background(), &pb.GetNetworkLiveStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetNetworkLiveStats: %v", err)
+	}
+
+	got := map[string]*pb.NetworkClusterLiveStats{}
+	for _, c := range resp.Clusters {
+		got[c.ClusterId] = c
+	}
+
+	a, ok := got["edge-a"]
+	if !ok {
+		t.Fatalf("missing edge-a in response")
+	}
+	if a.EgressCapacityBps != 1_250_000_000 {
+		t.Errorf("edge-a egress capacity = %d, want 1_250_000_000 (maintenance + unhealthy nodes excluded)", a.EgressCapacityBps)
+	}
+	if a.UploadBytesPerSec != 950 || a.DownloadBytesPerSec != 135 {
+		t.Errorf("edge-a up/down = %d/%d, want 950/135 (all nodes' load aggregated)", a.UploadBytesPerSec, a.DownloadBytesPerSec)
+	}
+	if a.ActiveStreams != 3 || a.CurrentViewers != 120 {
+		t.Errorf("edge-a streams/viewers = %d/%d, want 3/120", a.ActiveStreams, a.CurrentViewers)
+	}
+
+	b, ok := got["edge-b"]
+	if !ok {
+		t.Fatalf("missing edge-b in response")
+	}
+	if b.EgressCapacityBps != 10_000_000_000 {
+		t.Errorf("edge-b egress capacity = %d, want 10_000_000_000", b.EgressCapacityBps)
+	}
+
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
 func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))

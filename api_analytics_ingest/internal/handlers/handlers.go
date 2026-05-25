@@ -1652,7 +1652,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO node_state_current (
 			tenant_id, cluster_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
-			disk_used_bytes, disk_total_bytes, up_speed, down_speed,
+			disk_used_bytes, disk_total_bytes, up_speed, down_speed, bw_limit,
 			active_streams, is_healthy, operational_mode, latitude, longitude, location, metadata, updated_at
 		)`)
 	if err != nil {
@@ -1698,6 +1698,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		uint64(nodeLifecycle.GetDiskTotalBytes()),
 		uint64(nodeLifecycle.GetUpSpeed()),
 		uint64(nodeLifecycle.GetDownSpeed()),
+		uint64(nodeLifecycle.GetBwLimit()),
 		uint32(nodeLifecycle.GetActiveStreams()),
 		boolToUint8(nodeLifecycle.GetIsHealthy()),
 		modeStr,

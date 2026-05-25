@@ -71,12 +71,11 @@
     peerCount?: number;
     clusterType?: string;
     shortDescription?: string;
-    maxStreams?: number;
     currentStreams?: number;
-    maxViewers?: number;
     currentViewers?: number;
-    maxBandwidthMbps?: number;
-    currentBandwidthMbps?: number;
+    egressMbps?: number;
+    egressCapacityMbps?: number;
+    ingressMbps?: number;
     services?: string[];
   }
 
@@ -882,16 +881,23 @@
 
       const sections: DetailSection[] = [];
 
-      if ((cluster.maxStreams ?? 0) > 0 || (cluster.currentStreams ?? 0) > 0) {
+      if (
+        (cluster.currentStreams ?? 0) > 0 ||
+        (cluster.currentViewers ?? 0) > 0 ||
+        (cluster.egressMbps ?? 0) > 0 ||
+        (cluster.ingressMbps ?? 0) > 0 ||
+        (cluster.egressCapacityMbps ?? 0) > 0
+      ) {
         sections.push({
           title: "Load",
           rows: [
-            detailRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)),
-            detailRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)),
+            detailRow("Streams", `${cluster.currentStreams ?? 0}`),
+            detailRow("Viewers", `${cluster.currentViewers ?? 0}`),
             detailRow(
-              "Bandwidth",
-              `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
+              "Egress",
+              `${formatLoad(cluster.egressMbps, cluster.egressCapacityMbps)} Mbps`
             ),
+            detailRow("Ingress", `${cluster.ingressMbps ?? 0} Mbps`),
           ],
         });
       }

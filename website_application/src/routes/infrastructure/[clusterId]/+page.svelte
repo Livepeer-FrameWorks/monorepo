@@ -119,7 +119,8 @@
   let isMediaCluster = $derived(cluster?.clusterType === "edge");
   let currentStreams = $derived(clusterLiveStats?.currentStreams ?? 0);
   let currentViewers = $derived(clusterLiveStats?.currentViewers ?? 0);
-  let currentBandwidthMbps = $derived(clusterLiveStats?.currentBandwidthMbps ?? 0);
+  let egressMbps = $derived(clusterLiveStats?.egressMbps ?? 0);
+  let ingressMbps = $derived(clusterLiveStats?.ingressMbps ?? 0);
 
   // Real-time system health
   type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
@@ -175,10 +176,17 @@
           tone: "text-accent-purple",
         },
         {
-          key: "bandwidth",
-          label: "Bandwidth",
-          subtitle: "Current media traffic",
-          value: `${currentBandwidthMbps.toLocaleString()} Mbps`,
+          key: "egress",
+          label: "Egress",
+          subtitle: "Delivery to viewers",
+          value: `${egressMbps.toLocaleString()} Mbps`,
+          tone: "text-warning",
+        },
+        {
+          key: "ingress",
+          label: "Ingress",
+          subtitle: "Publisher + peer inbound",
+          value: `${ingressMbps.toLocaleString()} Mbps`,
           tone: "text-warning",
         }
       );

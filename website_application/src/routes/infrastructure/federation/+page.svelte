@@ -138,12 +138,11 @@
       peerCount: c.peerCount,
       clusterType: c.clusterType ?? undefined,
       shortDescription: c.shortDescription ?? undefined,
-      maxStreams: c.maxStreams ?? undefined,
       currentStreams: c.currentStreams ?? undefined,
-      maxViewers: c.maxViewers ?? undefined,
       currentViewers: c.currentViewers ?? undefined,
-      maxBandwidthMbps: c.maxBandwidthMbps ?? undefined,
-      currentBandwidthMbps: c.currentBandwidthMbps ?? undefined,
+      egressMbps: c.egressMbps ?? undefined,
+      egressCapacityMbps: c.egressCapacityMbps ?? undefined,
+      ingressMbps: c.ingressMbps ?? undefined,
       services: c.services ?? [],
     }))
   );

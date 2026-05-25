@@ -719,6 +719,7 @@ CREATE TABLE IF NOT EXISTS node_state_current (
 
     up_speed UInt64,
     down_speed UInt64,
+    bw_limit UInt64 DEFAULT 0,
 
     active_streams UInt32,
     is_healthy UInt8,

@@ -6584,6 +6584,7 @@ type NetworkClusterLiveStats struct {
 	UploadBytesPerSec   uint64                 `protobuf:"varint,4,opt,name=upload_bytes_per_sec,json=uploadBytesPerSec,proto3" json:"upload_bytes_per_sec,omitempty"`
 	DownloadBytesPerSec uint64                 `protobuf:"varint,5,opt,name=download_bytes_per_sec,json=downloadBytesPerSec,proto3" json:"download_bytes_per_sec,omitempty"`
 	ActiveNodes         int32                  `protobuf:"varint,6,opt,name=active_nodes,json=activeNodes,proto3" json:"active_nodes,omitempty"`
+	EgressCapacityBps   uint64                 `protobuf:"varint,7,opt,name=egress_capacity_bps,json=egressCapacityBps,proto3" json:"egress_capacity_bps,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -6656,6 +6657,13 @@ func (x *NetworkClusterLiveStats) GetDownloadBytesPerSec() uint64 {
 func (x *NetworkClusterLiveStats) GetActiveNodes() int32 {
 	if x != nil {
 		return x.ActiveNodes
+	}
+	return 0
+}
+
+func (x *NetworkClusterLiveStats) GetEgressCapacityBps() uint64 {
+	if x != nil {
+		return x.EgressCapacityBps
 	}
 	return 0
 }
@@ -16345,7 +16353,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\bstatuses\x18\x01 \x03(\v2..periscope.StreamsStatusResponse.StatusesEntryR\bstatuses\x1a\\\n" +
 	"\rStatusesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
-	"\x05value\x18\x02 \x01(\v2\x1f.periscope.StreamStatusResponseR\x05value:\x028\x01\"\x91\x02\n" +
+	"\x05value\x18\x02 \x01(\v2\x1f.periscope.StreamStatusResponseR\x05value:\x028\x01\"\xc1\x02\n" +
 	"\x17NetworkClusterLiveStats\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12%\n" +
@@ -16353,7 +16361,8 @@ const file_periscope_proto_rawDesc = "" +
 	"\x0fcurrent_viewers\x18\x03 \x01(\x05R\x0ecurrentViewers\x12/\n" +
 	"\x14upload_bytes_per_sec\x18\x04 \x01(\x04R\x11uploadBytesPerSec\x123\n" +
 	"\x16download_bytes_per_sec\x18\x05 \x01(\x04R\x13downloadBytesPerSec\x12!\n" +
-	"\factive_nodes\x18\x06 \x01(\x05R\vactiveNodes\"\x1c\n" +
+	"\factive_nodes\x18\x06 \x01(\x05R\vactiveNodes\x12.\n" +
+	"\x13egress_capacity_bps\x18\a \x01(\x04R\x11egressCapacityBps\"\x1c\n" +
 	"\x1aGetNetworkLiveStatsRequest\"]\n" +
 	"\x1bGetNetworkLiveStatsResponse\x12>\n" +
 	"\bclusters\x18\x01 \x03(\v2\".periscope.NetworkClusterLiveStatsR\bclusters\"\x81\x02\n" +

@@ -1736,12 +1736,11 @@ enum GQL {
         status
         clusterType
         shortDescription
-        maxStreams
         currentStreams
-        maxViewers
         currentViewers
-        maxBandwidthMbps
-        currentBandwidthMbps
+        egressMbps
+        egressCapacityMbps
+        ingressMbps
       }
       peerConnections {
         sourceCluster
@@ -1817,12 +1816,11 @@ enum GQL {
         status
         clusterType
         shortDescription
-        maxStreams
         currentStreams
-        maxViewers
         currentViewers
-        maxBandwidthMbps
-        currentBandwidthMbps
+        egressMbps
+        egressCapacityMbps
+        ingressMbps
         services
       }
       peerConnections {

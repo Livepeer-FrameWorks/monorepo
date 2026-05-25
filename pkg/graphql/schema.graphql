@@ -5973,12 +5973,11 @@ type NetworkClusterStatus {
   status: String!
   clusterType: String!
   shortDescription: String
-  maxStreams: Int!
   currentStreams: Int!
-  maxViewers: Int!
   currentViewers: Int!
-  maxBandwidthMbps: Int!
-  currentBandwidthMbps: Int!
+  egressMbps: Int!
+  egressCapacityMbps: Int!
+  ingressMbps: Int!
   services: [String!]!
 }
 

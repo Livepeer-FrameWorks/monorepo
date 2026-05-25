@@ -188,16 +188,20 @@ function clusterDetail(cluster, nodeTypeCounts, clusterServices) {
 
   const sections = [];
 
-  if (cluster.maxStreams > 0 || cluster.currentStreams > 0) {
+  if (
+    cluster.currentStreams > 0 ||
+    cluster.currentViewers > 0 ||
+    cluster.egressMbps > 0 ||
+    cluster.ingressMbps > 0 ||
+    cluster.egressCapacityMbps > 0
+  ) {
     sections.push({
       title: "Load",
       rows: [
-        detailRow("Streams", formatLoad(cluster.currentStreams, cluster.maxStreams)),
-        detailRow("Viewers", formatLoad(cluster.currentViewers, cluster.maxViewers)),
-        detailRow(
-          "Bandwidth",
-          `${formatLoad(cluster.currentBandwidthMbps, cluster.maxBandwidthMbps)} Mbps`
-        ),
+        detailRow("Streams", `${cluster.currentStreams ?? 0}`),
+        detailRow("Viewers", `${cluster.currentViewers ?? 0}`),
+        detailRow("Egress", `${formatLoad(cluster.egressMbps, cluster.egressCapacityMbps)} Mbps`),
+        detailRow("Ingress", `${cluster.ingressMbps ?? 0} Mbps`),
       ],
     });
   }

@@ -809,6 +809,7 @@ message NetworkClusterLiveStats {
   uint64 upload_bytes_per_sec = 4;
   uint64 download_bytes_per_sec = 5;
   int32 active_nodes = 6;
+  uint64 egress_capacity_bps = 7;
 }
 
 message GetNetworkLiveStatsRequest {}

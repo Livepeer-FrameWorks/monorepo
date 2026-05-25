@@ -3810,15 +3810,14 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			shortDesc = c.ShortDescription
 		}
 
-		var maxStreams, currentStreams, maxViewers, currentViewers, maxBwMbps, currentBwMbps int
+		var currentStreams, currentViewers, egressMbps, ingressMbps, egressCapacityMbps int
 		if c.ClusterType == "edge" {
-			maxStreams = int(c.MaxConcurrentStreams)
-			maxViewers = int(c.MaxConcurrentViewers)
-			maxBwMbps = int(c.MaxBandwidthMbps)
 			if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
 				currentStreams = int(ls.ActiveStreams)
 				currentViewers = int(ls.CurrentViewers)
-				currentBwMbps = int((ls.UploadBytesPerSec + ls.DownloadBytesPerSec) * 8 / 1_000_000)
+				egressMbps = int(ls.UploadBytesPerSec * 8 / 1_000_000)
+				ingressMbps = int(ls.DownloadBytesPerSec * 8 / 1_000_000)
+				egressCapacityMbps = int(ls.EgressCapacityBps * 8 / 1_000_000)
 			}
 		}
 
@@ -3836,24 +3835,23 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 
 		clusters = append(clusters, &model.NetworkClusterStatus{
-			ClusterID:            c.ClusterId,
-			Name:                 c.ClusterName,
-			Region:               clusterRegion,
-			Latitude:             lat,
-			Longitude:            lon,
-			NodeCount:            nc,
-			HealthyNodeCount:     hn,
-			PeerCount:            peerCount,
-			Status:               c.HealthStatus,
-			ClusterType:          c.ClusterType,
-			ShortDescription:     shortDesc,
-			MaxStreams:           maxStreams,
-			CurrentStreams:       currentStreams,
-			MaxViewers:           maxViewers,
-			CurrentViewers:       currentViewers,
-			MaxBandwidthMbps:     maxBwMbps,
-			CurrentBandwidthMbps: currentBwMbps,
-			Services:             clusterServices,
+			ClusterID:          c.ClusterId,
+			Name:               c.ClusterName,
+			Region:             clusterRegion,
+			Latitude:           lat,
+			Longitude:          lon,
+			NodeCount:          nc,
+			HealthyNodeCount:   hn,
+			PeerCount:          peerCount,
+			Status:             c.HealthStatus,
+			ClusterType:        c.ClusterType,
+			ShortDescription:   shortDesc,
+			CurrentStreams:     currentStreams,
+			CurrentViewers:     currentViewers,
+			EgressMbps:         egressMbps,
+			EgressCapacityMbps: egressCapacityMbps,
+			IngressMbps:        ingressMbps,
+			Services:           clusterServices,
 		})
 		totalNodes += nc
 		healthyNodes += hn

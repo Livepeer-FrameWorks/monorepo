@@ -15,12 +15,11 @@ const NETWORK_STATUS_QUERY = `query GetNetworkStatus {
       status
       clusterType
       shortDescription
-      maxStreams
       currentStreams
-      maxViewers
       currentViewers
-      maxBandwidthMbps
-      currentBandwidthMbps
+      egressMbps
+      egressCapacityMbps
+      ingressMbps
       services
     }
     peerConnections {
