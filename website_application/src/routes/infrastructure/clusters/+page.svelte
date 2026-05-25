@@ -156,12 +156,14 @@
 
   onMount(async () => {
     await Promise.all([
-      nodesStore.fetch(),
       accessStore.fetch(),
       subscriptionsStore.fetch(),
       invitesStore.fetch(),
       marketplaceStore.fetch(),
     ]);
+    if (ownedClusterIds.length > 0) {
+      await nodesStore.fetch();
+    }
     await fetchPendingApprovals();
   });
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { auth } from "$lib/stores/auth";
   import {
@@ -276,17 +277,17 @@
 
   async function loadData() {
     try {
+      if (!isAuthenticated) {
+        await auth.checkAuth();
+      }
+      const authenticated = get(auth).isAuthenticated;
+
       const range = resolveTimeRange(timeRange);
       const timeRangeInput = { start: range.start, end: range.end };
 
       await Promise.all([networkStore.fetch(), orchVantagesStore.fetch()]);
 
-      // Tenant-scoped analytics should only run after auth is present.
-      if (!isAuthenticated) {
-        await auth.checkAuth();
-      }
-
-      if (isAuthenticated) {
+      if (authenticated) {
         await Promise.all([
           trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
           summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
@@ -309,7 +310,7 @@
         toast.error("Failed to load federation data");
       }
 
-      if (isAuthenticated && $eventsStore.errors?.length) {
+      if (authenticated && $eventsStore.errors?.length) {
         console.error("Failed to load federation events:", $eventsStore.errors);
         toast.error("Failed to load federation events");
       }

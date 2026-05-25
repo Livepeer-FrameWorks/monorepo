@@ -44,6 +44,7 @@
   const systemHealthSub = new SystemHealthStore();
 
   let isAuthenticated = false;
+  let systemHealthListening = false;
 
   let hasData = $derived(!!$nodeStore.data);
   let loading = $derived($nodeStore.fetching && !hasData);
@@ -202,12 +203,13 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    systemHealthSub.listen();
   });
 
   onDestroy(() => {
     unsubscribeAuth();
-    systemHealthSub.unlisten();
+    if (systemHealthListening) {
+      systemHealthSub.unlisten();
+    }
   });
 
   async function loadNodeData() {
@@ -218,6 +220,10 @@
       if (requestID !== loadSequence) return;
 
       if (node) {
+        if (!systemHealthListening) {
+          systemHealthSub.listen();
+          systemHealthListening = true;
+        }
         const range = resolveTimeRange(timeRange);
         const timeRangeInput = { start: range.start, end: range.end };
         await Promise.all([

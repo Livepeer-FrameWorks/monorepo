@@ -1,17 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
-    fragment,
-    GetNodesConnectionStore,
     GetGeographicDistributionStore,
     GetRoutingEventsDetailedStore,
     GetConnectionEventsStore,
     GetViewerGeoHourlyStore,
-    NodeListFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -29,15 +25,11 @@
   import { buildBucketFlows } from "$lib/analytics/routingFlows";
 
   // Houdini stores
-  const nodesStore = new GetNodesConnectionStore();
   const geoDistStore = new GetGeographicDistributionStore();
   const routingEventsStore = new GetRoutingEventsDetailedStore();
   const connectionEventsStore = new GetConnectionEventsStore();
   const viewerGeoHourlyStore = new GetViewerGeoHourlyStore();
   const CONNECTION_EVENTS_PAGE_SIZE = 50;
-
-  // Fragment stores for unmasking nested data
-  const nodeCoreStore = new NodeListFieldsStore();
 
   // Types from Houdini
   type ConnectionEventsConnection = NonNullable<
@@ -47,8 +39,7 @@
 
   let isAuthenticated = false;
   let loading = $derived(
-    $nodesStore.fetching ||
-      $geoDistStore.fetching ||
+    $geoDistStore.fetching ||
       $routingEventsStore.fetching ||
       $connectionEventsStore.fetching ||
       $viewerGeoHourlyStore.fetching
@@ -62,11 +53,6 @@
   let hasMoreEvents = $derived(connectionEventsPageInfo?.hasNextPage ?? false);
   let totalEventsCount = $derived(connectionEventsTotalCount);
 
-  // Get masked nodes from edges
-  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
-
-  // Unmask nodes with fragment() and get() pattern
-  let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let geographicDistribution = $derived(
     $geoDistStore.data?.analytics?.usage?.streaming?.geographicDistribution ?? null
   );
@@ -186,19 +172,6 @@
 
     console.log("[routingMapData] computing, h3Ready:", h3Ready, "events:", events.length);
 
-    // Map nodes to dictionary for easier lookup
-    const nodeMap: Record<string, { id: string; name: string; lat: number; lng: number }> = {};
-    nodes.forEach((n) => {
-      if (n.latitude && n.longitude) {
-        nodeMap[n.nodeName] = {
-          id: n.id,
-          name: n.nodeName,
-          lat: n.latitude,
-          lng: n.longitude,
-        };
-      }
-    });
-
     const routes: {
       from: [number, number];
       to: [number, number];
@@ -235,15 +208,6 @@
       if (evt.clientLatitude && evt.clientLongitude) {
         let nodeLat = evt.nodeLatitude;
         let nodeLng = evt.nodeLongitude;
-
-        // If event doesn't have node coordinates but has node name, try to look it up
-        if ((!nodeLat || !nodeLng) && evt.selectedNode) {
-          const nodeInfo = nodeMap[evt.selectedNode];
-          if (nodeInfo) {
-            nodeLat = nodeInfo.lat;
-            nodeLng = nodeInfo.lng;
-          }
-        }
 
         if (nodeLat && nodeLng) {
           routes.push({
@@ -302,8 +266,15 @@
       }
     }
 
-    // Only pass nodes that are actually involved in routes or available
-    const displayNodes = Object.values(nodeMap);
+    const displayNodes = events
+      .map((edge) => edge.node)
+      .filter((evt) => evt.nodeLatitude && evt.nodeLongitude && (evt.nodeId || evt.selectedNode))
+      .map((evt) => ({
+        id: evt.nodeId ?? evt.selectedNode ?? "",
+        name: evt.nodeName ?? evt.selectedNode ?? evt.nodeId ?? "Node",
+        lat: evt.nodeLatitude!,
+        lng: evt.nodeLongitude!,
+      }));
 
     return { routes, nodes: displayNodes, buckets: bucketPolys, bucketStats };
   });
@@ -543,18 +514,16 @@
       const hourlyFirst = Math.min(range.days * 24, 150);
 
       const timeRangeInput = { start: range.start, end: range.end };
-      const [nodesResult, geoDistResult, routingEventsResult, connectionEventsResult] =
-        await Promise.all([
-          nodesStore.fetch(),
-          geoDistStore.fetch({ variables: { streamId: null, timeRange: timeRangeInput } }),
-          routingEventsStore.fetch({ variables: { streamId: null, timeRange: timeRangeInput } }),
-          connectionEventsStore.fetch({
-            variables: { timeRange: timeRangeInput, first: CONNECTION_EVENTS_PAGE_SIZE },
-          }),
-          viewerGeoHourlyStore
-            .fetch({ variables: { timeRange: timeRangeInput, first: hourlyFirst } })
-            .catch(() => null),
-        ]);
+      const [geoDistResult, routingEventsResult, connectionEventsResult] = await Promise.all([
+        geoDistStore.fetch({ variables: { streamId: null, timeRange: timeRangeInput } }),
+        routingEventsStore.fetch({ variables: { streamId: null, timeRange: timeRangeInput } }),
+        connectionEventsStore.fetch({
+          variables: { timeRange: timeRangeInput, first: CONNECTION_EVENTS_PAGE_SIZE },
+        }),
+        viewerGeoHourlyStore
+          .fetch({ variables: { timeRange: timeRangeInput, first: hourlyFirst } })
+          .catch(() => null),
+      ]);
 
       const connectionConnection =
         connectionEventsResult.data?.analytics?.lifecycle?.connectionEventsConnection;
@@ -562,10 +531,6 @@
       connectionEventsPageInfo = connectionConnection?.pageInfo ?? null;
       connectionEventsTotalCount = connectionConnection?.totalCount ?? 0;
 
-      if (nodesResult.errors?.length) {
-        error = nodesResult.errors[0].message;
-        console.error("Failed to load node data:", nodesResult.errors);
-      }
       if (geoDistResult.errors?.length) {
         console.error("Failed to load geographic distribution:", geoDistResult.errors);
       }

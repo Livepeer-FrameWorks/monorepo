@@ -5,6 +5,7 @@
   import { auth } from "$lib/stores/auth";
   import {
     fragment,
+    GetClustersAccessStore,
     GetNodesConnectionStore,
     GetNodePerformance5mStore,
     GetNodeMetricsStore,
@@ -44,6 +45,7 @@
   const CalendarIcon = getIconComponent("Calendar");
 
   // Houdini stores
+  const accessStore = new GetClustersAccessStore();
   const nodesStore = new GetNodesConnectionStore();
   const nodePerformanceStore = new GetNodePerformance5mStore();
   const nodeMetricsStore = new GetNodeMetricsStore();
@@ -65,6 +67,7 @@
   }
 
   let isAuthenticated = false;
+  let systemHealthListening = false;
 
   // Derived state from Houdini stores
   let showRawMetrics = $state(false);
@@ -88,6 +91,8 @@
   });
   let hasMoreNodes = $derived(pageInfo?.hasNextPage ?? false);
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
+  let accessList = $derived($accessStore.data?.clustersAccess ?? []);
+  let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
   let systemHealth = $state<Record<string, SystemHealthData>>({});
   let rawMetricsNodeId = $state<string | null>(null);
   let showRawDetails = $state(false);
@@ -221,12 +226,13 @@
       await auth.checkAuth();
     }
     await loadNodeData();
-    systemHealthSub.listen();
   });
 
   onDestroy(() => {
     unsubscribeAuth();
-    systemHealthSub.unlisten();
+    if (systemHealthListening) {
+      systemHealthSub.unlisten();
+    }
   });
 
   async function loadNodeData() {
@@ -235,6 +241,20 @@
       currentRange = range;
       const timeRangeInput = { start: range.start, end: range.end };
       const perfFirst = Math.min(range.days * 24 * 12, 150);
+
+      await accessStore.fetch();
+      if (!hasOperatorAccess) {
+        if (systemHealthListening) {
+          systemHealthSub.unlisten();
+          systemHealthListening = false;
+        }
+        systemHealth = {};
+        return;
+      }
+      if (!systemHealthListening) {
+        systemHealthSub.listen();
+        systemHealthListening = true;
+      }
 
       await Promise.all([
         nodesStore.fetch(),
@@ -261,7 +281,7 @@
   }
 
   async function loadRawMetrics(nodeId: string | null = rawMetricsNodeId) {
-    if (!nodeId) return;
+    if (!hasOperatorAccess || !nodeId) return;
     const range = resolveTimeRange(timeRange);
     currentRange = range;
     const timeRangeInput = { start: range.start, end: range.end };
@@ -942,10 +962,16 @@
             <div class="slab-body--padded">
               {#if filteredNodes.length === 0}
                 <EmptyState
-                  title={nodes.length === 0 ? "No nodes found" : "No matching nodes"}
-                  description={nodes.length === 0
-                    ? "Connect your own Edge nodes or subscribe to clusters to expand capacity."
-                    : "Try adjusting your filters or search criteria"}
+                  title={!hasOperatorAccess
+                    ? "Cluster operator access required"
+                    : nodes.length === 0
+                      ? "No nodes found"
+                      : "No matching nodes"}
+                  description={!hasOperatorAccess
+                    ? "Node inventory and host metrics are available to cluster owners."
+                    : nodes.length === 0
+                      ? "Connect your own Edge nodes to expand capacity."
+                      : "Try adjusting your filters or search criteria"}
                   size="md"
                   showAction={false}
                 >

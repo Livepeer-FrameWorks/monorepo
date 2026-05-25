@@ -6,6 +6,7 @@
   import { get } from "svelte/store";
   import {
     fragment,
+    GetClustersAccessStore,
     GetInfrastructureOverviewStore,
     GetNetworkStatusStore,
     GetNodesConnectionStore,
@@ -44,6 +45,7 @@
 
   let clusterId = $derived(page.params.clusterId as string);
 
+  const accessStore = new GetClustersAccessStore();
   const infrastructureStore = new GetInfrastructureOverviewStore();
   const networkStore = new GetNetworkStatusStore();
   const nodesStore = new GetNodesConnectionStore();
@@ -54,6 +56,8 @@
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   let isAuthenticated = false;
+  let accessDenied = $state(false);
+  let systemHealthListening = false;
   let loadSequence = 0;
   let lastLoadedClusterId = $state<string | null>(null);
   let showEnrollmentModal = $state(false);
@@ -230,17 +234,38 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    systemHealthSub.listen();
   });
 
   onDestroy(() => {
     unsubscribeAuth();
-    systemHealthSub.unlisten();
+    if (systemHealthListening) {
+      systemHealthSub.unlisten();
+    }
   });
 
   async function loadClusterData() {
     const requestId = ++loadSequence;
+    accessDenied = false;
     try {
+      await accessStore.fetch();
+      const ownsCluster =
+        $accessStore.data?.clustersAccess?.some(
+          (entry) => entry.clusterId === clusterId && entry.accessLevel === "owner"
+        ) ?? false;
+      if (!ownsCluster) {
+        accessDenied = true;
+        if (systemHealthListening) {
+          systemHealthSub.unlisten();
+          systemHealthListening = false;
+        }
+        systemHealth = {};
+        return;
+      }
+      if (!systemHealthListening) {
+        systemHealthSub.listen();
+        systemHealthListening = true;
+      }
+
       await Promise.all([
         infrastructureStore.fetch(),
         networkStore.fetch(),
@@ -507,6 +532,14 @@
             {/each}
           </div>
         </div>
+      </div>
+    {:else if accessDenied}
+      <div class="p-8">
+        <EmptyState
+          iconName="Server"
+          title="Cluster operator access required"
+          description="Cluster inspection, nodes, services, and enrollment controls are available to cluster owners."
+        />
       </div>
     {:else if !cluster}
       <div class="p-8">

@@ -15,6 +15,14 @@ The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/stre
   definitions in the [GraphQL playground](/developer/playground).
 </Aside>
 
+<Aside type="note" title="Cluster data is scoped by intent">
+  Stream, audience, routing, QoE, and billing analytics show your tenant's own data, including when
+  your streams are routed through a subscribed marketplace/shared cluster. Node inventory, service
+  instances, node metrics, enrollment tokens, and cluster inspection are cluster-operator surfaces
+  and require ownership of the cluster. Public network maps expose official cluster-level topology
+  only.
+</Aside>
+
 <Aside type="note" title="View-level QoE is on the roadmap">
   Stream health, routing, geographic, usage, and current client QoE summaries are available today.
   Per-view QoE across player SDKs — TTFF, rebuffering, playback failures, rendition changes, and
@@ -131,7 +139,7 @@ query DetailedUsage($page: ConnectionInput) {
 
 ## Network and federation
 
-`/network` and `/infrastructure/network` show cluster-level health and orchestrator vantage points across the federation.
+`/network` and `/infrastructure/federation` show public cluster-level topology and orchestrator vantage points across the federation. Authenticated users also get tenant-scoped routing and federation overlays for their own streams.
 
 ```graphql
 query NetworkStatus {

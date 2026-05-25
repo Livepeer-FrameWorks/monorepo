@@ -130,13 +130,17 @@
       const range = resolveTimeRange(timeRange);
       const metricsFirst = Math.min(range.days * 24, 150);
       const timeRangeInput = { start: range.start, end: range.end };
-      await Promise.all([
-        infrastructureStore.fetch(),
-        metricsStore.fetch({
-          variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
-        }),
-        serviceInstancesHealthStore.fetch().catch(() => null),
-      ]);
+      await infrastructureStore.fetch();
+
+      const ownedClusterCount = $infrastructureStore.data?.clustersConnection?.edges?.length ?? 0;
+      if (ownedClusterCount > 0) {
+        await Promise.all([
+          metricsStore.fetch({
+            variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
+          }),
+          serviceInstancesHealthStore.fetch().catch(() => null),
+        ]);
+      }
 
       if ($infrastructureStore.errors?.length) {
         console.error("Failed to load infrastructure data:", $infrastructureStore.errors);
@@ -364,8 +368,8 @@
           <div class="slab-body--padded">
             {#if !clusters || clusters.length === 0}
               <EmptyState
-                title="No clusters found"
-                description="Infrastructure clusters will appear here when configured"
+                title="No owned clusters"
+                description="Cluster operations dashboards are available after you create or own an Edge cluster."
                 size="sm"
                 showAction={false}
               >

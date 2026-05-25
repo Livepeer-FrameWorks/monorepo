@@ -1800,8 +1800,9 @@ enum GQL {
   """
 
   static let GetNetworkStatus = """
-  # Public network status for marketing site and webapp (no auth required)
-  # Returns full infrastructure topology: clusters, nodes, services, peer connections
+  # Public network status for marketing/status maps. Authenticated cluster owners
+  # receive node/service detail for owned clusters; everyone else receives
+  # cluster-level topology only.
   query GetNetworkStatus {
     networkStatus {
       clusters {
@@ -1985,7 +1986,22 @@ enum GQL {
         ...OrchestratorInstanceFields
       }
       vantages {
-        ...OrchestratorVantageFields
+        __typename
+        tenantId
+        gatewayId
+        gatewayRegion
+        orchAddr
+        resolvedIp
+        latitude
+        longitude
+        city
+        countryCode
+        geoSource
+        geoResolvedAt
+        latestLatencyMs
+        score
+        dialedRecently
+        lastSeen
       }
     }
   }
@@ -2063,7 +2079,22 @@ enum GQL {
   # (gateway, IP) point. Filter by `orchAddr` from the side panel.
   query GetOrchestratorVantages($orchAddr: String) {
     orchestratorVantages(orchAddr: $orchAddr) {
-      ...OrchestratorVantageFields
+      __typename
+      tenantId
+      gatewayId
+      gatewayRegion
+      orchAddr
+      resolvedIp
+      latitude
+      longitude
+      city
+      countryCode
+      geoSource
+      geoResolvedAt
+      latestLatencyMs
+      score
+      dialedRecently
+      lastSeen
     }
   }
   """

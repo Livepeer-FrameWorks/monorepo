@@ -31,6 +31,8 @@ It is written as a “how the system works” reference (vs an audit checklist).
 - `api_realtime` (“Signalman”): Realtime subscription hub (WebSocket/streaming); redacts client IPs for broadcast.
 - `api_billing` (“Purser”): Consumes billing usage reports, stores usage records, exposes billing APIs.
 
+Bridge exposes analytics through three access scopes: public topology, tenant analytics, and cluster operations. Tenant analytics stay keyed to the caller's `tenant_id`; cluster operations require ownership of the relevant cluster or node; public topology only exposes official cluster-level status. See [analytics-access-scopes.md](analytics-access-scopes.md).
+
 ## 1) Emission: MistServer → Helmsman
 
 Helmsman is the boundary where raw MistServer signals become typed protobuf messages (`pkg/proto`) that the rest of the platform can reason about.

@@ -3,6 +3,21 @@
 # (gateway, IP) point. Filter by `orchAddr` from the side panel.
 query GetOrchestratorVantages($orchAddr: String) {
   orchestratorVantages(orchAddr: $orchAddr) {
-    ...OrchestratorVantageFields @mask_disable
+    __typename
+    tenantId
+    gatewayId
+    gatewayRegion
+    orchAddr
+    resolvedIp
+    latitude
+    longitude
+    city
+    countryCode
+    geoSource
+    geoResolvedAt
+    latestLatencyMs
+    score
+    dialedRecently
+    lastSeen
   }
 }

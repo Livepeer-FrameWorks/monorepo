@@ -1,0 +1,88 @@
+package resolvers
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+)
+
+func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	resp, err := r.Clients.Quartermaster.ListClustersForTenant(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+	if err != nil {
+		return nil, fmt.Errorf("failed to load cluster access: %w", err)
+	}
+
+	out := make(map[string]struct{})
+	for _, cluster := range resp.GetClusters() {
+		if cluster == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(cluster.GetAccessLevel()), "owner") && strings.TrimSpace(cluster.GetClusterId()) != "" {
+			out[cluster.GetClusterId()] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func (r *Resolver) requireClusterOperatorTenant(ctx context.Context) (string, map[string]struct{}, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return "", nil, fmt.Errorf("tenant context required")
+	}
+
+	owned, err := r.ownedClusterIDs(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(owned) == 0 {
+		return "", nil, fmt.Errorf("cluster owner access required")
+	}
+	return tenantID, owned, nil
+}
+
+func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) error {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		_, _, err := r.requireClusterOperatorTenant(ctx)
+		return err
+	}
+
+	owned, err := r.ownedClusterIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if _, ok := owned[clusterID]; !ok {
+		return fmt.Errorf("cluster owner access required")
+	}
+	return nil
+}
+
+func (r *Resolver) requireOwnedNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil, fmt.Errorf("node_id required")
+	}
+
+	resp, err := r.Clients.Quartermaster.GetNode(ctx, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node: %w", err)
+	}
+	node := resp.GetNode()
+	if node == nil {
+		return nil, fmt.Errorf("node not found")
+	}
+	if strings.TrimSpace(node.GetClusterId()) == "" {
+		return nil, fmt.Errorf("node cluster missing")
+	}
+	if err := r.requireOwnedCluster(ctx, node.GetClusterId()); err != nil {
+		return nil, err
+	}
+	return node, nil
+}

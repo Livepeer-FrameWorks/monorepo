@@ -539,7 +539,14 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 
 	nodeKey := ""
 	if nodeID != nil {
-		nodeKey = *nodeID
+		nodeKey = strings.TrimSpace(*nodeID)
+	}
+	if nodeKey != "" {
+		if _, err := r.requireOwnedNode(ctx, nodeKey); err != nil {
+			return nil, err
+		}
+	} else if _, _, err := r.requireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
 	}
 
 	// Build cache key including pagination parameters
@@ -578,7 +585,14 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 
 	nodeKey := ""
 	if nodeID != nil {
-		nodeKey = *nodeID
+		nodeKey = strings.TrimSpace(*nodeID)
+	}
+	if nodeKey != "" {
+		if _, err := r.requireOwnedNode(ctx, nodeKey); err != nil {
+			return nil, err
+		}
+	} else if _, _, err := r.requireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
 	}
 
 	// Build cache key including pagination parameters

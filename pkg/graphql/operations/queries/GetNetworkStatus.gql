@@ -1,5 +1,6 @@
-# Public network status for marketing site and webapp (no auth required)
-# Returns full infrastructure topology: clusters, nodes, services, peer connections
+# Public network status for marketing/status maps. Authenticated cluster owners
+# receive node/service detail for owned clusters; everyone else receives
+# cluster-level topology only.
 query GetNetworkStatus {
   networkStatus {
     clusters {

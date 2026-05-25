@@ -19,11 +19,11 @@ func isLivepeerGatewayService(serviceID string) bool {
 	return serviceID == "livepeer-gateway" || strings.HasPrefix(serviceID, "livepeer-gateway-")
 }
 
-// networkOrchestratorOwnerTenants derives scope from the same current
-// cluster/service topology that backs networkStatus.
+// networkOrchestratorOwnerTenants derives public orchestrator scope from
+// platform-official gateway clusters.
 func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]string, error) {
 	val, err := r.fetchPeriscope(ctx, "network_orchestrator_owner_tenants", []string{"current"}, func(ctx context.Context) (any, error) {
-		clustersResp, err := r.Clients.Quartermaster.ListClusters(ctx, &pb.CursorPaginationRequest{First: 500})
+		clustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(ctx)
 		if err != nil {
 			return nil, err
 		}

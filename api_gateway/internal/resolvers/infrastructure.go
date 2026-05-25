@@ -141,17 +141,21 @@ func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (
 	return resp, nil
 }
 
-// DoGetClusters returns available clusters
+// DoGetClusters returns clusters owned by the current tenant.
 func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string) ([]*pb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data")
 		return demo.GenerateInfrastructureClusters(), nil
 	}
 
-	r.Logger.Info("Getting clusters")
+	tenantID, _, err := r.requireClusterOperatorTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	// Get clusters from Quartermaster gRPC
-	clustersResp, err := r.Clients.Quartermaster.ListClusters(ctx, buildCursorPagination(first, after, nil, nil))
+	r.Logger.WithField("tenant_id", tenantID).Info("Getting owned clusters")
+
+	clustersResp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, buildCursorPagination(first, after, nil, nil))
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clusters")
 		return nil, fmt.Errorf("failed to get clusters: %w", err)
@@ -175,11 +179,13 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*pb.Infrastruct
 
 	r.Logger.WithField("cluster_id", id).Info("Getting cluster")
 
-	// Get cluster from Quartermaster gRPC
 	clusterResp, err := r.Clients.Quartermaster.GetCluster(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get cluster")
 		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+	if err := r.requireOwnedCluster(ctx, clusterResp.GetCluster().GetClusterId()); err != nil {
+		return nil, err
 	}
 
 	return clusterResp.Cluster, nil
@@ -192,27 +198,50 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 		return demo.GenerateInfrastructureNodes(), nil
 	}
 
-	r.Logger.Info("Getting nodes")
-
-	// Build filter parameters for gRPC
 	clusterFilter, err := normalizeFilterID(clusterID, globalid.TypeCluster)
 	if err != nil {
 		return nil, err
 	}
+	if clusterFilter != "" {
+		if accessErr := r.requireOwnedCluster(ctx, clusterFilter); accessErr != nil {
+			return nil, accessErr
+		}
+	} else {
+		if _, _, accessErr := r.requireClusterOperatorTenant(ctx); accessErr != nil {
+			return nil, accessErr
+		}
+	}
+
+	r.Logger.Info("Getting owned-cluster nodes")
+
 	typeFilter := ""
 	if typeArg != nil {
 		typeFilter = *typeArg
 	}
-	// Note: status and tag filters can be added when proto supports them
 
-	// Get nodes from Quartermaster gRPC
-	nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterFilter, typeFilter, "", buildCursorPagination(first, after, nil, nil))
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get nodes")
-		return nil, fmt.Errorf("failed to get nodes: %w", err)
+	if clusterFilter != "" {
+		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, clusterFilter, typeFilter, "", buildCursorPagination(first, after, nil, nil))
+		if listErr != nil {
+			r.Logger.WithError(listErr).Error("Failed to get nodes")
+			return nil, fmt.Errorf("failed to get nodes: %w", listErr)
+		}
+		return nodesResp.Nodes, nil
 	}
 
-	return nodesResp.Nodes, nil
+	owned, err := r.ownedClusterIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]*pb.InfrastructureNode, 0)
+	for ownedClusterID := range owned {
+		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, ownedClusterID, typeFilter, "", &pb.CursorPaginationRequest{First: infraMaxLimit})
+		if listErr != nil {
+			r.Logger.WithError(listErr).WithField("cluster_id", ownedClusterID).Error("Failed to get nodes")
+			return nil, fmt.Errorf("failed to get nodes: %w", listErr)
+		}
+		nodes = append(nodes, nodesResp.GetNodes()...)
+	}
+	return nodes, nil
 }
 
 // DoGetServiceInstances returns service instances
@@ -231,15 +260,43 @@ func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string,
 	if err != nil {
 		return nil, err
 	}
-	// Note: status filter can be added when proto supports it
-
-	// Get service instances from Quartermaster gRPC
-	resp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterFilter, "", nodeFilter, buildCursorPagination(first, after, nil, nil))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service instances: %w", err)
+	if clusterFilter != "" {
+		if accessErr := r.requireOwnedCluster(ctx, clusterFilter); accessErr != nil {
+			return nil, accessErr
+		}
+	} else if nodeFilter != "" {
+		node, accessErr := r.requireOwnedNode(ctx, nodeFilter)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		clusterFilter = node.GetClusterId()
+	} else {
+		if _, _, accessErr := r.requireClusterOperatorTenant(ctx); accessErr != nil {
+			return nil, accessErr
+		}
 	}
 
-	return resp.Instances, nil
+	if clusterFilter != "" {
+		resp, listErr := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterFilter, "", nodeFilter, buildCursorPagination(first, after, nil, nil))
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to get service instances: %w", listErr)
+		}
+		return resp.Instances, nil
+	}
+
+	owned, err := r.ownedClusterIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	instances := make([]*pb.ServiceInstance, 0)
+	for ownedClusterID := range owned {
+		resp, listErr := r.Clients.Quartermaster.ListServiceInstances(ctx, ownedClusterID, "", "", &pb.CursorPaginationRequest{First: infraMaxLimit})
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to get service instances: %w", listErr)
+		}
+		instances = append(instances, resp.GetInstances()...)
+	}
+	return instances, nil
 }
 
 // DoGetNode returns a specific node by ID
@@ -257,14 +314,13 @@ func (r *Resolver) DoGetNode(ctx context.Context, id string) (*pb.Infrastructure
 
 	r.Logger.WithField("node_id", id).Info("Getting node")
 
-	// Get node from Quartermaster gRPC
-	nodeResp, err := r.Clients.Quartermaster.GetNode(ctx, id)
+	node, err := r.requireOwnedNode(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get node")
-		return nil, fmt.Errorf("failed to get node: %w", err)
+		return nil, err
 	}
 
-	return nodeResp.Node, nil
+	return node, nil
 }
 
 // DoDiscoverServices discovers running service instances by service type and optional cluster
@@ -286,15 +342,38 @@ func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, c
 	if clusterID != nil {
 		clusterFilter = *clusterID
 	}
+	if clusterFilter != "" {
+		if err := r.requireOwnedCluster(ctx, clusterFilter); err != nil {
+			return nil, err
+		}
+	} else if _, _, err := r.requireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
+	}
 
-	resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, clusterFilter, buildCursorPagination(first, after, nil, nil))
+	if clusterFilter != "" {
+		resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, clusterFilter, buildCursorPagination(first, after, nil, nil))
+		if err != nil {
+			return nil, fmt.Errorf("failed to discover services: %w", err)
+		}
+		if resp == nil {
+			return []*pb.ServiceInstance{}, nil
+		}
+		return resp.Instances, nil
+	}
+
+	owned, err := r.ownedClusterIDs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to discover services: %w", err)
+		return nil, err
 	}
-	if resp == nil {
-		return []*pb.ServiceInstance{}, nil
+	instances := make([]*pb.ServiceInstance, 0)
+	for ownedClusterID := range owned {
+		resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, ownedClusterID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+		if err != nil {
+			return nil, fmt.Errorf("failed to discover services: %w", err)
+		}
+		instances = append(instances, resp.GetInstances()...)
 	}
-	return resp.Instances, nil
+	return instances, nil
 }
 
 // DoGetDiscoverServicesConnection returns a Relay-style connection for service discovery.
@@ -349,6 +428,13 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 	if clusterID != nil {
 		clusterFilter = *clusterID
 	}
+	if clusterFilter != "" {
+		if err := r.requireOwnedCluster(ctx, clusterFilter); err != nil {
+			return nil, err
+		}
+	} else if _, _, err := r.requireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
+	}
 
 	// Fetch all instances (Quartermaster supports pagination)
 	limit := pagination.DefaultLimit
@@ -356,11 +442,18 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 		limit = pagination.ClampLimit(*first)
 	}
 
+	if clusterFilter == "" {
+		instances, err := r.DoDiscoverServices(ctx, serviceType, nil, first, after)
+		if err != nil {
+			return nil, err
+		}
+		return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
+	}
+
 	resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, clusterFilter, buildCursorPagination(&limit, after, last, before))
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover services: %w", err)
 	}
-
 	instances := resp.Instances
 	if instances == nil {
 		instances = []*pb.ServiceInstance{}
@@ -683,11 +776,14 @@ func (r *Resolver) DoGetClustersConnection(ctx context.Context, first *int, afte
 		return r.buildClustersConnectionFromSlice(clusters, first, after, last, before), nil
 	}
 
-	// Build bidirectional pagination request
+	tenantID, _, err := r.requireClusterOperatorTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	paginationReq := buildCursorPagination(first, after, last, before)
 
-	// Call Quartermaster with pagination
-	resp, err := r.Clients.Quartermaster.ListClusters(ctx, paginationReq)
+	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, paginationReq)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clusters")
 		return nil, fmt.Errorf("failed to get clusters: %w", err)
@@ -804,27 +900,13 @@ func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, 
 		return r.buildNodesConnectionFromSlice(nodes, first, after, last, before), nil
 	}
 
-	decodedClusterID, err := normalizeFilterID(clusterID, globalid.TypeCluster)
-	if err != nil {
-		return nil, err
-	}
-
-	nodeType := ""
-	if typeArg != nil {
-		nodeType = *typeArg
-	}
-
-	// Build bidirectional pagination request
-	paginationReq := buildCursorPagination(first, after, last, before)
-
-	// Call Quartermaster with pagination
-	resp, err := r.Clients.Quartermaster.ListNodes(ctx, decodedClusterID, nodeType, "", paginationReq)
+	nodes, err := r.DoGetNodes(ctx, clusterID, status, typeArg, nil, nil, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get nodes")
 		return nil, fmt.Errorf("failed to get nodes: %w", err)
 	}
 
-	return r.buildNodesConnectionFromResponse(resp), nil
+	return r.buildNodesConnectionFromSlice(nodes, first, after, last, before), nil
 }
 
 // buildNodesConnectionFromResponse constructs a connection from gRPC response
@@ -935,26 +1017,13 @@ func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterI
 		return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
 	}
 
-	decodedClusterID, err := normalizeFilterID(clusterID, globalid.TypeCluster)
-	if err != nil {
-		return nil, err
-	}
-	decodedNodeID, err := normalizeFilterID(nodeID, globalid.TypeInfrastructureNode)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build bidirectional pagination request
-	paginationReq := buildCursorPagination(first, after, last, before)
-
-	// Call Quartermaster with pagination
-	resp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, decodedClusterID, "", decodedNodeID, paginationReq)
+	instances, err := r.DoGetServiceInstances(ctx, clusterID, nodeID, status, nil, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get service instances")
 		return nil, fmt.Errorf("failed to get service instances: %w", err)
 	}
 
-	return r.buildServiceInstancesConnectionFromResponse(resp), nil
+	return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
 }
 
 // buildServiceInstancesConnectionFromResponse constructs a connection from gRPC response

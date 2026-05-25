@@ -11,7 +11,22 @@ query GetOrchestrator($orchAddr: String!) {
       ...OrchestratorInstanceFields @mask_disable
     }
     vantages {
-      ...OrchestratorVantageFields @mask_disable
+      __typename
+      tenantId
+      gatewayId
+      gatewayRegion
+      orchAddr
+      resolvedIp
+      latitude
+      longitude
+      city
+      countryCode
+      geoSource
+      geoResolvedAt
+      latestLatencyMs
+      score
+      dialedRecently
+      lastSeen
     }
   }
 }

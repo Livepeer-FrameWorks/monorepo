@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
@@ -550,6 +551,13 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
+	}
+	if nodeID != nil && strings.TrimSpace(*nodeID) != "" {
+		if _, err := r.requireOwnedNode(ctx, strings.TrimSpace(*nodeID)); err != nil {
+			return nil, err
+		}
+	} else if _, _, err := r.requireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -1494,7 +1502,6 @@ func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *s
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
-
 	opts := &periscopeclient.CursorPaginationOpts{
 		First: int32(pagination.DefaultLimit),
 	}
@@ -1859,6 +1866,13 @@ func (r *Resolver) DoGetNodePerformance5mConnection(ctx context.Context, nodeID 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
+	}
+	if nodeID != nil && strings.TrimSpace(*nodeID) != "" {
+		if _, accessErr := r.requireOwnedNode(ctx, strings.TrimSpace(*nodeID)); accessErr != nil {
+			return nil, accessErr
+		}
+	} else if _, _, accessErr := r.requireClusterOperatorTenant(ctx); accessErr != nil {
+		return nil, accessErr
 	}
 
 	opts := &periscopeclient.CursorPaginationOpts{
@@ -3627,14 +3641,32 @@ func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.
 	return resp.GetSummary(), nil
 }
 
-// DoGetNetworkStatus returns public network topology (no tenant data).
+// DoGetNetworkStatus returns public cluster-level topology and adds node/service
+// detail only for authenticated cluster owners.
 func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNetworkStatus(), nil
 	}
 
-	// Fetch all active clusters (gateway uses service token → sees all active)
-	clustersResp, err := r.Clients.Quartermaster.ListClusters(ctx, &pb.CursorPaginationRequest{First: 500})
+	tenantID := tenantIDFromContext(ctx)
+	operatorView := false
+	var ownedClusters map[string]struct{}
+	if tenantID != "" {
+		var accessErr error
+		ownedClusters, accessErr = r.ownedClusterIDs(ctx)
+		if accessErr != nil {
+			r.Logger.WithError(accessErr).Warn("networkStatus: failed to resolve cluster ownership; returning public topology")
+		}
+		operatorView = len(ownedClusters) > 0
+	}
+
+	var clustersResp *pb.ListClustersResponse
+	var err error
+	if operatorView {
+		clustersResp, err = r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
+	} else {
+		clustersResp, err = r.Clients.Quartermaster.ListOfficialClusters(ctx)
+	}
 	if err != nil {
 		r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
 		return nil, fmt.Errorf("network topology unavailable: %w", err)
@@ -3658,27 +3690,45 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		poolStatuses = append(poolStatuses, servicePoolStatus)
 	}
 
-	// Fetch all nodes (for geo + counts + individual exposure)
-	nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
-	if err != nil {
-		r.Logger.WithError(err).Warn("networkStatus: failed to list nodes")
+	visibleClusterIDs := make(map[string]struct{})
+	for _, cluster := range clustersResp.GetClusters() {
+		if cluster != nil && cluster.GetIsActive() && cluster.GetClusterId() != "" {
+			visibleClusterIDs[cluster.GetClusterId()] = struct{}{}
+		}
 	}
 
-	// Fetch all service instances
-	instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
-	if err != nil {
-		r.Logger.WithError(err).Warn("networkStatus: failed to list service instances")
+	networkNodesRaw := make([]*pb.InfrastructureNode, 0)
+	for clusterID := range visibleClusterIDs {
+		nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		if err != nil {
+			r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list nodes")
+			continue
+		}
+		networkNodesRaw = append(networkNodesRaw, nodesResp.GetNodes()...)
 	}
 
-	// Fetch live stats from Periscope (ClickHouse)
-	liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
-	if err != nil {
-		r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
+	serviceInstancesRaw := make([]*pb.ServiceInstance, 0)
+	for clusterID := range visibleClusterIDs {
+		instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		if err != nil {
+			r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list service instances")
+			continue
+		}
+		serviceInstancesRaw = append(serviceInstancesRaw, instancesResp.GetInstances()...)
 	}
+
 	liveStatsByCluster := make(map[string]*pb.NetworkClusterLiveStats)
-	if liveStatsResp != nil {
-		for _, ls := range liveStatsResp.Clusters {
-			liveStatsByCluster[ls.ClusterId] = ls
+	if operatorView {
+		liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
+		if err != nil {
+			r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
+		}
+		if liveStatsResp != nil {
+			for _, ls := range liveStatsResp.Clusters {
+				if _, ok := visibleClusterIDs[ls.ClusterId]; ok {
+					liveStatsByCluster[ls.ClusterId] = ls
+				}
+			}
 		}
 	}
 
@@ -3687,16 +3737,18 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	var serviceInstances []*model.NetworkServiceInstance
 	nodesWithHealthyService := make(map[string]bool)
 	servicesByCluster := make(map[string]map[string]bool)
-	if instancesResp != nil {
-		for _, si := range instancesResp.Instances {
-			serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
-				InstanceID:   si.InstanceId,
-				ServiceID:    si.ServiceId,
-				ClusterID:    si.ClusterId,
-				NodeID:       si.NodeId,
-				Status:       si.Status,
-				HealthStatus: si.HealthStatus,
-			})
+	for _, si := range serviceInstancesRaw {
+		if si != nil {
+			if operatorView {
+				serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
+					InstanceID:   si.InstanceId,
+					ServiceID:    si.ServiceId,
+					ClusterID:    si.ClusterId,
+					NodeID:       si.NodeId,
+					Status:       si.Status,
+					HealthStatus: si.HealthStatus,
+				})
+			}
 			if si.NodeId != nil && si.HealthStatus == "healthy" {
 				nodesWithHealthyService[*si.NodeId] = true
 			}
@@ -3711,32 +3763,32 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	nodesByCluster := make(map[string]*networkClusterGeo)
 	nodesByID := make(map[string]*pb.InfrastructureNode)
 	var networkNodes []*model.NetworkNode
-	if nodesResp != nil {
-		for _, n := range nodesResp.Nodes {
-			if n == nil {
-				continue
-			}
-			nodesByID[n.NodeId] = n
-			cg, ok := nodesByCluster[n.ClusterId]
-			if !ok {
-				cg = &networkClusterGeo{}
-				nodesByCluster[n.ClusterId] = cg
-			}
-			cg.nodeCount++
-			if cg.region == "" && n.Region != nil && *n.Region != "" {
-				cg.region = *n.Region
-			}
-			var lat, lon float64
-			if n.Latitude != nil && n.Longitude != nil {
-				lat = *n.Latitude
-				lon = *n.Longitude
-				addNetworkClusterGeo(cg, n)
-			}
-			nodeStatus := "offline"
-			if n.LastHeartbeat != nil || nodesWithHealthyService[n.NodeId] {
-				nodeStatus = "active"
-				cg.healthyCount++
-			}
+	for _, n := range networkNodesRaw {
+		if n == nil {
+			continue
+		}
+		nodesByID[n.NodeId] = n
+		cg, ok := nodesByCluster[n.ClusterId]
+		if !ok {
+			cg = &networkClusterGeo{}
+			nodesByCluster[n.ClusterId] = cg
+		}
+		cg.nodeCount++
+		if cg.region == "" && n.Region != nil && *n.Region != "" {
+			cg.region = *n.Region
+		}
+		var lat, lon float64
+		if n.Latitude != nil && n.Longitude != nil {
+			lat = *n.Latitude
+			lon = *n.Longitude
+			addNetworkClusterGeo(cg, n)
+		}
+		nodeStatus := "offline"
+		if n.LastHeartbeat != nil || nodesWithHealthyService[n.NodeId] {
+			nodeStatus = "active"
+			cg.healthyCount++
+		}
+		if operatorView {
 			networkNodes = append(networkNodes, &model.NetworkNode{
 				NodeID:    n.NodeId,
 				Name:      n.NodeName,
@@ -3749,11 +3801,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 	instancesByID := make(map[string]*pb.ServiceInstance)
-	if instancesResp != nil {
-		for _, si := range instancesResp.Instances {
-			if si != nil && si.Id != "" {
-				instancesByID[si.Id] = si
-			}
+	for _, si := range serviceInstancesRaw {
+		if si != nil && si.Id != "" {
+			instancesByID[si.Id] = si
 		}
 	}
 	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, poolStatuses)
@@ -3890,13 +3940,11 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	foghornHostClusterByInstanceID := make(map[string]string)
-	if instancesResp != nil {
-		for _, si := range instancesResp.Instances {
-			if si.ServiceId != "foghorn" || si.Id == "" || si.ClusterId == "" {
-				continue
-			}
-			foghornHostClusterByInstanceID[si.Id] = si.ClusterId
+	for _, si := range serviceInstancesRaw {
+		if si.ServiceId != "foghorn" || si.Id == "" || si.ClusterId == "" {
+			continue
 		}
+		foghornHostClusterByInstanceID[si.Id] = si.ClusterId
 	}
 	if poolStatus != nil {
 		for _, assignment := range poolStatus.Assignments {

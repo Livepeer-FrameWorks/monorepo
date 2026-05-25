@@ -5960,7 +5960,8 @@ type FederationSummary {
   overallFailureRate: Float!
 }
 
-# Public network status (no tenant data)
+# Public cluster-level network status; node/service detail is populated only
+# for authenticated cluster owners.
 type NetworkClusterStatus {
   clusterId: String!
   name: String!
@@ -5988,7 +5989,7 @@ type NetworkPeerConnection {
   connectionType: String!
 }
 
-# Individual infrastructure node (public, no IPs or keys)
+# Individual infrastructure node for authenticated cluster owners.
 type NetworkNode {
   nodeId: String!
   name: String!
@@ -5999,7 +6000,7 @@ type NetworkNode {
   clusterId: String!
 }
 
-# Running service instance (public, no internal endpoints)
+# Running service instance for authenticated cluster owners.
 type NetworkServiceInstance {
   instanceId: String!
   serviceId: String!
