@@ -1186,7 +1186,33 @@ message UpdateNodeHardwareRequest {
 }
 
 message ReportAliveNodesRequest {
-  repeated string node_ids = 1;
+  reserved 1;
+  reserved "node_ids";
+  // Per-node payload: health, capabilities, cluster, external IP. Foghorn
+  // sends this on its 60s heartbeat AND on every detected DNS-relevant
+  // delta.
+  repeated NodeAliveness nodes = 2;
+}
+
+// NodeAliveness carries the per-node fields Quartermaster needs to maintain
+// DNS-visible state (service_instances.health_status, infrastructure_nodes
+// heartbeat/external_ip). Sent by Foghorn.
+message NodeAliveness {
+  string node_id = 1;
+  bool is_healthy = 2;
+  string cluster_id = 3;
+  // Routable IPv4 or IPv6 literal. Must parse as an IP — infrastructure_nodes.external_ip is INET.
+  // Hostnames are not accepted; Foghorn resolves before sending or omits the field.
+  string external_ip = 4;
+  EdgeCapabilities capabilities = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+message EdgeCapabilities {
+  bool ingest = 1;
+  bool egress = 2;
+  bool storage = 3;
+  bool processing = 4;
 }
 
 // Matches pkg/api/quartermaster/types.go:NodeOwnerResponse (lines 431-437)

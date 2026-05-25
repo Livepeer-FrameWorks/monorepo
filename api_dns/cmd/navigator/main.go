@@ -374,7 +374,7 @@ func configureCloudflareACMETokenAlias() {
 }
 
 func requirePrivatePeerUnaryInterceptor() grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		p, ok := peer.FromContext(ctx)
 		if !ok || p.Addr == nil {
 			return nil, status.Error(codes.PermissionDenied, "navigator gRPC requires a private network peer")
@@ -412,13 +412,28 @@ func isPrivateClientIP(raw string) bool {
 	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
-// SyncDNS implements the gRPC SyncDNS method
+// SyncDNS implements the gRPC SyncDNS method. When `cluster_id` is set, the
+// reconcile is scoped to that cluster's edge service type and is authoritative
+// (empty healthy set clears the record). Without `cluster_id`, behaviour is
+// the root-domain sync used by Quartermaster's existing tenant-alias paths.
 func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
-	s.Logger.WithField("service_type", req.GetServiceType()).Info("Received SyncDNS request")
+	log := s.Logger.WithField("service_type", req.GetServiceType())
+	if req.ClusterId != nil {
+		log = log.WithField("cluster_id", req.GetClusterId())
+	}
+	log.Info("Received SyncDNS request")
 
-	partialErrors, err := s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain())
+	var (
+		partialErrors map[string]string
+		err           error
+	)
+	if req.ClusterId != nil && req.GetClusterId() != "" {
+		partialErrors, err = s.DNSManager.SyncServiceForCluster(ctx, req.GetServiceType(), req.GetClusterId())
+	} else {
+		partialErrors, err = s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain())
+	}
 	if err != nil {
-		s.Logger.WithError(err).Error("DNS sync failed")
+		log.WithError(err).Error("DNS sync failed")
 		return &pb.SyncDNSResponse{
 			Success: false,
 			Message: fmt.Sprintf("Sync failed: %v", err),

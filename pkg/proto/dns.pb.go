@@ -1010,10 +1010,15 @@ func (x *GetCustomDomainStatusResponse) GetLastError() string {
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
 type SyncDNSRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Optional: tenant context for tenant-specific DNS records
-	ServiceType   string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "bridge", "foghorn", "helmsman"
-	RootDomain    string                 `protobuf:"bytes,3,opt,name=root_domain,json=rootDomain,proto3" json:"root_domain,omitempty"`    // e.g., "frameworks.network"
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TenantId    *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Optional: tenant context for tenant-specific DNS records
+	ServiceType string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "bridge", "foghorn", "helmsman"
+	RootDomain  string                 `protobuf:"bytes,3,opt,name=root_domain,json=rootDomain,proto3" json:"root_domain,omitempty"`    // e.g., "frameworks.network"
+	// When set, Navigator reconciles only the {service_type}.{clusterSlug}.{root_domain}
+	// record set (and any per-node edge-<node_id> records for that cluster), and treats
+	// an empty healthy-node set as authoritative: the cluster service record is cleared.
+	// When unset, Navigator falls back to root-scoped SyncService behaviour.
+	ClusterId     *string `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1065,6 +1070,13 @@ func (x *SyncDNSRequest) GetServiceType() string {
 func (x *SyncDNSRequest) GetRootDomain() string {
 	if x != nil {
 		return x.RootDomain
+	}
+	return ""
+}
+
+func (x *SyncDNSRequest) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
 	}
 	return ""
 }
@@ -1906,14 +1918,17 @@ const file_dns_proto_rawDesc = "" +
 	"\x0fcert_expires_at\x18\t \x01(\x03R\rcertExpiresAt\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\n" +
-	" \x01(\tR\tlastError\"\x84\x01\n" +
+	" \x01(\tR\tlastError\"\xb7\x01\n" +
 	"\x0eSyncDNSRequest\x12 \n" +
 	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12!\n" +
 	"\fservice_type\x18\x02 \x01(\tR\vserviceType\x12\x1f\n" +
 	"\vroot_domain\x18\x03 \x01(\tR\n" +
-	"rootDomainB\f\n" +
+	"rootDomain\x12\"\n" +
 	"\n" +
-	"_tenant_id\"\xc0\x01\n" +
+	"cluster_id\x18\x04 \x01(\tH\x01R\tclusterId\x88\x01\x01B\f\n" +
+	"\n" +
+	"_tenant_idB\r\n" +
+	"\v_cluster_id\"\xc0\x01\n" +
 	"\x0fSyncDNSResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12>\n" +

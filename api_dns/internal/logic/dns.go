@@ -3,6 +3,7 @@ package logic
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -301,137 +302,15 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 	}
 
 	for _, cluster := range clustersResp.Clusters {
-		clusterSlug := m.clusterSlug(cluster)
-		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
-		useBunny := provider == pkgdns.ProviderBunny && m.bunnyClient != nil
-		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
-
-		if useBunny && !pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType())) {
-			if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
-				partialErrors[svcFQDN] = err.Error()
-			}
-			continue
-		}
-
-		// Inactive clusters: tear down their DNS records instead of syncing.
-		if !cluster.GetIsActive() {
-			if useBunny {
-				if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
-					partialErrors[svcFQDN] = err.Error()
-				}
-			} else if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
-				partialErrors[svcFQDN] = err.Error()
-			} else {
-				m.logger.WithFields(logging.Fields{
-					"service_type": serviceType,
-					"cluster":      clusterSlug,
-					"fqdn":         svcFQDN,
-				}).Info("Cleared DNS for inactive cluster")
-			}
-			// Also clean up per-node edge-<node_id> A records for this cluster.
-			if serviceType == "edge-egress" {
-				for k, v := range m.clearEdgeNodeRecords(rootDomain) {
-					partialErrors[k] = v
-				}
-			}
-			continue
-		}
-
-		// Granular edge services (edge-egress, edge-ingest, etc.) require a wildcard
-		// cert on the edge for TLS termination. Skip DNS records if no cert exists.
-		if m.certChecker != nil && isGranularEdgeService(serviceType) {
-			if !m.certChecker.HasClusterWildcardCert(ctx, clusterSlug, m.domain) {
-				m.logger.WithFields(logging.Fields{
-					"service_type": serviceType,
-					"cluster":      clusterSlug,
-				}).Debug("Skipping granular edge subdomain — no wildcard cert for cluster")
-				continue
-			}
-		}
-
 		nodes := dnsNodesFromProto(nodesByCluster[cluster.GetClusterId()])
-
-		if len(nodes) == 0 {
-			m.logger.WithFields(logging.Fields{
-				"service_type": serviceType,
-				"cluster":      clusterSlug,
-				"fqdn":         svcFQDN,
-			}).Warn("No healthy nodes for cluster; preserving existing DNS")
-			// Don't continue — edge cleanup below still needs to run so
-			// stale per-node records are removed when nodes are drained.
-		} else {
-			var svcPartial map[string]string
-			var syncErr error
-			if useBunny {
-				svcPartial, syncErr = m.syncBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes)
-			} else {
-				svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, nodes)
-			}
-			if syncErr != nil {
-				partialErrors[svcFQDN] = syncErr.Error()
-			} else {
-				for k, v := range svcPartial {
-					partialErrors[k] = v
-				}
-			}
-		}
-
-		if serviceType != "edge-egress" {
-			continue
-		}
-
-		if provider == pkgdns.ProviderBunny {
-			if useBunny {
-				for k, v := range m.syncBunnyEdgeNodeRecords(ctx, rootDomain, nodes) {
-					partialErrors[k] = v
-				}
-			} else {
-				for k, v := range m.clearEdgeNodeRecords(rootDomain) {
-					partialErrors[k] = v
-				}
-			}
-			continue
-		}
-
-		desiredNodeRecords := map[string]string{}
-		for _, node := range nodes {
-			if node.ExternalIP == "" {
-				continue
-			}
-			fqdn := edgeNodeRecordName(node.NodeID, rootDomain)
-			desiredNodeRecords[fqdn] = node.ExternalIP
-			if err := m.applySingleNodeConfig(ctx, fqdn, node.ExternalIP, false); err != nil {
-				partialErrors[fqdn] = err.Error()
-			}
-		}
-
-		aRecords, listErr := m.cfClient.ListDNSRecords("A", "")
-		if listErr != nil {
-			partialErrors[fmt.Sprintf("edge-nodes.%s", rootDomain)] = listErr.Error()
-			continue
-		}
-		prefix := "edge-"
-		suffix := "." + rootDomain
-		for _, rec := range aRecords {
-			if !isEdgeNodeRecord(rec.Name, prefix, suffix) {
-				continue
-			}
-			if _, keep := desiredNodeRecords[rec.Name]; keep {
-				continue
-			}
-			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
-				partialErrors[rec.Name] = err.Error()
-			}
-		}
+		m.syncOneCluster(ctx, serviceType, provider, cluster, nodes, false, partialErrors)
 	}
 
 	if provider == pkgdns.ProviderBunny {
 		if cleanupErrors, err := m.clearUnsupportedRootServiceDNS(ctx, serviceType); err != nil {
 			partialErrors[serviceType+":root-cleanup"] = err.Error()
 		} else {
-			for k, v := range cleanupErrors {
-				partialErrors[k] = v
-			}
+			maps.Copy(partialErrors, cleanupErrors)
 		}
 	}
 
@@ -439,6 +318,210 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+// SyncServiceForCluster reconciles DNS for a single cluster's edge service
+// type. Called by Navigator's SyncDNS RPC when Quartermaster targets a
+// specific (cluster, service_type) wakeup. Authoritative: an empty healthy
+// node set actively clears the cluster service record, unlike the polling
+// path which preserves it (transient QM-failure tolerance).
+func (m *DNSManager) SyncServiceForCluster(ctx context.Context, serviceType, clusterID string) (map[string]string, error) {
+	partialErrors := map[string]string{}
+
+	clustersResp, err := m.qmClient.ListClusters(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	var target *proto.InfrastructureCluster
+	for _, c := range clustersResp.Clusters {
+		if c.GetClusterId() == clusterID {
+			target = c
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("cluster %q not found", clusterID)
+	}
+
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
+	}
+
+	var nodes []dnsNode
+	for _, n := range nodesResp.GetNodes() {
+		if n.GetClusterId() != clusterID {
+			continue
+		}
+		nodes = append(nodes, dnsNodesFromProto([]*proto.InfrastructureNode{n})...)
+	}
+
+	provider := pkgdns.ProviderForServiceType(serviceType)
+	if provider == pkgdns.ProviderBunny && m.bunnyClient == nil {
+		m.logger.WithField("service_type", serviceType).Warn("Bunny DNS is not configured; using Cloudflare cluster-scoped fallback")
+	}
+
+	m.syncOneCluster(ctx, serviceType, provider, target, nodes, true, partialErrors)
+
+	if len(partialErrors) == 0 {
+		return nil, nil
+	}
+	return partialErrors, nil
+}
+
+// syncOneCluster reconciles DNS for a single cluster's edge service type.
+// authoritative controls empty-set handling:
+//
+//   - false (polling caller): preserve the cluster service record on empty
+//     healthy set. Transient QM unavailability or first-deploy races would
+//     otherwise blow DNS away.
+//   - true (targeted Navigator wakeup from QM): the empty set IS the
+//     authoritative signal. Clear the cluster service record actively.
+//
+// Per-node edge-<node_id> records (edge-egress only) are always reconciled.
+func (m *DNSManager) syncOneCluster(
+	ctx context.Context,
+	serviceType string,
+	provider pkgdns.Provider,
+	cluster *proto.InfrastructureCluster,
+	nodes []dnsNode,
+	authoritative bool,
+	partialErrors map[string]string,
+) {
+	clusterSlug := m.clusterSlug(cluster)
+	rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+	useBunny := provider == pkgdns.ProviderBunny && m.bunnyClient != nil
+	svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+
+	if useBunny && !pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType())) {
+		if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
+			partialErrors[svcFQDN] = err.Error()
+		}
+		return
+	}
+
+	if !cluster.GetIsActive() {
+		if useBunny {
+			if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			}
+		} else if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+			partialErrors[svcFQDN] = err.Error()
+		} else {
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"cluster":      clusterSlug,
+				"fqdn":         svcFQDN,
+			}).Info("Cleared DNS for inactive cluster")
+		}
+		if serviceType == "edge-egress" {
+			maps.Copy(partialErrors, m.clearEdgeNodeRecords(rootDomain))
+		}
+		return
+	}
+
+	// Authoritative empty-clear runs BEFORE the cert gate: a node leaving the
+	// healthy set must propagate to DNS even if cluster cert state has
+	// regressed since the last create. The cert gate only protects record
+	// creation, not removal.
+	if len(nodes) == 0 && authoritative {
+		m.logger.WithFields(logging.Fields{
+			"service_type": serviceType,
+			"cluster":      clusterSlug,
+			"fqdn":         svcFQDN,
+		}).Info("Authoritative empty set; clearing cluster service record")
+		if useBunny {
+			if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			}
+		} else if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+			partialErrors[svcFQDN] = err.Error()
+		}
+		if serviceType == "edge-egress" {
+			if provider == pkgdns.ProviderBunny && useBunny {
+				maps.Copy(partialErrors, m.syncBunnyEdgeNodeRecords(ctx, rootDomain, nil))
+			} else {
+				maps.Copy(partialErrors, m.clearEdgeNodeRecords(rootDomain))
+			}
+		}
+		return
+	}
+
+	if m.certChecker != nil && isGranularEdgeService(serviceType) {
+		if !m.certChecker.HasClusterWildcardCert(ctx, clusterSlug, m.domain) {
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"cluster":      clusterSlug,
+			}).Debug("Skipping granular edge subdomain — no wildcard cert for cluster")
+			return
+		}
+	}
+
+	if len(nodes) == 0 {
+		m.logger.WithFields(logging.Fields{
+			"service_type": serviceType,
+			"cluster":      clusterSlug,
+			"fqdn":         svcFQDN,
+		}).Warn("No healthy nodes for cluster; preserving existing DNS")
+	} else {
+		var svcPartial map[string]string
+		var syncErr error
+		if useBunny {
+			svcPartial, syncErr = m.syncBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes)
+		} else {
+			svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, nodes)
+		}
+		if syncErr != nil {
+			partialErrors[svcFQDN] = syncErr.Error()
+		} else {
+			maps.Copy(partialErrors, svcPartial)
+		}
+	}
+
+	if serviceType != "edge-egress" {
+		return
+	}
+
+	if provider == pkgdns.ProviderBunny {
+		if useBunny {
+			maps.Copy(partialErrors, m.syncBunnyEdgeNodeRecords(ctx, rootDomain, nodes))
+		} else {
+			maps.Copy(partialErrors, m.clearEdgeNodeRecords(rootDomain))
+		}
+		return
+	}
+
+	desiredNodeRecords := map[string]string{}
+	for _, node := range nodes {
+		if node.ExternalIP == "" {
+			continue
+		}
+		fqdn := edgeNodeRecordName(node.NodeID, rootDomain)
+		desiredNodeRecords[fqdn] = node.ExternalIP
+		if err := m.applySingleNodeConfig(ctx, fqdn, node.ExternalIP, false); err != nil {
+			partialErrors[fqdn] = err.Error()
+		}
+	}
+
+	aRecords, listErr := m.cfClient.ListDNSRecords("A", "")
+	if listErr != nil {
+		partialErrors[fmt.Sprintf("edge-nodes.%s", rootDomain)] = listErr.Error()
+		return
+	}
+	prefix := "edge-"
+	suffix := "." + rootDomain
+	for _, rec := range aRecords {
+		if !isEdgeNodeRecord(rec.Name, prefix, suffix) {
+			continue
+		}
+		if _, keep := desiredNodeRecords[rec.Name]; keep {
+			continue
+		}
+		if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+			partialErrors[rec.Name] = err.Error()
+		}
+	}
 }
 
 func edgeNodeRecordLabel(nodeID string) string {
@@ -677,9 +760,7 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		if cleanupErrors == nil && len(apexCleanup) > 0 {
 			cleanupErrors = map[string]string{}
 		}
-		for k, v := range apexCleanup {
-			cleanupErrors[k] = v
-		}
+		maps.Copy(cleanupErrors, apexCleanup)
 	}
 	return cleanupErrors, nil
 }
@@ -714,9 +795,7 @@ func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain s
 	}
 	if created {
 		fields := logging.Fields{"zone": zoneDomain}
-		for k, v := range logFields {
-			fields[k] = v
-		}
+		maps.Copy(fields, logFields)
 		m.logger.WithFields(fields).Info("Created Bunny DNS zone")
 	}
 
@@ -1133,9 +1212,7 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 	}
 
 	preCreateCleanupErrors := m.cleanupManagedPools(fqdn, legacyPoolName, desiredPoolNames)
-	for k, v := range preCreateCleanupErrors {
-		partialErrors[k] = v
-	}
+	maps.Copy(partialErrors, preCreateCleanupErrors)
 
 	for _, pool := range desiredPools {
 		poolID, err := m.ensureDesiredPool(pool)
@@ -1243,13 +1320,9 @@ func (m *DNSManager) applyLoadBalancerPools(ctx context.Context, fqdn, serviceTy
 	}
 
 	stalePoolErrors := m.cleanupManagedPools(fqdn, legacyPoolName, desiredPoolNames)
-	for k, v := range stalePoolErrors {
-		partialErrors[k] = v
-	}
+	maps.Copy(partialErrors, stalePoolErrors)
 	stalePoolIDErrors := m.cleanupPoolIDs(fqdn, previousPoolIDs, desiredPoolIDs)
-	for k, v := range stalePoolIDErrors {
-		partialErrors[k] = v
-	}
+	maps.Copy(partialErrors, stalePoolIDErrors)
 
 	if len(partialErrors) == 0 {
 		return nil, nil

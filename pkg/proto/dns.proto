@@ -170,6 +170,11 @@ message SyncDNSRequest {
   optional string tenant_id = 1; // Optional: tenant context for tenant-specific DNS records
   string service_type = 2;       // e.g., "bridge", "foghorn", "helmsman"
   string root_domain = 3;        // e.g., "frameworks.network"
+  // When set, Navigator reconciles only the {service_type}.{clusterSlug}.{root_domain}
+  // record set (and any per-node edge-<node_id> records for that cluster), and treats
+  // an empty healthy-node set as authoritative: the cluster service record is cleared.
+  // When unset, Navigator falls back to root-scoped SyncService behaviour.
+  optional string cluster_id = 4;
 }
 
 // SyncDNSResponse is returned by Navigator after attempting DNS synchronization.

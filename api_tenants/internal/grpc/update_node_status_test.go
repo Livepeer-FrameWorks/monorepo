@@ -63,9 +63,9 @@ func TestUpdateNodeStatus_AllowsProviderRoleAcrossActiveClusters(t *testing.T) {
 	`)).
 		WithArgs("00000000-0000-0000-0000-000000000001").
 		WillReturnRows(sqlmock.NewRows([]string{"is_provider"}).AddRow(true))
-	mock.ExpectQuery(`UPDATE quartermaster\.infrastructure_nodes n[\s\S]*c\.is_active = true[\s\S]*RETURNING n\.node_id`).
+	mock.ExpectQuery(`UPDATE quartermaster\.infrastructure_nodes n[\s\S]*c\.is_active = true[\s\S]*RETURNING n\.node_id, n\.cluster_id`).
 		WithArgs("edge-1", "maintenance", clusterID).
-		WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("edge-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id"}).AddRow("edge-1", clusterID))
 	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type[\s\S]*snapshot_cpu_percent[\s\S]*WHERE n\.node_id = \$1 OR n\.id::text = \$1`).
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))

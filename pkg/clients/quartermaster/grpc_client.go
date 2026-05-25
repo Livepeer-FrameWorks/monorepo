@@ -560,10 +560,14 @@ func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeH
 	return err
 }
 
-// ReportAliveNodes batch-refreshes last_heartbeat for connected edge nodes.
-func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodeIDs []string) error {
+// ReportAliveNodes pushes the current per-node DNS-relevant state (health,
+// capabilities, cluster, external IP) for every connected edge. Quartermaster
+// refreshes infrastructure_nodes.last_heartbeat, syncs service_instances
+// health_status from capabilities, and fires Navigator wakeups for any
+// (cluster, edge-service) pair whose DNS-visible set changes.
+func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodes []*pb.NodeAliveness) error {
 	_, err := c.node.ReportAliveNodes(ctx, &pb.ReportAliveNodesRequest{
-		NodeIds: nodeIDs,
+		Nodes: nodes,
 	})
 	return err
 }

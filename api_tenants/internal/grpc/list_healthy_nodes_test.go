@@ -439,7 +439,12 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 	}
 }
 
-func TestReportAliveNodesMarksEdgeCapabilitiesHealthyByServiceType(t *testing.T) {
+// TestReportAliveNodesUpsertsEdgeCapabilities pins event-driven edge
+// membership ingestion: for each NodeAliveness with an edge-* capability set, QM
+// upserts the matching service_instances row. Caps not set are not
+// materialised; existing rows for caps flipped off get UPDATE'd to unhealthy
+// (covered by a separate test).
+func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -448,16 +453,109 @@ func TestReportAliveNodesMarksEdgeCapabilitiesHealthyByServiceType(t *testing.T)
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes\s+SET last_heartbeat = NOW\(\), updated_at = NOW\(\)\s+WHERE node_id = ANY\(\$1\)`).
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'healthy'.*FROM quartermaster\.services svc.*si\.service_id = svc\.service_id.*svc\.type LIKE 'edge-%'`).
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 4))
+	// ensureServiceExists runs once per edge-* type (4 types), each in its own tx.
+	for range []string{"edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
+		mock.ExpectBegin()
+		mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(`SELECT service_id FROM quartermaster\.services WHERE service_id = \$1 OR name = \$1`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("edge-egress"))
+		mock.ExpectCommit()
+	}
 
-	if _, err := server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
-		NodeIds: []string{"edge-eu-1"},
-	}); err != nil {
+	// Main tx: prior node read → update infrastructure_nodes → prior service_instances → per-cap upsert.
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT node_id, cluster_id, COALESCE\(host\(external_ip\), ''\)\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = ANY\(\$1\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
+			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\).*FROM quartermaster\.service_instances si.*svc\.type LIKE 'edge-%'`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}))
+	// Two caps on → two ON CONFLICT upserts. The other two caps are false →
+	// no row exists → no UPDATE issued.
+	for range []int{0, 1} {
+		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectCommit()
+
+	_, err = server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
+		Nodes: []*pb.NodeAliveness{{
+			NodeId:     "edge-eu-1",
+			IsHealthy:  true,
+			ClusterId:  "cluster-eu",
+			ExternalIp: "203.0.113.10",
+			Capabilities: &pb.EdgeCapabilities{
+				Ingest: true,
+				Egress: true,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ReportAliveNodes returned error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// TestReportAliveNodesMarksDroppedCapUnhealthy verifies that when a cap that
+// previously had a healthy row goes false, we UPDATE the row to unhealthy.
+// Don't delete; don't INSERT a fresh unhealthy row that was never advertised.
+func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	for range []string{"edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
+		mock.ExpectBegin()
+		mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(`SELECT service_id FROM quartermaster\.services`).WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("edge-egress"))
+		mock.ExpectCommit()
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT node_id, cluster_id, COALESCE\(host\(external_ip\), ''\)\s+FROM quartermaster\.infrastructure_nodes`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
+			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Prior state: edge-egress instance was healthy. Now cap is off.
+	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
+			AddRow("edge-eu-1", "edge-egress", "cluster-eu", "healthy"))
+	// Cap is off + existing row → UPDATE to unhealthy.
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'`).
+		WithArgs("edge-egress", "edge-eu-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	_, err = server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
+		Nodes: []*pb.NodeAliveness{{
+			NodeId:       "edge-eu-1",
+			IsHealthy:    true,
+			ClusterId:    "cluster-eu",
+			ExternalIp:   "203.0.113.10",
+			Capabilities: &pb.EdgeCapabilities{}, // all caps off
+		}},
+	})
+	if err != nil {
 		t.Fatalf("ReportAliveNodes returned error: %v", err)
 	}
 

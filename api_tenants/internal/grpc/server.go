@@ -4234,13 +4234,43 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 		UPDATE quartermaster.infrastructure_nodes n
 		SET status = $2, updated_at = NOW()
 		WHERE %s
-		RETURNING n.node_id
+		RETURNING n.node_id, n.cluster_id
 	`, strings.Join(where, " AND "))
-	var canonicalNodeID string
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&canonicalNodeID); errors.Is(err, sql.ErrNoRows) {
+	var canonicalNodeID, canonicalClusterID string
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&canonicalNodeID, &canonicalClusterID); errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found")
 	} else if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update node status: %v", err)
+	}
+
+	// Any non-active status transition makes the node ineligible for DNS.
+	// Aggregate `edge` DNS gates on n.status='active'; edge-* subtype DNS
+	// gates on service_instances.health_status. Flip every edge-* instance
+	// to 'unhealthy' so the polling Navigator reconcile would converge even
+	// if our targeted wake-up below fails.
+	if nextStatus != "active" {
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE quartermaster.service_instances si
+			SET health_status = 'unhealthy',
+			    status = 'offline',
+			    stopped_at = COALESCE(si.stopped_at, NOW()),
+			    last_health_check = NOW(),
+			    updated_at = NOW()
+			FROM quartermaster.services svc
+			WHERE svc.service_id = si.service_id
+			  AND svc.type LIKE 'edge-%'
+			  AND si.node_id = $1
+		`, canonicalNodeID); err != nil {
+			s.logger.WithError(err).WithField("node_id", canonicalNodeID).
+				Warn("Failed to mark edge service_instances unhealthy after UpdateNodeStatus")
+		}
+		if canonicalClusterID != "" {
+			pairs := map[dnsPairKey]struct{}{}
+			for _, mapping := range edgeCapToServiceType {
+				pairs[dnsPairKey{canonicalClusterID, mapping.serviceType}] = struct{}{}
+			}
+			s.fireNavigatorSyncForPairs(pairs)
+		}
 	}
 
 	node, err := s.queryNode(ctx, canonicalNodeID)
@@ -4840,42 +4870,371 @@ func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.Up
 	return &emptypb.Empty{}, nil
 }
 
-// ReportAliveNodes batch-refreshes last_heartbeat for connected edge nodes.
-// Called periodically by Foghorn with IDs of nodes that have active control streams.
+// edgeCapToServiceType maps a capability flag in NodeAliveness to the
+// corresponding services.type. The list is closed; new capability types must
+// land here and in pkg/dns/public_services.go in the same change.
+var edgeCapToServiceType = []struct {
+	serviceType string
+	cap         func(c *pb.EdgeCapabilities) bool
+}{
+	{"edge-ingest", func(c *pb.EdgeCapabilities) bool { return c.GetIngest() }},
+	{"edge-egress", func(c *pb.EdgeCapabilities) bool { return c.GetEgress() }},
+	{"edge-storage", func(c *pb.EdgeCapabilities) bool { return c.GetStorage() }},
+	{"edge-processing", func(c *pb.EdgeCapabilities) bool { return c.GetProcessing() }},
+}
+
+// dnsPairKey identifies the (cluster, edge-service_type) tuple that scopes a
+// Navigator.SyncDNS wakeup.
+type dnsPairKey struct {
+	clusterID   string
+	serviceType string
+}
+
+// nodeBefore captures the persisted node fields ReportAliveNodes diffs against
+// the incoming payload.
+type nodeBefore struct {
+	clusterID, externalIP string
+}
+
+// instBefore captures the persisted service_instance state ReportAliveNodes
+// diffs against per (node, edge-service_type).
+type instBefore struct {
+	clusterID, health string
+	exists            bool
+}
+
+func scanPriorNodes(rows *sql.Rows) (map[string]nodeBefore, error) {
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+	out := map[string]nodeBefore{}
+	for rows.Next() {
+		var id string
+		var nb nodeBefore
+		if err := rows.Scan(&id, &nb.clusterID, &nb.externalIP); err != nil {
+			return nil, err
+		}
+		out[id] = nb
+	}
+	return out, rows.Err()
+}
+
+func scanPriorInst(rows *sql.Rows) (map[string]instBefore, error) {
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+	out := map[string]instBefore{}
+	for rows.Next() {
+		var nodeID, svcType string
+		ib := instBefore{exists: true}
+		if err := rows.Scan(&nodeID, &svcType, &ib.clusterID, &ib.health); err != nil {
+			return nil, err
+		}
+		out[nodeID+"|"+svcType] = ib
+	}
+	return out, rows.Err()
+}
+
+// ReportAliveNodes ingests Foghorn's per-node DNS-relevant state. For each
+// reported node it:
+//
+//   - Refreshes infrastructure_nodes.last_heartbeat (only when is_healthy=true;
+//     refreshing on disconnect would extend the aggregate `edge` DNS gate,
+//     which uses n.last_heartbeat).
+//   - Updates external_ip when Foghorn sent a valid IP literal.
+//   - UPSERTs the edge-* service_instances rows that match the node's
+//     capability flags, marking them healthy when both the cap and the node
+//     are healthy. Caps that drop to false on an existing row become
+//     'unhealthy' (present-but-unhealthy, not deleted).
+//
+// When any (cluster_id, edge-service_type) pair's DNS-visible state changes —
+// service_instances health flip, external_ip change, or cluster_id change —
+// Quartermaster fires Navigator.SyncDNS for that pair after commit. The 60s
+// Navigator reconcile loop is the backstop.
 func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
-	nodeIDs := req.GetNodeIds()
-	if len(nodeIDs) == 0 {
+	nodes := req.GetNodes()
+	if len(nodes) == 0 {
 		return &emptypb.Empty{}, nil
 	}
-	if len(nodeIDs) > 500 {
-		return nil, status.Errorf(codes.InvalidArgument, "too many node IDs (%d), max 500", len(nodeIDs))
+	if len(nodes) > 500 {
+		return nil, status.Errorf(codes.InvalidArgument, "too many nodes (%d), max 500", len(nodes))
 	}
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE quartermaster.infrastructure_nodes
-		SET last_heartbeat = NOW(), updated_at = NOW()
+
+	type capState struct {
+		nodeID, clusterID, serviceType string
+		healthy                        bool
+	}
+	type nodeUpdate struct {
+		nodeID, clusterID, externalIP string
+		isHealthy                     bool
+		hasExternalIP                 bool
+	}
+
+	updates := make([]nodeUpdate, 0, len(nodes))
+	caps := make([]capState, 0, len(nodes)*len(edgeCapToServiceType))
+
+	for _, n := range nodes {
+		id := strings.TrimSpace(n.GetNodeId())
+		if id == "" {
+			continue
+		}
+		u := nodeUpdate{
+			nodeID:    id,
+			clusterID: strings.TrimSpace(n.GetClusterId()),
+			isHealthy: n.GetIsHealthy(),
+		}
+		if raw := strings.TrimSpace(n.GetExternalIp()); raw != "" {
+			if parsed := net.ParseIP(raw); parsed != nil {
+				u.externalIP = parsed.String()
+				u.hasExternalIP = true
+			} else {
+				s.logger.WithFields(logging.Fields{
+					"node_id":     id,
+					"external_ip": raw,
+				}).Warn("Rejecting non-IP external_ip from Foghorn ReportAliveNodes payload")
+			}
+		}
+		updates = append(updates, u)
+
+		for _, mapping := range edgeCapToServiceType {
+			caps = append(caps, capState{
+				nodeID:      id,
+				clusterID:   u.clusterID,
+				serviceType: mapping.serviceType,
+				healthy:     u.isHealthy && mapping.cap(n.GetCapabilities()),
+			})
+		}
+	}
+	if len(updates) == 0 {
+		return &emptypb.Empty{}, nil
+	}
+
+	// Ensure edge-* services rows exist BEFORE the main tx: ensureServiceExists
+	// uses its own transaction with an advisory lock.
+	for _, mapping := range edgeCapToServiceType {
+		if _, err := s.ensureServiceExists(ctx, mapping.serviceType, "http"); err != nil {
+			return nil, err
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			s.logger.WithError(rbErr).Debug("ReportAliveNodes rollback")
+		}
+	}()
+
+	// Pre-read prior node state (external_ip, cluster_id) so we can detect
+	// IP/cluster deltas that need Navigator wakeups even when health doesn't flip.
+	nodeIDs := make([]string, 0, len(updates))
+	for _, u := range updates {
+		nodeIDs = append(nodeIDs, u.nodeID)
+	}
+	nodeRows, err := tx.QueryContext(ctx, `
+		SELECT node_id, cluster_id, COALESCE(host(external_ip), '')
+		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = ANY($1)
 	`, pq.Array(nodeIDs))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update heartbeats: %v", err)
+		return nil, status.Errorf(codes.Internal, "read prior node state: %v", err)
+	}
+	priorNodes, err := scanPriorNodes(nodeRows)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "scan prior node: %v", err)
 	}
 
-	// Mark edge-* service instances healthy on these nodes. Capability health
-	// is authoritative from Foghorn's control-stream heartbeat; join the service
-	// catalog by type so this keeps working even when service_id is not the type.
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE quartermaster.service_instances si
-		SET health_status = 'healthy', last_health_check = NOW(), updated_at = NOW()
-		FROM quartermaster.services svc
-		WHERE si.service_id = svc.service_id
-		  AND si.node_id = ANY($1)
+	// Warn, but don't mutate, when Foghorn's view of cluster_id disagrees
+	// with the persisted value. Cluster moves require FK-deferred row moves
+	// of dependent service_instances (see api_tenants/internal/bootstrap/nodes.go).
+	// ReportAliveNodes is the wrong authority for that; only operator paths
+	// move clusters.
+	for _, u := range updates {
+		if u.clusterID == "" {
+			continue
+		}
+		if prior, ok := priorNodes[u.nodeID]; ok && prior.clusterID != "" && prior.clusterID != u.clusterID {
+			s.logger.WithFields(logging.Fields{
+				"node_id":           u.nodeID,
+				"reported_cluster":  u.clusterID,
+				"persisted_cluster": prior.clusterID,
+			}).Warn("Foghorn reported cluster_id differs from persisted; cluster moves must go through operator path, not heartbeat")
+		}
+	}
+
+	// Per-node heartbeat + external_ip. Heartbeat ONLY for healthy nodes —
+	// listHealthyEdgeNodes gates aggregate `edge` DNS on n.last_heartbeat, so
+	// refreshing it for unhealthy reports would extend DNS eligibility for a
+	// node Foghorn just declared dead.
+	upNodeIDs := make([]string, 0, len(updates))
+	upExternalIPs := make([]string, 0, len(updates))
+	upRefreshHB := make([]bool, 0, len(updates))
+	for _, u := range updates {
+		upNodeIDs = append(upNodeIDs, u.nodeID)
+		ip := ""
+		if u.hasExternalIP {
+			ip = u.externalIP
+		}
+		upExternalIPs = append(upExternalIPs, ip)
+		upRefreshHB = append(upRefreshHB, u.isHealthy)
+	}
+	if _, execErr := tx.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes n
+		SET last_heartbeat = CASE WHEN payload.refresh_hb THEN NOW() ELSE n.last_heartbeat END,
+		    updated_at = NOW(),
+		    external_ip = COALESCE(NULLIF(payload.ip, '')::inet, n.external_ip)
+		FROM unnest($1::text[], $2::text[], $3::boolean[]) AS payload(node_id, ip, refresh_hb)
+		WHERE n.node_id = payload.node_id
+	`, pq.Array(upNodeIDs), pq.Array(upExternalIPs), pq.Array(upRefreshHB)); execErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update node state: %v", execErr)
+	}
+
+	// Pre-read prior service_instances state per (node, edge-service_type) so
+	// we can detect health flips.
+	siRows, err := tx.QueryContext(ctx, `
+		SELECT si.node_id, svc.type, si.cluster_id, COALESCE(si.health_status, '')
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.node_id = ANY($1)
 		  AND svc.type LIKE 'edge-%'
-		  AND si.status IN ('running','starting')
-	`, pq.Array(nodeIDs))
+	`, pq.Array(upNodeIDs))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update edge service health: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to read prior edge service health: %v", err)
+	}
+	priorInst, err := scanPriorInst(siRows)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "scan prior si: %v", err)
+	}
+
+	// UPSERT capabilities. We only INSERT when the cap is currently true —
+	// don't materialise rows for caps a node has never advertised.
+	// For caps that flip false on an existing row we UPDATE to 'unhealthy'.
+	for _, c := range caps {
+		key := c.nodeID + "|" + c.serviceType
+		_, hadRow := priorInst[key]
+		switch {
+		case c.healthy:
+			// Operator status is authoritative over capability flags: a node in
+			// maintenance/offline/retired/evicted must not be re-enabled by a
+			// stale Foghorn heartbeat. The INSERT...SELECT only emits a row when
+			// the persisted node row is active, so the same upsert can revive an
+			// edge capability after the operator marks the node active again.
+			instanceID := fmt.Sprintf("edge-cap-%s-%s", c.nodeID, c.serviceType)
+			if _, execErr := tx.ExecContext(ctx, `
+				INSERT INTO quartermaster.service_instances
+					(instance_id, cluster_id, node_id, service_id, protocol,
+					 advertise_host, port, status, health_status, started_at,
+					 last_health_check, created_at, updated_at)
+				SELECT $1, n.cluster_id, $2, $3, 'http',
+				       COALESCE(host(n.external_ip), ''), 18008, 'running', 'healthy',
+				       COALESCE((SELECT started_at FROM quartermaster.service_instances WHERE instance_id = $1), NOW()),
+				       NOW(), NOW(), NOW()
+				FROM quartermaster.infrastructure_nodes n
+				WHERE n.node_id = $2
+				  AND n.status = 'active'
+				ON CONFLICT (instance_id) DO UPDATE
+				SET node_id = EXCLUDED.node_id,
+				    service_id = EXCLUDED.service_id,
+				    health_status = 'healthy',
+				    status = 'running',
+				    advertise_host = EXCLUDED.advertise_host,
+				    last_health_check = NOW(),
+				    updated_at = NOW()
+			`, instanceID, c.nodeID, c.serviceType); execErr != nil {
+				return nil, status.Errorf(codes.Internal, "upsert healthy edge instance: %v", execErr)
+			}
+		case !c.healthy && hadRow:
+			if _, execErr := tx.ExecContext(ctx, `
+				UPDATE quartermaster.service_instances si
+				SET health_status = 'unhealthy',
+				    last_health_check = NOW(),
+				    updated_at = NOW()
+				FROM quartermaster.services svc
+				WHERE svc.service_id = si.service_id
+				  AND svc.type = $1
+				  AND si.node_id = $2
+			`, c.serviceType, c.nodeID); execErr != nil {
+				return nil, status.Errorf(codes.Internal, "mark edge instance unhealthy: %v", execErr)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit: %v", err)
+	}
+
+	// Compute dirty (cluster, type) pairs across two change axes:
+	//   - health_status flip on an edge-* instance (cap toggled or node health flipped)
+	//   - external_ip change on the underlying node (A record value changes)
+	//
+	// Cluster moves are not mutated here, so the dirty cluster is always the
+	// persisted cluster — taken from prior row state or the node row.
+	dirty := map[dnsPairKey]struct{}{}
+	for _, c := range caps {
+		prior, hadRow := priorInst[c.nodeID+"|"+c.serviceType]
+		newHealth := "unhealthy"
+		if c.healthy {
+			newHealth = "healthy"
+		}
+		clusterForDirty := ""
+		if hadRow {
+			clusterForDirty = prior.clusterID
+		} else if pn, ok := priorNodes[c.nodeID]; ok {
+			clusterForDirty = pn.clusterID
+		}
+		if clusterForDirty == "" {
+			continue
+		}
+		switch {
+		case !hadRow && c.healthy:
+			dirty[dnsPairKey{clusterForDirty, c.serviceType}] = struct{}{}
+		case hadRow && prior.health != newHealth:
+			dirty[dnsPairKey{clusterForDirty, c.serviceType}] = struct{}{}
+		}
+	}
+	// IP deltas at the node level: wake every edge-* pair for the persisted cluster.
+	for _, u := range updates {
+		prior, ok := priorNodes[u.nodeID]
+		if !ok || prior.clusterID == "" {
+			continue
+		}
+		if !u.hasExternalIP || prior.externalIP == u.externalIP {
+			continue
+		}
+		for _, mapping := range edgeCapToServiceType {
+			dirty[dnsPairKey{prior.clusterID, mapping.serviceType}] = struct{}{}
+		}
+	}
+	if len(dirty) > 0 {
+		s.fireNavigatorSyncForPairs(dirty)
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+// fireNavigatorSyncForPairs dispatches Navigator.SyncDNS for each
+// (cluster, service_type) pair whose DNS-visible health set changed. Failures
+// are logged; the 60s Navigator reconcile loop is the durable backstop.
+func (s *QuartermasterServer) fireNavigatorSyncForPairs(pairs map[dnsPairKey]struct{}) {
+	if s.navigatorClient == nil || len(pairs) == 0 {
+		return
+	}
+	go func() {
+		// Detached from the request ctx so the notify outlives the caller's deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for p := range pairs {
+			clusterID := p.clusterID
+			req := &pb.SyncDNSRequest{
+				ServiceType: p.serviceType,
+				ClusterId:   &clusterID,
+			}
+			if _, err := s.navigatorClient.SyncDNS(ctx, req); err != nil {
+				s.logger.WithError(err).WithFields(logging.Fields{
+					"cluster_id":   p.clusterID,
+					"service_type": p.serviceType,
+				}).Warn("Navigator SyncDNS notify failed; 60s repair loop will converge")
+			}
+		}
+	}()
 }
 
 // ListNodes returns nodes with optional filters
@@ -5152,7 +5511,10 @@ func synthesizePublicHost(serviceType, clusterID, clusterName, baseURL string) s
 func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []any, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
 	args := append([]any{}, baseArgs...)
 	args = append(args, models.NodeTypeEdge)
-	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL", len(baseArgs)+1)
+	// n.status = 'active' is the operator-controlled DNS gate: maintenance/
+	// offline/retired/evicted nodes are excluded even when their heartbeat
+	// is fresh.
+	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL AND n.status = 'active'", len(baseArgs)+1)
 	argIdx := len(args) + 1
 
 	var totalNodes int32
@@ -5220,7 +5582,10 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		argIdx++
 	}
 
-	where += " AND n.external_ip IS NOT NULL"
+	// Operator-controlled gate: maintenance/offline/retired/evicted nodes are
+	// excluded from DNS even when a recent Foghorn heartbeat marked the
+	// service_instances row healthy.
+	where += " AND n.external_ip IS NOT NULL AND n.status = 'active'"
 
 	servicesJoin := "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
 	siJoin := `

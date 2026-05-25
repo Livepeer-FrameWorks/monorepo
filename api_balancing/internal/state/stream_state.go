@@ -263,6 +263,10 @@ type StreamStateManager struct {
 	instanceID  string
 	redisCancel context.CancelFunc
 	redisWg     sync.WaitGroup
+
+	// DNS-relevant delta tracker: records last-published per-node snapshot
+	// and a dirty set drained by the coalescer that pushes ReportAliveNodes.
+	dnsDelta dnsDeltaTracker
 }
 
 // NewStreamStateManager creates a new stream state manager
@@ -296,6 +300,8 @@ func NewStreamStateManager() *StreamStateManager {
 
 		stalenessCheckInterval:  30 * time.Second,
 		stalenessConfigRefreshC: make(chan struct{}, 1),
+
+		dnsDelta: newDNSDeltaTracker(),
 	}
 
 	// Start staleness detection background goroutine
@@ -923,6 +929,7 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.MarkNodeDNSChanged(nodeID)
 }
 
 // SetProbeVerified marks whether Foghorn has verified the node's HTTPS endpoint.
@@ -981,6 +988,7 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.MarkNodeDNSChanged(nodeID)
 }
 
 // UpdateNodeMetrics updates node metrics, capabilities, roles, and storage info
@@ -1030,6 +1038,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.MarkNodeDNSChanged(nodeID)
 }
 
 // UpdateNodeDiskUsage updates the disk usage statistics for a node
@@ -1070,6 +1079,7 @@ func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.MarkNodeDNSChanged(nodeID)
 }
 
 func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error {
@@ -1451,6 +1461,7 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(ctx context.Context, nodeID 
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+	sm.MarkNodeDNSChanged(nodeID)
 }
 
 // ArtifactNodeInfo contains node information for artifact routing

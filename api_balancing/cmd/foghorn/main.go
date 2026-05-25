@@ -978,8 +978,13 @@ func main() {
 	defer clusterRefreshCancel()
 	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)
 
-	// Relay edge heartbeats to Quartermaster so last_heartbeat stays fresh for DNS
+	// Relay edge state to Quartermaster. Two paths:
+	//   - delta coalescer: drains DNS-relevant deltas (health/caps/cluster/IP)
+	//     within ~1s of the lifecycle event or stream disconnect.
+	//   - 60s repair sync: re-publishes the full alive set so transient losses
+	//     converge without an event.
 	if qmClient != nil {
+		go startEdgeDNSDeltaCoalescer(qmClient, logger)
 		go startEdgeHealthSync(qmClient, logger)
 	}
 
@@ -1321,20 +1326,70 @@ func reconnectCommodore(
 	}
 }
 
+// startEdgeHealthSync re-publishes every known node — healthy AND unhealthy —
+// to Quartermaster every 60s as a repair signal. The delta coalescer carries
+// the fast path; this loop catches anything the coalescer missed (lost gRPC
+// call, restart) including unhealthy tombstones that AliveNodeIDs would
+// filter out.
 func startEdgeHealthSync(qm *qmclient.GRPCClient, log logging.Logger) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		nodeIDs := state.DefaultManager().AliveNodeIDs(90 * time.Second)
-		if len(nodeIDs) == 0 {
+		snaps := state.DefaultManager().AllReportedNodes(15 * time.Minute)
+		if len(snaps) == 0 {
 			continue
 		}
+		nodes := make([]*pb.NodeAliveness, 0, len(snaps))
+		for _, s := range snaps {
+			nodes = append(nodes, snapshotToProto(s))
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := qm.ReportAliveNodes(ctx, nodeIDs)
+		err := qm.ReportAliveNodes(ctx, nodes)
 		cancel()
 		if err != nil {
-			log.WithError(err).WithField("count", len(nodeIDs)).Warn("edge health sync failed")
+			log.WithError(err).WithField("count", len(nodes)).Warn("edge health sync failed")
 		}
+	}
+}
+
+// startEdgeDNSDeltaCoalescer drains DNS-relevant deltas on a ~1s window and
+// pushes them to Quartermaster. Coalescing protects against flap (caps
+// flickering, stream rapid-reconnect) without sacrificing latency.
+func startEdgeDNSDeltaCoalescer(qm *qmclient.GRPCClient, log logging.Logger) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		deltas := state.DefaultManager().ConsumeDNSRelevantDeltas()
+		if len(deltas) == 0 {
+			continue
+		}
+		nodes := make([]*pb.NodeAliveness, 0, len(deltas))
+		for _, d := range deltas {
+			nodes = append(nodes, snapshotToProto(d))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := qm.ReportAliveNodes(ctx, nodes)
+		cancel()
+		if err != nil {
+			log.WithError(err).WithField("count", len(nodes)).Warn("edge DNS delta push failed")
+		}
+	}
+}
+
+func snapshotToProto(s state.NodeDNSSnapshot) *pb.NodeAliveness {
+	return &pb.NodeAliveness{
+		NodeId:    s.NodeID,
+		IsHealthy: s.IsHealthy,
+		ClusterId: s.ClusterID,
+		// ExternalIp is sent only when Foghorn could parse an IP literal out
+		// of base_url; QM rejects malformed values rather than coerce.
+		ExternalIp: s.ExternalIP,
+		Capabilities: &pb.EdgeCapabilities{
+			Ingest:     s.CapIngest,
+			Egress:     s.CapEdge,
+			Storage:    s.CapStorage,
+			Processing: s.CapProcessing,
+		},
 	}
 }
 
