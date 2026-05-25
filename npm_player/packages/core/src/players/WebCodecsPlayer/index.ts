@@ -543,6 +543,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     // Keep paused state in sync with actual element state
     this._onVideoPlay = () => {
+      if (this.useDirectRendering) return;
       if (this._suppressPlayPauseSync) return;
       this._isPaused = false;
       this.sendToWorker({
@@ -553,6 +554,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }).catch(() => {});
     };
     this._onVideoPause = () => {
+      if (this.useDirectRendering) return;
       if (this._suppressPlayPauseSync) return;
       this._isPaused = true;
       this.sendToWorker({
@@ -1677,6 +1679,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         paused: true,
         uid: this.workerUidCounter++,
       }).catch(() => {});
+    } else {
+      this.sendToWorker({
+        type: "frametiming",
+        action: "setPaused",
+        paused: false,
+        uid: this.workerUidCounter++,
+      }).catch(() => {});
     }
   }
 
@@ -1892,6 +1901,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       // Set video.srcObject for audio output (video display uses WebGL canvas)
       if (this.videoElement && !this.videoElement.srcObject) {
         this.videoElement.srcObject = this.mediaStream;
+        if (!this._isPaused) {
+          void this.videoElement.play().catch((err) => {
+            this.log(`Audio output play failed: ${err}`, "warn");
+          });
+        }
       }
     } else if (this.useDirectRendering) {
       // Chromium/Brave audio in direct rendering mode: AudioWorkletRenderer handles it
@@ -2096,6 +2110,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       throw error;
     }
     if (this.isDestroyed) return;
+    if (this.useDirectRendering) {
+      if (this.videoElement?.srcObject || this.videoElement?.currentSrc || this.videoElement?.src) {
+        await this.videoElement.play().catch((err) => {
+          this.log(`Backing media element play failed: ${err}`, "warn");
+        });
+      }
+      return;
+    }
     await this.videoElement?.play();
   }
 
@@ -2111,7 +2133,9 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         this.log(`Frame timing pause update failed: ${message}`, "warn");
       }
     });
-    this.videoElement?.pause();
+    if (!this.useDirectRendering || this.videoElement?.srcObject) {
+      this.videoElement?.pause();
+    }
   }
 
   private async setFrameTimingPaused(paused: boolean): Promise<void> {
