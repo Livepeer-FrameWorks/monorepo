@@ -2,7 +2,6 @@ package relay
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -244,12 +243,23 @@ func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal strin
 		s.serverError(c, "create sidecar tmp", err)
 		return
 	}
-	if _, err := io.Copy(f, c.Request.Body); err != nil {
+	written, err := io.Copy(f, c.Request.Body)
+	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		if !errors.Is(err, io.ErrUnexpectedEOF) {
-			s.serverError(c, "write sidecar body", err)
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("local_path", localPath).Warn("relay sidecar PUT body ended before a durable sidecar could be written")
 		}
+		c.String(http.StatusBadRequest, "incomplete sidecar body")
+		return
+	}
+	if written == 0 {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		if s.logger != nil {
+			s.logger.WithField("local_path", localPath).Warn("relay sidecar PUT body was empty")
+		}
+		c.String(http.StatusBadRequest, "empty sidecar body")
 		return
 	}
 	if err := f.Sync(); err != nil {

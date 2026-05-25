@@ -50,6 +50,18 @@ func (f *fakeFreeze) OnLocalDtshGenerated(kind, hash, localPath string) {
 	f.calls = append(f.calls, kind+"/"+hash+"/"+localPath)
 }
 
+type unexpectedEOFReader struct {
+	sent bool
+}
+
+func (r *unexpectedEOFReader) Read(p []byte) (int, error) {
+	if r.sent {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.sent = true
+	return copy(p, "partial dtsh"), nil
+}
+
 // upstreamServer stands in for S3. Reports total size + range support on
 // HEAD, returns the supplied body on full GET, and slices the body for
 // well-formed Range requests so tests can assert the relay's cold-path
@@ -384,6 +396,99 @@ func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	}
 	if len(fz.calls) != 1 || !strings.Contains(fz.calls[0], target) {
 		t.Fatalf("freeze handoff not called: %v", fz.calls)
+	}
+}
+
+func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+	body := []byte("nested generated dtsh bytes")
+
+	fz := &fakeFreeze{}
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/internal/artifact/clip/streamA/"+file, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	target := filepath.Join(dir, "clips", "streamA", file)
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("expected nested dtsh on disk: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "clips", file)); !os.IsNotExist(err) {
+		t.Fatalf("flat clip sidecar should not be written, stat err=%v", err)
+	}
+	if len(fz.calls) != 1 || !strings.Contains(fz.calls[0], target) {
+		t.Fatalf("freeze handoff not called for nested path: %v", fz.calls)
+	}
+}
+
+func TestDtshPutUnexpectedEOFDoesNotReportSuccess(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/internal/artifact/vod/"+file, &unexpectedEOFReader{})
+	c.Params = gin.Params{{Key: "file", Value: file}}
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	s.putSidecarWithStream(c, "vod", "")
+
+	if w.Code == http.StatusOK {
+		t.Fatal("incomplete sidecar upload must not report 200 OK")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", w.Code, http.StatusBadRequest)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file)); !os.IsNotExist(err) {
+		t.Fatalf("incomplete sidecar must not be durable, stat err=%v", err)
+	}
+}
+
+func TestDtshPutEmptyBodyDoesNotReportSuccess(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/internal/artifact/vod/"+file, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("empty sidecar upload must not report 200 OK")
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file)); !os.IsNotExist(err) {
+		t.Fatalf("empty sidecar must not be durable, stat err=%v", err)
 	}
 }
 

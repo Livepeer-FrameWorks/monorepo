@@ -433,7 +433,7 @@ loop:
 	// Generate DTSH by booting the output as vod+ (no MistProc* re-trigger).
 	// Foghorn now has the artifact registered, so vod+ STREAM_SOURCE resolves.
 	vodStreamName := "vod+" + req.GetInternalName()
-	if err := GenerateDTSH(h.mistServerURL, vodStreamName, log); err != nil {
+	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
 		log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
 	}
 
@@ -1234,6 +1234,36 @@ func GenerateDTSH(mistServerURL, streamName string, log *logrus.Entry) error {
 		return nil
 	}
 	return fmt.Errorf("timed out waiting for DTSH generation")
+}
+
+func GenerateDTSHForPath(mistServerURL, streamName, dtshPath string, log *logrus.Entry) error {
+	if err := GenerateDTSH(mistServerURL, streamName, log); err != nil {
+		return err
+	}
+	if dtshPath == "" {
+		return nil
+	}
+	return waitForDTSHFile(dtshPath, 10*time.Second)
+}
+
+func waitForDTSHFile(dtshPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		info, err := os.Stat(dtshPath)
+		switch {
+		case err == nil && info.Mode().IsRegular() && info.Size() > 0:
+			return nil
+		case err == nil:
+			lastErr = fmt.Errorf("dtsh file is empty: %s", dtshPath)
+		default:
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("dtsh file not ready at %s: %w", dtshPath, lastErr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // isHLSSource detects if the source is an HLS manifest (segmented).

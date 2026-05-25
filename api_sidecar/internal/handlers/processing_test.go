@@ -289,6 +289,39 @@ func TestGenerateDTSHFetchesJSONEndpoint(t *testing.T) {
 	}
 }
 
+func TestGenerateDTSHForPathRequiresSidecarFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	dtshPath := filepath.Join(t.TempDir(), "artifact.mkv.dtsh")
+	err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(logrus.New()))
+	if err == nil {
+		t.Fatal("expected missing sidecar to fail")
+	}
+	if !strings.Contains(err.Error(), "dtsh file not ready") {
+		t.Fatalf("error = %v, want dtsh readiness error", err)
+	}
+}
+
+func TestGenerateDTSHForPathWaitsForSidecarFile(t *testing.T) {
+	dir := t.TempDir()
+	dtshPath := filepath.Join(dir, "artifact.mkv.dtsh")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = os.WriteFile(dtshPath, []byte("dtsh"), 0o644)
+		}()
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(logrus.New())); err != nil {
+		t.Fatalf("GenerateDTSHForPath failed: %v", err)
+	}
+}
+
 func TestProcessingMuxTargetURISelectsAllTracks(t *testing.T) {
 	got := processingMuxTargetURI("/var/lib/mistserver/recordings/vod/hash.mkv")
 	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=all&meta=all&subtitle=all"

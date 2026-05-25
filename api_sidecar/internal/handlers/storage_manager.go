@@ -236,7 +236,8 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 			"clip_hash":   clipHash,
 			"stream_name": streamName,
 		})
-		if err := GenerateDTSH(mistURL, streamName, entry); err != nil {
+		dtshPath := findLocalClipDTSHPath(basePath, clipHash)
+		if err := GenerateDTSHForPath(mistURL, streamName, dtshPath, entry); err != nil {
 			entry.WithError(err).Debug("Post-clip DTSH generation failed (will regen on first playback)")
 			return
 		}
@@ -357,6 +358,31 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	}).Info("Storage manager initialized (presigned URL mode)")
 
 	return nil
+}
+
+func findLocalClipDTSHPath(basePath, clipHash string) string {
+	if basePath == "" || clipHash == "" {
+		return ""
+	}
+	clipsDir := filepath.Join(basePath, "clips")
+	var dtshPath string
+	if err := filepath.WalkDir(clipsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(d.Name())
+		if strings.TrimSuffix(d.Name(), ext) == clipHash && IsVideoFile(ext) {
+			dtshPath = path + ".dtsh"
+			return fs.SkipAll
+		}
+		return nil
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return dtshPath
 }
 
 // StorageThresholds holds configurable thresholds for storage management
@@ -1196,7 +1222,7 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 					"asset_hash":  req.AssetHash,
 					"stream_name": vodStreamName,
 				})
-				if err := GenerateDTSH(mistServerURL, vodStreamName, dtshLog); err != nil {
+				if err := GenerateDTSHForPath(mistServerURL, vodStreamName, req.LocalPath+".dtsh", dtshLog); err != nil {
 					dtshLog.WithError(err).Warn("Post-defrost DTSH generation failed")
 				}
 			}()
@@ -1731,7 +1757,7 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 				return fmt.Errorf(".dtsh stat failed at %s: %w", dtshPath, err)
 			}
 			vodStreamName := "vod+" + assetHash
-			if genErr := GenerateDTSH(os.Getenv("MISTSERVER_URL"), vodStreamName, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
+			if genErr := GenerateDTSHForPath(os.Getenv("MISTSERVER_URL"), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
 				return fmt.Errorf("dtsh missing and on-demand generation failed: %w", genErr)
 			}
 			if _, err := os.Stat(dtshPath); err != nil {

@@ -329,9 +329,9 @@ loop:
 	// so finalized chapters reach frozen without waiting for a viewer
 	// to happen to boot the asset first.
 	vodStreamName := "vod+" + req.GetArtifactHash()
-	if err := GenerateDTSH(h.mistServerURL, vodStreamName, log); err != nil {
+	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
 		log.WithError(err).Warn("Chapter finalize: DTSH generation failed, scheduling background retries")
-		go h.retryChapterDTSH(vodStreamName, log)
+		go h.retryChapterDTSH(vodStreamName, outputPath+".dtsh", log)
 	}
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly.
@@ -344,11 +344,11 @@ loop:
 // which can be never on cold archives. Bounded retries with backoff
 // (1m → 5m → 15m → 30m → 60m) cover the realistic transient cases;
 // a chapter that fails all attempts ends up needing operator triage.
-func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName string, log *logrus.Entry) {
+func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, log *logrus.Entry) {
 	backoffs := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, 60 * time.Minute}
 	for i, wait := range backoffs {
 		time.Sleep(wait)
-		if err := GenerateDTSH(h.mistServerURL, vodStreamName, log); err == nil {
+		if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, dtshPath, log); err == nil {
 			log.WithField("attempt", i+2).Info("Chapter finalize: DTSH generation succeeded on retry")
 			TriggerStorageCheck()
 			return
