@@ -55,6 +55,7 @@ func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Cont
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_discovery_samples batch: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -153,6 +154,7 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_state_current batch: %w", err)
 	}
+	defer closeClickHouseBatch(stateBatch)
 	if err := stateBatch.Append(
 		event.TenantID,
 		msg.GetOrchAddr(),
@@ -186,6 +188,7 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 		if err != nil {
 			return fmt.Errorf("prepare orchestrator_instance_state_current batch: %w", err)
 		}
+		defer closeClickHouseBatch(instanceBatch)
 		capabilities, positions, pricePerUnits, pixelsPerUnits := capabilityPriceArrays(msg.GetCapabilityPriceEntries())
 		if err := instanceBatch.Append(
 			event.TenantID,
@@ -272,6 +275,7 @@ func (h *AnalyticsHandler) processOrchestratorTranscodeOutcome(ctx context.Conte
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_transcode_outcomes batch: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -336,6 +340,7 @@ func (h *AnalyticsHandler) processOrchestratorAIOutcome(ctx context.Context, eve
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_ai_outcomes batch: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -384,6 +389,7 @@ func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event 
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_vantage_current batch: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	geoResolvedAt := time.Time{}
 	if t := vantage.GetGeoResolvedAt(); t != nil {

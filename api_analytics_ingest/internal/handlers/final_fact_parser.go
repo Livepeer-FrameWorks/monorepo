@@ -182,6 +182,7 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	if err != nil {
 		return fmt.Errorf("viewer_sessions_final prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(
 		row.tenantID, row.nodeID, row.sessionID, row.sourceEventID,
 		row.clusterID, row.streamID, row.streamName, row.connector, row.host,
@@ -290,6 +291,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	if err != nil {
 		return fmt.Errorf("stream_sessions_final prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(
 		row.tenantID, row.nodeID, row.streamID, row.sourceEventID,
 		row.clusterID, row.streamName,
@@ -437,6 +439,7 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 	if err != nil {
 		return fmt.Errorf("processing_segments_final prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(
 		tenantID, nodeID, streamID, processType, outputCodec, trackType, segmentNumber,
 		sourceEventID,
@@ -847,6 +850,7 @@ func (h *AnalyticsHandler) recordProjectionDivergence(ctx context.Context, obser
 	if err != nil {
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(observedAtMS, tableName, meter, field, naturalKeyJSON, priorJSON, newJSON, sourceEventID); err != nil {
 		return err
 	}

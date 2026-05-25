@@ -146,6 +146,7 @@ func (h *AnalyticsHandler) recordLedgerRebuildCursor(ctx context.Context, ledger
 	if err != nil {
 		return fmt.Errorf("ledger_rebuild_cursors prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(ledgerName, processedThrough.UnixMilli(), time.Now().UnixMilli()); err != nil {
 		return fmt.Errorf("ledger_rebuild_cursors append: %w", err)
 	}
@@ -205,6 +206,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	if err != nil {
 		return fmt.Errorf("viewer_usage_5m prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -294,6 +296,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	if err != nil {
 		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -407,7 +410,7 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 				s.storage_provider_tenant_id,
 				s.storage_provider_cluster_id,
 				s.storage_backend,
-				toUnixTimestamp(s.timestamp) * 1000 AS ts_ms,
+				toInt64(toUnixTimestamp(s.timestamp)) * 1000 AS ts_ms,
 				s.ingested_at_ms,
 				s.total_bytes,
 				s.file_count
@@ -436,7 +439,7 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 					s.storage_provider_cluster_id,
 					s.storage_backend,
 					a.bucket_start                         AS bucket_start,
-					toUnixTimestamp(s.timestamp) * 1000    AS ts_ms,
+					toInt64(toUnixTimestamp(s.timestamp)) * 1000 AS ts_ms,
 					s.ingested_at_ms,
 					s.total_bytes,
 					s.file_count
@@ -543,6 +546,7 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 	if err != nil {
 		return fmt.Errorf("storage_gb_seconds_5m prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for k, a := range state {
@@ -700,6 +704,7 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	if err != nil {
 		return fmt.Errorf("processing_5m prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for rows.Next() {

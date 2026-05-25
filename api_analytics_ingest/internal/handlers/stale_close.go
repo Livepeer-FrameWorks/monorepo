@@ -77,8 +77,8 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 			stream_id,
 			session_id,
 			node_id,
-			toUnixTimestamp(connected_at) * 1000 AS observed_first_at_ms,
-			toUnixTimestamp(last_updated) * 1000 AS observed_last_at_ms,
+			toInt64(toUnixTimestamp(connected_at)) * 1000 AS observed_first_at_ms,
+			toInt64(toUnixTimestamp(last_updated)) * 1000 AS observed_last_at_ms,
 			session_duration
 		FROM periscope.viewer_sessions_current FINAL
 		WHERE last_updated < ?
@@ -109,6 +109,7 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("viewer_sessions_anomalous prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -160,8 +161,8 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 			tenant_id,
 			stream_id,
 			node_id,
-			toUnixTimestamp(ifNull(started_at, updated_at)) * 1000 AS observed_first_at_ms,
-			toUnixTimestamp(updated_at) * 1000 AS observed_last_at_ms,
+			toInt64(toUnixTimestamp(ifNull(started_at, updated_at))) * 1000 AS observed_first_at_ms,
+			toInt64(toUnixTimestamp(updated_at)) * 1000 AS observed_last_at_ms,
 			toInt64(viewer_seconds) AS viewer_seconds_max
 		FROM periscope.stream_state_current FINAL
 		WHERE updated_at < ?
@@ -193,6 +194,7 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("stream_sessions_anomalous prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 
 	rowsEmitted := 0
 	for rows.Next() {

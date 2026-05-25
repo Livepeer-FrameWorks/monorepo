@@ -50,6 +50,12 @@ type clickhouseBatch interface {
 	Send() error
 }
 
+func closeClickHouseBatch(batch clickhouseBatch) {
+	if closer, ok := batch.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+}
+
 type clickhouseRows interface {
 	Next() bool
 	Close() error
@@ -366,6 +372,7 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 	if err != nil {
 		return fmt.Errorf("raw_mist_triggers prepare: %w", err)
 	}
+	defer closeClickHouseBatch(batch)
 	if err := batch.Append(
 		nodeID,
 		triggerType,
@@ -447,6 +454,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 		h.logger.Errorf("Failed to prepare ClickHouse batch for storage_snapshots: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	storageScope := storageSnapshot.GetStorageScope()
 	if storageScope == "" {
@@ -579,6 +587,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		}
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	// Derive status from buffer state
 	status := "live"
@@ -662,6 +671,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		}
 		return err
 	}
+	defer closeClickHouseBatch(eventBatch)
 
 	if appendErr := eventBatch.Append(
 		event.Timestamp,
@@ -735,6 +745,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		}
 		return err
 	}
+	defer closeClickHouseBatch(healthBatch)
 
 	// Calculate buffer_health ratio (0.0-1.0): buffer_ms / max_keepaway_ms.
 	var bufferHealth interface{}
@@ -937,6 +948,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if err != nil {
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	eventType := map[bool]string{true: "connect", false: "disconnect"}[isConnect]
 	durationUI := uint32(0)
@@ -1221,6 +1233,7 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 		}
 		return
 	}
+	defer closeClickHouseBatch(batch)
 
 	if appendErr := batch.Append(
 		event.Timestamp,
@@ -1317,6 +1330,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	if err != nil {
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	var prot interface{}
 	if pr.Protocol != nil && *pr.Protocol != "" {
@@ -1412,6 +1426,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	var selID interface{}
 	if loadBalancing.SelectedNodeId != nil && *loadBalancing.SelectedNodeId != "" {
@@ -1549,6 +1564,7 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	for _, sample := range samples {
 		// Normalize internal name (strip live+/vod+ prefix).
@@ -1640,6 +1656,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		}
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	cpuPercent := float32(nodeLifecycle.GetCpuTenths()) / 10.0
 	modeStr := strings.ToLower(strings.TrimPrefix(nodeLifecycle.GetOperationalMode().String(), "NODE_OPERATIONAL_MODE_"))
@@ -1720,6 +1737,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		}
 		return err
 	}
+	defer closeClickHouseBatch(metricsBatch)
 
 	if err := metricsBatch.Append(
 		event.Timestamp,
@@ -1968,6 +1986,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(streamEventsBatch)
 
 	if appendErr := streamEventsBatch.Append(
 		event.Timestamp,
@@ -2025,6 +2044,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(healthBatch)
 
 	if appendErr := healthBatch.Append(
 		event.Timestamp,
@@ -2127,6 +2147,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	var downloaded, uploaded, totalViewers, totalInputs, totalOutputs, viewerSeconds interface{}
 	if streamEnd.DownloadedBytes != nil {
@@ -2222,6 +2243,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		h.logger.Errorf("Failed to prepare track list batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	if appendErr := batch.Append(
 		event.Timestamp,
@@ -2270,6 +2292,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		h.logger.Errorf("Failed to prepare stream events batch (track list): %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(eventBatch)
 
 	if appendErr := eventBatch.Append(
 		event.Timestamp,
@@ -2398,6 +2421,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		}
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	// Map stage string for consistency - convert STAGE_DONE -> done, STAGE_FAILED -> failed, etc.
 	stageStr := strings.ToLower(strings.TrimPrefix(cl.GetStage().String(), "STAGE_"))
@@ -2465,6 +2489,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		}
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -2574,6 +2599,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		}
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	if appendErr := stateBatch.Append(
 		tenantID,
@@ -2636,6 +2662,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		}
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	var message interface{}
 	if dvrData.GetError() != "" {
@@ -2737,6 +2764,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		}
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	internalName := vodData.GetVodHash()
 	var filename *string
@@ -2805,6 +2833,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		}
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	var expiresAt interface{}
 	if vodData.GetExpiresAt() != 0 {
@@ -2937,6 +2966,7 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -3013,6 +3043,7 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 		h.logger.Errorf("Failed to prepare artifact storage state batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(stateBatch)
 
 	isFinalized := sld.DtshIncluded
 	if err := stateBatch.Append(
@@ -3110,6 +3141,7 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 		h.logger.Errorf("Failed to prepare federation_events batch: %v", err)
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -3251,6 +3283,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		}
 		return err
 	}
+	defer closeClickHouseBatch(batch)
 
 	trackType := pbe.GetTrackType()
 	if trackType == "" {
@@ -3391,6 +3424,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 		}
 		return err
 	}
+	defer closeClickHouseBatch(chBatch)
 
 	batchTimestamp := time.Unix(batch.GetTimestamp(), 0)
 	sourceNode := batch.GetSourceNode()
@@ -3537,6 +3571,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		}
 		return err
 	}
+	defer closeClickHouseBatch(chBatch)
 
 	appendErrors := 0
 	rowCount := 0
@@ -3665,6 +3700,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 		}
 		return err
 	}
+	defer closeClickHouseBatch(chBatch)
 
 	rowCount := 0
 	for _, rawAgg := range aggregates {
@@ -3682,6 +3718,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 		if ts, ok := getInt64FromMap(aggMap, "timestamp"); ok {
 			aggTimestamp = time.Unix(ts, 0)
 		}
+		userHashes := getUint64SliceFromMap(aggMap, "user_hashes")
+		tokenHashes := getUint64SliceFromMap(aggMap, "token_hashes")
 
 		details := map[string]interface{}{
 			"source_node":       sourceNode,
@@ -3692,8 +3730,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			"error_count":       getUint64FromMap(aggMap, "error_count"),
 			"total_duration_ms": getUint64FromMap(aggMap, "total_duration_ms"),
 			"total_complexity":  getUint64FromMap(aggMap, "total_complexity"),
-			"user_hashes":       getUint64SliceFromMap(aggMap, "user_hashes"),
-			"token_hashes":      getUint64SliceFromMap(aggMap, "token_hashes"),
+			"user_hash_count":   len(userHashes),
+			"token_hash_count":  len(tokenHashes),
 		}
 
 		detailsJSON, err := json.Marshal(details)
@@ -3780,6 +3818,7 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 		}
 		return err
 	}
+	defer closeClickHouseBatch(chBatch)
 	if err := chBatch.Append(
 		event.Timestamp,
 		parseUUID(event.TenantID),
@@ -3868,6 +3907,7 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 		}
 		return err
 	}
+	defer closeClickHouseBatch(chBatch)
 
 	if err := chBatch.Append(
 		parseUUID(event.EventID),
