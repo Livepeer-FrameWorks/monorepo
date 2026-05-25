@@ -71,11 +71,13 @@
 
   function handleStateChange(state: string, context?: unknown) {
     console.debug("[StreamCrafter] State:", state, context);
-    isStreaming = state === "streaming";
+    const wasStreaming = isStreaming;
+    const nextStreaming = state === "streaming";
+    isStreaming = nextStreaming;
 
-    if (state === "streaming") {
+    if (!wasStreaming && nextStreaming) {
       toast.success("You are now live!");
-    } else if (state === "idle" && isStreaming) {
+    } else if (wasStreaming && !nextStreaming && state === "idle") {
       toast.info("Broadcast ended");
     }
   }
