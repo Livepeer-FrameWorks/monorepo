@@ -5216,17 +5216,17 @@ type GetPlatformOverviewResponse struct {
 	StreamHours float64 `protobuf:"fixed64,10,opt,name=stream_hours,json=streamHours,proto3" json:"stream_hours,omitempty"` // Total streaming hours in time range (ingest hours)
 	EgressGb    float64 `protobuf:"fixed64,11,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`          // Total egress bandwidth in GB
 	PeakViewers int32   `protobuf:"varint,12,opt,name=peak_viewers,json=peakViewers,proto3" json:"peak_viewers,omitempty"`  // Peak concurrent viewers in time range (NOTE: currently unique_viewers)
-	// Real-time bandwidth metrics (from live_streams)
+	// Real-time bandwidth metrics (from stream_state_current)
 	TotalUploadBytes   uint64 `protobuf:"varint,13,opt,name=total_upload_bytes,json=totalUploadBytes,proto3" json:"total_upload_bytes,omitempty"`       // Total ingest bytes (sum of uploaded_bytes)
 	TotalDownloadBytes uint64 `protobuf:"varint,14,opt,name=total_download_bytes,json=totalDownloadBytes,proto3" json:"total_download_bytes,omitempty"` // Total egress bytes (sum of downloaded_bytes)
-	// Viewer consumption metrics (from tenant_viewer_daily)
+	// Viewer consumption metrics (from finalized viewer usage facts)
 	ViewerHours      float64 `protobuf:"fixed64,15,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`                // Total accumulated viewer watch time in hours
 	DeliveredMinutes float64 `protobuf:"fixed64,16,opt,name=delivered_minutes,json=deliveredMinutes,proto3" json:"delivered_minutes,omitempty"` // viewer_hours * 60 (convenience field)
 	UniqueViewers    int32   `protobuf:"varint,17,opt,name=unique_viewers,json=uniqueViewers,proto3" json:"unique_viewers,omitempty"`           // Unique viewer count for the time range
 	IngestHours      float64 `protobuf:"fixed64,18,opt,name=ingest_hours,json=ingestHours,proto3" json:"ingest_hours,omitempty"`                // Total hours streams were live (alias for stream_hours)
-	// True peak concurrent viewers (from stream_events max(total_viewers))
+	// True peak concurrent viewers (from stream_runtime_5m_v max(peak_viewers))
 	PeakConcurrentViewers int32 `protobuf:"varint,19,opt,name=peak_concurrent_viewers,json=peakConcurrentViewers,proto3" json:"peak_concurrent_viewers,omitempty"` // Maximum concurrent viewers at any instant in time range
-	// Total views count (from tenant_analytics_daily - connection events)
+	// Total views count (from finalized viewer usage facts)
 	TotalViews int64 `protobuf:"varint,20,opt,name=total_views,json=totalViews,proto3" json:"total_views,omitempty"` // Total number of view sessions started in time range
 	// Echoed time range used for aggregation (for UI consistency)
 	TimeRange     *TimeRange `protobuf:"bytes,21,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
@@ -12351,7 +12351,7 @@ func (x *GetStreamAnalyticsSummariesResponse) GetTotalCount() int64 {
 	return 0
 }
 
-// Hourly API usage record (from api_usage_hourly MV)
+// API usage record from canonical 5-minute windows.
 type APIUsageRecord struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`               // Unique ID for cursor pagination
@@ -12593,7 +12593,7 @@ func (x *APIUsageSummary) GetUniqueTokens() uint64 {
 	return 0
 }
 
-// Operation-level API usage summary (from api_usage_hourly)
+// Operation-level API usage summary (from canonical API usage windows)
 type APIUsageOperationSummary struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	OperationType    string                 `protobuf:"bytes,1,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"` // query, mutation, subscription
