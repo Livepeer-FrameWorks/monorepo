@@ -62,6 +62,10 @@ export interface FrameWorksPlayerOptions {
   controls?: boolean;
   poster?: string;
 
+  /** Cycle the spritesheet tiles as a one-shot preroll animation before
+   *  playback starts. Default false — the latest poster frame is shown. */
+  animatePreroll?: boolean;
+
   /** Debug logging */
   debug?: boolean;
 
@@ -147,6 +151,7 @@ export class FrameWorksPlayer {
       muted: normalizedOptions.muted ?? false,
       controls: normalizedOptions.controls ?? true,
       poster: normalizedOptions.poster,
+      animatePreroll: normalizedOptions.animatePreroll,
       debug: normalizedOptions.debug,
     };
 

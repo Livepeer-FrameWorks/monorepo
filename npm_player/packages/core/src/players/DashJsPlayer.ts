@@ -167,7 +167,7 @@ export class DashJsPlayerImpl extends BasePlayer {
             return bufferEnd + timeSinceBuffer;
           }
         }
-        const value = Reflect.get(target, key, receiver);
+        const value = Reflect.get(target, key, target);
         // Bind functions to the original target
         if (typeof value === "function") {
           return value.bind(target);

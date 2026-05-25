@@ -69,6 +69,7 @@ Notes:
 | `stock-controls`  | `boolean` | `false`  | Use native browser controls             |
 | `native-controls` | `boolean` | `false`  | Alias for `stock-controls`              |
 | `thumbnail-url`   | `string`  | —        | Poster / thumbnail URL                  |
+| `animate-preroll` | `boolean` | `false`  | Cycle sprite tiles as preroll animation |
 | `theme`           | `string`  | —        | Theme preset name                       |
 | `locale`          | `string`  | `"en"`   | UI language                             |
 | `debug`           | `boolean` | `false`  | Debug logging                           |

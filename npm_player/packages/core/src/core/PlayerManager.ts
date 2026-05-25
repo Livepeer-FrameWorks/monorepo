@@ -326,17 +326,36 @@ export class PlayerManager {
     // Get combinations (will use cache if available)
     const combinations = this.getAllCombinations(streamInfo, mergedOptions.playbackMode);
 
-    // Apply force filters
-    let filtered = combinations.filter((c) => c.compatible);
+    const compatible = combinations.filter((c) => c.compatible);
+    let filtered = compatible;
 
-    if (mergedOptions.forcePlayer) {
-      filtered = filtered.filter((c) => c.player === mergedOptions.forcePlayer);
-    }
-    if (mergedOptions.forceType) {
-      filtered = filtered.filter((c) => c.sourceType === mergedOptions.forceType);
-    }
-    if (mergedOptions.forceSource !== undefined) {
-      filtered = filtered.filter((c) => c.sourceIndex === mergedOptions.forceSource);
+    if (
+      mergedOptions.forcePlayer ||
+      mergedOptions.forceType ||
+      mergedOptions.forceSource !== undefined
+    ) {
+      const forcedByPlayerType = compatible.filter((c) => {
+        if (mergedOptions.forcePlayer && c.player !== mergedOptions.forcePlayer) return false;
+        if (mergedOptions.forceType && c.sourceType !== mergedOptions.forceType) return false;
+        return true;
+      });
+
+      filtered = forcedByPlayerType;
+      if (mergedOptions.forceSource !== undefined) {
+        const forcedBySource = forcedByPlayerType.filter(
+          (c) => c.sourceIndex === mergedOptions.forceSource
+        );
+        if (forcedBySource.length > 0) {
+          filtered = forcedBySource;
+        } else if (forcedByPlayerType.length > 0) {
+          this.log("Forced source index unavailable; keeping forced player/type");
+        }
+      }
+
+      if (filtered.length === 0) {
+        this.log("Forced player/protocol unavailable; falling back to automatic selection");
+        filtered = compatible;
+      }
     }
 
     // Apply forcePriority sort if configured

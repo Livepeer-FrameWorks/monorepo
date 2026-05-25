@@ -51,6 +51,9 @@ export interface PlayerOptions {
   muted?: boolean;
   controls?: boolean;
   stockControls?: boolean;
+  /** Cycle the spritesheet tiles as a one-shot preroll animation before
+   *  playback starts. Default false — the latest poster frame is shown. */
+  animatePreroll?: boolean;
   debug?: boolean;
   /** Show dev mode overlay panel (player/source selection, stats) */
   devMode?: boolean;

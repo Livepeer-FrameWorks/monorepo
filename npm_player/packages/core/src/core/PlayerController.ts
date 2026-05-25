@@ -116,6 +116,11 @@ export interface PlayerControllerConfig {
   controls?: boolean;
   poster?: string;
 
+  /** Cycle the spritesheet tiles as a one-shot preroll animation before
+   *  the stream starts. Defaults to false — the latest poster frame is shown
+   *  instead, matching every other player. */
+  animatePreroll?: boolean;
+
   /** Debug logging */
   debug?: boolean;
 
@@ -3635,6 +3640,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       (c) =>
         c.x !== undefined && c.y !== undefined && c.width !== undefined && c.height !== undefined
     );
+
+    // Default to the static poster when one is available; sprite-tile preroll
+    // animation is opt-in via config.animatePreroll.
+    if (staticUrl && !this.config.animatePreroll) {
+      return {
+        mode: "static",
+        cues: [],
+        columns: 0,
+        rows: 0,
+        tileWidth: 0,
+        tileHeight: 0,
+        spriteWidth: 0,
+        spriteHeight: 0,
+        staticUrl,
+        staticSource,
+        generation: this._loadingPosterGeneration,
+      };
+    }
 
     // Animate path: sprite URL is known.
     if (spriteJpgUrl) {

@@ -10,7 +10,8 @@ describe("Svelte LoadingPoster", () => {
     expect(source).toContain("const animationStartTimes = new Map<string, number>()");
     expect(source).toContain("const completedAnimations = new Set<string>()");
     expect(source).toContain("function animationKeyFor");
-    expect(source).toContain("p.prerollKey ?? p.staticUrl ?? p.spriteJpgUrl");
+    expect(source).toContain("return p.prerollKey ?? p.staticUrl ?? p.spriteJpgUrl");
+    expect(source).not.toContain("p.cues.length,");
     expect(source).toContain("let animationCompleted = $state(false)");
     expect(source).toContain("animationCompleted = true");
     expect(source).toContain("!(animationCompleted && staticSrc)");

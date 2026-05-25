@@ -193,6 +193,50 @@ describe("LoadingPoster", () => {
     }
   });
 
+  it("animate-measured: does not restart when live cue windows grow", async () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(
+        <LoadingPoster loadingPoster={{ ...measured10x10, prerollKey: "stream-a" }} />
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("poster.jpg");
+
+      const extraCue = {
+        x: 0,
+        y: 180,
+        width: 160,
+        height: 90,
+        startTime: 4,
+        endTime: 5,
+      };
+      await act(async () => {
+        rerender(
+          <LoadingPoster
+            loadingPoster={{
+              ...measured10x10,
+              prerollKey: "stream-a",
+              generation: 2,
+              cues: [...measured10x10.cues, extraCue],
+              rows: 3,
+              spriteHeight: 270,
+            }}
+          />
+        );
+      });
+
+      expect(container.querySelector("img")?.getAttribute("src")).toContain("poster.jpg");
+      expect(container.querySelector("svg")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("animate-measured: sizes the sheet from natural image dimensions, not cue extents", async () => {
     installImageStub({ naturalWidth: 1200, naturalHeight: 900 });
     const partialGrid: LoadingPosterInfo = {

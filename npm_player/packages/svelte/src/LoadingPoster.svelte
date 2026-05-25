@@ -16,20 +16,7 @@
   function animationKeyFor(p: LoadingPosterInfo | null): string | null {
     if (!p || p.mode !== "animate" || p.geometry !== "measured" || !p.spriteJpgUrl) return null;
     if (p.cues.length < 2) return null;
-    const first = p.cues[0];
-    const last = p.cues[p.cues.length - 1];
-    return [
-      p.prerollKey ?? p.staticUrl ?? p.spriteJpgUrl,
-      p.cues.length,
-      first.x,
-      first.y,
-      first.width,
-      first.height,
-      last.x,
-      last.y,
-      last.width,
-      last.height,
-    ].join("|");
+    return p.prerollKey ?? p.staticUrl ?? p.spriteJpgUrl;
   }
 
   function cueIndexFor(tickIdx: number, cueCount: number): number {

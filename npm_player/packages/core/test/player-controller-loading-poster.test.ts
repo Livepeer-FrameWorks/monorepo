@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { PlayerController } from "../src/core/PlayerController";
 import type { LoadingPosterInfo } from "../src/types";
 
-function makeController(opts: { poster?: string } = {}): PlayerController {
+function makeController(
+  opts: { poster?: string; animatePreroll?: boolean } = {}
+): PlayerController {
   return new PlayerController({
     contentId: "test-stream",
     contentType: "live",
     poster: opts.poster,
+    animatePreroll: opts.animatePreroll,
     playerManager: {
       on: vi.fn(() => () => {}),
     } as any,
@@ -112,8 +115,21 @@ describe("PlayerController.buildLoadingPosterInfo", () => {
     expect(p.staticUrl).toBe("https://chandler/p.jpg");
   });
 
-  it("includes staticUrl as fallback even in animate mode", () => {
+  it("prefers static poster over sprite preroll by default", () => {
     const c = makeController();
+    setAssets(c, {
+      posterUrl: "https://c/p.jpg",
+      spriteJpgUrl: "https://c/s.jpg",
+      assetKey: "k",
+    });
+    const p = c.getLoadingPoster()!;
+    expect(p.mode).toBe("static");
+    expect(p.staticUrl).toBe("https://c/p.jpg");
+    expect(p.staticSource).toBe("chandler-poster");
+  });
+
+  it("includes staticUrl as fallback in animate mode when animatePreroll is opted in", () => {
+    const c = makeController({ animatePreroll: true });
     setAssets(c, {
       posterUrl: "https://c/p.jpg",
       spriteJpgUrl: "https://c/s.jpg",

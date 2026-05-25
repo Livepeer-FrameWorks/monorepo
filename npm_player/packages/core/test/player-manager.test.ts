@@ -329,6 +329,47 @@ describe("PlayerManager", () => {
         expect(result.source_index).toBe(1);
       }
     });
+
+    it("keeps forced player and type when the forced source index is stale", () => {
+      const mgr = new PlayerManager();
+      mgr.registerPlayer(makePlayer({ shortname: "hls", mimes: ["application/x-mpegURL"] }));
+      mgr.registerPlayer(makePlayer({ shortname: "dash", mimes: ["application/dash+xml"] }));
+
+      const info = makeStreamInfo([
+        { type: "application/x-mpegURL", url: "https://cdn.example.com/live.m3u8" },
+        { type: "application/dash+xml", url: "https://cdn.example.com/live.mpd" },
+      ]);
+
+      const result = mgr.selectBestPlayer(info, {
+        forcePlayer: "dash",
+        forceType: "application/dash+xml",
+        forceSource: 0,
+      });
+
+      expect(result).not.toBe(false);
+      if (result) {
+        expect(result.player).toBe("dash");
+        expect(result.source.type).toBe("application/dash+xml");
+        expect(result.source_index).toBe(1);
+      }
+    });
+
+    it("falls back to automatic selection when forced player and type are unavailable", () => {
+      const mgr = new PlayerManager();
+      mgr.registerPlayer(makePlayer({ shortname: "hls", mimes: ["application/x-mpegURL"] }));
+
+      const result = mgr.selectBestPlayer(makeStreamInfo(), {
+        forcePlayer: "dash",
+        forceType: "application/dash+xml",
+        forceSource: 0,
+      });
+
+      expect(result).not.toBe(false);
+      if (result) {
+        expect(result.player).toBe("hls");
+        expect(result.source.type).toBe("application/x-mpegURL");
+      }
+    });
   });
 
   // ===========================================================================

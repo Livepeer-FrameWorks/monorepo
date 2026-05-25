@@ -154,6 +154,7 @@ export class PlayerControllerHost implements ReactiveController {
       muted: this.currentConfig.muted,
       controls: this.currentConfig.controls,
       poster: this.currentConfig.poster,
+      animatePreroll: this.currentConfig.animatePreroll,
       debug: this.currentConfig.debug,
     });
 

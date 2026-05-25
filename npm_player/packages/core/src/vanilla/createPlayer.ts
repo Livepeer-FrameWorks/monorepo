@@ -93,6 +93,10 @@ export interface CreatePlayerConfig {
   controls?: boolean;
   poster?: string;
 
+  /** Cycle the spritesheet tiles as a one-shot preroll animation before
+   *  playback starts. Default false — the latest poster frame is shown. */
+  animatePreroll?: boolean;
+
   /** Theme preset or custom overrides */
   theme?: FwThemePreset;
   themeOverrides?: FwThemeOverrides;
@@ -342,6 +346,7 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     muted: config.muted ?? false,
     controls: config.controls ?? true,
     poster: config.poster,
+    animatePreroll: config.animatePreroll,
     debug: config.debug,
     playbackMode: config.playbackMode,
     locale: config.locale,

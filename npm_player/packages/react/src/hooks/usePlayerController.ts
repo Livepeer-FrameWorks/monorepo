@@ -299,6 +299,7 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       muted: configRef.current.muted,
       controls: configRef.current.controls,
       poster: configRef.current.poster,
+      animatePreroll: configRef.current.animatePreroll,
       debug: configRef.current.debug,
     });
 

@@ -43,6 +43,7 @@ export class FwPlayer extends LitElement {
   @property({ type: Boolean, attribute: "no-controls" }) noControls = false;
   @property({ type: Boolean, attribute: "stock-controls" }) stockControls = false;
   @property({ type: Boolean, attribute: "native-controls" }) nativeControls = false;
+  @property({ type: Boolean, attribute: "animate-preroll" }) animatePreroll = false;
   @property({ type: Boolean }) debug = false;
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
   @property({ attribute: "thumbnail-url" }) thumbnailUrl?: string;
@@ -149,6 +150,7 @@ export class FwPlayer extends LitElement {
       changed.has("noControls") ||
       changed.has("stockControls") ||
       changed.has("nativeControls") ||
+      changed.has("animatePreroll") ||
       changed.has("debug") ||
       changed.has("thumbnailUrl") ||
       changed.has("endpoints") ||
@@ -169,6 +171,7 @@ export class FwPlayer extends LitElement {
         muted: this.muted,
         controls: this._useStockControls,
         poster: this.thumbnailUrl,
+        animatePreroll: this.animatePreroll,
         debug: this.debug,
         locale: this.locale,
         translations: this.translations,

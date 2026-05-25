@@ -163,25 +163,26 @@ function FullyCustomPlayer() {
 
 ## Props Reference
 
-| Prop                     | Type                                                 | Description                                                                                       |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `contentId`              | `string`                                             | Playback ID (live/clip/DVR/VOD)                                                                   |
-| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type (affects presets and UI)                                                             |
-| `endpoints`              | `ContentEndpoints`                                   | Advanced: pass pre-resolved endpoints                                                             |
-| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                          |
-| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                 |
-| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                        |
-| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                       |
-| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports |
-| `options.autoplay`       | `boolean`                                            | Auto-start playback                                                                               |
-| `options.muted`          | `boolean`                                            | Start muted (required for autoplay)                                                               |
-| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                 |
-| `options.theme`          | `string`                                             | Theme preset name                                                                                 |
-| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                         |
-| `options.locale`         | `string`                                             | Built-in UI locale                                                                                |
-| `options.playbackMode`   | `string`                                             | Initial controls/dev-panel mode label; use `setDevModeOptions` for runtime protocol preference    |
-| `options.debug`          | `boolean`                                            | Debug logging                                                                                     |
-| `onStateChange`          | `function`                                           | State transition callback                                                                         |
+| Prop                     | Type                                                 | Description                                                                                        |
+| ------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `contentId`              | `string`                                             | Playback ID (live/clip/DVR/VOD)                                                                    |
+| `contentType`            | `'live' \| 'dvr' \| 'clip' \| 'vod'`                 | Content type (affects presets and UI)                                                              |
+| `endpoints`              | `ContentEndpoints`                                   | Advanced: pass pre-resolved endpoints                                                              |
+| `thumbnailUrl`           | `string`                                             | Poster image (pre-playback overlay). Seek-bar sprites are auto-detected.                           |
+| `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                  |
+| `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                         |
+| `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                        |
+| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports  |
+| `options.autoplay`       | `boolean`                                            | Auto-start playback                                                                                |
+| `options.muted`          | `boolean`                                            | Start muted (required for autoplay)                                                                |
+| `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                  |
+| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster) |
+| `options.theme`          | `string`                                             | Theme preset name                                                                                  |
+| `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                          |
+| `options.locale`         | `string`                                             | Built-in UI locale                                                                                 |
+| `options.playbackMode`   | `string`                                             | Initial controls/dev-panel mode label; use `setDevModeOptions` for runtime protocol preference     |
+| `options.debug`          | `boolean`                                            | Debug logging                                                                                      |
+| `onStateChange`          | `function`                                           | State transition callback                                                                          |
 
 ## State Callbacks
 

@@ -254,6 +254,7 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 | `muted`          | `boolean`                                            | `true`      | Start muted                                           |
 | `controls`       | `boolean`                                            | `true`      | Show built-in controls                                |
 | `poster`         | `string`                                             | —           | Poster image URL                                      |
+| `animatePreroll` | `boolean`                                            | `false`     | Cycle sprite tiles as a one-shot preroll animation    |
 | `theme`          | `FwThemePreset`                                      | `"default"` | Theme preset name                                     |
 | `themeOverrides` | `FwThemeOverrides`                                   | —           | CSS token overrides                                   |
 | `playbackMode`   | `string`                                             | `"auto"`    | `auto`, `low-latency`, `quality`, `vod`               |

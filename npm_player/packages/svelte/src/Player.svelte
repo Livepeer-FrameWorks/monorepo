@@ -63,6 +63,7 @@
       muted?: boolean;
       controls?: boolean;
       stockControls?: boolean;
+      animatePreroll?: boolean;
       devMode?: boolean;
       debug?: boolean;
       forcePlayer?: string;
@@ -274,6 +275,7 @@
       muted: options?.muted === true,
       controls: options?.stockControls === true,
       poster: thumbnailUrl || undefined,
+      animatePreroll: options?.animatePreroll,
       debug: options?.debug,
     });
 

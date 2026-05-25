@@ -93,6 +93,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
     muted: options?.muted !== false,
     controls: options?.controls !== false && options?.stockControls === true,
     poster: thumbnailUrl || undefined,
+    animatePreroll: options?.animatePreroll,
     debug: options?.debug,
     onStateChange: (playerState) => {
       onStateChange?.(playerState);

@@ -202,6 +202,7 @@ The context object from `getContext("fw-player-controller")` provides:
 | `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                          |
 | `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports    |
 | `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                    |
+| `options.animatePreroll` | `boolean`                                            | Cycle thumbnail sprite tiles as a preroll animation before playback. Default false (static poster)   |
 | `options.theme`          | `string`                                             | Theme preset                                                                                         |
 | `options.themeOverrides` | `object`                                             | Per-token theme overrides                                                                            |
 | `options.locale`         | `string`                                             | Built-in UI locale                                                                                   |
