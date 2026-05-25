@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	sqldriver "database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -104,6 +107,37 @@ func main() {
 		return func(ctx context.Context, msg kafka.Message) error {
 			start := time.Now()
 			err := handler(ctx, msg)
+			for attempt := 1; err != nil && isRetryableConsumerError(err); attempt++ {
+				delay := retryableConsumerBackoff(attempt)
+				logger.WithError(err).WithFields(logging.Fields{
+					"topic":       msg.Topic,
+					"partition":   msg.Partition,
+					"offset":      msg.Offset,
+					"attempt":     attempt,
+					"retry_in":    delay.String(),
+					"consumer":    consumerName,
+					"dlq_enabled": useDLQ,
+				}).Warn("Handler dependency failed; retrying message")
+
+				timer := time.NewTimer(delay)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					err = ctx.Err()
+				case <-timer.C:
+				}
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					break
+				}
+
+				err = handler(ctx, msg)
+			}
 			if metrics.KafkaDuration != nil {
 				metrics.KafkaDuration.WithLabelValues("consume").Observe(time.Since(start).Seconds())
 			}
@@ -115,6 +149,14 @@ func main() {
 				metrics.KafkaMessages.WithLabelValues(msg.Topic, "consume", status).Inc()
 			}
 			if err != nil {
+				if isRetryableConsumerError(err) {
+					logger.WithError(err).WithFields(logging.Fields{
+						"topic":     msg.Topic,
+						"partition": msg.Partition,
+						"offset":    msg.Offset,
+					}).Warn("Handler dependency failed; leaving message uncommitted for retry")
+					return err
+				}
 				if !useDLQ {
 					return err
 				}
@@ -362,6 +404,63 @@ func main() {
 	}
 
 	logger.Info("Periscope-Ingest stopped")
+}
+
+func isRetryableConsumerError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, sqldriver.ErrBadConn) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"connection refused",
+		"connection reset by peer",
+		"driver: bad connection",
+		"broken pipe",
+		"i/o timeout",
+		"no such host",
+		"unexpected eof",
+		"use of closed network connection",
+	} {
+		if strings.Contains(msg, fragment) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func retryableConsumerBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	delay := 500 * time.Millisecond
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= 30*time.Second {
+			return 30 * time.Second
+		}
+	}
+	return delay
 }
 
 func closeWithTimeout(logger logging.Logger, name string, timeout time.Duration, closeFn func() error) {

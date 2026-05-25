@@ -3907,7 +3907,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			"error":       err,
 		})
 		if errors.Is(err, sql.ErrNoRows) {
-			entry.Warn("Rejecting freeze permission for uncataloged asset")
+			entry.Debug("Rejecting freeze permission for uncataloged asset")
 		} else {
 			entry.Error("Failed to resolve asset for freeze permission")
 		}

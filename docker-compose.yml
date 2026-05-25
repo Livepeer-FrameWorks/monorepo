@@ -1283,8 +1283,8 @@ services:
       nofile:
         soft: 262144
         hard: 262144
-    mem_limit: 2g
-    mem_reservation: 1g
+    mem_limit: 4g
+    mem_reservation: 2g
     cpus: 2.0
     networks:
       - frameworks
@@ -1297,7 +1297,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget --no-verbose --tries=1 --spider http://localhost:8123/ping && clickhouse-client --host localhost --port 9000 --query 'SELECT 1'",
+          "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping && clickhouse-client --host 127.0.0.1 --port 9000 --query 'SELECT 1'",
         ]
       interval: 10s
       timeout: 5s

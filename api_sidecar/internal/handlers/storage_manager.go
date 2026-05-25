@@ -544,6 +544,8 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	// Freeze assets until we reach target threshold
 	var totalFreed uint64
 	var frozenCount int
+	var uncatalogedCount int
+	uncatalogedSamples := make([]string, 0, 5)
 
 	for _, candidate := range candidates {
 		if totalFreed >= bytesToFree {
@@ -560,7 +562,10 @@ func (sm *StorageManager) checkAndManageStorage() error {
 
 		if err := sm.freezeAsset(context.Background(), candidate); err != nil {
 			if strings.Contains(err.Error(), "freeze not approved: asset_not_found") {
-				sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Warn("Skipping freeze candidate that is not cataloged")
+				uncatalogedCount++
+				if len(uncatalogedSamples) < cap(uncatalogedSamples) {
+					uncatalogedSamples = append(uncatalogedSamples, candidate.AssetHash)
+				}
 				continue
 			}
 			sm.logger.WithError(err).WithField("asset_hash", candidate.AssetHash).Error("Failed to freeze asset")
@@ -569,6 +574,12 @@ func (sm *StorageManager) checkAndManageStorage() error {
 
 		totalFreed += candidate.SizeBytes
 		frozenCount++
+	}
+	if uncatalogedCount > 0 {
+		sm.logger.WithFields(logging.Fields{
+			"candidate_count": uncatalogedCount,
+			"sample_hashes":   uncatalogedSamples,
+		}).Warn("Skipped freeze candidates that are not cataloged")
 	}
 
 	sm.logger.WithFields(logging.Fields{
