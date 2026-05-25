@@ -32,6 +32,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
+	"frameworks/cli/pkg/gitops"
 	fwsops "frameworks/cli/pkg/sops"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
@@ -171,6 +172,18 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 		}
 	}
 
+	frozenManifest, releaseSelector, releaseVersion, err := freezeProvisionReleaseManifest(manifest, rc.ReleaseRepos)
+	if err != nil {
+		return err
+	}
+	manifest = frozenManifest
+	rc.Manifest = frozenManifest
+	if releaseSelector != releaseVersion {
+		fmt.Fprintf(out, "Platform release: %s -> %s\n\n", releaseSelector, releaseVersion)
+	} else {
+		fmt.Fprintf(out, "Platform release: %s\n\n", releaseVersion)
+	}
+
 	// Load and validate shared env_files up front. SERVICE_TOKEN and other
 	// shared platform secrets live in gitops (SOPS-encrypted); this is the
 	// single source of truth for the entire provision run — bootstrap auth,
@@ -286,6 +299,34 @@ func phaseSyncsEdgeReleaseTarget(phase orchestrator.Phase) bool {
 	default:
 		return false
 	}
+}
+
+func freezeProvisionReleaseManifest(manifest *inventory.Manifest, releaseRepos []string) (*inventory.Manifest, string, string, error) {
+	return freezeProvisionReleaseManifestWithFetchOptions(manifest, releaseRepos, gitops.FetchOptions{
+		LatestTTL:      -time.Nanosecond,
+		LatestMaxStale: -time.Nanosecond,
+	})
+}
+
+func freezeProvisionReleaseManifestWithFetchOptions(manifest *inventory.Manifest, releaseRepos []string, opts gitops.FetchOptions) (*inventory.Manifest, string, string, error) {
+	if manifest == nil {
+		return nil, "", "", fmt.Errorf("manifest is required")
+	}
+	selector := manifest.ResolvedChannel()
+	channel, version := gitops.ResolveVersion(selector)
+	if !concreteVersionPattern.MatchString(version) {
+		releaseManifest, err := gitops.FetchFromRepositories(opts, releaseRepos, channel, version)
+		if err != nil {
+			return nil, selector, "", fmt.Errorf("resolve platform release from cluster channel %q: %w", selector, err)
+		}
+		version = strings.TrimSpace(releaseManifest.PlatformVersion)
+	}
+	if !concreteVersionPattern.MatchString(version) {
+		return nil, selector, version, fmt.Errorf("cluster channel %q resolved to non-concrete platform release %q", selector, version)
+	}
+	frozen := *manifest
+	frozen.Channel = version
+	return &frozen, selector, version, nil
 }
 
 // validateIngressBundleIDs rejects manifests with unsafe TLS bundle ids.
@@ -2435,7 +2476,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		config.Metadata["gitops_repositories"] = repos
 	}
 	if manifest != nil {
-		config.Metadata["platform_channel"] = manifest.ResolvedChannel()
+		channel := manifest.ResolvedChannel()
+		config.Version = channel
+		config.Metadata["platform_channel"] = channel
 	}
 
 	// Copy runtime data

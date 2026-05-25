@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/detect"
+	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
@@ -143,6 +145,63 @@ func TestClusterProvisionDoesNotUseFixedWholeRunDeadline(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "context.WithTimeout(context.Background(), 30*time.Minute)") {
 		t.Fatalf("cluster provision must not impose a fixed whole-run deadline")
+	}
+}
+
+func TestFreezeProvisionReleaseManifestResolvesChannelOnce(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "channels"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "releases"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "channels", "stable.yaml"), []byte("platform_version: v9.8.7\nmanifest: releases/v9.8.7.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "releases", "v9.8.7.yaml"), []byte("platform_version: v9.8.7\nservices: []\nnative_binaries: []\ninterfaces: []\ninfrastructure: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := &inventory.Manifest{Channel: "stable"}
+	frozen, selector, version, err := freezeProvisionReleaseManifestWithFetchOptions(manifest, []string{repo}, gitops.FetchOptions{CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("freezeProvisionReleaseManifest: %v", err)
+	}
+	if selector != "stable" {
+		t.Fatalf("selector=%q, want stable", selector)
+	}
+	if version != "v9.8.7" {
+		t.Fatalf("version=%q, want v9.8.7", version)
+	}
+	if frozen.Channel != "v9.8.7" {
+		t.Fatalf("frozen channel=%q, want v9.8.7", frozen.Channel)
+	}
+	if manifest.Channel != "stable" {
+		t.Fatalf("original manifest channel mutated to %q", manifest.Channel)
+	}
+}
+
+func TestBuildTaskConfigUsesFrozenReleaseVersion(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Channel: "v9.8.7",
+		Services: map[string]inventory.ServiceConfig{
+			"bridge": {Enabled: true, Mode: "native", Host: "node-a"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Type:      "bridge",
+		ServiceID: "bridge",
+		Host:      "node-a",
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+	if cfg.Version != "v9.8.7" {
+		t.Fatalf("config version=%q, want frozen release version", cfg.Version)
+	}
+	if got := cfg.Metadata["platform_channel"]; got != "v9.8.7" {
+		t.Fatalf("platform_channel=%v, want v9.8.7", got)
 	}
 }
 
