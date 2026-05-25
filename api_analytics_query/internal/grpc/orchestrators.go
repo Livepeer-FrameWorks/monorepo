@@ -572,28 +572,28 @@ func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
 			SELECT tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,
 			       latitude, longitude, city, country_code, geo_source, geo_resolved_at,
 			       latest_latency_ms, score, dialed_recently, last_seen
-			FROM periscope.orchestrator_vantage_current FINAL
-			WHERE %s
-		),
-		geo AS (
-			SELECT tenant_id, gateway_id, orch_addr, resolved_ip,
-			       argMax(latitude, timestamp) AS latitude,
-			       argMax(longitude, timestamp) AS longitude,
-			       argMax(country_code, timestamp) AS country_code,
-			       argMax(geo_source, timestamp) AS geo_source,
-			       max(timestamp) AS geo_resolved_at
-			FROM periscope.orchestrator_discovery_samples
-			WHERE %s
-			GROUP BY tenant_id, gateway_id, orch_addr, resolved_ip
-		)
-		SELECT latest.tenant_id, latest.gateway_id, latest.gateway_region, latest.orch_addr, latest.resolved_ip,
-		       coalesce(geo.latitude, latest.latitude) AS latitude,
-		       coalesce(geo.longitude, latest.longitude) AS longitude,
-		       latest.city,
-		       coalesce(geo.country_code, latest.country_code) AS country_code,
-		       coalesce(geo.geo_source, latest.geo_source) AS geo_source,
-		       coalesce(geo.geo_resolved_at, latest.geo_resolved_at) AS geo_resolved_at,
-		       latest.latest_latency_ms, latest.score, latest.dialed_recently, latest.last_seen
+		FROM periscope.orchestrator_vantage_current FINAL
+		WHERE %s
+	),
+	geo AS (
+		SELECT tenant_id, gateway_id, orch_addr, resolved_ip,
+		       argMax(latitude, timestamp) AS geo_latitude,
+		       argMax(longitude, timestamp) AS geo_longitude,
+		       argMax(country_code, timestamp) AS geo_country_code,
+		       argMax(geo_source, timestamp) AS latest_geo_source,
+		       max(timestamp) AS latest_geo_resolved_at
+		FROM periscope.orchestrator_discovery_samples
+		WHERE %s
+		GROUP BY tenant_id, gateway_id, orch_addr, resolved_ip
+	)
+	SELECT latest.tenant_id, latest.gateway_id, latest.gateway_region, latest.orch_addr, latest.resolved_ip,
+	       coalesce(geo.geo_latitude, latest.latitude) AS latitude,
+	       coalesce(geo.geo_longitude, latest.longitude) AS longitude,
+	       latest.city,
+	       coalesce(geo.geo_country_code, latest.country_code) AS country_code,
+	       coalesce(geo.latest_geo_source, latest.geo_source) AS geo_source,
+	       coalesce(geo.latest_geo_resolved_at, latest.geo_resolved_at) AS geo_resolved_at,
+	       latest.latest_latency_ms, latest.score, latest.dialed_recently, latest.last_seen
 		FROM latest
 		LEFT JOIN geo
 		  ON geo.tenant_id = latest.tenant_id

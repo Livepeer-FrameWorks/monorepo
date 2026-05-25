@@ -696,8 +696,9 @@ func TestBuildOrchestratorVantagesQueryKeepsLastValidGeo(t *testing.T) {
 		"FROM periscope.orchestrator_vantage_current FINAL",
 		"FROM periscope.orchestrator_discovery_samples",
 		"geo_source != 'unknown'",
-		"coalesce(geo.latitude, latest.latitude)",
-		"coalesce(geo.longitude, latest.longitude)",
+		"argMax(geo_source, timestamp) AS latest_geo_source",
+		"coalesce(geo.geo_latitude, latest.latitude)",
+		"coalesce(geo.geo_longitude, latest.longitude)",
 		"latest.latest_latency_ms",
 		"latest.dialed_recently",
 	} {
@@ -707,6 +708,9 @@ func TestBuildOrchestratorVantagesQueryKeepsLastValidGeo(t *testing.T) {
 	}
 	if len(args) != 2 || args[0] != "tenant-a" || args[1] != "tenant-a" {
 		t.Fatalf("args = %#v, want tenant for latest and geo subqueries", args)
+	}
+	if strings.Contains(query, "argMax(geo_source, timestamp) AS geo_source") {
+		t.Fatalf("query reuses geo_source as an aggregate alias:\n%s", query)
 	}
 }
 
