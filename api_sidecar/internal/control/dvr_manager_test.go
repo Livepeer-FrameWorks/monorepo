@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestGetActiveDVRHashes_Empty(t *testing.T) {
@@ -104,6 +106,135 @@ func TestStopRecording_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected error to contain 'not found', got: %s", err.Error())
+	}
+}
+
+func TestStopRecordingWithSender_RecoversOnDiskRecording(t *testing.T) {
+	clearConn()
+
+	storagePath := t.TempDir()
+	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+
+	dvrHash := "hash-recovered"
+	streamID := "stream-1"
+	outputDir := filepath.Join(storagePath, "dvr", streamID, dvrHash)
+	segmentsDir := filepath.Join(outputDir, "segments")
+	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
+		t.Fatalf("mkdir segments: %v", err)
+	}
+	manifest := `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.000,
+segments/seg0.ts
+#EXTINF:5.500,
+segments/seg1.ts
+#EXT-X-ENDLIST`
+	manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(segmentsDir, "seg0.ts"), []byte("segment-zero"), 0644); err != nil {
+		t.Fatalf("write seg0: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(segmentsDir, "seg1.ts"), []byte("segment-one"), 0644); err != nil {
+		t.Fatalf("write seg1: %v", err)
+	}
+
+	dm := &DVRManager{
+		logger:      logging.NewLogger(),
+		jobs:        make(map[string]*DVRJob),
+		storagePath: storagePath,
+	}
+	var sent []*pb.ControlMessage
+	err := dm.StopRecordingWithSender(dvrHash, func(msg *pb.ControlMessage) {
+		sent = append(sent, msg)
+	})
+	if err != nil {
+		t.Fatalf("StopRecordingWithSender: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(sent))
+	}
+	stopped := sent[0].GetDvrStopped()
+	if stopped == nil {
+		t.Fatal("expected DVRStopped payload")
+	}
+	if stopped.GetDvrHash() != dvrHash {
+		t.Fatalf("DvrHash = %q, want %q", stopped.GetDvrHash(), dvrHash)
+	}
+	if stopped.GetStatus() != "completed" {
+		t.Fatalf("Status = %q, want completed", stopped.GetStatus())
+	}
+	if stopped.GetManifestPath() != manifestPath {
+		t.Fatalf("ManifestPath = %q, want %q", stopped.GetManifestPath(), manifestPath)
+	}
+	if stopped.GetDurationSeconds() < 11 {
+		t.Fatalf("DurationSeconds = %d, want at least 11", stopped.GetDurationSeconds())
+	}
+	if stopped.GetSizeBytes() == 0 {
+		t.Fatal("SizeBytes should be populated from the recovered output directory")
+	}
+}
+
+func TestRecoverActiveDVRJobsFromMist_RebuildsJobMap(t *testing.T) {
+	clearConn()
+
+	storagePath := t.TempDir()
+	dvrHash := "hash-active"
+	streamID := "stream-1"
+	outputDir := filepath.Join(storagePath, "dvr", streamID, dvrHash)
+	segmentsDir := filepath.Join(outputDir, "segments")
+	if err := os.MkdirAll(segmentsDir, 0755); err != nil {
+		t.Fatalf("mkdir segments: %v", err)
+	}
+	manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
+	if err := os.WriteFile(manifestPath, []byte(`#EXTM3U
+#EXTINF:6.000,
+segments/seg0.ts
+`), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(segmentsDir, "seg0.ts"), []byte("segment-zero"), 0644); err != nil {
+		t.Fatalf("write segment: %v", err)
+	}
+
+	fakeMist := &fakeMistClient{
+		pushListItems: []mist.PushInfo{{
+			ID:         42,
+			StreamName: "live+internal",
+			TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+		}},
+	}
+	dm := &DVRManager{
+		logger:      logging.NewLogger(),
+		jobs:        make(map[string]*DVRJob),
+		storagePath: storagePath,
+		mistClient:  fakeMist,
+	}
+
+	if err := dm.recoverActiveDVRJobsFromMist(storagePath, logging.NewLogger()); err != nil {
+		t.Fatalf("recoverActiveDVRJobsFromMist: %v", err)
+	}
+
+	job, ok := dm.jobs[dvrHash]
+	if !ok {
+		t.Fatal("expected recovered DVR job in manager map")
+	}
+	if job.PushID != 42 {
+		t.Fatalf("PushID = %d, want 42", job.PushID)
+	}
+	if job.StreamName != "live+internal" {
+		t.Fatalf("StreamName = %q, want live+internal", job.StreamName)
+	}
+	if job.TargetURI != fakeMist.pushListItems[0].TargetURI {
+		t.Fatalf("TargetURI = %q, want %q", job.TargetURI, fakeMist.pushListItems[0].TargetURI)
+	}
+	if job.Status != "recording" {
+		t.Fatalf("Status = %q, want recording", job.Status)
+	}
+	if job.ManifestPath != manifestPath {
+		t.Fatalf("ManifestPath = %q, want %q", job.ManifestPath, manifestPath)
 	}
 }
 

@@ -131,6 +131,13 @@ func GetDVRManager() *DVRManager {
 	return dvrManager
 }
 
+// RecoverActiveDVRJobsFromMist rebuilds in-memory DVR jobs after a Helmsman
+// restart by matching local DVR directories with Mist's active push list.
+func RecoverActiveDVRJobsFromMist(basePath string, logger logging.Logger) error {
+	initDVRManager()
+	return dvrManager.recoverActiveDVRJobsFromMist(basePath, logger)
+}
+
 // GetActiveDVRHashes returns DVR hashes that are currently recording.
 func GetActiveDVRHashes() map[string]bool {
 	if dvrManager == nil {
@@ -580,13 +587,146 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 	return nil
 }
 
-// StopRecording stops a DVR recording job
+type localDVRDirectory struct {
+	streamID     string
+	dvrHash      string
+	outputDir    string
+	manifestPath string
+}
+
+func (dm *DVRManager) recoverActiveDVRJobsFromMist(basePath string, logger logging.Logger) error {
+	pushes, err := dm.mistClient.PushList()
+	if err != nil {
+		return fmt.Errorf("list Mist pushes: %w", err)
+	}
+	dirs, err := scanLocalDVRDirectories(basePath)
+	if err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		dm.mutex.RLock()
+		_, active := dm.jobs[dir.dvrHash]
+		dm.mutex.RUnlock()
+		if active {
+			continue
+		}
+		push, ok := findDVRPush(pushes, dir.dvrHash)
+		if !ok {
+			continue
+		}
+		duration := dvrManifestDuration(dir.manifestPath)
+		startTime := time.Now()
+		if duration > 0 {
+			startTime = startTime.Add(-duration)
+		}
+		job := &DVRJob{
+			DVRHash:      dir.dvrHash,
+			InternalName: dir.streamID,
+			StartTime:    startTime,
+			PushID:       push.ID,
+			OutputDir:    dir.outputDir,
+			ManifestPath: dir.manifestPath,
+			SendFunc: func(msg *pb.ControlMessage) {
+				if err := sendOrEnqueue(msg); err != nil {
+					logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR completion queued for retry")
+				}
+			},
+			Logger:         dm.logger,
+			SegmentCount:   dvrManifestSegmentCount(dir.manifestPath),
+			TotalSizeBytes: dvrDirectorySize(dir.outputDir),
+			Status:         "recording",
+			TargetURI:      push.TargetURI,
+			StreamName:     push.StreamName,
+			MaxRetries:     MaxDVRRetries,
+			SyncedSegments: make(map[string]bool),
+		}
+
+		dm.mutex.Lock()
+		if _, exists := dm.jobs[dir.dvrHash]; !exists {
+			dm.jobs[dir.dvrHash] = job
+			go dm.monitorJob(job)
+			logger.WithFields(logging.Fields{
+				"dvr_hash":      dir.dvrHash,
+				"stream_id":     dir.streamID,
+				"push_id":       push.ID,
+				"stream_name":   push.StreamName,
+				"manifest_path": dir.manifestPath,
+			}).Warn("Recovered active DVR job from Mist push after restart")
+		}
+		dm.mutex.Unlock()
+	}
+	return nil
+}
+
+func scanLocalDVRDirectories(basePath string) ([]localDVRDirectory, error) {
+	dvrRoot := filepath.Join(basePath, "dvr")
+	streamDirs, err := os.ReadDir(dvrRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var dirs []localDVRDirectory
+	for _, streamDir := range streamDirs {
+		if !streamDir.IsDir() {
+			continue
+		}
+		streamID := streamDir.Name()
+		artifactDirs, err := os.ReadDir(filepath.Join(dvrRoot, streamID))
+		if err != nil {
+			continue
+		}
+		for _, artifactDir := range artifactDirs {
+			if !artifactDir.IsDir() {
+				continue
+			}
+			dvrHash := artifactDir.Name()
+			outputDir := filepath.Join(dvrRoot, streamID, dvrHash)
+			segmentsDir := filepath.Join(outputDir, "segments")
+			if info, statErr := os.Stat(segmentsDir); statErr != nil || !info.IsDir() {
+				continue
+			}
+			manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
+			dirs = append(dirs, localDVRDirectory{
+				streamID:     streamID,
+				dvrHash:      dvrHash,
+				outputDir:    outputDir,
+				manifestPath: manifestPath,
+			})
+		}
+	}
+	return dirs, nil
+}
+
+func findDVRPush(pushes []mist.PushInfo, dvrHash string) (mist.PushInfo, bool) {
+	for _, push := range pushes {
+		if strings.Contains(push.TargetURI, dvrHash) || strings.Contains(push.ActualURI, dvrHash) {
+			return push, true
+		}
+	}
+	return mist.PushInfo{}, false
+}
+
+// StopRecording stops a DVR recording job.
 func (dm *DVRManager) StopRecording(dvrHash string) error {
+	return dm.StopRecordingWithSender(dvrHash, nil)
+}
+
+// StopRecordingWithSender stops a DVR recording job and sends the terminal
+// notification through sendFunc. If Helmsman restarted after Mist finished
+// writing the recording, the in-memory job is gone but the on-disk DVR
+// layout is still authoritative enough to emit completion and let Foghorn
+// finalize the chapter.
+func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.ControlMessage)) error {
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
 	if !exists {
 		dm.mutex.Unlock()
-		return fmt.Errorf("DVR recording not found for hash %s", dvrHash)
+		return dm.stopRecoveredRecording(dvrHash, sendFunc)
+	}
+	if sendFunc != nil {
+		job.SendFunc = sendFunc
 	}
 
 	// Stop the MistServer push if running
@@ -614,6 +754,99 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 
 	job.Logger.Info("DVR recording job stopped")
 	return nil
+}
+
+func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*pb.ControlMessage)) error {
+	segmentsDir := resolveDVRSegmentsDirByHash(dvrHash)
+	if segmentsDir == "" {
+		return fmt.Errorf("DVR recording not found for hash %s", dvrHash)
+	}
+	outputDir := filepath.Dir(segmentsDir)
+	streamID := filepath.Base(filepath.Dir(outputDir))
+	manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
+	duration := dvrManifestDuration(manifestPath)
+	startTime := time.Now()
+	if duration > 0 {
+		startTime = startTime.Add(-duration)
+	}
+
+	job := &DVRJob{
+		DVRHash:        dvrHash,
+		InternalName:   streamID,
+		StartTime:      startTime,
+		OutputDir:      outputDir,
+		ManifestPath:   manifestPath,
+		SendFunc:       sendFunc,
+		Logger:         dm.logger,
+		TotalSizeBytes: dvrDirectorySize(outputDir),
+		Status:         "finalizing",
+		SyncedSegments: make(map[string]bool),
+	}
+
+	dm.logger.WithFields(logging.Fields{
+		"dvr_hash":      dvrHash,
+		"manifest_path": manifestPath,
+		"output_dir":    outputDir,
+	}).Warn("Recovered DVR stop from on-disk recording after missing in-memory job")
+
+	dm.syncNewSegments(job)
+	dm.sendCompletion(job, "completed", "")
+	return nil
+}
+
+func dvrManifestDuration(manifestPath string) time.Duration {
+	manifestBody, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 0
+	}
+	parsed, err := hls.Parse(string(manifestBody))
+	if err != nil || parsed == nil {
+		return 0
+	}
+	var total time.Duration
+	for _, seg := range parsed.Segments {
+		if seg.Duration <= 0 {
+			continue
+		}
+		total += time.Duration(seg.Duration * float64(time.Second))
+	}
+	return total
+}
+
+func dvrManifestSegmentCount(manifestPath string) int {
+	manifestBody, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 0
+	}
+	parsed, err := hls.Parse(string(manifestBody))
+	if err != nil || parsed == nil {
+		return 0
+	}
+	return len(parsed.Segments)
+}
+
+func dvrDirectorySize(outputDir string) uint64 {
+	var total uint64
+	if err := filepath.WalkDir(outputDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return statErr
+		}
+		if info.Size() < 0 {
+			return nil
+		}
+		total += uint64(info.Size())
+		return nil
+	}); err != nil {
+		return total
+	}
+	return total
 }
 
 // startDVRPush starts DVR recording via MistServer push API

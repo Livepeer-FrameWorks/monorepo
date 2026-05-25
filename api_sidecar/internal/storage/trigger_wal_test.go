@@ -36,6 +36,28 @@ func TestComputeSourceEventIDStable(t *testing.T) {
 	}
 }
 
+func TestDefaultTriggerWALDirPrefersExplicitEnv(t *testing.T) {
+	explicit := filepath.Join(t.TempDir(), "wal")
+	storagePath := t.TempDir()
+	t.Setenv("FRAMEWORKS_TRIGGER_WAL_DIR", explicit)
+	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+
+	if got := DefaultTriggerWALDir(); got != explicit {
+		t.Fatalf("DefaultTriggerWALDir() = %q, want explicit env %q", got, explicit)
+	}
+}
+
+func TestDefaultTriggerWALDirFallsBackToStoragePath(t *testing.T) {
+	storagePath := t.TempDir()
+	t.Setenv("FRAMEWORKS_TRIGGER_WAL_DIR", "")
+	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+
+	want := filepath.Join(storagePath, "trigger-wal")
+	if got := DefaultTriggerWALDir(); got != want {
+		t.Fatalf("DefaultTriggerWALDir() = %q, want storage fallback %q", got, want)
+	}
+}
+
 func TestTriggerWALAppendIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	wal, err := NewTriggerWAL(dir)

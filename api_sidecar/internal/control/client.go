@@ -933,7 +933,11 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_ProcessingJobRequest:
 				if processingJobHandler != nil {
-					go processingJobHandler(x.ProcessingJobRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+					go processingJobHandler(x.ProcessingJobRequest, func(m *pb.ControlMessage) {
+						if err := sendOrEnqueue(m); err != nil {
+							logger.WithError(err).WithField("job_id", x.ProcessingJobRequest.GetJobId()).Warn("Processing job message queued for retry")
+						}
+					})
 				}
 			}
 		}
@@ -1416,7 +1420,7 @@ func handleDVRStop(logger logging.Logger, req *pb.DVRStopRequest, send func(*pb.
 	initDVRManager()
 
 	// Stop the DVR recording job
-	if err := dvrManager.StopRecording(dvrHash); err != nil {
+	if err := dvrManager.StopRecordingWithSender(dvrHash, send); err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"error":    err,

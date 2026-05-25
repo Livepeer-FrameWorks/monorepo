@@ -41,11 +41,14 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 }
 
 // DefaultTriggerWALDir resolves the on-disk directory used by the WAL.
-// Honors FRAMEWORKS_TRIGGER_WAL_DIR, falling back to the user cache dir
-// and finally /tmp.
+// Honors FRAMEWORKS_TRIGGER_WAL_DIR, falling back to the edge storage path
+// and finally the user cache dir or /tmp.
 func DefaultTriggerWALDir() string {
 	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_TRIGGER_WAL_DIR")); dir != "" {
 		return dir
+	}
+	if storagePath := strings.TrimSpace(os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")); storagePath != "" {
+		return filepath.Join(storagePath, "trigger-wal")
 	}
 	if cacheDir, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(cacheDir, "frameworks", "trigger-wal")

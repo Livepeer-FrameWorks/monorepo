@@ -129,6 +129,9 @@ func main() {
 		if err := idx.RestoreFromDisk(ctx, cfg.StorageLocalPath); err != nil {
 			logger.WithError(err).Warn("Local segment index restore-from-disk failed")
 		}
+		if err := control.RecoverActiveDVRJobsFromMist(cfg.StorageLocalPath, logger); err != nil {
+			logger.WithError(err).Warn("Active DVR recovery from Mist push list failed")
+		}
 		// Bring the segment ledger and on-disk inventory into agreement:
 		// detect missing-pre-upload files (-> lost_local), heal reappeared
 		// lost_local segments with matching PDT timing, rebuild ledger rows
