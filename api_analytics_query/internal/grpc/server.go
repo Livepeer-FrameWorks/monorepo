@@ -1218,19 +1218,19 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		topN = 10
 	}
 
-	// Build base WHERE clause - use viewer_hours_hourly MV (no raw events)
-	whereClause := "WHERE tenant_id = ? AND hour >= ? AND hour <= ?"
-	args := []any{tenantID, startTime, endTime}
+	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
+	sessionEndExpr := "ifNull(disconnected_at, ?)"
+	whereClause := fmt.Sprintf("WHERE tenant_id = ? AND %s <= ? AND %s >= ?", sessionStartExpr, sessionEndExpr)
+	args := []any{tenantID, endTime, endTime, startTime}
 
 	if streamID := req.GetStreamId(); streamID != "" {
 		whereClause += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
-	// Query for country aggregates - distinct viewers per country from MV
 	countryQuery := fmt.Sprintf(`
-		SELECT country_code, uniqCombinedMerge(unique_viewers_state) as cnt
-		FROM periscope.viewer_hours_hourly
+		SELECT country_code, uniqExact(node_id, session_id) as cnt
+		FROM periscope.viewer_sessions_current FINAL
 		%s AND country_code != ''
 		GROUP BY country_code
 		ORDER BY cnt DESC
@@ -1244,36 +1244,29 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	defer func() { _ = countryRows.Close() }()
 
 	var topCountries []*pb.CountryMetric
-	var totalViewersForPercent int64
+	var totalViewersForPercent uint64
 	for countryRows.Next() {
 		var countryCode string
-		var count int64
+		var count uint64
 		if scanErr := countryRows.Scan(&countryCode, &count); scanErr != nil {
 			return nil, wrapClickhouseError(scanErr, "database error (countries)")
 		}
 		topCountries = append(topCountries, &pb.CountryMetric{
 			CountryCode: countryCode,
-			ViewerCount: int32(count),
+			ViewerCount: int32(min(count, uint64(1<<31-1))),
 		})
 	}
-	if err := countryRows.Err(); err != nil {
-		return nil, wrapClickhouseError(err, "database error (countries)")
+	if rowsErr := countryRows.Err(); rowsErr != nil {
+		return nil, wrapClickhouseError(rowsErr, "database error (countries)")
 	}
 
 	totalQuery := fmt.Sprintf(`
-		SELECT ifNull(sum(cnt), 0) FROM (
-			SELECT uniqCombinedMerge(unique_viewers_state) as cnt
-			FROM periscope.viewer_hours_hourly
-			%s AND country_code != ''
-			GROUP BY country_code
-		)
+		SELECT uniqExact(node_id, session_id)
+		FROM periscope.viewer_sessions_current FINAL
+		%s AND country_code != ''
 	`, whereClause)
-	var totalViewersForPercentRow sql.NullInt64
-	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercentRow); queryErr != nil {
+	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
 		return nil, wrapClickhouseError(queryErr, "database error (countries)")
-	}
-	if totalViewersForPercentRow.Valid {
-		totalViewersForPercent = totalViewersForPercentRow.Int64
 	}
 
 	// Calculate percentages for countries
@@ -1283,12 +1276,10 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		}
 	}
 
-	// Query for city aggregates from viewer_city_hourly MV.
-	// latitude/longitude are scalar in the rollup (not aggregate states).
 	cityQuery := fmt.Sprintf(`
-		SELECT city, country_code, uniqCombinedMerge(unique_viewers_state) as cnt,
+		SELECT city, country_code, uniqExact(node_id, session_id) as cnt,
 		       ifNull(any(latitude), 0) as lat, ifNull(any(longitude), 0) as lon
-		FROM periscope.viewer_city_hourly
+		FROM periscope.viewer_sessions_current FINAL
 		%s AND city != ''
 		GROUP BY city, country_code
 		ORDER BY cnt DESC
@@ -1304,7 +1295,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	var topCities []*pb.CityMetric
 	for cityRows.Next() {
 		var city, countryCode string
-		var count int64
+		var count uint64
 		var lat, lon float64
 		if err := cityRows.Scan(&city, &countryCode, &count, &lat, &lon); err != nil {
 			return nil, wrapClickhouseError(err, "database error (cities)")
@@ -1316,7 +1307,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		topCities = append(topCities, &pb.CityMetric{
 			City:        city,
 			CountryCode: countryCode,
-			ViewerCount: int32(count),
+			ViewerCount: int32(min(count, uint64(1<<31-1))),
 			Percentage:  percentage,
 			Latitude:    lat,
 			Longitude:   lon,
@@ -1326,44 +1317,37 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		return nil, wrapClickhouseError(err, "database error (cities)")
 	}
 
-	// Unique cities from MV (city + country)
-	var uniqueCities int32
+	var uniqueCities uint64
 	uniqueCityQuery := fmt.Sprintf(`
 		SELECT uniqExact(city, country_code)
-		FROM periscope.viewer_city_hourly
+		FROM periscope.viewer_sessions_current FINAL
 		%s AND city != ''
 	`, whereClause)
 	if err := s.clickhouse.QueryRowContext(ctx, uniqueCityQuery, args...).Scan(&uniqueCities); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique city counts")
 	}
 
-	// Query for unique countries and total viewers from MV
 	uniqueQuery := fmt.Sprintf(`
-		SELECT uniqExact(country_code), uniqCombinedMerge(unique_viewers_state)
-		FROM periscope.viewer_hours_hourly
+		SELECT uniqExact(country_code), uniqExact(node_id, session_id)
+		FROM periscope.viewer_sessions_current FINAL
 		%s AND country_code != ''
 	`, whereClause)
 
-	var uniqueCountries sql.NullInt64
-	var totalViewersAll sql.NullInt64
+	var uniqueCountries uint64
+	var totalViewersAll uint64
 	totalViewers := int32(0)
 	if err := s.clickhouse.QueryRowContext(ctx, uniqueQuery, args...).Scan(&uniqueCountries, &totalViewersAll); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique geographic counts")
 	}
-	if totalViewersAll.Valid {
-		totalViewers = int32(totalViewersAll.Int64)
-	}
+	totalViewers = int32(min(totalViewersAll, uint64(1<<31-1)))
 
-	uniqueCountriesVal := int32(0)
-	if uniqueCountries.Valid {
-		uniqueCountriesVal = int32(uniqueCountries.Int64)
-	}
+	uniqueCountriesVal := int32(min(uniqueCountries, uint64(1<<31-1)))
 
 	return &pb.GetGeographicDistributionResponse{
 		TopCountries:    topCountries,
 		TopCities:       topCities,
 		UniqueCountries: uniqueCountriesVal,
-		UniqueCities:    uniqueCities,
+		UniqueCities:    int32(min(uniqueCities, uint64(1<<31-1))),
 		TotalViewers:    totalViewers,
 	}, nil
 }

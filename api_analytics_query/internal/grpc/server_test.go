@@ -307,16 +307,16 @@ func TestGetGeographicDistributionEmptyKnownGeo(t *testing.T) {
 	db, server, mock := newLiveUsageSummaryServer(t)
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT country_code, uniqCombinedMerge\(unique_viewers_state\) as cnt[\s\S]*FROM periscope\.viewer_hours_hourly`).
+	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
 		WillReturnRows(sqlmock.NewRows([]string{"country_code", "cnt"}))
-	mock.ExpectQuery(`SELECT ifNull\(sum\(cnt\), 0\)[\s\S]*FROM \([\s\S]*FROM periscope\.viewer_hours_hourly`).
-		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(int64(0)))
-	mock.ExpectQuery(`SELECT city, country_code, uniqCombinedMerge\(unique_viewers_state\) as cnt,[\s\S]*FROM periscope\.viewer_city_hourly`).
+	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(uint64(0)))
+	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
 		WillReturnRows(sqlmock.NewRows([]string{"city", "country_code", "cnt", "lat", "lon"}))
-	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_city_hourly`).
-		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(int32(0)))
-	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqCombinedMerge\(unique_viewers_state\)[\s\S]*FROM periscope\.viewer_hours_hourly`).
-		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(int64(0), int64(0)))
+	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(uint64(0)))
+	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(0), uint64(0)))
 
 	resp, err := server.GetGeographicDistribution(context.Background(), &pb.GetGeographicDistributionRequest{
 		TenantId: "tenant-1",
@@ -334,6 +334,50 @@ func TestGetGeographicDistributionEmptyKnownGeo(t *testing.T) {
 	}
 	if resp.GetTotalViewers() != 0 || resp.GetUniqueCountries() != 0 || resp.GetUniqueCities() != 0 {
 		t.Fatalf("expected zero counts, got total=%d countries=%d cities=%d", resp.GetTotalViewers(), resp.GetUniqueCountries(), resp.GetUniqueCities())
+	}
+
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
+func TestGetGeographicDistributionUsesCurrentSessionOverlap(t *testing.T) {
+	db, server, mock := newLiveUsageSummaryServer(t)
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT country_code, uniqExact\(node_id, session_id\) as cnt[\s\S]*FROM periscope\.viewer_sessions_current FINAL[\s\S]*ifNull\(connected_at, disconnected_at\) <= \? AND ifNull\(disconnected_at, \?\) >= \?`).
+		WillReturnRows(sqlmock.NewRows([]string{"country_code", "cnt"}).
+			AddRow("NL", uint64(3)).
+			AddRow("DE", uint64(1)))
+	mock.ExpectQuery(`SELECT uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"total"}).AddRow(uint64(4)))
+	mock.ExpectQuery(`SELECT city, country_code, uniqExact\(node_id, session_id\) as cnt,[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"city", "country_code", "cnt", "lat", "lon"}).
+			AddRow("The Hague", "NL", uint64(3), float64(52.0705), float64(4.3007)))
+	mock.ExpectQuery(`SELECT uniqExact\(city, country_code\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_cities"}).AddRow(uint64(1)))
+	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
+		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(2), uint64(4)))
+
+	resp, err := server.GetGeographicDistribution(context.Background(), &pb.GetGeographicDistributionRequest{
+		TenantId: "tenant-1",
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(time.Now().Add(-24 * time.Hour)),
+			End:   timestamppb.New(time.Now()),
+		},
+		TopN: 10,
+	})
+	if err != nil {
+		t.Fatalf("GetGeographicDistribution: %v", err)
+	}
+	if resp.GetTotalViewers() != 4 || resp.GetUniqueCountries() != 2 || resp.GetUniqueCities() != 1 {
+		t.Fatalf("unexpected totals: total=%d countries=%d cities=%d", resp.GetTotalViewers(), resp.GetUniqueCountries(), resp.GetUniqueCities())
+	}
+	if got := resp.GetTopCountries(); len(got) != 2 || got[0].GetCountryCode() != "NL" || got[0].GetViewerCount() != 3 {
+		t.Fatalf("unexpected top countries: %#v", got)
+	}
+	if got := resp.GetTopCities(); len(got) != 1 || got[0].GetCity() != "The Hague" || got[0].GetViewerCount() != 3 {
+		t.Fatalf("unexpected top cities: %#v", got)
 	}
 
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
