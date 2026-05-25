@@ -1801,9 +1801,9 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 		if linkedClawbackID == "" {
 			linkedClawbackID = clawbackID
 		}
-		// Mark the original accrual clawed_back if the clawback fully
-		// covers the payable amount; otherwise leave at its current state.
-		if clawPayable >= a.payable {
+		// Mark the original accrual clawed_back if the signed clawback fully
+		// covers the signed payable amount; otherwise leave at its current state.
+		if absCents(clawPayable) >= absCents(a.payable) {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE purser.operator_credit_ledger
 				SET status = 'clawed_back', updated_at = NOW()
@@ -1823,6 +1823,13 @@ func applyOperatorCreditClawbackTx(ctx context.Context, tx *sql.Tx, invoiceID, r
 		}
 	}
 	return nil
+}
+
+func absCents(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // applyPrepaidTopupReversalTx writes the negative balance_transactions row

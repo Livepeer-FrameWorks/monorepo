@@ -357,10 +357,9 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 // preceding bucket. The preceding bucket can only be fully closed once a
 // later snapshot arrives. Each affected bucket gets its own seed
 // snapshot at-or-before bucket_start so the leading edge integrates
-// cleanly. If a bucket is first closed by a snapshot ingested at-or-after
-// that bucket's billing boundary, the rebuilder records a zero-baseline
-// divergence before appending the latest projection so Purser receives an
-// explicit correction instead of silently missing a late snapshot.
+// cleanly. Billing walks this ledger by first projection time, so a
+// bucket's first projection is normal usage; only subsequent projection
+// changes produce correction rows.
 func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, windowStart, windowEnd time.Time) error {
 	cursorStartMS := windowStart.UnixMilli()
 	cursorEndMS := windowEnd.UnixMilli()
@@ -467,7 +466,6 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 		gbSecondsByWindow map[int64]float64
 		fileCountByWindow map[int64]uint64
 		closedByWindow    map[int64]bool
-		closedIngestMS    map[int64]int64
 		prevTsMS          int64
 		prevBytes         uint64
 		prevFileCount     uint64
@@ -491,7 +489,7 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 		k := key{tenantID, clusterID, scope, providerTenantID, providerClusterID, storageBackend}
 		a, ok := state[k]
 		if !ok {
-			a = &accum{gbSecondsByWindow: map[int64]float64{}, fileCountByWindow: map[int64]uint64{}, closedByWindow: map[int64]bool{}, closedIngestMS: map[int64]int64{}}
+			a = &accum{gbSecondsByWindow: map[int64]float64{}, fileCountByWindow: map[int64]uint64{}, closedByWindow: map[int64]bool{}}
 			state[k] = a
 		}
 		if a.prevTsMS > 0 && tsMS > a.prevTsMS {
@@ -514,9 +512,6 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 				}
 				if tsMS >= w+fiveMinuteMS {
 					a.closedByWindow[w] = true
-					if a.closedIngestMS[w] < ingestedAtMS {
-						a.closedIngestMS[w] = ingestedAtMS
-					}
 				}
 			}
 		}
@@ -555,7 +550,7 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 			if !a.closedByWindow[w] {
 				continue
 			}
-			if err := h.storageProjectionDiverged(ctx, projectionVersionMS, time.UnixMilli(w).UTC(), a.closedIngestMS[w],
+			if err := h.storageProjectionDiverged(ctx, projectionVersionMS, time.UnixMilli(w).UTC(),
 				k.tenant, k.cluster, k.scope, k.providerTenant, k.providerCluster, k.backend,
 				gbs, a.fileCountByWindow[w]); err != nil {
 				return err
@@ -587,7 +582,6 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 	ctx context.Context,
 	observedAtMS int64,
 	windowStart time.Time,
-	closedByIngestedAtMS int64,
 	tenantID, clusterID, scope, providerTenantID, providerClusterID, backend string,
 	gbSeconds float64,
 	fileCount uint64,
@@ -644,9 +638,6 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("storage_gb_seconds_5m divergence lookup iterate: %w", err)
-		}
-		if closedByIngestedAtMS >= windowStart.Add(5*time.Minute).UnixMilli() {
-			return record(0, 0)
 		}
 		return nil
 	}

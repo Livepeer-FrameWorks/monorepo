@@ -102,3 +102,43 @@ func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestQueryClusterStorageProviderUsageReadsLedgerByProjectionTime(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
+	start := time.Unix(1700000000, 0).UTC()
+	end := start.Add(5 * time.Minute)
+
+	rows := sqlmock.NewRows([]string{
+		"cluster_id",
+		"storage_provider_tenant_id",
+		"storage_provider_cluster_id",
+		"storage_backend",
+		"storage_scope",
+		"gb_seconds",
+	}).AddRow("cluster-a", "provider-tenant", "provider-cluster", "s3", "cold", 900.0)
+	mock.ExpectQuery(`FROM periscope\.storage_gb_seconds_5m`).
+		WithArgs("tenant-1", end.UnixMilli(), start.UnixMilli(), end.UnixMilli()).
+		WillReturnRows(rows)
+
+	got, err := bs.queryClusterStorageProviderUsage(context.Background(), "tenant-1", start, end, "primary")
+	if err != nil {
+		t.Fatalf("queryClusterStorageProviderUsage error: %v", err)
+	}
+	if len(got["cluster-a"]) != 1 {
+		t.Fatalf("expected one provider row, got %#v", got)
+	}
+	rec := got["cluster-a"][0]
+	if rec.StorageScope != "cold" || rec.UsageType != "storage_gb_seconds_cold" || rec.GBSeconds != 900 {
+		t.Fatalf("unexpected storage provider row: %#v", rec)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}

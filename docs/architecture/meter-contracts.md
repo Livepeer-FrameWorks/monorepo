@@ -153,7 +153,7 @@ Four time concepts per fact. **Edge-time and billable-time are different concept
 
 `billable_at_ms` is therefore **derived, not stored**. It is `min(projection_version_ms)` across the projection rows for one logical fact — the first time Periscope saw it. It is deterministic given the table contents, never set explicitly by the parser, never overwritten. The billing cursor walks this derived value over the read view.
 
-For derived 5-min ledger rows (`viewer_usage_5m`, `processing_5m`, `api_usage_5m`, etc.) the same model holds: the rebuild worker appends a projection row each time it computes the window; readers materialize via `min/argMax`. Storage billing is the exception: invoices integrate `storage_snapshots` directly so a tenant with no fresh snapshot activity still bills from the last-known size. The storage ledger remains the dashboard/rollup source.
+For derived 5-min ledger rows (`viewer_usage_5m`, `processing_5m`, `api_usage_5m`, `storage_gb_seconds_5m`, etc.) the same model holds: the rebuild worker appends a projection row each time it computes the window; readers materialize via `min/argMax`. Storage snapshots are the raw facts, but billing reads the closed 5-minute storage ledger by first projection time so late snapshots bill once instead of being inferred independently from raw snapshots.
 
 ## Corrections
 
@@ -169,9 +169,10 @@ On a guarded projection insert:
 2. Compare the new projection's rated-field values to the prior values.
 3. If any rated field's value differs by more than a per-meter epsilon (`duration_seconds` ≥ 1, uploaded/downloaded bytes ≥ 1 KiB, scope changes, codec changes — defined per meter in the parser):
    - For finalized-fact tables, record the divergence before writing the new projection. If the divergence row cannot be written, the projection fails and the Kafka message retries.
-   - For derived storage ledger rows, record the divergence and append the latest projection. Billing receives an explicit correction for already-cursored source windows, while dashboard rollups keep the latest storage truth.
-   - Increment `periscope_projection_divergence_total{table, meter, field}` Prometheus counter.
-   - Write an audit row to `periscope.projection_divergences` : `(observed_at_ms, table_name, natural_key_json, prior_value_json, new_value_json, source_event_id)`.
+
+- For derived storage ledger rows, the first projection is canonical usage for the projection slice. Later projections for the same natural key record a divergence before appending the latest projection. Billing receives an explicit correction only for already-cursored projections, while dashboard rollups keep the latest storage truth.
+- Increment `periscope_projection_divergence_total{table, meter, field}` Prometheus counter.
+- Write an audit row to `periscope.projection_divergences` : `(observed_at_ms, table_name, natural_key_json, prior_value_json, new_value_json, source_event_id)`.
 
 This gives us:
 

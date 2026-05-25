@@ -228,6 +228,33 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 	return tenants, nil
 }
 
+func (bs *BillingSummarizer) getCursorTenants(ctx context.Context) ([]string, error) {
+	rows, err := bs.yugaDB.QueryContext(ctx, `
+		SELECT tenant_id
+		FROM periscope.billing_cursors
+		WHERE tenant_id IS NOT NULL
+		  AND tenant_id <> ''
+		ORDER BY tenant_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query billing cursor tenants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tenants []string
+	for rows.Next() {
+		var tenantID string
+		if scanErr := rows.Scan(&tenantID); scanErr != nil {
+			return nil, fmt.Errorf("scan billing cursor tenant: %w", scanErr)
+		}
+		tenants = append(tenants, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate billing cursor tenants: %w", err)
+	}
+	return tenants, nil
+}
+
 // generateTenantUsageSummary creates one usage summary per cluster that has
 // canonical usage in the period. Tenant-wide gauges attach to the primary
 // cluster; meters with source cluster identity stay cluster-scoped.
@@ -739,69 +766,23 @@ func storageUsageType(scope string) string {
 
 func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string][]models.StorageProviderUsage, error) {
 	out := map[string][]models.StorageProviderUsage{}
-	periodSeconds := endTime.Sub(startTime).Seconds()
-	if periodSeconds <= 0 {
-		return out, nil
-	}
 	rows, err := bs.clickhouse.QueryContext(ctx, `
-		WITH points AS (
-			SELECT
-				tenant_id, cluster_id, storage_scope,
-				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-				? AS point_ts,
-				argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
-			FROM periscope.storage_snapshots
-			WHERE tenant_id = ?
-			  AND timestamp <= ?
-			  AND ingested_at_ms < ?
-			GROUP BY tenant_id, cluster_id, storage_scope,
-			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
-
-			UNION ALL
-
-			SELECT
-				tenant_id, cluster_id, storage_scope,
-				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-				timestamp AS point_ts,
-				argMax(total_bytes, ingested_at_ms) AS total_bytes
-			FROM periscope.storage_snapshots
-			WHERE tenant_id = ?
-			  AND timestamp > ?
-			  AND timestamp < ?
-			  AND ingested_at_ms < ?
-			GROUP BY tenant_id, cluster_id, storage_scope,
-			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-			         point_ts
-
-			UNION ALL
-
-			SELECT
-				tenant_id, cluster_id, storage_scope,
-				storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-				? AS point_ts,
-				argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
-			FROM periscope.storage_snapshots
-			WHERE tenant_id = ?
-			  AND timestamp < ?
-			  AND ingested_at_ms < ?
-			GROUP BY tenant_id, cluster_id, storage_scope,
-			         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
-		),
-		segments AS (
+		WITH first_projections AS (
 			SELECT
 				cluster_id,
 				storage_provider_tenant_id,
 				storage_provider_cluster_id,
 				storage_backend,
 				storage_scope,
-				point_ts,
-				total_bytes,
-				lead(point_ts, 1, point_ts) OVER (
-					PARTITION BY tenant_id, cluster_id, storage_scope,
-					             storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
-					ORDER BY point_ts
-				) AS next_ts
-			FROM points
+				window_start,
+				min(projection_version_ms) AS billable_at_ms,
+				argMax(gb_seconds, projection_version_ms) AS gb_seconds
+			FROM periscope.storage_gb_seconds_5m
+			WHERE tenant_id = ?
+			  AND projection_version_ms < ?
+			GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
+			         storage_backend, storage_scope, window_start
+			HAVING billable_at_ms >= ? AND billable_at_ms < ?
 		)
 		SELECT
 			cluster_id,
@@ -809,18 +790,14 @@ func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Contex
 			storage_provider_cluster_id,
 			storage_backend,
 			storage_scope,
-			sum((toFloat64(total_bytes) / pow(1024, 3)) * dateDiff('second', point_ts, next_ts)) AS gb_seconds
-		FROM segments
-		WHERE next_ts > point_ts
-		  AND total_bytes != 0
+			sum(gb_seconds) AS gb_seconds
+		FROM first_projections
+		WHERE gb_seconds != 0
 		GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
 		         storage_backend, storage_scope
-		HAVING gb_seconds != 0
-	`, startTime, tenantID, startTime, endTime.UnixMilli(),
-		tenantID, startTime, endTime, endTime.UnixMilli(),
-		endTime, tenantID, endTime, endTime.UnixMilli())
+	`, tenantID, endTime.UnixMilli(), startTime.UnixMilli(), endTime.UnixMilli())
 	if err != nil {
-		return nil, fmt.Errorf("storage snapshots provider usage: %w", err)
+		return nil, fmt.Errorf("storage ledger provider usage: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -960,13 +937,6 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 			  AND source_event_id = ?
 		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "storage_gb_seconds_5m":
-		windowStart, err := time.Parse(time.RFC3339, stringFromJSONMap(naturalKey, "window_start"))
-		if err != nil {
-			return false, fmt.Errorf("parse storage divergence window_start: %w", err)
-		}
-		if windowStart.Before(sliceStart) {
-			return true, nil
-		}
 		return queryFirstProjection(`
 			SELECT if(count() = 0, 0, min(projection_version_ms))
 			FROM periscope.storage_gb_seconds_5m
@@ -1415,6 +1385,20 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get active tenants: %w", err)
 	}
+	cursorTenants, err := bs.getCursorTenants(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get billing cursor tenants: %w", err)
+	}
+	tenantSet := make(map[string]struct{}, len(tenants)+len(cursorTenants))
+	mergedTenants := make([]string, 0, len(tenants)+len(cursorTenants))
+	for _, tenantID := range append(tenants, cursorTenants...) {
+		if _, seen := tenantSet[tenantID]; seen {
+			continue
+		}
+		tenantSet[tenantID] = struct{}{}
+		mergedTenants = append(mergedTenants, tenantID)
+	}
+	tenants = mergedTenants
 
 	var failedTenants []string
 	for _, tenantID := range tenants {
