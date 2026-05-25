@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,12 +43,12 @@ func TestEvaluateNodeHealth(t *testing.T) {
 			expect:      false,
 		},
 		{
-			name:        "cpu degraded",
+			name:        "cpu does not mark node down",
 			hasMistData: true,
 			cpu:         91,
 			mem:         10,
 			shm:         10,
-			expect:      false,
+			expect:      true,
 		},
 		{
 			name:        "memory degraded",
@@ -82,6 +83,21 @@ func TestEvaluateNodeHealth(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tt.expect, got)
 			}
 		})
+	}
+}
+
+func TestNormalizeMistCPUPercent(t *testing.T) {
+	if got := normalizeMistCPUPercent(45); got != 45 {
+		t.Fatalf("expected already-normalized CPU to remain 45, got %v", got)
+	}
+
+	cores := runtime.NumCPU()
+	got := normalizeMistCPUPercent(float64(cores) * 90)
+	if cores > 1 && got != 90 {
+		t.Fatalf("expected multicore CPU to normalize to 90, got %v", got)
+	}
+	if got := normalizeMistCPUPercent(float64(cores) * 150); got != 100 {
+		t.Fatalf("expected normalized CPU to cap at 100, got %v", got)
 	}
 }
 

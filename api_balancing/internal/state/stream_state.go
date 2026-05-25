@@ -955,9 +955,6 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	}
 	n.BaseURL = baseURL
 	n.IsHealthy = isHealthy
-	if !isHealthy {
-		n.IsStale = true
-	}
 	if isNew && n.LastHeartbeat.IsZero() {
 		n.IsStale = true
 	}
@@ -2686,6 +2683,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 		lon := update.GetLongitude()
 		lonPtr = &lon
 	}
+	sm.TouchNode(update.GetNodeId(), update.GetIsHealthy())
 	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
 	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch())
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {

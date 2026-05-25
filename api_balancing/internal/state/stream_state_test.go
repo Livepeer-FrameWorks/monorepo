@@ -413,6 +413,33 @@ func TestApplyNodeLifecyclePreservesZeroCoordinateWithValidPair(t *testing.T) {
 	}
 }
 
+func TestApplyNodeLifecycleKeepsDegradedHeartbeatFresh(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	if err := sm.ApplyNodeLifecycle(context.Background(), &pb.NodeLifecycleUpdate{
+		NodeId:    "node-degraded",
+		BaseUrl:   "http://node-degraded.example",
+		IsHealthy: false,
+	}); err != nil {
+		t.Fatalf("ApplyNodeLifecycle failed: %v", err)
+	}
+
+	node := sm.GetNodeState("node-degraded")
+	if node == nil {
+		t.Fatal("expected node state")
+	}
+	if node.LastHeartbeat.IsZero() {
+		t.Fatal("expected lifecycle update to refresh LastHeartbeat")
+	}
+	if node.IsStale {
+		t.Fatal("expected fresh degraded node not to be marked stale")
+	}
+	if node.IsHealthy {
+		t.Fatal("expected degraded health to remain visible")
+	}
+}
+
 func TestNewNodeStartsStaleUntilHeartbeat(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()

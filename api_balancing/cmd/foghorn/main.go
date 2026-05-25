@@ -556,6 +556,7 @@ func main() {
 			ClusterId: &foghornCfg.ClusterID,
 			Metadata: map[string]string{
 				"foghorn_listener": "internal_control",
+				"instance_id":      instanceID,
 			},
 		}
 		if nodeID := config.GetEnv("NODE_ID", ""); nodeID != "" {

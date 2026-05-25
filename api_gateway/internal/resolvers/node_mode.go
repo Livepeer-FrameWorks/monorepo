@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -23,8 +24,9 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	if err := middleware.RequirePermission(ctx, "infrastructure:write"); err != nil {
 		return nil, err
 	}
-	if input.NodeID == "" {
-		return &model.ValidationError{Message: "nodeId is required", Field: strPtr("nodeId")}, nil
+	nodeID, validationErr := normalizeNodeModeID(input.NodeID)
+	if validationErr != nil {
+		return validationErr, nil
 	}
 	wire := input.Mode.WireValue()
 	if wire == "" {
@@ -36,7 +38,7 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	}
 
 	resp, err := r.Clients.Commodore.SetNodeMode(ctx, &pb.SetNodeModeRequest{
-		NodeId: input.NodeID,
+		NodeId: nodeID,
 		Mode:   wire,
 		SetBy:  reason,
 	})
@@ -190,4 +192,16 @@ func callerIdentity(ctx context.Context) string {
 		return "user:" + u
 	}
 	return "graphql"
+}
+
+func normalizeNodeModeID(nodeID string) (string, *model.ValidationError) {
+	trimmed := strings.TrimSpace(nodeID)
+	if trimmed == "" {
+		return "", &model.ValidationError{Message: "nodeId is required", Field: strPtr("nodeId")}
+	}
+	rawID, err := normalizeFilterID(&trimmed, globalid.TypeInfrastructureNode)
+	if err != nil {
+		return "", &model.ValidationError{Message: "nodeId must reference an infrastructure node", Field: strPtr("nodeId")}
+	}
+	return rawID, nil
 }

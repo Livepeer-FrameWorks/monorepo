@@ -448,7 +448,7 @@
         {#if node.nodeType?.toLowerCase() === "edge" && node.effectiveMode}
           <div class="slab col-span-full">
             <NodeModePanel
-              relayId={node.id}
+              nodeId={node.nodeId}
               nodeName={node.nodeName}
               effectiveMode={node.effectiveMode}
               activeStreams={node.routingImpactPreview?.activeStreams ?? 0}

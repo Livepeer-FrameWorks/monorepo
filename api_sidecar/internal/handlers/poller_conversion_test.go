@@ -578,8 +578,8 @@ func TestEvaluateNodeHealth_Boundary(t *testing.T) {
 	if !evaluateNodeHealth(true, 90, 90, 90) {
 		t.Fatal("expected healthy at exactly 90%")
 	}
-	if evaluateNodeHealth(true, 90.1, 90, 90) {
-		t.Fatal("expected unhealthy at 90.1% CPU")
+	if !evaluateNodeHealth(true, 90.1, 90, 90) {
+		t.Fatal("expected CPU pressure to be handled by scoring, not node health")
 	}
 }
 

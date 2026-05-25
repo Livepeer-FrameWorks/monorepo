@@ -7,7 +7,7 @@
   import { CircleDot, GaugeCircle, Wrench, AlertTriangle } from "lucide-svelte";
 
   interface Props {
-    relayId: string;
+    nodeId: string;
     nodeName: string;
     effectiveMode: NodeOperationalMode$options;
     activeStreams: number;
@@ -15,13 +15,8 @@
     onModeChanged?: () => Promise<void> | void;
   }
 
-  let { relayId, nodeName, effectiveMode, activeStreams, activeViewers, onModeChanged }: Props =
+  let { nodeId, nodeName, effectiveMode, activeStreams, activeViewers, onModeChanged }: Props =
     $props();
-
-  // Operator drain/maintenance/restore controls. The current mode comes from
-  // Foghorn (effectiveMode field resolver); switching modes is a single
-  // setNodeMode mutation that updates Foghorn's heartbeat snapshot. Routing
-  // adjusts on the next health tick.
 
   const setModeMutation = new SetNodeModeStore();
 
@@ -67,7 +62,7 @@
     pending = mode;
     try {
       const result = await setModeMutation.mutate({
-        input: { nodeId: relayId, mode, reason: reason.trim() || undefined },
+        input: { nodeId, mode, reason: reason.trim() || undefined },
       });
       const data = result.data?.setNodeMode;
       if (!data) {

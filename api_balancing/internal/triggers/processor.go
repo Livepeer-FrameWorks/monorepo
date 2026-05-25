@@ -2914,7 +2914,8 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		longitude = &lon
 	}
 
-	// Update node info in state manager
+	// Update node heartbeat and info in state manager
+	state.DefaultManager().TouchNode(nu.GetNodeId(), nu.GetIsHealthy())
 	state.DefaultManager().SetNodeInfo(nu.GetNodeId(), nu.GetBaseUrl(), nu.GetIsHealthy(), latitude, longitude, nu.GetLocation(), nu.GetOutputsJson(), nil)
 
 	// Log mismatch between Helmsman-reported mode and Foghorn-authoritative mode.

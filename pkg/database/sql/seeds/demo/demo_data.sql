@@ -1430,7 +1430,8 @@ ON CONFLICT (cluster_id, service_id) DO NOTHING;
 -- FOGHORN: Pre-seeded service instances for HA pair (gRPC only)
 -- ============================================================================
 -- Each foghorn registers a single gRPC service instance. At runtime,
--- BootstrapService matches by (service_id, cluster_id, protocol, port, node_id)
+-- BootstrapService matches by stable FOGHORN_INSTANCE_ID first, then by
+-- (service_id, cluster_id, protocol, port, node_id, advertise_host)
 -- and UPDATEs the pre-seeded row (preserving instance_id and UUID).
 -- LoadServedClusters queries by FOGHORN_INSTANCE_ID → finds cluster assignments.
 
@@ -1446,15 +1447,23 @@ INSERT INTO quartermaster.service_instances (
     'grpc', 'foghorn', 18019, 'running', 'unknown',
     NOW(), NOW(), NOW()
 ),
--- foghorn-2 gRPC (control plane + relay, docker-compose default 18029)
+-- foghorn-2 gRPC (internal control plane + relay, docker-compose default 18019)
 (
     '5eedf0e1-0002-da7a-f0e1-0002da7a0002',
     'foghorn-2', 'central-primary', 'central-node-1', 'foghorn',
-    'grpc', 'foghorn-2', 18029, 'running', 'unknown',
+    'grpc', 'foghorn-2', 18019, 'running', 'unknown',
     NOW(), NOW(), NOW()
 )
 ON CONFLICT (instance_id) DO UPDATE SET
+    cluster_id = EXCLUDED.cluster_id,
+    node_id = EXCLUDED.node_id,
+    service_id = EXCLUDED.service_id,
+    protocol = EXCLUDED.protocol,
+    advertise_host = EXCLUDED.advertise_host,
+    port = EXCLUDED.port,
     status = 'running',
+    health_status = 'unknown',
+    stopped_at = NULL,
     updated_at = NOW();
 
 -- Assign HA Foghorn instances to the platform cluster and the demo media cluster.

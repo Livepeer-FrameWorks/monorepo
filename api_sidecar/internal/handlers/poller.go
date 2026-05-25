@@ -1747,7 +1747,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	if jsonData != nil {
 		// Extract CPU usage (Mist provides integer percentage 0-100 or more)
 		if cpu, ok := jsonData["cpu"].(float64); ok {
-			nodeUpdate.CpuTenths = uint32(cpu * 10) // Convert % to tenths (e.g. 14% -> 140)
+			nodeUpdate.CpuTenths = uint32(normalizeMistCPUPercent(cpu) * 10) // Convert % to tenths (e.g. 14% -> 140)
 		}
 
 		// Extract RAM info (Mist provides bytes)
@@ -1901,8 +1901,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		logger.WithError(err).WithField("path", storagePath).Warn("Failed to get disk usage")
 	}
 
-	// Determine node health based on resource utilization thresholds
-	// Matches MistUtilHealth logic: CPU > 90%, RAM > 90%, SHM > 90% = degraded
+	// Determine node health based on resource utilization thresholds.
 	cpuPercent := float64(nodeUpdate.CpuTenths) / 10.0
 	memPercent := float64(0)
 	if nodeUpdate.RamMax > 0 {
@@ -1913,7 +1912,6 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		shmPercent = float64(nodeUpdate.ShmUsedBytes) / float64(nodeUpdate.ShmTotalBytes) * 100
 	}
 
-	// Node is healthy if: we got MistServer data AND CPU <= 90% AND RAM <= 90% AND SHM <= 90%
 	hasMistData := jsonData != nil
 	isHealthy := evaluateNodeHealth(hasMistData, cpuPercent, memPercent, shmPercent)
 	nodeUpdate.IsHealthy = isHealthy
@@ -2014,11 +2012,27 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 }
 
+func normalizeMistCPUPercent(rawCPU float64) float64 {
+	if rawCPU <= 0 {
+		return 0
+	}
+	if rawCPU > 100 {
+		cores := runtime.NumCPU()
+		if cores > 1 {
+			rawCPU = rawCPU / float64(cores)
+		}
+	}
+	if rawCPU > 100 {
+		return 100
+	}
+	return rawCPU
+}
+
 func evaluateNodeHealth(hasMistData bool, cpuPercent, memPercent, shmPercent float64) bool {
 	if !hasMistData {
 		return false
 	}
-	return cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
+	return memPercent <= 90 && shmPercent <= 90
 }
 
 // getDiskUsage returns total and used bytes for the file system containing path

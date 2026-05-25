@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/graph/model"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -54,5 +55,33 @@ func TestNodeModeFieldsDefaultWhenControlPlaneUnavailable(t *testing.T) {
 	}
 	if impact == nil || impact.ActiveStreams != 0 || impact.ActiveViewers != 0 {
 		t.Fatalf("DoNodeRoutingImpactPreview = %#v, want zero-value impact", impact)
+	}
+}
+
+func TestNormalizeNodeModeIDAcceptsRawAndRelayIDs(t *testing.T) {
+	raw, validationErr := normalizeNodeModeID(" regional-eu-1 ")
+	if validationErr != nil {
+		t.Fatalf("normalizeNodeModeID returned validation error: %v", validationErr)
+	}
+	if raw != "regional-eu-1" {
+		t.Fatalf("normalizeNodeModeID raw = %q, want regional-eu-1", raw)
+	}
+
+	raw, validationErr = normalizeNodeModeID(globalid.Encode(globalid.TypeInfrastructureNode, "regional-eu-1"))
+	if validationErr != nil {
+		t.Fatalf("normalizeNodeModeID returned validation error for relay ID: %v", validationErr)
+	}
+	if raw != "regional-eu-1" {
+		t.Fatalf("normalizeNodeModeID relay = %q, want regional-eu-1", raw)
+	}
+}
+
+func TestNormalizeNodeModeIDRejectsWrongRelayType(t *testing.T) {
+	_, validationErr := normalizeNodeModeID(globalid.Encode(globalid.TypeCluster, "regional-eu"))
+	if validationErr == nil {
+		t.Fatal("expected validation error")
+	}
+	if validationErr.Field == nil || *validationErr.Field != "nodeId" {
+		t.Fatalf("validation field = %#v, want nodeId", validationErr.Field)
 	}
 }

@@ -877,6 +877,10 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	}
 	metadata := req.GetMetadata()
 	isFoghornControlListener := serviceID == "foghorn" && proto == "grpc" && (port == foghornInternalGRPCPort || metadata["foghorn_listener"] == foghornListenerInternalControl)
+	requestedInstanceID := strings.TrimSpace(metadata["instance_id"])
+	if isFoghornControlListener && requestedInstanceID != "" {
+		instanceID = requestedInstanceID
+	}
 
 	// 5a. Auto-associate with node by IP when no explicit node_id provided.
 	// If advHost is a hostname, resolve it to an IP first.
@@ -910,19 +914,36 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	// 5b. Idempotent registration: check for existing instance
 	var existingID, existingInstanceID string
-	if resolvedNodeID != nil {
-		_ = exec.QueryRowContext(ctx, `
+	var existingRow *sql.Row
+	if isFoghornControlListener && requestedInstanceID != "" {
+		existingRow = exec.QueryRowContext(ctx, `
+			SELECT id::text, instance_id FROM quartermaster.service_instances
+			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND instance_id = $4
+			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
+		`, serviceID, registrationClusterID, proto, requestedInstanceID)
+	} else if resolvedNodeID != nil && isFoghornControlListener {
+		existingRow = exec.QueryRowContext(ctx, `
+			SELECT id::text, instance_id FROM quartermaster.service_instances
+			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
+			  AND (node_id = $5 OR node_id IS NULL) AND advertise_host = $6
+			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
+		`, serviceID, registrationClusterID, proto, port, *resolvedNodeID, advHost)
+	} else if resolvedNodeID != nil {
+		existingRow = exec.QueryRowContext(ctx, `
 			SELECT id::text, instance_id FROM quartermaster.service_instances
 			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
 			  AND (node_id = $5 OR node_id IS NULL)
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, registrationClusterID, proto, port, *resolvedNodeID).Scan(&existingID, &existingInstanceID)
+		`, serviceID, registrationClusterID, proto, port, *resolvedNodeID)
 	} else {
-		_ = exec.QueryRowContext(ctx, `
+		existingRow = exec.QueryRowContext(ctx, `
 			SELECT id::text, instance_id FROM quartermaster.service_instances
 			WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4 AND advertise_host = $5
 			ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
-		`, serviceID, registrationClusterID, proto, port, advHost).Scan(&existingID, &existingInstanceID)
+		`, serviceID, registrationClusterID, proto, port, advHost)
+	}
+	if scanErr := existingRow.Scan(&existingID, &existingInstanceID); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "failed to lookup existing service instance: %v", scanErr)
 	}
 	registeredNodeID := ""
 	if resolvedNodeID != nil {
@@ -938,14 +959,16 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			    version = $3,
 			    node_id = COALESCE($4, node_id),
 			    metadata = COALESCE($5::jsonb, metadata),
+			    protocol = $6,
+			    port = $7,
 			    status = 'running',
 			    health_status = 'unknown',
 			    started_at = COALESCE(started_at, NOW()),
 			    stopped_at = NULL,
 			    last_health_check = NULL,
 			    updated_at = NOW()
-			WHERE id = $6::uuid
-		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, metadataJSON, existingID)
+			WHERE id = $8::uuid
+		`, advHost, healthEndpoint, req.GetVersion(), resolvedNodeID, metadataJSON, proto, port, existingID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to update service instance")
 			return nil, status.Errorf(codes.Internal, "failed to update service instance: %v", err)
