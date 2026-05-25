@@ -34,6 +34,14 @@
   let turnstileToken = $state("");
   let turnstileWidgetId = $state("");
 
+  const isEmailVerificationRequired = (result: { error?: string; errorCode?: string }) => {
+    if (result.errorCode?.trim().toUpperCase() === "EMAIL_NOT_VERIFIED") {
+      return true;
+    }
+    const message = result.error?.toLowerCase() ?? "";
+    return message.includes("not verified") || message.includes("verify your email");
+  };
+
   const resetTurnstileWidget = () => {
     if (typeof window !== "undefined" && turnstileWidgetId) {
       try {
@@ -119,7 +127,7 @@
         goto(returnTo ?? resolve("/"));
       } else {
         const loginError = result.error || "Login failed";
-        if (loginError.toLowerCase().includes("not verified")) {
+        if (isEmailVerificationRequired(result)) {
           goto(resolve(`/verify-email?email=${encodeURIComponent(email)}`));
           return;
         }

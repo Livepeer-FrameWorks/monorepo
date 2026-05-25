@@ -41,6 +41,44 @@ interface AuthState {
 interface LoginResponse {
   success: boolean;
   error?: string;
+  errorCode?: string;
+}
+
+interface AuthErrorResponse {
+  error?: unknown;
+  error_code?: unknown;
+  code?: unknown;
+}
+
+function getAuthErrorResponse(error: unknown): AuthErrorResponse | null {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("response" in error) ||
+    !error.response ||
+    typeof error.response !== "object" ||
+    !("data" in error.response) ||
+    !error.response.data ||
+    typeof error.response.data !== "object"
+  ) {
+    return null;
+  }
+  return error.response.data as AuthErrorResponse;
+}
+
+function extractAuthError(
+  error: unknown,
+  fallback: string
+): { message: string; errorCode?: string } {
+  const data = getAuthErrorResponse(error);
+  const message = typeof data?.error === "string" ? data.error : fallback;
+  const errorCode =
+    typeof data?.error_code === "string"
+      ? data.error_code
+      : typeof data?.code === "string"
+        ? data.code
+        : undefined;
+  return { message, errorCode };
 }
 
 function createAuthStore() {
@@ -146,21 +184,9 @@ function createAuthStore() {
 
         return { success: true };
       } catch (error: unknown) {
-        const errorMessage =
-          error &&
-          typeof error === "object" &&
-          "response" in error &&
-          error.response &&
-          typeof error.response === "object" &&
-          "data" in error.response &&
-          error.response.data &&
-          typeof error.response.data === "object" &&
-          "error" in error.response.data &&
-          typeof error.response.data.error === "string"
-            ? error.response.data.error
-            : "Login failed";
+        const { message: errorMessage, errorCode } = extractAuthError(error, "Login failed");
         update((state) => ({ ...state, loading: false, error: errorMessage }));
-        return { success: false, error: errorMessage };
+        return { success: false, error: errorMessage, errorCode };
       }
     },
 

@@ -53,4 +53,43 @@ describe("auth store", () => {
     expect(authAPI.post).toHaveBeenCalledTimes(1);
     expect(authAPI.post).toHaveBeenCalledWith("/refresh");
   });
+
+  it("preserves unverified-account login error codes for route handling", async () => {
+    const authAPI = {
+      get: vi.fn(),
+      post: vi.fn().mockRejectedValue({
+        response: {
+          data: {
+            error: "email not verified",
+            error_code: "EMAIL_NOT_VERIFIED",
+          },
+        },
+      }),
+    };
+
+    vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
+    vi.doMock("./realtime.js", () => ({
+      initializeWebSocket: vi.fn(),
+      disconnectWebSocket: vi.fn(),
+    }));
+
+    const { auth } = await import("./auth");
+
+    const result = await auth.login("user@example.com", "correct-password", {
+      human_check: "human",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: "email not verified",
+      errorCode: "EMAIL_NOT_VERIFIED",
+    });
+    expect(authAPI.post).toHaveBeenCalledWith("/login", {
+      email: "user@example.com",
+      password: "correct-password",
+      turnstile_token: undefined,
+      human_check: "human",
+    });
+  });
 });

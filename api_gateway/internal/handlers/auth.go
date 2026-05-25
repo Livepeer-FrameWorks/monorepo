@@ -27,12 +27,14 @@ const (
 )
 
 var (
-	loginAllowedErrors         = []string{"not verified", "deactivated"}
+	loginAllowedErrors         = []string{"not verified", "verify your email", "deactivated"}
 	walletLoginAllowedErrors   = []string{"signature", "expired"}
 	registerAllowedErrors      = []string{"already exists", "user limit", "bot verification"}
 	verifyEmailAllowedErrors   = []string{"invalid or expired", "already verified"}
 	resetPasswordAllowedErrors = []string{"invalid or expired", "password too weak"}
 )
+
+const emailNotVerifiedErrorCode = "EMAIL_NOT_VERIFIED"
 
 // behaviorJSON represents client-side behavioral signals sent as JSON
 type behaviorJSON struct {
@@ -56,6 +58,22 @@ func handleBotCheckError(c *gin.Context, err error) bool {
 		"error_code": "BOT_CHECK_FAILED",
 	})
 	return true
+}
+
+func handleEmailNotVerifiedLoginError(c *gin.Context, message string) bool {
+	if !isEmailNotVerifiedLoginMessage(message) {
+		return false
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error":      "email not verified",
+		"error_code": emailNotVerifiedErrorCode,
+	})
+	return true
+}
+
+func isEmailNotVerifiedLoginMessage(message string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lowered, "not verified") || strings.Contains(lowered, "verify your email")
 }
 
 // parseBehavior converts JSON behavior string to proto BehaviorData
@@ -128,6 +146,9 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 				return
 			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
+			if handleEmailNotVerifiedLoginError(c, errMsg) {
+				return
+			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
 		}

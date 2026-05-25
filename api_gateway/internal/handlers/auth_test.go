@@ -139,6 +139,68 @@ func TestHandleBotCheckError(t *testing.T) {
 	}
 }
 
+func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		message     string
+		wantHandled bool
+	}{
+		{
+			name:        "verified password but unverified email gets stable code",
+			message:     "email not verified",
+			wantHandled: true,
+		},
+		{
+			name:        "alternate verification wording gets stable code",
+			message:     "please verify your email before signing in",
+			wantHandled: true,
+		},
+		{
+			name:        "invalid credentials remains generic",
+			message:     "invalid credentials",
+			wantHandled: false,
+		},
+		{
+			name:        "empty message passes through",
+			message:     "",
+			wantHandled: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+
+			got := handleEmailNotVerifiedLoginError(c, tc.message)
+			if got != tc.wantHandled {
+				t.Fatalf("handleEmailNotVerifiedLoginError() = %v, want %v", got, tc.wantHandled)
+			}
+			if !tc.wantHandled {
+				if rec.Code != http.StatusOK && rec.Code != 0 {
+					t.Fatalf("handler should not have written a response; got status %d", rec.Code)
+				}
+				return
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status: got %d, want %d", rec.Code, http.StatusForbidden)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal body: %v (raw=%q)", err, rec.Body.String())
+			}
+			if body["error_code"] != emailNotVerifiedErrorCode {
+				t.Fatalf("error_code: got %q, want %q", body["error_code"], emailNotVerifiedErrorCode)
+			}
+			if body["error"] != "email not verified" {
+				t.Fatalf("error: got %q, want %q", body["error"], "email not verified")
+			}
+		})
+	}
+}
+
 func TestIsAuthServiceUnavailable(t *testing.T) {
 	tests := []struct {
 		name string
