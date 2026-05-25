@@ -1070,10 +1070,8 @@ SELECT
 FROM numbers(0, 2016);
 
 -- Canonical api_usage_5m so the api_usage_hourly/daily rollups have a
--- source. Per-bucket scalar counts plus AggregateFunction states for
--- unique users/tokens (uniqCombinedStateForEachIfNotEmpty isn't a real
--- function in CH; we emit empty state arrays for the demo and rely on
--- uniqCombinedMerge to return 0).
+-- source. Each generated row is grouped by its sequence number so the
+-- AggregateFunction state columns are valid one-row uniqCombined states.
 INSERT INTO periscope.api_usage_5m (
     window_start, tenant_id, auth_type, operation_type, operation_name,
     requests, errors, duration_ms, complexity,
@@ -1093,7 +1091,8 @@ SELECT
     uniqCombinedState(toUInt64(number%17))                                AS unique_users_state,
     uniqCombinedState(toUInt64(number%23))                                AS unique_tokens_state,
     toUnixTimestamp(now()) * 1000                                         AS projection_version_ms
-FROM numbers(0, 2016);
+FROM numbers(0, 2016)
+GROUP BY number;
 -- ============================================================================
 
 -- =================================================================================================

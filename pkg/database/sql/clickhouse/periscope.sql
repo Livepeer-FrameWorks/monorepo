@@ -2434,10 +2434,10 @@ SELECT
     process_type,
     output_codec,
     track_type,
-    sum(media_seconds)                       AS media_seconds,
-    toUInt64(uniqCombined(source_event_id))  AS segment_count,
+    sum(p5.media_seconds)                    AS media_seconds,
+    toUInt64(uniqCombined(p5.source_event_id)) AS segment_count,
     now64(3)                                 AS refresh_version_ms
-FROM processing_5m_v
+FROM processing_5m_v AS p5
 WHERE (hour, tenant_id, cluster_id, process_type, output_codec, track_type) IN (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, process_type, output_codec, track_type
     FROM processing_5m_v
@@ -2478,10 +2478,10 @@ SELECT
     process_type,
     output_codec,
     track_type,
-    sum(media_seconds) AS media_seconds,
-    sum(segment_count) AS segment_count,
+    sum(ph.media_seconds) AS media_seconds,
+    sum(ph.segment_count) AS segment_count,
     now64(3)           AS refresh_version_ms
-FROM processing_hourly
+FROM processing_hourly AS ph
 WHERE (day, tenant_id, cluster_id, process_type, output_codec, track_type) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, process_type, output_codec, track_type
     FROM processing_hourly
@@ -2524,14 +2524,14 @@ SELECT
     auth_type,
     operation_type,
     operation_name,
-    sum(requests)    AS requests,
-    sum(errors)      AS errors,
-    sum(duration_ms) AS duration_ms,
-    sum(complexity)  AS complexity,
-    uniqCombinedMergeState(unique_users_state)  AS unique_users_state,
-    uniqCombinedMergeState(unique_tokens_state) AS unique_tokens_state,
+    sum(api5.requests)    AS requests,
+    sum(api5.errors)      AS errors,
+    sum(api5.duration_ms) AS duration_ms,
+    sum(api5.complexity)  AS complexity,
+    uniqCombinedMergeState(api5.unique_users_state)  AS unique_users_state,
+    uniqCombinedMergeState(api5.unique_tokens_state) AS unique_tokens_state,
     now64(3)                                    AS refresh_version_ms
-FROM api_usage_5m_v
+FROM api_usage_5m_v AS api5
 WHERE (hour, tenant_id, auth_type, operation_type, operation_name) IN (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, auth_type, operation_type, operation_name
     FROM api_usage_5m_v
@@ -2583,13 +2583,13 @@ SELECT
     toDate(hour) AS day,
     tenant_id,
     cluster_id,
-    sum(seconds_observed) AS seconds_observed,
-    sum(up_bytes)         AS up_bytes,
-    sum(down_bytes)       AS down_bytes,
-    uniqCombinedMergeState(unique_sessions_state) AS unique_sessions_state,
-    uniqCombinedMergeState(unique_streams_state)  AS unique_streams_state,
+    sum(tuh.seconds_observed) AS seconds_observed,
+    sum(tuh.up_bytes)         AS up_bytes,
+    sum(tuh.down_bytes)       AS down_bytes,
+    uniqCombinedMergeState(tuh.unique_sessions_state) AS unique_sessions_state,
+    uniqCombinedMergeState(tuh.unique_streams_state)  AS unique_streams_state,
     now64(3)                                      AS refresh_version_ms
-FROM tenant_usage_hourly
+FROM tenant_usage_hourly AS tuh
 WHERE (day, tenant_id, cluster_id) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id
     FROM tenant_usage_hourly
@@ -2629,12 +2629,12 @@ SELECT
     day,
     tenant_id,
     cluster_id,
-    sum(seconds_observed) / 3600.0            AS viewer_hours,
-    sum(down_bytes) / pow(1024, 3) AS egress_gb,
-    uniqCombinedMergeState(unique_sessions_state) AS unique_viewers_state,
-    uniqCombinedMerge(unique_sessions_state)  AS total_sessions,
+    sum(tud.seconds_observed) / 3600.0            AS viewer_hours,
+    sum(tud.down_bytes) / pow(1024, 3) AS egress_gb,
+    uniqCombinedMergeState(tud.unique_sessions_state) AS unique_viewers_state,
+    uniqCombinedMerge(tud.unique_sessions_state)  AS total_sessions,
     now64(3)                                  AS refresh_version_ms
-FROM tenant_usage_daily
+FROM tenant_usage_daily AS tud
 WHERE (day, tenant_id, cluster_id) IN (
     SELECT DISTINCT day, tenant_id, cluster_id
     FROM tenant_usage_daily
@@ -2645,14 +2645,23 @@ GROUP BY day, tenant_id, cluster_id;
 CREATE VIEW IF NOT EXISTS tenant_viewer_daily AS
 SELECT
     day, tenant_id, cluster_id,
-    argMax(viewer_hours,          refresh_version_ms) AS viewer_hours,
-    argMax(egress_gb,             refresh_version_ms) AS egress_gb,
-    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
-    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
-    argMax(total_sessions,        refresh_version_ms) AS total_sessions,
-    max(refresh_version_ms) AS latest_refresh_version_ms
-FROM tenant_viewer_daily_store
-GROUP BY day, tenant_id, cluster_id;
+    viewer_hours,
+    egress_gb,
+    unique_viewers_state,
+    toUInt64(finalizeAggregation(unique_viewers_state)) AS unique_viewers,
+    total_sessions,
+    latest_refresh_version_ms
+FROM (
+    SELECT
+        day, tenant_id, cluster_id,
+        argMax(viewer_hours,          refresh_version_ms) AS viewer_hours,
+        argMax(egress_gb,             refresh_version_ms) AS egress_gb,
+        argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+        argMax(total_sessions,        refresh_version_ms) AS total_sessions,
+        max(refresh_version_ms) AS latest_refresh_version_ms
+    FROM tenant_viewer_daily_store
+    GROUP BY day, tenant_id, cluster_id
+);
 
 CREATE TABLE IF NOT EXISTS tenant_analytics_daily_store (
     day Date,
@@ -2672,12 +2681,12 @@ REFRESH EVERY 1 HOUR APPEND TO tenant_analytics_daily_store AS
 SELECT
     day,
     tenant_id,
-    uniqCombinedMerge(unique_streams_state)  AS total_streams,
-    uniqCombinedMerge(unique_sessions_state) AS total_views,
-    uniqCombinedMergeState(unique_sessions_state) AS unique_viewers_state,
-    sum(down_bytes)                          AS egress_bytes,
+    uniqCombinedMerge(tud.unique_streams_state)  AS total_streams,
+    uniqCombinedMerge(tud.unique_sessions_state) AS total_views,
+    uniqCombinedMergeState(tud.unique_sessions_state) AS unique_viewers_state,
+    sum(tud.down_bytes)                      AS egress_bytes,
     now64(3)                                 AS refresh_version_ms
-FROM tenant_usage_daily
+FROM tenant_usage_daily AS tud
 WHERE (day, tenant_id) IN (
     SELECT DISTINCT day, tenant_id
     FROM tenant_usage_daily
@@ -2688,14 +2697,23 @@ GROUP BY day, tenant_id;
 CREATE VIEW IF NOT EXISTS tenant_analytics_daily AS
 SELECT
     day, tenant_id,
-    argMax(total_streams,         refresh_version_ms) AS total_streams,
-    argMax(total_views,           refresh_version_ms) AS total_views,
-    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
-    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
-    argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
-    max(refresh_version_ms) AS latest_refresh_version_ms
-FROM tenant_analytics_daily_store
-GROUP BY day, tenant_id;
+    total_streams,
+    total_views,
+    unique_viewers_state,
+    toUInt64(finalizeAggregation(unique_viewers_state)) AS unique_viewers,
+    egress_bytes,
+    latest_refresh_version_ms
+FROM (
+    SELECT
+        day, tenant_id,
+        argMax(total_streams,         refresh_version_ms) AS total_streams,
+        argMax(total_views,           refresh_version_ms) AS total_views,
+        argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+        argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
+        max(refresh_version_ms) AS latest_refresh_version_ms
+    FROM tenant_analytics_daily_store
+    GROUP BY day, tenant_id
+);
 
 CREATE TABLE IF NOT EXISTS stream_analytics_daily_store (
     day Date,
@@ -2739,16 +2757,27 @@ GROUP BY day, u.tenant_id, u.stream_id;
 CREATE VIEW IF NOT EXISTS stream_analytics_daily AS
 SELECT
     day, tenant_id, stream_id,
-    argMax(internal_name,         refresh_version_ms) AS internal_name,
-    argMax(total_views,           refresh_version_ms) AS total_views,
-    argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
-    toUInt64(finalizeAggregation(argMax(unique_viewers_state, refresh_version_ms))) AS unique_viewers,
-    argMax(unique_countries,      refresh_version_ms) AS unique_countries,
-    argMax(unique_cities,         refresh_version_ms) AS unique_cities,
-    argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
-    max(refresh_version_ms) AS latest_refresh_version_ms
-FROM stream_analytics_daily_store
-GROUP BY day, tenant_id, stream_id;
+    internal_name,
+    total_views,
+    unique_viewers_state,
+    toUInt64(finalizeAggregation(unique_viewers_state)) AS unique_viewers,
+    unique_countries,
+    unique_cities,
+    egress_bytes,
+    latest_refresh_version_ms
+FROM (
+    SELECT
+        day, tenant_id, stream_id,
+        argMax(internal_name,         refresh_version_ms) AS internal_name,
+        argMax(total_views,           refresh_version_ms) AS total_views,
+        argMax(unique_viewers_state,  refresh_version_ms) AS unique_viewers_state,
+        argMax(unique_countries,      refresh_version_ms) AS unique_countries,
+        argMax(unique_cities,         refresh_version_ms) AS unique_cities,
+        argMax(egress_bytes,          refresh_version_ms) AS egress_bytes,
+        max(refresh_version_ms) AS latest_refresh_version_ms
+    FROM stream_analytics_daily_store
+    GROUP BY day, tenant_id, stream_id
+);
 
 CREATE TABLE IF NOT EXISTS viewer_geo_daily_store (
     day Date,
@@ -2770,12 +2799,12 @@ SELECT
     toDate(hour) AS day,
     tenant_id,
     country_code,
-    uniqCombinedMerge(unique_viewers_state)      AS viewer_count,
-    sum(viewer_hours)                            AS viewer_hours,
-    sum(egress_gb)                               AS egress_gb,
-    uniqCombinedMergeState(unique_viewers_state) AS unique_viewers_state,
+    uniqCombinedMerge(vgh.unique_viewers_state)      AS viewer_count,
+    sum(vgh.viewer_hours)                        AS viewer_hours,
+    sum(vgh.egress_gb)                           AS egress_gb,
+    uniqCombinedMergeState(vgh.unique_viewers_state) AS unique_viewers_state,
     now64(3)                                     AS refresh_version_ms
-FROM viewer_geo_hourly
+FROM viewer_geo_hourly AS vgh
 WHERE (day, tenant_id, country_code) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, country_code
     FROM viewer_geo_hourly
@@ -2818,12 +2847,12 @@ SELECT
     stream_id,
     country_code,
     city,
-    uniqCombinedMerge(unique_viewers_state)      AS viewer_count,
-    sum(viewer_hours)                            AS viewer_hours,
-    sum(egress_gb)                               AS egress_gb,
-    uniqCombinedMergeState(unique_viewers_state) AS unique_viewers_state,
+    uniqCombinedMerge(vch.unique_viewers_state)      AS viewer_count,
+    sum(vch.viewer_hours)                        AS viewer_hours,
+    sum(vch.egress_gb)                           AS egress_gb,
+    uniqCombinedMergeState(vch.unique_viewers_state) AS unique_viewers_state,
     now64(3)                                     AS refresh_version_ms
-FROM viewer_city_hourly
+FROM viewer_city_hourly AS vch
 WHERE (day, tenant_id, stream_id, country_code, city) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, stream_id, country_code, city
     FROM viewer_city_hourly
@@ -2862,10 +2891,10 @@ SELECT
     tenant_id,
     cluster_id,
     stream_id,
-    sum(runtime_seconds) AS runtime_seconds,
-    max(peak_viewers)    AS peak_viewers,
+    sum(srh.runtime_seconds) AS runtime_seconds,
+    max(srh.peak_viewers)    AS peak_viewers,
     now64(3)             AS refresh_version_ms
-FROM stream_runtime_hourly
+FROM stream_runtime_hourly AS srh
 WHERE (day, tenant_id, cluster_id, stream_id) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, stream_id
     FROM stream_runtime_hourly
@@ -2913,14 +2942,14 @@ SELECT
     auth_type,
     operation_type,
     operation_name,
-    sum(requests)    AS requests,
-    sum(errors)      AS errors,
-    sum(duration_ms) AS duration_ms,
-    sum(complexity)  AS complexity,
-    uniqCombinedMergeState(unique_users_state)  AS unique_users_state,
-    uniqCombinedMergeState(unique_tokens_state) AS unique_tokens_state,
+    sum(auh.requests)    AS requests,
+    sum(auh.errors)      AS errors,
+    sum(auh.duration_ms) AS duration_ms,
+    sum(auh.complexity)  AS complexity,
+    uniqCombinedMergeState(auh.unique_users_state)  AS unique_users_state,
+    uniqCombinedMergeState(auh.unique_tokens_state) AS unique_tokens_state,
     now64(3)                                    AS refresh_version_ms
-FROM api_usage_hourly
+FROM api_usage_hourly AS auh
 WHERE (day, tenant_id, auth_type, operation_type, operation_name) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, auth_type, operation_type, operation_name
     FROM api_usage_hourly
@@ -2980,11 +3009,11 @@ SELECT
     storage_provider_tenant_id,
     storage_provider_cluster_id,
     storage_backend,
-    sum(gb_seconds)            AS gb_seconds,
-    sum(gb_seconds) / 3600.0   AS gb_hours,
-    sum(gb_seconds) / 3600.0   AS avg_gb,
+    sum(sg5.gb_seconds)        AS gb_seconds,
+    sum(sg5.gb_seconds) / 3600.0 AS gb_hours,
+    sum(sg5.gb_seconds) / 3600.0 AS avg_gb,
     now64(3)                   AS refresh_version_ms
-FROM storage_gb_seconds_5m_v
+FROM storage_gb_seconds_5m_v AS sg5
 WHERE (hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
     FROM storage_gb_seconds_5m_v
@@ -3030,10 +3059,10 @@ SELECT
     storage_provider_tenant_id,
     storage_provider_cluster_id,
     storage_backend,
-    sum(gb_seconds)          AS gb_seconds,
-    sum(gb_seconds) / 3600.0 AS gb_hours,
+    sum(suh.gb_seconds)          AS gb_seconds,
+    sum(suh.gb_seconds) / 3600.0 AS gb_hours,
     now64(3)                 AS refresh_version_ms
-FROM storage_usage_hourly
+FROM storage_usage_hourly AS suh
 WHERE (day, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
     FROM storage_usage_hourly
