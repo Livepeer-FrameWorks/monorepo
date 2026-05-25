@@ -123,11 +123,112 @@ func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 		WithArgs(summary.TenantID, "cluster-a", "storage_gb_seconds_hot", -60.0, start, end, "periscope.projection_divergences", "storage-correction-1", "projection_divergence", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
+	if _, err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
 		t.Fatalf("processUsageSummary: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	mock.MatchExpectationsInOrder(false)
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	summary := models.UsageSummary{
+		TenantID:             "00000000-0000-0000-0000-000000000001",
+		ClusterID:            "cluster-a",
+		Period:               start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
+		ViewerHours:          1.0 / 60.0,
+		EgressGB:             2.5,
+		StorageGBSecondsCold: 300,
+		NativeAvAACSeconds:   60,
+		Timestamp:            start,
+	}
+
+	for usageType, usageValue := range map[string]float64{
+		"delivered_minutes":       1,
+		"egress_gb":               2.5,
+		"storage_gb_seconds_cold": 300,
+		"media_seconds":           60,
+	} {
+		mock.ExpectExec(`INSERT INTO purser\.usage_records`).
+			WithArgs(summary.TenantID, "cluster-a", usageType, usageValue, sqlmock.AnyArg(), start, end, "minute_5", "delta").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+
+	if _, err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
+		t.Fatalf("processUsageSummary: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestProcessUsageSummaryQuarantinesMissingClusterID(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	summary := models.UsageSummary{
+		TenantID:    "00000000-0000-0000-0000-000000000001",
+		Period:      start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339),
+		ViewerHours: 1.0 / 60.0,
+		Timestamp:   start,
+	}
+
+	mock.ExpectExec(`INSERT INTO purser\.usage_records_quarantine`).
+		WithArgs(summary.TenantID, "", "delivered_minutes", 1.0, sqlmock.AnyArg(), start, end, "minute_5", "delta", "missing_cluster_id", "kafka-test", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	accepted, err := jm.processUsageSummary(context.Background(), summary, "kafka-test")
+	if err != nil {
+		t.Fatalf("processUsageSummary: %v", err)
+	}
+	if len(accepted) != 0 {
+		t.Fatalf("expected no accepted usage rows, got %#v", accepted)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestBuildRatingInputFromCanonicalUsageUsesAcceptedRowsOnly(t *testing.T) {
+	rows := []canonicalUsageDelta{
+		{
+			usageType:  "delivered_minutes",
+			usageValue: 2,
+		},
+		{
+			usageType:  "media_seconds",
+			usageValue: 60,
+			usageDetails: models.JSONB{
+				"codec_seconds": map[string]float64{"AV:opus": 60, "opus": 60},
+			},
+		},
+	}
+
+	got := buildRatingInputFromCanonicalUsage(rows, "EUR", nil)
+	if got.Usage["delivered_minutes"].String() != "2" {
+		t.Fatalf("delivered_minutes = %s, want 2", got.Usage["delivered_minutes"])
+	}
+	if got.Usage["media_seconds"].String() != "60" {
+		t.Fatalf("media_seconds = %s, want 60", got.Usage["media_seconds"])
+	}
+	if got.CodecSeconds["AV:opus"].String() != "60" || got.CodecSeconds["opus"].String() != "60" {
+		t.Fatalf("codec seconds not preserved: %#v", got.CodecSeconds)
 	}
 }
 

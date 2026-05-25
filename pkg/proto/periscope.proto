@@ -635,20 +635,20 @@ message GetPlatformOverviewResponse {
   double egress_gb = 11;                // Total egress bandwidth in GB
   int32 peak_viewers = 12;              // Peak concurrent viewers in time range (NOTE: currently unique_viewers)
 
-  // Real-time bandwidth metrics (from live_streams)
+  // Real-time bandwidth metrics (from stream_state_current)
   uint64 total_upload_bytes = 13;       // Total ingest bytes (sum of uploaded_bytes)
   uint64 total_download_bytes = 14;     // Total egress bytes (sum of downloaded_bytes)
 
-  // Viewer consumption metrics (from tenant_viewer_daily)
+  // Viewer consumption metrics (from finalized viewer usage facts)
   double viewer_hours = 15;             // Total accumulated viewer watch time in hours
   double delivered_minutes = 16;        // viewer_hours * 60 (convenience field)
   int32 unique_viewers = 17;            // Unique viewer count for the time range
   double ingest_hours = 18;             // Total hours streams were live (alias for stream_hours)
 
-  // True peak concurrent viewers (from stream_events max(total_viewers))
+  // True peak concurrent viewers (from stream_runtime_5m_v max(peak_viewers))
   int32 peak_concurrent_viewers = 19;   // Maximum concurrent viewers at any instant in time range
 
-  // Total views count (from tenant_analytics_daily - connection events)
+  // Total views count (from finalized viewer usage facts)
   int64 total_views = 20;               // Total number of view sessions started in time range
 
   // Echoed time range used for aggregation (for UI consistency)
@@ -1266,7 +1266,7 @@ message GetNodePerformance5mResponse {
 }
 
 // ============================================================================
-// Viewer Hours Hourly Aggregates (from viewer_hours_hourly MV)
+// Viewer Hours Hourly Aggregates (from canonical viewer usage windows)
 // ============================================================================
 
 message ViewerHoursHourly {
@@ -1320,7 +1320,7 @@ message GetViewerGeoHourlyResponse {
 }
 
 // ============================================================================
-// Tenant Daily Stats (from tenant_viewer_daily for PlatformOverview.dailyStats)
+// Tenant Daily Stats (from canonical viewer usage windows for PlatformOverview.dailyStats)
 // ============================================================================
 
 message TenantDailyStat {
@@ -1629,10 +1629,10 @@ message GetStreamAnalyticsSummariesResponse {
 }
 
 // ============================================================================
-// API Usage Analytics (from api_usage_hourly/daily tables)
+// API Usage Analytics (from finalized API usage facts)
 // ============================================================================
 
-// Hourly API usage record (from api_usage_hourly MV)
+// API usage record from canonical 5-minute windows.
 message APIUsageRecord {
   string id = 1;                                         // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;               // Hour timestamp
@@ -1661,7 +1661,7 @@ message APIUsageSummary {
   uint64 unique_tokens = 9;
 }
 
-// Operation-level API usage summary (from api_usage_hourly)
+// Operation-level API usage summary (from canonical API usage windows)
 message APIUsageOperationSummary {
   string operation_type = 1;                       // query, mutation, subscription
   uint64 total_requests = 2;

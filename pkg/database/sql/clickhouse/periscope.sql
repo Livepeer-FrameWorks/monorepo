@@ -1963,6 +1963,7 @@ CREATE TABLE IF NOT EXISTS processing_5m (
     window_start DateTime,
     tenant_id UUID,
     cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
     process_type LowCardinality(String),
     output_codec LowCardinality(String),
     track_type LowCardinality(String),
@@ -1973,13 +1974,14 @@ CREATE TABLE IF NOT EXISTS processing_5m (
     projection_version_ms Int64
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
-ORDER BY (tenant_id, projection_version_ms, cluster_id, process_type, output_codec, track_type, source_event_id, window_start)
+ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
 
 CREATE VIEW IF NOT EXISTS processing_5m_v AS
 SELECT
     window_start, tenant_id,
     argMax(cluster_id, projection_version_ms) AS cluster_id,
+    argMax(stream_id, projection_version_ms) AS stream_id,
     argMax(process_type, projection_version_ms) AS process_type,
     argMax(output_codec, projection_version_ms) AS output_codec,
     argMax(track_type, projection_version_ms) AS track_type,

@@ -684,11 +684,11 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 		)
 		SELECT
 			toStartOfFiveMinute(toDateTime(intDiv(source_started_at_ms, 1000))) AS window_start,
-			tenant_id, cluster_id, process_type, output_codec, track_type, source_event_id,
+			tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id,
 			sum(media_seconds) AS media_seconds
 		FROM seg
 		WHERE source_started_at_ms > 0
-		GROUP BY window_start, tenant_id, cluster_id, process_type, output_codec, track_type, source_event_id`,
+		GROUP BY window_start, tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("processing_5m source query: %w", err)
@@ -698,7 +698,7 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	projectionVersionMS := time.Now().UnixMilli()
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO periscope.processing_5m (
-			window_start, tenant_id, cluster_id, process_type, output_codec, track_type, source_event_id,
+			window_start, tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id,
 			media_seconds, projection_version_ms
 		)`)
 	if err != nil {
@@ -709,17 +709,17 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	rowsEmitted := 0
 	for rows.Next() {
 		var (
-			windowStartT                                             time.Time
-			tenantID, clusterID, processType, outputCodec, trackType string
-			sourceEventID                                            string
-			rawDurationSeconds                                       float64
+			windowStartT                                                       time.Time
+			tenantID, clusterID, streamID, processType, outputCodec, trackType string
+			sourceEventID                                                      string
+			rawDurationSeconds                                                 float64
 		)
-		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds); err != nil {
+		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &streamID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds); err != nil {
 			return fmt.Errorf("processing_5m scan: %w", err)
 		}
 		if err := batch.Append(
 			windowStartT,
-			tenantID, clusterID, processType, outputCodec, trackType, sourceEventID,
+			tenantID, clusterID, streamID, processType, outputCodec, trackType, sourceEventID,
 			rawDurationSeconds, projectionVersionMS,
 		); err != nil {
 			return fmt.Errorf("processing_5m append: %w", err)

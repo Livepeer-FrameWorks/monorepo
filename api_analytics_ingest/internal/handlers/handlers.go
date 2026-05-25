@@ -354,6 +354,25 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 		}
 	}
 	clusterID := trigger.GetClusterId()
+	if clusterID == "" {
+		if v, ok := msg.Headers["cluster_id"]; ok {
+			clusterID = v
+		}
+	}
+	// Projection consumes the protobuf envelope, while the raw journal also
+	// accepts Kafka header fallbacks. Keep both views aligned before projecting.
+	if trigger.GetNodeId() == "" && nodeID != "" {
+		trigger.NodeId = nodeID
+	}
+	if trigger.GetTriggerType() == "" && triggerType != "" {
+		trigger.TriggerType = triggerType
+	}
+	if trigger.GetTenantId() == "" && tenantID != "" {
+		trigger.TenantId = &tenantID
+	}
+	if trigger.GetClusterId() == "" && clusterID != "" {
+		trigger.ClusterId = &clusterID
+	}
 
 	receivedAtMS := trigger.GetTimestamp()
 	if receivedAtMS == 0 {
@@ -3313,7 +3332,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "attempt").Inc()
 	}
 
-	// Write to process_billing table. cluster_id flows from the
+	// Write diagnostic processing telemetry. cluster_id flows from the
 	// ProcessBillingEvent (set by Helmsman/Foghorn) so processing minutes
 	// can be billed against the right cluster's pricing model. Falls back
 	// to the MistTrigger envelope's cluster_id when the producer hasn't

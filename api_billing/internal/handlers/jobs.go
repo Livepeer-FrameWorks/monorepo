@@ -30,6 +30,13 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
+type canonicalUsageDelta struct {
+	clusterID    string
+	usageType    string
+	usageValue   float64
+	usageDetails models.JSONB
+}
+
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
 	var start, end, mollieNext sql.NullTime
 	err := db.QueryRowContext(ctx, `
@@ -348,7 +355,8 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		return nil
 	}
 
-	if err := jm.processUsageSummary(ctx, summary, "kafka"); err != nil {
+	acceptedUsage, err := jm.processUsageSummary(ctx, summary, "kafka")
+	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
 			"period":    summary.Period,
@@ -359,15 +367,15 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 	// Check billing model to determine processing path
 	billingModel, err := jm.getTenantBillingModel(ctx, summary.TenantID)
 	if err != nil {
-		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to get billing model, defaulting to postpaid")
-		billingModel = "postpaid"
+		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to get billing model")
+		return fmt.Errorf("billing model lookup failed: %w", err)
 	}
 
 	if billingModel == "prepaid" {
 		// Prepaid: deduct usage cost from balance. Surface the error so Kafka
 		// retries the message; silently swallowing means the balance never
 		// got charged for usage that was already recorded.
-		if err := jm.processPrepaidUsage(ctx, summary); err != nil {
+		if err := jm.processPrepaidUsage(ctx, summary, acceptedUsage); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to process prepaid usage")
 			return fmt.Errorf("prepaid deduction failed: %w", err)
 		}
@@ -533,7 +541,7 @@ func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
 // processPrepaidUsage calculates usage cost and deducts from prepaid balance.
 // Uses rating.UsageAmount only, never TotalAmount, so per-event deductions
 // don't re-charge the monthly base subscription fee.
-func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary) error {
+func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary, acceptedUsage []canonicalUsageDelta) error {
 	periodStart, _, _, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
 		return err
@@ -595,7 +603,7 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		}
 	}
 
-	in := buildRatingInputFromSummary(summary, currency, rules)
+	in := buildRatingInputFromCanonicalUsage(acceptedUsage, currency, rules)
 	res, err := rating.Rate(in)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
@@ -2645,10 +2653,10 @@ func parseUsageSummaryPeriod(summary models.UsageSummary) (time.Time, time.Time,
 }
 
 // processUsageSummary processes a single usage summary and stores it in the usage records table
-func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.UsageSummary, source string) error {
+func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
 	periodStart, periodEnd, granularity, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Use shared helper for usage data extraction
@@ -2677,6 +2685,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		"api_complexity":        summary.APIComplexity,
 		"api_breakdown":         summary.APIBreakdown,
 	}
+	acceptedUsage := []canonicalUsageDelta{}
 
 	// Upsert each usage type
 	for usageType, usageValue := range usageTypes {
@@ -2691,7 +2700,11 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		// usage_records and therefore never billed. See
 		// docs/architecture/meter-contracts.md.
 		valueKind := "delta"
-		if rejection := validateUsageRecord(usageType, usageValue, periodStart, periodEnd, granularity, valueKind); rejection != "" {
+		rejection := validateUsageRecord(usageType, usageValue, periodStart, periodEnd, granularity, valueKind)
+		if rejection == "" && summary.ClusterID == "" {
+			rejection = "missing_cluster_id"
+		}
+		if rejection != "" {
 			if _, qErr := jm.db.ExecContext(ctx, `
 				INSERT INTO purser.usage_records_quarantine
 					(tenant_id, cluster_id, usage_type, usage_value, usage_details,
@@ -2723,21 +2736,29 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, periodStart, periodEnd, granularity, valueKind)
 
 		if err != nil {
-			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
+			return nil, fmt.Errorf("failed to upsert %s: %w", usageType, err)
 		}
 		if metrics != nil && metrics.UsageRecords != nil {
 			metrics.UsageRecords.WithLabelValues(usageType).Inc()
 		}
+		acceptedUsage = append(acceptedUsage, canonicalUsageDelta{
+			clusterID:    summary.ClusterID,
+			usageType:    usageType,
+			usageValue:   usageValue,
+			usageDetails: usageDetails,
+		})
 	}
 
-	if err := jm.persistStorageProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); err != nil {
-		return err
+	if persistErr := jm.persistStorageProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); persistErr != nil {
+		return nil, persistErr
 	}
-	if err := jm.persistUsageAdjustments(ctx, summary, source); err != nil {
-		return err
+	acceptedAdjustments, err := jm.persistUsageAdjustments(ctx, summary, source)
+	if err != nil {
+		return nil, err
 	}
+	acceptedUsage = append(acceptedUsage, acceptedAdjustments...)
 
-	return nil
+	return acceptedUsage, nil
 }
 
 func (jm *JobManager) persistStorageProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
@@ -2750,6 +2771,9 @@ func (jm *JobManager) persistStorageProviderUsage(ctx context.Context, summary m
 		}
 		if rec.CustomerClusterID == "" {
 			rec.CustomerClusterID = summary.ClusterID
+		}
+		if rec.CustomerClusterID == "" {
+			return fmt.Errorf("storage provider usage missing customer_cluster_id")
 		}
 		if rec.UsageType == "" {
 			switch rec.StorageScope {
@@ -2803,22 +2827,26 @@ func (jm *JobManager) persistStorageProviderUsage(ctx context.Context, summary m
 	return nil
 }
 
-func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary models.UsageSummary, source string) error {
+func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
+	accepted := []canonicalUsageDelta{}
 	for _, adj := range summary.UsageAdjustments {
 		if adj.DeltaValue == 0 {
 			continue
 		}
 		if !rating.ValidMeter(rating.Meter(adj.UsageType)) {
-			return fmt.Errorf("invalid usage adjustment usage_type %q", adj.UsageType)
+			return nil, fmt.Errorf("invalid usage adjustment usage_type %q", adj.UsageType)
 		}
 		if adj.SourceSystem == "" || adj.SourceID == "" {
-			return fmt.Errorf("usage adjustment missing source identity for %s", adj.UsageType)
+			return nil, fmt.Errorf("usage adjustment missing source identity for %s", adj.UsageType)
 		}
 		if adj.ClusterID == "" {
 			adj.ClusterID = summary.ClusterID
 		}
+		if adj.ClusterID == "" {
+			return nil, fmt.Errorf("usage adjustment %s missing cluster_id", adj.SourceID)
+		}
 		if adj.PeriodStart.IsZero() || adj.PeriodEnd.IsZero() || !adj.PeriodEnd.After(adj.PeriodStart) {
-			return fmt.Errorf("usage adjustment %s has invalid period", adj.SourceID)
+			return nil, fmt.Errorf("usage adjustment %s has invalid period", adj.SourceID)
 		}
 		if adj.Details == nil {
 			adj.Details = models.JSONB{}
@@ -2848,10 +2876,16 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 		`, summary.TenantID, adj.ClusterID, adj.UsageType, adj.DeltaValue,
 			adj.PeriodStart, adj.PeriodEnd, adj.SourceSystem, adj.SourceID, adj.Reason, adj.Details)
 		if err != nil {
-			return fmt.Errorf("upsert usage adjustment %s: %w", adj.SourceID, err)
+			return nil, fmt.Errorf("upsert usage adjustment %s: %w", adj.SourceID, err)
 		}
+		accepted = append(accepted, canonicalUsageDelta{
+			clusterID:    adj.ClusterID,
+			usageType:    adj.UsageType,
+			usageValue:   adj.DeltaValue,
+			usageDetails: adj.Details,
+		})
 	}
-	return nil
+	return accepted, nil
 }
 
 // validateUsageRecord checks per-meter constraints. Returns "" on

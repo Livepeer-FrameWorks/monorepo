@@ -12,7 +12,7 @@ Consumes analytics and service-plane events from Kafka and writes time-series da
 
 - Consume `analytics_events` and `service_events` topics with tenant headers
 - Validate/normalize event payloads (Decklog already validates)
-- Insert into ClickHouse tables: `stream_event_log`, `viewer_connection_events`, `stream_health_samples`, `track_list_events`, `client_qoe_samples`, `node_metrics_samples`, `stream_state_current`, `node_state_current`, `artifact_state_current`, `artifact_events`, `routing_decisions`, `storage_snapshots`, `processing_events`
+- Insert into ClickHouse canonical facts, 5-minute ledgers, current-state tables, and diagnostic event timelines
 - Publish failed messages to `decklog_events_dlq` when DLQ production is available
 
 ## Event → table mapping
@@ -27,7 +27,7 @@ Consumes analytics and service-plane events from Kafka and writes time-series da
 - `load_balancing` → `routing_decisions`
 - `clip_lifecycle`, `dvr_lifecycle`, `vod_lifecycle`, `storage_lifecycle` → `artifact_state_current` + `artifact_events`
 - `storage_snapshot` → `storage_snapshots`
-- `process_billing` → `processing_events`
+- `process_billing` → `processing_events` diagnostic telemetry; durable segment-complete triggers project into `processing_segments_final`
 - `api_request_batch` → API usage rollups and audit events
 - `federation_event` → `federation_events`
 - service-plane `tenant_created` → tenant acquisition events plus service-event audit

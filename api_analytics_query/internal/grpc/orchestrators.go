@@ -528,19 +528,7 @@ func capabilityPricesFromArrays(capabilities []string, positions []uint32, price
 // queryOrchestratorVantages reads orchestrator_vantage_current rows for a
 // tenant, optionally filtered to one orch.
 func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantID, orchAddr string) ([]*pb.OrchestratorVantage, error) {
-	query := `
-		SELECT tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,
-		       latitude, longitude, city, country_code, geo_source, geo_resolved_at,
-		       latest_latency_ms, score, dialed_recently, last_seen
-		FROM periscope.orchestrator_vantage_current FINAL
-		WHERE tenant_id = ?
-	`
-	args := []any{tenantID}
-	if orchAddr != "" {
-		query += " AND orch_addr = ?"
-		args = append(args, orchAddr)
-	}
-	query += " ORDER BY orch_addr ASC, gateway_id ASC, resolved_ip ASC"
+	query, args := buildOrchestratorVantagesQuery(tenantID, orchAddr)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -567,4 +555,54 @@ func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantI
 		out = append(out, &v)
 	}
 	return out, nil
+}
+
+func buildOrchestratorVantagesQuery(tenantID, orchAddr string) (string, []any) {
+	latestWhere := "tenant_id = ?"
+	geoWhere := "tenant_id = ? AND geo_source != 'unknown' AND (latitude != 0 OR longitude != 0)"
+	args := []any{tenantID, tenantID}
+	if orchAddr != "" {
+		latestWhere += " AND orch_addr = ?"
+		geoWhere += " AND orch_addr = ?"
+		args = []any{tenantID, orchAddr, tenantID, orchAddr}
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest AS (
+			SELECT tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,
+			       latitude, longitude, city, country_code, geo_source, geo_resolved_at,
+			       latest_latency_ms, score, dialed_recently, last_seen
+			FROM periscope.orchestrator_vantage_current FINAL
+			WHERE %s
+		),
+		geo AS (
+			SELECT tenant_id, gateway_id, orch_addr, resolved_ip,
+			       argMax(latitude, timestamp) AS latitude,
+			       argMax(longitude, timestamp) AS longitude,
+			       argMax(country_code, timestamp) AS country_code,
+			       argMax(geo_source, timestamp) AS geo_source,
+			       max(timestamp) AS geo_resolved_at
+			FROM periscope.orchestrator_discovery_samples
+			WHERE %s
+			GROUP BY tenant_id, gateway_id, orch_addr, resolved_ip
+		)
+		SELECT latest.tenant_id, latest.gateway_id, latest.gateway_region, latest.orch_addr, latest.resolved_ip,
+		       coalesce(geo.latitude, latest.latitude) AS latitude,
+		       coalesce(geo.longitude, latest.longitude) AS longitude,
+		       latest.city,
+		       coalesce(geo.country_code, latest.country_code) AS country_code,
+		       coalesce(geo.geo_source, latest.geo_source) AS geo_source,
+		       coalesce(geo.geo_resolved_at, latest.geo_resolved_at) AS geo_resolved_at,
+		       latest.latest_latency_ms, latest.score, latest.dialed_recently, latest.last_seen
+		FROM latest
+		LEFT JOIN geo
+		  ON geo.tenant_id = latest.tenant_id
+		 AND geo.gateway_id = latest.gateway_id
+		 AND geo.orch_addr = latest.orch_addr
+		 AND geo.resolved_ip = latest.resolved_ip
+		ORDER BY latest.orch_addr ASC, latest.gateway_id ASC, latest.resolved_ip ASC`,
+		latestWhere,
+		geoWhere,
+	)
+	return query, args
 }

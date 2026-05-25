@@ -327,7 +327,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}
 	for _, metric := range viewerMetrics {
 		m := clusterViewerMetrics{IngressGB: metric.IngressGB, EgressGB: metric.EgressGB, ViewerHours: metric.ViewerHours, UniqueViewers: metric.UniqueViewers}
-		cid := attributedViewerClusterID(metric.ClusterID, metric.OriginClusterID, primaryClusterID)
+		cid := strings.TrimSpace(metric.ClusterID)
 		if existing, ok := clusterMetrics[cid]; ok {
 			existing.IngressGB += m.IngressGB
 			existing.EgressGB += m.EgressGB
@@ -347,7 +347,8 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		SELECT COALESCE(max(avg_bw_out) / (1024*1024), 0) as peak_bandwidth_mbps
 		FROM periscope.client_qoe_5m
 		WHERE tenant_id = ?
-		AND timestamp_5m BETWEEN ? AND ?
+		AND timestamp_5m >= ?
+		AND timestamp_5m <  ?
 	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query peak bandwidth from ClickHouse: %w", err)
@@ -378,16 +379,16 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to query finalized unique users from ClickHouse: %w", err)
 	}
 
-	clusterStorageProviderUsage, err := bs.queryClusterStorageProviderUsage(ctx, tenantID, startTime, endTime, primaryClusterID)
+	clusterStorageProviderUsage, err := bs.queryClusterStorageProviderUsage(ctx, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query provider storage GiB-seconds from ClickHouse: %w", err)
 	}
 	clusterStorageGB := storageMetricsFromProviderUsage(clusterStorageProviderUsage)
-	usageAdjustments, err := bs.queryUsageAdjustments(ctx, tenantID, startTime, endTime, primaryClusterID)
+	usageAdjustments, err := bs.queryUsageAdjustments(ctx, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query usage adjustments from ClickHouse: %w", err)
 	}
-	clusterProcessing, err := bs.queryClusterProcessingSeconds(ctx, tenantID, startTime, endTime, primaryClusterID)
+	clusterProcessing, err := bs.queryClusterProcessingSeconds(ctx, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query processing seconds from ClickHouse: %w", err)
 	}
@@ -690,7 +691,7 @@ func normalizedProcessingCodec(codec string) string {
 // queryClusterProcessingSeconds returns processing-second totals grouped by
 // cluster_id for the period. Empty cluster_id is bucketed under the
 // tenant's primary cluster.
-func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string]clusterProcessingMetrics, error) {
+func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string]clusterProcessingMetrics, error) {
 	out := map[string]clusterProcessingMetrics{}
 	// source_event_id is the logical fact identity. process_type, codec,
 	// and track are materialized fields that may be corrected by replay;
@@ -738,9 +739,6 @@ func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, 
 		if scanErr := rows.Scan(&cid, &processType, &outputCodec, &mediaSeconds); scanErr != nil {
 			return nil, fmt.Errorf("scan processing row: %w", scanErr)
 		}
-		if cid == "" {
-			cid = primaryClusterID
-		}
 		existing := out[cid]
 		existing.add(processType, outputCodec, sanitizeFloat(mediaSeconds))
 		out[cid] = existing
@@ -766,7 +764,7 @@ func storageUsageType(scope string) string {
 	return "storage_gb_seconds_hot"
 }
 
-func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string][]models.StorageProviderUsage, error) {
+func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string][]models.StorageProviderUsage, error) {
 	out := map[string][]models.StorageProviderUsage{}
 	rows, err := bs.clickhouse.QueryContext(ctx, `
 		WITH first_projections AS (
@@ -816,7 +814,11 @@ func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Contex
 			return nil, fmt.Errorf("scan storage provider row: %w", scanErr)
 		}
 		if clusterID == "" {
-			clusterID = primaryClusterID
+			rec.CustomerClusterID = ""
+			rec.UsageType = storageUsageType(rec.StorageScope)
+			rec.GBSeconds = sanitizeFloat(rec.GBSeconds)
+			out[clusterID] = append(out[clusterID], rec)
+			continue
 		}
 		rec.CustomerClusterID = clusterID
 		rec.UsageType = storageUsageType(rec.StorageScope)
@@ -846,7 +848,7 @@ func storageMetricsFromProviderUsage(providerUsage map[string][]models.StoragePr
 	return out
 }
 
-func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID string, startTime, endTime time.Time, primaryClusterID string) (map[string][]models.UsageAdjustment, error) {
+func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string][]models.UsageAdjustment, error) {
 	out := map[string][]models.UsageAdjustment{}
 	rows, err := bs.clickhouse.QueryContext(ctx, `
 		SELECT observed_at_ms, table_name, meter, field,
@@ -876,7 +878,7 @@ func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID
 			continue
 		}
 		adjustments, buildErr := usageAdjustmentsFromProjectionDivergence(
-			tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, observedAtMS, primaryClusterID, startTime, endTime,
+			tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, observedAtMS, startTime, endTime,
 		)
 		if buildErr != nil {
 			return nil, buildErr
@@ -973,7 +975,7 @@ type projectionAdjustmentDelta struct {
 	sourcePeriodEnd   time.Time
 }
 
-func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string, observedAtMS int64, primaryClusterID string, adjustmentPeriodStart, adjustmentPeriodEnd time.Time) ([]models.UsageAdjustment, error) {
+func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string, observedAtMS int64, adjustmentPeriodStart, adjustmentPeriodEnd time.Time) ([]models.UsageAdjustment, error) {
 	var naturalKey map[string]any
 	if err := json.Unmarshal([]byte(naturalKeyJSON), &naturalKey); err != nil {
 		return nil, fmt.Errorf("parse projection divergence natural key: %w", err)
@@ -989,7 +991,7 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 
 	clusterID := stringFromJSONMap(naturalKey, "cluster_id")
 	if clusterID == "" {
-		clusterID = primaryClusterID
+		return nil, fmt.Errorf("projection divergence %s missing cluster_id", sourceEventID)
 	}
 
 	deltas, err := adjustmentDeltasFromProjectionDivergence(tableName, field, naturalKey, priorValue, newValue, clusterID)
@@ -1000,7 +1002,7 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 	out := make([]models.UsageAdjustment, 0, len(deltas))
 	for _, delta := range deltas {
 		if delta.clusterID == "" {
-			delta.clusterID = primaryClusterID
+			return nil, fmt.Errorf("projection divergence %s produced adjustment without cluster_id", sourceEventID)
 		}
 		sourceMaterial := fmt.Sprintf("%s|%s|%s|%s|%s|%f|%s|%s|%s|%s|%s|%s", tableName, meter, field, delta.usageType, delta.clusterID, delta.deltaValue, delta.processType, delta.outputCodec, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID)
 		sourceHash := sha1.Sum([]byte(sourceMaterial))
@@ -1052,21 +1054,41 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 		if !priorOK || !newOK {
 			return nil, fmt.Errorf("storage divergence values must be JSON objects")
 		}
+		priorGBSeconds, err := floatFromJSONMap(priorMap, "gb_seconds")
+		if err != nil {
+			return nil, err
+		}
+		newGBSeconds, err := floatFromJSONMap(newMap, "gb_seconds")
+		if err != nil {
+			return nil, err
+		}
 		return []projectionAdjustmentDelta{{
 			usageType:         storageUsageType(scope),
 			clusterID:         clusterID,
-			deltaValue:        floatFromJSONMap(newMap, "gb_seconds") - floatFromJSONMap(priorMap, "gb_seconds"),
+			deltaValue:        newGBSeconds - priorGBSeconds,
 			sourcePeriodStart: sourceStart,
 			sourcePeriodEnd:   sourceStart.Add(5 * time.Minute),
 		}}, nil
 	case "viewer_sessions_final":
 		switch field {
 		case "duration_seconds":
-			return []projectionAdjustmentDelta{{usageType: "delivered_minutes", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / 60.0}}, nil
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "delivered_minutes", clusterID: clusterID, deltaValue: (next - prior) / 60.0}}, nil
 		case "uploaded_bytes":
-			return []projectionAdjustmentDelta{{usageType: "ingress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / gibibyte}}, nil
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "ingress_gb", clusterID: clusterID, deltaValue: (next - prior) / gibibyte}}, nil
 		case "downloaded_bytes":
-			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)) / gibibyte}}, nil
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (next - prior) / gibibyte}}, nil
 		case "cluster_id":
 			priorMap, priorOK := priorValue.(map[string]any)
 			newMap, newOK := newValue.(map[string]any)
@@ -1075,13 +1097,37 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			}
 			priorCluster := stringFromJSONMap(priorMap, "cluster_id")
 			newCluster := stringFromJSONMap(newMap, "cluster_id")
+			priorDuration, err := floatFromJSONMap(priorMap, "duration_seconds")
+			if err != nil {
+				return nil, err
+			}
+			priorUploaded, err := floatFromJSONMap(priorMap, "uploaded_bytes")
+			if err != nil {
+				return nil, err
+			}
+			priorDownloaded, err := floatFromJSONMap(priorMap, "downloaded_bytes")
+			if err != nil {
+				return nil, err
+			}
+			newDuration, err := floatFromJSONMap(newMap, "duration_seconds")
+			if err != nil {
+				return nil, err
+			}
+			newUploaded, err := floatFromJSONMap(newMap, "uploaded_bytes")
+			if err != nil {
+				return nil, err
+			}
+			newDownloaded, err := floatFromJSONMap(newMap, "downloaded_bytes")
+			if err != nil {
+				return nil, err
+			}
 			return []projectionAdjustmentDelta{
-				{usageType: "delivered_minutes", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "duration_seconds") / 60.0},
-				{usageType: "ingress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "uploaded_bytes") / gibibyte},
-				{usageType: "egress_gb", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "downloaded_bytes") / gibibyte},
-				{usageType: "delivered_minutes", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "duration_seconds") / 60.0},
-				{usageType: "ingress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "uploaded_bytes") / gibibyte},
-				{usageType: "egress_gb", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "downloaded_bytes") / gibibyte},
+				{usageType: "delivered_minutes", clusterID: priorCluster, deltaValue: -priorDuration / 60.0},
+				{usageType: "ingress_gb", clusterID: priorCluster, deltaValue: -priorUploaded / gibibyte},
+				{usageType: "egress_gb", clusterID: priorCluster, deltaValue: -priorDownloaded / gibibyte},
+				{usageType: "delivered_minutes", clusterID: newCluster, deltaValue: newDuration / 60.0},
+				{usageType: "ingress_gb", clusterID: newCluster, deltaValue: newUploaded / gibibyte},
+				{usageType: "egress_gb", clusterID: newCluster, deltaValue: newDownloaded / gibibyte},
 			}, nil
 		default:
 			return nil, fmt.Errorf("unsupported viewer divergence field %q", field)
@@ -1089,7 +1135,11 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 	case "stream_sessions_final":
 		switch field {
 		case "runtime_seconds":
-			return []projectionAdjustmentDelta{{usageType: "stream_runtime_seconds", clusterID: clusterID, deltaValue: floatFromJSONValue(newValue) - floatFromJSONValue(priorValue)}}, nil
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "stream_runtime_seconds", clusterID: clusterID, deltaValue: next - prior}}, nil
 		case "cluster_id":
 			priorMap, priorOK := priorValue.(map[string]any)
 			newMap, newOK := newValue.(map[string]any)
@@ -1098,9 +1148,17 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			}
 			priorCluster := stringFromJSONMap(priorMap, "cluster_id")
 			newCluster := stringFromJSONMap(newMap, "cluster_id")
+			priorRuntime, err := floatFromJSONMap(priorMap, "runtime_seconds")
+			if err != nil {
+				return nil, err
+			}
+			newRuntime, err := floatFromJSONMap(newMap, "runtime_seconds")
+			if err != nil {
+				return nil, err
+			}
 			return []projectionAdjustmentDelta{
-				{usageType: "stream_runtime_seconds", clusterID: priorCluster, deltaValue: -floatFromJSONMap(priorMap, "runtime_seconds")},
-				{usageType: "stream_runtime_seconds", clusterID: newCluster, deltaValue: floatFromJSONMap(newMap, "runtime_seconds")},
+				{usageType: "stream_runtime_seconds", clusterID: priorCluster, deltaValue: -priorRuntime},
+				{usageType: "stream_runtime_seconds", clusterID: newCluster, deltaValue: newRuntime},
 			}, nil
 		default:
 			return nil, fmt.Errorf("unsupported stream divergence field %q", field)
@@ -1108,10 +1166,14 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 	case "processing_segments_final":
 		switch field {
 		case "media_seconds":
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
 			return []projectionAdjustmentDelta{{
 				usageType:   "media_seconds",
 				clusterID:   clusterID,
-				deltaValue:  floatFromJSONValue(newValue) - floatFromJSONValue(priorValue),
+				deltaValue:  next - prior,
 				processType: stringFromJSONMap(naturalKey, "process_type"),
 				outputCodec: stringFromJSONMap(naturalKey, "output_codec"),
 			}}, nil
@@ -1121,18 +1183,26 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			if !priorOK || !newOK {
 				return nil, fmt.Errorf("processing cluster divergence values must be JSON objects")
 			}
+			priorMediaSeconds, err := floatFromJSONMap(priorMap, "media_seconds")
+			if err != nil {
+				return nil, err
+			}
+			newMediaSeconds, err := floatFromJSONMap(newMap, "media_seconds")
+			if err != nil {
+				return nil, err
+			}
 			return []projectionAdjustmentDelta{
 				{
 					usageType:   "media_seconds",
 					clusterID:   stringFromJSONMap(priorMap, "cluster_id"),
-					deltaValue:  -floatFromJSONMap(priorMap, "media_seconds"),
+					deltaValue:  -priorMediaSeconds,
 					processType: stringFromJSONMap(priorMap, "process_type"),
 					outputCodec: stringFromJSONMap(priorMap, "output_codec"),
 				},
 				{
 					usageType:   "media_seconds",
 					clusterID:   stringFromJSONMap(newMap, "cluster_id"),
-					deltaValue:  floatFromJSONMap(newMap, "media_seconds"),
+					deltaValue:  newMediaSeconds,
 					processType: stringFromJSONMap(newMap, "process_type"),
 					outputCodec: stringFromJSONMap(newMap, "output_codec"),
 				},
@@ -1143,18 +1213,26 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			if !priorOK || !newOK {
 				return nil, fmt.Errorf("processing identity divergence values must be JSON objects")
 			}
+			priorMediaSeconds, err := floatFromJSONMap(priorMap, "media_seconds")
+			if err != nil {
+				return nil, err
+			}
+			newMediaSeconds, err := floatFromJSONMap(newMap, "media_seconds")
+			if err != nil {
+				return nil, err
+			}
 			return []projectionAdjustmentDelta{
 				{
 					usageType:   "media_seconds",
 					clusterID:   stringFromJSONMap(priorMap, "cluster_id"),
-					deltaValue:  -floatFromJSONMap(priorMap, "media_seconds"),
+					deltaValue:  -priorMediaSeconds,
 					processType: stringFromJSONMap(priorMap, "process_type"),
 					outputCodec: stringFromJSONMap(priorMap, "output_codec"),
 				},
 				{
 					usageType:   "media_seconds",
 					clusterID:   stringFromJSONMap(newMap, "cluster_id"),
-					deltaValue:  floatFromJSONMap(newMap, "media_seconds"),
+					deltaValue:  newMediaSeconds,
 					processType: stringFromJSONMap(newMap, "process_type"),
 					outputCodec: stringFromJSONMap(newMap, "output_codec"),
 				},
@@ -1175,47 +1253,49 @@ func stringFromJSONMap(m map[string]any, key string) string {
 	return v
 }
 
-func floatFromJSONMap(m map[string]any, key string) float64 {
+func floatFromJSONMap(m map[string]any, key string) (float64, error) {
 	return floatFromJSONValue(m[key])
 }
 
-func floatFromJSONValue(v any) float64 {
+func floatDeltaValues(priorValue, newValue any) (float64, float64, error) {
+	prior, err := floatFromJSONValue(priorValue)
+	if err != nil {
+		return 0, 0, err
+	}
+	next, err := floatFromJSONValue(newValue)
+	if err != nil {
+		return 0, 0, err
+	}
+	return prior, next, nil
+}
+
+func floatFromJSONValue(v any) (float64, error) {
 	switch v := v.(type) {
 	case float64:
-		return v
+		return v, nil
 	case int:
-		return float64(v)
+		return float64(v), nil
 	case int64:
-		return float64(v)
+		return float64(v), nil
 	case uint32:
-		return float64(v)
+		return float64(v), nil
 	case uint64:
-		return float64(v)
+		return float64(v), nil
 	case json.Number:
 		f, err := v.Float64()
 		if err != nil {
-			return 0
+			return 0, fmt.Errorf("parse numeric JSON value %q: %w", v.String(), err)
 		}
-		return f
+		return f, nil
 	case string:
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return 0
+			return 0, fmt.Errorf("parse numeric string %q: %w", v, err)
 		}
-		return f
+		return f, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("unsupported numeric JSON value %T", v)
 	}
-}
-
-func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID string) string {
-	if strings.TrimSpace(clusterID) != "" {
-		return clusterID
-	}
-	if strings.TrimSpace(originClusterID) != "" {
-		return originClusterID
-	}
-	return primaryClusterID
 }
 
 type tenantViewerMetricRow struct {
@@ -1423,6 +1503,50 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, tenantID string) (time.Time, bool, error) {
+	var firstMS sql.NullInt64
+	err := bs.clickhouse.QueryRowContext(ctx, `
+		SELECT min(first_ms)
+		FROM (
+			SELECT min(projection_version_ms) AS first_ms
+			FROM periscope.viewer_sessions_final
+			WHERE tenant_id = ?
+
+			UNION ALL
+
+			SELECT min(projection_version_ms) AS first_ms
+			FROM periscope.stream_sessions_final
+			WHERE tenant_id = ?
+
+			UNION ALL
+
+			SELECT min(projection_version_ms) AS first_ms
+			FROM periscope.processing_segments_final
+			WHERE tenant_id = ?
+
+			UNION ALL
+
+			SELECT min(projection_version_ms) AS first_ms
+			FROM periscope.storage_gb_seconds_5m
+			WHERE tenant_id = ?
+
+			UNION ALL
+
+			SELECT toUnixTimestamp64Milli(min(window_start)) AS first_ms
+			FROM periscope.api_usage_5m_v
+			WHERE tenant_id = ?
+		)
+	`, tenantID, tenantID, tenantID, tenantID, tenantID).Scan(&firstMS)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !firstMS.Valid || firstMS.Int64 <= 0 {
+		return time.Time{}, false, nil
+	}
+	return time.UnixMilli(firstMS.Int64), true, nil
+}
+
 func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tenantID string) error {
 	// Get last processed timestamp from cursor
 	var lastProcessed time.Time
@@ -1433,9 +1557,16 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		// Default to 24 hours ago for new tenants/first run
-		// This avoids reprocessing history forever if we add a new tenant
-		lastProcessed = time.Now().Add(-24 * time.Hour)
+		cursorStart, found, findErr := bs.earliestCanonicalBillingFact(ctx, tenantID)
+		if findErr != nil {
+			return fmt.Errorf("failed to initialize cursor from canonical facts: %w", findErr)
+		}
+		if found {
+			lastProcessed = cursorStart
+		} else {
+			lastProcessed = time.Now()
+		}
+		lastProcessed = lastProcessed.Truncate(5 * time.Minute)
 		// Insert initial cursor
 		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 			_, execErr := bs.yugaDB.ExecContext(ctx, `
@@ -1462,11 +1593,7 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 	)
 	targetEnd := time.Now().Add(-billingSettlementLag).Truncate(billingCursorAlignment)
 
-	// Snap any minute-aligned lastProcessed value up to the next 5-minute
-	// boundary so emissions stay aligned with the canonical meter contract.
-	if rem := lastProcessed.Sub(lastProcessed.Truncate(billingCursorAlignment)); rem > 0 {
-		lastProcessed = lastProcessed.Truncate(billingCursorAlignment).Add(billingCursorAlignment)
-	}
+	lastProcessed = alignBillingCursorStart(lastProcessed, billingCursorAlignment)
 
 	// If no new aligned window to process, skip.
 	if !targetEnd.After(lastProcessed) {
@@ -1498,6 +1625,13 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		"end":       targetEnd,
 	}).Info("Successfully processed pending usage")
 	return nil
+}
+
+func alignBillingCursorStart(lastProcessed time.Time, alignment time.Duration) time.Time {
+	if alignment <= 0 {
+		return lastProcessed
+	}
+	return lastProcessed.UTC().Truncate(alignment)
 }
 
 // processBillingSlice generates the usage summary for one 5-minute aligned

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,6 +58,82 @@ func buildRatingInputFromSummary(summary models.UsageSummary, currency string, r
 		Breakdowns:   map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
 		CodecSeconds: codecSeconds,
 	}
+}
+
+func buildRatingInputFromCanonicalUsage(rows []canonicalUsageDelta, currency string, rules []rating.Rule) rating.Input {
+	usage := map[rating.Meter]decimal.Decimal{}
+	codecSeconds := map[string]decimal.Decimal{}
+	for _, row := range rows {
+		m := rating.Meter(row.usageType)
+		if !rating.ValidMeter(m) {
+			continue
+		}
+		delta := decimal.NewFromFloat(row.usageValue)
+		usage[m] = usage[m].Add(delta)
+		if m == rating.MeterMediaSeconds {
+			addCodecSecondsFromUsageDetails(codecSeconds, row.usageDetails, delta)
+		}
+	}
+	return rating.Input{
+		Currency:     currency,
+		BasePrice:    decimal.Zero,
+		Rules:        rules,
+		Usage:        usage,
+		Breakdowns:   map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
+		CodecSeconds: codecSeconds,
+	}
+}
+
+func addCodecSecondsFromUsageDetails(out map[string]decimal.Decimal, details models.JSONB, fallback decimal.Decimal) {
+	if details == nil {
+		return
+	}
+	raw, ok := details["codec_seconds"]
+	if !ok {
+		codec := adjustmentDetailString(details, "output_codec")
+		if codec != "" {
+			out[codec] = out[codec].Add(fallback)
+		}
+		processType := adjustmentDetailString(details, "process_type")
+		if codec != "" && processType != "" {
+			out[processType+":"+codec] = out[processType+":"+codec].Add(fallback)
+		}
+		return
+	}
+	for key, value := range numericMapValues(raw) {
+		out[key] = out[key].Add(decimal.NewFromFloat(value))
+	}
+}
+
+func numericMapValues(raw any) map[string]float64 {
+	out := map[string]float64{}
+	switch values := raw.(type) {
+	case map[string]float64:
+		for key, value := range values {
+			out[key] = value
+		}
+	case map[string]any:
+		for key, value := range values {
+			switch v := value.(type) {
+			case float64:
+				out[key] = v
+			case int:
+				out[key] = float64(v)
+			case int64:
+				out[key] = float64(v)
+			case json.Number:
+				if parsed, err := v.Float64(); err == nil {
+					out[key] = parsed
+				}
+			case string:
+				if parsed, err := decimal.NewFromString(v); err == nil {
+					f, _ := parsed.Float64()
+					out[key] = f
+				}
+			}
+		}
+	}
+	return out
 }
 
 func addMediaAdjustmentCodecSeconds(out map[string]decimal.Decimal, adj models.UsageAdjustment) {

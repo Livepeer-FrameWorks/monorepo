@@ -100,7 +100,7 @@ USER_END trigger (uploaded/downloaded bytes total)
 
 ### 5. Platform Overview Metrics
 
-**Source:** `stream_state_current` (real-time snapshots) + canonical dashboard rollups (`tenant_usage_hourly/daily`, `client_qoe_5m`) via Periscope Query
+**Source:** `stream_state_current` (real-time snapshots) + finalized viewer usage ledgers (`viewer_usage_5m_v`) + canonical dashboard rollups (`tenant_usage_hourly/daily`, `client_qoe_5m`) via Periscope Query
 
 | Field                | Unit  | Type  | Description                            |
 | -------------------- | ----- | ----- | -------------------------------------- |

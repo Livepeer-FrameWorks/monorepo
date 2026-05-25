@@ -32,7 +32,7 @@ func TestIsRetryableConsumerError(t *testing.T) {
 		},
 		{
 			name: "clickhouse semantic exception",
-			err:  errors.New("tenant_viewer_daily view: code: 184, message: aggregate function found inside another aggregate function"),
+			err:  errors.New("viewer_usage_5m_v view: code: 184, message: aggregate function found inside another aggregate function"),
 			want: false,
 		},
 		{

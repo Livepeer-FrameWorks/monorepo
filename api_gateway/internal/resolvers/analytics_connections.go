@@ -2583,8 +2583,8 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 	}, nil
 }
 
-// DoGetProcessingUsageConnection returns transcoding/processing usage records with cursor pagination.
-// This exposes data from the process_billing table (Livepeer Gateway and MistProcAV events).
+// DoGetProcessingUsageConnection returns canonical finalized processing segment records with cursor pagination.
+// Raw Livepeer/MistProcAV telemetry remains diagnostic; this surface follows the usage facts used for billing-adjacent analytics.
 func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamName *string, processType *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ProcessingUsageConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err

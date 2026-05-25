@@ -155,7 +155,7 @@ Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by 
 | `dvr_lifecycle`                        | `processDVRLifecycle`         | `artifact_state_current` (current state) + `artifact_events` (history)                  |
 | `storage_lifecycle`                    | `processStorageLifecycle`     | `storage_events`                                                                        |
 | `storage_snapshot`                     | `processStorageSnapshot`      | `storage_snapshots`                                                                     |
-| `process_billing`                      | `processProcessBilling`       | `processing_events`                                                                     |
+| `process_billing`                      | `processProcessBilling`       | `processing_events` diagnostic telemetry                                                |
 | `vod_lifecycle`                        | `processVodLifecycle`         | `artifact_state_current` + `artifact_events` (`content_type='vod'`)                     |
 | `federation_event`                     | `processFederationEvent`      | `federation_events`                                                                     |
 | `api_request_batch`                    | `processAPIRequestBatch`      | `api_requests`                                                                          |
@@ -237,10 +237,10 @@ Most list endpoints use cursor-based (keyset) pagination for time-series tables.
 These live in `api_analytics_query/internal/grpc`:
 
 - `GetStreamStatus` / `GetStreamsStatus`: reads `stream_state_current` for near-realtime stream state + quality fields.
-- `GetStreamAnalyticsSummary`: MV-backed range aggregates (e.g., `stream_viewer_5m`, `stream_analytics_daily`, `stream_health_5m`, `client_qoe_5m`, `quality_tier_daily`).
+- `GetStreamAnalyticsSummary`: finalized viewer usage facts plus current session state for range viewer/session totals, with support rollups such as `stream_health_5m`, `client_qoe_5m`, and `quality_tier_daily` for QoE and quality breakdowns.
 - `GetStreamHealthMetrics`: reads `stream_health_samples` (detailed QoE samples) with cursor pagination.
 - `GetConnectionEvents`: reads `viewer_connection_events` (includes raw `connection_addr`; redact at API boundary).
-- `GetPlatformOverview`: uses `stream_state_current` (snapshot), `client_qoe_5m` (peak bandwidth), and `tenant_viewer_daily` (historical rollups).
+- `GetPlatformOverview`: uses `stream_state_current` (snapshot), `client_qoe_5m` (peak bandwidth), `viewer_usage_5m_v` (viewer totals), and `stream_runtime_5m_v` (runtime/peak concurrency).
 
 ## 7) API Exposure: Bridge (GraphQL)
 
@@ -350,7 +350,7 @@ Canonical billing facts and dashboard rollups populated:
 ```sql
 SELECT count(), min(billable_at_ms), max(billable_at_ms) FROM periscope.viewer_sessions_final_v;
 SELECT window_start, sum(seconds_observed), sum(up_bytes_observed + down_bytes_observed) FROM periscope.viewer_usage_5m_v GROUP BY window_start ORDER BY window_start DESC LIMIT 12;
-SELECT day, sum(viewer_hours), sum(egress_gb) FROM periscope.tenant_viewer_daily GROUP BY day ORDER BY day DESC LIMIT 14;
+SELECT toDate(window_start) AS day, sum(seconds_observed) / 3600.0, sum(down_bytes_observed) / 1073741824.0 FROM periscope.viewer_usage_5m_v GROUP BY day ORDER BY day DESC LIMIT 14;
 SELECT hour, sum(viewer_count), sum(egress_gb) FROM periscope.viewer_geo_hourly GROUP BY hour ORDER BY hour DESC LIMIT 48;
 ```
 

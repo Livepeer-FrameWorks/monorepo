@@ -18,6 +18,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestMax64(t *testing.T) {
@@ -1218,6 +1219,66 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	}
 	if row[21] != uint32(42) {
 		t.Fatalf("expected session_duration 42, got %#v", row[21])
+	}
+}
+
+func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	trigger := &pb.MistTrigger{
+		NodeId:      "edge-1",
+		TriggerType: "USER_END",
+		RequestId:   "source-event-1",
+		Timestamp:   time.Now().UnixMilli(),
+		StreamId:    &streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+				SessionId:  "sess-final",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+				Duration:   65,
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"tenant_id":       tenantID,
+			"source_event_id": "source-event-1",
+			"trigger_type":    "USER_END",
+			"node_id":         "edge-1",
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	rawBatch := conn.batches["periscope.raw_mist_triggers"]
+	if rawBatch == nil || len(rawBatch.rows) != 1 {
+		t.Fatalf("expected raw_mist_triggers row, got %#v", rawBatch)
+	}
+	if rawBatch.rows[0][4] != tenantID {
+		t.Fatalf("expected raw tenant_id %q, got %#v", tenantID, rawBatch.rows[0][4])
+	}
+	finalBatch := conn.batches["periscope.viewer_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected viewer_sessions_final row, got %#v", finalBatch)
+	}
+	if got := finalBatch.rows[0][0].(uuid.UUID).String(); got != tenantID {
+		t.Fatalf("expected final tenant_id %q, got %q", tenantID, got)
+	}
+	if finalBatch.rows[0][2] != "sess-final" {
+		t.Fatalf("expected session_id sess-final, got %#v", finalBatch.rows[0][2])
 	}
 }
 

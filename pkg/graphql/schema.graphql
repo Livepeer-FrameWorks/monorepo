@@ -4027,7 +4027,7 @@ type NodePerformance5mConnection {
   totalCount: Int!
 }
 
-# Viewer Hours Hourly Aggregates (from viewer_hours_hourly MV)
+# Viewer Hours Hourly Aggregates (from canonical viewer usage windows)
 type ViewerHoursHourly implements Node {
   id: ID!
   hour: Time!
@@ -4075,7 +4075,7 @@ type ViewerGeoHourlyConnection {
   totalCount: Int!
 }
 
-# Tenant Daily Stats (from tenant_viewer_daily for PlatformOverview.dailyStats)
+# Tenant Daily Stats (from finalized viewer usage facts for PlatformOverview.dailyStats)
 type TenantDailyStat implements Node {
   id: ID!
   date: Time!
@@ -4387,7 +4387,7 @@ type ProcessingUsageConnection {
   summaries: [ProcessingUsageSummary!]! # Daily summaries (always returned)
 }
 
-# API Usage Analytics (hourly aggregates from api_usage_hourly)
+# API Usage Analytics (5-minute finalized API usage facts)
 type APIUsageRecord implements Node {
   id: ID!
   timestamp: Time!
@@ -4731,16 +4731,16 @@ type PlatformOverview {
   # Real-time bandwidth metrics (from stream_state_current)
   totalUploadBytes: Float! # Total ingest bytes (sum across all streams)
   totalDownloadBytes: Float! # Total egress bytes (sum across all streams)
-  # Viewer consumption metrics (from tenant_viewer_daily)
+  # Viewer consumption metrics (from finalized viewer usage facts)
   viewerHours: Float! # Total accumulated viewer watch time in hours
   deliveredMinutes: Float! # viewer_hours * 60 (convenience field)
   uniqueViewers: Int! # Unique viewer count for the time range
   ingestHours: Float! # Total hours streams were live (alias for streamHours)
   # True peak concurrent (from stream_events max(total_viewers))
   peakConcurrentViewers: Int! # Maximum concurrent viewers at any instant in time range
-  # Total views (session starts from tenant_analytics_daily)
+  # Total views (session starts from finalized viewer usage facts)
   totalViews: Int! # Total number of view sessions started in time range
-  # Daily breakdown for charts (from tenant_viewer_daily)
+  # Daily breakdown for charts (from finalized viewer usage facts)
   dailyStats(days: Int = 7): [TenantDailyStat!]!
 }
 

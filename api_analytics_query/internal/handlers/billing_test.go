@@ -41,26 +41,11 @@ func TestSanitizeFloat(t *testing.T) {
 	}
 }
 
-func TestAttributedViewerClusterID(t *testing.T) {
-	tests := []struct {
-		name             string
-		clusterID        string
-		originClusterID  string
-		primaryClusterID string
-		expected         string
-	}{
-		{name: "uses serving cluster when present", clusterID: "cluster-serving", originClusterID: "cluster-origin", primaryClusterID: "cluster-primary", expected: "cluster-serving"},
-		{name: "falls back to origin cluster when serving missing", clusterID: "", originClusterID: "cluster-origin", primaryClusterID: "cluster-primary", expected: "cluster-origin"},
-		{name: "falls back to primary when both missing", clusterID: "", originClusterID: "", primaryClusterID: "cluster-primary", expected: "cluster-primary"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			actual := attributedViewerClusterID(test.clusterID, test.originClusterID, test.primaryClusterID)
-			if actual != test.expected {
-				t.Fatalf("expected %q, got %q", test.expected, actual)
-			}
-		})
+func TestAlignBillingCursorStartFloorsLegacyCursor(t *testing.T) {
+	got := alignBillingCursorStart(time.Date(2026, 5, 25, 19, 52, 23, 0, time.UTC), 5*time.Minute)
+	want := time.Date(2026, 5, 25, 19, 50, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("aligned cursor = %s, want %s", got, want)
 	}
 }
 
@@ -126,7 +111,7 @@ func TestQueryClusterStorageProviderUsageReadsLedgerByProjectionTime(t *testing.
 		WithArgs("tenant-1", end.UnixMilli(), start.UnixMilli(), end.UnixMilli()).
 		WillReturnRows(rows)
 
-	got, err := bs.queryClusterStorageProviderUsage(context.Background(), "tenant-1", start, end, "primary")
+	got, err := bs.queryClusterStorageProviderUsage(context.Background(), "tenant-1", start, end)
 	if err != nil {
 		t.Fatalf("queryClusterStorageProviderUsage error: %v", err)
 	}

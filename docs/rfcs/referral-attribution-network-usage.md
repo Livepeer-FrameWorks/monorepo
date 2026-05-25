@@ -72,7 +72,7 @@ In `quartermaster`, the core tables already exist:
 ClickHouse support exists for:
 
 - `tenant_acquisition_events` for raw acquisition events.
-- `network usage` queried by aggregating existing daily rollups (`tenant_viewer_daily`, `processing_daily`, `api_usage_daily`).
+- `network usage` queried from canonical analytics ledgers/facts rather than legacy daily rollup authorities.
 - `acquisition cohort usage` computed by joining `tenant_acquisition_events` with daily usage tables.
 
 ## Data flow changes

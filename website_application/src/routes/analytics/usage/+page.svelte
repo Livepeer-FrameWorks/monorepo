@@ -826,7 +826,7 @@
           </div>
         {/if}
 
-        <!-- Daily Usage Trend (from tenant_analytics_daily) -->
+        <!-- Daily Usage Trend (from canonical tenant usage rollups) -->
         {#if tenantDailyTrendData.length > 0}
           <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
             <div class="slab-header">
@@ -1418,7 +1418,7 @@
                 </div>
               {/if}
 
-              <!-- Processing Events Detail (Collapsed by default) -->
+              <!-- Processing Segment Detail (Collapsed by default) -->
               {#if processingEvents.length > 0}
                 <div class="slab col-span-full">
                   <button
@@ -1427,7 +1427,7 @@
                   >
                     <div class="flex items-center gap-2 text-left">
                       <CpuIcon class="w-4 h-4 text-muted-foreground" />
-                      <h3>Processing Events Detail</h3>
+                      <h3>Processing Segment Detail</h3>
                       <span class="text-xs text-muted-foreground ml-2">
                         ({processingEventsTotalCount} records)
                       </span>

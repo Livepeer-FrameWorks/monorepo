@@ -11,7 +11,7 @@ Read‑optimized analytics API. Serves tenant‑scoped queries by reading time�
 ## What it does
 
 - gRPC endpoints for analytics slices and rollups
-- Reads ClickHouse for time‑series (e.g., `stream_event_log`, `viewer_connection_events`, `stream_health_samples`, rollups)
+- Reads ClickHouse for canonical facts, 5-minute ledgers, diagnostic event timelines, and current-state overlays
 - Reads ClickHouse for current state (`stream_state_current`, `node_state_current`, `artifact_state_current`)
 - Reads PostgreSQL for billing cursor tracking only (`billing_cursors` table)
 - Produces usage summaries for Purser (billing service)

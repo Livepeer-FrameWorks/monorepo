@@ -203,8 +203,8 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 		`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`: sql.ErrConnDone,
 		liveViewerUsagePattern:                                 sql.ErrConnDone,
 		"FROM client_qoe_5m":                                   sql.ErrConnDone,
-		"FROM storage_usage_hourly":                            sql.ErrConnDone,
-		"FROM processing_daily":                                sql.ErrConnDone,
+		"FROM storage_gb_seconds_5m_v":                         sql.ErrConnDone,
+		"FROM processing_5m_v":                                 sql.ErrConnDone,
 		liveGeoSummaryPattern:                                  sql.ErrConnDone,
 		liveGeoBreakdownPattern:                                sql.ErrConnDone,
 		"FROM artifact_events":                                 sql.ErrConnDone,
@@ -424,8 +424,8 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	expectQuery(`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`, []string{"stream_hours"}, []any{float64(0)})
 	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "egress_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
 	expectQuery("FROM client_qoe_5m", []string{"peak_bandwidth"}, []any{float64(0)})
-	expectQuery("FROM storage_usage_hourly", []string{"gb_seconds"}, []any{float64(0)})
-	expectQuery("FROM processing_daily", []string{
+	expectQuery("FROM storage_gb_seconds_5m_v", []string{"gb_seconds"}, []any{float64(0)})
+	expectQuery("FROM processing_5m_v", []string{
 		"livepeer_h264", "livepeer_vp9", "livepeer_av1", "livepeer_hevc",
 		"native_av_h264", "native_av_vp9", "native_av_av1", "native_av_hevc",
 		"native_av_aac", "native_av_opus",
@@ -454,6 +454,202 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	expectQuery("storage_scope = 'hot'", []string{"clip_bytes", "dvr_bytes", "vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("storage_scope = 'cold'", []string{"frozen_clip_bytes", "frozen_dvr_bytes", "frozen_vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("FROM storage_events", []string{"freeze_count", "freeze_bytes", "defrost_count", "defrost_bytes"}, []any{uint32(0), uint64(0), uint32(0), uint64(0)})
+}
+
+func TestGetAPIUsageCursorPredicateStaysInWhere(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+
+	start := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	operationName := "GetStream"
+	after := pagination.EncodeCursor(start.Add(30*time.Minute), "jwt|query|GetStream")
+
+	mock.ExpectQuery(`(?s)SELECT operation_type,.*FROM api_usage_5m_v.*ifNull\(operation_name, ''\) = \?.*GROUP BY operation_type`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"operation_type", "total_requests", "total_errors", "total_duration_ms", "total_complexity", "unique_operations",
+		}).AddRow("query", uint64(1), uint64(0), uint64(42), uint64(7), uint64(1)))
+
+	mock.ExpectQuery(`(?s)SELECT count\(\) FROM \(\s*SELECT window_start, auth_type, operation_type, operation_name\s*FROM api_usage_5m_v.*GROUP BY window_start, auth_type, operation_type, operation_name\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+
+	mock.ExpectQuery(`(?s)FROM api_usage_5m_v\s+WHERE tenant_id = \? AND window_start >= \? AND window_start < \?.*AND \(window_start, auth_type, operation_type, ifNull\(operation_name, ''\)\) < \(\?, \?, \?, \?\).*GROUP BY hour, tenant_id, auth_type, operation_type, operation_name`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"hour", "tenant_id", "auth_type", "operation_type", "operation_name",
+			"total_requests", "total_errors", "total_duration_ms", "total_complexity",
+			"unique_users", "unique_tokens",
+		}))
+
+	_, err = server.GetAPIUsage(context.Background(), &pb.GetAPIUsageRequest{
+		TenantId:      "tenant-1",
+		OperationName: &operationName,
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(start),
+			End:   timestamppb.New(end),
+		},
+		Pagination: &pb.CursorPaginationRequest{
+			First: 1,
+			After: &after,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetAPIUsage: %v", err)
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
+func TestGetProcessingUsageSummariesCountDistinctSegments(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+
+	start := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	mock.ExpectQuery(`(?s)uniqExactIf\(source_event_id, process_type = 'Livepeer'\).*uniqExactIf\(stream_id, process_type = 'Livepeer'\).*FROM processing_5m_v`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"day", "tenant_id", "livepeer_seconds", "livepeer_segment_count", "livepeer_unique_streams",
+			"livepeer_h264", "livepeer_vp9", "livepeer_av1", "livepeer_hevc",
+			"native_av_seconds", "native_av_segment_count", "native_av_unique_streams",
+			"native_av_h264", "native_av_vp9", "native_av_av1", "native_av_hevc",
+			"native_av_aac", "native_av_opus", "audio_seconds", "video_seconds",
+		}))
+
+	_, err = server.GetProcessingUsage(context.Background(), &pb.GetProcessingUsageRequest{
+		TenantId:    "tenant-1",
+		SummaryOnly: true,
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(start),
+			End:   timestamppb.New(end),
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetProcessingUsage: %v", err)
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
+func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+
+	start := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	mock.ExpectQuery(`(?s)FROM stream_state_current FINAL\s+WHERE tenant_id = \?`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"total_streams", "active_streams", "total_viewers", "avg_viewers", "total_upload_bytes", "total_download_bytes",
+		}).AddRow(int32(2), int32(1), int32(10), float64(5), uint64(100), uint64(200)))
+	mock.ExpectQuery(`(?s)FROM client_qoe_5m\s+WHERE tenant_id = \?.*timestamp_5m >= \?.*timestamp_5m <\s+\?`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"peak_bandwidth"}).AddRow(float64(123)))
+	mock.ExpectQuery(`(?s)FROM periscope\.viewer_usage_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"egress_gb", "viewer_hours", "unique_viewers", "total_views"}).
+			AddRow(float64(1.5), float64(2.0), int64(3), int64(4)))
+	mock.ExpectQuery(`(?s)sum\(active_seconds\).*FROM periscope\.stream_runtime_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"stream_hours"}).AddRow(float64(9)))
+	mock.ExpectQuery(`(?s)max\(peak_viewers\).*FROM periscope\.stream_runtime_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"peak_concurrent"}).AddRow(int32(8)))
+
+	resp, err := server.GetPlatformOverview(context.Background(), &pb.GetPlatformOverviewRequest{
+		TenantId: "tenant-1",
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(start),
+			End:   timestamppb.New(end),
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetPlatformOverview: %v", err)
+	}
+	if resp.TotalViews != 4 || resp.UniqueViewers != 3 || resp.PeakConcurrentViewers != 8 {
+		t.Fatalf("unexpected overview viewer metrics: %+v", resp)
+	}
+	if resp.StreamHours != 9 || resp.IngestHours != 9 || resp.ViewerHours != 2 || resp.EgressGb != 1.5 {
+		t.Fatalf("unexpected overview usage metrics: %+v", resp)
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
+}
+
+func TestGetStreamAnalyticsSummariesUsesViewerUsageLedger(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+
+	start := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	mock.ExpectQuery(`(?s)WITH stream_totals AS.*FROM periscope\.viewer_usage_5m_v.*WHERE tenant_id = \? AND window_start >= \? AND window_start < \?.*ORDER BY egress_bytes DESC`).
+		WithArgs("tenant-1", start, end, 2).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"stream_id", "total_views", "unique_viewers", "egress_bytes", "viewer_seconds",
+			"egress_gb", "viewer_hours", "views_share_pct", "viewers_share_pct", "egress_share_pct", "viewer_hours_share_pct",
+		}).AddRow("stream-a", int64(4), int64(3), int64(1073741824), int64(7200), float64(1), float64(2), float64(100), float64(100), float64(100), float64(100)))
+	mock.ExpectQuery(`(?s)SELECT count\(DISTINCT stream_id\)\s+FROM periscope\.viewer_usage_5m_v\s+WHERE tenant_id = \? AND window_start >= \? AND window_start < \?`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+
+	resp, err := server.GetStreamAnalyticsSummaries(context.Background(), &pb.GetStreamAnalyticsSummariesRequest{
+		TenantId: "tenant-1",
+		TimeRange: &pb.TimeRange{
+			Start: timestamppb.New(start),
+			End:   timestamppb.New(end),
+		},
+		Pagination: &pb.CursorPaginationRequest{First: 1},
+	})
+	if err != nil {
+		t.Fatalf("GetStreamAnalyticsSummaries: %v", err)
+	}
+	if resp.TotalCount != 1 || len(resp.Summaries) != 1 {
+		t.Fatalf("unexpected summary result: %+v", resp)
+	}
+	got := resp.Summaries[0]
+	if got.RangeTotalViews != 4 || got.RangeUniqueViewers != 3 || got.RangeEgressBytes != 1073741824 || got.RangeViewerSeconds != 7200 {
+		t.Fatalf("unexpected summary metrics: %+v", got)
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
 }
 
 func TestRequireTenantID(t *testing.T) {
@@ -492,6 +688,42 @@ func TestRequireTenantID(t *testing.T) {
 			t.Fatalf("expected tenant-service, got %s", tenantID)
 		}
 	})
+}
+
+func TestBuildOrchestratorVantagesQueryKeepsLastValidGeo(t *testing.T) {
+	query, args := buildOrchestratorVantagesQuery("tenant-a", "")
+	for _, want := range []string{
+		"FROM periscope.orchestrator_vantage_current FINAL",
+		"FROM periscope.orchestrator_discovery_samples",
+		"geo_source != 'unknown'",
+		"coalesce(geo.latitude, latest.latitude)",
+		"coalesce(geo.longitude, latest.longitude)",
+		"latest.latest_latency_ms",
+		"latest.dialed_recently",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("query missing %q:\n%s", want, query)
+		}
+	}
+	if len(args) != 2 || args[0] != "tenant-a" || args[1] != "tenant-a" {
+		t.Fatalf("args = %#v, want tenant for latest and geo subqueries", args)
+	}
+}
+
+func TestBuildOrchestratorVantagesQueryFiltersOrchInLatestAndGeo(t *testing.T) {
+	query, args := buildOrchestratorVantagesQuery("tenant-a", "orch-a")
+	if got := strings.Count(query, "AND orch_addr = ?"); got != 2 {
+		t.Fatalf("orch filter count = %d, want 2:\n%s", got, query)
+	}
+	wantArgs := []any{"tenant-a", "orch-a", "tenant-a", "orch-a"}
+	if len(args) != len(wantArgs) {
+		t.Fatalf("args = %#v, want %#v", args, wantArgs)
+	}
+	for i := range wantArgs {
+		if args[i] != wantArgs[i] {
+			t.Fatalf("args = %#v, want %#v", args, wantArgs)
+		}
+	}
 }
 
 func TestValidateRelatedTenantIDs(t *testing.T) {
