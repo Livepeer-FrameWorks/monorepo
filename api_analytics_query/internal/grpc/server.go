@@ -1022,10 +1022,12 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Start count query in parallel
 	streamID := req.GetStreamId()
-	countQuery := `SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE tenant_id = ? AND ((connected_at >= ? AND connected_at <= ?) OR (connected_at IS NULL AND disconnected_at >= ? AND disconnected_at <= ?))`
-	countArgs := []any{tenantID, startTime, endTime, startTime, endTime}
+	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
+	sessionEndExpr := "ifNull(disconnected_at, ?)"
+	overlapWhere := fmt.Sprintf("tenant_id = ? AND %s <= ? AND %s >= ?", sessionStartExpr, sessionEndExpr)
+	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE %s`, overlapWhere)
+	countArgs := []any{tenantID, endTime, endTime, startTime}
 	if streamID != "" {
 		countQuery += " AND stream_id = ?"
 		countArgs = append(countArgs, streamID)
@@ -1038,18 +1040,15 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 			connector, country_code, city,
 			latitude, longitude, session_duration, bytes_transferred
 		FROM periscope.viewer_sessions_current FINAL
-		WHERE tenant_id = ? AND ((connected_at >= ? AND connected_at <= ?) OR (connected_at IS NULL AND disconnected_at >= ? AND disconnected_at <= ?))
+		WHERE ` + overlapWhere + `
 	`
-	args := []any{tenantID, startTime, endTime, startTime, endTime}
+	args := []any{tenantID, endTime, endTime, startTime}
 
 	if streamID != "" {
 		query += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
-	// NOTE: session_start is a SELECT alias; ClickHouse doesn't allow SELECT aliases in WHERE.
-	// Inline the expression for keyset pagination.
-	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
 	keysetCond, keysetArgs := buildKeysetCondition(params, sessionStartExpr, "session_id")
 	if keysetCond != "" {
 		query += keysetCond
@@ -3775,15 +3774,42 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		}
 	}
 
-	// Viewer hours, egress, and unique countries from viewer_hours_hourly.
+	// Viewer duration and session counts combine finalized 5-minute usage with
+	// current session facts that have not appeared in the usage ledger yet.
 	{
-		var totalSessionSeconds, totalBytes, egressBytes sql.NullInt64
-		var uniqueCountries sql.NullInt64
+		var totalSessionSeconds, totalBytes, egressBytes, uniqueViewers, totalSessions sql.NullInt64
 		err := s.clickhouse.QueryRowContext(ctx, `
-			SELECT sum(total_session_seconds), sum(total_bytes), sum(egress_bytes), uniqExact(country_code)
-			FROM periscope.viewer_hours_hourly
-			WHERE tenant_id = ? AND stream_id = ? AND hour >= ? AND hour <= ?
-		`, tenantID, streamID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueCountries)
+			SELECT
+				toInt64(COALESCE(sum(seconds_observed), 0)),
+				toInt64(COALESCE(sum(total_bytes_observed), 0)),
+				toInt64(COALESCE(sum(down_bytes_observed), 0)),
+				toInt64(uniqExact(session_key)),
+				toInt64(uniqExact(session_key))
+			FROM (
+				SELECT
+					toUInt64(seconds_observed) AS seconds_observed,
+					toUInt64(up_bytes_observed + down_bytes_observed) AS total_bytes_observed,
+					toUInt64(down_bytes_observed) AS down_bytes_observed,
+					concat(toString(node_id), '|', session_id) AS session_key
+				FROM periscope.viewer_usage_5m_v
+				WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
+				UNION ALL
+				SELECT
+					toUInt64(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) AS seconds_observed,
+					toUInt64(0) AS total_bytes_observed,
+					toUInt64(0) AS down_bytes_observed,
+					concat(toString(node_id), '|', session_id) AS session_key
+				FROM periscope.viewer_sessions_current FINAL
+				WHERE tenant_id = ? AND stream_id = ?
+				  AND ifNull(connected_at, disconnected_at) < ?
+				  AND ifNull(disconnected_at, now()) >= ?
+				  AND (tenant_id, node_id, session_id) NOT IN (
+				      SELECT tenant_id, node_id, session_id
+				      FROM periscope.viewer_usage_5m_v
+				      WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
+				  )
+			)
+		`, tenantID, streamID, startTime, endTime, startTime, endTime, tenantID, streamID, endTime, startTime, tenantID, streamID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueViewers, &totalSessions)
 		if err == nil {
 			if totalSessionSeconds.Valid {
 				summary.RangeViewerHours = float32(totalSessionSeconds.Int64) / 3600.0
@@ -3795,21 +3821,6 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 			if egressBytes.Valid {
 				summary.RangeEgressGb = float32(float64(egressBytes.Int64) / (1024.0 * 1024.0 * 1024.0))
 			}
-			if uniqueCountries.Valid {
-				summary.RangeUniqueCountries = int32(uniqueCountries.Int64)
-			}
-		}
-	}
-
-	// Unique viewers + total sessions from stream_connection_hourly
-	{
-		var uniqueViewers, totalSessions sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
-			SELECT uniqCombinedMerge(unique_viewers_state), sum(total_sessions)
-			FROM periscope.stream_connection_hourly
-			WHERE tenant_id = ? AND stream_id = ? AND hour >= ? AND hour <= ?
-		`, tenantID, streamID, startTime, endTime).Scan(&uniqueViewers, &totalSessions)
-		if err == nil {
 			if uniqueViewers.Valid {
 				summary.RangeUniqueViewers = uniqueViewers.Int64
 			}
@@ -3817,6 +3828,22 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 				summary.RangeTotalSessions = totalSessions.Int64
 				totalSessionsVal = totalSessions.Int64
 			}
+		}
+	}
+
+	// Current session geography is available before finalized usage ledgers.
+	{
+		var uniqueCountries sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT uniqExact(country_code)
+			FROM periscope.viewer_sessions_current FINAL
+			WHERE tenant_id = ? AND stream_id = ?
+			  AND ifNull(connected_at, disconnected_at) <= ?
+			  AND ifNull(disconnected_at, now()) >= ?
+			  AND country_code != ''
+		`, tenantID, streamID, endTime, startTime).Scan(&uniqueCountries)
+		if err == nil && uniqueCountries.Valid {
+			summary.RangeUniqueCountries = int32(uniqueCountries.Int64)
 		}
 	}
 
@@ -5416,8 +5443,8 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	summary.TotalStreams = totalStreams
 	summary.StreamHours = streamHours
 
-	// Viewer hours + egress + unique sessions for live usage from the
-	// 5-minute rollup of the canonical viewer_usage_5m ledger.
+	// Viewer duration and session counts combine finalized 5-minute usage with
+	// current session facts that have not appeared in the usage ledger yet.
 	var totalSessionSeconds uint64
 	var egressBytes uint64
 	var uniqueViewers uint32
@@ -5425,16 +5452,38 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 		SELECT
-			sum(seconds_observed)                              AS total_session_seconds,
-			sum(down_bytes)                                    AS egress_bytes,
-			toUInt32(uniqCombinedMerge(unique_sessions_state)) AS unique_viewers
-		FROM tenant_usage_5m
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-	`, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &egressBytes, &uniqueViewers)
+			toUInt64(COALESCE(sum(seconds_observed), 0)) AS total_session_seconds,
+			toUInt64(COALESCE(sum(down_bytes_observed), 0)) AS egress_bytes,
+			toUInt32(uniqExact(session_key)) AS unique_viewers
+		FROM (
+			SELECT
+				toUInt64(seconds_observed) AS seconds_observed,
+				toUInt64(down_bytes_observed) AS down_bytes_observed,
+				concat(toString(node_id), '|', session_id) AS session_key
+			FROM viewer_usage_5m_v
+			WHERE tenant_id = ?
+			  AND window_start >= ?
+			  AND window_start <  ?
+			UNION ALL
+			SELECT
+				toUInt64(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) AS seconds_observed,
+				toUInt64(0) AS down_bytes_observed,
+				concat(toString(node_id), '|', session_id) AS session_key
+			FROM viewer_sessions_current FINAL
+			WHERE tenant_id = ?
+			  AND ifNull(connected_at, disconnected_at) < ?
+			  AND ifNull(disconnected_at, now()) >= ?
+			  AND (tenant_id, node_id, session_id) NOT IN (
+			      SELECT tenant_id, node_id, session_id
+			      FROM viewer_usage_5m_v
+			      WHERE tenant_id = ?
+			        AND window_start >= ?
+			        AND window_start <  ?
+			  )
+		)
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &egressBytes, &uniqueViewers)
 	cancel()
-	recordQueryError(err, "Failed to query tenant_usage_5m for live usage")
+	recordQueryError(err, "Failed to query viewer usage facts for live usage")
 	summary.ViewerHours = float64(totalSessionSeconds) / 3600.0
 	summary.EgressGb = float64(egressBytes) / (1024 * 1024 * 1024)
 	summary.UniqueUsers = int32(uniqueViewers)
@@ -5529,29 +5578,37 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	summary.LivepeerUniqueStreams = livepeerUniqueStreams
 	summary.NativeAvUniqueStreams = nativeAvUniqueStreams
 
-	// Geographic summary from canonical geo/city rollups.
+	// Geographic summary from current session facts.
 	var uniqueCountries, uniqueCities int32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 		SELECT
-			(
-				SELECT COALESCE(uniq(country_code), 0)
-				FROM viewer_geo_hourly
-				WHERE tenant_id = ?
-				  AND hour >= ?
-				  AND hour <= ?
-			) AS unique_countries,
-			(
-				SELECT COALESCE(uniq(city), 0)
-				FROM viewer_city_hourly
-				WHERE tenant_id = ?
-				  AND hour >= ?
-				  AND hour <= ?
-			) AS unique_cities
-	`, tenantID, startTime, endTime, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
+			toInt32(uniqExactIf(country_code, country_code != '')) AS unique_countries,
+			toInt32(uniqExactIf(city, city != '')) AS unique_cities
+		FROM (
+			SELECT country_code, '' AS city
+			FROM viewer_geo_hourly
+			WHERE tenant_id = ?
+			  AND hour >= ?
+			  AND hour <= ?
+			UNION ALL
+			SELECT country_code, city
+			FROM viewer_sessions_current FINAL
+			WHERE tenant_id = ?
+			  AND ifNull(connected_at, disconnected_at) <= ?
+			  AND ifNull(disconnected_at, now()) >= ?
+			  AND (tenant_id, node_id, session_id) NOT IN (
+			      SELECT tenant_id, node_id, session_id
+			      FROM viewer_usage_5m_v
+			      WHERE tenant_id = ?
+			        AND window_start >= ?
+			        AND window_start <  ?
+			  )
+		)
+	`, tenantID, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
 	cancel()
-	recordQueryError(err, "Failed to query canonical geo rollups")
+	recordQueryError(err, "Failed to query current viewer geography")
 	summary.UniqueCountries = uniqueCountries
 	summary.UniqueCities = uniqueCities
 
@@ -5564,17 +5621,43 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 			toInt32(sum(viewer_count)) AS viewer_count,
 			sum(viewer_hours) AS viewer_hours,
 			sum(egress_gb) AS egress_gb
-		FROM viewer_geo_hourly
-		WHERE tenant_id = ?
-		  AND hour >= ?
-		  AND hour <= ?
+		FROM (
+			SELECT
+				country_code,
+				viewer_count,
+				viewer_hours,
+				egress_gb
+			FROM viewer_geo_hourly
+			WHERE tenant_id = ?
+			  AND hour >= ?
+			  AND hour <= ?
+			UNION ALL
+			SELECT
+				country_code,
+				toUInt64(uniqExact(node_id, session_id)) AS viewer_count,
+				sum(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) / 3600.0 AS viewer_hours,
+				toFloat64(0) AS egress_gb
+			FROM viewer_sessions_current FINAL
+			WHERE tenant_id = ?
+			  AND ifNull(connected_at, disconnected_at) <= ?
+			  AND ifNull(disconnected_at, now()) >= ?
+			  AND country_code != ''
+			  AND (tenant_id, node_id, session_id) NOT IN (
+			      SELECT tenant_id, node_id, session_id
+			      FROM viewer_usage_5m_v
+			      WHERE tenant_id = ?
+			        AND window_start >= ?
+			        AND window_start <  ?
+			  )
+			GROUP BY country_code
+		)
 		GROUP BY country_code
 		ORDER BY viewer_hours DESC
 		LIMIT 20
-	`, tenantID, startTime, endTime)
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime)
 	if err != nil {
 		cancel()
-		recordQueryError(err, "Failed to query viewer_geo_hourly for geo breakdown")
+		recordQueryError(err, "Failed to query current geo breakdown")
 	} else if rows != nil {
 		defer func() {
 			_ = rows.Close()

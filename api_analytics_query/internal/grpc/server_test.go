@@ -155,7 +155,7 @@ func TestGetLiveUsageSummaryPartialFailureFailsClosed(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
-		"FROM tenant_usage_5m": errors.New("query failed"),
+		liveViewerUsagePattern: errors.New("query failed"),
 	})
 
 	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
@@ -201,12 +201,12 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
 		`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`:   sql.ErrConnDone,
 		`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`: sql.ErrConnDone,
-		"FROM tenant_usage_5m":                                 sql.ErrConnDone,
+		liveViewerUsagePattern:                                 sql.ErrConnDone,
 		"FROM client_qoe_5m":                                   sql.ErrConnDone,
 		"FROM storage_usage_hourly":                            sql.ErrConnDone,
 		"FROM processing_daily":                                sql.ErrConnDone,
-		`FROM viewer_geo_hourly[\s\S]*FROM viewer_city_hourly`: sql.ErrConnDone,
-		"FROM viewer_geo_hourly":                               sql.ErrConnDone,
+		liveGeoSummaryPattern:                                  sql.ErrConnDone,
+		liveGeoBreakdownPattern:                                sql.ErrConnDone,
 		"FROM artifact_events":                                 sql.ErrConnDone,
 		"storage_scope = 'hot'":                                sql.ErrConnDone,
 		"storage_scope = 'cold'":                               sql.ErrConnDone,
@@ -398,6 +398,12 @@ func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock
 	return db, server, mock
 }
 
+const (
+	liveViewerUsagePattern  = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
+	liveGeoSummaryPattern   = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
+	liveGeoBreakdownPattern = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
+)
+
 func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides map[string]error) {
 	t.Helper()
 	expectQuery := func(pattern string, columns []string, values []any) {
@@ -416,7 +422,7 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 
 	expectQuery(`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`, []string{"max_viewers", "total_streams"}, []any{int32(0), int32(0)})
 	expectQuery(`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`, []string{"stream_hours"}, []any{float64(0)})
-	expectQuery("FROM tenant_usage_5m", []string{"total_session_seconds", "egress_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
+	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "egress_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
 	expectQuery("FROM client_qoe_5m", []string{"peak_bandwidth"}, []any{float64(0)})
 	expectQuery("FROM storage_usage_hourly", []string{"gb_seconds"}, []any{float64(0)})
 	expectQuery("FROM processing_daily", []string{
@@ -432,12 +438,12 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 		uint64(0), uint64(0),
 		uint32(0), uint32(0),
 	})
-	expectQuery(`FROM viewer_geo_hourly[\s\S]*FROM viewer_city_hourly`, []string{"unique_countries", "unique_cities"}, []any{int32(0), int32(0)})
+	expectQuery(liveGeoSummaryPattern, []string{"unique_countries", "unique_cities"}, []any{int32(0), int32(0)})
 
-	if err, ok := overrides["FROM viewer_geo_hourly"]; ok {
-		mock.ExpectQuery("FROM viewer_geo_hourly").WillReturnError(err)
+	if err, ok := overrides[liveGeoBreakdownPattern]; ok {
+		mock.ExpectQuery(liveGeoBreakdownPattern).WillReturnError(err)
 	} else {
-		mock.ExpectQuery("FROM viewer_geo_hourly").WillReturnRows(
+		mock.ExpectQuery(liveGeoBreakdownPattern).WillReturnRows(
 			sqlmock.NewRows([]string{"country_code", "viewer_count", "viewer_hours", "egress_gb"}),
 		)
 	}
