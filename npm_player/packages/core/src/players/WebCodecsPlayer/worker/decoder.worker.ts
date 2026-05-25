@@ -321,6 +321,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
 
     case "debugging":
       debugging = msg.value;
+      if (typeof msg.uid === "number") {
+        sendAck(msg.uid);
+      }
       log(`Debugging set to: ${msg.value}`);
       break;
 

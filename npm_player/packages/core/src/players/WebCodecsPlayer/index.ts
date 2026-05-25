@@ -67,6 +67,17 @@ function isRawVideoCodec(codec: string): boolean {
   return normalized === "UYVY" || normalized === "YUYV" || normalized === "NV12";
 }
 
+function isPreviewVideoTrack(track: {
+  type?: string;
+  codec?: string;
+  lang?: string;
+  fpks?: number;
+}): boolean {
+  if (track.type !== "video") return false;
+  if (track.codec?.toUpperCase() !== "JPEG") return false;
+  return track.lang === "pre" || track.lang === "thu" || track.fpks === 0;
+}
+
 // Import inline worker (bundled via rollup-plugin-web-worker-loader)
 
 /**
@@ -488,6 +499,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             width: track.width,
             height: track.height,
             fpks: track.fpks,
+            lang: track.lang,
             channels: track.channels,
             rate: track.rate,
             size: track.size,
@@ -620,6 +632,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
       for (const track of streamInfo.meta.tracks) {
         if (track.type === "video" || track.type === "audio") {
+          if (isPreviewVideoTrack(track)) {
+            this.log(
+              `Track ${track.idx} (${track.codec} ${track.lang ?? "preview"}): skipped preview`
+            );
+            continue;
+          }
+
           const trackInfo: TrackInfo = {
             idx: track.idx ?? 0,
             type: track.type as "video" | "audio",
@@ -628,6 +647,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             init: track.init,
             width: track.width,
             height: track.height,
+            fpks: track.fpks,
+            lang: track.lang,
             channels: track.channels,
             rate: track.rate,
           };
@@ -999,7 +1020,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
       worker.addEventListener("error", onError);
       worker.addEventListener("message", onMessage);
-      worker.postMessage({ type: "debugging", value: true, uid: -1 });
+      worker.postMessage({ type: "debugging", value: false, uid: -1 });
     });
   }
 
@@ -1016,16 +1037,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     candidates.push(
       {
-        label: "source worker",
+        label: "package dist worker",
         createWorker: () =>
-          new Worker(new URL("./worker/decoder.worker.ts", import.meta.url), {
+          new Worker(new URL("../../../workers/decoder.worker.js", import.meta.url), {
             type: "module",
           }),
       },
       {
-        label: "package dist worker",
+        label: "source worker",
         createWorker: () =>
-          new Worker(new URL("../../../workers/decoder.worker.js", import.meta.url), {
+          new Worker(new URL("./worker/decoder.worker.ts", import.meta.url), {
             type: "module",
           }),
       },

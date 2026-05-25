@@ -11,5 +11,7 @@ describe("WebCodecs worker path resolution", () => {
     expect(source).toContain("../../../workers/decoder.worker.js");
     expect(source).toContain("/workers/decoder.worker.js");
     expect(source).toContain("this.workerUrl");
+    expect(source.indexOf("package dist worker")).toBeLessThan(source.indexOf("source worker"));
+    expect(source).toContain('type: "debugging", value: false');
   });
 });

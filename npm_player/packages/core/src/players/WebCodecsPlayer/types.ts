@@ -65,6 +65,7 @@ export interface TrackInfo {
   width?: number;
   height?: number;
   fpks?: number; // frames per kilosecond
+  lang?: string;
   // Audio-specific
   channels?: number;
   rate?: number; // sample rate

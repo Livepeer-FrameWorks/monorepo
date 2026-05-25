@@ -615,6 +615,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private currentPlayer: IPlayer | null = null;
   private videoElement: HTMLVideoElement | null = null;
   private container: HTMLElement | null = null;
+  private _initializePlayerInFlight: Promise<unknown> | null = null;
 
   private endpoints: ContentEndpoints | null = null;
   private streamInfo: StreamInfo | null = null;
@@ -3130,6 +3131,18 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   ): Promise<void> {
     if (!this.container) return;
 
+    if (this._initializePlayerInFlight) {
+      this.log("Stream came online while player initialization is in flight; waiting");
+      try {
+        await this._initializePlayerInFlight;
+      } catch {}
+      if (!this.container || this.isDestroyed) return;
+      if (this.currentPlayer && this.videoElement && this.state !== "error") {
+        await this.attemptConfiguredAutoplay(this.videoElement, "online transition", 0);
+        return;
+      }
+    }
+
     const needsFreshAttach =
       !this.videoElement ||
       !this.currentPlayer ||
@@ -3966,17 +3979,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.log(
       `[initializePlayer] Manager options: ${JSON.stringify(managerOptions)} (pending force: ${pendingForce ? "yes" : "no"})`
     );
+    let initializePromise: Promise<HTMLVideoElement> | null = null;
     try {
-      await this.playerManager.initializePlayer(
+      initializePromise = this.playerManager.initializePlayer(
         container,
         streamInfo,
         playerOptions,
         managerOptions
       );
+      this._initializePlayerInFlight = initializePromise;
+      await initializePromise;
       this.log(`[initializePlayer] Player initialized successfully`);
     } catch (e) {
       this.log(`[initializePlayer] Player initialization FAILED: ${e}`);
       throw e;
+    } finally {
+      if (this._initializePlayerInFlight === initializePromise) {
+        this._initializePlayerInFlight = null;
+      }
     }
   }
 
