@@ -3664,7 +3664,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	clustersResp := &pb.ListClustersResponse{}
 	seenClusters := make(map[string]struct{})
 	topologyClusterIDs := make(map[string]struct{})
-	appendClusters := func(clusters []*pb.InfrastructureCluster, exposeTopology bool) {
+	publicTopologyClusterIDs := make(map[string]struct{})
+	publicCtx := publicTopologyReadContext(ctx)
+	appendClusters := func(clusters []*pb.InfrastructureCluster, exposeTopology bool, publicTopology bool) {
 		for _, cluster := range clusters {
 			if cluster == nil || cluster.GetClusterId() == "" {
 				continue
@@ -3672,6 +3674,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			clusterID := cluster.GetClusterId()
 			if exposeTopology {
 				topologyClusterIDs[clusterID] = struct{}{}
+				if publicTopology {
+					publicTopologyClusterIDs[clusterID] = struct{}{}
+				}
 			}
 			if _, ok := seenClusters[clusterID]; !ok {
 				seenClusters[clusterID] = struct{}{}
@@ -3680,7 +3685,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 
-	officialClustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(ctx)
+	officialClustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(publicCtx)
 	if err != nil {
 		if tenantID == "" {
 			r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
@@ -3688,7 +3693,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 		r.Logger.WithError(err).Warn("networkStatus: failed to list official clusters; returning tenant-accessible topology only")
 	} else {
-		appendClusters(officialClustersResp.GetClusters(), true)
+		appendClusters(officialClustersResp.GetClusters(), true, true)
 	}
 
 	if tenantID != "" {
@@ -3699,7 +3704,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if accessErr != nil {
 			r.Logger.WithError(accessErr).Warn("networkStatus: failed to list tenant cluster access")
 		} else {
-			appendClusters(accessResp.GetClusters(), false)
+			appendClusters(accessResp.GetClusters(), false, false)
 		}
 	}
 
@@ -3709,7 +3714,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			r.Logger.WithError(ownedErr).Error("networkStatus: owned cluster topology unavailable")
 			return nil, fmt.Errorf("owned network topology unavailable: %w", ownedErr)
 		}
-		appendClusters(ownedClustersResp.GetClusters(), true)
+		appendClusters(ownedClustersResp.GetClusters(), true, false)
 	}
 	if len(clustersResp.GetClusters()) == 0 {
 		return nil, fmt.Errorf("network topology unavailable: no visible clusters")
@@ -3745,7 +3750,11 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if _, visible := visibleClusterIDs[clusterID]; !visible {
 			continue
 		}
-		nodesResp, nodeErr := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		readCtx := ctx
+		if _, publicTopology := publicTopologyClusterIDs[clusterID]; publicTopology {
+			readCtx = publicCtx
+		}
+		nodesResp, nodeErr := r.Clients.Quartermaster.ListNodes(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
 		if nodeErr != nil {
 			r.Logger.WithError(nodeErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list nodes")
 			continue
@@ -3758,7 +3767,11 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if _, visible := visibleClusterIDs[clusterID]; !visible {
 			continue
 		}
-		instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		readCtx := ctx
+		if _, publicTopology := publicTopologyClusterIDs[clusterID]; publicTopology {
+			readCtx = publicCtx
+		}
+		instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
 		if instanceErr != nil {
 			r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list service instances")
 			continue

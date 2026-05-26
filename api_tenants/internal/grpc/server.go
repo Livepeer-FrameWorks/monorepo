@@ -3006,6 +3006,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 
 	tenantID := middleware.GetTenantID(ctx)
 	ownerTenantID := strings.TrimSpace(req.GetOwnerTenantId())
+	publicPlatformOfficialScope := ownerTenantID == "" && req.IsPlatformOfficial != nil && req.GetIsPlatformOfficial()
 
 	builder := &pagination.KeysetBuilder{
 		TimestampColumn: "c.created_at",
@@ -3021,6 +3022,10 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 			WHERE c.owner_tenant_id = $1
 		`
 		baseCountArgs = append(baseCountArgs, ownerTenantID)
+	} else if publicPlatformOfficialScope {
+		baseWhere = `
+			WHERE c.is_platform_official = true
+		`
 	} else if tenantID != "" {
 		baseWhere = `
 			WHERE (c.cluster_id IN (
@@ -3076,7 +3081,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		countArgs = append(countArgs, req.GetDeploymentModel())
 		argIdx++
 	}
-	if req.IsPlatformOfficial != nil {
+	if req.IsPlatformOfficial != nil && !publicPlatformOfficialScope {
 		where += fmt.Sprintf(" AND c.is_platform_official = $%d", argIdx)
 		countWhere += fmt.Sprintf(" AND c.is_platform_official = $%d", argIdx)
 		args = append(args, *req.IsPlatformOfficial)

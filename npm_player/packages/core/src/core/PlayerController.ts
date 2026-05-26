@@ -3829,7 +3829,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (this._hasPlaybackStarted) return false;
     if (this._errorText) return false;
     const status = String(this.streamState?.status ?? "").toUpperCase();
-    if (status === "OFFLINE" || status === "ERROR" || status === "INVALID") return false;
+    if (status === "ERROR" || status === "INVALID") return false;
+    // StreamStateClient starts in OFFLINE/Connecting before the first Mist response.
+    // Keep the poster during that handoff; hide it only for a definitive offline result.
+    if (status === "OFFLINE" && this.streamState?.error) return false;
     return true;
   }
 

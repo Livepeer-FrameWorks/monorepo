@@ -255,13 +255,28 @@ describe("PlayerController.getShouldShowLoadingPoster", () => {
     expect(c.getShouldShowLoadingPoster()).toBe(false);
   });
 
-  it("false when stream status is OFFLINE/ERROR/INVALID", () => {
+  it("true during the initial OFFLINE/Connecting stream poll handoff", () => {
+    const c = makeController();
+    setAssets(c, { posterUrl: "https://c/p.jpg", assetKey: "k" });
+    emitPoster(c);
+    (c as any).endpoints = { primary: { url: "https://e" } };
+    (c as any).streamState = {
+      isOnline: false,
+      status: "OFFLINE",
+      message: "Connecting...",
+      lastUpdate: Date.now(),
+    };
+
+    expect(c.getShouldShowLoadingPoster()).toBe(true);
+  });
+
+  it("false when stream status is definitively OFFLINE/ERROR/INVALID", () => {
     for (const status of ["OFFLINE", "ERROR", "INVALID"]) {
       const c = makeController();
       setAssets(c, { posterUrl: "https://c/p.jpg", assetKey: "k" });
       emitPoster(c);
       (c as any).endpoints = { primary: { url: "https://e" } };
-      (c as any).streamState = { isOnline: false, status };
+      (c as any).streamState = { isOnline: false, status, error: `${status} from Mist` };
       expect(c.getShouldShowLoadingPoster()).toBe(false);
     }
   });

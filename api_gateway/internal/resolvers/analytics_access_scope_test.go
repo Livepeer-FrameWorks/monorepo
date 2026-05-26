@@ -89,18 +89,33 @@ func TestAnalyticsAccessScopeContracts(t *testing.T) {
 
 	t.Run("network status splits public and owner views", func(t *testing.T) {
 		src := functionSource(t, "analytics_connections.go", "DoGetNetworkStatus")
-		assertContains(t, src, "ListOfficialClusters(ctx)")
+		assertContains(t, src, "publicCtx := publicTopologyReadContext(ctx)")
+		assertContains(t, src, "ListOfficialClusters(publicCtx)")
 		assertContains(t, src, "ListMySubscriptions(ctx")
 		assertContains(t, src, "ListClustersByOwner(ctx, tenantID")
 		assertContains(t, src, "topologyClusterIDs")
-		assertContains(t, src, "appendClusters(officialClustersResp.GetClusters(), true)")
-		assertContains(t, src, "appendClusters(accessResp.GetClusters(), false)")
-		assertContains(t, src, "appendClusters(ownedClustersResp.GetClusters(), true)")
+		assertContains(t, src, "publicTopologyClusterIDs")
+		assertContains(t, src, "appendClusters(officialClustersResp.GetClusters(), true, true)")
+		assertContains(t, src, "appendClusters(accessResp.GetClusters(), false, false)")
+		assertContains(t, src, "appendClusters(ownedClustersResp.GetClusters(), true, false)")
 		assertContains(t, src, "for clusterID := range topologyClusterIDs")
+		assertContains(t, src, "readCtx = publicCtx")
 		assertContains(t, src, "if _, visible := visibleClusterIDs[ls.ClusterId]; visible")
 		assertContains(t, src, "operatorView")
 		assertNotContains(t, src, "if operatorView {\n\t\t\t\tserviceInstances = append")
 		assertNotContains(t, src, "if operatorView {\n\t\t\tnetworkNodes = append")
+	})
+
+	t.Run("orchestrator public scope ignores signed-in tenant visibility", func(t *testing.T) {
+		src := functionSource(t, "orchestrators.go", "networkOrchestratorOwnerTenants")
+		assertContains(t, src, "publicCtx := publicTopologyReadContext(ctx)")
+		assertContains(t, src, "ListOfficialClusters(publicCtx)")
+		assertContains(t, src, `cacheParts := []string{"public"}`)
+		assertContains(t, src, `cacheParts = []string{"tenant", tenantID}`)
+		assertContains(t, src, "ListMySubscriptions(ctx")
+		assertContains(t, src, "ListClustersByOwner(ctx, tenantID")
+		assertContains(t, src, "readCtx = publicCtx")
+		assertContains(t, src, "ListServiceInstances(readCtx, clusterID")
 	})
 }
 

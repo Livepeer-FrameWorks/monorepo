@@ -20,38 +20,70 @@ func isLivepeerGatewayService(serviceID string) bool {
 }
 
 // networkOrchestratorOwnerTenants derives public orchestrator scope from
-// platform-official gateway clusters.
+// platform-official gateway clusters plus signed-in tenant accessible clusters.
 func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]string, error) {
-	val, err := r.fetchPeriscope(ctx, "network_orchestrator_owner_tenants", []string{"current"}, func(ctx context.Context) (any, error) {
-		clustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(ctx)
+	tenantID := tenantIDFromContext(ctx)
+	cacheParts := []string{"public"}
+	if tenantID != "" {
+		cacheParts = []string{"tenant", tenantID}
+	}
+
+	val, err := r.fetchPeriscope(ctx, "network_orchestrator_owner_tenants", cacheParts, func(ctx context.Context) (any, error) {
+		publicCtx := publicTopologyReadContext(ctx)
+		clustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(publicCtx)
 		if err != nil {
 			return nil, err
 		}
-		instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, "", "", "", &pb.CursorPaginationRequest{First: 2000})
-		if err != nil {
-			return nil, err
-		}
+
 		clusterByID := make(map[string]*pb.InfrastructureCluster)
-		for _, cluster := range clustersResp.GetClusters() {
-			if cluster != nil && cluster.GetIsActive() {
+		addClusters := func(clusters []*pb.InfrastructureCluster) {
+			for _, cluster := range clusters {
+				if cluster == nil || !cluster.GetIsActive() || cluster.GetClusterId() == "" {
+					continue
+				}
 				clusterByID[cluster.GetClusterId()] = cluster
 			}
 		}
+		addClusters(clustersResp.GetClusters())
+
+		if tenantID != "" {
+			accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+				TenantId:   tenantID,
+				Pagination: &pb.CursorPaginationRequest{First: 500},
+			})
+			if accessErr != nil {
+				return nil, fmt.Errorf("load tenant cluster access for orchestrator scope: %w", accessErr)
+			}
+			addClusters(accessResp.GetClusters())
+
+			ownedResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
+			if ownedErr != nil {
+				return nil, fmt.Errorf("load owned clusters for orchestrator scope: %w", ownedErr)
+			}
+			addClusters(ownedResp.GetClusters())
+		}
+
 		seen := make(map[string]struct{})
-		for _, instance := range instancesResp.GetInstances() {
-			if instance == nil || !isLivepeerGatewayService(instance.GetServiceId()) {
-				continue
+		for clusterID, cluster := range clusterByID {
+			readCtx := ctx
+			if cluster.GetIsPlatformOfficial() {
+				readCtx = publicCtx
 			}
-			cluster := clusterByID[instance.GetClusterId()]
-			if cluster == nil {
-				continue
+			instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+			if instanceErr != nil {
+				return nil, fmt.Errorf("load orchestrator gateway instances for cluster %q: %w", clusterID, instanceErr)
 			}
-			ownerTenantID := strings.TrimSpace(cluster.GetOwnerTenantId())
-			if ownerTenantID == "" {
-				r.Logger.WithField("cluster_id", cluster.GetClusterId()).Warn("livepeer gateway cluster missing owner_tenant_id")
-				continue
+			for _, instance := range instancesResp.GetInstances() {
+				if instance == nil || !isLivepeerGatewayService(instance.GetServiceId()) {
+					continue
+				}
+				ownerTenantID := strings.TrimSpace(cluster.GetOwnerTenantId())
+				if ownerTenantID == "" {
+					r.Logger.WithField("cluster_id", cluster.GetClusterId()).Warn("livepeer gateway cluster missing owner_tenant_id")
+					continue
+				}
+				seen[ownerTenantID] = struct{}{}
 			}
-			seen[ownerTenantID] = struct{}{}
 		}
 		tenantIDs := make([]string, 0, len(seen))
 		for tenantID := range seen {
