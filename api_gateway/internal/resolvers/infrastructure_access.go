@@ -14,9 +14,9 @@ func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, er
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListClustersForTenant(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
 	if err != nil {
-		return nil, fmt.Errorf("failed to load cluster access: %w", err)
+		return nil, fmt.Errorf("failed to load owned clusters: %w", err)
 	}
 
 	out := make(map[string]struct{})
@@ -24,7 +24,7 @@ func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, er
 		if cluster == nil {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(cluster.GetAccessLevel()), "owner") && strings.TrimSpace(cluster.GetClusterId()) != "" {
+		if strings.TrimSpace(cluster.GetClusterId()) != "" {
 			out[cluster.GetClusterId()] = struct{}{}
 		}
 	}

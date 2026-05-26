@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { resolve } from "$app/paths";
+  import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
   import {
+    GetClustersAccessStore,
     GetInfrastructureOverviewStore,
     GetInfrastructureMetricsStore,
     GetServiceInstancesHealthStore,
@@ -24,6 +26,7 @@
   const PackageIcon = getIconComponent("Package");
   const CalendarIcon = getIconComponent("Calendar");
 
+  const accessStore = new GetClustersAccessStore();
   const infrastructureStore = new GetInfrastructureOverviewStore();
   const metricsStore = new GetInfrastructureMetricsStore();
   const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
@@ -31,7 +34,11 @@
   let isAuthenticated = false;
 
   let hasInfrastructureData = $derived(!!$infrastructureStore.data);
-  let loading = $derived($infrastructureStore.fetching && !hasInfrastructureData);
+  let loading = $derived(
+    ($accessStore.fetching || $infrastructureStore.fetching) && !hasInfrastructureData
+  );
+  let accessList = $derived($accessStore.data?.clustersAccess ?? []);
+  let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
   let tenant = $derived($infrastructureStore.data?.tenant ?? null);
   let clusters = $derived(
     $infrastructureStore.data?.clustersConnection?.edges?.map((e) => e.node) ?? []
@@ -130,17 +137,22 @@
       const range = resolveTimeRange(timeRange);
       const metricsFirst = Math.min(range.days * 24, 150);
       const timeRangeInput = { start: range.start, end: range.end };
+      await accessStore.fetch();
+      const ownsCluster =
+        get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
+        false;
+      if (!ownsCluster) {
+        return;
+      }
+
       await infrastructureStore.fetch();
 
-      const ownedClusterCount = $infrastructureStore.data?.clustersConnection?.edges?.length ?? 0;
-      if (ownedClusterCount > 0) {
-        await Promise.all([
-          metricsStore.fetch({
-            variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
-          }),
-          serviceInstancesHealthStore.fetch().catch(() => null),
-        ]);
-      }
+      await Promise.all([
+        metricsStore.fetch({
+          variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
+        }),
+        serviceInstancesHealthStore.fetch().catch(() => null),
+      ]);
 
       if ($infrastructureStore.errors?.length) {
         console.error("Failed to load infrastructure data:", $infrastructureStore.errors);
@@ -232,6 +244,21 @@
                 <LoadingCard variant="infrastructure" />
               {/each}
             </div>
+          </div>
+        </div>
+      </div>
+    {:else if !hasOperatorAccess}
+      <div class="dashboard-grid">
+        <div class="slab col-span-full">
+          <div class="slab-body--padded">
+            <EmptyState
+              title="No owned clusters"
+              description="Create or claim an Edge cluster to unlock node inventory, service health, and operator telemetry."
+              size="md"
+              showAction={false}
+            >
+              <ServerIcon class="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+            </EmptyState>
           </div>
         </div>
       </div>

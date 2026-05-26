@@ -519,10 +519,11 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 		return nil, fmt.Errorf("failed to get clusters access: %w", err)
 	}
 	if resp == nil {
-		return []*model.ClusterAccess{}, nil
+		resp = &pb.ClustersAccessResponse{}
 	}
 
 	out := make([]*model.ClusterAccess, 0, len(resp.Clusters))
+	byClusterID := make(map[string]*model.ClusterAccess)
 	for _, c := range resp.Clusters {
 		item := &model.ClusterAccess{
 			ClusterID:   c.ClusterId,
@@ -537,6 +538,33 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 				item.ResourceLimits = &s
 			}
 		}
+		if item.ClusterID != "" {
+			byClusterID[item.ClusterID] = item
+			out = append(out, item)
+		}
+	}
+
+	ownedResp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get owned clusters: %w", err)
+	}
+	for _, c := range ownedResp.GetClusters() {
+		if c == nil || c.GetClusterId() == "" {
+			continue
+		}
+		if item, ok := byClusterID[c.GetClusterId()]; ok {
+			item.AccessLevel = "owner"
+			if item.ClusterName == "" {
+				item.ClusterName = c.GetClusterName()
+			}
+			continue
+		}
+		item := &model.ClusterAccess{
+			ClusterID:   c.GetClusterId(),
+			ClusterName: c.GetClusterName(),
+			AccessLevel: "owner",
+		}
+		byClusterID[item.ClusterID] = item
 		out = append(out, item)
 	}
 	return out, nil
@@ -2102,20 +2130,12 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListClustersForTenant(ctx, tenantID, buildCursorPagination(first, after, last, before))
+	limit := infraMaxLimit
+	items, err := r.DoGetClustersAccess(ctx, &limit, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get clusters access: %w", err)
+		return nil, err
 	}
-	if resp == nil {
-		return &model.ClusterAccessConnection{
-			Edges:      []*model.ClusterAccessEdge{},
-			Nodes:      []*model.ClusterAccess{},
-			PageInfo:   &model.PageInfo{},
-			TotalCount: 0,
-		}, nil
-	}
-
-	return buildClustersAccessConnectionFromResponse(resp), nil
+	return buildClustersAccessConnectionFromSlice(items, first, after, last, before), nil
 }
 
 // buildClustersAccessConnectionFromResponse builds a connection from a ClustersAccessResponse.
