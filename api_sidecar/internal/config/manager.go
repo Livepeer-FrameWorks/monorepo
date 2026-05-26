@@ -223,7 +223,7 @@ func (m *Manager) reconcile() {
 		"LIVEPEER_SEGMENT_COMPLETE":           []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/livepeer_segment_complete"), "sync": false}},
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_av_segment_complete"), "sync": false}},
 		"THUMBNAIL_UPDATED":                   []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/thumbnail_updated"), "sync": false}},
-		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true, "streams": []string{"live+", "processing+", "vod+", "pull+", "dvr+"}}},
+		"STREAM_PROCESS":                      []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_process"), "sync": true}},
 		"PROCESS_EXIT":                        []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/process_exit"), "sync": false, "streams": []string{"processing+"}}},
 	}
 	desiredConfig["triggers"] = triggers

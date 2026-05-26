@@ -8,13 +8,15 @@ import (
 
 type recordingMistAPI struct {
 	addedProtocols []map[string]interface{}
+	updatedConfigs []map[string]interface{}
 }
 
 func (m *recordingMistAPI) ConfigBackup() (map[string]interface{}, error) {
 	return nil, nil
 }
 
-func (m *recordingMistAPI) UpdateConfig(map[string]interface{}) (map[string]interface{}, error) {
+func (m *recordingMistAPI) UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error) {
+	m.updatedConfigs = append(m.updatedConfigs, partial)
 	return nil, nil
 }
 

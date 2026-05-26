@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -59,6 +60,41 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	}
 	if got := streams["live"]["inputtimeout"]; got != 12 {
 		t.Fatalf("live inputtimeout = %v, want 12", got)
+	}
+}
+
+func TestReconcileConfiguresGlobalStreamProcessTrigger(t *testing.T) {
+	mist := &recordingMistAPI{}
+	manager := &Manager{
+		mistClient: mist,
+		logger:     logging.NewLogger(),
+		lastSeed: &pb.ConfigSeed{
+			FoghornBalancerBase: "http://foghorn:18008",
+			Templates: []*pb.StreamTemplate{
+				{Def: &pb.StreamDef{Name: "live"}},
+			},
+		},
+	}
+
+	manager.reconcile()
+
+	if len(mist.updatedConfigs) == 0 {
+		t.Fatal("expected UpdateConfig call")
+	}
+	triggers, ok := mist.updatedConfigs[0]["triggers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing triggers in UpdateConfig: %#v", mist.updatedConfigs[0])
+	}
+	rawHandlers, ok := triggers["STREAM_PROCESS"].([]any)
+	if !ok || len(rawHandlers) != 1 {
+		t.Fatalf("STREAM_PROCESS trigger = %#v", triggers["STREAM_PROCESS"])
+	}
+	handler, ok := rawHandlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("STREAM_PROCESS handler = %#v", rawHandlers[0])
+	}
+	if _, scoped := handler["streams"]; scoped {
+		t.Fatalf("STREAM_PROCESS must not be stream-scoped; managed streams use bare names: %#v", handler)
 	}
 }
 

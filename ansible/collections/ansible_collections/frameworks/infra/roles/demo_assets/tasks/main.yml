@@ -2,11 +2,8 @@
 # Distribute operator-supplied media via SigV4-authenticated S3 GET with
 # sha256 verification. See defaults/main.yml for the demo_assets list shape.
 #
-# amazon.aws.s3_object's `overwrite: different` checks the local file's
-# checksum against the S3 object's ETag before re-downloading; that gives
-# us idempotent runs cheaply when bytes are already correct. We still run
-# an explicit sha256 stat+assert pair after, since ETag is not SHA-256 (and
-# is multipart-mangled for files over the part-size threshold).
+# The destination sha256 is the idempotency gate. If the file is already
+# present and matches the declared digest, this role never talks to S3 for it.
 
 - name: Demo_assets | sanity-check endpoint config
   ansible.builtin.assert:
@@ -31,6 +28,18 @@
     label: "{{ item.dest | dirname }}"
   tags: [install, configure]
 
+- name: Demo_assets | stat existing destination
+  ansible.builtin.stat:
+    path: "{{ item.dest }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  loop: "{{ demo_assets }}"
+  loop_control:
+    label: "{{ item.name | default(item.dest) }}"
+  register: demo_assets_existing_stat
+  tags: [install, configure, validate]
+  check_mode: false
+
 - name: Demo_assets | download from S3 (SigV4)
   amazon.aws.s3_object:
     bucket: "{{ item.bucket }}"
@@ -39,10 +48,14 @@
     mode: get
     endpoint_url: "{{ demo_assets_s3_endpoint_url }}"
     region: "{{ demo_assets_s3_region }}"
-    overwrite: different
+    overwrite: always
   loop: "{{ demo_assets }}"
   loop_control:
+    index_var: idx
     label: "{{ item.name | default(item.dest) }}"
+  when: >-
+    not (demo_assets_existing_stat.results[idx].stat.exists | bool) or
+    demo_assets_existing_stat.results[idx].stat.checksum != item.sha256
   tags: [install, configure]
 
 - name: Demo_assets | fix ownership + mode on downloaded files
