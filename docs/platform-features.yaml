@@ -1112,6 +1112,22 @@ features:
       webapp: { required: true }
       docs: { required: true }
 
+  - slug: scheduled-vod-streams
+    name: Scheduled VOD streams
+    area: streaming
+    description: Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream.
+    status: roadmap
+    gap_reason: |
+      Not shipped. Managed Mist-native streams provide the lower-level primitive for platform-owned concrete stream configs, but scheduled VOD streams need a separate product layer:
+      a schedule/timeline store, VOD artifact selection, asset availability checks, pre-hydration/pinning for frozen assets, failover-aware edge placement, GraphQL/MCP controls,
+      and dashboard scheduling workflows. The source material should remain normal finalized VOD artifacts with their existing storage lifecycle; the scheduler turns them into a
+      live channel without bypassing artifact ownership, retention, or billing semantics.
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+
   - slug: incidents-and-alerts
     name: Incidents and alerts
     area: infrastructure

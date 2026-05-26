@@ -12,7 +12,7 @@ The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/stre
 <Aside type="note">
   All analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and you
   can't query across tenants. Bounded time ranges and pagination are enforced server-side; see field
-  definitions in the [GraphQL playground](/developer/playground).
+  definitions in the [GraphQL playground](%APP_URL%/developer/playground).
 </Aside>
 
 <Aside type="note" title="Cluster data is scoped by intent">
@@ -182,5 +182,5 @@ Agents call analytics through diagnostic tools rather than direct GraphQL — se
 
 ## Related
 
-- [GraphQL playground](/developer/playground) — try these queries against your own tenant
+- [GraphQL playground](%APP_URL%/developer/playground) — try these queries against your own tenant
 - [Platform capabilities](/platform/feature-matrix) — where analytics is exposed
