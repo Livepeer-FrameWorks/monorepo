@@ -23,6 +23,7 @@ dependencies:
   community.postgresql: ">=3.4.0,<4.0.0"
   community.general: ">=9.0.0,<10.0.0"
   ansible.posix: ">=1.5.0,<2.0.0"
+  amazon.aws: ">=7.0.0,<8.0.0"
 repository: https://github.com/frameworks-network/monorepo
 documentation: https://github.com/frameworks-network/monorepo/tree/master/ansible
 build_ignore:

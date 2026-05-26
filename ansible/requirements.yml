@@ -22,6 +22,13 @@ collections:
   - name: ansible.posix
     version: "1.5.4"
 
+  # amazon.aws.s3_object provides SigV4-authenticated S3 GET/PUT against
+  # AWS or S3-compatible endpoints (Hetzner Object Storage etc.). Consumed
+  # by frameworks.infra.demo_assets to fetch operator-supplied media from
+  # the cluster's existing object storage with sha256 verification.
+  - name: amazon.aws
+    version: "7.6.0"
+
 roles:
   - name: geerlingguy.postgresql
     version: "3.5.2"

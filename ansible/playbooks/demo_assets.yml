@@ -1,0 +1,31 @@
+---
+# Distribute operator-supplied media (e.g. mist_native source clips) from
+# the cluster's S3 bucket onto edge nodes.
+#
+# One-time upload (operator workstation, once per asset):
+#   export AWS_ACCESS_KEY_ID=$(sops -d gitops/secrets/cluster-media-eu-1.env \
+#     | awk -F= '/^STORAGE_S3_ACCESS_KEY=/{print $2}')
+#   export AWS_SECRET_ACCESS_KEY=$(sops -d gitops/secrets/cluster-media-eu-1.env \
+#     | awk -F= '/^STORAGE_S3_SECRET_KEY=/{print $2}')
+#   aws s3 cp /private/tmp/frameworks-demo-source.mp4 \
+#     s3://frameworks/marketing/frameworks-demo-source.mp4 \
+#     --endpoint-url https://nbg1.your-objectstorage.com
+#
+# Play invocation (any operator with SOPS access):
+#   export AWS_ACCESS_KEY_ID=$(sops -d gitops/secrets/cluster-media-eu-1.env \
+#     | awk -F= '/^STORAGE_S3_ACCESS_KEY=/{print $2}')
+#   export AWS_SECRET_ACCESS_KEY=$(sops -d gitops/secrets/cluster-media-eu-1.env \
+#     | awk -F= '/^STORAGE_S3_SECRET_KEY=/{print $2}')
+#   ansible-playbook -i <inventory> ansible/playbooks/demo_assets.yml \
+#     --limit media-eu-1 \
+#     -e @gitops/clusters/production/demo_assets.yml
+#
+# The sha256 in the manifest is the immutable reference. If the S3 object
+# is re-uploaded, the bytes must match or the role fails on the verify step.
+
+- name: Distribute demo assets to edge nodes
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: frameworks.infra.demo_assets

@@ -1,0 +1,85 @@
+---
+# Distribute operator-supplied media via SigV4-authenticated S3 GET with
+# sha256 verification. See defaults/main.yml for the demo_assets list shape.
+#
+# amazon.aws.s3_object's `overwrite: different` checks the local file's
+# checksum against the S3 object's ETag before re-downloading; that gives
+# us idempotent runs cheaply when bytes are already correct. We still run
+# an explicit sha256 stat+assert pair after, since ETag is not SHA-256 (and
+# is multipart-mangled for files over the part-size threshold).
+
+- name: Demo_assets | sanity-check endpoint config
+  ansible.builtin.assert:
+    that:
+      - demo_assets_s3_endpoint_url | length > 0
+      - demo_assets_s3_region | length > 0
+    fail_msg: >-
+      demo_assets_s3_endpoint_url and demo_assets_s3_region must be set
+      when demo_assets is non-empty.
+  when: demo_assets | length > 0
+  tags: [install, configure, validate]
+
+- name: Demo_assets | ensure parent directory
+  ansible.builtin.file:
+    path: "{{ item.dest | dirname }}"
+    state: directory
+    owner: "{{ item.owner | default(demo_assets_dest_owner) }}"
+    group: "{{ item.group | default(demo_assets_dest_group) }}"
+    mode: "{{ item.dir_mode | default(demo_assets_dest_dir_mode) }}"
+  loop: "{{ demo_assets }}"
+  loop_control:
+    label: "{{ item.dest | dirname }}"
+  tags: [install, configure]
+
+- name: Demo_assets | download from S3 (SigV4)
+  amazon.aws.s3_object:
+    bucket: "{{ item.bucket }}"
+    object: "{{ item.s3_key }}"
+    dest: "{{ item.dest }}"
+    mode: get
+    endpoint_url: "{{ demo_assets_s3_endpoint_url }}"
+    region: "{{ demo_assets_s3_region }}"
+    overwrite: different
+  loop: "{{ demo_assets }}"
+  loop_control:
+    label: "{{ item.name | default(item.dest) }}"
+  tags: [install, configure]
+
+- name: Demo_assets | fix ownership + mode on downloaded files
+  ansible.builtin.file:
+    path: "{{ item.dest }}"
+    owner: "{{ item.owner | default(demo_assets_dest_owner) }}"
+    group: "{{ item.group | default(demo_assets_dest_group) }}"
+    mode: "{{ item.mode | default(demo_assets_dest_mode) }}"
+  loop: "{{ demo_assets }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  tags: [install, configure]
+
+- name: Demo_assets | stat post-download
+  ansible.builtin.stat:
+    path: "{{ item.dest }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  loop: "{{ demo_assets }}"
+  loop_control:
+    label: "{{ item.name | default(item.dest) }}"
+  register: demo_assets_stat
+  tags: [install, configure, validate]
+  check_mode: false
+
+- name: Demo_assets | assert sha256 matches expected
+  ansible.builtin.assert:
+    that:
+      - demo_assets_stat.results[idx].stat.exists | bool
+      - demo_assets_stat.results[idx].stat.checksum == item.sha256
+    fail_msg: >-
+      sha256 mismatch on {{ item.dest }}:
+      expected {{ item.sha256 }}, got
+      {{ demo_assets_stat.results[idx].stat.checksum | default('<missing>') }}
+    success_msg: "{{ item.name | default(item.dest) }} sha256 verified ({{ item.sha256[:12] }}…)"
+  loop: "{{ demo_assets }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.name | default(item.dest) }}"
+  tags: [install, configure, validate]

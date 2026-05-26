@@ -1,0 +1,28 @@
+---
+# Pull operator-supplied media (e.g. CC0 loop clips backing mist_native
+# streams) from an S3-compatible bucket onto each targeted node, with
+# sha256 verification on landing.
+#
+# Auth: amazon.aws.s3_object picks up AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# from the environment. The playbook header documents how to source those
+# from the cluster's SOPS-encrypted secrets.
+
+demo_assets: []
+# Example (see gitops/clusters/production/demo_assets.yml for a live one):
+# demo_assets:
+#   - name: frameworks-demo-source
+#     bucket: frameworks
+#     s3_key: marketing/frameworks-demo-source.mp4
+#     dest: /var/lib/frameworks/demo/frameworks-demo-source.mp4
+#     sha256: 7f4e5858a25f9aa26c3fcd9c1766d183a4eaa8d3ec5ab0c24025aa1dfa6acfbc
+#     mode: "0644"
+
+# S3-compatible endpoint config. Override at the manifest level; required
+# (non-empty) when demo_assets is non-empty.
+demo_assets_s3_endpoint_url: ""
+demo_assets_s3_region: ""
+
+demo_assets_dest_owner: root
+demo_assets_dest_group: root
+demo_assets_dest_mode: "0644"
+demo_assets_dest_dir_mode: "0755"

@@ -1,0 +1,72 @@
+---
+argument_specs:
+  main:
+    short_description: Pull operator-supplied media from S3 onto edge nodes.
+    description:
+      - >-
+        Fetches operator-distributed media (e.g. a CC0 loop clip backing a
+        mist_native stream) from an S3-compatible bucket to a known on-disk
+        path on every targeted node, with SigV4 auth and sha256 verification.
+    options:
+      demo_assets:
+        type: list
+        elements: dict
+        required: true
+        description: Files to fetch onto the target node.
+        options:
+          name:
+            type: str
+            required: true
+            description: Stable label used for logs and verification messages.
+          bucket:
+            type: str
+            required: true
+            description: S3 bucket name.
+          s3_key:
+            type: str
+            required: true
+            description: Object key within the bucket.
+          dest:
+            type: str
+            required: true
+            description: Absolute path on the target node where the file is placed.
+          sha256:
+            type: str
+            required: true
+            description: Expected SHA-256 of the file; asserted after download.
+          mode:
+            type: str
+            required: false
+            description: File mode (octal string, default 0644).
+          owner:
+            type: str
+            required: false
+            description: File owner (default root).
+          group:
+            type: str
+            required: false
+            description: File group (default root).
+          dir_mode:
+            type: str
+            required: false
+            description: Parent directory mode (default 0755).
+      demo_assets_s3_endpoint_url:
+        type: str
+        required: true
+        description: S3-compatible endpoint URL (e.g. https://nbg1.your-objectstorage.com).
+      demo_assets_s3_region:
+        type: str
+        required: true
+        description: S3 region (e.g. nbg1 for Hetzner Object Storage).
+      demo_assets_dest_owner:
+        type: str
+        required: false
+      demo_assets_dest_group:
+        type: str
+        required: false
+      demo_assets_dest_mode:
+        type: str
+        required: false
+      demo_assets_dest_dir_mode:
+        type: str
+        required: false
