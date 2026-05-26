@@ -8,6 +8,7 @@ import type {
   PlayerOptions,
   PlayerCapability,
 } from "../core/PlayerInterface";
+import { isLiveStreamType } from "../core/PlayerInterface";
 
 // Player implementation class
 export class DashJsPlayerImpl extends BasePlayer {
@@ -236,10 +237,37 @@ export class DashJsPlayerImpl extends BasePlayer {
     });
   }
 
+  private reportDashFailure(error: string | Error, options?: PlayerOptions): void {
+    const message = typeof error === "string" ? error : error.message || String(error);
+    options?.onError?.(message);
+    this.emit("error", message);
+  }
+
+  private createInternalRejectionHandler(
+    options: PlayerOptions
+  ): (e: PromiseRejectionEvent) => void {
+    return (e: PromiseRejectionEvent) => {
+      if (this.destroyed) return;
+      const msg = e.reason?.message || String(e.reason);
+      if (
+        msg.includes("getCurrentDVRInfo") ||
+        msg.includes("range") ||
+        msg.includes("Cannot read properties of null") ||
+        msg.includes("can't access property")
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation?.();
+        console.warn("[DashJS] Caught internal dash.js rejection:", msg);
+        this.reportDashFailure(`DASH fatal internal error: ${msg}`, options);
+      }
+    };
+  }
+
   async initialize(
     container: HTMLElement,
     source: StreamSource,
-    options: PlayerOptions
+    options: PlayerOptions,
+    streamInfo?: StreamInfo
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
@@ -247,11 +275,11 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.pendingSubtitleId = null;
     container.classList.add("fw-player-container");
 
-    // Detect stream type from source if available (reference dashjs.js live detection)
-    const sourceType = (source as any).type;
-    if (sourceType === "live") {
+    // Detect stream type from gateway/Mist metadata. source.type is the MIME
+    // protocol, not live/VOD state.
+    if (isLiveStreamType(streamInfo?.type)) {
       this.streamType = "live";
-    } else if (sourceType === "vod") {
+    } else if (streamInfo?.type === "vod") {
       this.streamType = "vod";
     } else {
       this.streamType = "unknown";
@@ -307,21 +335,13 @@ export class DashJsPlayerImpl extends BasePlayer {
         if (this.destroyed) return;
         const error = `DASH error: ${e?.event?.message || e?.message || "unknown"}`;
         console.error("[DashJS] Error event:", e);
-        this.emit("error", error);
+        this.reportDashFailure(error, options);
       });
 
       // dash.js has internal unhandled promise rejections (e.g. SegmentBase SIDX
       // loader crashes on live CMAF streams). Catch these and surface as errors
       // so PlayerController can fall back to another player/protocol.
-      this._rejectionHandler = (e: PromiseRejectionEvent) => {
-        if (this.destroyed) return;
-        const msg = e.reason?.message || String(e.reason);
-        if (msg.includes("range") || msg.includes("Cannot read properties of null")) {
-          e.preventDefault();
-          console.warn("[DashJS] Caught internal dash.js rejection:", msg);
-          this.emit("error", `DASH internal error: ${msg}`);
-        }
-      };
+      this._rejectionHandler = this.createInternalRejectionHandler(options);
       window.addEventListener("unhandledrejection", this._rejectionHandler);
 
       // Log key dashjs events for debugging
@@ -441,7 +461,7 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       return video;
     } catch (error: any) {
-      this.emit("error", error.message || String(error));
+      this.reportDashFailure(error.message || String(error), options);
       throw error;
     }
   }

@@ -23,4 +23,31 @@ describe("DashJsPlayerImpl", () => {
 
     expect(proxy.duration).toBe(42);
   });
+
+  it("routes dash.js live DVR null-range rejections through onError", () => {
+    const player = new DashJsPlayerImpl();
+    const errors: string[] = [];
+    let prevented = false;
+    let stopped = false;
+
+    const handler = (player as any).createInternalRejectionHandler({
+      onError: (error: string | Error) => errors.push(String(error)),
+    });
+
+    handler({
+      reason: new TypeError(`can't access property "range", v.getCurrentDVRInfo() is null`),
+      preventDefault: () => {
+        prevented = true;
+      },
+      stopImmediatePropagation: () => {
+        stopped = true;
+      },
+    } as PromiseRejectionEvent);
+
+    expect(prevented).toBe(true);
+    expect(stopped).toBe(true);
+    expect(errors).toEqual([
+      `DASH fatal internal error: can't access property "range", v.getCurrentDVRInfo() is null`,
+    ]);
+  });
 });
