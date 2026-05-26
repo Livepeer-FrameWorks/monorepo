@@ -1001,8 +1001,7 @@ func main() {
 	//   - 60s repair sync: re-publishes the full alive set so transient losses
 	//     converge without an event.
 	if qmClient != nil {
-		go startEdgeDNSDeltaCoalescer(qmClient, logger)
-		go startEdgeHealthSync(qmClient, logger)
+		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, logger)
 	}
 
 	// Start the hourly storage snapshot scheduler
@@ -1343,6 +1342,64 @@ func reconnectCommodore(
 	}
 }
 
+const (
+	edgeQMPublisherLeaseRole = "quartermaster_reporter"
+	edgeQMPublisherLeaseTTL  = 15 * time.Second
+)
+
+func startEdgeQuartermasterPublisher(qm *qmclient.GRPCClient, store *state.RedisStateStore, instanceID string, log logging.Logger) {
+	if store == nil {
+		go startEdgeDNSDeltaCoalescer(qm, log)
+		go startEdgeHealthSync(qm, log)
+		return
+	}
+	go runEdgeQuartermasterPublisher(qm, store, instanceID, log)
+}
+
+func runEdgeQuartermasterPublisher(qm *qmclient.GRPCClient, store *state.RedisStateStore, instanceID string, log logging.Logger) {
+	deltaTicker := time.NewTicker(1 * time.Second)
+	defer deltaTicker.Stop()
+	healthTicker := time.NewTicker(60 * time.Second)
+	defer healthTicker.Stop()
+
+	leaseHeld := false
+	var lastLeaseErrLog time.Time
+	ensureLease := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ok, err := store.TryAcquireLease(ctx, edgeQMPublisherLeaseRole, instanceID, edgeQMPublisherLeaseTTL)
+		cancel()
+		if err != nil {
+			now := time.Now()
+			if lastLeaseErrLog.IsZero() || now.Sub(lastLeaseErrLog) >= 30*time.Second {
+				log.WithError(err).Warn("edge Quartermaster publisher lease check failed")
+				lastLeaseErrLog = now
+			}
+			return false
+		}
+		if ok && !leaseHeld {
+			log.WithField("instance_id", instanceID).Info("Acquired edge Quartermaster publisher lease")
+		}
+		if !ok && leaseHeld {
+			log.WithField("instance_id", instanceID).Warn("Lost edge Quartermaster publisher lease")
+		}
+		leaseHeld = ok
+		return ok
+	}
+
+	for {
+		select {
+		case <-deltaTicker.C:
+			if ensureLease() {
+				publishEdgeDNSDeltas(qm, log)
+			}
+		case <-healthTicker.C:
+			if ensureLease() {
+				publishEdgeHealthSnapshot(qm, log)
+			}
+		}
+	}
+}
+
 // startEdgeHealthSync re-publishes every known node — healthy AND unhealthy —
 // to Quartermaster every 60s as a repair signal. The delta coalescer carries
 // the fast path; this loop catches anything the coalescer missed (lost gRPC
@@ -1352,20 +1409,24 @@ func startEdgeHealthSync(qm *qmclient.GRPCClient, log logging.Logger) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		snaps := state.DefaultManager().AllReportedNodes(15 * time.Minute)
-		if len(snaps) == 0 {
-			continue
-		}
-		nodes := make([]*pb.NodeAliveness, 0, len(snaps))
-		for _, s := range snaps {
-			nodes = append(nodes, snapshotToProto(s))
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := qm.ReportAliveNodes(ctx, nodes)
-		cancel()
-		if err != nil {
-			log.WithError(err).WithField("count", len(nodes)).Warn("edge health sync failed")
-		}
+		publishEdgeHealthSnapshot(qm, log)
+	}
+}
+
+func publishEdgeHealthSnapshot(qm *qmclient.GRPCClient, log logging.Logger) {
+	snaps := state.DefaultManager().AllReportedNodes(15 * time.Minute)
+	if len(snaps) == 0 {
+		return
+	}
+	nodes := make([]*pb.NodeAliveness, 0, len(snaps))
+	for _, s := range snaps {
+		nodes = append(nodes, snapshotToProto(s))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err := qm.ReportAliveNodes(ctx, nodes)
+	cancel()
+	if err != nil {
+		log.WithError(err).WithField("count", len(nodes)).Warn("edge health sync failed")
 	}
 }
 
@@ -1376,20 +1437,24 @@ func startEdgeDNSDeltaCoalescer(qm *qmclient.GRPCClient, log logging.Logger) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		deltas := state.DefaultManager().ConsumeDNSRelevantDeltas()
-		if len(deltas) == 0 {
-			continue
-		}
-		nodes := make([]*pb.NodeAliveness, 0, len(deltas))
-		for _, d := range deltas {
-			nodes = append(nodes, snapshotToProto(d))
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := qm.ReportAliveNodes(ctx, nodes)
-		cancel()
-		if err != nil {
-			log.WithError(err).WithField("count", len(nodes)).Warn("edge DNS delta push failed")
-		}
+		publishEdgeDNSDeltas(qm, log)
+	}
+}
+
+func publishEdgeDNSDeltas(qm *qmclient.GRPCClient, log logging.Logger) {
+	deltas := state.DefaultManager().ConsumeDNSRelevantDeltas()
+	if len(deltas) == 0 {
+		return
+	}
+	nodes := make([]*pb.NodeAliveness, 0, len(deltas))
+	for _, d := range deltas {
+		nodes = append(nodes, snapshotToProto(d))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := qm.ReportAliveNodes(ctx, nodes)
+	cancel()
+	if err != nil {
+		log.WithError(err).WithField("count", len(nodes)).Warn("edge DNS delta push failed")
 	}
 }
 

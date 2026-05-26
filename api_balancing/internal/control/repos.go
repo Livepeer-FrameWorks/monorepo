@@ -318,12 +318,10 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*
 		return nil
 	}
 
-	nodeIDs := make([]string, 0, len(updates))
-	lifecycles := make([]string, 0, len(updates))
-	for _, update := range updates {
-		if update == nil {
-			continue
-		}
+	deduped := dedupeNodeLifecycleUpdates(updates)
+	nodeIDs := make([]string, 0, len(deduped))
+	lifecycles := make([]string, 0, len(deduped))
+	for _, update := range deduped {
 		b, err := json.Marshal(update)
 		if err != nil {
 			return err
@@ -350,21 +348,14 @@ func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	var nodeIDs []string
-	var components []string
-	var versions []string
-	for _, update := range updates {
-		if update == nil {
-			continue
-		}
-		for _, component := range update.GetComponentVersions() {
-			if component == nil || component.GetComponent() == "" {
-				continue
-			}
-			nodeIDs = append(nodeIDs, update.GetNodeId())
-			components = append(components, component.GetComponent())
-			versions = append(versions, component.GetVersion())
-		}
+	entries := dedupeNodeComponentUpdates(updates)
+	nodeIDs := make([]string, 0, len(entries))
+	components := make([]string, 0, len(entries))
+	versions := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		nodeIDs = append(nodeIDs, entry.nodeID)
+		components = append(components, entry.component)
+		versions = append(versions, entry.version)
 	}
 	if len(nodeIDs) == 0 {
 		return nil
@@ -378,6 +369,62 @@ func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*
 			last_reported_at = NOW()
 	`, nodeIDs, components, versions)
 	return err
+}
+
+func dedupeNodeLifecycleUpdates(updates []*pb.NodeLifecycleUpdate) []*pb.NodeLifecycleUpdate {
+	order := make([]string, 0, len(updates))
+	byNode := make(map[string]*pb.NodeLifecycleUpdate, len(updates))
+	for _, update := range updates {
+		if update == nil || update.GetNodeId() == "" {
+			continue
+		}
+		nodeID := update.GetNodeId()
+		if _, seen := byNode[nodeID]; !seen {
+			order = append(order, nodeID)
+		}
+		byNode[nodeID] = update
+	}
+	out := make([]*pb.NodeLifecycleUpdate, 0, len(order))
+	for _, nodeID := range order {
+		out = append(out, byNode[nodeID])
+	}
+	return out
+}
+
+type nodeComponentUpdate struct {
+	nodeID    string
+	component string
+	version   string
+}
+
+func dedupeNodeComponentUpdates(updates []*pb.NodeLifecycleUpdate) []nodeComponentUpdate {
+	order := make([]string, 0)
+	byKey := make(map[string]nodeComponentUpdate)
+	for _, update := range updates {
+		if update == nil || update.GetNodeId() == "" {
+			continue
+		}
+		nodeID := update.GetNodeId()
+		for _, component := range update.GetComponentVersions() {
+			if component == nil || component.GetComponent() == "" {
+				continue
+			}
+			key := nodeID + "\x00" + component.GetComponent()
+			if _, seen := byKey[key]; !seen {
+				order = append(order, key)
+			}
+			byKey[key] = nodeComponentUpdate{
+				nodeID:    nodeID,
+				component: component.GetComponent(),
+				version:   component.GetVersion(),
+			}
+		}
+	}
+	out := make([]nodeComponentUpdate, 0, len(order))
+	for _, key := range order {
+		out = append(out, byKey[key])
+	}
+	return out
 }
 
 func (r *nodeRepositoryDB) UpsertNodeMaintenance(ctx context.Context, nodeID string, mode state.NodeOperationalMode, setBy string) error {

@@ -37,6 +37,22 @@ end
 return val
 `)
 
+var renewLeaseScript = goredis.NewScript(`
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('pexpire', KEYS[1], ARGV[2])
+else
+  return 0
+end
+`)
+
+var releaseLeaseScript = goredis.NewScript(`
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+else
+  return 0
+end
+`)
+
 type StateEntity string
 
 type StateOperation string
@@ -105,6 +121,9 @@ func (r *RedisStateStore) keyStreamInstance(streamName, nodeID string) string {
 func (r *RedisStateStore) keyArtifact(nodeID string) string {
 	return fmt.Sprintf("{%s}:artifacts:%s", r.clusterID, nodeID)
 }
+func (r *RedisStateStore) keyLease(role string) string {
+	return fmt.Sprintf("{%s}:lease:%s", r.clusterID, role)
+}
 
 func (r *RedisStateStore) setJSON(ctx context.Context, key string, value any) error {
 	bytes, err := json.Marshal(value)
@@ -116,6 +135,46 @@ func (r *RedisStateStore) setJSON(ctx context.Context, key string, value any) er
 
 func (r *RedisStateStore) setJSONRaw(ctx context.Context, key string, payload []byte) error {
 	return r.client.Set(ctx, key, payload, 0).Err()
+}
+
+func (r *RedisStateStore) TryAcquireLease(ctx context.Context, role, owner string, ttl time.Duration) (bool, error) {
+	if owner == "" {
+		return false, nil
+	}
+	key := r.keyLease(role)
+	ok, err := r.client.SetNX(ctx, key, owner, ttl).Result()
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
+	current, err := r.client.Get(ctx, key).Result()
+	if errors.Is(err, goredis.Nil) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if current != owner {
+		return false, nil
+	}
+	return r.RenewLease(ctx, role, owner, ttl)
+}
+
+func (r *RedisStateStore) RenewLease(ctx context.Context, role, owner string, ttl time.Duration) (bool, error) {
+	if owner == "" {
+		return false, nil
+	}
+	result, err := renewLeaseScript.Run(ctx, r.client, []string{r.keyLease(role)}, owner, int64(ttl/time.Millisecond)).Int64()
+	return err == nil && result == 1, err
+}
+
+func (r *RedisStateStore) ReleaseLease(ctx context.Context, role, owner string) error {
+	if owner == "" {
+		return nil
+	}
+	return releaseLeaseScript.Run(ctx, r.client, []string{r.keyLease(role)}, owner).Err()
 }
 
 func (r *RedisStateStore) SetNode(nodeID string, state *NodeState) error {

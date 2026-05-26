@@ -93,6 +93,68 @@ func TestDeleteConnOwnerIfMatch(t *testing.T) {
 	}
 }
 
+func TestRedisLeaseAcquireRenewRelease(t *testing.T) {
+	store, mr, _ := newRedisStateStore(t)
+	ctx := context.Background()
+	ttl := 15 * time.Second
+
+	acquired, err := store.TryAcquireLease(ctx, "qm_reporter", "inst-a", ttl)
+	if err != nil {
+		t.Fatalf("TryAcquireLease inst-a: %v", err)
+	}
+	if !acquired {
+		t.Fatal("expected inst-a to acquire lease")
+	}
+
+	acquired, err = store.TryAcquireLease(ctx, "qm_reporter", "inst-b", ttl)
+	if err != nil {
+		t.Fatalf("TryAcquireLease inst-b: %v", err)
+	}
+	if acquired {
+		t.Fatal("expected inst-b not to acquire held lease")
+	}
+
+	mr.FastForward(10 * time.Second)
+	renewed, err := store.RenewLease(ctx, "qm_reporter", "inst-a", ttl)
+	if err != nil {
+		t.Fatalf("RenewLease inst-a: %v", err)
+	}
+	if !renewed {
+		t.Fatal("expected inst-a to renew lease")
+	}
+
+	mr.FastForward(10 * time.Second)
+	acquired, err = store.TryAcquireLease(ctx, "qm_reporter", "inst-b", ttl)
+	if err != nil {
+		t.Fatalf("TryAcquireLease inst-b after renew: %v", err)
+	}
+	if acquired {
+		t.Fatal("expected renewed lease to remain held by inst-a")
+	}
+
+	if releaseErr := store.ReleaseLease(ctx, "qm_reporter", "inst-b"); releaseErr != nil {
+		t.Fatalf("ReleaseLease non-owner: %v", releaseErr)
+	}
+	acquired, err = store.TryAcquireLease(ctx, "qm_reporter", "inst-b", ttl)
+	if err != nil {
+		t.Fatalf("TryAcquireLease inst-b after stale release: %v", err)
+	}
+	if acquired {
+		t.Fatal("expected non-owner release not to clear lease")
+	}
+
+	if releaseErr := store.ReleaseLease(ctx, "qm_reporter", "inst-a"); releaseErr != nil {
+		t.Fatalf("ReleaseLease owner: %v", releaseErr)
+	}
+	acquired, err = store.TryAcquireLease(ctx, "qm_reporter", "inst-b", ttl)
+	if err != nil {
+		t.Fatalf("TryAcquireLease inst-b after owner release: %v", err)
+	}
+	if !acquired {
+		t.Fatal("expected inst-b to acquire released lease")
+	}
+}
+
 func TestPendingDVRStopConsumeIsSingleUse(t *testing.T) {
 	store, mr, _ := newRedisStateStore(t)
 	ctx := context.Background()
