@@ -215,7 +215,7 @@ func (s *Server) putClipRoute(c *gin.Context) {
 func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal string) {
 	forceCloseForMistReader(c)
 
-	file := strings.TrimPrefix(c.Param("file"), "/")
+	file := strings.Trim(c.Param("file"), "/")
 	if !safeRelayPathSegment(file) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return

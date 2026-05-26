@@ -399,6 +399,42 @@ func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	}
 }
 
+func TestUploadDtshPutWithTrailingSlashLandsLocally(t *testing.T) {
+	dir := t.TempDir()
+	hash := "uploadabc"
+	file := hash + ".mov.dtsh"
+	body := []byte("generated upload dtsh bytes")
+
+	fz := &fakeFreeze{}
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/internal/artifact/upload/"+file+"/", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	target := filepath.Join(dir, "upload", file)
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("expected upload dtsh on disk: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+	if len(fz.calls) != 1 || !strings.Contains(fz.calls[0], target) {
+		t.Fatalf("freeze handoff not called: %v", fz.calls)
+	}
+}
+
 func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"

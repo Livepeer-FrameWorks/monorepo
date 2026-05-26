@@ -123,6 +123,7 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 	g.HEAD("/vod/:file", func(c *gin.Context) { s.serveFile(c, "vod") })
 	g.GET("/vod/:file", func(c *gin.Context) { s.serveFile(c, "vod") })
 	g.PUT("/vod/:file", func(c *gin.Context) { s.putSidecar(c, "vod") })
+	g.PUT("/vod/:file/", func(c *gin.Context) { s.putSidecar(c, "vod") })
 
 	// Clip: stream-nested (clip/<stream>/<hash>.<ext>). Foghorn always
 	// emits this shape — output_stream_name is required on
@@ -136,4 +137,6 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 	// Processing input. Same flat layout under storage/upload/.
 	g.HEAD("/upload/:file", s.serveUpload)
 	g.GET("/upload/:file", s.serveUpload)
+	g.PUT("/upload/:file", func(c *gin.Context) { s.putSidecar(c, "upload") })
+	g.PUT("/upload/:file/", func(c *gin.Context) { s.putSidecar(c, "upload") })
 }

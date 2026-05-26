@@ -98,7 +98,7 @@ func (s *Server) serveClipRoute(c *gin.Context) {
 // two-segment paths (<stream>/<file>) are valid; anything else
 // returns ("", "") and the caller 404s.
 func parseClipWildcardPath(p string) (string, string) {
-	p = strings.TrimPrefix(p, "/")
+	p = strings.Trim(p, "/")
 	if p == "" {
 		return "", ""
 	}

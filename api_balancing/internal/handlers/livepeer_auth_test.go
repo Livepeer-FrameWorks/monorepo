@@ -133,6 +133,55 @@ func TestLivepeerAuth_PositiveCacheHitSkipsCommodoreAndPeers(t *testing.T) {
 	}
 }
 
+func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.T) {
+	commod := &stubCommodore{}
+	r := newAuthResolver(t)
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
+	r.Commodore = commod
+	r.ProcessingJob = func(_ context.Context, manifestID string) *LivepeerAuthContext {
+		if manifestID != "processing+artifact123" {
+			return nil
+		}
+		return &LivepeerAuthContext{
+			TenantID:     "tenant-processing",
+			StreamID:     "stream-processing",
+			InternalName: manifestID,
+		}
+	}
+
+	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")
+	if authCtx == nil {
+		t.Fatalf("expected processing authorize success, got reason=%q", reason)
+	}
+	if authCtx.TenantID != "tenant-processing" || authCtx.StreamID != "stream-processing" || authCtx.InternalName != "processing+artifact123" {
+		t.Fatalf("unexpected auth context: %+v", authCtx)
+	}
+	if commod.callCount() != 0 {
+		t.Fatalf("processing job hit must not call Commodore, got %d calls", commod.callCount())
+	}
+	if cached := r.PositiveCache.get("processing+artifact123-4VrbXAvV"); cached == nil {
+		t.Fatal("expected suffixed processing manifest to be cached")
+	}
+	if cached := r.PositiveCache.get("processing+artifact123"); cached == nil {
+		t.Fatal("expected base processing manifest to be cached")
+	}
+}
+
+func TestLivepeerAuth_ProcessingSessionManifestFallsThroughWhenJobMissing(t *testing.T) {
+	r := newAuthResolver(t)
+	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
+	r.ProcessingJob = func(context.Context, string) *LivepeerAuthContext { return nil }
+	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{TenantId: ""}}
+
+	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")
+	if authCtx != nil {
+		t.Fatal("expected reject for unknown processing manifest")
+	}
+	if reason != authRejectStreamNotFound {
+		t.Fatalf("expected reason=%q, got %q", authRejectStreamNotFound, reason)
+	}
+}
+
 func TestLivepeerAuth_CommodoreNotFoundReturnsStreamNotFound(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }

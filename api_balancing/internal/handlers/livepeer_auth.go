@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/url"
 	"strings"
@@ -144,6 +145,7 @@ type federationStreamQuerier interface {
 type LivepeerAuthResolver struct {
 	LocalCluster  string
 	StreamLookup  func(manifestID string) *LivepeerAuthContext
+	ProcessingJob func(ctx context.Context, manifestID string) *LivepeerAuthContext
 	Commodore     commodoreInternalNameResolver
 	Federation    federationStreamQuerier
 	PeerAddrs     peerAddrResolver // shared with the rest of the handlers package
@@ -168,6 +170,7 @@ func defaultLivepeerAuthResolver() *LivepeerAuthResolver {
 				InternalName: s.InternalName,
 			}
 		},
+		ProcessingJob: lookupProcessingJobAuthContext,
 		Commodore:     commodoreAdapter{client: commodoreClient},
 		Federation:    federationAdapter{client: federationClient},
 		PeerAddrs:     peerManager,
@@ -181,12 +184,16 @@ func defaultLivepeerAuthResolver() *LivepeerAuthResolver {
 // resolved tenant/stream context; (nil, reason) with one of the constants above
 // when the stream cannot be confirmed.
 func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string) (*LivepeerAuthContext, string) {
+	manifestIDs := livepeerAuthCandidateManifestIDs(manifestID)
+
 	// 1. Local in-memory state. Pub/sub keeps this in sync within a Foghorn pool
 	// when EnableRedisSync is on, so this hit covers same-instance and same-pool
 	// streams without a network round trip.
 	if r.StreamLookup != nil {
-		if c := r.StreamLookup(manifestID); c != nil {
-			return c, ""
+		for _, candidate := range manifestIDs {
+			if c := r.StreamLookup(candidate); c != nil {
+				return c, ""
+			}
 		}
 	}
 
@@ -194,8 +201,22 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 	// burst of segments at session startup. Caches the full auth context, not
 	// just a boolean, so the cached path still produces tenant attribution.
 	if r.PositiveCache != nil {
-		if c := r.PositiveCache.get(manifestID); c != nil {
-			return c, ""
+		for _, candidate := range manifestIDs {
+			if c := r.PositiveCache.get(candidate); c != nil {
+				return c, ""
+			}
+		}
+	}
+
+	if isProcessingManifestID(manifestID) && r.ProcessingJob != nil {
+		for _, candidate := range manifestIDs {
+			if c := r.ProcessingJob(ctx, candidate); c != nil {
+				if r.PositiveCache != nil {
+					r.PositiveCache.add(manifestID, c)
+					r.PositiveCache.add(candidate, c)
+				}
+				return c, ""
+			}
 		}
 	}
 
@@ -278,6 +299,60 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 		return nil, authRejectPeerUnreachable
 	}
 	return nil, authRejectStreamNotLive
+}
+
+func isProcessingManifestID(manifestID string) bool {
+	return strings.HasPrefix(manifestID, "processing+")
+}
+
+func livepeerAuthCandidateManifestIDs(manifestID string) []string {
+	candidates := []string{manifestID}
+	if !isProcessingManifestID(manifestID) {
+		return candidates
+	}
+	token := strings.TrimPrefix(manifestID, "processing+")
+	if dash := strings.LastIndex(token, "-"); dash > 0 {
+		canonical := "processing+" + token[:dash]
+		if canonical != manifestID {
+			candidates = append(candidates, canonical)
+		}
+	}
+	return candidates
+}
+
+func lookupProcessingJobAuthContext(ctx context.Context, manifestID string) *LivepeerAuthContext {
+	if db == nil || !isProcessingManifestID(manifestID) {
+		return nil
+	}
+	artifactHash := strings.TrimPrefix(manifestID, "processing+")
+	if artifactHash == "" {
+		return nil
+	}
+
+	var tenantID, streamID string
+	err := db.QueryRowContext(ctx, `
+		SELECT pj.tenant_id::text, COALESCE(a.stream_id::text, '')
+		  FROM foghorn.processing_jobs pj
+		  LEFT JOIN foghorn.artifacts a ON a.artifact_hash = pj.artifact_hash
+		 WHERE pj.artifact_hash = $1
+		   AND pj.status IN ('queued', 'dispatched', 'processing')
+		 ORDER BY pj.updated_at DESC
+		 LIMIT 1
+	`, artifactHash).Scan(&tenantID, &streamID)
+	if err != nil {
+		if err != sql.ErrNoRows && logger != nil {
+			logger.WithError(err).WithField("manifest_id", manifestID).Warn("livepeer auth: processing job lookup failed")
+		}
+		return nil
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		return nil
+	}
+	return &LivepeerAuthContext{
+		TenantID:     tenantID,
+		StreamID:     streamID,
+		InternalName: manifestID,
+	}
 }
 
 // authPositiveCache holds short-lived "this manifest is authorised" entries to
