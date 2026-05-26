@@ -130,6 +130,31 @@ func runBootstrapCommand(args []string) int {
 			len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
 	}
 
+	// Mist-native streams: always reconcile, even when the desired list is
+	// empty. ReconcileMistNativeStreams handles upserts; an empty list means
+	// "every previously-bootstrapped mist_native stream under the operator
+	// tenant must be deleted". Without this call the declarative remove path
+	// would be broken — pulling a stream out of bootstrap.yaml has to stop
+	// the stream, not leave it running.
+	mnStreams := desired.Commodore.MistNativeStreams
+	var mnRes bootstrap.Result
+	var mnErr error
+	if len(mnStreams) > 0 {
+		mnRes, mnErr = bootstrap.ReconcileMistNativeStreams(ctx, tx, mnStreams, resolver)
+	} else {
+		// No desired rows declared. Scope the prune to the operator/system
+		// tenant — any other tenant's mist_native streams stay untouched
+		// (the operator-tenant scope matches the render-time exec gate).
+		mnRes, mnErr = bootstrap.PruneAllMistNativeStreams(ctx, tx, resolver, []string{bootstrap.SystemTenantAlias})
+	}
+	if mnErr != nil {
+		_ = tx.Rollback() //nolint:errcheck // already in error path
+		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", mnErr)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
+		len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
+
 	if *dryRun {
 		if err := tx.Rollback(); err != nil {
 			fmt.Fprintf(os.Stderr, "commodore bootstrap [dry-run] rollback: %v\n", err)

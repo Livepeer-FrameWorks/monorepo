@@ -86,7 +86,7 @@ Pull streams meter exactly like push live streams once viewers attach. Idle pull
 | Transcoding ladder applied           | Transcoded minutes meter identically to push.                                                                                  |
 | Last viewer leaves                   | Mist drops the input after the standard grace period. No cost while idle.                                                      |
 
-`always_on: true` is **not** in Phase 1. When it ships in Phase 2, it will accrue processing/recording/thumbnail/health/upstream-bandwidth costs even with zero viewers; the API surface will document this explicitly.
+`always_on: true` is not yet wired for pull streams — the column exists on `commodore.streams` (today used by `mist_native` streams, which always run regardless of viewer demand) but Foghorn's reconciler does not yet keep `pull+` always-on streams active without a viewer. When wired, an always-on pull stream will accrue processing/recording/thumbnail/health/upstream-bandwidth costs even with zero viewers; the API surface documents this explicitly.
 
 ## Tenant Responsibilities
 

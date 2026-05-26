@@ -826,6 +826,13 @@ func main() {
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
 
+	// Wire the trigger processor's cache + DVR machinery to the managed-stream
+	// reconciler so mist_native Apply events populate the same caches and
+	// start the same DVR side-effects PUSH_REWRITE drives for push streams.
+	// Without this, STREAM_PROCESS would miss the per-stream process policy
+	// for mist_native streams (which never fire PUSH_REWRITE).
+	control.SetManagedStreamMaterializer(triggerProcessor.ManagedStreamMaterializer())
+
 	// Wire cache invalidator for instant tenant reactivation (Purser → Commodore → Foghorn)
 	foghornServer.SetCacheInvalidator(triggerProcessor)
 
@@ -977,6 +984,16 @@ func main() {
 	clusterRefreshCtx, clusterRefreshCancel := context.WithCancel(context.Background())
 	defer clusterRefreshCancel()
 	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)
+
+	// Reconcile managed (mist_native) streams onto connected Helmsmen every
+	// 30 seconds. Each tick lists Commodore's desired state for every served
+	// cluster, runs deterministic placement, and emits Apply / Retract
+	// deltas against last_sent[node]. Reconnect handling: ForgetManagedStreamLastSent
+	// is called from the connection cleanup so the next tick re-emits Apply
+	// for whatever should be on the reconnected node.
+	managedStreamCtx, managedStreamCancel := context.WithCancel(context.Background())
+	defer managedStreamCancel()
+	go control.StartManagedStreamReconciler(managedStreamCtx, 30*time.Second, logger)
 
 	// Relay edge state to Quartermaster. Two paths:
 	//   - delta coalescer: drains DNS-relevant deltas (health/caps/cluster/IP)

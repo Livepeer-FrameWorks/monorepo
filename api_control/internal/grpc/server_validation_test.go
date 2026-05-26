@@ -165,6 +165,199 @@ func TestValidateStreamKey(t *testing.T) {
 	}
 }
 
+func TestResolveStreamContext(t *testing.T) {
+	ctx := context.Background()
+	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}
+	tests := []struct {
+		name      string
+		req       *pb.ResolveStreamContextRequest
+		setupMock func(sqlmock.Sqlmock)
+		wantErr   bool
+		assert    func(*testing.T, *pb.ResolveStreamContextResponse)
+	}{
+		{
+			name:    "no_identifier",
+			req:     &pb.ResolveStreamContextRequest{},
+			wantErr: true,
+		},
+		{
+			name:    "empty_stream_id",
+			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_StreamId{StreamId: ""}},
+			wantErr: true,
+		},
+		{
+			name: "stream_not_found",
+			req:  &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_StreamId{StreamId: "missing"}},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(`WHERE s\.id = \$1`).WithArgs("missing").WillReturnError(sql.ErrNoRows)
+			},
+			assert: func(t *testing.T, resp *pb.ResolveStreamContextResponse) {
+				if resp.Admitted {
+					t.Fatalf("expected admitted=false for missing stream")
+				}
+				if resp.RejectionReason != pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY {
+					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
+				}
+			},
+		},
+		{
+			name: "inactive_user",
+			req:  &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows(cols).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native")
+				mock.ExpectQuery(`WHERE s\.playback_id = \$1`).WithArgs("pk_inactive").WillReturnRows(rows)
+			},
+			assert: func(t *testing.T, resp *pb.ResolveStreamContextResponse) {
+				if resp.Admitted {
+					t.Fatalf("expected admitted=false for inactive user")
+				}
+				if resp.RejectionReason != pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE {
+					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
+				}
+				if resp.StreamId != "stream-id" || resp.TenantId != "tenant-id" {
+					t.Fatalf("identity fields not populated on rejection: %+v", resp)
+				}
+			},
+		},
+		{
+			// nil purserClient ⇒ fail-closed-as-transient. ValidateStreamKey
+			// can default to postpaid/active when Purser isn't wired (push
+			// ingest re-evaluates every PUSH_REWRITE), but ResolveStreamContext
+			// must not admit because the caller is the managed-stream
+			// reconciler running every 30s on always-on streams.
+			name:    "nil_purser_fails_closed_as_transient",
+			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-1"}},
+			wantErr: true,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows(cols).
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native")
+				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-1").WillReturnRows(rows)
+			},
+		},
+		{
+			// Fail-closed-as-transient: when a cluster_id is supplied but
+			// the cluster route lookup fails (Quartermaster unavailable in
+			// this test, since quartermasterClient is nil), the RPC must
+			// return codes.Unavailable rather than silently admit. Foghorn's
+			// reconciler treats this as transient and preserves any prior
+			// applied state instead of newly Applying onto an unverified
+			// cluster.
+			name:    "cluster_id_with_route_lookup_failure_fails_closed",
+			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-2"}, ClusterId: "cluster-edge"},
+			wantErr: true,
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows(cols).
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native")
+				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-2").WillReturnRows(rows)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var db *sql.DB
+			var mock sqlmock.Sqlmock
+			if test.setupMock != nil {
+				var err error
+				db, mock, err = sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+				if err != nil {
+					t.Fatalf("failed to create sqlmock: %v", err)
+				}
+				defer db.Close()
+				test.setupMock(mock)
+			}
+
+			server := &CommodoreServer{db: db, logger: logrus.New()}
+			resp, err := server.ResolveStreamContext(ctx, test.req)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got resp=%+v", resp)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			test.assert(t, resp)
+
+			if test.setupMock != nil {
+				if err := mock.ExpectationsWereMet(); err != nil {
+					t.Fatalf("unmet expectations: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestListManagedStreams(t *testing.T) {
+	ctx := context.Background()
+	cols := []string{
+		"id", "playback_id", "internal_name", "tenant_id",
+		"ingest_mode", "source_spec", "source_kind", "always_on",
+		"placement_count", "allowed_cluster_ids",
+	}
+
+	t.Run("empty_cluster_id_rejected", func(t *testing.T) {
+		server := &CommodoreServer{logger: logrus.New()}
+		_, err := server.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: ""})
+		if err == nil {
+			t.Fatal("expected InvalidArgument for empty cluster_id")
+		}
+	})
+
+	t.Run("returns_rows_for_cluster", func(t *testing.T) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		if err != nil {
+			t.Fatalf("sqlmock: %v", err)
+		}
+		defer db.Close()
+
+		// Two rows pinned to cluster-edge: the request scope. A row whose
+		// allowed_cluster_ids does NOT include "cluster-edge" would never
+		// be returned by the SQL (no $1 = ANY clause match), so the test
+		// does not need to mock such a row — that's the new invariant
+		// (empty list no longer auto-eligible for every cluster).
+		mock.ExpectQuery(`FROM commodore\.streams s.*JOIN commodore\.stream_mist_sources`).
+			WithArgs("cluster-edge").
+			WillReturnRows(sqlmock.NewRows(cols).
+				AddRow(
+					"stream-1", "frameworks-demo", "internal-1", "tenant-system",
+					"mist_native",
+					"ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
+					"exec", true, int32(1),
+					"{cluster-edge}",
+				).
+				AddRow(
+					"stream-2", "linear-2", "internal-2", "tenant-system",
+					"mist_native",
+					"ts-exec:cat /dev/null",
+					"exec", true, int32(2),
+					"{cluster-edge}",
+				))
+
+		server := &CommodoreServer{db: db, logger: logrus.New()}
+		resp, err := server.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: "cluster-edge"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.Streams) != 2 {
+			t.Fatalf("want 2 streams, got %d", len(resp.Streams))
+		}
+		if resp.Streams[0].GetStreamId() != "stream-1" || resp.Streams[0].GetPlacementCount() != 1 {
+			t.Fatalf("stream-1 not populated correctly: %+v", resp.Streams[0])
+		}
+		if resp.Streams[1].GetPlacementCount() != 2 ||
+			len(resp.Streams[1].GetAllowedClusterIds()) != 1 ||
+			resp.Streams[1].GetAllowedClusterIds()[0] != "cluster-edge" {
+			t.Fatalf("stream-2 not populated correctly: %+v", resp.Streams[1])
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+}
+
 func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *testing.T) {
 	merged := mergeTenantResourceLimits(
 		&pb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},

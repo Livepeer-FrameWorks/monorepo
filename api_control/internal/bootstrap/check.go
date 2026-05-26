@@ -36,5 +36,13 @@ func Check(desired DesiredState) error {
 			return fmt.Errorf("pull_stream %q: %w", ps.PlaybackID, err)
 		}
 	}
+	for _, ms := range desired.Commodore.MistNativeStreams {
+		if err := validateMistNativeShape(ms); err != nil {
+			return err
+		}
+		if _, err := AliasFromRef(ms.OwnerTenant.Ref); err != nil {
+			return fmt.Errorf("mist_native_stream %q: %w", ms.PlaybackID, err)
+		}
+	}
 	return nil
 }

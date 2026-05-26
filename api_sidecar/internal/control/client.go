@@ -175,6 +175,9 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
 	}
 	initTriggerForwarder(logger)
+	// Recover managed-stream ownership from Mist's persisted config so
+	// Foghorn-issued Retract commands work across sidecar restarts.
+	HydrateAppliedManagedStreamsFromMist(logger)
 	go func() {
 		backoff := time.Second
 		const maxBackoff = 30 * time.Second
@@ -759,22 +762,23 @@ func runClient(addr string, logger logging.Logger) error {
 	hwSpecs := sidecarcfg.DetectHardware(cfg.StorageLocalPath)
 
 	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
-		NodeId:          nodeID,
-		Roles:           roles,
-		CapIngest:       cfg.CapIngest,
-		CapEdge:         cfg.CapEdge,
-		CapStorage:      cfg.CapStorage,
-		CapProcessing:   cfg.CapProcessing,
-		StorageLocal:    cfg.StorageLocalPath,
-		StorageBucket:   cfg.StorageS3Bucket,
-		StoragePrefix:   cfg.StorageS3Prefix,
-		EnrollmentToken: cfg.EnrollmentToken,
-		Fingerprint:     collectNodeFingerprint(),
-		CpuCores:        &hwSpecs.CPUCores,
-		MemoryGb:        &hwSpecs.MemoryGB,
-		DiskGb:          &hwSpecs.DiskGB,
-		RequestedMode:   parseRequestedMode(cfg.RequestedMode),
-		RelayBaseUrl:    relayBaseURL(),
+		NodeId:                nodeID,
+		Roles:                 roles,
+		CapIngest:             cfg.CapIngest,
+		CapEdge:               cfg.CapEdge,
+		CapStorage:            cfg.CapStorage,
+		CapProcessing:         cfg.CapProcessing,
+		StorageLocal:          cfg.StorageLocalPath,
+		StorageBucket:         cfg.StorageS3Bucket,
+		StoragePrefix:         cfg.StorageS3Prefix,
+		EnrollmentToken:       cfg.EnrollmentToken,
+		Fingerprint:           collectNodeFingerprint(),
+		CpuCores:              &hwSpecs.CPUCores,
+		MemoryGb:              &hwSpecs.MemoryGB,
+		DiskGb:                &hwSpecs.DiskGB,
+		RequestedMode:         parseRequestedMode(cfg.RequestedMode),
+		RelayBaseUrl:          relayBaseURL(),
+		AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -925,6 +929,10 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleActivatePushTargets(logger, x.ActivatePushTargets)
 			case *pb.ControlMessage_DeactivatePushTargets:
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
+			case *pb.ControlMessage_ApplyManagedStream:
+				go handleApplyManagedStream(logger, x.ApplyManagedStream)
+			case *pb.ControlMessage_RetractManagedStream:
+				go handleRetractManagedStream(logger, x.RetractManagedStream)
 			case *pb.ControlMessage_ValidateEdgeTokenResponse:
 				handleValidateEdgeTokenResponse(msg.GetRequestId(), x.ValidateEdgeTokenResponse)
 			case *pb.ControlMessage_EdgeMistAdminSessionResponse:
@@ -946,7 +954,20 @@ func runClient(addr string, logger logging.Logger) error {
 	for {
 		select {
 		case <-hbTicker.C:
-			_ = stream.Send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Heartbeat{Heartbeat: &pb.Heartbeat{NodeId: nodeID}}})
+			// Heartbeat carries the verified-applied managed-streams
+			// snapshot Foghorn uses as ground truth for the reconciler.
+			// A Send error means the bidi stream is broken; surface it
+			// so the outer Start loop reconnects (Foghorn will then
+			// receive a fresh snapshot via the new Register).
+			if err := stream.Send(&pb.ControlMessage{
+				SentAt: timestamppb.Now(),
+				Payload: &pb.ControlMessage_Heartbeat{Heartbeat: &pb.Heartbeat{
+					NodeId:                nodeID,
+					AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
+				}},
+			}); err != nil {
+				return fmt.Errorf("heartbeat send: %w", err)
+			}
 		case e := <-errCh:
 			return e
 		}

@@ -234,10 +234,18 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
         ),
 
     -- ===== INGEST MODE =====
-    -- 'push': encoder pushes via RTMP/WHIP/SRT (default).
-    -- 'pull': MistServer pulls from a configured upstream URI; see commodore.stream_pull_sources.
+    -- 'push':        encoder pushes via RTMP/WHIP/SRT (default).
+    -- 'pull':        MistServer pulls from a configured upstream URI; see commodore.stream_pull_sources.
+    -- 'mist_native': MistServer generates the source via a literal config
+    --                (ts-exec:..., file://..., playlist:...); see commodore.stream_mist_sources.
+    --                Concrete config, no wildcard prefix in Mist stream name.
     ingest_mode TEXT NOT NULL DEFAULT 'push'
-        CONSTRAINT streams_ingest_mode_chk CHECK (ingest_mode IN ('push', 'pull')),
+        CONSTRAINT streams_ingest_mode_chk CHECK (ingest_mode IN ('push', 'pull', 'mist_native')),
+
+    -- ===== ALWAYS-ON =====
+    -- When true, Foghorn keeps the stream's input running on the elected
+    -- edge regardless of viewer demand.
+    always_on BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- ===== PER-STREAM RETENTION OVERRIDES =====
     -- NULL = inherit tenant default; 0 = no auto-expire (infinite).
@@ -246,8 +254,18 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     clip_retention_days_override INTEGER,
 
     -- ===== CLUSTER TRACKING =====
-    -- Set by ValidateStreamKey when Foghorn reports its cluster_id during ingest.
-    -- Used by Commodore to route stream-scoped commands (CreateClip) to the correct cluster.
+    -- Cluster currently sinking the stream's ingest, recorded by Foghorn:
+    --   * push streams      → set by ValidateStreamKey on PUSH_REWRITE
+    --   * mist_native       → set by RecordStreamActiveCluster after the
+    --                          managed-stream Apply is verified by the
+    --                          sidecar's Heartbeat-borne applied set
+    --                          (cleared by ClearStreamActiveCluster on
+    --                          verified retract)
+    -- Both writers share the 30 s contended-update guard so a stale claim
+    -- cannot overwrite a fresh lease from a different cluster.
+    -- Consumed by Commodore to route stream-scoped commands (CreateClip,
+    -- etc.) and by ResolvePlaybackID/ResolveInternalName to override the
+    -- tenant default origin when set.
     active_ingest_cluster_id VARCHAR(100),
     active_ingest_cluster_updated_at TIMESTAMP,
 
@@ -288,6 +306,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_streams_playback_id_ci
     ON commodore.streams((lower(playback_id::text)));
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_ingest_mode
     ON commodore.streams(ingest_mode) WHERE ingest_mode <> 'push';
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_always_on
+    ON commodore.streams(ingest_mode) WHERE always_on = TRUE;
 CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stream_keys(stream_id);
 
 -- ============================================================================
@@ -313,6 +333,47 @@ CREATE TABLE IF NOT EXISTS commodore.stream_pull_sources (
     -- render, bootstrap apply, CreateStream/UpdateStream, viewer routing,
     -- /source, and the STREAM_SOURCE trigger via pkg/pullsource.FilterPlacementClusters.
     allowed_cluster_ids TEXT[] NOT NULL DEFAULT '{}',
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- MIST-NATIVE STREAMS — concrete source config for ingest_mode='mist_native'
+-- ============================================================================
+-- One row per Mist-native stream. Foghorn reads these on its managed-stream
+-- reconciler tick, runs deterministic-hash placement against
+-- allowed_cluster_ids, and sends an ApplyManagedStream command on the
+-- control channel to the elected node. Sidecar issues mist.AddStreams with
+-- the literal source; MistServer's controller spawns the input immediately
+-- when always_on is true.
+--
+-- source_kind discriminates safe input forms. Bootstrap render restricts
+-- mist_native streams of every source_kind to the operator/system tenant.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS commodore.stream_mist_sources (
+    stream_id UUID PRIMARY KEY REFERENCES commodore.streams(id) ON DELETE CASCADE,
+
+    source_spec TEXT NOT NULL,                    -- literal Mist source string
+    source_kind TEXT NOT NULL
+        CONSTRAINT stream_mist_sources_kind_chk CHECK (source_kind IN ('file', 'playlist', 'exec')),
+
+    placement_count INTEGER NOT NULL DEFAULT 1
+        CONSTRAINT stream_mist_sources_placement_chk CHECK (placement_count >= 1),
+    -- allowed_cluster_ids currently names exactly one source cluster.
+    -- Foghorn elects an edge inside that cluster and records it in
+    -- commodore.streams.active_ingest_cluster_id; federation routes viewers
+    -- cross-cluster from that elected source. The array shape is retained for
+    -- pull-stream symmetry, but the table contract matches the current runtime.
+    allowed_cluster_ids TEXT[] NOT NULL
+        CONSTRAINT stream_mist_sources_allowed_clusters_chk
+            CHECK (cardinality(allowed_cluster_ids) = 1),
+
+    -- Informational: bootstrap declares expected on-disk asset paths; Ansible
+    -- places the actual files. Reconcilers do not validate file presence;
+    -- per-feedback Ansible owns proof.
+    local_asset_paths JSONB NOT NULL DEFAULT '[]'::JSONB,
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -662,6 +723,19 @@ CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
     tenant_id UUID PRIMARY KEY,
     processes_live JSONB,           -- Override for live stream processes (NULL = use tier default)
     processes_vod JSONB,            -- Override for VOD processes (NULL = use tier default)
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Per-stream override layer. Resolution order in resolveProcessesJSON is:
+--   stream override (this table)
+--   tenant override (commodore.tenant_processing_config)
+--   tier default (purser.billing_tiers.processes_live/_vod)
+-- Sibling to tenant_processing_config rather than a column on commodore.streams
+-- so the processing-policy authority stays in one place.
+CREATE TABLE IF NOT EXISTS commodore.stream_processing_config (
+    stream_id UUID PRIMARY KEY REFERENCES commodore.streams(id) ON DELETE CASCADE,
+    processes_live JSONB,
+    processes_vod  JSONB,
     updated_at TIMESTAMP DEFAULT NOW()
 );
 

@@ -107,6 +107,8 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"processing_job", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &pb.ProcessingJobRequest{}}}, "processing_job_request"},
 		{"freeze", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_Freeze{Freeze: &pb.FreezeRequest{}}}, "freeze_request"},
 		{"desired_state_update", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: &pb.DesiredStateUpdate{}}}, "desired_state_update"},
+		{"apply_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &pb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
+		{"retract_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &pb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

@@ -171,16 +171,25 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		}
 	}
 
-	// 3. Live view keys (playback_id) — prefix is kind-aware.
-	// push streams → live+<internal>; pull streams → pull+<internal>.
+	// 3. Live view keys (playback_id) — internal name shape is ingest-mode aware.
+	// push streams      → live+<internal>      (wildcard adapter; resolved at PUSH_REWRITE)
+	// pull streams      → pull+<internal>      (wildcard adapter; STREAM_SOURCE resolves upstream)
+	// mist_native       → <internal> (bare)    (concrete Mist config; literal source set by sidecar Apply)
+	// Bare names are reserved for concrete configs; new ingest modes must
+	// not introduce a fourth `<word>+` prefix without explicit design review.
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil {
-			prefix := "live+"
-			if resp.GetIngestMode() == "pull" {
-				prefix = "pull+"
+			var internalName string
+			switch resp.GetIngestMode() {
+			case "pull":
+				internalName = "pull+" + resp.InternalName
+			case "mist_native":
+				internalName = resp.InternalName
+			default:
+				internalName = "live+" + resp.InternalName
 			}
 			return &StreamTarget{
-				InternalName:      prefix + resp.InternalName,
+				InternalName:      internalName,
 				IsVod:             false,
 				TenantID:          resp.TenantId,
 				StreamID:          resp.StreamId,

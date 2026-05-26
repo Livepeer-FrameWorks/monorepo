@@ -90,6 +90,10 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalFreezeRequest(req.TargetNodeId, cmd.Freeze)
 	case *pb.ForwardCommandRequest_DesiredStateUpdate:
 		err = control.SendLocalDesiredStateUpdate(req.TargetNodeId, cmd.DesiredStateUpdate)
+	case *pb.ForwardCommandRequest_ApplyManagedStream:
+		err = control.SendLocalApplyManagedStream(req.TargetNodeId, cmd.ApplyManagedStream)
+	case *pb.ForwardCommandRequest_RetractManagedStream:
+		err = control.SendLocalRetractManagedStream(req.TargetNodeId, cmd.RetractManagedStream)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}

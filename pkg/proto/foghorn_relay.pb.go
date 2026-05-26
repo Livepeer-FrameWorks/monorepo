@@ -42,6 +42,8 @@ type ForwardCommandRequest struct {
 	//	*ForwardCommandRequest_Freeze
 	//	*ForwardCommandRequest_DesiredStateUpdate
 	//	*ForwardCommandRequest_InvalidateSessions
+	//	*ForwardCommandRequest_ApplyManagedStream
+	//	*ForwardCommandRequest_RetractManagedStream
 	Command       isForwardCommandRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -235,6 +237,24 @@ func (x *ForwardCommandRequest) GetInvalidateSessions() *InvalidateSessionsReque
 	return nil
 }
 
+func (x *ForwardCommandRequest) GetApplyManagedStream() *ApplyManagedStream {
+	if x != nil {
+		if x, ok := x.Command.(*ForwardCommandRequest_ApplyManagedStream); ok {
+			return x.ApplyManagedStream
+		}
+	}
+	return nil
+}
+
+func (x *ForwardCommandRequest) GetRetractManagedStream() *RetractManagedStream {
+	if x != nil {
+		if x, ok := x.Command.(*ForwardCommandRequest_RetractManagedStream); ok {
+			return x.RetractManagedStream
+		}
+	}
+	return nil
+}
+
 type isForwardCommandRequest_Command interface {
 	isForwardCommandRequest_Command()
 }
@@ -303,6 +323,18 @@ type ForwardCommandRequest_InvalidateSessions struct {
 	InvalidateSessions *InvalidateSessionsRequest `protobuf:"bytes,25,opt,name=invalidate_sessions,json=invalidateSessions,proto3,oneof"`
 }
 
+type ForwardCommandRequest_ApplyManagedStream struct {
+	// Managed-stream Apply/Retract: routed via the relay when the elected
+	// node is connected to a peer Foghorn. Same local-first-then-relay
+	// pattern as ClipPull/DVRStart so multi-Foghorn-per-cluster deployments
+	// work correctly.
+	ApplyManagedStream *ApplyManagedStream `protobuf:"bytes,26,opt,name=apply_managed_stream,json=applyManagedStream,proto3,oneof"`
+}
+
+type ForwardCommandRequest_RetractManagedStream struct {
+	RetractManagedStream *RetractManagedStream `protobuf:"bytes,27,opt,name=retract_managed_stream,json=retractManagedStream,proto3,oneof"`
+}
+
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_ClipPull) isForwardCommandRequest_Command() {}
@@ -334,6 +366,10 @@ func (*ForwardCommandRequest_Freeze) isForwardCommandRequest_Command() {}
 func (*ForwardCommandRequest_DesiredStateUpdate) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_InvalidateSessions) isForwardCommandRequest_Command() {}
+
+func (*ForwardCommandRequest_ApplyManagedStream) isForwardCommandRequest_Command() {}
+
+func (*ForwardCommandRequest_RetractManagedStream) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -391,7 +427,7 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xe2\t\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\x9a\v\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
@@ -414,7 +450,9 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x0eprocessing_job\x18\x16 \x01(\v2%.helmsmancontrol.ProcessingJobRequestH\x00R\rprocessingJob\x128\n" +
 	"\x06freeze\x18\x17 \x01(\v2\x1e.helmsmancontrol.FreezeRequestH\x00R\x06freeze\x12W\n" +
 	"\x14desired_state_update\x18\x18 \x01(\v2#.helmsmancontrol.DesiredStateUpdateH\x00R\x12desiredStateUpdate\x12]\n" +
-	"\x13invalidate_sessions\x18\x19 \x01(\v2*.helmsmancontrol.InvalidateSessionsRequestH\x00R\x12invalidateSessionsB\t\n" +
+	"\x13invalidate_sessions\x18\x19 \x01(\v2*.helmsmancontrol.InvalidateSessionsRequestH\x00R\x12invalidateSessions\x12W\n" +
+	"\x14apply_managed_stream\x18\x1a \x01(\v2#.helmsmancontrol.ApplyManagedStreamH\x00R\x12applyManagedStream\x12]\n" +
+	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStreamB\t\n" +
 	"\acommand\"L\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
@@ -454,6 +492,8 @@ var file_foghorn_relay_proto_goTypes = []any{
 	(*FreezeRequest)(nil),             // 15: helmsmancontrol.FreezeRequest
 	(*DesiredStateUpdate)(nil),        // 16: helmsmancontrol.DesiredStateUpdate
 	(*InvalidateSessionsRequest)(nil), // 17: helmsmancontrol.InvalidateSessionsRequest
+	(*ApplyManagedStream)(nil),        // 18: helmsmancontrol.ApplyManagedStream
+	(*RetractManagedStream)(nil),      // 19: helmsmancontrol.RetractManagedStream
 }
 var file_foghorn_relay_proto_depIdxs = []int32{
 	2,  // 0: foghorn_relay.ForwardCommandRequest.config_seed:type_name -> helmsmancontrol.ConfigSeed
@@ -472,13 +512,15 @@ var file_foghorn_relay_proto_depIdxs = []int32{
 	15, // 13: foghorn_relay.ForwardCommandRequest.freeze:type_name -> helmsmancontrol.FreezeRequest
 	16, // 14: foghorn_relay.ForwardCommandRequest.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
 	17, // 15: foghorn_relay.ForwardCommandRequest.invalidate_sessions:type_name -> helmsmancontrol.InvalidateSessionsRequest
-	0,  // 16: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 17: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	17, // [17:18] is the sub-list for method output_type
-	16, // [16:17] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	18, // 16: foghorn_relay.ForwardCommandRequest.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
+	19, // 17: foghorn_relay.ForwardCommandRequest.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
+	0,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	19, // [19:20] is the sub-list for method output_type
+	18, // [18:19] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -504,6 +546,8 @@ func file_foghorn_relay_proto_init() {
 		(*ForwardCommandRequest_Freeze)(nil),
 		(*ForwardCommandRequest_DesiredStateUpdate)(nil),
 		(*ForwardCommandRequest_InvalidateSessions)(nil),
+		(*ForwardCommandRequest_ApplyManagedStream)(nil),
+		(*ForwardCommandRequest_RetractManagedStream)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

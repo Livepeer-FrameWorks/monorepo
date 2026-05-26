@@ -654,6 +654,10 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 		return "freeze"
 	case *pb.ForwardCommandRequest_DesiredStateUpdate:
 		return "desired_state_update"
+	case *pb.ForwardCommandRequest_ApplyManagedStream:
+		return "apply_managed_stream"
+	case *pb.ForwardCommandRequest_RetractManagedStream:
+		return "retract_managed_stream"
 	default:
 		return "unknown"
 	}
@@ -965,6 +969,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				if canonicalNodeID != "" && canonicalNodeID != nodeID {
 					state.DefaultManager().MarkNodeDisconnected(canonicalNodeID)
 				}
+				// Drop managed-stream Apply state for the disconnected node
+				// so the next reconciler tick re-emits Apply on reconnect.
+				ForgetManagedStreamLastSent(nodeID)
+				if canonicalNodeID != "" && canonicalNodeID != nodeID {
+					ForgetManagedStreamLastSent(canonicalNodeID)
+				}
 				if rs := GetRedisStore(); rs != nil {
 					if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
 						registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
@@ -1138,6 +1148,21 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			}
 			registry.mu.Unlock()
 
+			// Hydrate the managed-stream lastSent map from the sidecar's
+			// post-restart applied set so a Foghorn restart followed by a
+			// DB-row removal still emits a Retract for the orphaned stream.
+			// Runs after canonical-node-ID resolution so the hydrated
+			// entries land under the same key connectedNodesInCluster will
+			// later report; raw nodeID would miss when fingerprint
+			// resolution rewrites the identifier.
+			if applied := x.Register.GetAppliedManagedStreams(); len(applied) > 0 {
+				hydrationID := canonicalNodeID
+				if hydrationID == "" {
+					hydrationID = nodeID
+				}
+				HydrateManagedStreamLastSentForNode(hydrationID, applied)
+			}
+
 			// Determine operational mode: DB-persisted wins over Helmsman's request
 			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
 			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode, clusterID)
@@ -1274,6 +1299,14 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				state.DefaultManager().TouchNode(nodeID, true)
 				if canonicalNodeID != nodeID {
 					state.DefaultManager().TouchNode(canonicalNodeID, true)
+				}
+				// Refresh the verified-applied set for the managed-stream
+				// reconciler: Heartbeat carries the sidecar's current
+				// applied snapshot so Foghorn detects Mist-add failures
+				// (where the wire Apply succeeded but Mist rejected the
+				// config) and re-emits on the next reconciler tick.
+				if hb := x.Heartbeat; hb != nil {
+					UpdateVerifiedAppliedFromHeartbeat(canonicalNodeID, hb.GetAppliedManagedStreams())
 				}
 				// HA: refresh connection ownership TTL
 				if rs := GetRedisStore(); rs != nil {

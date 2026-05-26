@@ -21,6 +21,10 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	InternalService_ValidateStreamKey_FullMethodName               = "/commodore.InternalService/ValidateStreamKey"
+	InternalService_ResolveStreamContext_FullMethodName            = "/commodore.InternalService/ResolveStreamContext"
+	InternalService_ListManagedStreams_FullMethodName              = "/commodore.InternalService/ListManagedStreams"
+	InternalService_RecordStreamActiveCluster_FullMethodName       = "/commodore.InternalService/RecordStreamActiveCluster"
+	InternalService_ClearStreamActiveCluster_FullMethodName        = "/commodore.InternalService/ClearStreamActiveCluster"
 	InternalService_ResolvePlaybackID_FullMethodName               = "/commodore.InternalService/ResolvePlaybackID"
 	InternalService_ResolvePullSourceByInternalName_FullMethodName = "/commodore.InternalService/ResolvePullSourceByInternalName"
 	InternalService_ResolvePlaybackPolicy_FullMethodName           = "/commodore.InternalService/ResolvePlaybackPolicy"
@@ -76,6 +80,47 @@ type InternalServiceClient interface {
 	// Called by Foghorn on PUSH_REWRITE to validate stream key
 	// Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
 	ValidateStreamKey(ctx context.Context, in *ValidateStreamKeyRequest, opts ...grpc.CallOption) (*ValidateStreamKeyResponse, error)
+	// Stream-key-less admission/materialization authority. Returns the same
+	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
+	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
+	// / playback_id / internal_name. Used by Foghorn at per-stream Apply time
+	// for ingest modes that bypass PUSH_REWRITE (notably mist_native), so the
+	// same cache writes happen without a stream key.
+	//
+	// Admission scope: `admitted` enforces user-active, cluster entitlement /
+	// health, tenant suspension, and negative balance. It does NOT enforce
+	// free-tier load or per-tenant stream-count caps (those are Foghorn-side
+	// state in the push path); the facts needed to layer those checks
+	// caller-side are returned in the response. This RPC is currently used
+	// only for operator/system-tenant managed streams (see render-layer gate
+	// in cli/pkg/bootstrap/render.go: mistNativeStreamToRendered), so the
+	// missing caller-side gates do not affect customer billing today. Adding
+	// tenant-owned managed streams requires implementing those caller-side
+	// gates before relaxing that ownership constraint.
+	ResolveStreamContext(ctx context.Context, in *ResolveStreamContextRequest, opts ...grpc.CallOption) (*ResolveStreamContextResponse, error)
+	// Lists every mist_native always_on stream whose single allowed source
+	// cluster includes the caller's cluster_id. The repeated field is retained
+	// for pull-stream symmetry, but current mist_native bootstrap/schema
+	// validation requires exactly one entry.
+	// Per-stream admission + policy resolution then go through
+	// ResolveStreamContext above.
+	// Stable ordering by stream_id keeps reconciler diffs deterministic.
+	ListManagedStreams(ctx context.Context, in *ListManagedStreamsRequest, opts ...grpc.CallOption) (*ListManagedStreamsResponse, error)
+	// Records the cluster currently serving a managed stream. Foghorn calls
+	// this after a successful ApplyManagedStream so commodore.streams.active_
+	// ingest_cluster_id reflects the elected placement: without it, public
+	// playback/control routing falls back to the tenant's default route and
+	// a managed stream pinned to a non-default cluster gets routed to the
+	// wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
+	RecordStreamActiveCluster(ctx context.Context, in *RecordStreamActiveClusterRequest, opts ...grpc.CallOption) (*RecordStreamActiveClusterResponse, error)
+	// Clears commodore.streams.active_ingest_cluster_id for a managed stream
+	// once Foghorn has confirmed the Mist config is gone (verified retract).
+	// Without this, a disabled / suspended / removed managed stream keeps
+	// routing pinned at its old cluster until some unrelated path overwrites
+	// the column. Conditional: only clears when the recorded cluster matches
+	// the caller's expected_cluster_id, so concurrent placement on a peer
+	// cluster cannot have its pin nuked by a stale retract.
+	ClearStreamActiveCluster(ctx context.Context, in *ClearStreamActiveClusterRequest, opts ...grpc.CallOption) (*ClearStreamActiveClusterResponse, error)
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(ctx context.Context, in *ResolvePlaybackIDRequest, opts ...grpc.CallOption) (*ResolvePlaybackIDResponse, error)
@@ -242,6 +287,46 @@ func (c *internalServiceClient) ValidateStreamKey(ctx context.Context, in *Valid
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateStreamKeyResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateStreamKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ResolveStreamContext(ctx context.Context, in *ResolveStreamContextRequest, opts ...grpc.CallOption) (*ResolveStreamContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveStreamContextResponse)
+	err := c.cc.Invoke(ctx, InternalService_ResolveStreamContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListManagedStreams(ctx context.Context, in *ListManagedStreamsRequest, opts ...grpc.CallOption) (*ListManagedStreamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListManagedStreamsResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListManagedStreams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RecordStreamActiveCluster(ctx context.Context, in *RecordStreamActiveClusterRequest, opts ...grpc.CallOption) (*RecordStreamActiveClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordStreamActiveClusterResponse)
+	err := c.cc.Invoke(ctx, InternalService_RecordStreamActiveCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ClearStreamActiveCluster(ctx context.Context, in *ClearStreamActiveClusterRequest, opts ...grpc.CallOption) (*ClearStreamActiveClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearStreamActiveClusterResponse)
+	err := c.cc.Invoke(ctx, InternalService_ClearStreamActiveCluster_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -697,6 +782,47 @@ type InternalServiceServer interface {
 	// Called by Foghorn on PUSH_REWRITE to validate stream key
 	// Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
 	ValidateStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error)
+	// Stream-key-less admission/materialization authority. Returns the same
+	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
+	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
+	// / playback_id / internal_name. Used by Foghorn at per-stream Apply time
+	// for ingest modes that bypass PUSH_REWRITE (notably mist_native), so the
+	// same cache writes happen without a stream key.
+	//
+	// Admission scope: `admitted` enforces user-active, cluster entitlement /
+	// health, tenant suspension, and negative balance. It does NOT enforce
+	// free-tier load or per-tenant stream-count caps (those are Foghorn-side
+	// state in the push path); the facts needed to layer those checks
+	// caller-side are returned in the response. This RPC is currently used
+	// only for operator/system-tenant managed streams (see render-layer gate
+	// in cli/pkg/bootstrap/render.go: mistNativeStreamToRendered), so the
+	// missing caller-side gates do not affect customer billing today. Adding
+	// tenant-owned managed streams requires implementing those caller-side
+	// gates before relaxing that ownership constraint.
+	ResolveStreamContext(context.Context, *ResolveStreamContextRequest) (*ResolveStreamContextResponse, error)
+	// Lists every mist_native always_on stream whose single allowed source
+	// cluster includes the caller's cluster_id. The repeated field is retained
+	// for pull-stream symmetry, but current mist_native bootstrap/schema
+	// validation requires exactly one entry.
+	// Per-stream admission + policy resolution then go through
+	// ResolveStreamContext above.
+	// Stable ordering by stream_id keeps reconciler diffs deterministic.
+	ListManagedStreams(context.Context, *ListManagedStreamsRequest) (*ListManagedStreamsResponse, error)
+	// Records the cluster currently serving a managed stream. Foghorn calls
+	// this after a successful ApplyManagedStream so commodore.streams.active_
+	// ingest_cluster_id reflects the elected placement: without it, public
+	// playback/control routing falls back to the tenant's default route and
+	// a managed stream pinned to a non-default cluster gets routed to the
+	// wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
+	RecordStreamActiveCluster(context.Context, *RecordStreamActiveClusterRequest) (*RecordStreamActiveClusterResponse, error)
+	// Clears commodore.streams.active_ingest_cluster_id for a managed stream
+	// once Foghorn has confirmed the Mist config is gone (verified retract).
+	// Without this, a disabled / suspended / removed managed stream keeps
+	// routing pinned at its old cluster until some unrelated path overwrites
+	// the column. Conditional: only clears when the recorded cluster matches
+	// the caller's expected_cluster_id, so concurrent placement on a peer
+	// cluster cannot have its pin nuked by a stale retract.
+	ClearStreamActiveCluster(context.Context, *ClearStreamActiveClusterRequest) (*ClearStreamActiveClusterResponse, error)
 	// Called by edge nodes to resolve playback ID to internal name
 	// Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
 	ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error)
@@ -861,6 +987,18 @@ type UnimplementedInternalServiceServer struct{}
 
 func (UnimplementedInternalServiceServer) ValidateStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateStreamKey not implemented")
+}
+func (UnimplementedInternalServiceServer) ResolveStreamContext(context.Context, *ResolveStreamContextRequest) (*ResolveStreamContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveStreamContext not implemented")
+}
+func (UnimplementedInternalServiceServer) ListManagedStreams(context.Context, *ListManagedStreamsRequest) (*ListManagedStreamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListManagedStreams not implemented")
+}
+func (UnimplementedInternalServiceServer) RecordStreamActiveCluster(context.Context, *RecordStreamActiveClusterRequest) (*RecordStreamActiveClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordStreamActiveCluster not implemented")
+}
+func (UnimplementedInternalServiceServer) ClearStreamActiveCluster(context.Context, *ClearStreamActiveClusterRequest) (*ClearStreamActiveClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearStreamActiveCluster not implemented")
 }
 func (UnimplementedInternalServiceServer) ResolvePlaybackID(context.Context, *ResolvePlaybackIDRequest) (*ResolvePlaybackIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolvePlaybackID not implemented")
@@ -1029,6 +1167,78 @@ func _InternalService_ValidateStreamKey_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateStreamKey(ctx, req.(*ValidateStreamKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ResolveStreamContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveStreamContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ResolveStreamContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ResolveStreamContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ResolveStreamContext(ctx, req.(*ResolveStreamContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListManagedStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListManagedStreamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListManagedStreams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListManagedStreams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListManagedStreams(ctx, req.(*ListManagedStreamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RecordStreamActiveCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordStreamActiveClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RecordStreamActiveCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RecordStreamActiveCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RecordStreamActiveCluster(ctx, req.(*RecordStreamActiveClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ClearStreamActiveCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearStreamActiveClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ClearStreamActiveCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ClearStreamActiveCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ClearStreamActiveCluster(ctx, req.(*ClearStreamActiveClusterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1835,6 +2045,22 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateStreamKey",
 			Handler:    _InternalService_ValidateStreamKey_Handler,
+		},
+		{
+			MethodName: "ResolveStreamContext",
+			Handler:    _InternalService_ResolveStreamContext_Handler,
+		},
+		{
+			MethodName: "ListManagedStreams",
+			Handler:    _InternalService_ListManagedStreams_Handler,
+		},
+		{
+			MethodName: "RecordStreamActiveCluster",
+			Handler:    _InternalService_RecordStreamActiveCluster_Handler,
+		},
+		{
+			MethodName: "ClearStreamActiveCluster",
+			Handler:    _InternalService_ClearStreamActiveCluster_Handler,
 		},
 		{
 			MethodName: "ResolvePlaybackID",

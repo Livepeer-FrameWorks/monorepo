@@ -275,7 +275,44 @@ message ControlMessage {
     // same stream.
     RelayResolveRequest relay_resolve_request = 140;
     RelayResolveResponse relay_resolve_response = 141;
+    // Foghorn -> Helmsman: concrete mist_native stream sync/unsync. Driven
+    // by Foghorn's managed-stream reconciler, not by ConfigSeed. Apply means
+    // "add/update this concrete Mist stream on this node now"; Retract means
+    // "remove it now". Sidecar handlers map to mist.AddStreams / DelStreams.
+    // Idempotent: re-Applying with identical fields is a no-op.
+    ApplyManagedStream apply_managed_stream = 160;
+    RetractManagedStream retract_managed_stream = 161;
   }
+}
+
+// ApplyManagedStream is sent by Foghorn to instruct Helmsman to add (or
+// update, if name already configured) a concrete mist_native stream config
+// on this node. Driven by Foghorn's reconciler after placement elects the
+// node for the stream and ResolveStreamContext admits it. Sidecar maps to
+// mist.AddStreams with `name` as the bare internal name (no live+/pull+
+// prefix — concrete configs use bare names, prefixes are reserved for
+// wildcard adapters), the literal `source`, and the tag set (always
+// includes "fw:managed:foghorn" so the sidecar can scope ownership).
+message ApplyManagedStream {
+  string name = 1;                // bare Mist stream name (== commodore.streams.internal_name)
+  string source = 2;              // literal Mist source string (ts-exec:..., file://..., etc.)
+  bool   always_on = 3;
+  bool   realtime = 4;
+  bool   stop_sessions = 5;
+  repeated string tags = 6;       // includes "fw:managed:foghorn" owner marker
+  string ingest_mode = 7;         // "mist_native" today
+  string stream_id = 8;           // commodore.streams.id; for logging/correlation
+  string tenant_id = 9;
+}
+
+// RetractManagedStream is sent by Foghorn to instruct Helmsman to remove a
+// concrete mist_native stream config. Sidecar maps to mist.DelStreams.
+// Idempotent: removing an absent stream is a no-op. Sidecar must only
+// retract names it Applied (sanity check via owner tag) — tenant push/pull
+// streams stay untouched even if a stale Retract for them is received.
+message RetractManagedStream {
+  string name = 1;                // bare Mist stream name
+  string stream_id = 2;           // commodore.streams.id; for logging/correlation
 }
 
 // ModeChangeRequest is sent by Helmsman when a local agent or CLI requests
@@ -412,6 +449,33 @@ message Register {
   // (e.g. http://helmsman:18007). Foghorn stamps STREAM_SOURCE responses
   // with this prefix so Mist always resolves to the right Helmsman.
   string relay_base_url = 16;
+  // Owner-tagged Mist streams currently configured on this node, as known
+  // to Helmsman after sidecar hydration. Foghorn uses this to seed its
+  // managed-stream lastSent map on (re)connect so a Foghorn restart does
+  // not lose track of streams it already provisioned. Without this, a
+  // restart + DB-row removal sequence would leave the Mist config in
+  // place forever because no Retract would ever fire.
+  repeated AppliedManagedStream applied_managed_streams = 17;
+}
+
+// AppliedManagedStream is a sidecar→Foghorn snapshot at (re)connect of one
+// managed Mist stream currently configured on the node. The Foghorn-side
+// reconciler seeds its lastSent map from this set so the next tick's
+// elected-vs-applied diff sees the stream and can issue a Retract if the
+// desired-state set no longer contains it.
+//
+// stream_id is the Foghorn lastSent map key. Without it, hydration would
+// land under the bare Mist name while the reconciler keys by stream_id,
+// and the next tick would Apply (under stream_id) then Retract (the
+// hydrated bare-name entry) the same physical stream — race-free path
+// requires the keys to match. Sidecar parses stream_id from the
+// `fw:stream:<stream_id>` tag both Apply and Mist-config hydration write.
+message AppliedManagedStream {
+  string name = 1;          // bare Mist stream name (== commodore.streams.internal_name)
+  string source = 2;        // literal Mist source string
+  bool   always_on = 3;
+  string ingest_mode = 4;
+  string stream_id = 5;     // commodore.streams.id; required when known
 }
 
 // NodeFingerprint carries stable identity hints from Helmsman.
@@ -507,6 +571,13 @@ message ControlError {
 
 message Heartbeat {
   string node_id = 1;
+  // Currently-applied managed Mist streams on this node. Foghorn's
+  // managed-stream reconciler uses this as ground truth (verified
+  // applied) — Apply / Retract are fire-and-forget on the control
+  // channel, so the reconciler gates active-cluster pinning and
+  // retract-completion on the next heartbeat's snapshot rather than
+  // assuming the wire-send means Mist actually landed the config.
+  repeated AppliedManagedStream applied_managed_streams = 2;
 }
 
 message MistTrigger {

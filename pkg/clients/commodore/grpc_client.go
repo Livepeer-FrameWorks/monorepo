@@ -62,7 +62,7 @@ type GRPCConfig struct {
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
@@ -209,6 +209,62 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, cl
 	}
 
 	return nil, err
+}
+
+// ListManagedStreams returns every mist_native always_on stream eligible to
+// run on the requested cluster. Foghorn's managed-stream reconciler calls
+// this each tick to build desired state; per-stream admission + cache writes
+// then go through ResolveStreamContext below.
+func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (*pb.ListManagedStreamsResponse, error) {
+	return c.internal.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: clusterID})
+}
+
+// RecordStreamActiveCluster pins the cluster currently serving a managed
+// stream so commodore.streams.active_ingest_cluster_id reflects the
+// elected placement. Called by Foghorn's reconciler after a successful
+// ApplyManagedStream; routing for public playback/control consults the
+// same column.
+func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, clusterID string) (*pb.RecordStreamActiveClusterResponse, error) {
+	return c.internal.RecordStreamActiveCluster(ctx, &pb.RecordStreamActiveClusterRequest{
+		StreamId:  streamID,
+		ClusterId: clusterID,
+	})
+}
+
+// ClearStreamActiveCluster nulls commodore.streams.active_ingest_cluster_id
+// for a managed stream that has been verified retracted from Mist.
+// expected_cluster_id is the cluster the caller believes is currently
+// recorded; the update is conditional so a stale retract cannot wipe a
+// fresher claim from a peer cluster.
+func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*pb.ClearStreamActiveClusterResponse, error) {
+	return c.internal.ClearStreamActiveCluster(ctx, &pb.ClearStreamActiveClusterRequest{
+		StreamId:          streamID,
+		ExpectedClusterId: expectedClusterID,
+	})
+}
+
+// ResolveStreamContext returns the admission/materialization fact set for a
+// stream identified by stream_id, playback_id, or internal_name. Called by
+// Foghorn at per-stream Apply time for ingest modes that bypass
+// PUSH_REWRITE (notably mist_native), so the same admission gates and cache
+// writes can happen without a stream key.
+//
+// Pass exactly one identifier; the others must be empty.
+func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*pb.ResolveStreamContextResponse, error) {
+	req := &pb.ResolveStreamContextRequest{
+		ClusterId: clusterID,
+	}
+	switch {
+	case streamID != "":
+		req.Identifier = &pb.ResolveStreamContextRequest_StreamId{StreamId: streamID}
+	case playbackID != "":
+		req.Identifier = &pb.ResolveStreamContextRequest_PlaybackId{PlaybackId: playbackID}
+	case internalName != "":
+		req.Identifier = &pb.ResolveStreamContextRequest_InternalName{InternalName: internalName}
+	default:
+		return nil, fmt.Errorf("ResolveStreamContext requires exactly one of stream_id / playback_id / internal_name")
+	}
+	return c.internal.ResolveStreamContext(ctx, req)
 }
 
 // ResolvePlaybackID resolves a playback ID to internal stream name

@@ -709,6 +709,8 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"processing_job":          func() error { return SendProcessingJob("node-1", &pb.ProcessingJobRequest{}) },
 		"freeze":                  func() error { return SendFreezeRequest("node-1", &pb.FreezeRequest{}) },
 		"desired_state_update":    func() error { return SendDesiredStateUpdate("node-1", &pb.DesiredStateUpdate{}) },
+		"apply_managed_stream":    func() error { return SendApplyManagedStream("node-1", &pb.ApplyManagedStream{Name: "demo"}) },
+		"retract_managed_stream":  func() error { return SendRetractManagedStream("node-1", &pb.RetractManagedStream{Name: "demo"}) },
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

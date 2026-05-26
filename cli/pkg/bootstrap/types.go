@@ -282,7 +282,8 @@ type PurserSection struct {
 // CommodoreSection carries declarative state for resources Commodore owns at
 // bootstrap time.
 type CommodoreSection struct {
-	PullStreams []PullStream `yaml:"pull_streams,omitempty"`
+	PullStreams       []PullStream       `yaml:"pull_streams,omitempty"`
+	MistNativeStreams []MistNativeStream `yaml:"mist_native_streams,omitempty"`
 }
 
 // PullStream is an operator-owned pull-input stream provisioned at bootstrap.
@@ -329,9 +330,95 @@ type PullStreamRendered struct {
 	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
 }
 
+// MistNativeStream is an operator-owned stream whose Mist `source` is a
+// literal value (e.g. ts-exec:ffmpeg ...) and which Mist generates itself
+// rather than pulling. Foghorn elects an eligible edge from the one allowed
+// source cluster (stable-hash placement, PlacementCount nodes), seeds the
+// concrete Mist config with always_on=true, and the Mist controller spawns the
+// input immediately.
+//
+// Stable key: PlaybackID. Reconciler must persist (playback_id, tenant_ref)
+// → stream UUID for idempotency across re-runs.
+type MistNativeStream struct {
+	PlaybackID  string    `yaml:"playback_id"`
+	OwnerTenant TenantRef `yaml:"owner_tenant"`
+	Title       string    `yaml:"title"`
+	Description string    `yaml:"description,omitempty"`
+
+	// Source is the literal Mist source string. SourceKind gates which prefixes
+	// are accepted at render: 'exec' requires ts-exec: prefix, 'file' requires
+	// file:// or absolute path, 'playlist' requires .pls/.m3u. Mist-native
+	// streams of any source_kind are restricted to the operator/system tenant
+	// (OwnerTenant must resolve to SystemTenantAlias).
+	Source     string `yaml:"source"`
+	SourceKind string `yaml:"source_kind"`
+
+	// AlwaysOn keeps the input running on the elected edge regardless of viewer
+	// demand. MistServer's controller honors this at config load.
+	AlwaysOn bool `yaml:"always_on"`
+
+	// IsRecordingEnabled drives auto-DVR materialization on the elected
+	// edge when the stream is admitted.
+	IsRecordingEnabled bool `yaml:"is_recording_enabled,omitempty"`
+
+	// ProcessPolicy is the per-stream MistServer process config (transcodes,
+	// thumbnails, sprite, etc.). When set, the reconciler writes it to
+	// commodore.stream_processing_config; when empty the stream inherits the
+	// tenant override or tier default. Free-form YAML mirroring the JSON
+	// MistServer expects so authors don't write JSON-in-YAML strings.
+	ProcessPolicy any `yaml:"process_policy,omitempty"`
+
+	// PlacementCount is the number of eligible edges Foghorn pins this stream
+	// to per reconciler tick. Default 1 = single elected edge. >1 elects
+	// N replicas within the allowed source cluster.
+	PlacementCount int `yaml:"placement_count,omitempty"`
+
+	// AllowedClusterIDs scopes which source cluster can serve this stream.
+	// The slice shape is retained for schema symmetry, but mist_native accepts
+	// exactly one cluster because cross-cluster source election is not
+	// implemented.
+	AllowedClusterIDs []string `yaml:"allowed_cluster_ids,omitempty"`
+
+	// LocalAssets declares files Ansible must place on every eligible edge.
+	// Informational at the bootstrap layer — reconciler writes them to
+	// stream_mist_sources.local_asset_paths for audit/observability, never
+	// validates on-disk state.
+	LocalAssets []MistNativeStreamAsset `yaml:"local_assets,omitempty"`
+
+	// Override = true on an Overlay item replaces the manifest-derived entry
+	// with the same PlaybackID. Ignored on Derived and Rendered.
+	Override bool `yaml:"override,omitempty"`
+}
+
+// MistNativeStreamAsset is one declared on-disk file for a Mist-native stream.
+type MistNativeStreamAsset struct {
+	Path   string `yaml:"path"`
+	Sha256 string `yaml:"sha256,omitempty"`
+	Note   string `yaml:"note,omitempty"`
+}
+
+// MistNativeStreamRendered mirrors MistNativeStream after secrets resolution.
+// The parallel shape exists so adding secret-ref fields later does not
+// require a separate rendered type.
+type MistNativeStreamRendered struct {
+	PlaybackID         string                  `yaml:"playback_id"`
+	OwnerTenant        TenantRef               `yaml:"owner_tenant"`
+	Title              string                  `yaml:"title"`
+	Description        string                  `yaml:"description,omitempty"`
+	Source             string                  `yaml:"source"`
+	SourceKind         string                  `yaml:"source_kind"`
+	AlwaysOn           bool                    `yaml:"always_on"`
+	IsRecordingEnabled bool                    `yaml:"is_recording_enabled,omitempty"`
+	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
+	PlacementCount     int                     `yaml:"placement_count,omitempty"`
+	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`
+	LocalAssets        []MistNativeStreamAsset `yaml:"local_assets,omitempty"`
+}
+
 // CommodoreRenderedSection is the post-render counterpart to CommodoreSection.
 type CommodoreRenderedSection struct {
-	PullStreams []PullStreamRendered `yaml:"pull_streams,omitempty"`
+	PullStreams       []PullStreamRendered       `yaml:"pull_streams,omitempty"`
+	MistNativeStreams []MistNativeStreamRendered `yaml:"mist_native_streams,omitempty"`
 }
 
 // === Account types — these differ by layer because they carry secrets ===

@@ -29,6 +29,51 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
   rpc ValidateStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
 
+  // Stream-key-less admission/materialization authority. Returns the same
+  // fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
+  // DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
+  // / playback_id / internal_name. Used by Foghorn at per-stream Apply time
+  // for ingest modes that bypass PUSH_REWRITE (notably mist_native), so the
+  // same cache writes happen without a stream key.
+  //
+  // Admission scope: `admitted` enforces user-active, cluster entitlement /
+  // health, tenant suspension, and negative balance. It does NOT enforce
+  // free-tier load or per-tenant stream-count caps (those are Foghorn-side
+  // state in the push path); the facts needed to layer those checks
+  // caller-side are returned in the response. This RPC is currently used
+  // only for operator/system-tenant managed streams (see render-layer gate
+  // in cli/pkg/bootstrap/render.go: mistNativeStreamToRendered), so the
+  // missing caller-side gates do not affect customer billing today. Adding
+  // tenant-owned managed streams requires implementing those caller-side
+  // gates before relaxing that ownership constraint.
+  rpc ResolveStreamContext(ResolveStreamContextRequest) returns (ResolveStreamContextResponse);
+
+  // Lists every mist_native always_on stream whose single allowed source
+  // cluster includes the caller's cluster_id. The repeated field is retained
+  // for pull-stream symmetry, but current mist_native bootstrap/schema
+  // validation requires exactly one entry.
+  // Per-stream admission + policy resolution then go through
+  // ResolveStreamContext above.
+  // Stable ordering by stream_id keeps reconciler diffs deterministic.
+  rpc ListManagedStreams(ListManagedStreamsRequest) returns (ListManagedStreamsResponse);
+
+  // Records the cluster currently serving a managed stream. Foghorn calls
+  // this after a successful ApplyManagedStream so commodore.streams.active_
+  // ingest_cluster_id reflects the elected placement: without it, public
+  // playback/control routing falls back to the tenant's default route and
+  // a managed stream pinned to a non-default cluster gets routed to the
+  // wrong Foghorn. Same column push ingest writes during PUSH_REWRITE.
+  rpc RecordStreamActiveCluster(RecordStreamActiveClusterRequest) returns (RecordStreamActiveClusterResponse);
+
+  // Clears commodore.streams.active_ingest_cluster_id for a managed stream
+  // once Foghorn has confirmed the Mist config is gone (verified retract).
+  // Without this, a disabled / suspended / removed managed stream keeps
+  // routing pinned at its old cluster until some unrelated path overwrites
+  // the column. Conditional: only clears when the recorded cluster matches
+  // the caller's expected_cluster_id, so concurrent placement on a peer
+  // cluster cannot have its pin nuked by a stale retract.
+  rpc ClearStreamActiveCluster(ClearStreamActiveClusterRequest) returns (ClearStreamActiveClusterResponse);
+
   // Called by edge nodes to resolve playback ID to internal name
   // Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
   rpc ResolvePlaybackID(ResolvePlaybackIDRequest) returns (ResolvePlaybackIDResponse);
@@ -336,6 +381,127 @@ message ValidateStreamKeyResponse {
   // resource_limits. Forwarded so Foghorn can apply them at trigger time
   // without another RPC. nil or zero-valued fields mean unlimited.
   optional quartermaster.TenantResourceLimits tenant_resource_limits = 19;
+}
+
+// ============================================================================
+// STREAM CONTEXT RESOLUTION (Foghorn → Commodore, mist_native / non-key paths)
+//
+// Authoritative admission/materialization RPC keyed by stream identifier
+// (stream_id / playback_id / internal_name) rather than stream key. Returns
+// the same fact set ValidateStreamKey does so Foghorn can populate
+// PUSH_REWRITE-equivalent caches (tenantId:internalName, process:internalName)
+// for ingest modes that never fire PUSH_REWRITE.
+//
+// Admission scope is intentionally narrower than ValidateStreamKey: see
+// the `admitted` field doc on ResolveStreamContextResponse. Free-tier load
+// and per-tenant stream caps are NOT enforced here; today this RPC is
+// render-gated to the operator/system tenant, so the missing gates do
+// not affect customer billing. Layer caller-side gates before widening.
+// ============================================================================
+
+message ResolveStreamContextRequest {
+  oneof identifier {
+    string stream_id = 1;
+    string playback_id = 2;
+    string internal_name = 3;
+  }
+  string cluster_id = 4;  // Cluster context for routing-aware fields (origin/official cluster, peers)
+}
+
+message ResolveStreamContextResponse {
+  // ===== ADMISSION =====
+  bool admitted = 1;                     // false ⇒ caller must omit the stream from the seed
+  string admission_reason = 2;           // human-readable detail (free text)
+  StreamKeyRejectionReason rejection_reason = 3;  // reused enum; structured form of admission_reason
+
+  // ===== STREAM IDENTITY =====
+  string stream_id = 4;
+  string playback_id = 5;
+  string internal_name = 6;
+  string ingest_mode = 7;                // "push" | "pull" | "mist_native"
+  string tenant_id = 8;
+  string user_id = 9;
+  bool is_recording_enabled = 10;
+
+  // ===== BILLING MODEL & SUSPENSION =====
+  // Same semantics as ValidateStreamKeyResponse: billing_model selects cache
+  // TTL (1m prepaid / 10m postpaid); is_suspended / is_balance_negative
+  // gate admission.
+  string billing_model = 11;
+  bool is_suspended = 12;
+  bool is_balance_negative = 13;
+
+  // ===== ROUTING =====
+  optional string origin_cluster_id = 14;
+  optional string official_cluster_id = 15;
+  repeated quartermaster.TenantClusterPeer cluster_peers = 16;
+
+  // ===== PROCESSING / DVR POLICY =====
+  // Same resolution path ValidateStreamKey uses (resolveProcessesJSON on the
+  // tenant's billing tier with optional tenant override). For mist_native,
+  // Foghorn writes this into the streamCache under "process:<internal_name>"
+  // so STREAM_PROCESS finds it.
+  string processes_json = 17;
+  shared.DVRPolicy dvr_policy = 18;
+
+  // ===== BILLING ALLOWANCES =====
+  repeated purser.MeterAllowance allowances = 19;
+
+  // ===== RUNTIME RESOURCE CAPS =====
+  optional quartermaster.TenantResourceLimits tenant_resource_limits = 20;
+}
+
+// ============================================================================
+// MANAGED STREAMS (Foghorn → Commodore, mist_native reconciler)
+//
+// Cluster-scoped listing for Foghorn's managed-stream reconciler. Returns
+// the desired-state set; per-stream admission/cache materialization uses
+// ResolveStreamContext above. Not a per-tick policy authority — the
+// reconciler caches the result and re-fetches on its own cadence + on
+// reactive triggers (Helmsman connect/disconnect, manual flush).
+// ============================================================================
+
+message ListManagedStreamsRequest {
+  string cluster_id = 1;
+}
+
+message ManagedStreamRow {
+  string stream_id = 1;
+  string playback_id = 2;
+  string internal_name = 3;
+  string tenant_id = 4;
+  string ingest_mode = 5;             // "mist_native" today; extensible
+  string source_spec = 6;             // literal Mist source (ts-exec:..., etc.)
+  string source_kind = 7;             // "file" | "playlist" | "exec"
+  bool   always_on = 8;
+  int32  placement_count = 9;
+  repeated string allowed_cluster_ids = 10; // exactly one source cluster for mist_native today
+}
+
+message ListManagedStreamsResponse {
+  repeated ManagedStreamRow streams = 1;
+}
+
+message RecordStreamActiveClusterRequest {
+  string stream_id = 1;
+  string cluster_id = 2;
+}
+
+message RecordStreamActiveClusterResponse {
+  // updated=false when the row already records the requested cluster (noop),
+  // or when a fresher claim from a different cluster holds the column.
+  bool updated = 1;
+}
+
+message ClearStreamActiveClusterRequest {
+  string stream_id = 1;
+  // expected_cluster_id guards against clobbering a fresher claim from a
+  // peer cluster. Required: clear only when the recorded value matches.
+  string expected_cluster_id = 2;
+}
+
+message ClearStreamActiveClusterResponse {
+  bool cleared = 1;
 }
 
 // ============================================================================

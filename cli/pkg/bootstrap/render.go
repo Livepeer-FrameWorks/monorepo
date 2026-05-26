@@ -189,7 +189,7 @@ func deriveInfrastructureRegistry(d *Derived, m *inventory.Manifest) {
 		if serviceName == "" || serviceType == "" || host == "" || port == 0 {
 			return
 		}
-		clusterID := serviceClusterIDForHost(m, serviceName, host, inventory.ServiceConfig{})
+		clusterID := serviceClusterIDForHost(m, serviceName, host)
 		if clusterID == "" {
 			return
 		}
@@ -355,7 +355,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 				if hostKey == "" {
 					continue
 				}
-				clusterID := serviceClusterIDForHost(m, serviceName, hostKey, svc)
+				clusterID := serviceClusterIDForHost(m, serviceName, hostKey)
 
 				if notSelfRegister && isPublic && port != 0 {
 					entry := ServiceRegistryEntry{
@@ -502,7 +502,7 @@ func splitHostPort(addr string) (string, int) {
 // specific host. service_instances rows must carry the host's runtime cluster
 // (FK-bound to the node); logical media-cluster identity is decoupled and
 // recorded in service_cluster_assignments by a runtime reconciler.
-func serviceClusterIDForHost(m *inventory.Manifest, serviceName, hostKey string, svc inventory.ServiceConfig) string {
+func serviceClusterIDForHost(m *inventory.Manifest, serviceName, hostKey string) string {
 	if hostKey != "" {
 		if c := m.HostCluster(hostKey); c != "" {
 			return c
@@ -751,6 +751,13 @@ func Render(derived *Derived, overlay *Overlay, resolver Resolver) (*Rendered, e
 		}
 		r.Commodore.PullStreams = append(r.Commodore.PullStreams, rps)
 	}
+	for i, ms := range mergedCommodore.MistNativeStreams {
+		rms, err := mistNativeStreamToRendered(ms, r.Quartermaster.Clusters)
+		if err != nil {
+			return nil, fmt.Errorf("commodore.mist_native_streams[%d] (%s): %w", i, ms.PlaybackID, err)
+		}
+		r.Commodore.MistNativeStreams = append(r.Commodore.MistNativeStreams, rms)
+	}
 
 	mergedAccounts := derived.Accounts
 	if overlay != nil {
@@ -988,9 +995,9 @@ func mergeAccounts(derived, overlay []AccountDerived) []AccountDerived {
 	return out
 }
 
-// mergeCommodore overlays operator-owned pull streams. Stable key: PlaybackID.
-// Additive when keys differ; Override=true updates mutable fields; collision
-// without Override is a configuration error.
+// mergeCommodore overlays operator-owned pull streams and mist-native streams.
+// Stable key: PlaybackID. Additive when keys differ; Override=true updates
+// mutable fields; collision without Override is a configuration error.
 func mergeCommodore(derived, overlay CommodoreSection) (CommodoreSection, error) {
 	out := derived
 	for _, ops := range overlay.PullStreams {
@@ -1006,12 +1013,34 @@ func mergeCommodore(derived, overlay CommodoreSection) (CommodoreSection, error)
 			return out, fmt.Errorf("pull_stream %q: overlay collides with derived without override=true", ops.PlaybackID)
 		}
 	}
+	for _, oms := range overlay.MistNativeStreams {
+		idx := indexMistNativeByPlaybackID(out.MistNativeStreams, oms.PlaybackID)
+		switch {
+		case idx == -1:
+			oms.Override = false
+			out.MistNativeStreams = append(out.MistNativeStreams, oms)
+		case oms.Override:
+			oms.Override = false
+			out.MistNativeStreams[idx] = oms
+		default:
+			return out, fmt.Errorf("mist_native_stream %q: overlay collides with derived without override=true", oms.PlaybackID)
+		}
+	}
 	return out, nil
 }
 
 func indexPullStreamByPlaybackID(ps []PullStream, id string) int {
 	for i, p := range ps {
 		if p.PlaybackID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func indexMistNativeByPlaybackID(ms []MistNativeStream, id string) int {
+	for i, m := range ms {
+		if m.PlaybackID == id {
 			return i
 		}
 	}
@@ -1084,6 +1113,123 @@ func pullStreamToRendered(p PullStream, resolver Resolver, clusters []Cluster) (
 		Enabled:           p.Enabled,
 		AllowedClusterIDs: allowedIDs,
 	}, nil
+}
+
+// mistNativeStreamToRendered validates an operator-owned Mist-native stream
+// declaration. Concrete Mist configs (literal source, always_on) bypass
+// PUSH_REWRITE entirely; Foghorn picks an eligible edge on its managed-stream
+// reconciler tick. Validation: source_kind must match the source prefix, every
+// Mist-native stream requires the operator/system tenant (any source_kind), and
+// AllowedClusterIDs must contain exactly one declared media cluster.
+func mistNativeStreamToRendered(m MistNativeStream, clusters []Cluster) (MistNativeStreamRendered, error) {
+	if m.PlaybackID == "" {
+		return MistNativeStreamRendered{}, fmt.Errorf("playback_id is required")
+	}
+	if m.OwnerTenant.IsZero() {
+		return MistNativeStreamRendered{}, fmt.Errorf("owner_tenant ref is required")
+	}
+	if m.Source == "" {
+		return MistNativeStreamRendered{}, fmt.Errorf("source is required")
+	}
+	if err := validateMistNativeSourceKind(m.SourceKind, m.Source); err != nil {
+		return MistNativeStreamRendered{}, err
+	}
+	// mist_native is operator-tenant-only for every source_kind: customer-
+	// owned managed streams would bypass the free-tier-load and per-tenant
+	// stream-cap gates that PUSH_REWRITE enforces. The managed-stream
+	// reconciler admits on suspension and balance only.
+	if !isSystemTenantRef(m.OwnerTenant) {
+		return MistNativeStreamRendered{}, fmt.Errorf("mist_native streams require owner_tenant=%s; tenant-supplied managed streams are not enabled", SystemTenantAlias)
+	}
+
+	count := m.PlacementCount
+	if count == 0 {
+		count = 1
+	}
+	if count < 1 {
+		return MistNativeStreamRendered{}, fmt.Errorf("placement_count must be >= 1, got %d", count)
+	}
+
+	allowedIDs := normalizeAllowedClusterIDs(m.AllowedClusterIDs)
+	// allowed_cluster_ids currently names exactly one source cluster the stream
+	// may run on. Foghorn elects an edge inside that cluster; the elected
+	// edge's cluster becomes active_ingest_cluster_id. Federation handles
+	// cross-cluster viewer routing from that single active source.
+	if len(allowedIDs) == 0 {
+		return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids must contain at least one media cluster")
+	}
+	mediaIDs := mediaClusterIDSet(clusters)
+	for _, id := range allowedIDs {
+		if !mediaIDs[id] {
+			return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids: cluster %q is not a declared media cluster", id)
+		}
+	}
+	if len(allowedIDs) != 1 {
+		return MistNativeStreamRendered{}, fmt.Errorf("allowed_cluster_ids currently supports exactly one source cluster for mist_native streams (got %d); cross-cluster source election is not implemented", len(allowedIDs))
+	}
+
+	return MistNativeStreamRendered{
+		PlaybackID:         m.PlaybackID,
+		OwnerTenant:        m.OwnerTenant,
+		Title:              m.Title,
+		Description:        m.Description,
+		Source:             m.Source,
+		SourceKind:         m.SourceKind,
+		AlwaysOn:           m.AlwaysOn,
+		IsRecordingEnabled: m.IsRecordingEnabled,
+		ProcessPolicy:      m.ProcessPolicy,
+		PlacementCount:     count,
+		AllowedClusterIDs:  allowedIDs,
+		LocalAssets:        m.LocalAssets,
+	}, nil
+}
+
+func validateMistNativeSourceKind(kind, source string) error {
+	switch kind {
+	case "exec":
+		if !strings.HasPrefix(source, "ts-exec:") {
+			return fmt.Errorf("source_kind=exec requires source to start with 'ts-exec:'")
+		}
+	case "file":
+		if !strings.HasPrefix(source, "file://") && !strings.HasPrefix(source, "/") {
+			return fmt.Errorf("source_kind=file requires source to start with 'file://' or '/'")
+		}
+	case "playlist":
+		if !strings.HasPrefix(source, "playlist:") &&
+			!strings.HasSuffix(source, ".pls") &&
+			!strings.HasSuffix(source, ".m3u") &&
+			!strings.HasSuffix(source, ".m3u8") {
+			return fmt.Errorf("source_kind=playlist requires source prefix 'playlist:' or a .pls/.m3u/.m3u8 path")
+		}
+	case "":
+		return fmt.Errorf("source_kind is required (file | playlist | exec)")
+	default:
+		return fmt.Errorf("source_kind %q is not supported (file | playlist | exec)", kind)
+	}
+	return nil
+}
+
+func isSystemTenantRef(ref TenantRef) bool {
+	// TenantRef.Ref is a path like "quartermaster.system_tenant" or
+	// "quartermaster.tenants.<alias>". The system tenant lives at a stable
+	// path; resolution against actual rows happens at reconcile time. Here
+	// we accept either form.
+	r := strings.TrimSpace(ref.Ref)
+	return r == "quartermaster.system_tenant" ||
+		r == "quartermaster.tenants."+SystemTenantAlias
+}
+
+func mediaClusterIDSet(clusters []Cluster) map[string]bool {
+	out := make(map[string]bool, len(clusters))
+	for _, c := range clusters {
+		// Type=="edge" marks media-capable clusters (matches
+		// mediaClusterCapabilities convention); central clusters host
+		// control plane only.
+		if c.Type == "edge" {
+			out[c.ID] = true
+		}
+	}
+	return out
 }
 
 // normalizeAllowedClusterIDs dedups, drops empties, and sorts so the rendered

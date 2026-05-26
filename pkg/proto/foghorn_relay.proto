@@ -34,6 +34,12 @@ message ForwardCommandRequest {
     helmsmancontrol.FreezeRequest freeze = 23;
     helmsmancontrol.DesiredStateUpdate desired_state_update = 24;
     helmsmancontrol.InvalidateSessionsRequest invalidate_sessions = 25;
+    // Managed-stream Apply/Retract: routed via the relay when the elected
+    // node is connected to a peer Foghorn. Same local-first-then-relay
+    // pattern as ClipPull/DVRStart so multi-Foghorn-per-cluster deployments
+    // work correctly.
+    helmsmancontrol.ApplyManagedStream apply_managed_stream = 26;
+    helmsmancontrol.RetractManagedStream retract_managed_stream = 27;
   }
 }
 

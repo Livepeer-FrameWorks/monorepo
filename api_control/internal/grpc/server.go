@@ -702,10 +702,12 @@ func isSelfHostedPeer(peer *pb.TenantClusterPeer) bool {
 	return strings.EqualFold(peer.GetClusterType(), "self-hosted")
 }
 
-// resolveProcessesJSON returns the MistServer process config JSON for a tenant.
-// Resolution order: tenant override (if tier allows) → tier default.
+// resolveProcessesJSON returns the MistServer process config JSON for a stream.
+// Resolution order: per-stream override → tenant override (if tier allows)
+// → tier default. streamID may be empty for tenant-scoped lookups
+// (GetTenantProcessesJSON RPC) — in that case the per-stream layer is skipped.
 // streamType is "live" or "vod".
-func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, clusterID, streamType string) string {
+func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, streamType string) string {
 	if s.purserClient == nil {
 		return "[]"
 	}
@@ -733,10 +735,23 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, cl
 		processesJSON = tier.GetProcessesVod()
 	}
 
-	// Check tenant override if tier allows customization
-	if tier.GetFeatures().GetProcessingCustomizable() {
-		override := s.getTenantProcessingOverride(ctx, tenantID, streamType)
-		if override != "" {
+	// Per-stream override always wins: operator-supplied bootstrap policy
+	// (stream_processing_config) must not be silently dropped by a tier
+	// flag, otherwise an operator-owned mist_native stream's thumbnails-only
+	// policy can be ignored when the system tenant tier isn't marked
+	// customizable. Tenant-wide override (tenant_processing_config) stays
+	// gated on tier.processing_customizable so paid-tier features cannot be
+	// opted into by tenants on a locked tier.
+	if streamID != "" {
+		if override := s.getStreamProcessingOverride(ctx, streamID, streamType); override != "" {
+			processesJSON = override
+		} else if tier.GetFeatures().GetProcessingCustomizable() {
+			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, streamType); tenantOverride != "" {
+				processesJSON = tenantOverride
+			}
+		}
+	} else if tier.GetFeatures().GetProcessingCustomizable() {
+		if override := s.getTenantProcessingOverride(ctx, tenantID, streamType); override != "" {
 			processesJSON = override
 		}
 	}
@@ -748,6 +763,24 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, cl
 	// {{gateway_url}} placeholder is left intact — Foghorn substitutes it
 	// with its local cluster's Livepeer gateway at cache/dispatch time.
 	return processesJSON
+}
+
+// getStreamProcessingOverride checks commodore.stream_processing_config for a
+// per-stream override. Returns "" when no row exists or the column is NULL.
+func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, streamID, streamType string) string {
+	col := "processes_live"
+	if streamType == "vod" {
+		col = "processes_vod"
+	}
+	var override sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT `+col+` FROM commodore.stream_processing_config WHERE stream_id = $1`,
+		streamID,
+	).Scan(&override)
+	if err != nil || !override.Valid {
+		return ""
+	}
+	return override.String
 }
 
 // getTenantProcessingOverride checks commodore.tenant_processing_config for a tenant override.
@@ -1248,7 +1281,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	if resp.OriginClusterId != nil {
 		processClusterID = *resp.OriginClusterId
 	}
-	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, processClusterID, "live")
+	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
 
 	// Track the media cluster this stream ingests on.
 	activeIngestClusterID := req.GetClusterId()
@@ -1310,6 +1343,338 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	return resp, nil
 }
 
+// ResolveStreamContext returns the materialization fact set as ValidateStreamKey
+// but is keyed by stream identifier (stream_id / playback_id / internal_name)
+// rather than stream key. Used by Foghorn's managed-stream reconciler for
+// ingest modes that bypass PUSH_REWRITE — notably mist_native — so the same
+// cache writes happen without a stream key.
+//
+// Admission semantics: `admitted` rolls user-active, cluster entitlement,
+// suspension, and negative-balance into a single boolean. Free-tier-load and
+// per-tenant-cap are NOT enforced here (they live in Foghorn's PUSH_REWRITE
+// path); the facts needed to layer those checks caller-side are returned in
+// the response. Today this RPC is only invoked for operator/system-tenant
+// managed streams (see cli/pkg/bootstrap/render.go: mistNativeStreamToRendered
+// rejects non-system tenants), so the missing caller-side gates do not
+// affect customer billing. Widening managed-stream ownership to tenants
+// requires implementing those gates before relaxing the render-layer
+// constraint.
+func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.ResolveStreamContextRequest) (*pb.ResolveStreamContextResponse, error) {
+	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
+	var isActive, isRecordingEnabled bool
+
+	const baseSelect = `
+		SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
+		       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
+		FROM commodore.streams s
+		JOIN commodore.users u ON s.user_id = u.id
+		WHERE `
+
+	var (
+		query string
+		arg   string
+		field string
+	)
+	switch id := req.GetIdentifier().(type) {
+	case *pb.ResolveStreamContextRequest_StreamId:
+		field, arg = "stream_id", id.StreamId
+		query = baseSelect + "s.id = $1"
+	case *pb.ResolveStreamContextRequest_PlaybackId:
+		field, arg = "playback_id", id.PlaybackId
+		query = baseSelect + "s.playback_id = $1"
+	case *pb.ResolveStreamContextRequest_InternalName:
+		field, arg = "internal_name", id.InternalName
+		query = baseSelect + "s.internal_name = $1"
+	default:
+		return nil, status.Error(codes.InvalidArgument, "identifier required (stream_id | playback_id | internal_name)")
+	}
+	if arg == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "%s must be non-empty", field)
+	}
+
+	err := s.db.QueryRowContext(ctx, query, arg).Scan(
+		&streamID, &userID, &tenantID, &internalName,
+		&isActive, &isRecordingEnabled, &playbackID, &ingestMode,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.ResolveStreamContextResponse{
+			Admitted:        false,
+			AdmissionReason: "stream not found",
+			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+		}, nil
+	}
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"identifier_field": field,
+			"identifier_value": arg,
+			"error":            err,
+		}).Error("Database error resolving stream context")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	resp := &pb.ResolveStreamContextResponse{
+		StreamId:           streamID,
+		PlaybackId:         playbackID,
+		InternalName:       internalName,
+		IngestMode:         ingestMode,
+		TenantId:           tenantID,
+		UserId:             userID,
+		IsRecordingEnabled: isRecordingEnabled,
+	}
+
+	if !isActive {
+		resp.Admitted = false
+		resp.AdmissionReason = "User account is inactive"
+		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
+		return resp, nil
+	}
+
+	// Cluster admission (only if caller supplied cluster_id — mist_native streams
+	// without allowed_cluster_ids skip this gate and rely on placement scoping).
+	// Fail-closed-as-transient: when a cluster_id is supplied the route MUST
+	// resolve so entitlement and health can be checked. A Quartermaster blip
+	// returns codes.Unavailable, which the caller (Foghorn's managed-stream
+	// reconciler) treats as transient — preserve existing applied state, do
+	// not newly Apply onto an unverified cluster.
+	requestedClusterID := strings.TrimSpace(req.GetClusterId())
+	if requestedClusterID != "" {
+		route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID)
+		if routeErr != nil {
+			s.logger.WithError(routeErr).WithFields(logging.Fields{
+				"tenant_id":  tenantID,
+				"cluster_id": requestedClusterID,
+			}).Warn("ResolveStreamContext: cluster route lookup failed; failing closed as transient")
+			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
+		}
+		peer := findPeerByClusterID(route.clusterPeers, requestedClusterID)
+		if peer == nil {
+			resp.Admitted = false
+			resp.AdmissionReason = "Tenant not entitled to cluster " + requestedClusterID
+			resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+			return resp, nil
+		}
+		if peerStatus := peer.GetHealthStatus(); peerStatus == "offline" || peerStatus == "degraded" {
+			resp.Admitted = false
+			resp.AdmissionReason = "Cluster " + requestedClusterID + " is " + peerStatus
+			resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
+			return resp, nil
+		}
+	}
+
+	// Billing status: same Purser call ValidateStreamKey makes, but
+	// fail-closed-as-transient instead of defaulting to postpaid/active.
+	// ValidateStreamKey can tolerate Purser absence/blips because
+	// PUSH_REWRITE admits on every encoder reconnect and re-evaluates; the
+	// managed-stream reconciler runs every 30s on always-on streams and
+	// must NOT keep a suspended/negative-balance tenant's stream alive
+	// just because Purser was momentarily unreachable or wasn't wired up.
+	// codes.Unavailable here maps to materializeTransient at the caller,
+	// preserving any previously-applied state without committing fresh
+	// state on unverified billing.
+	if s.purserClient == nil {
+		s.logger.WithField("tenant_id", tenantID).
+			Warn("ResolveStreamContext: purser client not configured; failing closed as transient")
+		return nil, status.Error(codes.Unavailable, "billing status: purser client not configured")
+	}
+	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Warn("ResolveStreamContext: billing status lookup failed; failing closed as transient")
+		return nil, status.Errorf(codes.Unavailable, "billing status lookup failed: %v", err)
+	}
+	resp.BillingModel = billingStatus.BillingModel
+	resp.IsSuspended = billingStatus.IsSuspended
+	resp.IsBalanceNegative = billingStatus.IsBalanceNegative
+	resp.DvrPolicy = billingStatus.DvrPolicy
+	resp.Allowances = billingStatus.Allowances
+	resp.TenantResourceLimits = billingStatus.GetTenantResourceLimits()
+
+	// Routing fields (origin/official cluster, peers, resource-limit merge) —
+	// same shape ValidateStreamKey returns.
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		resolvedOriginClusterID := resolveLiveIngestClusterID(route, requestedClusterID)
+		resp.OriginClusterId = &resolvedOriginClusterID
+		if route.officialClusterID != "" {
+			resp.OfficialClusterId = &route.officialClusterID
+		}
+		resp.ClusterPeers = route.clusterPeers
+		if hasTenantResourceLimits(route.tenantResourceLimits) {
+			resp.TenantResourceLimits = mergeTenantResourceLimits(resp.TenantResourceLimits, route.tenantResourceLimits)
+		}
+	}
+
+	// Processes JSON via the same tier/override resolution path ValidateStreamKey
+	// uses. Stream type is "live" for mist_native (it serves a live manifest).
+	processClusterID := ""
+	if resp.OriginClusterId != nil {
+		processClusterID = *resp.OriginClusterId
+	}
+	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
+
+	// Final admission decision: facts above were collected; now collapse the
+	// billing gates that PUSH_REWRITE applies (lines 1092-1110 in
+	// triggers/processor.go) into the admitted boolean. Free-tier-load and
+	// per-tenant-cap remain caller-side because they require Foghorn's local
+	// capacity state.
+	switch {
+	case resp.IsSuspended:
+		resp.Admitted = false
+		resp.AdmissionReason = "Tenant is suspended"
+		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED
+	case resp.IsBalanceNegative:
+		resp.Admitted = false
+		resp.AdmissionReason = "Tenant balance is negative"
+		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE
+	default:
+		resp.Admitted = true
+	}
+
+	return resp, nil
+}
+
+// ListManagedStreams returns every mist_native always_on stream whose single
+// allowed source cluster includes the requested cluster_id. Foghorn's managed-
+// stream reconciler calls this each tick to build desired state; per-stream
+// admission/cache writes then go through ResolveStreamContext. Stable ordering
+// by stream_id keeps reconciler diffs deterministic across calls.
+func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *pb.ListManagedStreamsRequest) (*pb.ListManagedStreamsResponse, error) {
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	// allowed_cluster_ids is stored as an array for pull-stream symmetry, but
+	// mist_native currently allows one source cluster. A row is eligible when
+	// the requested cluster_id is that source cluster.
+	const querySQL = `
+		SELECT s.id::text,
+		       s.playback_id,
+		       s.internal_name,
+		       s.tenant_id::text,
+		       s.ingest_mode,
+		       mn.source_spec,
+		       mn.source_kind,
+		       s.always_on,
+		       mn.placement_count,
+		       COALESCE(mn.allowed_cluster_ids, '{}')
+		FROM commodore.streams s
+		JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
+		WHERE s.ingest_mode = 'mist_native'
+		  AND s.always_on   = TRUE
+		  AND $1 = ANY(mn.allowed_cluster_ids)
+		ORDER BY s.id::text`
+
+	rows, err := s.db.QueryContext(ctx, querySQL, clusterID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"cluster_id": clusterID,
+			"error":      err,
+		}).Error("Database error listing managed streams")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	resp := &pb.ListManagedStreamsResponse{}
+	for rows.Next() {
+		var (
+			row        pb.ManagedStreamRow
+			placement  sql.NullInt32
+			allowedArr pq.StringArray
+		)
+		if scanErr := rows.Scan(
+			&row.StreamId, &row.PlaybackId, &row.InternalName, &row.TenantId,
+			&row.IngestMode, &row.SourceSpec, &row.SourceKind, &row.AlwaysOn,
+			&placement, &allowedArr,
+		); scanErr != nil {
+			s.logger.WithError(scanErr).Warn("Failed to scan managed stream row")
+			continue
+		}
+		row.PlacementCount = 1
+		if placement.Valid && placement.Int32 > 0 {
+			row.PlacementCount = placement.Int32
+		}
+		row.AllowedClusterIds = []string(allowedArr)
+		resp.Streams = append(resp.Streams, &row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate managed streams: %v", err)
+	}
+	return resp, nil
+}
+
+// RecordStreamActiveCluster updates commodore.streams.active_ingest_cluster_id
+// for a managed stream. Mirrors the contended-update guard from
+// ValidateStreamKey's push-ingest path so a stale claim cannot overwrite a
+// fresh lease held by a different cluster.
+func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *pb.RecordStreamActiveClusterRequest) (*pb.RecordStreamActiveClusterResponse, error) {
+	streamID := strings.TrimSpace(req.GetStreamId())
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if streamID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id and cluster_id required")
+	}
+	const updateSQL = `
+		UPDATE commodore.streams
+		SET active_ingest_cluster_id = $1,
+		    active_ingest_cluster_updated_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $2::uuid
+		  AND (
+		    active_ingest_cluster_id IS NULL
+		    OR active_ingest_cluster_id = ''
+		    OR active_ingest_cluster_id = $1
+		    OR active_ingest_cluster_updated_at IS NULL
+		    OR active_ingest_cluster_updated_at < NOW() - INTERVAL '30 seconds'
+		  )`
+	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"stream_id":  streamID,
+			"cluster_id": clusterID,
+		}).Error("RecordStreamActiveCluster: update failed")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
+	}
+	return &pb.RecordStreamActiveClusterResponse{Updated: rows > 0}, nil
+}
+
+// ClearStreamActiveCluster clears commodore.streams.active_ingest_cluster_id
+// for a managed stream once Foghorn has confirmed via heartbeat snapshot
+// that Mist no longer has the config. expected_cluster_id guards against
+// clobbering a fresher claim from a peer cluster — the column only
+// transitions to NULL when the recorded value matches the caller.
+func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *pb.ClearStreamActiveClusterRequest) (*pb.ClearStreamActiveClusterResponse, error) {
+	streamID := strings.TrimSpace(req.GetStreamId())
+	expected := strings.TrimSpace(req.GetExpectedClusterId())
+	if streamID == "" || expected == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id and expected_cluster_id required")
+	}
+	const clearSQL = `
+		UPDATE commodore.streams
+		SET active_ingest_cluster_id = NULL,
+		    active_ingest_cluster_updated_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1::uuid
+		  AND active_ingest_cluster_id = $2`
+	res, err := s.db.ExecContext(ctx, clearSQL, streamID, expected)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"stream_id":  streamID,
+			"cluster_id": expected,
+		}).Error("ClearStreamActiveCluster: update failed")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
+	}
+	return &pb.ClearStreamActiveClusterResponse{Cleared: rows > 0}, nil
+}
+
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer PLAY_REWRITE trigger
 func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.ResolvePlaybackIDRequest) (*pb.ResolvePlaybackIDResponse, error) {
 	playbackID := req.GetPlaybackId()
@@ -1320,11 +1685,12 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
 	var streamID, internalName, tenantID, ingestMode string
 	var requiresAuth bool
+	var activeIngestClusterID sql.NullString
 	err := s.retryPostgres(ctx, func() error {
 		return s.db.QueryRowContext(ctx, `
-			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode
+			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
 			FROM commodore.streams WHERE playback_id = $1
-		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode)
+		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode, &activeIngestClusterID)
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1355,6 +1721,15 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		}
 		resp.ClusterPeers = route.clusterPeers
 	}
+	// Managed (mist_native) streams may be placed in a cluster other than the
+	// tenant's default route; active_ingest_cluster_id is the verified-applied
+	// source cluster recorded by Foghorn. When set, it overrides the tenant
+	// default as origin so PLAY_REWRITE / federation / artifact attribution
+	// follow the active source. Peers and official cluster stay tenant-routed.
+	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
+		active := activeIngestClusterID.String
+		resp.OriginClusterId = &active
+	}
 
 	return resp, nil
 }
@@ -1370,9 +1745,11 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
 	var requiresAuth bool
+	var activeIngestClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1
-	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
+		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth, active_ingest_cluster_id
+		FROM commodore.streams WHERE internal_name = $1
+	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth, &activeIngestClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -1397,6 +1774,14 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
 		resp.ClusterPeers = route.clusterPeers
 		resp.OriginClusterId = route.clusterID
+	}
+	// Managed (mist_native) streams may be placed in a cluster other than the
+	// tenant's default route; active_ingest_cluster_id is the verified-applied
+	// source cluster recorded by Foghorn. When set, it is the authoritative
+	// origin — federation/thumbnail/storage attribution must follow the
+	// active source, not the tenant default. Peers stay tenant-routed.
+	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
+		resp.OriginClusterId = activeIngestClusterID.String
 	}
 	return resp, nil
 }
@@ -2167,7 +2552,7 @@ func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *pb.Update
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	var retentionArg interface{}
+	var retentionArg any
 	if req.GetRetentionUntil() != nil {
 		retentionArg = req.GetRetentionUntil().AsTime()
 	}
@@ -2553,7 +2938,7 @@ func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.Ge
 	if streamType != "live" && streamType != "vod" {
 		return nil, status.Error(codes.InvalidArgument, `stream_type must be "live" or "vod"`)
 	}
-	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetClusterId(), streamType)
+	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", req.GetClusterId(), streamType)
 	return &pb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
 }
 
@@ -4071,7 +4456,7 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.
 	// long-lived pending codes.
 	var userCode string
 	const maxAttempts = 5
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for range maxAttempts {
 		userCode, err = generateUserCode()
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to generate user_code: %v", err)
@@ -4615,7 +5000,7 @@ func (s *CommodoreServer) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest)
 
 	// Build dynamic update query
 	updates := []string{}
-	args := []interface{}{}
+	args := []any{}
 	argCount := 1
 
 	if req.FirstName != nil {
@@ -5538,7 +5923,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 		FROM commodore.streams s
 		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.user_id = $1 AND s.tenant_id = $2`
-	args := []interface{}{userID, tenantID}
+	args := []any{userID, tenantID}
 	argIdx := 3
 
 	// Add keyset condition if cursor provided
@@ -5735,7 +6120,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 
 	// Build update query dynamically
 	var updates []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 	changedFields := []string{}
 
@@ -5790,7 +6175,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		// Empty/NONE → set NULL so the CHECK constraint accepts no-chapter
 		// streams. Validated values land verbatim; the CHECK enforces the
 		// allowed set on write.
-		var modeArg interface{}
+		var modeArg any
 		if mode := strings.TrimSpace(req.GetDvrChapterMode()); mode != "" && strings.ToLower(mode) != "none" {
 			modeArg = mode
 		}
@@ -5800,7 +6185,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		changedFields = append(changedFields, "dvr_chapter_mode")
 	}
 	if req.DvrChapterIntervalSeconds != nil {
-		var ivArg interface{}
+		var ivArg any
 		if iv := req.GetDvrChapterIntervalSeconds(); iv > 0 {
 			ivArg = iv
 		}
@@ -5843,7 +6228,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		// (fieldcrypt re-encryption uses a fresh nonce, so blind rewrites
 		// would churn the column without semantic change).
 		setClauses := []string{}
-		setArgs := []interface{}{streamID}
+		setArgs := []any{streamID}
 		setIdx := 2
 		if pullPlan.writeURI {
 			setClauses = append(setClauses, fmt.Sprintf("source_uri_enc = $%d", setIdx))
@@ -6159,7 +6544,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 		SELECT id, tenant_id, user_id, stream_id, key_value, key_name, is_active, last_used_at, created_at, updated_at
 		FROM commodore.stream_keys
 		WHERE stream_id = $1`
-	args := []interface{}{streamID}
+	args := []any{streamID}
 	argIdx := 2
 
 	// Add keyset condition if cursor provided
@@ -6465,7 +6850,7 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePu
 
 	// Build dynamic UPDATE
 	setClauses := []string{"updated_at = NOW()"}
-	args := []interface{}{id, tenantID}
+	args := []any{id, tenantID}
 	argIdx := 3
 
 	if req.Name != nil {
@@ -6614,7 +6999,7 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *pb.Up
 	}
 
 	setClauses := []string{"status = $3", "updated_at = NOW()"}
-	args := []interface{}{id, tenantID, req.GetStatus()}
+	args := []any{id, tenantID, req.GetStatus()}
 	argIdx := 4
 
 	if req.LastError != nil {
@@ -6763,7 +7148,7 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPIToke
 		       last_used_at, expires_at, created_at
 		FROM commodore.api_tokens
 		WHERE user_id = $1 AND tenant_id = $2`
-	args := []interface{}{userID, tenantID}
+	args := []any{userID, tenantID}
 	argIdx := 3
 
 	// Add keyset condition if cursor provided
@@ -7558,7 +7943,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// resolvedDays == 0 + no expires_at → infinite (retentionUntil stays nil).
 
 	// Store requested params as JSON for audit
-	requestedParams := map[string]interface{}{}
+	requestedParams := map[string]any{}
 	if req.StartUnix != nil {
 		requestedParams["start_unix"] = *req.StartUnix
 	}
@@ -7606,7 +7991,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
 		Mode:               req.GetMode(),
-		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, clipClusterID, "vod")),
+		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, "", clipClusterID, "vod")),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -7707,7 +8092,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 
 	// Build WHERE clause with optional stream filter
 	whereClause := "c.tenant_id = $1"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	if streamID := req.GetStreamId(); streamID != "" {
@@ -8106,7 +8491,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 
 	// Build WHERE clause with optional stream filter
 	whereClause := "d.tenant_id = $1 AND (d.retention_until IS NULL OR d.retention_until > NOW())"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 
 	if streamID := req.GetStreamId(); streamID != "" {
@@ -8596,7 +8981,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 
 // unaryInterceptor logs gRPC requests
 func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
 		logger.WithFields(logging.Fields{
@@ -8864,10 +9249,10 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 	// Resolve MistServer process config for VOD processing
 	var processesJSON string
 	if route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
-		processesJSON = s.resolveProcessesJSON(ctx, tenantID, route.clusterID, "vod")
+		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", route.clusterID, "vod")
 	} else {
 		s.logger.WithError(routeErr).WithField("tenant_id", tenantID).Warn("Route lookup failed for VOD process config, resolving without cluster")
-		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", "vod")
+		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", "", "vod")
 	}
 
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
@@ -9077,7 +9462,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	}
 
 	whereClause := "tenant_id = $1"
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	argIdx := 2
 	if streamID := req.GetStreamId(); streamID != "" {
 		whereClause += fmt.Sprintf(" AND stream_id = $%d::uuid", argIdx)

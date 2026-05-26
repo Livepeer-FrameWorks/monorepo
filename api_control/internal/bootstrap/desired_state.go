@@ -13,10 +13,16 @@ type DesiredState struct {
 	Commodore CommodoreSection `yaml:"commodore,omitempty"`
 }
 
+// SystemTenantAlias is the canonical alias for the platform/system tenant.
+// Kept in sync with cli/pkg/bootstrap.SystemTenantAlias — the cross-service
+// contract is the alias literal, not the Go constant.
+const SystemTenantAlias = "frameworks"
+
 // CommodoreSection mirrors cli/pkg/bootstrap.CommodoreRenderedSection for
 // operator-owned Commodore resources reconciled by commodore bootstrap.
 type CommodoreSection struct {
-	PullStreams []PullStream `yaml:"pull_streams,omitempty"`
+	PullStreams       []PullStream       `yaml:"pull_streams,omitempty"`
+	MistNativeStreams []MistNativeStream `yaml:"mist_native_streams,omitempty"`
 }
 
 // PullStream mirrors cli/pkg/bootstrap.PullStreamRendered's wire format.
@@ -31,6 +37,37 @@ type PullStream struct {
 	SourceURI         string    `yaml:"source_uri"`
 	Enabled           bool      `yaml:"enabled"`
 	AllowedClusterIDs []string  `yaml:"allowed_cluster_ids,omitempty"`
+}
+
+// MistNativeStream mirrors cli/pkg/bootstrap.MistNativeStreamRendered's wire
+// format. Stable key: PlaybackID. The source is a literal Mist input string
+// (e.g. ts-exec:ffmpeg ...) — the CLI render layer is responsible for
+// source_kind validation. ProcessPolicy is the per-stream MistServer process
+// config; the reconciler serializes it to JSON and writes it to
+// commodore.stream_processing_config (NOT to commodore.streams) so the
+// existing process-policy authority stays in one place.
+type MistNativeStream struct {
+	PlaybackID         string                  `yaml:"playback_id"`
+	OwnerTenant        TenantRef               `yaml:"owner_tenant"`
+	Title              string                  `yaml:"title"`
+	Description        string                  `yaml:"description,omitempty"`
+	Source             string                  `yaml:"source"`
+	SourceKind         string                  `yaml:"source_kind"`
+	AlwaysOn           bool                    `yaml:"always_on"`
+	IsRecordingEnabled bool                    `yaml:"is_recording_enabled,omitempty"`
+	ProcessPolicy      any                     `yaml:"process_policy,omitempty"`
+	PlacementCount     int                     `yaml:"placement_count,omitempty"`
+	AllowedClusterIDs  []string                `yaml:"allowed_cluster_ids,omitempty"`
+	LocalAssets        []MistNativeStreamAsset `yaml:"local_assets,omitempty"`
+}
+
+// MistNativeStreamAsset declares one expected on-disk file. Bootstrap stores
+// these in stream_mist_sources.local_asset_paths for audit; Ansible places
+// the actual files on the edge nodes.
+type MistNativeStreamAsset struct {
+	Path   string `yaml:"path"`
+	Sha256 string `yaml:"sha256,omitempty"`
+	Note   string `yaml:"note,omitempty"`
 }
 
 // Account mirrors cli/pkg/bootstrap.AccountRendered's wire format. Field shapes
@@ -89,6 +126,9 @@ type Result struct {
 	Created []string
 	Updated []string
 	Noop    []string
+	Deleted []string
 }
 
-func (r Result) Total() int { return len(r.Created) + len(r.Updated) + len(r.Noop) }
+func (r Result) Total() int {
+	return len(r.Created) + len(r.Updated) + len(r.Noop) + len(r.Deleted)
+}
