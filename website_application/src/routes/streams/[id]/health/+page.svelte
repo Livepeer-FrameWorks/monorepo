@@ -632,6 +632,72 @@
     return [];
   }
 
+  function metricKey(metric: HealthMetricType, index: number): string {
+    return [
+      metric.timestamp ?? "metric",
+      metric.nodeId ?? "node",
+      metric.bufferState ?? "state",
+      index,
+    ].join(":");
+  }
+
+  function trackListEventKey(event: TrackListEventType, index: number): string {
+    return [
+      event.timestamp ?? "track-list",
+      event.nodeId ?? "node",
+      event.trackCount ?? 0,
+      index,
+    ].join(":");
+  }
+
+  function trackKey(
+    track:
+      | {
+          trackName?: string | null;
+          trackType?: string | null;
+          codec?: string | null;
+          bitrateKbps?: number | null;
+        }
+      | null
+      | undefined,
+    index: number
+  ): string {
+    return [
+      track?.trackName ?? "track",
+      track?.trackType ?? "type",
+      track?.codec ?? "codec",
+      track?.bitrateKbps ?? "bitrate",
+      index,
+    ].join(":");
+  }
+
+  function bufferEventKey(event: BufferEventType, index: number): string {
+    return [
+      event.eventId ?? "buffer",
+      event.timestamp ?? "time",
+      event.nodeId ?? "node",
+      event.bufferState ?? "state",
+      index,
+    ].join(":");
+  }
+
+  function viewerSessionKey(
+    session: { id?: string | null; sessionId?: string | null; timestamp?: string | null },
+    index: number
+  ): string {
+    return [session.id ?? session.sessionId ?? "session", session.timestamp ?? "time", index].join(
+      ":"
+    );
+  }
+
+  function health5mKey(
+    point: { timestamp?: string | null },
+    index: number,
+    series: string
+  ): string {
+    return [series, point.timestamp ?? "time", index].join(":");
+  }
+
   function navigateBack() {
     goto(resolve(`/streams/${streamId}`));
   }
@@ -1051,7 +1117,7 @@
                 <h4 class="text-sm font-medium text-muted-foreground">Per-Node Breakdown</h4>
               </div>
               <div class="divide-y divide-border/30">
-                {#each nodes as node (node.nodeId)}
+                {#each nodes as node, i (`${node.nodeId}:${i}`)}
                   <div class="p-3 flex items-center justify-between">
                     <div>
                       <p class="font-mono text-sm text-foreground">{node.nodeId}</p>
@@ -1115,7 +1181,7 @@
               </div>
               <div class="slab-body--padded">
                 <div class="space-y-3">
-                  {#each viewerGeography.countries as country (country.countryCode)}
+                  {#each viewerGeography.countries as country, i (`${country.countryCode}:${i}`)}
                     <div class="p-3 border border-border/30 bg-muted/10">
                       <div class="flex items-center justify-between mb-2">
                         <span class="font-medium text-foreground">{country.countryCode}</span>
@@ -1125,7 +1191,7 @@
                       </div>
                       {#if country.topCities.length > 0}
                         <div class="flex flex-wrap gap-2">
-                          {#each country.topCities as city (city.city)}
+                          {#each country.topCities as city, i (`${country.countryCode}:${city.city}:${i}`)}
                             <span
                               class="px-2 py-0.5 bg-muted/50 text-xs text-muted-foreground rounded"
                             >
@@ -1225,7 +1291,7 @@
           </div>
           {#if healthMetrics.length > 0}
             <div class="slab-body--flush max-h-96 overflow-y-auto">
-              {#each healthMetrics.slice(0, healthMetricsDisplayCount) as metric (metric.timestamp + metric.nodeId)}
+              {#each healthMetrics.slice(0, healthMetricsDisplayCount) as metric, i (metricKey(metric, i))}
                 <div class="p-3 border-b border-border/30 last:border-b-0">
                   <div class="flex justify-between items-start mb-2">
                     <span class="text-xs text-muted-foreground"
@@ -1291,7 +1357,7 @@
           </div>
           {#if trackListEvents.length > 0}
             <div class="slab-body--flush max-h-96 overflow-y-auto">
-              {#each trackListEvents.slice(0, trackListDisplayCount) as event, i (i)}
+              {#each trackListEvents.slice(0, trackListDisplayCount) as event, i (trackListEventKey(event, i))}
                 {@const tracks = getTracksForEvent(event)}
                 <div class="p-3 border-b border-border/30 last:border-b-0">
                   <div class="flex justify-between items-start mb-2">
@@ -1310,7 +1376,7 @@
 
                   {#if tracks.length > 0}
                     <div class="space-y-2">
-                      {#each tracks as track (track?.trackName ?? Math.random())}
+                      {#each tracks as track, i (trackKey(track, i))}
                         <div class="p-2 bg-muted/30 border border-border/30">
                           <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
@@ -1437,7 +1503,7 @@
             </span>
           </div>
           <div class="slab-body--flush max-h-72 overflow-y-auto">
-            {#each bufferEvents.slice(0, 10) as event (event.eventId)}
+            {#each bufferEvents.slice(0, 10) as event, i (bufferEventKey(event, i))}
               {@const payload = parseBufferPayload(event.payload)}
               {@const health = payload?.health as Record<string, unknown> | undefined}
               {@const trackCount = Array.isArray(health?.tracks) ? health?.tracks?.length : null}
@@ -1557,7 +1623,7 @@
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {#each viewerSessions.slice(0, viewerSessionsDisplayCount) as session (session.id)}
+                {#each viewerSessions.slice(0, viewerSessionsDisplayCount) as session, i (viewerSessionKey(session, i))}
                   <TableRow>
                     <TableCell class="text-xs text-muted-foreground font-mono">
                       {formatTimestamp(session.timestamp)}
@@ -1692,7 +1758,7 @@
                   <span class="text-xs text-muted-foreground">{health5mData.length} intervals</span>
                 </div>
                 <div class="flex items-end gap-px h-12">
-                  {#each health5mData as point (point.timestamp)}
+                  {#each health5mData as point, i (health5mKey(point, i, "rebuffers"))}
                     {@const maxRebuffers = Math.max(
                       ...health5mData.map((d) => d.rebufferCount ?? 0),
                       1
@@ -1719,7 +1785,7 @@
                   >
                 </div>
                 <div class="flex items-end gap-px h-12">
-                  {#each health5mData as point (point.timestamp)}
+                  {#each health5mData as point, i (health5mKey(point, i, "issues"))}
                     {@const maxIssues = Math.max(...health5mData.map((d) => d.issueCount ?? 0), 1)}
                     {@const heightPct = ((point.issueCount ?? 0) / maxIssues) * 100}
                     <div
@@ -1745,7 +1811,7 @@
                   >
                 </div>
                 <div class="flex items-end gap-px h-12">
-                  {#each health5mData as point (point.timestamp)}
+                  {#each health5mData as point, i (health5mKey(point, i, "bitrate"))}
                     {@const maxBitrate = Math.max(...health5mData.map((d) => d.avgBitrate ?? 0), 1)}
                     {@const heightPct = ((point.avgBitrate ?? 0) / maxBitrate) * 100}
                     <div
