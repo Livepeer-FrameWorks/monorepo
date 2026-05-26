@@ -376,6 +376,48 @@ frameworks admin clusters list
 
 ---
 
+### frameworks cluster finalize
+
+Resume the post-provision control-plane finalization steps without
+provisioning or restarting services.
+
+**Usage:**
+
+```bash
+frameworks cluster finalize [flags]
+```
+
+**Process:**
+
+1. Load the cluster manifest and SOPS-backed `env_files`
+2. Render the same bootstrap desired-state document used by provisioning
+3. Run `purser bootstrap` and `purser bootstrap validate`
+4. Run `commodore bootstrap`
+5. Run control-plane validation
+
+**Flags:**
+
+- Inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
+- `--only string` - Finalization slice to run (`all`, `purser`, `commodore`, `validation`)
+- `--skip-validation` - Skip final control-plane validation when `--only=all`
+- `--ignore-validation` - Continue even if control-plane validation has warnings
+- `--bootstrap-admin-*` / `--bootstrap-reset-credentials` / `--strict-control-plane` - Same bootstrap controls as `cluster provision`
+
+**Examples:**
+
+```bash
+# Resume every post-provision finalization step
+frameworks cluster finalize --gitops-dir gitops --cluster production
+
+# Retry only Commodore bootstrap after fixing stale stream state
+frameworks cluster finalize --gitops-dir gitops --cluster production --only commodore
+
+# Run only the final control-plane validation
+frameworks cluster finalize --gitops-dir gitops --cluster production --only validation
+```
+
+---
+
 ### frameworks cluster init
 
 Initialize databases and create required schemas/tables.
@@ -413,6 +455,7 @@ frameworks cluster init postgres --manifest production.yaml
 
 | Command                                                 | Purpose                                                                                                                                                                                                                                     |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster finalize`                           | Resume service-owned post-provision finalization without provisioning or restarting services; supports `--only purser`, `--only commodore`, and `--only validation`.                                                                        |
 | `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                        |
 | `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). |
 | `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                            |

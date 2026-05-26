@@ -930,8 +930,12 @@ func validateControlPlane(ctx context.Context, cmd *cobra.Command, manifest *inv
 	for _, w := range report.Warnings {
 		ux.Warn(cmd.OutOrStdout(), w.Detail)
 	}
+	ignore, _ := cmd.Flags().GetBool("ignore-validation")    //nolint:errcheck // absent flags default to false
 	strict, _ := cmd.Flags().GetBool("strict-control-plane") //nolint:errcheck // flag always exists
 	switch {
+	case ignore:
+		ux.Warn(cmd.OutOrStdout(), "Continuing despite control-plane validation warnings (--ignore-validation)")
+		return nil
 	case strict:
 		return fmt.Errorf("control-plane validation failed with %d warning(s) (--strict-control-plane is set)", len(report.Warnings))
 	case !isDevProfile(manifest):
