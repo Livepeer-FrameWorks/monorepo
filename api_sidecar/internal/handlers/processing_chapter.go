@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -161,12 +162,43 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		defer clearProcessingProcessOverride(streamName)
 	}
 
-	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+	fallbackAttempted := false
+	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
+	ignoredProcessExitBootCounts := map[string]int{}
+
+	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
-		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed",
-			fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
-		return
+		var livepeerBootErr *livepeerReadinessFallbackError
+		if errors.As(readinessErr, &livepeerBootErr) && !fallbackAttempted {
+			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Chapter finalize: Livepeer unrecoverable during readiness, falling back to local MistProcAV")
+			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
+			h.stopProcessingPush(log, mistClient, streamName)
+			os.Remove(outputPath)
+			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
+			setProcessingProcessOverride(streamName, localConfig)
+			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
+			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+				log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for readiness fallback")
+			}
+			doneCh = make(chan struct{}, 1)
+			pendingJobsMu.Lock()
+			pendingJobs[streamName] = doneCh
+			pendingJobsMu.Unlock()
+			streamOutputs, _, readinessErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+			if readinessErr != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed",
+					fmt.Sprintf("chapter finalize livepeer fallback readiness: %v", readinessErr), nil, "", 0)
+				return
+			}
+			fallbackAttempted = true
+			hasLivepeer = false
+		} else {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed",
+				fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
+			return
+		}
 	}
 
 	if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
@@ -180,9 +212,6 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 	var lastMs int64
 	lastAdvance := time.Now()
 	const stallTimeout = 3 * time.Minute
-	fallbackAttempted := false
-	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
-	ignoredProcessExitBootCounts := map[string]int{}
 
 	restartWithLocalMistProc := func(reason string) error {
 		ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
@@ -199,7 +228,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		pendingJobs[streamName] = doneCh
 		pendingJobsMu.Unlock()
 		var waitErr error
-		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			return fmt.Errorf("%s fallback readiness: %w", reason, waitErr)
 		}
@@ -220,13 +249,7 @@ loop:
 			log.Info("Chapter finalize: PUSH_END received")
 			break loop
 		case evt := <-processExitCh:
-			evtFields := logging.Fields{
-				"process":    evt.ProcessType,
-				"exit_code":  evt.ExitCode,
-				"boot_count": evt.BootCount,
-				"status":     evt.Status,
-				"reason":     evt.Reason,
-			}
+			evtFields := processExitFields(evt)
 			if shouldIgnoreProcessExit(evt, ignoredProcessExitBootCounts) {
 				log.WithFields(evtFields).Debug("Chapter finalize: ignoring stale process exit from retired generation")
 				continue

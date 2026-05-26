@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -499,6 +500,47 @@ func TestShouldIgnoreProcessExitWhenTypeRetiredWithoutBootCount(t *testing.T) {
 	}
 	if shouldIgnoreProcessExit(ProcessExitEvent{ProcessType: "AV", BootCount: 1}, ignored) {
 		t.Fatal("expected non-retired process types to remain eligible")
+	}
+}
+
+func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testing.T) {
+	h := &ProcessingJobHandler{}
+	req := &pb.ProcessingJobRequest{
+		ProcessesJson: `[{"process":"Livepeer"}]`,
+	}
+	processExitCh := make(chan ProcessExitEvent, 1)
+	processExitCh <- ProcessExitEvent{
+		StreamName:  "processing+artifact",
+		ProcessType: "Livepeer",
+		ExitCode:    2,
+		BootCount:   1,
+		Status:      "unrecoverable",
+		Reason:      "too many upload failures",
+	}
+
+	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", processExitCh, map[string]int{})
+	var fallbackErr *livepeerReadinessFallbackError
+	if !errors.As(err, &fallbackErr) {
+		t.Fatalf("expected livepeer readiness fallback error, got %v", err)
+	}
+	if fallbackErr.evt.Reason != "too many upload failures" {
+		t.Fatalf("fallback reason = %q", fallbackErr.evt.Reason)
+	}
+}
+
+func TestNextProcessExitEventSkipsRetiredGenerations(t *testing.T) {
+	ignored := map[string]int{}
+	ignoreProcessExitThrough(ignored, "Livepeer", 2)
+	processExitCh := make(chan ProcessExitEvent, 2)
+	processExitCh <- ProcessExitEvent{ProcessType: "Livepeer", BootCount: 2, Status: "unrecoverable"}
+	processExitCh <- ProcessExitEvent{ProcessType: "Livepeer", BootCount: 3, Status: "unrecoverable"}
+
+	evt, ok := nextProcessExitEvent(processExitCh, ignored)
+	if !ok {
+		t.Fatal("expected eligible process exit event")
+	}
+	if evt.BootCount != 3 {
+		t.Fatalf("boot count = %d, want 3", evt.BootCount)
 	}
 }
 

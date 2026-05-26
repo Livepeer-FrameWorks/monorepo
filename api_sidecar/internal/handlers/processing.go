@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -254,11 +255,41 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		return
 	}
 
-	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+	fallbackAttempted := false
+	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
+	ignoredProcessExitBootCounts := map[string]int{}
+
+	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
-		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed", waitErr.Error(), nil, "", 0)
-		return
+		var livepeerBootErr *livepeerReadinessFallbackError
+		if errors.As(waitErr, &livepeerBootErr) && !fallbackAttempted {
+			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Livepeer unrecoverable during readiness, falling back to local MistProcAV")
+			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
+			h.stopProcessingPush(log, mistClient, streamName)
+			os.Remove(outputPath)
+			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
+			setProcessingProcessOverride(streamName, localConfig)
+			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
+			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+				log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer readiness fallback")
+			}
+			doneCh = make(chan struct{}, 1)
+			pendingJobsMu.Lock()
+			pendingJobs[streamName] = doneCh
+			pendingJobsMu.Unlock()
+			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+			if waitErr != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
+				return
+			}
+			fallbackAttempted = true
+			hasLivepeer = false
+		} else {
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", waitErr.Error(), nil, "", 0)
+			return
+		}
 	}
 	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
 
@@ -275,9 +306,6 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	var lastMs int64
 	lastAdvance := time.Now()
 	const stallTimeout = 3 * time.Minute
-	fallbackAttempted := false
-	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
-	ignoredProcessExitBootCounts := map[string]int{}
 
 loop:
 	for {
@@ -287,13 +315,7 @@ loop:
 			break loop
 
 		case evt := <-processExitCh:
-			evtFields := logging.Fields{
-				"process":    evt.ProcessType,
-				"exit_code":  evt.ExitCode,
-				"boot_count": evt.BootCount,
-				"status":     evt.Status,
-				"reason":     evt.Reason,
-			}
+			evtFields := processExitFields(evt)
 			if shouldIgnoreProcessExit(evt, ignoredProcessExitBootCounts) {
 				log.WithFields(evtFields).Debug("Ignoring stale process exit from retired generation")
 				continue
@@ -317,7 +339,7 @@ loop:
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
-				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 				if waitErr != nil {
 					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
 					return
@@ -383,7 +405,7 @@ loop:
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
-					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName)
+					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 					if waitErr != nil {
 						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback readiness: %v", waitErr), nil, "", 0)
 						return
@@ -496,7 +518,7 @@ type processingTrackPresence struct {
 // until Mist has exposed the source tracks plus the configured MistProc output
 // tracks. Starting the file push before this point can permanently exclude
 // generated tracks from the muxed artifact.
-func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, streamName string) (map[string]string, int64, error) {
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, streamName string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(req.GetProcessesJson())
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
@@ -505,6 +527,24 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 	defer bootTicker.Stop()
 
 	for {
+		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
+			evtFields := processExitFields(evt)
+			switch {
+			case evt.Status == "unrecoverable" && evt.ProcessType == "Livepeer":
+				log.WithFields(evtFields).Warn("Livepeer unrecoverable while waiting for processing readiness")
+				return nil, 0, &livepeerReadinessFallbackError{evt: evt}
+			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
+				log.WithFields(evtFields).Error("Critical process unrecoverable while waiting for processing readiness")
+				return nil, 0, fmt.Errorf("%s process failed during readiness: %s", evt.ProcessType, evt.Reason)
+			case evt.Status == "unrecoverable":
+				log.WithFields(evtFields).Warn("Non-critical process failed while waiting for processing readiness")
+			case evt.Status == "retrying":
+				log.WithFields(evtFields).Info("Process retrying while waiting for processing readiness")
+			case evt.Status == "clean":
+				log.WithFields(evtFields).Info("Process exited cleanly while waiting for processing readiness")
+			}
+		}
+
 		if err := h.bootMistStream(streamName); err != nil {
 			lastErr = err
 		}
@@ -983,6 +1023,17 @@ type ProcessExitEvent struct {
 
 const ignoreAllProcessExitBootCounts = -1
 
+type livepeerReadinessFallbackError struct {
+	evt ProcessExitEvent
+}
+
+func (e *livepeerReadinessFallbackError) Error() string {
+	if e.evt.Reason != "" {
+		return fmt.Sprintf("livepeer process failed during readiness: %s", e.evt.Reason)
+	}
+	return "livepeer process failed during readiness"
+}
+
 // processExitListeners routes PROCESS_EXIT triggers to processing handlers.
 var (
 	processExitListeners   = map[string]chan ProcessExitEvent{}
@@ -1017,6 +1068,33 @@ func shouldIgnoreProcessExit(evt ProcessExitEvent, ignored map[string]int) bool 
 		return true
 	}
 	return evt.BootCount <= cutoff
+}
+
+func processExitFields(evt ProcessExitEvent) logging.Fields {
+	return logging.Fields{
+		"process":    evt.ProcessType,
+		"exit_code":  evt.ExitCode,
+		"boot_count": evt.BootCount,
+		"status":     evt.Status,
+		"reason":     evt.Reason,
+	}
+}
+
+func nextProcessExitEvent(processExitCh <-chan ProcessExitEvent, ignored map[string]int) (ProcessExitEvent, bool) {
+	if processExitCh == nil {
+		return ProcessExitEvent{}, false
+	}
+	for {
+		select {
+		case evt := <-processExitCh:
+			if shouldIgnoreProcessExit(evt, ignored) {
+				continue
+			}
+			return evt, true
+		default:
+			return ProcessExitEvent{}, false
+		}
+	}
 }
 
 func RegisterProcessExitListener(streamName string) chan ProcessExitEvent {
