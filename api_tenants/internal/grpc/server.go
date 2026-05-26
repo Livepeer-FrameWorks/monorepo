@@ -1771,7 +1771,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 			$4, '',
 			0, 0, 0,
 			'private', 'free_unmetered', $5,
-			NULLIF($8::text, ''), $2, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
+			NULLIF($8::text, ''), $2::text, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
 			'unknown', true, $6, $6
 		)
 	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
@@ -9914,7 +9914,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 			$4, '',
 			0, 0, 0,
 			'private', 'free_unmetered', $5,
-			NULLIF($8, ''), $2, 'tenant_private', $7, ARRAY[$7]::TEXT[],
+			NULLIF($8::text, ''), $2::text, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
 			'unknown', true, $6, $6
 		)
 	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
