@@ -99,14 +99,18 @@ const caddyfileTmpl = `{
 			respond "" 204
 		}
 		reverse_proxy {{.MistUpstream}} {
-			header_down Access-Control-Allow-Origin "*"
-			header_down Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-			header_down Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
-			header_down Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
+			header_down -Access-Control-Allow-Origin
+			header_down -Access-Control-Allow-Methods
+			header_down -Access-Control-Allow-Headers
+			header_down -Access-Control-Expose-Headers
 			header_down -Access-Control-Allow-Credentials
 			header_down -Access-Control-Max-Age
 			header_down -Access-Control-Request-Headers
 			header_down -Access-Control-Request-Method
+			header_down Access-Control-Allow-Origin "*"
+			header_down Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+			header_down Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
+			header_down Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
 			flush_interval -1
 			transport http {
 				read_timeout 0

@@ -156,6 +156,10 @@ func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
 		t.Fatalf("expected X-Mst-Path public base header for Mist; got:\n%s", out)
 	}
 	for _, headerName := range []string{
+		"Access-Control-Allow-Headers",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Origin",
+		"Access-Control-Expose-Headers",
 		"Access-Control-Allow-Credentials",
 		"Access-Control-Max-Age",
 		"Access-Control-Request-Headers",
