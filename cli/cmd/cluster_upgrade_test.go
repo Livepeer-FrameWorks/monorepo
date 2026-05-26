@@ -44,12 +44,12 @@ func TestCollectUpgradeableServices_DeduplicatesMultiHost(t *testing.T) {
 	plan := &orchestrator.ExecutionPlan{
 		Batches: [][]*orchestrator.Task{
 			{
-				{Name: "postgres", ServiceID: "postgres", Phase: orchestrator.PhaseInfrastructure},
-				{Name: "kafka", ServiceID: "kafka", Phase: orchestrator.PhaseInfrastructure},
+				{Name: "privateer-mesh-host-a", ServiceID: "privateer", InstanceID: "host-a", Phase: orchestrator.PhaseMesh},
+				{Name: "privateer-mesh-host-b", ServiceID: "privateer", InstanceID: "host-b", Phase: orchestrator.PhaseMesh},
 			},
 			{
-				{Name: "privateer@host-a", ServiceID: "privateer", InstanceID: "host-a", Phase: orchestrator.PhaseApplications},
-				{Name: "privateer@host-b", ServiceID: "privateer", InstanceID: "host-b", Phase: orchestrator.PhaseApplications},
+				{Name: "postgres", ServiceID: "postgres", Phase: orchestrator.PhaseInfrastructure},
+				{Name: "kafka", ServiceID: "kafka", Phase: orchestrator.PhaseInfrastructure},
 			},
 			{
 				{Name: "bridge@host-a", ServiceID: "bridge", InstanceID: "host-a", Phase: orchestrator.PhaseApplications},
@@ -60,7 +60,7 @@ func TestCollectUpgradeableServices_DeduplicatesMultiHost(t *testing.T) {
 	}
 
 	got := collectUpgradeableServices(plan)
-	want := []string{"privateer", "bridge", "commodore"}
+	want := []string{"bridge", "commodore"}
 
 	if len(got) != len(want) {
 		t.Fatalf("expected %d services, got %d: %v", len(want), len(got), got)

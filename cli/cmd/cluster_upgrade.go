@@ -786,14 +786,14 @@ func waitForHealth(ctx context.Context, check func() error, interval, timeout ti
 }
 
 // collectUpgradeableServices extracts deduplicated service IDs from app and
-// interface plan tasks. Infrastructure has release-artifact semantics per
-// role and is upgraded through its own command paths, not this service loop.
+// interface plan tasks. Mesh and infrastructure phases have role/fanout
+// semantics and are not valid inputs to runUpgrade's single-service loop.
 func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 	seen := make(map[string]bool)
 	var services []string
 	for _, batch := range plan.Batches {
 		for _, task := range batch {
-			if task.Phase == orchestrator.PhaseInfrastructure {
+			if task.Phase == orchestrator.PhaseMesh || task.Phase == orchestrator.PhaseInfrastructure {
 				continue
 			}
 			svcID := task.ServiceID
