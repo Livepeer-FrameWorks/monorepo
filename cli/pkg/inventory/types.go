@@ -91,6 +91,7 @@ type ClusterConfig struct {
 	Roles            []string              `yaml:"roles,omitempty"`             // control, data, analytics, media, mesh, interface, infra, support, observability
 	Default          bool                  `yaml:"default,omitempty"`           // is_default_cluster — auto-subscribe new tenants
 	PlatformOfficial bool                  `yaml:"platform_official,omitempty"` // is_platform_official — platform-operated cluster
+	PublicTopology   bool                  `yaml:"public_topology,omitempty"`   // public map/coverage visibility
 	OwnerTenant      string                `yaml:"owner_tenant,omitempty"`      // "frameworks" (system tenant) or bootstrap tenant alias
 	Pricing          *ClusterPricingConfig `yaml:"pricing,omitempty"`           // Purser cluster pricing (reconciled authoritatively when present)
 

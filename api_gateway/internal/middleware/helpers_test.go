@@ -115,11 +115,11 @@ func TestIsAllowlistedQuery(t *testing.T) {
 		expected bool
 	}{
 		{name: "mutation blocked", body: `{"query":"mutation { serviceInstancesHealth }"}`, expected: false},
-		{name: "serviceInstancesHealth allowed", body: `{"query":"query { serviceInstancesHealth }"}`, expected: true},
+		{name: "serviceInstancesHealth blocked", body: `{"query":"query { serviceInstancesHealth }"}`, expected: false},
 		{name: "resolveViewerEndpoint allowed", body: `{"query":"query { ResolveViewerEndpoint }"}`, expected: true},
 		{name: "resolveIngestEndpoint allowed", body: `{"query":"query { resolveIngestEndpoint }"}`, expected: true},
 		{name: "not allowlisted", body: `{"query":"query { other }"}`, expected: false},
-		{name: "operationName match", body: `{"query":"query ServiceInstancesHealth { serviceInstancesHealth { status } }","operationName":"ServiceInstancesHealth"}`, expected: true},
+		{name: "operationName match", body: `{"query":"query NetworkStatus { networkStatus { totalNodes } }","operationName":"NetworkStatus"}`, expected: true},
 		{name: "mixed selection blocked", body: `{"query":"query { resolveViewerEndpoint(contentId:\"x\"){streamName} me { id } }"}`, expected: false},
 		{name: "allowlisted operation with __typename", body: `{"query":"query { __typename resolveIngestEndpoint(streamKey:\"x\"){hostname} }"}`, expected: true},
 		{name: "multiple operations require operationName", body: `{"query":"query A { resolveViewerEndpoint(contentId:\"x\"){streamName} } query B { networkStatus { totalNodes } }"}`, expected: false},

@@ -51,6 +51,7 @@ type Cluster struct {
 	OwnerTenant             TenantRef   `yaml:"owner_tenant"`
 	IsDefault               bool        `yaml:"is_default,omitempty"`
 	IsPlatformOfficial      bool        `yaml:"is_platform_official,omitempty"`
+	PublicTopology          bool        `yaml:"public_topology,omitempty"`
 	AllowPrivatePullSources bool        `yaml:"allow_private_pull_sources,omitempty"`
 	BaseURL                 string      `yaml:"base_url,omitempty"`
 	Mesh                    ClusterMesh `yaml:"mesh"`

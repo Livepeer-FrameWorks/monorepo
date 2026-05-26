@@ -4,7 +4,7 @@
   import { SvelteMap } from "svelte/reactivity";
   import {
     fragment,
-    GetNodesConnectionStore,
+    GetNetworkStatusStore,
     GetClustersAccessStore,
     GetMySubscriptionsStore,
     GetMyClusterInvitesStore,
@@ -18,7 +18,6 @@
     GetMarketplaceClustersStore,
     SubscribeToClusterStore,
     RequestClusterSubscriptionStore,
-    NodeListFieldsStore,
     BootstrapTokenFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
@@ -45,7 +44,7 @@
   const SparklesIcon = getIconComponent("Sparkles");
 
   // My Network stores
-  const nodesStore = new GetNodesConnectionStore();
+  const networkStore = new GetNetworkStatusStore();
   const accessStore = new GetClustersAccessStore();
   const subscriptionsStore = new GetMySubscriptionsStore();
   const invitesStore = new GetMyClusterInvitesStore();
@@ -62,7 +61,6 @@
   const requestMutation = new RequestClusterSubscriptionStore();
 
   // Fragment stores
-  const nodeCoreStore = new NodeListFieldsStore();
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   function unmaskBootstrapToken(
@@ -73,8 +71,6 @@
   }
 
   // My Network derived state
-  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
-  let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let mySubscriptions = $derived($subscriptionsStore.data?.mySubscriptions ?? []);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let pendingInvites = $derived(
@@ -140,12 +136,13 @@
   let createdBootstrapToken = $state<string | null>(null);
   let createdFoghornAddr = $state<string | null>(null);
 
+  let publicMapNodes = $derived($networkStore.data?.networkStatus?.nodes ?? []);
   let mapNodes = $derived(
-    nodes
+    publicMapNodes
       .filter((n) => n.latitude && n.longitude)
       .map((n) => ({
-        id: n.id,
-        name: n.nodeName,
+        id: n.nodeId,
+        name: n.name,
         lat: n.latitude!,
         lng: n.longitude!,
       }))
@@ -160,10 +157,8 @@
       subscriptionsStore.fetch(),
       invitesStore.fetch(),
       marketplaceStore.fetch(),
+      networkStore.fetch(),
     ]);
-    if (ownedClusterIds.length > 0) {
-      await nodesStore.fetch();
-    }
     await fetchPendingApprovals();
   });
 

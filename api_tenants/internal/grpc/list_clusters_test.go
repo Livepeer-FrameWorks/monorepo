@@ -19,7 +19,7 @@ var clusterColumns = []string{
 	"base_url", "database_url", "periscope_url", "kafka_brokers",
 	"max_concurrent_streams", "max_concurrent_viewers", "max_bandwidth_mbps",
 	"health_status", "is_active", "is_default_cluster", "is_platform_official",
-	"allow_private_pull_sources", "created_at", "updated_at",
+	"public_topology", "allow_private_pull_sources", "created_at", "updated_at",
 }
 
 func newClusterRow(id, clusterID, clusterName, clusterType string, isDefault bool, isPlatformOfficial bool) []driver.Value {
@@ -42,6 +42,7 @@ func newClusterRow(id, clusterID, clusterName, clusterType string, isDefault boo
 		true,
 		isDefault,
 		isPlatformOfficial,
+		false,
 		false,
 		now,
 		now,

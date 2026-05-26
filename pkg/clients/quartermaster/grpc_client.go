@@ -309,6 +309,14 @@ func (c *GRPCClient) ListOfficialClusters(ctx context.Context) (*pb.ListClusters
 	})
 }
 
+// ListPublicTopologyClusters lists clusters visible on public topology maps.
+func (c *GRPCClient) ListPublicTopologyClusters(ctx context.Context) (*pb.ListClustersResponse, error) {
+	t := true
+	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+		PublicTopology: &t,
+	})
+}
+
 // CreateCluster creates a new cluster
 func (c *GRPCClient) CreateCluster(ctx context.Context, req *pb.CreateClusterRequest) (*pb.ClusterResponse, error) {
 	return c.cluster.CreateCluster(ctx, req)

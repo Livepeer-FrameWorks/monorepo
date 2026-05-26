@@ -3013,6 +3013,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	tenantID := middleware.GetTenantID(ctx)
 	ownerTenantID := strings.TrimSpace(req.GetOwnerTenantId())
 	publicPlatformOfficialScope := ownerTenantID == "" && req.IsPlatformOfficial != nil && req.GetIsPlatformOfficial()
+	publicTopologyScope := ownerTenantID == "" && req.PublicTopology != nil && req.GetPublicTopology()
 
 	builder := &pagination.KeysetBuilder{
 		TimestampColumn: "c.created_at",
@@ -3031,6 +3032,10 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	} else if publicPlatformOfficialScope {
 		baseWhere = `
 			WHERE c.is_platform_official = true
+		`
+	} else if publicTopologyScope {
+		baseWhere = `
+			WHERE c.public_topology = true AND c.is_active = true
 		`
 	} else if tenantID != "" {
 		baseWhere = `
@@ -3094,6 +3099,13 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		countArgs = append(countArgs, *req.IsPlatformOfficial)
 		argIdx++
 	}
+	if req.PublicTopology != nil && !publicTopologyScope {
+		where += fmt.Sprintf(" AND c.public_topology = $%d", argIdx)
+		countWhere += fmt.Sprintf(" AND c.public_topology = $%d", argIdx)
+		args = append(args, *req.PublicTopology)
+		countArgs = append(countArgs, *req.PublicTopology)
+		argIdx++
+	}
 
 	// Get total count
 	var total int32
@@ -3116,7 +3128,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.allow_private_pull_sources, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s %s
 		%s
@@ -3242,6 +3254,10 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 	if req.AllowPrivatePullSources != nil {
 		allowPrivatePullSources = *req.AllowPrivatePullSources
 	}
+	publicTopology := false
+	if req.PublicTopology != nil {
+		publicTopology = *req.PublicTopology
+	}
 
 	// At most one cluster can be the default — clear existing before setting.
 	if isDefaultCluster {
@@ -3256,13 +3272,13 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		                                                   health_status, is_active, is_platform_official, is_default_cluster,
-		                                                   allow_private_pull_sources, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $17, $17)
+		                                                   public_topology, allow_private_pull_sources, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $15, $16, $17, $18, $18)
 	`, id, clusterID, req.GetClusterName(), clusterType, deploymentModel,
 		ownerTenantID, baseURL,
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(),
-		isPlatformOfficial, isDefaultCluster, allowPrivatePullSources, now)
+		isPlatformOfficial, isDefaultCluster, publicTopology, allowPrivatePullSources, now)
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
@@ -3400,6 +3416,11 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	if req.AllowPrivatePullSources != nil {
 		updates = append(updates, fmt.Sprintf("allow_private_pull_sources = $%d", argIdx))
 		args = append(args, *req.AllowPrivatePullSources)
+		argIdx++
+	}
+	if req.PublicTopology != nil {
+		updates = append(updates, fmt.Sprintf("public_topology = $%d", argIdx))
+		args = append(args, *req.PublicTopology)
 		argIdx++
 	}
 
@@ -4104,7 +4125,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.allow_private_pull_sources, c.created_at, c.updated_at
+		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s
 		%s
@@ -5295,11 +5316,11 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 			)
 		`
 	} else {
-		// Unauthenticated: all platform-official clusters
+		// Unauthenticated: clusters explicitly published to public topology.
 		baseWhere = `
 			WHERE n.cluster_id IN (
 				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
-				WHERE c.is_platform_official = true AND c.is_active = true
+				WHERE c.public_topology = true AND c.is_active = true
 			)
 		`
 	}
@@ -5468,7 +5489,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		baseWhere = `
 			WHERE n.cluster_id IN (
 				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
-				WHERE c.is_platform_official = true AND c.is_active = true
+				WHERE c.public_topology = true AND c.is_active = true
 			)
 		`
 	}
@@ -8963,7 +8984,7 @@ func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
 		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
-		&cluster.IsPlatformOfficial, &cluster.AllowPrivatePullSources, &createdAt, &updatedAt,
+		&cluster.IsPlatformOfficial, &cluster.PublicTopology, &cluster.AllowPrivatePullSources, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -9113,7 +9134,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
 		       base_url, database_url, periscope_url, kafka_brokers,
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-		       health_status, is_active, is_default_cluster, is_platform_official, created_at, updated_at,
+		       health_status, is_active, is_default_cluster, is_platform_official, public_topology, created_at, updated_at,
 		       visibility, requires_approval, short_description,
 		       COALESCE(s3_bucket, ''), COALESCE(s3_endpoint, ''), COALESCE(s3_region, ''),
 		       COALESCE(region_id, ''), COALESCE(cell_id, ''), COALESCE(cluster_class, ''),
@@ -9136,7 +9157,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&ownerTenantID, &cluster.DeploymentModel, &cluster.BaseUrl, &databaseURL, &periscopeURL,
 		pq.Array(&kafkaBrokers), &cluster.MaxConcurrentStreams, &cluster.MaxConcurrentViewers,
 		&cluster.MaxBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
-		&cluster.IsPlatformOfficial, &createdAt, &updatedAt,
+		&cluster.IsPlatformOfficial, &cluster.PublicTopology, &createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
 		&cluster.S3Bucket, &cluster.S3Endpoint, &cluster.S3Region,
 		&cluster.RegionId, &cluster.CellId, &cluster.ClusterClass,

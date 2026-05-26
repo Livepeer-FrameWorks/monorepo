@@ -4,17 +4,18 @@
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-    is_default_cluster, is_platform_official,
+    is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'central-primary', 'Central Platform', 'central', 'platform.demo.frameworks.network',
     0, 0, 0,
-    FALSE, TRUE,
+    FALSE, TRUE, TRUE,
     'public', 'Platform services: API, billing, analytics, events'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_platform_official = TRUE,
+    public_topology = TRUE,
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
@@ -22,18 +23,19 @@ ON CONFLICT (cluster_id) DO UPDATE SET
 INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-    is_default_cluster, is_platform_official,
+    is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-media', 'Demo Media Cluster', 'edge', 'demo.frameworks.network',
     0, 0, 0,
-    TRUE, TRUE,
+    TRUE, TRUE, TRUE,
     'public', 'Media cluster: edge nodes, stream routing, viewer delivery'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     is_default_cluster = TRUE,
     is_platform_official = TRUE,
+    public_topology = TRUE,
     visibility = 'public',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
@@ -52,19 +54,20 @@ INSERT INTO quartermaster.infrastructure_clusters (
     cluster_id, cluster_name, cluster_type, base_url,
     owner_tenant_id,
     max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
-    is_default_cluster, is_platform_official,
+    is_default_cluster, is_platform_official, public_topology,
     visibility, short_description
 )
 VALUES (
     'demo-selfhosted', 'Demo Self-hosted Cluster', 'edge', 'selfhosted.demo.frameworks.network',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     0, 0, 0,
-    FALSE, FALSE,
+    FALSE, FALSE, FALSE,
     'private', 'Tenant-owned media cluster for local offload testing'
 )
 ON CONFLICT (cluster_id) DO UPDATE SET
     owner_tenant_id = EXCLUDED.owner_tenant_id,
     is_platform_official = FALSE,
+    public_topology = FALSE,
     visibility = 'private',
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 

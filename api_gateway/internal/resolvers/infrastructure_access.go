@@ -47,6 +47,11 @@ func (r *Resolver) requireClusterOperatorTenant(ctx context.Context) (string, ma
 	return tenantID, owned, nil
 }
 
+func (r *Resolver) RequireClusterOperatorTenant(ctx context.Context) error {
+	_, _, err := r.requireClusterOperatorTenant(ctx)
+	return err
+}
+
 func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) error {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {

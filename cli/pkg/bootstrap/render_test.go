@@ -41,6 +41,7 @@ func minimalManifest() *inventory.Manifest {
 				Type:             "central",
 				Default:          true,
 				PlatformOfficial: true,
+				PublicTopology:   true,
 				OwnerTenant:      "frameworks",
 				Pricing: &inventory.ClusterPricingConfig{
 					Model:             "tiered",
@@ -75,8 +76,8 @@ func TestDeriveProducesSystemTenantAndCluster(t *testing.T) {
 	if c.Mesh.CIDR != "10.99.0.0/16" {
 		t.Fatalf("cluster.mesh.cidr = %q, want 10.99.0.0/16", c.Mesh.CIDR)
 	}
-	if !c.IsDefault || !c.IsPlatformOfficial {
-		t.Fatalf("cluster flags = (default=%v, platform_official=%v); both should be true", c.IsDefault, c.IsPlatformOfficial)
+	if !c.IsDefault || !c.IsPlatformOfficial || !c.PublicTopology {
+		t.Fatalf("cluster flags = (default=%v, platform_official=%v, public_topology=%v); all should be true", c.IsDefault, c.IsPlatformOfficial, c.PublicTopology)
 	}
 
 	if got := len(d.Quartermaster.Nodes); got != 1 {

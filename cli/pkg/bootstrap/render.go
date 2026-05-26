@@ -71,6 +71,7 @@ func Derive(m *inventory.Manifest, opts DeriveOptions) (*Derived, error) {
 			c.Region = cc.Region
 			c.IsDefault = cc.Default
 			c.IsPlatformOfficial = cc.PlatformOfficial
+			c.PublicTopology = cc.PublicTopology
 			c.AllowPrivatePullSources = cc.AllowPrivatePullSources
 			c.Cell = cc.Cell
 			c.Class = cc.Class
@@ -972,6 +973,29 @@ func mergeClusterFields(derived, overlay Cluster) (Cluster, error) {
 	}
 	out.IsDefault = overlay.IsDefault
 	out.IsPlatformOfficial = overlay.IsPlatformOfficial
+	out.PublicTopology = overlay.PublicTopology
+	out.AllowPrivatePullSources = overlay.AllowPrivatePullSources
+	if overlay.Cell != "" {
+		out.Cell = overlay.Cell
+	}
+	if overlay.Class != "" {
+		out.Class = overlay.Class
+	}
+	if overlay.ControlCell != "" {
+		out.ControlCell = overlay.ControlCell
+	}
+	if len(overlay.EligibleServingCells) > 0 {
+		out.EligibleServingCells = overlay.EligibleServingCells
+	}
+	if overlay.S3Bucket != "" {
+		out.S3Bucket = overlay.S3Bucket
+	}
+	if overlay.S3Endpoint != "" {
+		out.S3Endpoint = overlay.S3Endpoint
+	}
+	if overlay.S3Region != "" {
+		out.S3Region = overlay.S3Region
+	}
 	if overlay.Mesh.ListenPort != 0 {
 		out.Mesh.ListenPort = overlay.Mesh.ListenPort
 	}

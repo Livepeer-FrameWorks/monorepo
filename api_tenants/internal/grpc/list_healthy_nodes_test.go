@@ -129,7 +129,7 @@ func TestListHealthyNodesForDNS_AnonymousUsesPlatformOfficialClusters(t *testing
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	svcType := "bridge"
-	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.is_platform_official = true AND c\.is_active = true\s*\).*AND s\.type = \$1`
+	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.public_topology = true AND c\.is_active = true\s*\).*AND s\.type = \$1`
 
 	mock.ExpectQuery(publicScope).
 		WithArgs(svcType).
@@ -172,7 +172,7 @@ func TestListHealthyNodesForDNS_ServiceTypeReturnsMatchingNodes(t *testing.T) {
 
 	svcType := "bridge"
 
-	// Total count query (no tenant = platform official path)
+	// Total count query (no tenant = public topology path)
 	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
 		WithArgs(svcType).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))

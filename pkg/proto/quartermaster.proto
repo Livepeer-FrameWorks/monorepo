@@ -622,6 +622,9 @@ message InfrastructureCluster {
   // Cells permitted to serve this cluster's content; single-element
   // [control_cell_id] is the common case.
   repeated string eligible_serving_cell_ids = 33;
+  // Public map visibility. Allows topology/coverage reads without exposing
+  // owner-only operations, host metrics, or node admin surfaces.
+  bool public_topology = 34;
 }
 
 message ClusterResponse {
@@ -636,6 +639,7 @@ message ListClustersRequest {
   string deployment_model = 5;
   optional string owner_tenant_id = 6;
   optional bool is_platform_official = 7;
+  optional bool public_topology = 8;
 }
 
 message ListClustersResponse {
@@ -662,6 +666,7 @@ message CreateClusterRequest {
   optional bool is_platform_official = 23; // Platform-operated cluster
   optional bool is_default_cluster = 24;   // Auto-subscribe new tenants to this cluster
   optional bool allow_private_pull_sources = 25; // Cluster allows pulls from RFC1918 / multicast
+  optional bool public_topology = 26; // Cluster appears on public topology/coverage maps
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -682,6 +687,7 @@ message UpdateClusterRequest {
   optional bool is_platform_official = 14; // json:"is_platform_official,omitempty" - Platform-operated cluster
   optional bool is_default_cluster = 15;   // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
   optional bool allow_private_pull_sources = 16; // Cluster allows pulls from RFC1918 / multicast
+  optional bool public_topology = 17; // Set/clear public topology visibility
 }
 
 // Updates the cluster's WireGuard mesh parameters (CIDR + default listen

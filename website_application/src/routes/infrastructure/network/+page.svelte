@@ -4,7 +4,7 @@
   import { SvelteMap } from "svelte/reactivity";
   import {
     fragment,
-    GetNodesConnectionStore,
+    GetNetworkStatusStore,
     GetClustersAccessStore,
     GetMySubscriptionsStore,
     GetMyClusterInvitesStore,
@@ -15,7 +15,6 @@
     SetPreferredClusterStore,
     ApproveClusterSubscriptionStore,
     RejectClusterSubscriptionStore,
-    NodeListFieldsStore,
     BootstrapTokenFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
@@ -26,7 +25,7 @@
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
 
-  const nodesStore = new GetNodesConnectionStore();
+  const networkStore = new GetNetworkStatusStore();
   const accessStore = new GetClustersAccessStore();
   const subscriptionsStore = new GetMySubscriptionsStore();
   const invitesStore = new GetMyClusterInvitesStore();
@@ -37,7 +36,6 @@
   const approveMutation = new ApproveClusterSubscriptionStore();
   const rejectMutation = new RejectClusterSubscriptionStore();
 
-  const nodeCoreStore = new NodeListFieldsStore();
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   function unmaskBootstrapToken(
@@ -47,8 +45,6 @@
     return get(fragment(masked, bootstrapTokenStore));
   }
 
-  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
-  let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let mySubscriptions = $derived($subscriptionsStore.data?.mySubscriptions ?? []);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let pendingInvites = $derived(
@@ -103,21 +99,23 @@
   let createdFoghornAddr = $state<string | null>(null);
 
   let mapNodes = $derived(
-    nodes
+    ($networkStore.data?.networkStatus?.nodes ?? [])
       .filter((n) => n.latitude && n.longitude)
       .map((n) => ({
-        id: n.id,
-        name: n.nodeName,
+        id: n.nodeId,
+        name: n.name,
         lat: n.latitude!,
         lng: n.longitude!,
       }))
   );
 
   onMount(async () => {
-    await Promise.all([accessStore.fetch(), subscriptionsStore.fetch(), invitesStore.fetch()]);
-    if (ownedClusterIds.length > 0) {
-      await nodesStore.fetch();
-    }
+    await Promise.all([
+      accessStore.fetch(),
+      subscriptionsStore.fetch(),
+      invitesStore.fetch(),
+      networkStore.fetch(),
+    ]);
     await fetchPendingApprovals();
   });
 

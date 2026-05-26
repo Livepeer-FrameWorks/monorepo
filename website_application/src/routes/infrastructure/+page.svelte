@@ -32,13 +32,15 @@
   const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
 
   let isAuthenticated = false;
+  let operatorAccessChecked = $state(false);
 
   let hasInfrastructureData = $derived(!!$infrastructureStore.data);
-  let loading = $derived(
-    ($accessStore.fetching || $infrastructureStore.fetching) && !hasInfrastructureData
-  );
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
+  let loading = $derived(
+    !operatorAccessChecked ||
+      (hasOperatorAccess && $infrastructureStore.fetching && !hasInfrastructureData)
+  );
   let tenant = $derived($infrastructureStore.data?.tenant ?? null);
   let clusters = $derived(
     $infrastructureStore.data?.clustersConnection?.edges?.map((e) => e.node) ?? []
@@ -138,6 +140,7 @@
       const metricsFirst = Math.min(range.days * 24, 150);
       const timeRangeInput = { start: range.start, end: range.end };
       await accessStore.fetch();
+      operatorAccessChecked = true;
       const ownsCluster =
         get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
         false;
@@ -159,6 +162,7 @@
         toast.error("Failed to load infrastructure data. Please refresh the page.");
       }
     } catch (error) {
+      operatorAccessChecked = true;
       console.error("Failed to load infrastructure data:", error);
       toast.error("Failed to load infrastructure data. Please refresh the page.");
     }

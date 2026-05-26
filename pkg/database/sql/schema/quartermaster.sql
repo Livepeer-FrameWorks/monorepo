@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     is_active BOOLEAN DEFAULT TRUE,
     is_default_cluster BOOLEAN DEFAULT FALSE,
     is_platform_official BOOLEAN DEFAULT FALSE,
+    public_topology BOOLEAN NOT NULL DEFAULT FALSE,
     -- Pull-source private-network allowance: when TRUE, pull streams placed on
     -- this cluster may resolve from RFC1918 / multicast literals. Defaults
     -- FALSE so platform-official clusters reject tenant-private upstreams.
@@ -440,6 +441,7 @@ CREATE INDEX IF NOT EXISTS idx_qm_sca_instance ON quartermaster.service_cluster_
 
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_cluster_type ON quartermaster.infrastructure_clusters(cluster_type);
 CREATE INDEX IF NOT EXISTS idx_qm_clusters_platform_official ON quartermaster.infrastructure_clusters(is_platform_official) WHERE is_platform_official = true;
+CREATE INDEX IF NOT EXISTS idx_qm_clusters_public_topology ON quartermaster.infrastructure_clusters(public_topology) WHERE public_topology = true;
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_clusters_owner_tenant ON quartermaster.infrastructure_clusters(owner_tenant_id);
 CREATE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_cluster_id ON quartermaster.infrastructure_nodes(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_qm_services_plane ON quartermaster.services(plane);

@@ -14,7 +14,7 @@ and real-time subscriptions.
 ## Authentication
 Most queries require a valid JWT or API token in the Authorization header.
 The dashboard may also authenticate via httpOnly cookies.
-Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `serviceInstancesHealth`, `networkStatus`.
+Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and public orchestrator topology fields.
 Tenant isolation is enforced - you can only access your own data.
 """
 schema {
@@ -436,7 +436,7 @@ type Query {
   mySubscriptionsConnection(page: ConnectionInput): MySubscriptionsConnection!
 
   """
-  Check health status of service instances (public allowlist).
+  Check health status of service instances for owned infrastructure.
   """
   serviceInstancesHealth(
     """
@@ -5988,7 +5988,7 @@ type NetworkPeerConnection {
   connectionType: String!
 }
 
-# Individual node in public official or owned cluster topology.
+# Individual node in public, subscribed, or owned cluster topology.
 type NetworkNode {
   nodeId: String!
   name: String!
@@ -5999,7 +5999,7 @@ type NetworkNode {
   clusterId: String!
 }
 
-# Running service instance in public official or owned cluster topology.
+# Running service instance exposed only for owned cluster topology.
 type NetworkServiceInstance {
   instanceId: String!
   serviceId: String!

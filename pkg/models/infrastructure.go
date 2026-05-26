@@ -87,6 +87,7 @@ type InfrastructureCluster struct {
 	IsActive           bool       `json:"is_active" db:"is_active"`
 	IsDefaultCluster   bool       `json:"is_default_cluster" db:"is_default_cluster"`
 	IsPlatformOfficial bool       `json:"is_platform_official" db:"is_platform_official"`
+	PublicTopology     bool       `json:"public_topology" db:"public_topology"`
 	HealthStatus       string     `json:"health_status" db:"health_status"`
 	LastSeen           *time.Time `json:"last_seen,omitempty" db:"last_seen"`
 

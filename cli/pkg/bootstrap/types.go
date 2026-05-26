@@ -77,6 +77,7 @@ type Cluster struct {
 	OwnerTenant        TenantRef `yaml:"owner_tenant"`
 	IsDefault          bool      `yaml:"is_default,omitempty"`
 	IsPlatformOfficial bool      `yaml:"is_platform_official,omitempty"`
+	PublicTopology     bool      `yaml:"public_topology,omitempty"`
 	// AllowPrivatePullSources opts the cluster in to RFC1918/multicast pull
 	// origins (typical for self-hosted edges in a LAN/VPC). Default false:
 	// platform-official clusters reject private literals so a misconfigured

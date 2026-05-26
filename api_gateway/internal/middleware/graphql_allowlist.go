@@ -9,7 +9,6 @@ import (
 )
 
 var allowlistedOperations = []string{
-	"serviceinstanceshealth",
 	"resolveviewerendpoint",
 	"resolveingestendpoint",
 	"networkstatus",

@@ -68,16 +68,11 @@
 
   let isAuthenticated = false;
   let systemHealthListening = false;
+  let operatorAccessChecked = $state(false);
 
   // Derived state from Houdini stores
   let showRawMetrics = $state(false);
   let hasNodesData = $derived(!!$nodesStore.data);
-  let loading = $derived(
-    ($nodesStore.fetching ||
-      $nodePerformanceStore.fetching ||
-      (showRawMetrics && $nodeMetricsStore.fetching)) &&
-      !hasNodesData
-  );
 
   // Get masked nodes from edges
   let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
@@ -93,6 +88,14 @@
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
+  let loading = $derived(
+    !operatorAccessChecked ||
+      (hasOperatorAccess &&
+        ($nodesStore.fetching ||
+          $nodePerformanceStore.fetching ||
+          (showRawMetrics && $nodeMetricsStore.fetching)) &&
+        !hasNodesData)
+  );
   let systemHealth = $state<Record<string, SystemHealthData>>({});
   let rawMetricsNodeId = $state<string | null>(null);
   let showRawDetails = $state(false);
@@ -243,7 +246,11 @@
       const perfFirst = Math.min(range.days * 24 * 12, 150);
 
       await accessStore.fetch();
-      if (!hasOperatorAccess) {
+      operatorAccessChecked = true;
+      const ownsCluster =
+        get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
+        false;
+      if (!ownsCluster) {
         if (systemHealthListening) {
           systemHealthSub.unlisten();
           systemHealthListening = false;
@@ -275,6 +282,7 @@
         toast.error("Failed to load node data. Please refresh the page.");
       }
     } catch (error) {
+      operatorAccessChecked = true;
       console.error("Failed to load node data:", error);
       toast.error("Failed to load node data. Please refresh the page.");
     }

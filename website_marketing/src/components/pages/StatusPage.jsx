@@ -16,6 +16,7 @@ import { Section, SectionContainer } from "@/components/ui/section";
 const pill = (label, cls) => <Badge className={cls}>{label}</Badge>;
 
 const formatTime = (ts) => {
+  if (!ts) return "Unknown";
   try {
     const d = new Date(ts);
     if (isNaN(+d)) return "Unknown";
@@ -25,33 +26,27 @@ const formatTime = (ts) => {
   }
 };
 
-const computeServiceRollups = (instances) => {
-  const byService = new Map();
-  for (const inst of instances) {
-    const sid = inst.serviceId || "unknown";
-    const arr = byService.get(sid) || [];
-    arr.push(inst);
-    byService.set(sid, arr);
-  }
-  const rollups = [];
-  for (const [serviceId, list] of byService) {
-    const total = list.length;
-    const healthyCount = list.filter(
-      (x) =>
-        String(x.status).toLowerCase() === "healthy" ||
-        String(x.status).toLowerCase() === "live" ||
-        String(x.status).toLowerCase() === "ready"
-    ).length;
-    const last = list.reduce(
-      (acc, x) => Math.max(acc, x.lastHealthCheck ? Date.parse(x.lastHealthCheck) : 0),
-      0
-    );
-    let status = "operational";
-    if (healthyCount === 0) status = "down";
-    else if (healthyCount < total) status = "degraded";
-    rollups.push({ serviceId, total, healthy: healthyCount, status, lastHealthCheck: last });
-  }
-  return rollups.sort((a, b) => a.serviceId.localeCompare(b.serviceId));
+const computeClusterRollups = (clusters) => {
+  return clusters
+    .map((cluster) => {
+      const statusValue = String(cluster.status || "unknown").toLowerCase();
+      let status = "operational";
+      if (statusValue === "down" || statusValue === "unhealthy") status = "down";
+      else if (statusValue !== "healthy" && statusValue !== "operational") status = "degraded";
+      return {
+        id: cluster.clusterId,
+        name: cluster.name || cluster.clusterId,
+        type: cluster.clusterType || "cluster",
+        total: cluster.nodeCount || 0,
+        healthy: cluster.healthyNodeCount || 0,
+        status,
+        currentStreams: cluster.currentStreams || 0,
+        currentViewers: cluster.currentViewers || 0,
+        egressMbps: cluster.egressMbps || 0,
+        ingressMbps: cluster.ingressMbps || 0,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 };
 
 const overallFromRollups = (rollups) => {
@@ -101,20 +96,14 @@ const statusHeroAccents = [
 ];
 
 const StatusPage = () => {
-  const [instances, setInstances] = useState([]);
+  const [clusters, setClusters] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(0);
 
-  const rollups = useMemo(() => computeServiceRollups(instances), [instances]);
+  const rollups = useMemo(() => computeClusterRollups(clusters), [clusters]);
   const overall = useMemo(() => overallFromRollups(rollups), [rollups]);
-  const lastCheck = useMemo(() => {
-    const last = Math.max(
-      ...instances.map((i) => (i.lastHealthCheck ? Date.parse(i.lastHealthCheck) : 0)),
-      0
-    );
-    return last || lastUpdated;
-  }, [instances, lastUpdated]);
+  const lastCheck = useMemo(() => lastUpdated, [lastUpdated]);
 
   const fetchHealth = async () => {
     setLoading(true);
@@ -124,15 +113,30 @@ const StatusPage = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          query:
-            "query { serviceInstancesHealth { instanceId serviceId clusterId protocol host port healthEndpoint status lastHealthCheck } }",
+          query: `query PublicStatus {
+            networkStatus {
+              clusters {
+                clusterId
+                name
+                clusterType
+                status
+                nodeCount
+                healthyNodeCount
+                currentStreams
+                currentViewers
+                egressMbps
+                ingressMbps
+              }
+            }
+          }`,
+          operationName: "PublicStatus",
         }),
       });
       if (!res.ok) throw new Error(`Gateway status ${res.status}`);
       const json = await res.json();
       if (json.errors?.length) throw new Error(json.errors[0]?.message || "GraphQL error");
-      const list = json.data?.serviceInstancesHealth || [];
-      setInstances(Array.isArray(list) ? list : []);
+      const list = json.data?.networkStatus?.clusters || [];
+      setClusters(Array.isArray(list) ? list : []);
       setLastUpdated(Date.now());
     } catch (e) {
       setError(String(e.message || e));
@@ -184,8 +188,8 @@ const StatusPage = () => {
           >
             <HeadlineStack
               eyebrow="Health"
-              title="Services"
-              subtitle="Live rollup from service instance checks."
+              title="Coverage"
+              subtitle="Live public rollup from cluster topology and aggregate load counters."
               align="left"
               underlineAlign="start"
             />
@@ -194,9 +198,14 @@ const StatusPage = () => {
             ) : (
               <MarketingGridSeam columns={2} stackAt="md" gap="tight" surface="glass">
                 {rollups.map((r) => (
-                  <div key={r.serviceId} className="flex h-full flex-col gap-2">
+                  <div key={r.id} className="flex h-full flex-col gap-2">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-base font-semibold text-foreground">{r.serviceId}</div>
+                      <div>
+                        <div className="text-base font-semibold text-foreground">{r.name}</div>
+                        <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                          {r.type}
+                        </div>
+                      </div>
                       {r.status === "operational" &&
                         pill("Operational", "bg-green-500/20 text-green-400 border-green-500/40")}
                       {r.status === "degraded" &&
@@ -205,10 +214,11 @@ const StatusPage = () => {
                         pill("Down", "bg-red-500/20 text-red-400 border-red-500/40")}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      Instances: {r.healthy}/{r.total} healthy
+                      Nodes: {r.healthy}/{r.total} active
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Last health: {formatTime(r.lastHealthCheck)}
+                      {r.currentStreams} live streams · {r.currentViewers} viewers · {r.egressMbps}{" "}
+                      Mbps egress · {r.ingressMbps} Mbps ingress
                     </div>
                   </div>
                 ))}

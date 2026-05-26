@@ -239,6 +239,9 @@ func (r *analyticsInfraResolver) ServiceInstancesConnection(ctx context.Context,
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
 func (r *analyticsInfraResolver) ServiceInstancesHealth(ctx context.Context, obj *markers.AnalyticsInfra, serviceID *string) ([]*proto.ServiceInstanceHealth, error) {
+	if err := r.RequireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
+	}
 	var resp *proto.ListServicesHealthResponse
 	var err error
 	if serviceID != nil && *serviceID != "" {
@@ -3982,6 +3985,9 @@ func (r *queryResolver) MySubscriptionsConnection(ctx context.Context, page *mod
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
 func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *string) ([]*proto.ServiceInstanceHealth, error) {
+	if err := r.RequireClusterOperatorTenant(ctx); err != nil {
+		return nil, err
+	}
 	var resp *proto.ListServicesHealthResponse
 	var err error
 	if serviceID != nil && *serviceID != "" {

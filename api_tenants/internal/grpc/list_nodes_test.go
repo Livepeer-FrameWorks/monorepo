@@ -47,7 +47,7 @@ func TestListNodes_ServiceAuthUsesAllActiveClusters(t *testing.T) {
 	}
 }
 
-func TestListNodes_AnonymousUsesPlatformOfficialClusters(t *testing.T) {
+func TestListNodes_AnonymousUsesPublicTopologyClusters(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -55,7 +55,7 @@ func TestListNodes_AnonymousUsesPlatformOfficialClusters(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
-	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.is_platform_official = true AND c\.is_active = true\s*\)`
+	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.public_topology = true AND c\.is_active = true\s*\)`
 
 	mock.ExpectQuery(publicScope).
 		WithArgs().

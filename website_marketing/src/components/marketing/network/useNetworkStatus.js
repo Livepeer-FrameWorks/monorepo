@@ -20,7 +20,6 @@ const NETWORK_STATUS_QUERY = `query GetNetworkStatus {
       egressMbps
       egressCapacityMbps
       ingressMbps
-      services
     }
     peerConnections {
       sourceCluster
@@ -36,14 +35,6 @@ const NETWORK_STATUS_QUERY = `query GetNetworkStatus {
       longitude
       status
       clusterId
-    }
-    serviceInstances {
-      instanceId
-      serviceId
-      clusterId
-      nodeId
-      status
-      healthStatus
     }
     totalNodes
     healthyNodes
@@ -124,7 +115,7 @@ export function useNetworkStatus() {
           clusters: status.clusters ?? [],
           nodes: status.nodes ?? [],
           peerConnections: status.peerConnections ?? [],
-          serviceInstances: status.serviceInstances ?? [],
+          serviceInstances: [],
           orchestratorVantages: vantages,
         });
         setError(null);

@@ -2193,8 +2193,11 @@ type InfrastructureCluster struct {
 	// Cells permitted to serve this cluster's content; single-element
 	// [control_cell_id] is the common case.
 	EligibleServingCellIds []string `protobuf:"bytes,33,rep,name=eligible_serving_cell_ids,json=eligibleServingCellIds,proto3" json:"eligible_serving_cell_ids,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Public map visibility. Allows topology/coverage reads without exposing
+	// owner-only operations, host metrics, or node admin surfaces.
+	PublicTopology bool `protobuf:"varint,34,opt,name=public_topology,json=publicTopology,proto3" json:"public_topology,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *InfrastructureCluster) Reset() {
@@ -2458,6 +2461,13 @@ func (x *InfrastructureCluster) GetEligibleServingCellIds() []string {
 	return nil
 }
 
+func (x *InfrastructureCluster) GetPublicTopology() bool {
+	if x != nil {
+		return x.PublicTopology
+	}
+	return false
+}
+
 type ClusterResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Cluster       *InfrastructureCluster `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
@@ -2511,6 +2521,7 @@ type ListClustersRequest struct {
 	DeploymentModel    string                   `protobuf:"bytes,5,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`
 	OwnerTenantId      *string                  `protobuf:"bytes,6,opt,name=owner_tenant_id,json=ownerTenantId,proto3,oneof" json:"owner_tenant_id,omitempty"`
 	IsPlatformOfficial *bool                    `protobuf:"varint,7,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`
+	PublicTopology     *bool                    `protobuf:"varint,8,opt,name=public_topology,json=publicTopology,proto3,oneof" json:"public_topology,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2594,6 +2605,13 @@ func (x *ListClustersRequest) GetIsPlatformOfficial() bool {
 	return false
 }
 
+func (x *ListClustersRequest) GetPublicTopology() bool {
+	if x != nil && x.PublicTopology != nil {
+		return *x.PublicTopology
+	}
+	return false
+}
+
 type ListClustersResponse struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
 	Clusters      []*InfrastructureCluster  `protobuf:"bytes,1,rep,name=clusters,proto3" json:"clusters,omitempty"`
@@ -2666,6 +2684,7 @@ type CreateClusterRequest struct {
 	IsPlatformOfficial      *bool   `protobuf:"varint,23,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`                  // Platform-operated cluster
 	IsDefaultCluster        *bool   `protobuf:"varint,24,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`                        // Auto-subscribe new tenants to this cluster
 	AllowPrivatePullSources *bool   `protobuf:"varint,25,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3,oneof" json:"allow_private_pull_sources,omitempty"` // Cluster allows pulls from RFC1918 / multicast
+	PublicTopology          *bool   `protobuf:"varint,26,opt,name=public_topology,json=publicTopology,proto3,oneof" json:"public_topology,omitempty"`                                // Cluster appears on public topology/coverage maps
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -2812,6 +2831,13 @@ func (x *CreateClusterRequest) GetAllowPrivatePullSources() bool {
 	return false
 }
 
+func (x *CreateClusterRequest) GetPublicTopology() bool {
+	if x != nil && x.PublicTopology != nil {
+		return *x.PublicTopology
+	}
+	return false
+}
+
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
 type UpdateClusterRequest struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
@@ -2831,6 +2857,7 @@ type UpdateClusterRequest struct {
 	IsPlatformOfficial      *bool                  `protobuf:"varint,14,opt,name=is_platform_official,json=isPlatformOfficial,proto3,oneof" json:"is_platform_official,omitempty"`                  // json:"is_platform_official,omitempty" - Platform-operated cluster
 	IsDefaultCluster        *bool                  `protobuf:"varint,15,opt,name=is_default_cluster,json=isDefaultCluster,proto3,oneof" json:"is_default_cluster,omitempty"`                        // json:"is_default_cluster,omitempty" - Set/clear default cluster flag
 	AllowPrivatePullSources *bool                  `protobuf:"varint,16,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3,oneof" json:"allow_private_pull_sources,omitempty"` // Cluster allows pulls from RFC1918 / multicast
+	PublicTopology          *bool                  `protobuf:"varint,17,opt,name=public_topology,json=publicTopology,proto3,oneof" json:"public_topology,omitempty"`                                // Set/clear public topology visibility
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -2973,6 +3000,13 @@ func (x *UpdateClusterRequest) GetIsDefaultCluster() bool {
 func (x *UpdateClusterRequest) GetAllowPrivatePullSources() bool {
 	if x != nil && x.AllowPrivatePullSources != nil {
 		return *x.AllowPrivatePullSources
+	}
+	return false
+}
+
+func (x *UpdateClusterRequest) GetPublicTopology() bool {
+	if x != nil && x.PublicTopology != nil {
+		return *x.PublicTopology
 	}
 	return false
 }
@@ -12937,7 +12971,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x17_tenant_resource_limits\"2\n" +
 	"\x11GetClusterRequest\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\xe5\v\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\x8e\f\n" +
 	"\x15InfrastructureCluster\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -12978,13 +13012,14 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\acell_id\x18\x1e \x01(\tR\x06cellId\x12#\n" +
 	"\rcluster_class\x18\x1f \x01(\tR\fclusterClass\x12&\n" +
 	"\x0fcontrol_cell_id\x18  \x01(\tR\rcontrolCellId\x129\n" +
-	"\x19eligible_serving_cell_ids\x18! \x03(\tR\x16eligibleServingCellIdsB\x12\n" +
+	"\x19eligible_serving_cell_ids\x18! \x03(\tR\x16eligibleServingCellIds\x12'\n" +
+	"\x0fpublic_topology\x18\" \x01(\bR\x0epublicTopologyB\x12\n" +
 	"\x10_owner_tenant_idB\x0f\n" +
 	"\r_database_urlB\x10\n" +
 	"\x0e_periscope_urlB\x14\n" +
 	"\x12_short_description\"Q\n" +
 	"\x0fClusterResponse\x12>\n" +
-	"\acluster\x18\x01 \x01(\v2$.quartermaster.InfrastructureClusterR\acluster\"\xf7\x02\n" +
+	"\acluster\x18\x01 \x01(\v2$.quartermaster.InfrastructureClusterR\acluster\"\xb9\x03\n" +
 	"\x13ListClustersRequest\x12?\n" +
 	"\n" +
 	"pagination\x18\x01 \x01(\v2\x1f.common.CursorPaginationRequestR\n" +
@@ -12995,14 +13030,16 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\fcluster_type\x18\x04 \x01(\tR\vclusterType\x12)\n" +
 	"\x10deployment_model\x18\x05 \x01(\tR\x0fdeploymentModel\x12+\n" +
 	"\x0fowner_tenant_id\x18\x06 \x01(\tH\x00R\rownerTenantId\x88\x01\x01\x125\n" +
-	"\x14is_platform_official\x18\a \x01(\bH\x01R\x12isPlatformOfficial\x88\x01\x01B\x12\n" +
+	"\x14is_platform_official\x18\a \x01(\bH\x01R\x12isPlatformOfficial\x88\x01\x01\x12,\n" +
+	"\x0fpublic_topology\x18\b \x01(\bH\x02R\x0epublicTopology\x88\x01\x01B\x12\n" +
 	"\x10_owner_tenant_idB\x17\n" +
-	"\x15_is_platform_official\"\x9a\x01\n" +
+	"\x15_is_platform_officialB\x12\n" +
+	"\x10_public_topology\"\x9a\x01\n" +
 	"\x14ListClustersResponse\x12@\n" +
 	"\bclusters\x18\x01 \x03(\v2$.quartermaster.InfrastructureClusterR\bclusters\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xd6\x06\n" +
+	"pagination\"\x98\a\n" +
 	"\x14CreateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -13021,13 +13058,15 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\rfoghorn_count\x18\x16 \x01(\x05R\ffoghornCount\x125\n" +
 	"\x14is_platform_official\x18\x17 \x01(\bH\x03R\x12isPlatformOfficial\x88\x01\x01\x121\n" +
 	"\x12is_default_cluster\x18\x18 \x01(\bH\x04R\x10isDefaultCluster\x88\x01\x01\x12@\n" +
-	"\x1aallow_private_pull_sources\x18\x19 \x01(\bH\x05R\x17allowPrivatePullSources\x88\x01\x01B\x0f\n" +
+	"\x1aallow_private_pull_sources\x18\x19 \x01(\bH\x05R\x17allowPrivatePullSources\x88\x01\x01\x12,\n" +
+	"\x0fpublic_topology\x18\x1a \x01(\bH\x06R\x0epublicTopology\x88\x01\x01B\x0f\n" +
 	"\r_database_urlB\x10\n" +
 	"\x0e_periscope_urlB\x12\n" +
 	"\x10_owner_tenant_idB\x17\n" +
 	"\x15_is_platform_officialB\x15\n" +
 	"\x13_is_default_clusterB\x1d\n" +
-	"\x1b_allow_private_pull_sources\"\x98\b\n" +
+	"\x1b_allow_private_pull_sourcesB\x12\n" +
+	"\x10_public_topology\"\xda\b\n" +
 	"\x14UpdateClusterRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12&\n" +
@@ -13047,7 +13086,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"R\x0fdeploymentModel\x88\x01\x01\x125\n" +
 	"\x14is_platform_official\x18\x0e \x01(\bH\vR\x12isPlatformOfficial\x88\x01\x01\x121\n" +
 	"\x12is_default_cluster\x18\x0f \x01(\bH\fR\x10isDefaultCluster\x88\x01\x01\x12@\n" +
-	"\x1aallow_private_pull_sources\x18\x10 \x01(\bH\rR\x17allowPrivatePullSources\x88\x01\x01B\x0f\n" +
+	"\x1aallow_private_pull_sources\x18\x10 \x01(\bH\rR\x17allowPrivatePullSources\x88\x01\x01\x12,\n" +
+	"\x0fpublic_topology\x18\x11 \x01(\bH\x0eR\x0epublicTopology\x88\x01\x01B\x0f\n" +
 	"\r_cluster_nameB\v\n" +
 	"\t_base_urlB\x0f\n" +
 	"\r_database_urlB\x10\n" +
@@ -13062,7 +13102,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x11_deployment_modelB\x17\n" +
 	"\x15_is_platform_officialB\x15\n" +
 	"\x13_is_default_clusterB\x1d\n" +
-	"\x1b_allow_private_pull_sources\"\x82\x01\n" +
+	"\x1b_allow_private_pull_sourcesB\x12\n" +
+	"\x10_public_topology\"\x82\x01\n" +
 	"\x1eUpdateClusterMeshConfigRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x1b\n" +

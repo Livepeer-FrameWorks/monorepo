@@ -37,7 +37,7 @@ func TestPublicOrJWTAuthAllowlistedQuery(t *testing.T) {
 		c.String(http.StatusOK, "ok")
 	})
 
-	body := []byte(`{"query":"query { serviceInstancesHealth }"}`)
+	body := []byte(`{"query":"query { networkStatus { totalNodes } }"}`)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
 	r.ServeHTTP(w, req)
