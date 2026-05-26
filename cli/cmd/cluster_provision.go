@@ -2564,7 +2564,6 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			if port, err := resolvePort(baseName, obs); err == nil && port != 0 {
 				config.Port = port
 			}
-			applyPlatformReleaseVersionDefault(&config, manifest.ResolvedChannel())
 		}
 		// Infrastructure overrides
 		switch task.Type {

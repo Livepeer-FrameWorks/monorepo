@@ -233,6 +233,33 @@ func TestBuildTaskConfigDoesNotUsePlatformReleaseAsInfrastructureVersion(t *test
 	}
 }
 
+func TestBuildTaskConfigDoesNotUsePlatformReleaseAsObservabilityComponentVersion(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Channel: "v9.8.7",
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Mode: "native", Host: "node-a"},
+		},
+	}
+
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Type:      "vmauth",
+		ServiceID: "vmauth",
+		Host:      "node-a",
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+	if cfg.Version != "stable" {
+		t.Fatalf("config version=%q, want release-channel placeholder for observability artifact resolution", cfg.Version)
+	}
+	if got := cfg.Metadata["platform_channel"]; got != "v9.8.7" {
+		t.Fatalf("platform_channel=%v, want v9.8.7", got)
+	}
+	if got := cfg.Metadata["component"]; got != "vmauth" {
+		t.Fatalf("component=%v, want vmauth", got)
+	}
+}
+
 func TestRunProvisionPhaseReportsOwnTimeout(t *testing.T) {
 	err := runProvisionPhase(context.Background(), time.Millisecond, "provision", func(ctx context.Context) error {
 		<-ctx.Done()
