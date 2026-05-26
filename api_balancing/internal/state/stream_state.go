@@ -2836,10 +2836,14 @@ func (sm *StreamStateManager) flushNodeLifecycleBatch(batch []*pb.NodeLifecycleU
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := sm.nodeRepo.UpsertNodeLifecycles(ctx, batch); err != nil && stateLogger != nil {
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return sm.nodeRepo.UpsertNodeLifecycles(ctx, batch)
+	}); err != nil && stateLogger != nil {
 		stateLogger.WithError(err).Warn("Failed to batch upsert node lifecycle updates")
 	}
-	if err := sm.nodeRepo.UpsertNodeComponents(ctx, batch); err != nil && stateLogger != nil {
+	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return sm.nodeRepo.UpsertNodeComponents(ctx, batch)
+	}); err != nil && stateLogger != nil {
 		stateLogger.WithError(err).Warn("Failed to upsert node component versions")
 	}
 }

@@ -1,6 +1,11 @@
 package cmd
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestNormalizeReleaseTargetVersion(t *testing.T) {
 	t.Parallel()
@@ -88,5 +93,40 @@ func TestPlatformKeyFromArtifactName(t *testing.T) {
 		if got != want {
 			t.Fatalf("platformKeyFromArtifactName(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestRetryEdgeReleaseSyncRPCRetriesSchemaVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	err := retryEdgeReleaseSyncRPCWithBackoff(context.Background(), 3, time.Nanosecond, func() error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("rpc error: code = Internal desc = get release target: pq: schema version mismatch for table x: expected 92, got 91 (40001)")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryEdgeReleaseSyncRPCWithBackoff returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestRetryEdgeReleaseSyncRPCDoesNotRetryPermanentError(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	err := retryEdgeReleaseSyncRPCWithBackoff(context.Background(), 3, time.Nanosecond, func() error {
+		attempts++
+		return errors.New("rpc error: code = PermissionDenied desc = provider authority required")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }

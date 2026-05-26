@@ -9,6 +9,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/lib/pq"
 )
 
 // TestParseRetentionDays_BareScalarOnly locks the canonical decoder contract:
@@ -35,6 +37,38 @@ func TestParseRetentionDays_BareScalarOnly(t *testing.T) {
 				t.Errorf("parseRetentionDays(%+v) = %d, want %d", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGetTenantBillingStatusRetriesRetryablePostgresErrors(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	tenantID := "tenant-1"
+	retryable := &pq.Error{
+		Code:    "40001",
+		Message: "schema version mismatch for table x: expected 2, got 1",
+	}
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(retryable)
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs(tenantID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+
+	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
+	resp, err := server.GetTenantBillingStatus(context.Background(), &pb.GetTenantBillingStatusRequest{TenantId: tenantID})
+	if err != nil {
+		t.Fatalf("GetTenantBillingStatus: %v", err)
+	}
+	if resp.GetBillingModel() != "postpaid" || resp.GetIsSuspended() || resp.GetIsBalanceNegative() {
+		t.Fatalf("unexpected default response after retry: %+v", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
 	}
 }
 

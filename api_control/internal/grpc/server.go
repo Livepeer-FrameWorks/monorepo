@@ -2873,10 +2873,12 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		var streamID, tenantID, userID, internalName string
 		var isRecordingEnabled bool
 		var requiresAuth bool
-		err := s.db.QueryRowContext(ctx, `
-			SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
-			FROM commodore.streams WHERE id = $1
-		`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
+		err := s.retryPostgres(ctx, func() error {
+			return s.db.QueryRowContext(ctx, `
+				SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
+				FROM commodore.streams WHERE id = $1
+			`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
+		})
 		if err == nil {
 			return &pb.ResolveIdentifierResponse{
 				Found:              true,
@@ -2893,10 +2895,12 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		}
 
 		var vodTenantID, vodUserID string
-		err = s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, user_id, requires_auth
-			FROM commodore.vod_assets WHERE id = $1
-		`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
+		err = s.retryPostgres(ctx, func() error {
+			return s.db.QueryRowContext(ctx, `
+				SELECT tenant_id, user_id, requires_auth
+				FROM commodore.vod_assets WHERE id = $1
+			`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
+		})
 		if err == nil {
 			return &pb.ResolveIdentifierResponse{
 				Found:          true,

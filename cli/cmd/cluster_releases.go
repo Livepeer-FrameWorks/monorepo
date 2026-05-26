@@ -16,6 +16,7 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/remoteaccess"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -25,7 +26,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const edgeReleaseSyncRPCTimeout = 60 * time.Second
+const (
+	edgeReleaseSyncRPCTimeout = 60 * time.Second
+	edgeReleaseSyncAttempts   = 6
+	edgeReleaseSyncBaseDelay  = 250 * time.Millisecond
+)
 
 func newClusterReleasesCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -249,11 +254,16 @@ func normalizeReleaseTargetChannel(channel string) (string, error) {
 }
 
 func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, version string) error {
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
-	defer cancel()
-	resp, err := qm.ListEdgeReleases(cctx, &pb.ListEdgeReleasesRequest{
-		Channel: channel,
-		Version: version,
+	var resp *pb.ListEdgeReleasesResponse
+	err := retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
+		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+		defer cancel()
+		var rpcErr error
+		resp, rpcErr = qm.ListEdgeReleases(cctx, &pb.ListEdgeReleasesRequest{
+			Channel: channel,
+			Version: version,
+		})
+		return rpcErr
 	})
 	if err != nil {
 		return fmt.Errorf("verify edge release catalog: %w", err)
@@ -284,13 +294,19 @@ func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 	if err != nil {
 		return nil, err
 	}
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
-	defer cancel()
-	return qm.UpsertEdgeRelease(cctx, &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
-		Channel:        channel,
-		Version:        manifest.PlatformVersion,
-		ComponentsJson: string(componentsJSON),
-	}})
+	var resp *pb.EdgeReleaseResponse
+	err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
+		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+		defer cancel()
+		var rpcErr error
+		resp, rpcErr = qm.UpsertEdgeRelease(cctx, &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
+			Channel:        channel,
+			Version:        manifest.PlatformVersion,
+			ComponentsJson: string(componentsJSON),
+		}})
+		return rpcErr
+	})
+	return resp, err
 }
 
 func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedCluster, selector string, sharedEnv map[string]string) error {
@@ -325,23 +341,25 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 
 	clusterIDs := rc.Manifest.AllClusterIDs()
 	for _, clusterID := range clusterIDs {
-		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
-		rolloutPlan, paused, err := existingReleaseTargetControls(cctx, qm, clusterID)
+		rolloutPlan, paused, err := existingReleaseTargetControlsWithRetry(cmd, qm, ctxCfg, clusterID)
 		if err != nil {
-			cancel()
 			return err
 		}
-		if _, err := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
-			ClusterId:       clusterID,
-			Channel:         channel,
-			TargetVersion:   targetVersion,
-			RolloutPlanJson: rolloutPlan,
-			Paused:          paused,
-		}}); err != nil {
-			cancel()
+		err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
+			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+			defer cancel()
+			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
+				ClusterId:       clusterID,
+				Channel:         channel,
+				TargetVersion:   targetVersion,
+				RolloutPlanJson: rolloutPlan,
+				Paused:          paused,
+			}})
+			return rpcErr
+		})
+		if err != nil {
 			return fmt.Errorf("set edge release target for cluster %s: %w", clusterID, err)
 		}
-		cancel()
 	}
 	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
 		Key: "edge-release-target",
@@ -350,6 +368,47 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 			channel, firstNonEmpty(targetVersion, "latest"), len(clusterIDs)),
 	}})
 	return nil
+}
+
+func retryEdgeReleaseSyncRPC(ctx context.Context, fn func() error) error {
+	return retryEdgeReleaseSyncRPCWithBackoff(ctx, edgeReleaseSyncAttempts, edgeReleaseSyncBaseDelay, fn)
+}
+
+func retryEdgeReleaseSyncRPCWithBackoff(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {
+	if attempts <= 0 {
+		attempts = edgeReleaseSyncAttempts
+	}
+	if baseDelay <= 0 {
+		baseDelay = edgeReleaseSyncBaseDelay
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err = fn()
+		if !database.IsRetryablePostgresError(err) || attempt == attempts-1 {
+			return err
+		}
+		timer := time.NewTimer(baseDelay << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+func existingReleaseTargetControlsWithRetry(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, clusterID string) (string, bool, error) {
+	var rolloutPlan string
+	var paused bool
+	err := retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
+		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+		defer cancel()
+		var rpcErr error
+		rolloutPlan, paused, rpcErr = existingReleaseTargetControls(cctx, qm, clusterID)
+		return rpcErr
+	})
+	return rolloutPlan, paused, err
 }
 
 func existingReleaseTargetControls(ctx context.Context, qm *qmclient.GRPCClient, clusterID string) (string, bool, error) {

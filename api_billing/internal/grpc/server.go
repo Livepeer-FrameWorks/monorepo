@@ -24,6 +24,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -475,7 +476,8 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	var features []byte
 	var processesLive, processesVod sql.NullString
 
-	err := s.db.QueryRowContext(ctx, `
+	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
 		SELECT id, tier_name, display_name, description, base_price, currency, billing_period,
 		       features, support_level, sla_level, metering_enabled,
 		       is_active, tier_level, is_enterprise,
@@ -485,14 +487,15 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		FROM purser.billing_tiers
 		WHERE id = $1
 	`, tierID).Scan(
-		&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
-		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
-		&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
-		&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
-		&createdAt, &updatedAt,
-		&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
-		&processesLive, &processesVod,
-	)
+			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
+			&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
+			&features, &tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled,
+			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
+			&createdAt, &updatedAt,
+			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
+			&processesLive, &processesVod,
+		)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Billing tier not found")
@@ -555,7 +558,8 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	// cap, and Free-plan concurrent caps in one round-trip.
 	// Commodore's StartDVR + ValidateStreamKey both need these so this
 	// avoids per-call GetSubscription + GetBillingTier roundtrips.
-	err := s.db.QueryRowContext(ctx, `
+	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
 		SELECT
 			ts.billing_model,
 			ts.status,
@@ -637,15 +641,16 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 			ORDER BY ts.created_at DESC
 			LIMIT 1
 		`, tenantID, currency, pq.StringArray{
-		"dvr_default_window_seconds",
-		"dvr_max_window_seconds",
-		"dvr_default_segment_duration_seconds",
-		"dvr_max_entries",
-		"dvr_allow_cluster_extension",
-	}, pq.StringArray{
-		"max_concurrent_streams",
-		"max_concurrent_viewers",
-	}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw)
+			"dvr_default_window_seconds",
+			"dvr_max_window_seconds",
+			"dvr_default_segment_duration_seconds",
+			"dvr_max_entries",
+			"dvr_allow_cluster_extension",
+		}, pq.StringArray{
+			"max_concurrent_streams",
+			"max_concurrent_viewers",
+		}).Scan(&billingModel, &subscriptionStatus, &balanceCents, &retentionRaw, &dvrEntitlements, &tierID, &billingPeriodStart, &billingPeriodEnd, &storageLimitRaw, &resourceLimitsRaw)
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
@@ -838,15 +843,17 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 
 	var included, unitPrice float64
 	var tierName string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-		    tpr.included_quantity::double precision,
-		    tpr.unit_price::double precision,
-		    bt.tier_name
-		FROM purser.tier_pricing_rules tpr
-		JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
-		WHERE tpr.tier_id = $1 AND tpr.meter = $2
-	`, tierID, meter).Scan(&included, &unitPrice, &tierName)
+	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT
+			    tpr.included_quantity::double precision,
+			    tpr.unit_price::double precision,
+			    bt.tier_name
+			FROM purser.tier_pricing_rules tpr
+			JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
+			WHERE tpr.tier_id = $1 AND tpr.meter = $2
+		`, tierID, meter).Scan(&included, &unitPrice, &tierName)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -861,30 +868,32 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 	}
 
 	var used float64
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(value), 0)::double precision
-		FROM (
-			SELECT usage_value::double precision AS value
-			FROM purser.usage_records
-			WHERE tenant_id = $1
-			  AND usage_type = 'delivered_minutes'
-			  AND value_kind = 'delta'
-			  AND granularity = 'minute_5'
-			  AND period_start < $3
-			  AND period_end > $2
+	if err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(value), 0)::double precision
+			FROM (
+				SELECT usage_value::double precision AS value
+				FROM purser.usage_records
+				WHERE tenant_id = $1
+				  AND usage_type = 'delivered_minutes'
+				  AND value_kind = 'delta'
+				  AND granularity = 'minute_5'
+				  AND period_start < $3
+				  AND period_end > $2
 
-			UNION ALL
+				UNION ALL
 
-			SELECT delta_value::double precision AS value
-			FROM purser.usage_adjustments
-			WHERE tenant_id = $4
-			  AND usage_type = 'delivered_minutes'
-			  AND value_kind = 'correction_delta'
-			  AND status = 'applied'
-			  AND period_start < $6
-			  AND period_end > $5
-		) allowance_usage
-	`, tenantID, periodStart, periodEnd, tenantID, periodStart, periodEnd).Scan(&used); err != nil {
+				SELECT delta_value::double precision AS value
+				FROM purser.usage_adjustments
+				WHERE tenant_id = $4
+				  AND usage_type = 'delivered_minutes'
+				  AND value_kind = 'correction_delta'
+				  AND status = 'applied'
+				  AND period_start < $6
+				  AND period_end > $5
+			) allowance_usage
+		`, tenantID, periodStart, periodEnd, tenantID, periodStart, periodEnd).Scan(&used)
+	}); err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"meter":     meter,

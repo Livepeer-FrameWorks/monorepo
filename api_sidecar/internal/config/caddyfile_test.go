@@ -157,16 +157,22 @@ func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
 	}
 	for _, headerName := range []string{
 		"Access-Control-Allow-Credentials",
-		"Access-Control-Allow-Headers",
-		"Access-Control-Allow-Methods",
-		"Access-Control-Allow-Origin",
-		"Access-Control-Expose-Headers",
 		"Access-Control-Max-Age",
 		"Access-Control-Request-Headers",
 		"Access-Control-Request-Method",
 	} {
 		if !strings.Contains(out, "header_down -"+headerName) {
 			t.Fatalf("expected /view proxy to strip Mist upstream CORS header %s; got:\n%s", headerName, out)
+		}
+	}
+	for _, headerName := range []string{
+		"Access-Control-Allow-Headers",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Origin",
+		"Access-Control-Expose-Headers",
+	} {
+		if !strings.Contains(out, "header_down "+headerName) {
+			t.Fatalf("expected /view proxy to own CORS response header %s; got:\n%s", headerName, out)
 		}
 	}
 }
@@ -180,7 +186,7 @@ func TestRenderCaddyfile_MediaRoutesExposeCorsHeaders(t *testing.T) {
 	if count := strings.Count(out, "Access-Control-Allow-Origin \"*\""); count < 2 {
 		t.Fatalf("expected CORS headers on /assets and /view routes, got %d occurrences:\n%s", count, out)
 	}
-	for _, want := range []string{"respond @assets_options \"\" 204", "respond @view_options \"\" 204"} {
+	for _, want := range []string{"respond @assets_options \"\" 204", "respond \"\" 204"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected CORS preflight response %q; got:\n%s", want, out)
 		}
