@@ -1222,6 +1222,44 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	}
 }
 
+func TestViewerDisconnectUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+				SessionId:  "sess-payload",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_disconnect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["viewer_connection_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+	}
+	if got := batch.rows[0][3]; got != uuid.MustParse(streamID) {
+		t.Fatalf("expected payload stream_id %s, got %#v", streamID, got)
+	}
+}
+
 func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -1279,6 +1317,51 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	}
 	if finalBatch.rows[0][2] != "sess-final" {
 		t.Fatalf("expected session_id sess-final, got %#v", finalBatch.rows[0][2])
+	}
+}
+
+func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	trigger := &pb.MistTrigger{
+		NodeId:      "edge-1",
+		TriggerType: "STREAM_END",
+		RequestId:   "source-event-stream-end",
+		Timestamp:   time.Now().UnixMilli(),
+		TenantId:    &tenantID,
+		TriggerPayload: &pb.MistTrigger_StreamEnd{
+			StreamEnd: &pb.StreamEndTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"source_event_id": "source-event-stream-end",
+			"trigger_type":    "STREAM_END",
+			"node_id":         "edge-1",
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	finalBatch := conn.batches["periscope.stream_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
+	}
+	if got := finalBatch.rows[0][2]; got != uuid.MustParse(streamID) {
+		t.Fatalf("expected payload stream_id %s, got %#v", streamID, got)
 	}
 }
 
@@ -1463,6 +1546,38 @@ func TestStreamEndUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
 	}
 	if got := batch.rows[0][1]; got != uuid.MustParse(streamID) {
 		t.Fatalf("expected payload stream_id %s, got %#v", streamID, got)
+	}
+}
+
+func TestMistTriggerStreamIDFallsBackToLifecyclePayloads(t *testing.T) {
+	streamID := uuid.NewString()
+	tests := map[string]*pb.MistTrigger{
+		"stream_buffer": {
+			TriggerPayload: &pb.MistTrigger_StreamBuffer{StreamBuffer: &pb.StreamBufferTrigger{StreamId: &streamID}},
+		},
+		"track_list": {
+			TriggerPayload: &pb.MistTrigger_TrackList{TrackList: &pb.StreamTrackListTrigger{StreamId: &streamID}},
+		},
+		"clip_lifecycle": {
+			TriggerPayload: &pb.MistTrigger_ClipLifecycleData{ClipLifecycleData: &pb.ClipLifecycleData{StreamId: &streamID}},
+		},
+		"dvr_lifecycle": {
+			TriggerPayload: &pb.MistTrigger_DvrLifecycleData{DvrLifecycleData: &pb.DVRLifecycleData{StreamId: &streamID}},
+		},
+		"load_balancing": {
+			TriggerPayload: &pb.MistTrigger_LoadBalancingData{LoadBalancingData: &pb.LoadBalancingData{StreamId: &streamID}},
+		},
+		"storage_lifecycle": {
+			TriggerPayload: &pb.MistTrigger_StorageLifecycleData{StorageLifecycleData: &pb.StorageLifecycleData{StreamId: &streamID}},
+		},
+	}
+
+	for name, trigger := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := mistTriggerStreamID(trigger); got != streamID {
+				t.Fatalf("mistTriggerStreamID = %q, want %q", got, streamID)
+			}
+		})
 	}
 }
 

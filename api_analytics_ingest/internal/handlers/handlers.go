@@ -566,11 +566,12 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if !isValidUUIDString(mt.GetStreamId()) {
+	streamID := mistTriggerStreamID(&mt)
+	if !isValidUUIDString(streamID) {
 		h.logger.WithFields(logging.Fields{
 			"event_id":  event.EventID,
 			"tenant_id": event.TenantID,
-			"stream_id": mt.GetStreamId(),
+			"stream_id": streamID,
 		}).Warn("Stream lifecycle event missing or invalid stream_id; skipping to avoid corrupting current state")
 		return nil
 	}
@@ -629,7 +630,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 
 	if appendErr := stateBatch.Append(
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		internalName,
 		mt.GetNodeId(),
 		status,
@@ -696,7 +697,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),
@@ -794,7 +795,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if err := healthBatch.Append(
 		event.Timestamp,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		internalName,
 		mt.GetNodeId(),
 		nilIfZeroUint32(uint32(streamLifecycle.GetPrimaryBitrate())),
@@ -847,7 +848,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	streamID := mistTriggerStreamID(&mt)
+	if err := h.requireStreamID(ctx, event, streamID); err != nil {
 		return err
 	}
 	if h.isDuplicateEvent(ctx, "viewer_connection_events", parseUUID(event.EventID), event.EventType) {
@@ -985,7 +987,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		parseUUID(event.EventID),
 		event.Timestamp,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		streamName,
 		sessionID,
 		host,
@@ -1126,6 +1128,66 @@ func isValidUUIDString(value string) bool {
 		return false
 	}
 	return parsed != uuid.Nil
+}
+
+func mistTriggerStreamID(mt *pb.MistTrigger) string {
+	if mt == nil {
+		return ""
+	}
+	if streamID := mt.GetStreamId(); isValidUUIDString(streamID) {
+		return streamID
+	}
+
+	switch p := mt.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_PushRewrite:
+		return validPayloadStreamID(p.PushRewrite.GetStreamId())
+	case *pb.MistTrigger_PlayRewrite:
+		return validPayloadStreamID(p.PlayRewrite.GetStreamId())
+	case *pb.MistTrigger_StreamSource:
+		return validPayloadStreamID(p.StreamSource.GetStreamId())
+	case *pb.MistTrigger_PushOutStart:
+		return validPayloadStreamID(p.PushOutStart.GetStreamId())
+	case *pb.MistTrigger_PushEnd:
+		return validPayloadStreamID(p.PushEnd.GetStreamId())
+	case *pb.MistTrigger_ViewerConnect:
+		return validPayloadStreamID(p.ViewerConnect.GetStreamId())
+	case *pb.MistTrigger_ViewerDisconnect:
+		return validPayloadStreamID(p.ViewerDisconnect.GetStreamId())
+	case *pb.MistTrigger_StreamBuffer:
+		return validPayloadStreamID(p.StreamBuffer.GetStreamId())
+	case *pb.MistTrigger_StreamEnd:
+		return validPayloadStreamID(p.StreamEnd.GetStreamId())
+	case *pb.MistTrigger_TrackList:
+		return validPayloadStreamID(p.TrackList.GetStreamId())
+	case *pb.MistTrigger_RecordingComplete:
+		return validPayloadStreamID(p.RecordingComplete.GetStreamId())
+	case *pb.MistTrigger_RecordingSegment:
+		return validPayloadStreamID(p.RecordingSegment.GetStreamId())
+	case *pb.MistTrigger_StreamLifecycleUpdate:
+		return validPayloadStreamID(p.StreamLifecycleUpdate.GetStreamId())
+	case *pb.MistTrigger_ClientLifecycleUpdate:
+		return validPayloadStreamID(p.ClientLifecycleUpdate.GetStreamId())
+	case *pb.MistTrigger_ClientLifecycleBatch:
+		return validPayloadStreamID(p.ClientLifecycleBatch.GetStreamId())
+	case *pb.MistTrigger_LoadBalancingData:
+		return validPayloadStreamID(p.LoadBalancingData.GetStreamId())
+	case *pb.MistTrigger_ClipLifecycleData:
+		return validPayloadStreamID(p.ClipLifecycleData.GetStreamId())
+	case *pb.MistTrigger_DvrLifecycleData:
+		return validPayloadStreamID(p.DvrLifecycleData.GetStreamId())
+	case *pb.MistTrigger_StorageLifecycleData:
+		return validPayloadStreamID(p.StorageLifecycleData.GetStreamId())
+	case *pb.MistTrigger_FederationEventData:
+		return validPayloadStreamID(p.FederationEventData.GetStreamId())
+	}
+	return mt.GetStreamId()
+}
+
+func validPayloadStreamID(streamID string) string {
+	if isValidUUIDString(streamID) {
+		return streamID
+	}
+	return ""
 }
 
 func getStringFromMap(data map[string]interface{}, key string) string {
@@ -1388,7 +1450,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),
@@ -1422,7 +1484,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_LoadBalancingData)
@@ -1498,7 +1560,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	if appendErr := batch.Append(
 		event.Timestamp,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		loadBalancing.GetSelectedNode(),
 		loadBalancing.GetStatus(),
@@ -1875,7 +1937,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
 	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
@@ -2018,7 +2080,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),
@@ -2075,7 +2137,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if appendErr := healthBatch.Append(
 		event.Timestamp,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetNodeId(),
 		streamBuffer.GetBufferState(),
@@ -2151,10 +2213,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		return fmt.Errorf("unexpected payload for stream_end")
 	}
 	streamEnd := tp.StreamEnd
-	streamID := mt.GetStreamId()
-	if !isValidUUIDString(streamID) && isValidUUIDString(streamEnd.GetStreamId()) {
-		streamID = streamEnd.GetStreamId()
-	}
+	streamID := mistTriggerStreamID(&mt)
 	if err := h.requireStreamID(ctx, event, streamID); err != nil {
 		return err
 	}
@@ -2299,7 +2358,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
 	eventID := parseUUID(event.EventID)
@@ -2336,7 +2395,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetNodeId(),
 		marshalTypedEventData(trackList.GetTracks()), // serialize tracks as JSON
@@ -2385,7 +2444,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),
@@ -2427,7 +2486,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClipLifecycleData)
@@ -2515,7 +2574,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 
 	if appendErr := stateBatch.Append(
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		requestID,
 		internalName,
 		nil,
@@ -2581,7 +2640,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetClusterId(),
 		mt.GetOriginClusterId(),
@@ -2633,7 +2692,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
+	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData)
@@ -2690,7 +2749,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 
 	if appendErr := stateBatch.Append(
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		dvrData.GetDvrHash(),
 		internalName,
 		nil,
@@ -2759,7 +2818,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName,
 		mt.GetClusterId(),
 		mt.GetOriginClusterId(),
@@ -2861,7 +2920,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 
 	if appendErr := stateBatch.Append(
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		vodData.GetVodHash(), // request_id = vod_hash
 		internalName,         // internal_name = vod_hash for VOD
 		filename,
@@ -2930,7 +2989,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		internalName, // internal_name = vod_hash
 		mt.GetClusterId(),
 		mt.GetOriginClusterId(),
@@ -3023,11 +3082,12 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		return fmt.Errorf("unexpected payload for storage_lifecycle")
 	}
 	sld := tp.StorageLifecycleData
-	if !isValidUUIDString(mt.GetStreamId()) {
+	streamID := mistTriggerStreamID(&mt)
+	if !isValidUUIDString(streamID) {
 		h.logger.WithFields(logging.Fields{
 			"event_id":   event.EventID,
 			"tenant_id":  event.TenantID,
-			"stream_id":  mt.GetStreamId(),
+			"stream_id":  streamID,
 			"asset_hash": sld.GetAssetHash(),
 		}).Warn("Storage lifecycle event missing or invalid stream_id")
 	}
@@ -3058,7 +3118,7 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 	if err := batch.Append(
 		event.Timestamp,
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(streamID),
 		internalName,
 		sld.GetAssetHash(),
 		actionStr,
@@ -3135,7 +3195,7 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 	isFinalized := sld.DtshIncluded
 	if err := stateBatch.Append(
 		event.TenantID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(mt)),
 		sld.GetAssetHash(),
 		internalName,
 		nil,
@@ -3383,7 +3443,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 		pbe.GetNodeId(),
 		clusterID,
 		originClusterID,
-		parseUUID(mt.GetStreamId()),
+		parseUUID(mistTriggerStreamID(&mt)),
 		streamName,
 		// Process info
 		pbe.GetProcessType(),

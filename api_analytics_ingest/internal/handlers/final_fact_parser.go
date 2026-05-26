@@ -219,14 +219,12 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	}
 
 	streamID := uuid.Nil
-	if rawStreamID := strings.TrimSpace(se.GetStreamId()); rawStreamID != "" {
+	if rawStreamID := strings.TrimSpace(mistTriggerStreamID(trigger)); rawStreamID != "" {
 		if parsedStreamID, parseErr := uuid.Parse(rawStreamID); parseErr == nil {
 			streamID = parsedStreamID
 		}
 	}
 	if streamID == uuid.Nil {
-		// STREAM_END without an enriched stream_id is a Foghorn-enrichment
-		// gap, not a parser bug. Log and drop.
 		h.logger.WithFields(logging.Fields{
 			"source_event_id": sourceEventID,
 			"trigger_type":    "STREAM_END",
