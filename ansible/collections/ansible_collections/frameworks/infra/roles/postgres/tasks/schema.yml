@@ -138,7 +138,9 @@
   loop: "{{ postgres_schema_items | default([]) }}"
   loop_control:
     label: "{{ item.db }}"
-  when: postgres_schema_items | default([]) | length > 0
+  when:
+    - postgres_schema_items | default([]) | length > 0
+    - not (postgres_schema_has_tables_by_db[item.db] | default(false))
 
 - name: Remove baseline schema SQL files
   ansible.builtin.file:

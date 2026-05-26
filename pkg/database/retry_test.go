@@ -19,6 +19,8 @@ func TestIsRetryablePostgresError(t *testing.T) {
 		{"serialization", &pq.Error{Code: "40001"}, true},
 		{"deadlock", &pq.Error{Code: "40P01"}, true},
 		{"schema version text", errors.New("pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
+		{"catalog version text", errors.New("pq: Catalog Version Mismatch: A DDL occurred while processing this query. Try Again."), true},
+		{"mismatched schema text", errors.New("ERROR: The catalog snapshot used for this transaction has been invalidated: expected: 4, got: 5: MISMATCHED_SCHEMA"), true},
 		{"wrapped grpc schema version text", errors.New("rpc error: code = Internal desc = database error: pq: schema version mismatch for table x: expected 31, got 30 (40001)"), true},
 		{"read restart text", errors.New("pq: restart transaction: read restart required (40001)"), true},
 		{"yugabyte restart read text", errors.New("pq: Restart read required (query layer retry isn't possible because this is not the first command in the transaction.) (40001)"), true},

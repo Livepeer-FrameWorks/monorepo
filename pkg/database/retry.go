@@ -9,7 +9,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const DefaultRetryAttempts = 3
+const DefaultRetryAttempts = 6
 
 // IsRetryablePostgresError classifies database errors that are expected to
 // succeed when the whole statement or transaction is replayed. Yugabyte can
@@ -26,11 +26,16 @@ func IsRetryablePostgresError(err error) bool {
 		}
 	}
 	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "schema version mismatch") ||
+		strings.Contains(msg, "catalog version mismatch") ||
+		strings.Contains(msg, "mismatched_schema") ||
+		strings.Contains(msg, "catalog snapshot") && strings.Contains(msg, "invalidated") {
+		return true
+	}
 	if !strings.Contains(msg, "40001") {
 		return false
 	}
-	return strings.Contains(msg, "schema version mismatch") ||
-		strings.Contains(msg, "read restart") ||
+	return strings.Contains(msg, "read restart") ||
 		strings.Contains(msg, "restart read") ||
 		strings.Contains(msg, "restart transaction")
 }

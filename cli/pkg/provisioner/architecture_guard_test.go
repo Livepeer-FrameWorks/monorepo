@@ -171,6 +171,65 @@ func TestArchitectureGuard_noRunningStateSkipGate(t *testing.T) {
 	})
 }
 
+func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) {
+	t.Parallel()
+	_, ansibleRoots := repoSourceRoots(t)
+	if len(ansibleRoots) == 0 {
+		t.Skip("ansible tree not available")
+	}
+
+	cases := []struct {
+		name         string
+		role         string
+		prefix       string
+		readLedger   string
+		ensureLedger string
+	}{
+		{"postgres", "postgres", "postgres", "Read applied migrations per database", "Ensure _migrations tracking table per database"},
+		{"yugabyte", "yugabyte", "yugabyte", "Read applied migrations per database (Yugabyte)", "Ensure _migrations tracking table per database (Yugabyte)"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			schemaBody := readRoleTask(t, ansibleRoots[0], tc.role, "schema.yml")
+			existingSchemaGuard := "- not (" + tc.prefix + "_schema_has_tables_by_db[item.db] | default(false))"
+			if !strings.Contains(schemaBody, existingSchemaGuard) {
+				t.Fatalf("%s schema ownership task must be gated by %q", tc.name, existingSchemaGuard)
+			}
+
+			migrateBody := readRoleTask(t, ansibleRoots[0], tc.role, "migrate.yml")
+			readIdx := strings.Index(migrateBody, "- name: "+tc.readLedger)
+			ensureIdx := strings.Index(migrateBody, "- name: "+tc.ensureLedger)
+			if readIdx < 0 || ensureIdx < 0 || readIdx > ensureIdx {
+				t.Fatalf("%s migrate task must read the ledger before creating or repairing it", tc.name)
+			}
+
+			pendingLoop := `loop: "{{ ` + tc.prefix + `_pending_migrate_items | default([]) | map(attribute='db') | unique | list }}"`
+			if !strings.Contains(migrateBody, pendingLoop) {
+				t.Fatalf("%s migrate task must create or repair _migrations only for pending databases", tc.name)
+			}
+			applyLoop := `loop: "{{ ` + tc.prefix + `_pending_migrate_items | default([]) }}"`
+			if !strings.Contains(migrateBody, applyLoop) {
+				t.Fatalf("%s migrate task must apply only the precomputed pending list", tc.name)
+			}
+			if !strings.Contains(migrateBody, "pg_advisory_lock(hashtext('frameworks_migrations')") {
+				t.Fatalf("%s migrate task must serialize schema changes with an advisory lock", tc.name)
+			}
+		})
+	}
+}
+
+func readRoleTask(t *testing.T, ansibleRoot, role, task string) string {
+	t.Helper()
+	path := filepath.Join(ansibleRoot, "collections", "ansible_collections", "frameworks", "infra", "roles", role, "tasks", task)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(body)
+}
+
 func TestArchitectureGuard_noCompatibilityNarrationInComments(t *testing.T) {
 	t.Parallel()
 	// docs/standards/code-comments.md bans history narration ("used to"),
