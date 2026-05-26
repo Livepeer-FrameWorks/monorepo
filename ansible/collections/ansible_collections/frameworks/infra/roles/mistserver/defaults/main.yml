@@ -28,6 +28,8 @@ mistserver_systemd_name: frameworks-mistserver
 mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service"
 mistserver_controller_port: 4242
 mistserver_controller_interface: 127.0.0.1
+mistserver_runtime_packages:
+  - ffmpeg
 
 # Darwin layout. Selected when ansible_facts.os_family == 'Darwin'. Two
 # domains supported: system (/Library/LaunchDaemons, root) and user

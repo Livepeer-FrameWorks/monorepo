@@ -23,6 +23,12 @@
     - /etc/frameworks
     - "{{ mistserver_install_dir }}"
 
+- name: Install MistServer runtime packages
+  ansible.builtin.package:
+    name: "{{ mistserver_runtime_packages }}"
+    state: present
+  when: mistserver_runtime_packages | length > 0
+
 - name: Download MistServer tarball
   ansible.builtin.get_url:
     url: "{{ mistserver_artifact_url }}"

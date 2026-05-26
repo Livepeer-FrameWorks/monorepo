@@ -5,3 +5,9 @@
     port: "{{ mistserver_controller_port }}"
     timeout: 60
   when: not ansible_check_mode
+
+- name: Validate ffmpeg is available for MistServer ts-exec sources
+  ansible.builtin.command: ffmpeg -version
+  register: mistserver_ffmpeg_version
+  changed_when: false
+  when: not ansible_check_mode
