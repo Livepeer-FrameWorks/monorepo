@@ -88,14 +88,14 @@ const caddyfileTmpl = `{
 	}
 
 	handle_path /view/* {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+			Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
+			Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
+		}
 		@view_options method OPTIONS
 		handle @view_options {
-			header {
-				Access-Control-Allow-Origin "*"
-				Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-				Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
-				Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
-			}
 			respond "" 204
 		}
 		reverse_proxy {{.MistUpstream}} {
@@ -107,10 +107,6 @@ const caddyfileTmpl = `{
 			header_down -Access-Control-Max-Age
 			header_down -Access-Control-Request-Headers
 			header_down -Access-Control-Request-Method
-			header_down Access-Control-Allow-Origin "*"
-			header_down Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-			header_down Access-Control-Allow-Headers "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range"
-			header_down Access-Control-Expose-Headers "Content-Length,Content-Range,Accept-Ranges"
 			flush_interval -1
 			transport http {
 				read_timeout 0

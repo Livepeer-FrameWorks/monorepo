@@ -175,8 +175,11 @@ func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
 		"Access-Control-Allow-Origin",
 		"Access-Control-Expose-Headers",
 	} {
-		if !strings.Contains(out, "header_down "+headerName) {
-			t.Fatalf("expected /view proxy to own CORS response header %s; got:\n%s", headerName, out)
+		if !strings.Contains(out, "\t\t\t"+headerName) {
+			t.Fatalf("expected /view route to own CORS response header %s; got:\n%s", headerName, out)
+		}
+		if strings.Contains(out, "header_down "+headerName) {
+			t.Fatalf("expected /view proxy to set CORS outside header_down for %s; got:\n%s", headerName, out)
 		}
 	}
 }
