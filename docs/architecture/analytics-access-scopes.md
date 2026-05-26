@@ -5,19 +5,19 @@ Bridge enforces the access boundary before calling Periscope or Quartermaster.
 
 ## Scopes
 
-| Scope              | Caller intent                                                   | Allowed data                                                                                                                                              | Examples                                                                                |
-| ------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Public topology    | Show platform status, federation shape, and public map context. | Official cluster-level topology and public orchestrator vantage points. No node inventory, service instances, tenant load, or host metrics.               | `networkStatus` for unauthenticated users, marketing network map.                       |
-| Tenant analytics   | Show what happened to the tenant's own streams and viewers.     | Periscope rows filtered by the caller's `tenant_id`, including routing decisions, federation events, client QoE, viewer geography, and usage.             | Audience routing map, stream health, subscriber routing matrix on a subscribed cluster. |
-| Cluster operations | Operate infrastructure the caller owns.                         | Nodes, service instances, node metrics, node performance, enrollment tokens, cluster inspection, and system-health subscriptions for owned clusters only. | `/infrastructure`, `/infrastructure/[clusterId]`, `/nodes`, `/nodes/[id]`.              |
+| Scope              | Caller intent                                                                 | Allowed data                                                                                                                                                                                                  | Examples                                                                                |
+| ------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Public topology    | Show platform status, federation shape, marketplace context, and public KPIs. | Official cluster topology with node/service placement, subscribed-cluster KPI summaries, owned-cluster topology, peering context, and public orchestrator vantage points. No per-tenant load or host metrics. | `networkStatus` for unauthenticated users, marketing network map.                       |
+| Tenant analytics   | Show what happened to the tenant's own streams and viewers.                   | Periscope rows filtered by the caller's `tenant_id`, including routing decisions, federation events, client QoE, viewer geography, and usage.                                                                 | Audience routing map, stream health, subscriber routing matrix on a subscribed cluster. |
+| Cluster operations | Operate infrastructure the caller owns.                                       | Nodes, service instances, node metrics, node performance, enrollment tokens, cluster inspection, and system-health subscriptions for owned clusters only.                                                     | `/infrastructure`, `/infrastructure/[clusterId]`, `/nodes`, `/nodes/[id]`.              |
 
 ## Bridge enforcement
 
 - Tenant analytics resolvers pass the context tenant id to Periscope and do not require cluster ownership. Periscope queries must keep `tenant_id = ?` predicates on the underlying ClickHouse reads.
 - Cluster operations resolvers first resolve the caller's owned clusters from Quartermaster. Reads without a cluster filter fan out only across owned clusters. Reads with a node id first fetch the node and then require ownership of its cluster.
-- Public topology resolvers use Quartermaster's official-cluster surface. Authenticated cluster owners receive node and service detail for their owned clusters; everyone else receives cluster markers and public peering context only.
+- Public topology resolvers use Quartermaster's official-cluster surface and the caller's active cluster-access rows. Authenticated tenants receive official topology plus subscribed or owned cluster rows, with basic cluster-level load counters for every visible cluster. Private node and service-instance topology is included only for owned clusters.
 
-This allows a tenant subscribed to a marketplace/shared cluster to inspect routing and quality for their own streams, while preventing that tenant from seeing the cluster owner's node fleet, service placement, or unrelated tenant traffic.
+This allows anonymous visitors and tenants to see the public platform map while preventing a tenant subscribed to a marketplace/shared cluster from seeing a private cluster owner's node fleet, service placement, host metrics, or unrelated tenant traffic.
 
 ## Webapp contract
 

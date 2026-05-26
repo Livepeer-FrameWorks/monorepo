@@ -3641,8 +3641,9 @@ func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.
 	return resp.GetSummary(), nil
 }
 
-// DoGetNetworkStatus returns public cluster-level topology and adds node/service
-// detail only for authenticated cluster owners.
+// DoGetNetworkStatus returns official public topology, owned private topology,
+// and subscribed cluster-level KPIs. Host metrics and inspect surfaces stay
+// owner-gated.
 func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNetworkStatus(), nil
@@ -3660,16 +3661,58 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		operatorView = len(ownedClusters) > 0
 	}
 
-	var clustersResp *pb.ListClustersResponse
-	var err error
-	if operatorView {
-		clustersResp, err = r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
-	} else {
-		clustersResp, err = r.Clients.Quartermaster.ListOfficialClusters(ctx)
+	clustersResp := &pb.ListClustersResponse{}
+	seenClusters := make(map[string]struct{})
+	topologyClusterIDs := make(map[string]struct{})
+	appendClusters := func(clusters []*pb.InfrastructureCluster, exposeTopology bool) {
+		for _, cluster := range clusters {
+			if cluster == nil || cluster.GetClusterId() == "" {
+				continue
+			}
+			clusterID := cluster.GetClusterId()
+			if exposeTopology {
+				topologyClusterIDs[clusterID] = struct{}{}
+			}
+			if _, ok := seenClusters[clusterID]; !ok {
+				seenClusters[clusterID] = struct{}{}
+				clustersResp.Clusters = append(clustersResp.Clusters, cluster)
+			}
+		}
 	}
+
+	officialClustersResp, err := r.Clients.Quartermaster.ListOfficialClusters(ctx)
 	if err != nil {
-		r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
-		return nil, fmt.Errorf("network topology unavailable: %w", err)
+		if tenantID == "" {
+			r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
+			return nil, fmt.Errorf("network topology unavailable: %w", err)
+		}
+		r.Logger.WithError(err).Warn("networkStatus: failed to list official clusters; returning tenant-accessible topology only")
+	} else {
+		appendClusters(officialClustersResp.GetClusters(), true)
+	}
+
+	if tenantID != "" {
+		accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+			TenantId:   tenantID,
+			Pagination: &pb.CursorPaginationRequest{First: 500},
+		})
+		if accessErr != nil {
+			r.Logger.WithError(accessErr).Warn("networkStatus: failed to list tenant cluster access")
+		} else {
+			appendClusters(accessResp.GetClusters(), false)
+		}
+	}
+
+	if operatorView {
+		ownedClustersResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
+		if ownedErr != nil {
+			r.Logger.WithError(ownedErr).Error("networkStatus: owned cluster topology unavailable")
+			return nil, fmt.Errorf("owned network topology unavailable: %w", ownedErr)
+		}
+		appendClusters(ownedClustersResp.GetClusters(), true)
+	}
+	if len(clustersResp.GetClusters()) == 0 {
+		return nil, fmt.Errorf("network topology unavailable: no visible clusters")
 	}
 
 	// Fetch pool assignments for peer connection derivation and virtual cluster geo.
@@ -3698,36 +3741,40 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	networkNodesRaw := make([]*pb.InfrastructureNode, 0)
-	for clusterID := range visibleClusterIDs {
-		nodesResp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
-		if err != nil {
-			r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list nodes")
+	for clusterID := range topologyClusterIDs {
+		if _, visible := visibleClusterIDs[clusterID]; !visible {
+			continue
+		}
+		nodesResp, nodeErr := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		if nodeErr != nil {
+			r.Logger.WithError(nodeErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list nodes")
 			continue
 		}
 		networkNodesRaw = append(networkNodesRaw, nodesResp.GetNodes()...)
 	}
 
 	serviceInstancesRaw := make([]*pb.ServiceInstance, 0)
-	for clusterID := range visibleClusterIDs {
-		instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
-		if err != nil {
-			r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list service instances")
+	for clusterID := range topologyClusterIDs {
+		if _, visible := visibleClusterIDs[clusterID]; !visible {
+			continue
+		}
+		instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		if instanceErr != nil {
+			r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list service instances")
 			continue
 		}
 		serviceInstancesRaw = append(serviceInstancesRaw, instancesResp.GetInstances()...)
 	}
 
 	liveStatsByCluster := make(map[string]*pb.NetworkClusterLiveStats)
-	if operatorView {
-		liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
-		if err != nil {
-			r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
-		}
-		if liveStatsResp != nil {
-			for _, ls := range liveStatsResp.Clusters {
-				if _, ok := visibleClusterIDs[ls.ClusterId]; ok {
-					liveStatsByCluster[ls.ClusterId] = ls
-				}
+	liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
+	if err != nil {
+		r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
+	}
+	if liveStatsResp != nil {
+		for _, ls := range liveStatsResp.Clusters {
+			if _, visible := visibleClusterIDs[ls.ClusterId]; visible {
+				liveStatsByCluster[ls.ClusterId] = ls
 			}
 		}
 	}
@@ -3739,16 +3786,14 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	servicesByCluster := make(map[string]map[string]bool)
 	for _, si := range serviceInstancesRaw {
 		if si != nil {
-			if operatorView {
-				serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
-					InstanceID:   si.InstanceId,
-					ServiceID:    si.ServiceId,
-					ClusterID:    si.ClusterId,
-					NodeID:       si.NodeId,
-					Status:       si.Status,
-					HealthStatus: si.HealthStatus,
-				})
-			}
+			serviceInstances = append(serviceInstances, &model.NetworkServiceInstance{
+				InstanceID:   si.InstanceId,
+				ServiceID:    si.ServiceId,
+				ClusterID:    si.ClusterId,
+				NodeID:       si.NodeId,
+				Status:       si.Status,
+				HealthStatus: si.HealthStatus,
+			})
 			if si.NodeId != nil && si.HealthStatus == "healthy" {
 				nodesWithHealthyService[*si.NodeId] = true
 			}
@@ -3788,17 +3833,15 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			nodeStatus = "active"
 			cg.healthyCount++
 		}
-		if operatorView {
-			networkNodes = append(networkNodes, &model.NetworkNode{
-				NodeID:    n.NodeId,
-				Name:      n.NodeName,
-				NodeType:  n.NodeType,
-				Latitude:  lat,
-				Longitude: lon,
-				Status:    nodeStatus,
-				ClusterID: n.ClusterId,
-			})
-		}
+		networkNodes = append(networkNodes, &model.NetworkNode{
+			NodeID:    n.NodeId,
+			Name:      n.NodeName,
+			NodeType:  n.NodeType,
+			Latitude:  lat,
+			Longitude: lon,
+			Status:    nodeStatus,
+			ClusterID: n.ClusterId,
+		})
 	}
 	instancesByID := make(map[string]*pb.ServiceInstance)
 	for _, si := range serviceInstancesRaw {

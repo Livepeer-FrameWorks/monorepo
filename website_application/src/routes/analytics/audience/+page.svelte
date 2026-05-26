@@ -166,11 +166,7 @@
   };
 
   let routingMapData = $derived.by(() => {
-    // Access cellToBoundaryFn to register dependency - re-run when h3 loads
-    const h3Ready = !!cellToBoundaryFn;
     const events = $routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? [];
-
-    console.log("[routingMapData] computing, h3Ready:", h3Ready, "events:", events.length);
 
     const routes: {
       from: [number, number];
@@ -190,20 +186,29 @@
       string,
       { count: number; success: number; distanceSum: number; nodeSeen: boolean }
     > = {};
-
-    // Log first event to debug bucket data
-    if (events.length > 0) {
-      const firstEvt = events[0].node;
-      console.log("[routingMapData] first event:", {
-        clientBucket: firstEvt.clientBucket,
-        nodeBucket: firstEvt.nodeBucket,
-        clientLat: firstEvt.clientLatitude,
-        clientLng: firstEvt.clientLongitude,
-      });
-    }
+    const nodesById: Record<
+      string,
+      { id: string; name: string; lat: number; lng: number; count: number }
+    > = {};
 
     events.forEach((edge) => {
       const evt = edge.node;
+      const nodeKey = evt.nodeId ?? evt.selectedNode ?? "";
+      if (nodeKey && evt.nodeLatitude && evt.nodeLongitude) {
+        const existing = nodesById[nodeKey];
+        if (existing) {
+          existing.count++;
+        } else {
+          nodesById[nodeKey] = {
+            id: nodeKey,
+            name: evt.nodeName ?? evt.selectedNode ?? evt.nodeId ?? "Node",
+            lat: evt.nodeLatitude,
+            lng: evt.nodeLongitude,
+            count: 1,
+          };
+        }
+      }
+
       // We need client lat/lng AND a resolved node lat/lng
       if (evt.clientLatitude && evt.clientLongitude) {
         let nodeLat = evt.nodeLatitude;
@@ -266,15 +271,12 @@
       }
     }
 
-    const displayNodes = events
-      .map((edge) => edge.node)
-      .filter((evt) => evt.nodeLatitude && evt.nodeLongitude && (evt.nodeId || evt.selectedNode))
-      .map((evt) => ({
-        id: evt.nodeId ?? evt.selectedNode ?? "",
-        name: evt.nodeName ?? evt.selectedNode ?? evt.nodeId ?? "Node",
-        lat: evt.nodeLatitude!,
-        lng: evt.nodeLongitude!,
-      }));
+    const displayNodes = Object.values(nodesById).map((node) => ({
+      id: node.id,
+      name: node.count > 1 ? `${node.name} (${node.count} routes)` : node.name,
+      lat: node.lat,
+      lng: node.lng,
+    }));
 
     return { routes, nodes: displayNodes, buckets: bucketPolys, bucketStats };
   });

@@ -1,4 +1,4 @@
-# Per-instance rows for the cluster owner. Each carries its own
+# Public per-instance rows. Each carries its own
 # price/capabilities/hardware — usually consistent across an orch's pool but
 # not guaranteed.
 query GetOrchestratorInstances($orchAddr: String) {

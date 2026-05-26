@@ -341,9 +341,8 @@ type Query {
   ): OrchestratorsConnection!
 
   """
-  Fetch a single orchestrator with every known instance and per-(gateway,
-  instance) vantage. Side-panel data source. tenant scope is the cluster
-  owner.
+  Fetch a public orchestrator with every known instance and per-(gateway,
+  instance) vantage. Side-panel data source for the federation map.
   """
   orchestrator(
     """
@@ -353,7 +352,7 @@ type Query {
   ): OrchestratorWithDetails
 
   """
-  List per-instance rows for the cluster owner. Each carries its own
+  List public per-instance rows. Each carries its own
   price/capabilities/hardware — usually consistent across an orch's pool but
   not guaranteed. Use the optional `orchAddr` filter to scope to one orch.
   """
@@ -5989,7 +5988,7 @@ type NetworkPeerConnection {
   connectionType: String!
 }
 
-# Individual infrastructure node for authenticated cluster owners.
+# Individual node in public official or owned cluster topology.
 type NetworkNode {
   nodeId: String!
   name: String!
@@ -6000,7 +5999,7 @@ type NetworkNode {
   clusterId: String!
 }
 
-# Running service instance for authenticated cluster owners.
+# Running service instance in public official or owned cluster topology.
 type NetworkServiceInstance {
   instanceId: String!
   serviceId: String!

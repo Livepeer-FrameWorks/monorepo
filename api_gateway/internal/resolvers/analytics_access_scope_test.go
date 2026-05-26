@@ -90,8 +90,17 @@ func TestAnalyticsAccessScopeContracts(t *testing.T) {
 	t.Run("network status splits public and owner views", func(t *testing.T) {
 		src := functionSource(t, "analytics_connections.go", "DoGetNetworkStatus")
 		assertContains(t, src, "ListOfficialClusters(ctx)")
+		assertContains(t, src, "ListMySubscriptions(ctx")
 		assertContains(t, src, "ListClustersByOwner(ctx, tenantID")
+		assertContains(t, src, "topologyClusterIDs")
+		assertContains(t, src, "appendClusters(officialClustersResp.GetClusters(), true)")
+		assertContains(t, src, "appendClusters(accessResp.GetClusters(), false)")
+		assertContains(t, src, "appendClusters(ownedClustersResp.GetClusters(), true)")
+		assertContains(t, src, "for clusterID := range topologyClusterIDs")
+		assertContains(t, src, "if _, visible := visibleClusterIDs[ls.ClusterId]; visible")
 		assertContains(t, src, "operatorView")
+		assertNotContains(t, src, "if operatorView {\n\t\t\t\tserviceInstances = append")
+		assertNotContains(t, src, "if operatorView {\n\t\t\tnetworkNodes = append")
 	})
 }
 
