@@ -1800,9 +1800,11 @@ enum GQL {
   """
 
   static let GetNetworkStatus = """
-  # Public network status for marketing/status maps. Authenticated cluster owners
-  # receive node/service detail for owned clusters; everyone else receives
-  # cluster-level topology only.
+  # Public network status for marketing/status maps. Anonymous callers receive
+  # official platform topology, including node and service placement. Authenticated
+  # tenants receive official topology plus subscribed or owned clusters, with
+  # cluster-level load counters for every visible cluster; private node and
+  # service placement is included only for owned clusters.
   query GetNetworkStatus {
     networkStatus {
       clusters {
@@ -2008,7 +2010,7 @@ enum GQL {
   """
 
   static let GetOrchestratorInstances = """
-  # Per-instance rows for the cluster owner. Each carries its own
+  # Public per-instance rows. Each carries its own
   # price/capabilities/hardware — usually consistent across an orch's pool but
   # not guaranteed.
   query GetOrchestratorInstances($orchAddr: String) {
@@ -2074,9 +2076,8 @@ enum GQL {
   """
 
   static let GetOrchestratorVantages = """
-  # All per-vantage observations for the cluster owner — used by the
-  # federation map's per-vantage pin toggle to scatter every observed
-  # (gateway, IP) point. Filter by `orchAddr` from the side panel.
+  # Public per-vantage Livepeer observations for the federation map's pin toggle.
+  # Filter by `orchAddr` from the side panel.
   query GetOrchestratorVantages($orchAddr: String) {
     orchestratorVantages(orchAddr: $orchAddr) {
       __typename
