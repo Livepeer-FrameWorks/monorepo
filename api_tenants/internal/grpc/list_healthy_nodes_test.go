@@ -480,7 +480,7 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 	// Two caps on → two ON CONFLICT upserts. The other two caps are false →
 	// no row exists → no UPDATE issued.
 	for range []int{0, 1} {
-		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
+		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*SELECT \$1::varchar\(100\).*WHERE instance_id = \$1::varchar\(100\).*WHERE n\.node_id = \$2::varchar\(100\).*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}

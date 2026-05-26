@@ -5123,12 +5123,12 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 					(instance_id, cluster_id, node_id, service_id, protocol,
 					 advertise_host, port, status, health_status, started_at,
 					 last_health_check, created_at, updated_at)
-				SELECT $1, n.cluster_id, $2, $3, 'http',
+				SELECT $1::varchar(100), n.cluster_id, $2::varchar(100), $3::varchar(100), 'http',
 				       COALESCE(host(n.external_ip), ''), 18008, 'running', 'healthy',
-				       COALESCE((SELECT started_at FROM quartermaster.service_instances WHERE instance_id = $1), NOW()),
+				       COALESCE((SELECT started_at FROM quartermaster.service_instances WHERE instance_id = $1::varchar(100)), NOW()),
 				       NOW(), NOW(), NOW()
 				FROM quartermaster.infrastructure_nodes n
-				WHERE n.node_id = $2
+				WHERE n.node_id = $2::varchar(100)
 				  AND n.status = 'active'
 				ON CONFLICT (instance_id) DO UPDATE
 				SET node_id = EXCLUDED.node_id,
