@@ -285,19 +285,7 @@ export function useCompositor({
       const sceneManager = controller?.getSceneManager();
       if (!sceneManager) return;
 
-      // Fix: Capture current layer order to persist across layout changes
-      const currentScene = sceneManager.getActiveScene();
-      let preservedOrder: string[] = [];
-      if (currentScene) {
-        preservedOrder = currentScene.layers.map((l) => l.sourceId);
-      }
-
       sceneManager.applyLayout(layout);
-
-      // Fix: Re-apply preserved order
-      if (currentScene && preservedOrder.length > 0) {
-        sceneManager.reorderLayers(currentScene.id, preservedOrder);
-      }
 
       setCurrentLayout(layout);
       syncState();

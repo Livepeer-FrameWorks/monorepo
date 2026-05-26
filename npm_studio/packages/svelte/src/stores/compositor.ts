@@ -271,22 +271,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     const sceneManager = controller?.getSceneManager();
     if (!sceneManager) return;
 
-    // Fix: Capture current layer order (source IDs) to persist across layout changes
-    // This prevents the layout switch from resetting your carefully cycled order.
-    const currentScene = sceneManager.getActiveScene();
-    let preservedOrder: string[] = [];
-    if (currentScene) {
-      preservedOrder = currentScene.layers.map((l) => l.sourceId);
-    }
-
-    // Apply the new layout (which calculates transforms)
     sceneManager.applyLayout(layout);
-
-    // Fix: Re-apply the preserved order immediately
-    if (currentScene && preservedOrder.length > 0) {
-      sceneManager.reorderLayers(currentScene.id, preservedOrder);
-    }
-
     store.update((state) => ({ ...state, currentLayout: layout }));
     syncState();
   }

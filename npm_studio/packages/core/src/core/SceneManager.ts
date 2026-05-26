@@ -364,11 +364,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
       case "layoutAnimationComplete": {
         this.isAnimating = false;
-        // Update local scene with the final layout
         const activeScene = this.getActiveScene();
         if (activeScene) {
-          const sourceIds = activeScene.layers.filter((l) => l.visible).map((l) => l.sourceId);
-          activeScene.layers = applyLayout(this.currentLayout, sourceIds);
+          activeScene.layers = this.buildLayoutLayers(activeScene, this.currentLayout);
         }
         this.emit("layoutAnimationCompleted", { layout: this.currentLayout });
         break;
@@ -618,6 +616,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     }
 
     layer.visible = visible;
+    scene.layers = this.buildLayoutLayers(scene, this.currentLayout);
     this.updateSceneInWorker(scene);
 
     this.emit("layerUpdated", { sceneId, layer });
@@ -654,17 +653,15 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       return;
     }
 
-    // Debug: log state BEFORE cycle
-    console.log("[SceneManager] cycleSourceOrder BEFORE:", {
-      direction,
-      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
-    });
-
     // Get layer IDs sorted by current zIndex
-    const sortedLayers = [...scene.layers].sort((a, b) => a.zIndex - b.zIndex);
+    const sortedLayers = [...scene.layers]
+      .filter((l) => l.visible)
+      .sort((a, b) => a.zIndex - b.zIndex);
+    if (sortedLayers.length < 2) {
+      console.warn("[SceneManager] cycleSourceOrder: Need at least 2 visible layers");
+      return;
+    }
     const layerIds = sortedLayers.map((l) => l.id);
-
-    console.log("[SceneManager] sorted layerIds before rotate:", [...layerIds]);
 
     // Rotate the array
     if (direction === "forward") {
@@ -675,25 +672,13 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       if (last) layerIds.unshift(last);
     }
 
-    console.log("[SceneManager] layerIds after rotate:", [...layerIds]);
-
     // Apply the new Z-order
     this.reorderLayers(scene.id, layerIds);
-
-    // Debug: log state AFTER reorder, BEFORE applyLayout
-    console.log("[SceneManager] after reorderLayers:", {
-      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
-    });
 
     // Re-apply layout to update visual positions based on new Z-order
     if (this.currentLayout) {
       this.applyLayout(this.currentLayout, true, { durationMs: 200, easing: "ease-out" });
     }
-
-    // Debug: log state AFTER applyLayout
-    console.log("[SceneManager] cycleSourceOrder AFTER applyLayout:", {
-      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
-    });
 
     this.emit("layerUpdated", { sceneId: scene.id, layer: scene.layers[0] });
   }
@@ -730,20 +715,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     this.currentLayout = layout;
 
-    // Get source IDs from current layers sorted by zIndex (preserves cycle order)
-    const sourceIds = [...scene.layers]
-      .filter((l) => l.visible)
-      .sort((a, b) => a.zIndex - b.zIndex)
-      .map((l) => l.sourceId);
-    console.log("[SceneManager] applyLayout", {
-      mode: layout.mode,
-      sourceIds,
-      currentLayerCount: scene.layers.length,
-      animate,
-    });
-
-    // Generate new layers from layout
-    const newLayers = applyLayout(layout, sourceIds);
+    const newLayers = this.buildLayoutLayers(scene, layout);
+    const hasVisibleLayers = newLayers.some((layer) => layer.visible);
 
     // Create target scene with new layers
     const targetScene: Scene = {
@@ -754,7 +727,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // Always update scene.layers to keep state in sync
     scene.layers = newLayers;
 
-    if (animate && newLayers.length > 0) {
+    if (animate && hasVisibleLayers) {
       // Animate to the new layout
       const transitionConfig: LayoutTransitionConfig = {
         ...this.defaultLayoutTransition,
@@ -775,6 +748,37 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Also send layout update to worker (for metadata tracking)
     this.sendToWorker({ type: "updateLayout", layout });
+  }
+
+  private buildLayoutLayers(scene: Scene, layout: LayoutConfig): Layer[] {
+    const existingBySource = new Map(scene.layers.map((layer) => [layer.sourceId, layer]));
+    const visibleSourceIds = [...scene.layers]
+      .filter((layer) => layer.visible)
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .map((layer) => layer.sourceId);
+    const visibleLayoutLayers = applyLayout(layout, visibleSourceIds);
+
+    const nextLayers = visibleLayoutLayers.map((layoutLayer) => {
+      const existing = existingBySource.get(layoutLayer.sourceId);
+      if (!existing) return layoutLayer;
+      return {
+        ...existing,
+        transform: layoutLayer.transform,
+        zIndex: layoutLayer.zIndex,
+        scalingMode: layoutLayer.scalingMode,
+      };
+    });
+
+    const visibleSources = new Set(visibleLayoutLayers.map((layer) => layer.sourceId));
+    const hiddenLayers = scene.layers
+      .filter((layer) => !layer.visible && !visibleSources.has(layer.sourceId))
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .map((layer, index) => ({
+        ...layer,
+        zIndex: nextLayers.length + index,
+      }));
+
+    return [...nextLayers, ...hiddenLayers];
   }
 
   /**

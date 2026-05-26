@@ -562,6 +562,8 @@
     const layer = layers.find((l) => l.sourceId === sourceId);
     if (layer) {
       compositorStore.setLayerVisibility(compositorState.activeSceneId, layer.id, !layer.visible);
+    } else {
+      compositorStore.addLayer(compositorState.activeSceneId, sourceId);
     }
   }
 
@@ -570,7 +572,7 @@
     const activeScene = compositorState.scenes.find((s) => s.id === compositorState.activeSceneId);
     if (!activeScene) return true;
     const layer = activeScene.layers.find((l) => l.sourceId === sourceId);
-    return layer?.visible ?? true;
+    return layer?.visible ?? false;
   }
 
   function sourceHasVideo(source: MediaSource): boolean {

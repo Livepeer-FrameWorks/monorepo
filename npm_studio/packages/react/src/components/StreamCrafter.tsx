@@ -846,7 +846,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                               const layer = compositor.activeScene?.layers.find(
                                 (l) => l.sourceId === source.id
                               );
-                              const isVisibleInCompositor = layer?.visible ?? true;
+                              const isVisibleInCompositor = layer?.visible ?? false;
 
                               return (
                                 <SourceRow
@@ -863,12 +863,15 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                                   isCompositorEnabled={enableCompositor}
                                   isVisibleInCompositor={isVisibleInCompositor}
                                   onVisibilityToggle={() => {
-                                    if (compositor.activeSceneId && layer) {
+                                    if (!compositor.activeSceneId) return;
+                                    if (layer) {
                                       compositor.setLayerVisibility(
                                         compositor.activeSceneId,
                                         layer.id,
-                                        !isVisibleInCompositor
+                                        !layer.visible
                                       );
+                                    } else {
+                                      compositor.addLayer(compositor.activeSceneId, source.id);
                                     }
                                   }}
                                 />

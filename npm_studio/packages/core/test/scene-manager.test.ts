@@ -328,6 +328,42 @@ describe("SceneManager", () => {
       const sm = new SceneManager();
       expect(sm.getCurrentLayout()).toBeDefined();
     });
+
+    it("keeps hidden layers addressable across layout changes", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      const camera = sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+
+      sm.setLayerVisibility(scene.id, screen.id, false);
+      sm.applyLayout({ mode: "split-h" }, false);
+
+      const layers = sm.getScene(scene.id)!.layers;
+      expect(layers).toHaveLength(2);
+      expect(layers.find((layer) => layer.sourceId === "camera")?.visible).toBe(true);
+      expect(layers.find((layer) => layer.sourceId === "screen")?.visible).toBe(false);
+      expect(layers.find((layer) => layer.sourceId === "screen")?.id).toBe(screen.id);
+      expect(layers.find((layer) => layer.sourceId === "camera")?.id).toBe(camera.id);
+    });
+
+    it("restores a hidden layer into the current layout when shown", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+
+      sm.applyLayout({ mode: "split-h" }, false);
+      sm.setLayerVisibility(scene.id, screen.id, false);
+      sm.setLayerVisibility(scene.id, screen.id, true);
+
+      const layers = sm.getScene(scene.id)!.layers;
+      expect(layers).toHaveLength(2);
+      expect(layers.every((layer) => layer.visible)).toBe(true);
+      expect(layers.map((layer) => layer.sourceId).sort()).toEqual(["camera", "screen"]);
+      expect(layers.map((layer) => layer.transform.width).sort()).toEqual([0.4975, 0.4975]);
+    });
   });
 
   // ===========================================================================
