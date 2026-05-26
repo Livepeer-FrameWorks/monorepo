@@ -1327,7 +1327,7 @@
           <div class="map-popup__title">{selectedDetail.title}</div>
           <table class="map-popup__table">
             <tbody>
-              {#each selectedDetail.rows as row (`${row.label}:${row.value}`)}
+              {#each selectedDetail.rows as row, i (`${row.label}:${row.value}:${i}`)}
                 <tr>
                   <td class="map-popup__label">{row.label}</td>
                   <td class="map-popup__value">
@@ -1341,11 +1341,11 @@
               {/each}
             </tbody>
           </table>
-          {#each selectedDetail.sections ?? [] as section (section.title)}
+          {#each selectedDetail.sections ?? [] as section, sectionIndex (`${section.title}:${sectionIndex}`)}
             <div class="map-popup__section-title">{section.title}</div>
             <table class="map-popup__table">
               <tbody>
-                {#each section.rows as row (`${section.title}:${row.label}:${row.value}`)}
+                {#each section.rows as row, rowIndex (`${section.title}:${row.label}:${row.value}:${rowIndex}`)}
                   <tr>
                     <td class="map-popup__label">{row.label}</td>
                     <td class="map-popup__value">
@@ -1362,7 +1362,7 @@
           {/each}
           {#if selectedDetail.tags?.length}
             <div class="map-popup__tags">
-              {#each selectedDetail.tags as tag (tag)}
+              {#each selectedDetail.tags as tag, i (`${tag}:${i}`)}
                 <span class="map-popup__tag">{tag}</span>
               {/each}
             </div>

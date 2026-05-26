@@ -827,7 +827,7 @@
                       Top Cities
                     </p>
                     <div class="space-y-2">
-                      {#each geographicDistribution.topCities.slice(0, 4) as city (`${city.city}-${city.countryCode}`)}
+                      {#each geographicDistribution.topCities.slice(0, 4) as city, i (`${city.city}-${city.countryCode}-${i}`)}
                         <div
                           class="flex justify-between items-center p-2 rounded border border-border/30 bg-muted/20"
                         >
@@ -955,7 +955,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each geographicDistribution.topCities as city (`${city.city}-${city.countryCode}`)}
+                    {#each geographicDistribution.topCities as city, i (`${city.city}-${city.countryCode}-${i}`)}
                       <tr class="border-b border-border/30 hover:bg-muted/10">
                         <td class="py-3 px-4 font-medium text-foreground">{city.city}</td>
                         <td class="py-3 px-4 text-muted-foreground"
@@ -1395,7 +1395,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to + flow.crossCluster)}
+                      {#each bucketFlows.slice(0, 10) as flow, i (`${flow.from}:${flow.to}:${flow.crossCluster}:${i}`)}
                         <tr class="border-b border-border/30 hover:bg-muted/15">
                           <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
                             {resolveBucketLocation(flow.from, bucketCountryMap)}
@@ -1577,7 +1577,7 @@
               </div>
               <div class="slab-body--padded">
                 <div class="space-y-2">
-                  {#each mostPopularNodes.slice(0, 6) as node (node.nodeName)}
+                  {#each mostPopularNodes.slice(0, 6) as node, i (`${node.nodeName}:${i}`)}
                     <div
                       class="flex justify-between items-center p-2 rounded border border-border/30 bg-muted/20"
                     >
@@ -1626,7 +1626,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {#each viewerEvents as event (event.eventId)}
+                      {#each viewerEvents as event, i (`${event.eventId ?? "event"}:${i}`)}
                         {@const displayStreamId = event.stream?.streamId ?? event.streamId}
                         <tr class="border-b border-border/30 hover:bg-muted/20">
                           <td class="py-2 px-4 text-xs text-muted-foreground"
