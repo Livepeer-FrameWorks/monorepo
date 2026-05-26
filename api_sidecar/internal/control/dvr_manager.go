@@ -46,6 +46,11 @@ const (
 	maxDVREvictionBatches = 10
 )
 
+var (
+	initialPushRetryFor   = 30 * time.Second
+	initialPushRetryEvery = 2 * time.Second
+)
+
 // DVRJob represents a running DVR recording session
 type DVRJob struct {
 	DVRHash      string
@@ -895,15 +900,34 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		maxEntries,
 	)
 
-	// Store for recreation attempts
-	streamName := fmt.Sprintf("live+%s", job.InternalName)
+	// Store for recreation attempts.
+	streamName := strings.TrimSpace(job.SourceURL)
+	if streamName == "" {
+		streamName = fmt.Sprintf("live+%s", job.InternalName)
+	}
 	job.TargetURI = targetURI
 	job.StreamName = streamName
 
-	// Attempt to create push
-	pushID, err := dm.createOrRecreatePush(job)
-	if err != nil {
-		return fmt.Errorf("failed to create initial push: %w", err)
+	var (
+		pushID int
+		err    error
+	)
+	deadline := time.Now().Add(initialPushRetryFor)
+	for attempt := 0; ; attempt++ {
+		pushID, err = dm.createOrRecreatePush(job)
+		if err == nil {
+			break
+		}
+		if time.Now().Add(initialPushRetryEvery).After(deadline) {
+			return fmt.Errorf("failed to create initial push: %w", err)
+		}
+		job.Logger.WithFields(logging.Fields{
+			"attempt":     attempt + 1,
+			"retry_after": initialPushRetryEvery.String(),
+			"stream":      streamName,
+			"error":       err,
+		}).Warn("DVR initial push not ready; retrying")
+		time.Sleep(initialPushRetryEvery)
 	}
 
 	job.PushID = pushID

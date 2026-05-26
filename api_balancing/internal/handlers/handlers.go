@@ -494,22 +494,42 @@ func Init(
 
 		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if commodoreClient != nil {
-			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
-				tenantIDStr = resp.TenantId
-				userIDStr = resp.UserId
-				internalNameStr = resp.StreamInternalName
-				streamID = resp.StreamId
-			}
-		}
-
-		_ = db.QueryRowContext(cctx, `
-			SELECT retention_until, started_at, ended_at
+		var rowTenantID, rowUserID, rowStreamID, rowInternalName sql.NullString
+		if err := db.QueryRowContext(cctx, `
+			SELECT tenant_id::text,
+			       user_id::text,
+			       stream_id::text,
+			       stream_internal_name,
+			       retention_until,
+			       started_at,
+			       ended_at
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
 			  AND artifact_type = 'dvr'
-			  AND COALESCE(tenant_id::text, '') = $2
-		`, dvrHash, tenantIDStr).Scan(&retentionUntil, &startedAt, &endedAt)
+		`, dvrHash).Scan(&rowTenantID, &rowUserID, &rowStreamID, &rowInternalName, &retentionUntil, &startedAt, &endedAt); err != nil {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to read DVR artifact context for lifecycle event")
+		} else {
+			tenantIDStr = rowTenantID.String
+			userIDStr = rowUserID.String
+			streamID = rowStreamID.String
+			internalNameStr = rowInternalName.String
+		}
+		if commodoreClient != nil {
+			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
+				if resp.TenantId != "" {
+					tenantIDStr = resp.TenantId
+				}
+				if resp.UserId != "" {
+					userIDStr = resp.UserId
+				}
+				if resp.StreamInternalName != "" {
+					internalNameStr = resp.StreamInternalName
+				}
+				if resp.StreamId != "" {
+					streamID = resp.StreamId
+				}
+			}
+		}
 
 		dvrData := &pb.DVRLifecycleData{
 			Status:  status,

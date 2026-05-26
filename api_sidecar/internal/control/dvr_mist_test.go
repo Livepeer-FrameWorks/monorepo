@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -49,6 +50,8 @@ func (f *fakeMistClient) PushList() ([]mist.PushInfo, error) {
 type startAwareFakeMist struct {
 	pushIDToReturn int
 	pushStartErr   error
+	failStarts     int
+	startCalls     int
 	pushStopErr    error
 	pushStopCalls  int64
 	started        bool
@@ -57,10 +60,15 @@ type startAwareFakeMist struct {
 }
 
 func (s *startAwareFakeMist) PushStart(streamName, targetURI string) error {
+	s.startCalls++
 	s.lastStreamName = streamName
 	s.lastTargetURI = targetURI
 	if s.pushStartErr != nil {
 		return s.pushStartErr
+	}
+	if s.failStarts > 0 {
+		s.failStarts--
+		return fmt.Errorf("stream ended before DVR start")
 	}
 	s.started = true
 	return nil
@@ -127,6 +135,18 @@ func newDVRManagerWithMist(t *testing.T, mc DVRMistClient) *DVRManager {
 	}
 }
 
+func useFastInitialPushRetry(t *testing.T) {
+	t.Helper()
+	oldFor := initialPushRetryFor
+	oldEvery := initialPushRetryEvery
+	initialPushRetryFor = 5 * time.Millisecond
+	initialPushRetryEvery = time.Millisecond
+	t.Cleanup(func() {
+		initialPushRetryFor = oldFor
+		initialPushRetryEvery = oldEvery
+	})
+}
+
 // --- StartRecording ---
 
 func TestStartRecording_CreatesDirectories(t *testing.T) {
@@ -163,8 +183,8 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mc.lastStreamName != "live+test-stream" {
-		t.Fatalf("expected stream name 'live+test-stream', got %s", mc.lastStreamName)
+	if mc.lastStreamName != "http://source" {
+		t.Fatalf("expected stream name 'http://source', got %s", mc.lastStreamName)
 	}
 	for _, want := range []string{"audio=source", "video=source", "subtitle=none", "meta=none"} {
 		if !strings.Contains(mc.lastTargetURI, want) {
@@ -173,7 +193,44 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 	}
 }
 
+func TestStartRecording_UsesLocalStreamWhenSourceURLMissing(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 11}
+	dm := newDVRManagerWithMist(t, mc)
+
+	err := dm.StartRecording("hash-local", "stream-1", "test-stream", "", &pb.DVRConfig{
+		SegmentDuration: 6,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mc.lastStreamName != "live+test-stream" {
+		t.Fatalf("expected stream name 'live+test-stream', got %s", mc.lastStreamName)
+	}
+}
+
+func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
+	useFastInitialPushRetry(t)
+	mc := &startAwareFakeMist{pushIDToReturn: 12, failStarts: 2}
+	dm := newDVRManagerWithMist(t, mc)
+
+	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "dtsc://source/live+test-stream", &pb.DVRConfig{
+		SegmentDuration: 6,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mc.startCalls != 3 {
+		t.Fatalf("PushStart calls = %d, want 3", mc.startCalls)
+	}
+	if mc.lastStreamName != "dtsc://source/live+test-stream" {
+		t.Fatalf("stream source = %q, want DTSC source", mc.lastStreamName)
+	}
+}
+
 func TestStartRecording_PushStartError(t *testing.T) {
+	useFastInitialPushRetry(t)
 	mc := &startAwareFakeMist{
 		pushIDToReturn: 0,
 		pushStartErr:   fmt.Errorf("mist connection refused"),
