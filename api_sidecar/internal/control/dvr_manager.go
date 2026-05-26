@@ -1202,7 +1202,7 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 	} else {
 		// Clean up any existing pushes for this stream/target combination
 		for _, push := range pushes {
-			if push.StreamName == job.StreamName && push.TargetURI == job.TargetURI {
+			if dvrPushMatchesJob(push, job) {
 				if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
 					job.Logger.WithError(stopErr).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
 				} else {
@@ -1225,12 +1225,25 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 
 	// Find our push by stream name and target
 	for _, push := range pushes {
-		if push.StreamName == job.StreamName && push.TargetURI == job.TargetURI {
+		if dvrPushMatchesJob(push, job) {
 			return push.ID, nil
 		}
 	}
 
 	return 0, fmt.Errorf("failed to find created push in push list")
+}
+
+func dvrPushMatchesJob(push mist.PushInfo, job *DVRJob) bool {
+	if job == nil || push.StreamName != job.StreamName {
+		return false
+	}
+	if job.TargetURI != "" && (push.TargetURI == job.TargetURI || push.ActualURI == job.TargetURI) {
+		return true
+	}
+	if job.DVRHash == "" {
+		return false
+	}
+	return strings.Contains(push.TargetURI, job.DVRHash) || strings.Contains(push.ActualURI, job.DVRHash)
 }
 
 // calculateRetryDelay calculates exponential backoff delay for push retries

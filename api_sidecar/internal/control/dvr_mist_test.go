@@ -57,6 +57,8 @@ type startAwareFakeMist struct {
 	started        bool
 	lastStreamName string
 	lastTargetURI  string
+	listTargetURI  string
+	listActualURI  string
 }
 
 func (s *startAwareFakeMist) PushStart(streamName, targetURI string) error {
@@ -82,11 +84,16 @@ func (s *startAwareFakeMist) PushStop(pushID int) error {
 
 func (s *startAwareFakeMist) PushList() ([]mist.PushInfo, error) {
 	if s.started {
+		targetURI := s.lastTargetURI
+		if s.listTargetURI != "" {
+			targetURI = s.listTargetURI
+		}
 		return []mist.PushInfo{
 			{
 				ID:         s.pushIDToReturn,
 				StreamName: s.lastStreamName,
-				TargetURI:  s.lastTargetURI,
+				TargetURI:  targetURI,
+				ActualURI:  s.listActualURI,
 			},
 		}, nil
 	}
@@ -333,6 +340,66 @@ func TestCreateOrRecreatePush_StaleCleanup(t *testing.T) {
 		DVRHash:    "hash-stale",
 		StreamName: "live+test",
 		TargetURI:  "/data/dvr/hash-stale",
+		Logger:     logging.NewLogger(),
+	}
+
+	pushID, err := dm.createOrRecreatePush(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pushID != 99 {
+		t.Fatalf("expected push ID 99, got %d", pushID)
+	}
+	if len(mc.stoppedIDs) != 1 || mc.stoppedIDs[0] != 10 {
+		t.Fatalf("expected old push 10 to be stopped, got %v", mc.stoppedIDs)
+	}
+}
+
+func TestCreateOrRecreatePush_MatchesMistExpandedDVRTarget(t *testing.T) {
+	const dvrHash = "20260526212719e6b54001bbf15619"
+	mc := &startAwareFakeMist{
+		pushIDToReturn: 77,
+		listTargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+	}
+	dm := newDVRManagerWithMist(t, mc)
+
+	job := &DVRJob{
+		DVRHash:    dvrHash,
+		StreamName: "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+abc",
+		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+		Logger:     logging.NewLogger(),
+	}
+
+	pushID, err := dm.createOrRecreatePush(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pushID != 77 {
+		t.Fatalf("expected push ID 77, got %d", pushID)
+	}
+	if mc.startCalls != 1 {
+		t.Fatalf("expected one PushStart call, got %d", mc.startCalls)
+	}
+}
+
+func TestCreateOrRecreatePush_CleansMistExpandedStaleDVRTarget(t *testing.T) {
+	const dvrHash = "20260526212719e6b54001bbf15619"
+	mc := &staleCleanupFakeMist{
+		existingPushes: []mist.PushInfo{
+			{
+				ID:         10,
+				StreamName: "live+test",
+				TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+			},
+		},
+		newPushID: 99,
+	}
+	dm := newDVRManagerWithMist(t, mc)
+
+	job := &DVRJob{
+		DVRHash:    dvrHash,
+		StreamName: "live+test",
+		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
 		Logger:     logging.NewLogger(),
 	}
 
