@@ -134,7 +134,7 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 			"features", "support_level", "sla_level",
 			"metering_enabled", "is_active",
 			"tier_level", "is_enterprise", "tier_created_at", "tier_updated_at",
-			"processes_live", "processes_vod",
+			"processes_live", "processes_dvr", "processes_clip", "processes_dvr_finalize", "processes_vod",
 		}).AddRow(
 			subID, tenantID, tierID, "active", nil,
 			now, nil, nil, nil,
@@ -152,7 +152,7 @@ func TestGetSubscriptionAndTierAllowsNullBillingEmail(t *testing.T) {
 			[]byte(`{}`), "community", "none",
 			false, true,
 			int32(1), false, now, now,
-			nil, nil,
+			nil, nil, nil, nil, nil,
 		))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT meter, COALESCE(model, ''), COALESCE(currency, '')`)).
 		WithArgs(subID).

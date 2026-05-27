@@ -621,14 +621,17 @@ type BillingTier struct {
 	StripePriceIdYearly  *string `protobuf:"bytes,23,opt,name=stripe_price_id_yearly,json=stripePriceIdYearly,proto3,oneof" json:"stripe_price_id_yearly,omitempty"`    // Stripe Price ID for yearly billing
 	IsDefaultPrepaid     bool    `protobuf:"varint,24,opt,name=is_default_prepaid,json=isDefaultPrepaid,proto3" json:"is_default_prepaid,omitempty"`
 	IsDefaultPostpaid    bool    `protobuf:"varint,25,opt,name=is_default_postpaid,json=isDefaultPostpaid,proto3" json:"is_default_postpaid,omitempty"`
-	// MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
-	ProcessesLive string `protobuf:"bytes,26,opt,name=processes_live,json=processesLive,proto3" json:"processes_live,omitempty"` // Process config for live streams
-	ProcessesVod  string `protobuf:"bytes,27,opt,name=processes_vod,json=processesVod,proto3" json:"processes_vod,omitempty"`    // Process config for VOD processing
+	// MistServer process definitions per lifecycle (raw JSON arrays with {{gateway_url}} placeholder)
+	ProcessesLive string `protobuf:"bytes,26,opt,name=processes_live,json=processesLive,proto3" json:"processes_live,omitempty"` // Live STREAM_PROCESS config
+	ProcessesVod  string `protobuf:"bytes,27,opt,name=processes_vod,json=processesVod,proto3" json:"processes_vod,omitempty"`    // Uploaded VOD processing config
 	// Rating engine inputs.
-	PricingRules  []*PricingRule    `protobuf:"bytes,28,rep,name=pricing_rules,json=pricingRules,proto3" json:"pricing_rules,omitempty"`                                                       // priced behaviors per meter
-	Entitlements  map[string]string `protobuf:"bytes,29,rep,name=entitlements,proto3" json:"entitlements,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // non-billing grants, JSON-encoded values
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PricingRules         []*PricingRule    `protobuf:"bytes,28,rep,name=pricing_rules,json=pricingRules,proto3" json:"pricing_rules,omitempty"`                                                       // priced behaviors per meter
+	Entitlements         map[string]string `protobuf:"bytes,29,rep,name=entitlements,proto3" json:"entitlements,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // non-billing grants, JSON-encoded values
+	ProcessesDvr         string            `protobuf:"bytes,30,opt,name=processes_dvr,json=processesDvr,proto3" json:"processes_dvr,omitempty"`                                                       // Rolling DVR STREAM_PROCESS config
+	ProcessesClip        string            `protobuf:"bytes,31,opt,name=processes_clip,json=processesClip,proto3" json:"processes_clip,omitempty"`                                                    // Clip materialization config
+	ProcessesDvrFinalize string            `protobuf:"bytes,32,opt,name=processes_dvr_finalize,json=processesDvrFinalize,proto3" json:"processes_dvr_finalize,omitempty"`                             // DVR chapter/finalization materialization config
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *BillingTier) Reset() {
@@ -834,6 +837,27 @@ func (x *BillingTier) GetEntitlements() map[string]string {
 		return x.Entitlements
 	}
 	return nil
+}
+
+func (x *BillingTier) GetProcessesDvr() string {
+	if x != nil {
+		return x.ProcessesDvr
+	}
+	return ""
+}
+
+func (x *BillingTier) GetProcessesClip() string {
+	if x != nil {
+		return x.ProcessesClip
+	}
+	return ""
+}
+
+func (x *BillingTier) GetProcessesDvrFinalize() string {
+	if x != nil {
+		return x.ProcessesDvrFinalize
+	}
+	return ""
 }
 
 // PricingRule is one priced behavior on a tier (or override on a subscription).
@@ -9827,8 +9851,7 @@ const file_purser_proto_rawDesc = "" +
 	"pagination\x18\x03 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\"0\n" +
 	"\x15GetBillingTierRequest\x12\x17\n" +
-	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\xa3\n" +
-	"\n" +
+	"\atier_id\x18\x01 \x01(\tR\x06tierId\"\xa5\v\n" +
 	"\vBillingTier\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttier_name\x18\x02 \x01(\tR\btierName\x12!\n" +
@@ -9858,7 +9881,10 @@ const file_purser_proto_rawDesc = "" +
 	"\x0eprocesses_live\x18\x1a \x01(\tR\rprocessesLive\x12#\n" +
 	"\rprocesses_vod\x18\x1b \x01(\tR\fprocessesVod\x128\n" +
 	"\rpricing_rules\x18\x1c \x03(\v2\x13.purser.PricingRuleR\fpricingRules\x12I\n" +
-	"\fentitlements\x18\x1d \x03(\v2%.purser.BillingTier.EntitlementsEntryR\fentitlements\x1a?\n" +
+	"\fentitlements\x18\x1d \x03(\v2%.purser.BillingTier.EntitlementsEntryR\fentitlements\x12#\n" +
+	"\rprocesses_dvr\x18\x1e \x01(\tR\fprocessesDvr\x12%\n" +
+	"\x0eprocesses_clip\x18\x1f \x01(\tR\rprocessesClip\x124\n" +
+	"\x16processes_dvr_finalize\x18  \x01(\tR\x14processesDvrFinalize\x1a?\n" +
 	"\x11EntitlementsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +

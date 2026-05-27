@@ -47,10 +47,13 @@ type CatalogTier struct {
 	IsEnterprise      bool                 `yaml:"is_enterprise"`
 	IsDefaultPrepaid  bool                 `yaml:"is_default_prepaid"`
 	IsDefaultPostpaid bool                 `yaml:"is_default_postpaid"`
-	// processes_live/processes_vod arrive as YAML strings carrying raw JSON.
+	// Process fields arrive as YAML strings carrying raw JSON.
 	// MistServer reads them verbatim, so we keep them as strings end-to-end.
-	ProcessesLive string `yaml:"processes_live"`
-	ProcessesVOD  string `yaml:"processes_vod"`
+	ProcessesLive        string `yaml:"processes_live"`
+	ProcessesDVR         string `yaml:"processes_dvr"`
+	ProcessesClip        string `yaml:"processes_clip"`
+	ProcessesDVRFinalize string `yaml:"processes_dvr_finalize"`
+	ProcessesVOD         string `yaml:"processes_vod"`
 }
 
 // catalog is the parsed shape of catalog/billing_tiers.yaml.

@@ -213,7 +213,7 @@ func (r *LivepeerAuthResolver) AuthorizeRequest(ctx context.Context, manifestID 
 	// 2. Positive-result cache. Avoids repeated Commodore + peer fan-out for the
 	// burst of segments at session startup. Caches the full auth context, not
 	// just a boolean, so the cached path still produces tenant attribution.
-	usePositiveCache := !(isProcessingManifestID(manifestID) && len(req.Profiles) > 0)
+	usePositiveCache := !isProcessingManifestID(manifestID) || len(req.Profiles) == 0
 	if usePositiveCache && r.PositiveCache != nil {
 		for _, candidate := range manifestIDs {
 			if c := r.PositiveCache.get(candidate); c != nil {

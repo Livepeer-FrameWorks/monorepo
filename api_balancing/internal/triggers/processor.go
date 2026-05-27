@@ -1344,7 +1344,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				UserId:        &userID,
 				ClusterId:     streamValidation.GetOriginClusterId(),
 				DvrPolicy:     streamValidation.GetDvrPolicy(),
-				ProcessesJson: mist.ThumbsOnlyProcesses(streamValidation.GetProcessesJson()),
+				ProcessesJson: streamValidation.GetDvrProcessesJson(),
 			}
 			var dvrResponse *pb.StartDVRResponse
 			var err error
@@ -2214,7 +2214,7 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 	return cfg
 }
 
-// resolveRollingDVRProcessConfig returns the live thumbnail processes_json
+// resolveRollingDVRProcessConfig returns the DVR lifecycle processes_json
 // snapshot stored on the DVR artifact row at StartDVR. The snapshot
 // is the authority: it survives Foghorn restarts and cache TTL expiry
 // that the PUSH_REWRITE-populated streamCache does not. The in-memory

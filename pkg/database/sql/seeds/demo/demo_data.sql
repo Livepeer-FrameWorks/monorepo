@@ -264,19 +264,22 @@ ON CONFLICT (node_id) DO NOTHING;
 WITH demo_process_config AS (
     SELECT
         '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_live,
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr,
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_clip,
+        '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr_finalize,
         '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
 )
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,
     features, support_level, sla_level, metering_enabled,
     tier_level, is_enterprise, is_default_prepaid, is_default_postpaid,
-    processes_live, processes_vod
+    processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 )
 SELECT
     v.tier_name, v.display_name, v.description, v.base_price, v.currency,
     v.features::jsonb, v.support_level, v.sla_level, v.metering_enabled,
     v.tier_level, v.is_enterprise, v.is_default_prepaid, v.is_default_postpaid,
-    pc.processes_live, pc.processes_vod
+    pc.processes_live, pc.processes_dvr, pc.processes_clip, pc.processes_dvr_finalize, pc.processes_vod
 FROM (VALUES
 ('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included usage.', 0.00, 'EUR',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
@@ -313,7 +316,12 @@ ON CONFLICT (tier_name) DO UPDATE SET
     tier_level = EXCLUDED.tier_level,
     is_enterprise = EXCLUDED.is_enterprise,
     is_default_prepaid = EXCLUDED.is_default_prepaid,
-    is_default_postpaid = EXCLUDED.is_default_postpaid;
+    is_default_postpaid = EXCLUDED.is_default_postpaid,
+    processes_live = EXCLUDED.processes_live,
+    processes_dvr = EXCLUDED.processes_dvr,
+    processes_clip = EXCLUDED.processes_clip,
+    processes_dvr_finalize = EXCLUDED.processes_dvr_finalize,
+    processes_vod = EXCLUDED.processes_vod;
 
 -- Tier cap on customer-set retention. 0 = no cap (paid baseline);
 -- Free's finite cap is the anti-abuse guardrail. Per-class system

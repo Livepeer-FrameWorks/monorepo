@@ -114,7 +114,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 				metering_enabled,
 				tier_level, is_enterprise,
 				is_default_prepaid, is_default_postpaid,
-				processes_live, processes_vod
+				processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 			) VALUES (
 				$1, $2, $3,
 				$4, $5, $6,
@@ -122,7 +122,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 				$10,
 				$11, $12,
 				$13, $14,
-				$15, $16
+				$15, $16, $17, $18, $19
 			) RETURNING id`
 		if insertErr := exec.QueryRowContext(ctx, insertSQL,
 			t.TierName, t.DisplayName, t.Description,
@@ -131,7 +131,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			t.MeteringEnabled,
 			t.TierLevel, t.IsEnterprise,
 			t.IsDefaultPrepaid, t.IsDefaultPostpaid,
-			processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesVOD),
+			processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesDVR), processOrEmpty(t.ProcessesClip), processOrEmpty(t.ProcessesDVRFinalize), processOrEmpty(t.ProcessesVOD),
 		).Scan(&tierID); insertErr != nil {
 			return "", insertErr
 		}
@@ -145,7 +145,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 				metering_enabled,
 				tier_level, is_enterprise,
 				is_default_prepaid, is_default_postpaid,
-				processes_live::text, processes_vod::text
+				processes_live::text, processes_dvr::text, processes_clip::text, processes_dvr_finalize::text, processes_vod::text
 			FROM purser.billing_tiers
 			WHERE tier_name = $1`
 		var (
@@ -153,7 +153,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			curFeat, curSupport, curSLA                                       string
 			curMetering, curEnterprise, curDefaultPrepaid, curDefaultPostpaid bool
 			curTierLvl                                                        int
-			curLive, curVOD                                                   string
+			curLive, curDVR, curClip, curDVRFinalize, curVOD                  string
 		)
 		if scanErr := exec.QueryRowContext(ctx, compareSQL, t.TierName).Scan(
 			&curDisplay, &curDesc, &curBase, &curCurr, &curPeriod,
@@ -161,7 +161,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			&curMetering,
 			&curTierLvl, &curEnterprise,
 			&curDefaultPrepaid, &curDefaultPostpaid,
-			&curLive, &curVOD,
+			&curLive, &curDVR, &curClip, &curDVRFinalize, &curVOD,
 		); scanErr != nil {
 			return "", fmt.Errorf("compare row: %w", scanErr)
 		}
@@ -180,6 +180,9 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 			curDefaultPrepaid == t.IsDefaultPrepaid &&
 			curDefaultPostpaid == t.IsDefaultPostpaid &&
 			jsonEq(curLive, []byte(processOrEmpty(t.ProcessesLive))) &&
+			jsonEq(curDVR, []byte(processOrEmpty(t.ProcessesDVR))) &&
+			jsonEq(curClip, []byte(processOrEmpty(t.ProcessesClip))) &&
+			jsonEq(curDVRFinalize, []byte(processOrEmpty(t.ProcessesDVRFinalize))) &&
 			jsonEq(curVOD, []byte(processOrEmpty(t.ProcessesVOD)))) {
 			const updateSQL = `
 				UPDATE purser.billing_tiers SET
@@ -197,7 +200,10 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 					is_default_prepaid = $13,
 					is_default_postpaid = $14,
 					processes_live = $15,
-					processes_vod = $16
+					processes_dvr = $16,
+					processes_clip = $17,
+					processes_dvr_finalize = $18,
+					processes_vod = $19
 				WHERE tier_name = $1`
 			if _, updateErr := exec.ExecContext(ctx, updateSQL,
 				t.TierName, t.DisplayName, t.Description,
@@ -206,7 +212,7 @@ func upsertBillingTier(ctx context.Context, exec DBTX, t CatalogTier) (string, e
 				t.MeteringEnabled,
 				t.TierLevel, t.IsEnterprise,
 				t.IsDefaultPrepaid, t.IsDefaultPostpaid,
-				processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesVOD),
+				processOrEmpty(t.ProcessesLive), processOrEmpty(t.ProcessesDVR), processOrEmpty(t.ProcessesClip), processOrEmpty(t.ProcessesDVRFinalize), processOrEmpty(t.ProcessesVOD),
 			); updateErr != nil {
 				return "", updateErr
 			}

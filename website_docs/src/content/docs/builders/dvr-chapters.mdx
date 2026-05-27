@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-DVR chapters turn one continuous recording into smaller playback windows. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, but their processing pass is thumbs-only because the source recording already carries the live A/V renditions.
+DVR chapters turn one continuous recording into smaller playback windows. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, and their processing pass uses the lifecycle-specific `dvr_finalize` process snapshot resolved by Commodore.
 
 <Aside type="tip" title="Why chapters matter">
   Chapters let always-on streams behave like an archive library without splitting the source into

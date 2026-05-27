@@ -31,10 +31,13 @@ func twoTierFixture() []CatalogTier {
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0.00055"},
 			},
-			TierLevel:        0,
-			IsDefaultPrepaid: true,
-			ProcessesLive:    `[{"process":"AV"}]`,
-			ProcessesVOD:     `[{"process":"Thumbs"}]`,
+			TierLevel:            0,
+			IsDefaultPrepaid:     true,
+			ProcessesLive:        `[{"process":"AV"}]`,
+			ProcessesDVR:         `[{"process":"Thumbs"}]`,
+			ProcessesClip:        `[{"process":"Thumbs"}]`,
+			ProcessesDVRFinalize: `[{"process":"Thumbs"}]`,
+			ProcessesVOD:         `[{"process":"Thumbs"}]`,
 		},
 		{
 			TierName:        "free",
@@ -52,10 +55,13 @@ func twoTierFixture() []CatalogTier {
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
 				{Meter: "storage_gb_seconds_hot", Model: "tiered_graduated", UnitPrice: "0"},
 			},
-			TierLevel:         1,
-			IsDefaultPostpaid: true,
-			ProcessesLive:     `[{"process":"AV"}]`,
-			ProcessesVOD:      `[{"process":"Thumbs"}]`,
+			TierLevel:            1,
+			IsDefaultPostpaid:    true,
+			ProcessesLive:        `[{"process":"AV"}]`,
+			ProcessesDVR:         `[{"process":"Thumbs"}]`,
+			ProcessesClip:        `[{"process":"Thumbs"}]`,
+			ProcessesDVRFinalize: `[{"process":"Thumbs"}]`,
+			ProcessesVOD:         `[{"process":"Thumbs"}]`,
 		},
 	}
 }
@@ -80,7 +86,7 @@ func TestEmbeddedCatalogParses(t *testing.T) {
 	}
 
 	for _, tier := range tiers {
-		if tier.ProcessesLive == "" || tier.ProcessesVOD == "" {
+		if tier.ProcessesLive == "" || tier.ProcessesDVR == "" || tier.ProcessesClip == "" || tier.ProcessesDVRFinalize == "" || tier.ProcessesVOD == "" {
 			t.Errorf("tier %q missing MistServer process json", tier.TierName)
 		}
 	}
@@ -165,6 +171,21 @@ func TestEmbeddedCatalogMistProcessShapes(t *testing.T) {
 		if tier.ProcessesLive != "" {
 			if err := mist.ValidateProcessConfigShape(tier.ProcessesLive); err != nil {
 				t.Fatalf("%s processes_live: %v", tier.TierName, err)
+			}
+		}
+		if tier.ProcessesDVR != "" {
+			if err := mist.ValidateProcessConfigShape(tier.ProcessesDVR); err != nil {
+				t.Fatalf("%s processes_dvr: %v", tier.TierName, err)
+			}
+		}
+		if tier.ProcessesClip != "" {
+			if err := mist.ValidateProcessConfigShape(tier.ProcessesClip); err != nil {
+				t.Fatalf("%s processes_clip: %v", tier.TierName, err)
+			}
+		}
+		if tier.ProcessesDVRFinalize != "" {
+			if err := mist.ValidateProcessConfigShape(tier.ProcessesDVRFinalize); err != nil {
+				t.Fatalf("%s processes_dvr_finalize: %v", tier.TierName, err)
 			}
 		}
 		if tier.ProcessesVOD != "" {

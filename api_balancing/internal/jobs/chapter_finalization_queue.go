@@ -15,7 +15,6 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -308,21 +307,17 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		return fmt.Errorf("cache playback_id on chapter row: %w", cacheErr)
 	}
 
-	// Resolve the tenant's VOD processing pipeline BEFORE marking the
-	// chapter finalizing, then keep only MistProcThumbs. DVR chapters are
-	// live-derived assets: the source already carries A/V renditions, but
-	// the finalized chapter needs fresh thumbnail tracks for its own
-	// bounded timeline. If Commodore is unreachable or returns an error we
-	// must leave the chapter in 'closed' so the next queue tick retries —
-	// advancing to 'finalizing' first would wedge the chapter for the full
-	// chapterFinalizationMaxTimeout (up to 24h) before the stale-finalizing
-	// path picks it up again.
+	// Resolve the DVR-finalization processing pipeline BEFORE marking the
+	// chapter finalizing. Commodore is the processing-policy authority; this
+	// queue stores/applies the resolved snapshot without deriving a local
+	// subset. If Commodore is unreachable or returns an error we must leave
+	// the chapter in 'closed' so the next queue tick retries.
 	if control.CommodoreClient == nil {
 		return fmt.Errorf("commodore client not configured; cannot resolve tenant processes_json")
 	}
 	processesJSON := ""
 	{
-		resp, perr := control.CommodoreClient.GetTenantProcessesJSONForStream(ctx, parent.tenantID, "vod", parent.originClusterID, parent.streamID)
+		resp, perr := control.CommodoreClient.GetTenantProcessesJSONForLifecycle(ctx, parent.tenantID, "dvr_finalize", parent.originClusterID, parent.streamID)
 		if perr != nil {
 			q.logger.WithError(perr).WithFields(logging.Fields{
 				"chapter_id":    c.ChapterID,
@@ -330,7 +325,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 			}).Warn("Chapter finalization queue: tenant processes_json lookup failed; chapter stays closed for retry")
 			return fmt.Errorf("resolve tenant processes_json: %w", perr)
 		}
-		processesJSON = mist.ThumbsOnlyProcesses(resp.GetProcessesJson())
+		processesJSON = resp.GetProcessesJson()
 	}
 	// Substitute {{gateway_url}} so Helmsman sees a concrete URL.
 	// Commodore returns the raw placeholder by design (the resolver

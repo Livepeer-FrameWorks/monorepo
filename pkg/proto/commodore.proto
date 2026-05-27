@@ -216,11 +216,9 @@ service InternalService {
   // artifact identity.
   rpc ResolveChapterPlaybackID(ResolveChapterPlaybackIDRequest) returns (ResolveChapterPlaybackIDResponse);
 
-  // GetTenantProcessesJSON returns the resolved MistServer process config
-  // for a tenant + stream type ("live" | "vod"). Foghorn calls this from
-  // the chapter finalization queue to attach the same VOD processing
-  // pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
-  // uploads use. Stream-type values match resolveProcessesJSON internally.
+  // GetTenantProcessesJSON returns the resolved MistServer process config for
+  // a tenant + lifecycle. Foghorn calls this from internal materialization
+  // queues and stores/applies the returned snapshot verbatim.
   rpc GetTenantProcessesJSON(GetTenantProcessesJSONRequest) returns (GetTenantProcessesJSONResponse);
 
   // Internal registry projection used by Bridge's GraphQL
@@ -358,9 +356,12 @@ message ValidateStreamKeyResponse {
   repeated PushTargetInternal push_targets = 15;
 
   // ===== PROCESSING CONFIG =====
-  // MistServer process config JSON array for STREAM_PROCESS trigger.
-  // Commodore determines this based on tenant's billing tier features.
+  // MistServer process config JSON array for live STREAM_PROCESS.
+  // Commodore determines this based on stream/tenant/tier lifecycle policy.
   string processes_json = 16;
+  // MistServer process config JSON array for rolling DVR STREAM_PROCESS.
+  // Foghorn stores this snapshot when starting an auto/manual DVR.
+  string dvr_processes_json = 31;
 
   // ===== DVR POLICY =====
   // Resolved DVR window/segment policy for this tenant (from billing tier +
@@ -437,12 +438,13 @@ message ResolveStreamContextResponse {
   repeated quartermaster.TenantClusterPeer cluster_peers = 16;
 
   // ===== PROCESSING / DVR POLICY =====
-  // Same resolution path ValidateStreamKey uses (resolveProcessesJSON on the
-  // tenant's billing tier with optional tenant override). For mist_native,
-  // Foghorn writes this into the streamCache under "process:<internal_name>"
-  // so STREAM_PROCESS finds it.
+  // Same lifecycle-aware resolution path ValidateStreamKey uses. For
+  // mist_native, Foghorn writes processes_json into the streamCache under
+  // "process:<internal_name>" so live STREAM_PROCESS finds it; DVR starts
+  // store dvr_processes_json on the DVR artifact snapshot.
   string processes_json = 17;
   shared.DVRPolicy dvr_policy = 18;
+  string dvr_processes_json = 21;
 
   // ===== BILLING ALLOWANCES =====
   repeated purser.MeterAllowance allowances = 19;
@@ -998,15 +1000,16 @@ message ResolveChapterPlaybackIDResponse {
   string artifact_hash = 4;
 }
 
-// GetTenantProcessesJSON exposes the resolved MistServer process config
-// for use by Foghorn-internal pipelines (chapter finalize). cluster_id
-// is optional — when empty the resolver picks the tenant's default
-// origin cluster.
+// GetTenantProcessesJSON exposes a resolved lifecycle-specific MistServer
+// process config for use by Foghorn-internal pipelines. lifecycle accepts:
+// "live", "dvr", "clip", "dvr_finalize", "vod". stream_type is retained
+// for older callers and is used only when lifecycle is empty.
 message GetTenantProcessesJSONRequest {
   string tenant_id   = 1;
-  string stream_type = 2;     // "live" | "vod"
+  string stream_type = 2;     // legacy: "live" | "vod"; ignored when lifecycle is set
   string cluster_id  = 3;     // optional
   string stream_id   = 4;     // optional; enables per-stream processing overrides
+  string lifecycle   = 5;     // "live" | "dvr" | "clip" | "dvr_finalize" | "vod"
 }
 
 message GetTenantProcessesJSONResponse {

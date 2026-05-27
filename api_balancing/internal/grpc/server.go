@@ -1233,8 +1233,8 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	chapterMode := req.GetDvrChapterMode()
 	chapterInterval := req.GetDvrChapterIntervalSeconds()
 	retentionDays := dvrRetentionDays(req.GetDvrPolicy())
-	// Persist Commodore's resolved live-derived process snapshot so the
-	// rolling-DVR surface (dvr+<internal>) keeps serving DVR-specific
+	// Persist Commodore's resolved DVR process snapshot so the
+	// rolling-DVR surface (dvr+<internal>) keeps serving lifecycle-specific
 	// thumbnails/sprites across Foghorn restarts and process-cache TTL expiry.
 	// Same snapshot pattern as dvr_window_seconds / dvr_chapter_mode.
 	dvrProcessesJSON := req.GetProcessesJson()

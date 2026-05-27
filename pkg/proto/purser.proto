@@ -260,13 +260,16 @@ message BillingTier {
   bool is_default_prepaid = 24;
   bool is_default_postpaid = 25;
 
-  // MistServer process definitions per stream type (raw JSON arrays with {{gateway_url}} placeholder)
-  string processes_live = 26;   // Process config for live streams
-  string processes_vod = 27;    // Process config for VOD processing
+  // MistServer process definitions per lifecycle (raw JSON arrays with {{gateway_url}} placeholder)
+  string processes_live = 26;         // Live STREAM_PROCESS config
+  string processes_vod = 27;          // Uploaded VOD processing config
 
   // Rating engine inputs.
   repeated PricingRule pricing_rules = 28; // priced behaviors per meter
   map<string, string> entitlements = 29;   // non-billing grants, JSON-encoded values
+  string processes_dvr = 30;          // Rolling DVR STREAM_PROCESS config
+  string processes_clip = 31;         // Clip materialization config
+  string processes_dvr_finalize = 32; // DVR chapter/finalization materialization config
 }
 
 // PricingRule is one priced behavior on a tier (or override on a subscription).

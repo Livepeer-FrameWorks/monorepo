@@ -16,17 +16,20 @@ import (
 type countingDVRStarter struct {
 	calls          atomic.Int32
 	hintedCalls    atomic.Int32
+	lastProcesses  atomic.Value // string
 	lastSourceNode atomic.Value // string
 }
 
-func (c *countingDVRStarter) StartDVR(_ context.Context, _ *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (c *countingDVRStarter) StartDVR(_ context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
 	c.calls.Add(1)
+	c.lastProcesses.Store(req.GetProcessesJson())
 	return &pb.StartDVRResponse{}, nil
 }
 
-func (c *countingDVRStarter) StartDVRWithSourceHint(_ context.Context, _ *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error) {
+func (c *countingDVRStarter) StartDVRWithSourceHint(_ context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error) {
 	c.hintedCalls.Add(1)
 	c.calls.Add(1)
+	c.lastProcesses.Store(req.GetProcessesJson())
 	c.lastSourceNode.Store(sourceNodeID)
 	return &pb.StartDVRResponse{}, nil
 }
@@ -67,6 +70,7 @@ func TestEnsureManagedStreamDVR_SuppressesRepeatWithinCooldown(t *testing.T) {
 		InternalName:       "internal-1",
 		TenantId:           "tenant-1",
 		IsRecordingEnabled: true,
+		DvrProcessesJson:   `[{"process":"AV","codec":"AAC"},{"process":"Thumbs","track_select":"video=maxbps"}]`,
 	}
 	m.EnsureManagedStreamDVR(context.Background(), ctx, "edge-a")
 	m.EnsureManagedStreamDVR(context.Background(), ctx, "edge-a")
@@ -79,6 +83,9 @@ func TestEnsureManagedStreamDVR_SuppressesRepeatWithinCooldown(t *testing.T) {
 	}
 	if got := starter.lastSourceNode.Load(); got != "edge-a" {
 		t.Fatalf("source_node_id not forwarded; want edge-a, got %v", got)
+	}
+	if got := starter.lastProcesses.Load(); got != ctx.GetDvrProcessesJson() {
+		t.Fatalf("DVR processes_json should be forwarded exactly from Commodore; want %s, got %v", ctx.GetDvrProcessesJson(), got)
 	}
 }
 

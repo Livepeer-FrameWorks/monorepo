@@ -218,11 +218,9 @@ type InternalServiceClient interface {
 	// Used by Foghorn's playback resolver to map the public ID to the internal
 	// artifact identity.
 	ResolveChapterPlaybackID(ctx context.Context, in *ResolveChapterPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveChapterPlaybackIDResponse, error)
-	// GetTenantProcessesJSON returns the resolved MistServer process config
-	// for a tenant + stream type ("live" | "vod"). Foghorn calls this from
-	// the chapter finalization queue to attach the same VOD processing
-	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
-	// uploads use. Stream-type values match resolveProcessesJSON internally.
+	// GetTenantProcessesJSON returns the resolved MistServer process config for
+	// a tenant + lifecycle. Foghorn calls this from internal materialization
+	// queues and stores/applies the returned snapshot verbatim.
 	GetTenantProcessesJSON(ctx context.Context, in *GetTenantProcessesJSONRequest, opts ...grpc.CallOption) (*GetTenantProcessesJSONResponse, error)
 	// Internal registry projection used by Bridge's GraphQL
 	// storageArtifactsConnection resolver. This is not a public HTTP surface.
@@ -920,11 +918,9 @@ type InternalServiceServer interface {
 	// Used by Foghorn's playback resolver to map the public ID to the internal
 	// artifact identity.
 	ResolveChapterPlaybackID(context.Context, *ResolveChapterPlaybackIDRequest) (*ResolveChapterPlaybackIDResponse, error)
-	// GetTenantProcessesJSON returns the resolved MistServer process config
-	// for a tenant + stream type ("live" | "vod"). Foghorn calls this from
-	// the chapter finalization queue to attach the same VOD processing
-	// pipeline (Thumbs, sprites, optional Livepeer) that user-initiated VOD
-	// uploads use. Stream-type values match resolveProcessesJSON internally.
+	// GetTenantProcessesJSON returns the resolved MistServer process config for
+	// a tenant + lifecycle. Foghorn calls this from internal materialization
+	// queues and stores/applies the returned snapshot verbatim.
 	GetTenantProcessesJSON(context.Context, *GetTenantProcessesJSONRequest) (*GetTenantProcessesJSONResponse, error)
 	// Internal registry projection used by Bridge's GraphQL
 	// storageArtifactsConnection resolver. This is not a public HTTP surface.

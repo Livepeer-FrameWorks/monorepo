@@ -289,9 +289,12 @@ type ValidateStreamKeyResponse struct {
 	// Foghorn sends these to Helmsman as ActivatePushTargets when the stream goes live.
 	PushTargets []*PushTargetInternal `protobuf:"bytes,15,rep,name=push_targets,json=pushTargets,proto3" json:"push_targets,omitempty"`
 	// ===== PROCESSING CONFIG =====
-	// MistServer process config JSON array for STREAM_PROCESS trigger.
-	// Commodore determines this based on tenant's billing tier features.
+	// MistServer process config JSON array for live STREAM_PROCESS.
+	// Commodore determines this based on stream/tenant/tier lifecycle policy.
 	ProcessesJson string `protobuf:"bytes,16,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
+	// MistServer process config JSON array for rolling DVR STREAM_PROCESS.
+	// Foghorn stores this snapshot when starting an auto/manual DVR.
+	DvrProcessesJson string `protobuf:"bytes,31,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
 	// ===== DVR POLICY =====
 	// Resolved DVR window/segment policy for this tenant (from billing tier +
 	// cluster overrides). Foghorn caches this with the stream context and
@@ -462,6 +465,13 @@ func (x *ValidateStreamKeyResponse) GetProcessesJson() string {
 	return ""
 }
 
+func (x *ValidateStreamKeyResponse) GetDvrProcessesJson() string {
+	if x != nil {
+		return x.DvrProcessesJson
+	}
+	return ""
+}
+
 func (x *ValidateStreamKeyResponse) GetDvrPolicy() *DVRPolicy {
 	if x != nil {
 		return x.DvrPolicy
@@ -615,12 +625,13 @@ type ResolveStreamContextResponse struct {
 	OfficialClusterId *string              `protobuf:"bytes,15,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"`
 	ClusterPeers      []*TenantClusterPeer `protobuf:"bytes,16,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
 	// ===== PROCESSING / DVR POLICY =====
-	// Same resolution path ValidateStreamKey uses (resolveProcessesJSON on the
-	// tenant's billing tier with optional tenant override). For mist_native,
-	// Foghorn writes this into the streamCache under "process:<internal_name>"
-	// so STREAM_PROCESS finds it.
-	ProcessesJson string     `protobuf:"bytes,17,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
-	DvrPolicy     *DVRPolicy `protobuf:"bytes,18,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
+	// Same lifecycle-aware resolution path ValidateStreamKey uses. For
+	// mist_native, Foghorn writes processes_json into the streamCache under
+	// "process:<internal_name>" so live STREAM_PROCESS finds it; DVR starts
+	// store dvr_processes_json on the DVR artifact snapshot.
+	ProcessesJson    string     `protobuf:"bytes,17,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
+	DvrPolicy        *DVRPolicy `protobuf:"bytes,18,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
+	DvrProcessesJson string     `protobuf:"bytes,21,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
 	// ===== BILLING ALLOWANCES =====
 	Allowances []*MeterAllowance `protobuf:"bytes,19,rep,name=allowances,proto3" json:"allowances,omitempty"`
 	// ===== RUNTIME RESOURCE CAPS =====
@@ -783,6 +794,13 @@ func (x *ResolveStreamContextResponse) GetDvrPolicy() *DVRPolicy {
 		return x.DvrPolicy
 	}
 	return nil
+}
+
+func (x *ResolveStreamContextResponse) GetDvrProcessesJson() string {
+	if x != nil {
+		return x.DvrProcessesJson
+	}
+	return ""
 }
 
 func (x *ResolveStreamContextResponse) GetAllowances() []*MeterAllowance {
@@ -4704,16 +4722,17 @@ func (x *ResolveChapterPlaybackIDResponse) GetArtifactHash() string {
 	return ""
 }
 
-// GetTenantProcessesJSON exposes the resolved MistServer process config
-// for use by Foghorn-internal pipelines (chapter finalize). cluster_id
-// is optional — when empty the resolver picks the tenant's default
-// origin cluster.
+// GetTenantProcessesJSON exposes a resolved lifecycle-specific MistServer
+// process config for use by Foghorn-internal pipelines. lifecycle accepts:
+// "live", "dvr", "clip", "dvr_finalize", "vod". stream_type is retained
+// for older callers and is used only when lifecycle is empty.
 type GetTenantProcessesJSONRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	StreamType    string                 `protobuf:"bytes,2,opt,name=stream_type,json=streamType,proto3" json:"stream_type,omitempty"` // "live" | "vod"
+	StreamType    string                 `protobuf:"bytes,2,opt,name=stream_type,json=streamType,proto3" json:"stream_type,omitempty"` // legacy: "live" | "vod"; ignored when lifecycle is set
 	ClusterId     string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`    // optional
 	StreamId      string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`       // optional; enables per-stream processing overrides
+	Lifecycle     string                 `protobuf:"bytes,5,opt,name=lifecycle,proto3" json:"lifecycle,omitempty"`                     // "live" | "dvr" | "clip" | "dvr_finalize" | "vod"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4772,6 +4791,13 @@ func (x *GetTenantProcessesJSONRequest) GetClusterId() string {
 func (x *GetTenantProcessesJSONRequest) GetStreamId() string {
 	if x != nil {
 		return x.StreamId
+	}
+	return ""
+}
+
+func (x *GetTenantProcessesJSONRequest) GetLifecycle() string {
+	if x != nil {
+		return x.Lifecycle
 	}
 	return ""
 }
@@ -13102,7 +13128,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\x83\b\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\xb1\b\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -13122,7 +13148,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\vplayback_id\x18\x0e \x01(\tR\n" +
 	"playbackId\x12@\n" +
 	"\fpush_targets\x18\x0f \x03(\v2\x1d.commodore.PushTargetInternalR\vpushTargets\x12%\n" +
-	"\x0eprocesses_json\x18\x10 \x01(\tR\rprocessesJson\x120\n" +
+	"\x0eprocesses_json\x18\x10 \x01(\tR\rprocessesJson\x12,\n" +
+	"\x12dvr_processes_json\x18\x1f \x01(\tR\x10dvrProcessesJson\x120\n" +
 	"\n" +
 	"dvr_policy\x18\x11 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x126\n" +
 	"\n" +
@@ -13140,7 +13167,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x04 \x01(\tR\tclusterIdB\f\n" +
 	"\n" +
-	"identifier\"\x80\b\n" +
+	"identifier\"\xae\b\n" +
 	"\x1cResolveStreamContextResponse\x12\x1a\n" +
 	"\badmitted\x18\x01 \x01(\bR\badmitted\x12)\n" +
 	"\x10admission_reason\x18\x02 \x01(\tR\x0fadmissionReason\x12N\n" +
@@ -13163,7 +13190,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\rcluster_peers\x18\x10 \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12%\n" +
 	"\x0eprocesses_json\x18\x11 \x01(\tR\rprocessesJson\x120\n" +
 	"\n" +
-	"dvr_policy\x18\x12 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x126\n" +
+	"dvr_policy\x18\x12 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12,\n" +
+	"\x12dvr_processes_json\x18\x15 \x01(\tR\x10dvrProcessesJson\x126\n" +
 	"\n" +
 	"allowances\x18\x13 \x03(\v2\x16.purser.MeterAllowanceR\n" +
 	"allowances\x12^\n" +
@@ -13511,14 +13539,15 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"chapter_id\x18\x02 \x01(\tR\tchapterId\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12#\n" +
-	"\rartifact_hash\x18\x04 \x01(\tR\fartifactHash\"\x99\x01\n" +
+	"\rartifact_hash\x18\x04 \x01(\tR\fartifactHash\"\xb7\x01\n" +
 	"\x1dGetTenantProcessesJSONRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1f\n" +
 	"\vstream_type\x18\x02 \x01(\tR\n" +
 	"streamType\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x1b\n" +
-	"\tstream_id\x18\x04 \x01(\tR\bstreamId\"G\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12\x1c\n" +
+	"\tlifecycle\x18\x05 \x01(\tR\tlifecycle\"G\n" +
 	"\x1eGetTenantProcessesJSONResponse\x12%\n" +
 	"\x0eprocesses_json\x18\x01 \x01(\tR\rprocessesJson\"\x8c\x02\n" +
 	"\x1bListStorageArtifactsRequest\x12\x1b\n" +

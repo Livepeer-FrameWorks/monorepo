@@ -372,7 +372,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
 		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
-		       processes_live, processes_vod
+		       processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 		FROM purser.billing_tiers
 		%s
 		ORDER BY tier_level %s, id %s
@@ -391,7 +391,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		var tier pb.BillingTier
 		var createdAt, updatedAt time.Time
 		var features []byte
-		var processesLive, processesVod sql.NullString
+		var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
 
 		err := rows.Scan(
 			&tier.Id, &tier.TierName, &tier.DisplayName, &tier.Description,
@@ -400,7 +400,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 			&createdAt, &updatedAt,
 			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
-			&processesLive, &processesVod,
+			&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod,
 		)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "scan billing tier: %v", err)
@@ -421,6 +421,15 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		tier.UpdatedAt = timestamppb.New(updatedAt)
 		if processesLive.Valid {
 			tier.ProcessesLive = processesLive.String
+		}
+		if processesDVR.Valid {
+			tier.ProcessesDvr = processesDVR.String
+		}
+		if processesClip.Valid {
+			tier.ProcessesClip = processesClip.String
+		}
+		if processesDVRFinalize.Valid {
+			tier.ProcessesDvrFinalize = processesDVRFinalize.String
 		}
 		if processesVod.Valid {
 			tier.ProcessesVod = processesVod.String
@@ -474,7 +483,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	var tier pb.BillingTier
 	var createdAt, updatedAt time.Time
 	var features []byte
-	var processesLive, processesVod sql.NullString
+	var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
 
 	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		return s.db.QueryRowContext(ctx, `
@@ -483,7 +492,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		       is_active, tier_level, is_enterprise,
 		       created_at, updated_at,
 		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false),
-		       processes_live, processes_vod
+		       processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 		FROM purser.billing_tiers
 		WHERE id = $1
 	`, tierID).Scan(
@@ -493,7 +502,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 			&createdAt, &updatedAt,
 			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
-			&processesLive, &processesVod,
+			&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod,
 		)
 	})
 
@@ -520,6 +529,15 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 	tier.UpdatedAt = timestamppb.New(updatedAt)
 	if processesLive.Valid {
 		tier.ProcessesLive = processesLive.String
+	}
+	if processesDVR.Valid {
+		tier.ProcessesDvr = processesDVR.String
+	}
+	if processesClip.Valid {
+		tier.ProcessesClip = processesClip.String
+	}
+	if processesDVRFinalize.Valid {
+		tier.ProcessesDvrFinalize = processesDVRFinalize.String
 	}
 	if processesVod.Valid {
 		tier.ProcessesVod = processesVod.String
@@ -3035,7 +3053,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 
 	// JSONB fields
 	var customFeatures, billingAddress, features []byte
-	var processesLive, processesVod sql.NullString
+	var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
@@ -3055,7 +3073,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			bt.features, bt.support_level, bt.sla_level,
 			bt.metering_enabled, bt.is_active,
 			bt.tier_level, bt.is_enterprise, bt.created_at, bt.updated_at,
-			bt.processes_live, bt.processes_vod
+			bt.processes_live, bt.processes_dvr, bt.processes_clip, bt.processes_dvr_finalize, bt.processes_vod
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
@@ -3078,7 +3096,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&features, &tier.SupportLevel, &tier.SlaLevel,
 		&tier.MeteringEnabled, &tier.IsActive,
 		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt,
-		&processesLive, &processesVod)
+		&processesLive, &processesDVR, &processesClip, &processesDVRFinalize, &processesVod)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: no active subscription")
@@ -3198,6 +3216,15 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 	tier.Entitlements = ents
 	if processesLive.Valid {
 		tier.ProcessesLive = processesLive.String
+	}
+	if processesDVR.Valid {
+		tier.ProcessesDvr = processesDVR.String
+	}
+	if processesClip.Valid {
+		tier.ProcessesClip = processesClip.String
+	}
+	if processesDVRFinalize.Valid {
+		tier.ProcessesDvrFinalize = processesDVRFinalize.String
 	}
 	if processesVod.Valid {
 		tier.ProcessesVod = processesVod.String

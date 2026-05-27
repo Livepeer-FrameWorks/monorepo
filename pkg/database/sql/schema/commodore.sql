@@ -721,8 +721,11 @@ $$ LANGUAGE plpgsql;
 
 CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
     tenant_id UUID PRIMARY KEY,
-    processes_live JSONB,           -- Override for live stream processes (NULL = use tier default)
-    processes_vod JSONB,            -- Override for VOD processes (NULL = use tier default)
+    processes_live JSONB,           -- Override for live STREAM_PROCESS (NULL = use tier default)
+    processes_dvr JSONB,            -- Override for rolling DVR STREAM_PROCESS
+    processes_clip JSONB,           -- Override for clip materialization
+    processes_dvr_finalize JSONB,   -- Override for DVR chapter/finalization materialization
+    processes_vod JSONB,            -- Override for uploaded VOD processing
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -735,6 +738,9 @@ CREATE TABLE IF NOT EXISTS commodore.tenant_processing_config (
 CREATE TABLE IF NOT EXISTS commodore.stream_processing_config (
     stream_id UUID PRIMARY KEY REFERENCES commodore.streams(id) ON DELETE CASCADE,
     processes_live JSONB,
+    processes_dvr JSONB,
+    processes_clip JSONB,
+    processes_dvr_finalize JSONB,
     processes_vod  JSONB,
     updated_at TIMESTAMP DEFAULT NOW()
 );

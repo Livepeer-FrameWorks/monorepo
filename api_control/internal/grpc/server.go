@@ -40,7 +40,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -702,15 +701,78 @@ func isSelfHostedPeer(peer *pb.TenantClusterPeer) bool {
 	return strings.EqualFold(peer.GetClusterType(), "self-hosted")
 }
 
-// resolveProcessesJSON returns the MistServer process config JSON for a stream.
-// Resolution order: per-stream override → tenant override (if tier allows)
-// → tier default. streamID may be empty for tenant-scoped lookups
-// (GetTenantProcessesJSON RPC) — in that case the per-stream layer is skipped.
-// streamType is "live" or "vod".
-func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, streamType string) string {
+const (
+	processLifecycleLive        = "live"
+	processLifecycleDVR         = "dvr"
+	processLifecycleClip        = "clip"
+	processLifecycleDVRFinalize = "dvr_finalize"
+	processLifecycleVOD         = "vod"
+)
+
+func normalizeProcessLifecycle(lifecycle string) string {
+	switch strings.TrimSpace(strings.ToLower(lifecycle)) {
+	case processLifecycleLive:
+		return processLifecycleLive
+	case processLifecycleDVR:
+		return processLifecycleDVR
+	case processLifecycleClip:
+		return processLifecycleClip
+	case processLifecycleDVRFinalize:
+		return processLifecycleDVRFinalize
+	case processLifecycleVOD:
+		return processLifecycleVOD
+	default:
+		return processLifecycleLive
+	}
+}
+
+func validProcessLifecycle(lifecycle string) bool {
+	switch strings.TrimSpace(strings.ToLower(lifecycle)) {
+	case processLifecycleLive, processLifecycleDVR, processLifecycleClip, processLifecycleDVRFinalize, processLifecycleVOD:
+		return true
+	default:
+		return false
+	}
+}
+
+func processConfigColumn(lifecycle string) string {
+	switch normalizeProcessLifecycle(lifecycle) {
+	case processLifecycleDVR:
+		return "processes_dvr"
+	case processLifecycleClip:
+		return "processes_clip"
+	case processLifecycleDVRFinalize:
+		return "processes_dvr_finalize"
+	case processLifecycleVOD:
+		return "processes_vod"
+	default:
+		return "processes_live"
+	}
+}
+
+func tierProcessesForLifecycle(tier *pb.BillingTier, lifecycle string) string {
+	switch normalizeProcessLifecycle(lifecycle) {
+	case processLifecycleDVR:
+		return tier.GetProcessesDvr()
+	case processLifecycleClip:
+		return tier.GetProcessesClip()
+	case processLifecycleDVRFinalize:
+		return tier.GetProcessesDvrFinalize()
+	case processLifecycleVOD:
+		return tier.GetProcessesVod()
+	default:
+		return tier.GetProcessesLive()
+	}
+}
+
+// resolveProcessesJSON returns the MistServer process config JSON for a
+// lifecycle. Resolution order: per-stream override → tenant override (if tier
+// allows) → tier default. streamID may be empty for tenant-scoped lookups.
+func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) string {
 	if s.purserClient == nil {
 		return "[]"
 	}
+	lifecycle = normalizeProcessLifecycle(lifecycle)
 
 	// Get tenant's subscription → tier
 	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
@@ -729,11 +791,7 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 		return "[]"
 	}
 
-	// Select processes JSON based on stream type
-	processesJSON := tier.GetProcessesLive()
-	if streamType == "vod" {
-		processesJSON = tier.GetProcessesVod()
-	}
+	processesJSON := tierProcessesForLifecycle(tier, lifecycle)
 
 	// Per-stream override always wins: operator-supplied bootstrap policy
 	// (stream_processing_config) must not be silently dropped by a tier
@@ -743,15 +801,15 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 	// gated on tier.processing_customizable so paid-tier features cannot be
 	// opted into by tenants on a locked tier.
 	if streamID != "" {
-		if override := s.getStreamProcessingOverride(ctx, streamID, streamType); override != "" {
+		if override := s.getStreamProcessingOverride(ctx, streamID, lifecycle); override != "" {
 			processesJSON = override
 		} else if tier.GetFeatures().GetProcessingCustomizable() {
-			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, streamType); tenantOverride != "" {
+			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); tenantOverride != "" {
 				processesJSON = tenantOverride
 			}
 		}
 	} else if tier.GetFeatures().GetProcessingCustomizable() {
-		if override := s.getTenantProcessingOverride(ctx, tenantID, streamType); override != "" {
+		if override := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); override != "" {
 			processesJSON = override
 		}
 	}
@@ -767,11 +825,8 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
 // per-stream override. Returns "" when no row exists or the column is NULL.
-func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, streamID, streamType string) string {
-	col := "processes_live"
-	if streamType == "vod" {
-		col = "processes_vod"
-	}
+func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, streamID, lifecycle string) string {
+	col := processConfigColumn(lifecycle)
 	var override sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+col+` FROM commodore.stream_processing_config WHERE stream_id = $1`,
@@ -784,11 +839,8 @@ func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, strea
 }
 
 // getTenantProcessingOverride checks commodore.tenant_processing_config for a tenant override.
-func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, streamType string) string {
-	col := "processes_live"
-	if streamType == "vod" {
-		col = "processes_vod"
-	}
+func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, lifecycle string) string {
+	col := processConfigColumn(lifecycle)
 	var override sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+col+` FROM commodore.tenant_processing_config WHERE tenant_id = $1`,
@@ -1282,6 +1334,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		processClusterID = *resp.OriginClusterId
 	}
 	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
+	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr")
 
 	// Track the media cluster this stream ingests on.
 	activeIngestClusterID := req.GetClusterId()
@@ -1512,6 +1565,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 		processClusterID = *resp.OriginClusterId
 	}
 	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
+	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr")
 
 	// Final admission decision: facts above were collected; now collapse the
 	// billing gates that PUSH_REWRITE applies (lines 1092-1110 in
@@ -2287,7 +2341,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		TenantId:      tenantID,
 		InternalName:  internalName,
 		UserId:        &userID,
-		ProcessesJson: mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")),
+		ProcessesJson: s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr"),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -2932,18 +2986,22 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 }
 
 // GetTenantProcessesJSON exposes Commodore's resolved MistServer process config
-// for a given tenant/stream/type. Foghorn-internal pipelines may use it directly
-// for VOD uploads or filter it for live-derived assets.
+// for a given tenant/stream/lifecycle. Foghorn-internal pipelines store and
+// apply the returned snapshot without deriving local lifecycle subsets.
 func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.GetTenantProcessesJSONRequest) (*pb.GetTenantProcessesJSONResponse, error) {
 	tenantID := req.GetTenantId()
-	streamType := req.GetStreamType()
-	if tenantID == "" || streamType == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id and stream_type are required")
+	lifecycle := req.GetLifecycle()
+	if lifecycle == "" {
+		lifecycle = req.GetStreamType()
 	}
-	if streamType != "live" && streamType != "vod" {
-		return nil, status.Error(codes.InvalidArgument, `stream_type must be "live" or "vod"`)
+	if tenantID == "" || lifecycle == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and lifecycle are required")
 	}
-	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetStreamId(), req.GetClusterId(), streamType)
+	if !validProcessLifecycle(lifecycle) {
+		return nil, status.Error(codes.InvalidArgument, `lifecycle must be "live", "dvr", "clip", "dvr_finalize", or "vod"`)
+	}
+	lifecycle = normalizeProcessLifecycle(lifecycle)
+	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetStreamId(), req.GetClusterId(), lifecycle)
 	return &pb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
 }
 
@@ -7996,7 +8054,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
 		Mode:               req.GetMode(),
-		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, streamID, clipClusterID, "vod")),
+		ProcessesJson:      s.resolveProcessesJSON(ctx, tenantID, streamID, clipClusterID, "clip"),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID

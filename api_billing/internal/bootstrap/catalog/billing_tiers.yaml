@@ -29,7 +29,7 @@
 #
 #   features: opaque feature flags consumed by the application layer.
 #
-#   processes_live / processes_vod: raw MistServer process JSON arrays, with
+#   processes_*: raw MistServer process JSON arrays per lifecycle, with
 #     {{gateway_url}} placeholders that Foghorn substitutes at cache/dispatch
 #     time from its local cluster's Livepeer gateway.
 #
@@ -69,6 +69,12 @@ tiers:
     is_default_postpaid: false
     processes_live: &standard_live |
       [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360","x-LSP-name":"ABR Transcode"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]
+    processes_dvr: &standard_dvr |
+      [{"process":"Thumbs","x-LSP-name":"DVR Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+    processes_clip: &standard_clip |
+      [{"process":"Thumbs","x-LSP-name":"Clip Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
+    processes_dvr_finalize: &standard_dvr_finalize |
+      [{"process":"Thumbs","x-LSP-name":"DVR Chapter Thumbnail Sprites","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
     processes_vod: &standard_vod |
       [{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]
 
@@ -121,6 +127,9 @@ tiers:
     is_default_prepaid: false
     is_default_postpaid: true
     processes_live: *standard_live
+    processes_dvr: *standard_dvr
+    processes_clip: *standard_clip
+    processes_dvr_finalize: *standard_dvr_finalize
     processes_vod: *standard_vod
 
   - tier_name: supporter
@@ -157,6 +166,9 @@ tiers:
     is_default_prepaid: false
     is_default_postpaid: false
     processes_live: *standard_live
+    processes_dvr: *standard_dvr
+    processes_clip: *standard_clip
+    processes_dvr_finalize: *standard_dvr_finalize
     processes_vod: *standard_vod
 
   - tier_name: developer
@@ -193,6 +205,9 @@ tiers:
     is_default_prepaid: false
     is_default_postpaid: false
     processes_live: *standard_live
+    processes_dvr: *standard_dvr
+    processes_clip: *standard_clip
+    processes_dvr_finalize: *standard_dvr_finalize
     processes_vod: *standard_vod
 
   - tier_name: production
@@ -231,6 +246,9 @@ tiers:
     is_default_prepaid: false
     is_default_postpaid: false
     processes_live: *standard_live
+    processes_dvr: *standard_dvr
+    processes_clip: *standard_clip
+    processes_dvr_finalize: *standard_dvr_finalize
     processes_vod: *standard_vod
 
   - tier_name: enterprise
@@ -263,4 +281,7 @@ tiers:
     is_default_prepaid: false
     is_default_postpaid: false
     processes_live: *standard_live
+    processes_dvr: *standard_dvr
+    processes_clip: *standard_clip
+    processes_dvr_finalize: *standard_dvr_finalize
     processes_vod: *standard_vod
