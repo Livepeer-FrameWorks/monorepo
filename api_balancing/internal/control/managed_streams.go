@@ -349,6 +349,11 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 	}
 	elected := make(map[string]map[string]electedEntry)
 	placementTransientStreams := make(map[string]struct{})
+	// transientNodes[nodeID] is the set of stream_ids whose node-specific
+	// authority check or admission lookup failed transiently, or whose
+	// command stream is owned by a peer Foghorn. Neither Apply nor Retract:
+	// leave the peer-owned/prior state in place and re-check next tick.
+	transientNodes := make(map[string]map[string]struct{})
 
 	for _, row := range rows {
 		rowByID[row.GetStreamId()] = row
@@ -394,10 +399,17 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// node; peers skip.
 			owns, ownerStatus := managedStreamOwnsConnectionStatus(n.nodeID)
 			if ownerStatus == placementTransient {
-				placementTransientStreams[row.GetStreamId()] = struct{}{}
+				if transientNodes[n.nodeID] == nil {
+					transientNodes[n.nodeID] = make(map[string]struct{})
+				}
+				transientNodes[n.nodeID][row.GetStreamId()] = struct{}{}
 				continue
 			}
 			if !owns {
+				if transientNodes[n.nodeID] == nil {
+					transientNodes[n.nodeID] = make(map[string]struct{})
+				}
+				transientNodes[n.nodeID][row.GetStreamId()] = struct{}{}
 				continue
 			}
 			if elected[n.nodeID] == nil {
@@ -411,11 +423,6 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 	// on that node. retract_loop diffs against this, NOT against elected, so
 	// denied-this-tick streams (in elected but not admitted) get retracted.
 	admittedNodes := make(map[string]map[string]struct{})
-	// transientNodes[nodeID] is the set of stream_ids whose admission lookup
-	// failed transiently (Commodore RPC error, timeout). Neither Apply nor
-	// Retract — leave the prior state in place and re-check next tick.
-	transientNodes := make(map[string]map[string]struct{})
-
 	// Snapshot the current per-cluster lastSent under a brief lock so the
 	// per-stream loop below (which performs ResolveStreamContext, sidecar
 	// sends, materializer hooks, RecordStreamActiveCluster, retract sends)

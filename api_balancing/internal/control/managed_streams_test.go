@@ -1,11 +1,13 @@
 package control
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -234,6 +236,85 @@ func TestManagedStreamOwnsConnection_RedisErrorIsTransient(t *testing.T) {
 	}
 	if owns {
 		t.Fatalf("must not claim ownership when Redis owner lookup fails")
+	}
+}
+
+// TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer
+// locks the HA command-ownership boundary. Redis ConnOwner is authoritative
+// for which Foghorn may mutate a Helmsman node. A non-owner can still have
+// hydrated/previous lastSent state after failover or restart, but it must not
+// turn "not my command stream" into Retract; the peer owner is responsible for
+// Apply/Retract using its live heartbeat snapshot.
+func TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	if err := store.SetNode("edge-eu-1", &state.NodeState{
+		NodeID:    "edge-eu-1",
+		ClusterID: "media-eu-1",
+		IsHealthy: true,
+		CapEdge:   true,
+	}); err != nil {
+		t.Fatalf("SetNode: %v", err)
+	}
+	if err := store.SetConnOwner(ctx, "edge-eu-1", "peer-foghorn", "10.0.0.2:9090"); err != nil {
+		t.Fatalf("SetConnOwner: %v", err)
+	}
+
+	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	setCommandRelay(t, buildRelay(t, store, "self-foghorn", "10.0.0.1:9090", &mockRelayPool{
+		client: &mockRelayClient{relay: fakeRelay},
+	}))
+
+	managedStreamLastSent.Lock()
+	managedStreamLastSent.m = map[string]map[string]map[string]managedStreamSnapshot{
+		"media-eu-1": {
+			"edge-eu-1": {
+				"stream-1": {
+					sourceSpec:   "ts-exec:cat /dev/null",
+					alwaysOn:     true,
+					ingestMode:   "mist_native",
+					internalName: "frameworks-demo",
+				},
+			},
+		},
+	}
+	managedStreamLastSent.Unlock()
+	managedStreamVerifiedApplied.Lock()
+	managedStreamVerifiedApplied.m = map[string]map[string]managedStreamSnapshot{
+		"edge-eu-1": {
+			"stream-1": {
+				sourceSpec:   "ts-exec:cat /dev/null",
+				alwaysOn:     true,
+				ingestMode:   "mist_native",
+				internalName: "frameworks-demo",
+			},
+		},
+	}
+	managedStreamVerifiedApplied.Unlock()
+	t.Cleanup(func() {
+		managedStreamLastSent.Lock()
+		managedStreamLastSent.m = make(map[string]map[string]map[string]managedStreamSnapshot)
+		managedStreamLastSent.Unlock()
+		managedStreamVerifiedApplied.Lock()
+		managedStreamVerifiedApplied.m = make(map[string]map[string]managedStreamSnapshot)
+		managedStreamVerifiedApplied.Unlock()
+	})
+
+	reconcileClusterManagedStreams(ctx, logging.NewLogger(), "media-eu-1", []*pb.ManagedStreamRow{
+		{
+			StreamId:          "stream-1",
+			PlaybackId:        "frameworks-demo",
+			InternalName:      "frameworks-demo",
+			IngestMode:        "mist_native",
+			SourceSpec:        "ts-exec:cat /dev/null",
+			AlwaysOn:          true,
+			PlacementCount:    1,
+			AllowedClusterIds: []string{"media-eu-1"},
+		},
+	})
+
+	if fakeRelay.last != nil {
+		t.Fatalf("non-owner reconciler must not forward a retract/apply, got %T", fakeRelay.last.GetCommand())
 	}
 }
 
