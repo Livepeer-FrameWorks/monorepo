@@ -103,6 +103,12 @@ export interface CreatePlayerConfig {
 
   /** Playback mode preference */
   playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+  /** Force a specific player implementation (for diagnostics or embed policy). */
+  forcePlayer?: string;
+  /** Force a specific source MIME/type (for diagnostics or embed policy). */
+  forceType?: string;
+  /** Force a specific source index (for diagnostics or embed policy). */
+  forceSource?: number;
 
   /** Locale for i18n (default: "en") */
   locale?: FwLocale;
@@ -348,6 +354,9 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     poster: config.poster,
     animatePreroll: config.animatePreroll,
     debug: config.debug,
+    forcePlayer: config.forcePlayer,
+    forceType: config.forceType,
+    forceSource: config.forceSource,
     playbackMode: config.playbackMode,
     locale: config.locale,
     translations: config.translations,

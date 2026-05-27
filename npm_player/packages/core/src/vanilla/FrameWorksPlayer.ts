@@ -68,6 +68,14 @@ export interface FrameWorksPlayerOptions {
 
   /** Debug logging */
   debug?: boolean;
+  /** Playback mode preference */
+  playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+  /** Force a specific player implementation (for diagnostics or embed policy). */
+  forcePlayer?: string;
+  /** Force a specific source MIME/type (for diagnostics or embed policy). */
+  forceType?: string;
+  /** Force a specific source index (for diagnostics or embed policy). */
+  forceSource?: number;
 
   // Event callbacks
   /** Called when player state changes */
@@ -94,6 +102,10 @@ interface LegacyConfig {
     controls?: boolean;
     debug?: boolean;
     authToken?: string;
+    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    forcePlayer?: string;
+    forceType?: string;
+    forceSource?: number;
   };
 }
 
@@ -153,6 +165,10 @@ export class FrameWorksPlayer {
       poster: normalizedOptions.poster,
       animatePreroll: normalizedOptions.animatePreroll,
       debug: normalizedOptions.debug,
+      forcePlayer: normalizedOptions.forcePlayer,
+      forceType: normalizedOptions.forceType,
+      forceSource: normalizedOptions.forceSource,
+      playbackMode: normalizedOptions.playbackMode,
     };
 
     // Create controller
@@ -363,6 +379,10 @@ export class FrameWorksPlayer {
         muted: legacy.options?.muted,
         controls: legacy.options?.controls,
         debug: legacy.options?.debug,
+        playbackMode: legacy.options?.playbackMode,
+        forcePlayer: legacy.options?.forcePlayer,
+        forceType: legacy.options?.forceType,
+        forceSource: legacy.options?.forceSource,
       };
     }
 

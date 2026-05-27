@@ -238,6 +238,38 @@ describe("usePlayerController", () => {
     expect(PlayerController).not.toHaveBeenCalled();
   });
 
+  it("passes initial playback selection options to the controller", async () => {
+    const { PlayerController } = await import("@livepeer-frameworks/player-core");
+
+    vi.mocked(PlayerController).mockClear();
+
+    const hook = renderHook(
+      ({ contentId }: { contentId: string }) =>
+        usePlayerController({
+          contentId,
+          contentType: "live",
+          playbackMode: "quality",
+          forcePlayer: "hlsjs",
+          forceType: "html5/application/vnd.apple.mpegurl",
+          forceSource: 4,
+        }),
+      { initialProps: { contentId: "stream-1" } }
+    );
+
+    (hook.result.current.containerRef as React.MutableRefObject<HTMLDivElement>).current =
+      document.createElement("div");
+    hook.rerender({ contentId: "stream-2" });
+
+    expect(PlayerController).toHaveBeenCalledWith(
+      expect.objectContaining({
+        playbackMode: "quality",
+        forcePlayer: "hlsjs",
+        forceType: "html5/application/vnd.apple.mpegurl",
+        forceSource: 4,
+      })
+    );
+  });
+
   it("dismissToast clears toast from state", () => {
     const { result } = renderHook(() =>
       usePlayerController({

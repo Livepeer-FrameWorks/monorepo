@@ -166,6 +166,10 @@ describe("createPlayerControllerStore", () => {
     const store = createPlayerControllerStore({
       contentId: "test-stream",
       contentType: "live",
+      playbackMode: "quality",
+      forcePlayer: "hlsjs",
+      forceType: "html5/application/vnd.apple.mpegurl",
+      forceSource: 4,
     });
 
     const state = get(store);
@@ -190,13 +194,24 @@ describe("createPlayerControllerStore", () => {
     const store = createPlayerControllerStore({
       contentId: "test-stream",
       contentType: "live",
+      playbackMode: "quality",
+      forcePlayer: "hlsjs",
+      forceType: "html5/application/vnd.apple.mpegurl",
+      forceSource: 4,
     });
 
     const container = document.createElement("div");
     await store.attach(container);
 
     expect(PlayerController).toHaveBeenCalledWith(
-      expect.objectContaining({ contentId: "test-stream", contentType: "live" })
+      expect.objectContaining({
+        contentId: "test-stream",
+        contentType: "live",
+        playbackMode: "quality",
+        forcePlayer: "hlsjs",
+        forceType: "html5/application/vnd.apple.mpegurl",
+        forceSource: 4,
+      })
     );
     expect(mockAttach).toHaveBeenCalledWith(container);
     expect(mockOn).toHaveBeenCalled();

@@ -48,6 +48,9 @@ export class FwPlayer extends LitElement {
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
   @property({ attribute: "thumbnail-url" }) thumbnailUrl?: string;
   @property({ attribute: "playback-mode" }) playbackMode: PlaybackMode = "auto";
+  @property({ attribute: "force-player" }) forcePlayer?: string;
+  @property({ attribute: "force-type" }) forceType?: string;
+  @property({ type: Number, attribute: "force-source" }) forceSource?: number;
 
   // ---- Theme ----
   @property({ attribute: "theme" }) theme?: FwThemePreset;
@@ -153,6 +156,10 @@ export class FwPlayer extends LitElement {
       changed.has("animatePreroll") ||
       changed.has("debug") ||
       changed.has("thumbnailUrl") ||
+      changed.has("playbackMode") ||
+      changed.has("forcePlayer") ||
+      changed.has("forceType") ||
+      changed.has("forceSource") ||
       changed.has("endpoints") ||
       changed.has("locale") ||
       changed.has("translations")
@@ -173,6 +180,10 @@ export class FwPlayer extends LitElement {
         poster: this.thumbnailUrl,
         animatePreroll: this.animatePreroll,
         debug: this.debug,
+        forcePlayer: this.forcePlayer,
+        forceType: this.forceType,
+        forceSource: this.forceSource,
+        playbackMode: this.playbackMode,
         locale: this.locale,
         translations: this.translations,
       });

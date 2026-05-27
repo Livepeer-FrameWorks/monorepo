@@ -253,6 +253,9 @@ describe("createPlayer", () => {
           poster: "poster.png",
           debug: true,
           playbackMode: "low-latency",
+          forcePlayer: "hlsjs",
+          forceType: "html5/application/vnd.apple.mpegurl",
+          forceSource: 4,
         })
       );
 
@@ -269,6 +272,9 @@ describe("createPlayer", () => {
         controls: false,
         poster: "poster.png",
         debug: true,
+        forcePlayer: "hlsjs",
+        forceType: "html5/application/vnd.apple.mpegurl",
+        forceSource: 4,
         playbackMode: "low-latency",
       });
     });

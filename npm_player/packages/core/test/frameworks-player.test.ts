@@ -94,6 +94,10 @@ describe("FrameWorksPlayer", () => {
       controls: false,
       poster: "poster.png",
       debug: true,
+      playbackMode: "quality",
+      forcePlayer: "hlsjs",
+      forceType: "html5/application/vnd.apple.mpegurl",
+      forceSource: 4,
     });
 
     const instance = MockPlayerController.instances[0];
@@ -108,6 +112,10 @@ describe("FrameWorksPlayer", () => {
       controls: false,
       poster: "poster.png",
       debug: true,
+      forcePlayer: "hlsjs",
+      forceType: "html5/application/vnd.apple.mpegurl",
+      forceSource: 4,
+      playbackMode: "quality",
     });
 
     expect(player.getState()).toBe("idle");

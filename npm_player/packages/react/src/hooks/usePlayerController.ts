@@ -301,6 +301,10 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       poster: configRef.current.poster,
       animatePreroll: configRef.current.animatePreroll,
       debug: configRef.current.debug,
+      forcePlayer: configRef.current.forcePlayer,
+      forceType: configRef.current.forceType,
+      forceSource: configRef.current.forceSource,
+      playbackMode: configRef.current.playbackMode,
     });
 
     controllerRef.current = controller;

@@ -314,6 +314,7 @@ const LandingPage = () => {
                           autoplay: true,
                           muted: true,
                           controls: false,
+                          playbackMode: "quality",
                           gatewayUrl: config.gatewayUrl,
                         }}
                         onStateChange={(st) => setDemoState(st)}

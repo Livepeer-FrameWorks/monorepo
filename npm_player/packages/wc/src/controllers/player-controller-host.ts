@@ -156,6 +156,10 @@ export class PlayerControllerHost implements ReactiveController {
       poster: this.currentConfig.poster,
       animatePreroll: this.currentConfig.animatePreroll,
       debug: this.currentConfig.debug,
+      forcePlayer: this.currentConfig.forcePlayer,
+      forceType: this.currentConfig.forceType,
+      forceSource: this.currentConfig.forceSource,
+      playbackMode: this.currentConfig.playbackMode,
     });
 
     this.controller = controller;

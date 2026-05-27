@@ -56,4 +56,29 @@ describe("PlayerControllerHost parity", () => {
       expect(eventNames).toContain(eventName);
     }
   });
+
+  it("passes initial playback selection options to the controller", async () => {
+    const { PlayerController } = await import("@livepeer-frameworks/player-core");
+    const host = createMockHost();
+    const pc = new PlayerControllerHost(host);
+    pc.configure({
+      contentId: "test",
+      contentType: "live",
+      playbackMode: "quality",
+      forcePlayer: "hlsjs",
+      forceType: "html5/application/vnd.apple.mpegurl",
+      forceSource: 4,
+    });
+
+    await pc.attach(document.createElement("div"));
+
+    expect(PlayerController).toHaveBeenCalledWith(
+      expect.objectContaining({
+        playbackMode: "quality",
+        forcePlayer: "hlsjs",
+        forceType: "html5/application/vnd.apple.mpegurl",
+        forceSource: 4,
+      })
+    );
+  });
 });
