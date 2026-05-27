@@ -48,17 +48,18 @@ func (f *fakeMistClient) PushList() ([]mist.PushInfo, error) {
 
 // startAwareFakeMist simulates PushStart creating a push that PushList can find.
 type startAwareFakeMist struct {
-	pushIDToReturn int
-	pushStartErr   error
-	failStarts     int
-	startCalls     int
-	pushStopErr    error
-	pushStopCalls  int64
-	started        bool
-	lastStreamName string
-	lastTargetURI  string
-	listTargetURI  string
-	listActualURI  string
+	pushIDToReturn      int
+	pushStartErr        error
+	failStarts          int
+	startCalls          int
+	pushStopErr         error
+	pushStopCalls       int64
+	started             bool
+	lastStreamName      string
+	lastTargetURI       string
+	listTargetURI       string
+	listActualURI       string
+	listEmptyAfterStart int
 }
 
 func (s *startAwareFakeMist) PushStart(streamName, targetURI string) error {
@@ -84,6 +85,10 @@ func (s *startAwareFakeMist) PushStop(pushID int) error {
 
 func (s *startAwareFakeMist) PushList() ([]mist.PushInfo, error) {
 	if s.started {
+		if s.listEmptyAfterStart > 0 {
+			s.listEmptyAfterStart--
+			return []mist.PushInfo{}, nil
+		}
 		targetURI := s.lastTargetURI
 		if s.listTargetURI != "" {
 			targetURI = s.listTargetURI
@@ -146,11 +151,17 @@ func useFastInitialPushRetry(t *testing.T) {
 	t.Helper()
 	oldFor := initialPushRetryFor
 	oldEvery := initialPushRetryEvery
+	oldVisibleFor := pushListVisibilityFor
+	oldVisiblePollFor := pushListVisibilityPollFor
 	initialPushRetryFor = 5 * time.Millisecond
 	initialPushRetryEvery = time.Millisecond
+	pushListVisibilityFor = 5 * time.Millisecond
+	pushListVisibilityPollFor = time.Millisecond
 	t.Cleanup(func() {
 		initialPushRetryFor = oldFor
 		initialPushRetryEvery = oldEvery
+		pushListVisibilityFor = oldVisibleFor
+		pushListVisibilityPollFor = oldVisiblePollFor
 	})
 }
 
@@ -231,8 +242,24 @@ func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
 	if mc.startCalls != 3 {
 		t.Fatalf("PushStart calls = %d, want 3", mc.startCalls)
 	}
-	if mc.lastStreamName != "dtsc://source/live+test-stream" {
-		t.Fatalf("stream source = %q, want DTSC source", mc.lastStreamName)
+	if mc.lastStreamName != "live+test-stream" {
+		t.Fatalf("stream source = %q, want live+test-stream", mc.lastStreamName)
+	}
+}
+
+func TestStartRecording_ExtractsMistStreamFromDTSCSource(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 13}
+	dm := newDVRManagerWithMist(t, mc)
+
+	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+test-stream", &pb.DVRConfig{
+		SegmentDuration: 6,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mc.lastStreamName != "live+test-stream" {
+		t.Fatalf("expected Mist push stream live+test-stream, got %q", mc.lastStreamName)
 	}
 }
 
@@ -327,6 +354,26 @@ func TestCreateOrRecreatePush_New(t *testing.T) {
 	}
 }
 
+func TestCreateOrRecreatePush_WaitsForPushListVisibility(t *testing.T) {
+	mc := &startAwareFakeMist{pushIDToReturn: 56, listEmptyAfterStart: 1}
+	dm := newDVRManagerWithMist(t, mc)
+
+	job := &DVRJob{
+		DVRHash:    "hash-visible",
+		StreamName: "live+test",
+		TargetURI:  "/data/dvr/hash-visible",
+		Logger:     logging.NewLogger(),
+	}
+
+	pushID, err := dm.createOrRecreatePush(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pushID != 56 {
+		t.Fatalf("expected push ID 56, got %d", pushID)
+	}
+}
+
 func TestCreateOrRecreatePush_StaleCleanup(t *testing.T) {
 	mc := &staleCleanupFakeMist{
 		existingPushes: []mist.PushInfo{
@@ -416,6 +463,7 @@ func TestCreateOrRecreatePush_CleansMistExpandedStaleDVRTarget(t *testing.T) {
 }
 
 func TestCreateOrRecreatePush_PushListError(t *testing.T) {
+	useFastInitialPushRetry(t)
 	mc := &fakeMistClient{
 		pushListErr: fmt.Errorf("mist unavailable"),
 	}
@@ -538,6 +586,7 @@ func TestMaintainPushStatus_FinalizingJobSkipped(t *testing.T) {
 }
 
 func TestMaintainPushStatus_PushWithErrors(t *testing.T) {
+	useFastInitialPushRetry(t)
 	mcWithErrors := &fakeMistClient{
 		pushListItems: []mist.PushInfo{
 			{

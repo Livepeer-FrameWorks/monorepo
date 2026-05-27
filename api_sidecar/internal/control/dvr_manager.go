@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,8 +48,10 @@ const (
 )
 
 var (
-	initialPushRetryFor   = 30 * time.Second
-	initialPushRetryEvery = 2 * time.Second
+	initialPushRetryFor       = 30 * time.Second
+	initialPushRetryEvery     = 2 * time.Second
+	pushListVisibilityFor     = 2 * time.Second
+	pushListVisibilityPollFor = 100 * time.Millisecond
 )
 
 // DVRJob represents a running DVR recording session
@@ -900,11 +903,10 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		maxEntries,
 	)
 
-	// Store for recreation attempts.
-	streamName := strings.TrimSpace(job.SourceURL)
-	if streamName == "" {
-		streamName = fmt.Sprintf("live+%s", job.InternalName)
-	}
+	// Store for recreation attempts. Mist push_start.stream is a stream
+	// name, not a source URL; STREAM_SOURCE owns resolving that name when
+	// the stream is not already local.
+	streamName := dvrPushStreamName(job.InternalName, job.SourceURL)
 	job.TargetURI = targetURI
 	job.StreamName = streamName
 
@@ -939,6 +941,29 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	}).Info("Started DVR recording via MistServer push")
 
 	return nil
+}
+
+func dvrPushStreamName(internalName, sourceURL string) string {
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return fmt.Sprintf("live+%s", internalName)
+	}
+	u, err := url.Parse(sourceURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "dtsc") {
+		return sourceURL
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(parts) >= 2 && parts[0] == "view" {
+		if streamName, unescapeErr := url.PathUnescape(parts[1]); unescapeErr == nil && streamName != "" {
+			return streamName
+		}
+	}
+	if len(parts) == 1 && parts[0] != "" {
+		if streamName, unescapeErr := url.PathUnescape(parts[0]); unescapeErr == nil && streamName != "" {
+			return streamName
+		}
+	}
+	return sourceURL
 }
 
 // monitorJob monitors a DVR job's progress and performs incremental sync
@@ -1217,17 +1242,21 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 		return 0, fmt.Errorf("failed to start push: %w", pushErr)
 	}
 
-	// Find the newly created push ID
-	pushes, err = dm.mistClient.PushList()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get push list after creation: %w", err)
-	}
-
-	// Find our push by stream name and target
-	for _, push := range pushes {
-		if dvrPushMatchesJob(push, job) {
-			return push.ID, nil
+	deadline := time.Now().Add(pushListVisibilityFor)
+	for {
+		pushes, err = dm.mistClient.PushList()
+		if err != nil {
+			return 0, fmt.Errorf("failed to get push list after creation: %w", err)
 		}
+		for _, push := range pushes {
+			if dvrPushMatchesJob(push, job) {
+				return push.ID, nil
+			}
+		}
+		if time.Now().Add(pushListVisibilityPollFor).After(deadline) {
+			break
+		}
+		time.Sleep(pushListVisibilityPollFor)
 	}
 
 	return 0, fmt.Errorf("failed to find created push in push list")
