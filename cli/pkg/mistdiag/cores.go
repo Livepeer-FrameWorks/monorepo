@@ -2,6 +2,7 @@ package mistdiag
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -146,7 +147,8 @@ uname -a > "$tmp/uname.txt" 2>&1 || true
 coredumpctl info MistController > "$tmp/coredumpctl-info-MistController.txt" 2>&1 || true
 coredumpctl dump MistController --output "$tmp/core.MistController" > "$tmp/coredumpctl-dump-MistController.txt" 2>&1 || true
 journalctl --no-pager -u %[2]s --since %[3]s > "$tmp/journal-%[4]s.log" 2>&1 || true
-tarball="/tmp/mistcontroller-core-$(hostname)-$(date -u +%%Y%%m%%dT%%H%%M%%SZ).tar.gz"
+host="$(cat /proc/sys/kernel/hostname 2>/dev/null || printf edge)"
+tarball="/tmp/mistcontroller-core-${host}-$(date -u +%%Y%%m%%dT%%H%%M%%SZ).tar.gz"
 tar -czf "$tarball" -C "$tmp" .
 printf '%%s\n' "$tarball"
 `, defaultMistInstallDir, shellWord(service), shellWord(since), serviceFile)
@@ -157,11 +159,14 @@ func runSSHScript(ctx context.Context, target, keyPath, script string) (string, 
 	args = append(args, target, "sh", "-s")
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("collect core bundle over ssh: %w\n%s", err, string(out))
+		return "", fmt.Errorf("collect core bundle over ssh failed: %s\n%s", err.Error(), stderr.String())
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func scpFromTarget(ctx context.Context, target, keyPath, remotePath, output string) error {
@@ -176,7 +181,7 @@ func scpFromTarget(ctx context.Context, target, keyPath, remotePath, output stri
 	cmd := exec.CommandContext(ctx, "scp", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("copy core bundle from edge: %w\n%s", err, string(out))
+		return fmt.Errorf("copy core bundle from edge failed: %s\n%s", err.Error(), string(out))
 	}
 	return nil
 }

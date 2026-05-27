@@ -2160,7 +2160,7 @@ func shouldScopeServiceAssignmentInstancesByTarget(serviceName string, svc inven
 		if !ok {
 			continue
 		}
-		if _, ok := targetRegions[strings.TrimSpace(host.Labels["region"])]; ok {
+		if _, regionMatch := targetRegions[strings.TrimSpace(host.Labels["region"])]; regionMatch {
 			return true
 		}
 		hostCluster, ok := manifest.Clusters[host.Cluster]
