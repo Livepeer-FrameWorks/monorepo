@@ -154,6 +154,31 @@ func getProcessingSourceOverride(streamName string) (string, bool) {
 	return sourceURL, ok
 }
 
+func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logrus.Entry, mistClient *mist.Client, streamName string) {
+	h.stopProcessingPush(log, mistClient, streamName)
+	if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
+		log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer fallback")
+	}
+	drainProcessingGeneration(log, mistClient, streamName)
+}
+
+func drainProcessingGeneration(log *logrus.Entry, mistClient *mist.Client, streamName string) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := mistClient.GetActiveStreams()
+		if err != nil {
+			log.WithError(err).Warn("Failed to check processing stream shutdown")
+			return
+		}
+		active, _ := resp["active_streams"].(map[string]interface{})
+		if _, ok := active[streamName]; !ok {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.WithField("stream_name", streamName).Warn("Processing stream still active before fallback reboot")
+}
+
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
 	return &ProcessingJobHandler{
 		logger:        logger,
@@ -304,14 +329,11 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		if errors.As(waitErr, &livepeerBootErr) && !fallbackAttempted {
 			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Livepeer unrecoverable during readiness, falling back to local MistProcAV")
 			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
-			h.stopProcessingPush(log, mistClient, streamName)
 			os.Remove(outputPath)
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 			setProcessingProcessOverride(streamName, localConfig)
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-				log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer readiness fallback")
-			}
+			h.restartProcessingStreamForLocalFallback(log, mistClient, streamName)
 			doneCh = make(chan ProcessingPushEndEvent, 1)
 			pendingJobsMu.Lock()
 			pendingJobs[streamName] = doneCh
@@ -376,14 +398,11 @@ loop:
 			case evt.Status == "unrecoverable" && evt.ProcessType == "Livepeer" && !fallbackAttempted:
 				log.WithFields(evtFields).Warn("Livepeer unrecoverable, falling back to local MistProcAV")
 				ignoreProcessExitThrough(ignoredProcessExitBootCounts, evt.ProcessType, evt.BootCount)
-				h.stopProcessingPush(log, mistClient, streamName)
 				os.Remove(outputPath)
 				localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 				setProcessingProcessOverride(streamName, localConfig)
 				h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-				if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-					log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer fallback")
-				}
+				h.restartProcessingStreamForLocalFallback(log, mistClient, streamName)
 				// Fresh doneCh so any PUSH_END from the old push doesn't
 				// satisfy the completion check for the restarted push.
 				doneCh = make(chan ProcessingPushEndEvent, 1)
@@ -444,14 +463,11 @@ loop:
 				if hasLivepeer && !fallbackAttempted {
 					log.WithField("progress_pct", progressPct).Warn("Livepeer stalled, falling back to local MistProcAV")
 					ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
-					h.stopProcessingPush(log, mistClient, streamName)
 					os.Remove(outputPath)
 					localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 					setProcessingProcessOverride(streamName, localConfig)
 					h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-					if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-						log.WithError(deleteErr).Warn("Failed to delete stream for stall fallback")
-					}
+					h.restartProcessingStreamForLocalFallback(log, mistClient, streamName)
 					doneCh = make(chan ProcessingPushEndEvent, 1)
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
