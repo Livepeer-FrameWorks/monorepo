@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -407,12 +406,6 @@ func livepeerValidatedProfiles(processesJSON string, req livepeerAuthRequest, so
 	if len(req.Profiles) > 0 {
 		return req.Profiles
 	}
-	if len(req.Profiles) == 0 {
-		if source.Width <= 0 || source.Height <= 0 || source.FPS <= 0 {
-			return nil
-		}
-		return mist.LivepeerProfilesFromProcessesJSON(processesJSON, source)
-	}
 
 	if source.Width <= 0 || source.Height <= 0 {
 		if width, height, ok := parseContentResolution(req.ContentResolution); ok {
@@ -420,18 +413,11 @@ func livepeerValidatedProfiles(processesJSON string, req livepeerAuthRequest, so
 			source.Height = height
 		}
 	}
-	if source.FPS <= 0 {
-		source.FPS = fpsFromLivepeerProfiles(req.Profiles)
-	}
 	if source.Width <= 0 || source.Height <= 0 {
 		return nil
 	}
 
-	expected := mist.LivepeerProfilesFromProcessesJSON(processesJSON, source)
-	if !livepeerProfilesJSONEqual(expected, req.Profiles) {
-		return nil
-	}
-	return req.Profiles
+	return mist.LivepeerProfilesFromProcessesJSON(processesJSON, source)
 }
 
 func parseContentResolution(resolution string) (int, int, bool) {
@@ -448,57 +434,6 @@ func parseContentResolution(resolution string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return width, height, true
-}
-
-func fpsFromLivepeerProfiles(profiles []livepeerJSONProfile) float64 {
-	for _, profile := range profiles {
-		fps, ok := livepeerProfileFloat(profile, "fps")
-		if !ok || fps <= 0 {
-			continue
-		}
-		fpsDen, ok := livepeerProfileFloat(profile, "fpsDen")
-		if !ok || fpsDen <= 0 {
-			return fps
-		}
-		return fps / fpsDen
-	}
-	return 0
-}
-
-func livepeerProfileFloat(profile livepeerJSONProfile, key string) (float64, bool) {
-	switch value := profile[key].(type) {
-	case float64:
-		return value, true
-	case float32:
-		return float64(value), true
-	case int:
-		return float64(value), true
-	case int64:
-		return float64(value), true
-	case json.Number:
-		n, err := value.Float64()
-		return n, err == nil
-	default:
-		return 0, false
-	}
-}
-
-func livepeerProfilesJSONEqual(a, b []livepeerJSONProfile) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	if len(a) == 0 {
-		return true
-	}
-	aj, err := json.Marshal(a)
-	if err != nil {
-		return false
-	}
-	bj, err := json.Marshal(b)
-	if err != nil {
-		return false
-	}
-	return string(aj) == string(bj)
 }
 
 // authPositiveCache holds short-lived "this manifest is authorised" entries to
