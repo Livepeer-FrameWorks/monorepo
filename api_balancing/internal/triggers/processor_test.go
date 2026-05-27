@@ -617,6 +617,49 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 	}
 }
 
+func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testing.T) {
+	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
+	t.Cleanup(cleanup)
+	stub.resolveStreamContextByKey = map[string]*pb.ResolveStreamContextResponse{
+		"playback_id:frameworks-demo": {
+			Admitted:   true,
+			IngestMode: "mist_native",
+			StreamId:   "stream-uuid-1",
+			PlaybackId: "frameworks-demo",
+			// Production playback IDs are public aliases; the concrete Mist
+			// stream can be a separate internal name.
+			InternalName: "60546679b497415db2338cd5cae54992",
+			TenantId:     "tenant-system",
+		},
+	}
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+	processor.clusterID = "media-eu-1"
+
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "frameworks-demo"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort STREAM_SOURCE response")
+	}
+	if resp != "balance:https://foghorn.media-eu-1.frameworks.network" {
+		t.Fatalf("unexpected STREAM_SOURCE response: %q", resp)
+	}
+	keys := stub.ResolveStreamContextKeys()
+	want := []string{"internal_name:frameworks-demo", "playback_id:frameworks-demo"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected ResolveStreamContext lookups: got %v want %v", keys, want)
+	}
+}
+
 type stubCommodoreInternalService struct {
 	pb.UnimplementedInternalServiceServer
 	validateResponse          *pb.ValidateStreamKeyResponse
@@ -625,6 +668,9 @@ type stubCommodoreInternalService struct {
 	validateClusterIDs        []string
 	resolveIdentifierResponse *pb.ResolveIdentifierResponse
 	resolveIdentifierErr      error
+	resolveStreamContextByKey map[string]*pb.ResolveStreamContextResponse
+	resolveStreamContextErr   error
+	resolveStreamContextKeys  []string
 }
 
 func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
@@ -645,6 +691,42 @@ func (s *stubCommodoreInternalService) LastValidateClusterID() string {
 
 func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
 	return s.resolveIdentifierResponse, s.resolveIdentifierErr
+}
+
+func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context, req *pb.ResolveStreamContextRequest) (*pb.ResolveStreamContextResponse, error) {
+	key := ""
+	switch id := req.GetIdentifier().(type) {
+	case *pb.ResolveStreamContextRequest_StreamId:
+		key = "stream_id:" + id.StreamId
+	case *pb.ResolveStreamContextRequest_PlaybackId:
+		key = "playback_id:" + id.PlaybackId
+	case *pb.ResolveStreamContextRequest_InternalName:
+		key = "internal_name:" + id.InternalName
+	}
+	s.mu.Lock()
+	s.resolveStreamContextKeys = append(s.resolveStreamContextKeys, key)
+	resp := s.resolveStreamContextByKey[key]
+	err := s.resolveStreamContextErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return &pb.ResolveStreamContextResponse{
+			Admitted:        false,
+			AdmissionReason: "stream not found",
+			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+		}, nil
+	}
+	return resp, nil
+}
+
+func (s *stubCommodoreInternalService) ResolveStreamContextKeys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.resolveStreamContextKeys))
+	copy(out, s.resolveStreamContextKeys)
+	return out
 }
 
 func newTestProcessor(t *testing.T) *Processor {

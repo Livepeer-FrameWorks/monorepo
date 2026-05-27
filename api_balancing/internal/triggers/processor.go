@@ -1565,9 +1565,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	}
 
 	if !strings.Contains(streamName, "+") && p.commodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, p.clusterID)
-		cancel()
+		resp, lookupMode, err := p.resolveBareManagedStreamContext(streamName)
 		if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
 			base := control.FoghornBalancerBase(p.clusterID)
 			if base == "" {
@@ -1575,10 +1573,27 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 				return "", true, nil
 			}
 			p.logger.WithFields(logging.Fields{
-				"stream_name": streamName,
-				"cluster_id":  p.clusterID,
+				"stream_name":   streamName,
+				"internal_name": resp.GetInternalName(),
+				"lookup_mode":   lookupMode,
+				"cluster_id":    p.clusterID,
 			}).Info("STREAM_SOURCE: mist_native stream returning balance URI")
 			return "balance:" + base, false, nil
+		}
+		if err != nil {
+			p.logger.WithError(err).WithFields(logging.Fields{
+				"stream_name": streamName,
+				"cluster_id":  p.clusterID,
+			}).Warn("STREAM_SOURCE: mist_native stream context lookup failed")
+		} else if resp != nil && resp.GetAdmissionReason() != "" {
+			p.logger.WithFields(logging.Fields{
+				"stream_name":       streamName,
+				"lookup_mode":       lookupMode,
+				"ingest_mode":       resp.GetIngestMode(),
+				"admission_reason":  resp.GetAdmissionReason(),
+				"rejection_reason":  resp.GetRejectionReason().String(),
+				"resolved_internal": resp.GetInternalName(),
+			}).Debug("STREAM_SOURCE: bare stream is not an admitted mist_native source")
 		}
 	}
 
@@ -1940,6 +1955,26 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 	// Commodore. Trusting a fallback param here would be a source-injection vector.
 	p.recordPullSourceEvent(resp, internalName, "resolved", triggerClusterID)
 	return "balance:" + base, false, nil
+}
+
+func (p *Processor) resolveBareManagedStreamContext(streamName string) (*pb.ResolveStreamContextResponse, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, p.clusterID)
+	cancel()
+	if err != nil {
+		return nil, "internal_name", err
+	}
+	if resp != nil && (resp.GetAdmitted() || resp.GetAdmissionReason() != "stream not found") {
+		return resp, "internal_name", nil
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+	resp, err = p.commodoreClient.ResolveStreamContext(ctx, "", streamName, "", p.clusterID)
+	cancel()
+	if err != nil {
+		return nil, "playback_id", err
+	}
+	return resp, "playback_id", nil
 }
 
 // formatTriggerPlacementRejects renders FilterPlacementClusters rejections
