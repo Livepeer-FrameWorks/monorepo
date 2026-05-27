@@ -322,7 +322,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	}
 	processesJSON := ""
 	{
-		resp, perr := control.CommodoreClient.GetTenantProcessesJSON(ctx, parent.tenantID, "vod", parent.originClusterID)
+		resp, perr := control.CommodoreClient.GetTenantProcessesJSONForStream(ctx, parent.tenantID, "vod", parent.originClusterID, parent.streamID)
 		if perr != nil {
 			q.logger.WithError(perr).WithFields(logging.Fields{
 				"chapter_id":    c.ChapterID,

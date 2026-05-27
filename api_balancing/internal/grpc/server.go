@@ -1233,20 +1233,11 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	chapterMode := req.GetDvrChapterMode()
 	chapterInterval := req.GetDvrChapterIntervalSeconds()
 	retentionDays := dvrRetentionDays(req.GetDvrPolicy())
-	// Snapshot the tenant's live thumbnail config so the rolling-DVR
-	// surface (dvr+<internal>) keeps serving DVR-specific thumbnails/sprites
-	// across Foghorn restarts and process-cache TTL expiry without
-	// re-resolving through Commodore on every STREAM_PROCESS boot.
+	// Persist Commodore's resolved live-derived process snapshot so the
+	// rolling-DVR surface (dvr+<internal>) keeps serving DVR-specific
+	// thumbnails/sprites across Foghorn restarts and process-cache TTL expiry.
 	// Same snapshot pattern as dvr_window_seconds / dvr_chapter_mode.
-	var dvrProcessesJSON string
-	if control.CommodoreClient != nil {
-		resp, perr := control.CommodoreClient.GetTenantProcessesJSON(ctx, req.TenantId, "live", dvrCluster)
-		if perr != nil {
-			s.logger.WithError(perr).WithField("tenant_id", req.TenantId).Error("StartDVR: live processes_json snapshot failed")
-			return nil, status.Errorf(codes.Unavailable, "live processes_json snapshot failed: %v", perr)
-		}
-		dvrProcessesJSON = mist.ThumbsOnlyProcesses(resp.GetProcessesJson())
-	}
+	dvrProcessesJSON := req.GetProcessesJson()
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, stream_internal_name, internal_name,

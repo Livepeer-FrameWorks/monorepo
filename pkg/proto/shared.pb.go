@@ -1189,6 +1189,7 @@ type StartDVRRequest struct {
 	// authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
 	DvrChapterMode            *string `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3,oneof" json:"dvr_chapter_mode,omitempty"`
 	DvrChapterIntervalSeconds *int32  `protobuf:"varint,10,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3,oneof" json:"dvr_chapter_interval_seconds,omitempty"`
+	ProcessesJson             string  `protobuf:"bytes,11,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Resolved Commodore process config snapshot for DVR thumbnails
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -1291,6 +1292,13 @@ func (x *StartDVRRequest) GetDvrChapterIntervalSeconds() int32 {
 		return *x.DvrChapterIntervalSeconds
 	}
 	return 0
+}
+
+func (x *StartDVRRequest) GetProcessesJson() string {
+	if x != nil {
+		return x.ProcessesJson
+	}
+	return ""
 }
 
 // StartDVRResponse - response from starting DVR
@@ -4947,7 +4955,7 @@ const file_shared_proto_rawDesc = "" +
 	"maxEntries\x126\n" +
 	"\x17allow_cluster_extension\x18\x05 \x01(\bR\x15allowClusterExtension\x12=\n" +
 	"\x18recording_retention_days\x18\x06 \x01(\x05H\x00R\x16recordingRetentionDays\x88\x01\x01B\x1b\n" +
-	"\x19_recording_retention_days\"\xa6\x04\n" +
+	"\x19_recording_retention_days\"\xcd\x04\n" +
 	"\x0fStartDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12 \n" +
@@ -4962,7 +4970,8 @@ const file_shared_proto_rawDesc = "" +
 	"dvr_policy\x18\b \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12-\n" +
 	"\x10dvr_chapter_mode\x18\t \x01(\tH\x04R\x0edvrChapterMode\x88\x01\x01\x12D\n" +
 	"\x1cdvr_chapter_interval_seconds\x18\n" +
-	" \x01(\x05H\x05R\x19dvrChapterIntervalSeconds\x88\x01\x01B\f\n" +
+	" \x01(\x05H\x05R\x19dvrChapterIntervalSeconds\x88\x01\x01\x12%\n" +
+	"\x0eprocesses_json\x18\v \x01(\tR\rprocessesJsonB\f\n" +
 	"\n" +
 	"_stream_idB\n" +
 	"\n" +

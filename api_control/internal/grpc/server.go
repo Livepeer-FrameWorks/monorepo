@@ -2220,7 +2220,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	foghornClient, dvrRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -2279,10 +2279,15 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	// Foghorn back-fills commodore.dvr_recordings.retention_until after
 	// FinalizeDVR.
 
+	processClusterID := ""
+	if dvrRoute != nil {
+		processClusterID = dvrRoute.clusterID
+	}
 	foghornReq := &pb.StartDVRRequest{
-		TenantId:     tenantID,
-		InternalName: internalName,
-		UserId:       &userID,
+		TenantId:      tenantID,
+		InternalName:  internalName,
+		UserId:        &userID,
+		ProcessesJson: mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -2926,9 +2931,9 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 	return &pb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
 }
 
-// GetTenantProcessesJSON exposes the tenant's resolved MistServer
-// process config for a given stream type. Foghorn-internal pipelines may
-// use it directly for VOD uploads or filter it for live-derived assets.
+// GetTenantProcessesJSON exposes Commodore's resolved MistServer process config
+// for a given tenant/stream/type. Foghorn-internal pipelines may use it directly
+// for VOD uploads or filter it for live-derived assets.
 func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.GetTenantProcessesJSONRequest) (*pb.GetTenantProcessesJSONResponse, error) {
 	tenantID := req.GetTenantId()
 	streamType := req.GetStreamType()
@@ -2938,7 +2943,7 @@ func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.Ge
 	if streamType != "live" && streamType != "vod" {
 		return nil, status.Error(codes.InvalidArgument, `stream_type must be "live" or "vod"`)
 	}
-	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", req.GetClusterId(), streamType)
+	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetStreamId(), req.GetClusterId(), streamType)
 	return &pb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
 }
 
@@ -7991,7 +7996,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
 		Mode:               req.GetMode(),
-		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, "", clipClusterID, "vod")),
+		ProcessesJson:      mist.ThumbsOnlyProcesses(s.resolveProcessesJSON(ctx, tenantID, streamID, clipClusterID, "vod")),
 	}
 	if streamID != "" {
 		foghornReq.StreamId = &streamID
@@ -9234,7 +9239,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	foghornClient, vodRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -9246,14 +9251,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}
 
-	// Resolve MistServer process config for VOD processing
-	var processesJSON string
-	if route, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
-		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", route.clusterID, "vod")
-	} else {
-		s.logger.WithError(routeErr).WithField("tenant_id", tenantID).Warn("Route lookup failed for VOD process config, resolving without cluster")
-		processesJSON = s.resolveProcessesJSON(ctx, tenantID, "", "", "vod")
-	}
+	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", vodRoute.clusterID, "vod")
 
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
 	foghornReq := &pb.CompleteVodUploadRequest{

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -136,11 +137,12 @@ func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, 
 
 	userID := streamCtx.GetUserId()
 	req := &pb.StartDVRRequest{
-		TenantId:     streamCtx.GetTenantId(),
-		InternalName: streamCtx.GetInternalName(),
-		UserId:       &userID,
-		ClusterId:    streamCtx.GetOriginClusterId(),
-		DvrPolicy:    streamCtx.GetDvrPolicy(),
+		TenantId:      streamCtx.GetTenantId(),
+		InternalName:  streamCtx.GetInternalName(),
+		UserId:        &userID,
+		ClusterId:     streamCtx.GetOriginClusterId(),
+		DvrPolicy:     streamCtx.GetDvrPolicy(),
+		ProcessesJson: mist.ThumbsOnlyProcesses(streamCtx.GetProcessesJson()),
 	}
 	dvrCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

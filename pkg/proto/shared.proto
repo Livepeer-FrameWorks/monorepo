@@ -193,6 +193,7 @@ message StartDVRRequest {
   // authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
   optional string dvr_chapter_mode = 9;
   optional int32 dvr_chapter_interval_seconds = 10;
+  string processes_json = 11;     // Resolved Commodore process config snapshot for DVR thumbnails
 }
 
 // StartDVRResponse - response from starting DVR

@@ -1339,11 +1339,12 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			dvrCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			dvrReq := &pb.StartDVRRequest{
-				TenantId:     streamValidation.TenantId,
-				InternalName: streamValidation.InternalName,
-				UserId:       &userID,
-				ClusterId:    streamValidation.GetOriginClusterId(),
-				DvrPolicy:    streamValidation.GetDvrPolicy(),
+				TenantId:      streamValidation.TenantId,
+				InternalName:  streamValidation.InternalName,
+				UserId:        &userID,
+				ClusterId:     streamValidation.GetOriginClusterId(),
+				DvrPolicy:     streamValidation.GetDvrPolicy(),
+				ProcessesJson: mist.ThumbsOnlyProcesses(streamValidation.GetProcessesJson()),
 			}
 			var dvrResponse *pb.StartDVRResponse
 			var err error

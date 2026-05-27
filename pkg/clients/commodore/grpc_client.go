@@ -662,14 +662,21 @@ func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenan
 	})
 }
 
-// GetTenantProcessesJSON returns the tenant's MistServer process
-// config JSON for the given stream type ("live" | "vod"). Callers may
-// filter the returned config for live-derived asset pipelines.
+// GetTenantProcessesJSON returns the tenant-level MistServer process config JSON
+// for the given stream type ("live" | "vod"). Callers may filter the returned
+// config for live-derived asset pipelines.
 func (c *GRPCClient) GetTenantProcessesJSON(ctx context.Context, tenantID, streamType, clusterID string) (*pb.GetTenantProcessesJSONResponse, error) {
+	return c.GetTenantProcessesJSONForStream(ctx, tenantID, streamType, clusterID, "")
+}
+
+// GetTenantProcessesJSONForStream returns the stream-aware MistServer process
+// config JSON for the given stream type ("live" | "vod").
+func (c *GRPCClient) GetTenantProcessesJSONForStream(ctx context.Context, tenantID, streamType, clusterID, streamID string) (*pb.GetTenantProcessesJSONResponse, error) {
 	return c.internal.GetTenantProcessesJSON(ctx, &pb.GetTenantProcessesJSONRequest{
 		TenantId:   tenantID,
 		StreamType: streamType,
 		ClusterId:  clusterID,
+		StreamId:   streamID,
 	})
 }
 

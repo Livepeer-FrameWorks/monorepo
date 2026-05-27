@@ -1006,6 +1006,7 @@ message GetTenantProcessesJSONRequest {
   string tenant_id   = 1;
   string stream_type = 2;     // "live" | "vod"
   string cluster_id  = 3;     // optional
+  string stream_id   = 4;     // optional; enables per-stream processing overrides
 }
 
 message GetTenantProcessesJSONResponse {

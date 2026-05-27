@@ -4713,6 +4713,7 @@ type GetTenantProcessesJSONRequest struct {
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	StreamType    string                 `protobuf:"bytes,2,opt,name=stream_type,json=streamType,proto3" json:"stream_type,omitempty"` // "live" | "vod"
 	ClusterId     string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`    // optional
+	StreamId      string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`       // optional; enables per-stream processing overrides
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4764,6 +4765,13 @@ func (x *GetTenantProcessesJSONRequest) GetStreamType() string {
 func (x *GetTenantProcessesJSONRequest) GetClusterId() string {
 	if x != nil {
 		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *GetTenantProcessesJSONRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
 	}
 	return ""
 }
@@ -13503,13 +13511,14 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"chapter_id\x18\x02 \x01(\tR\tchapterId\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12#\n" +
-	"\rartifact_hash\x18\x04 \x01(\tR\fartifactHash\"|\n" +
+	"\rartifact_hash\x18\x04 \x01(\tR\fartifactHash\"\x99\x01\n" +
 	"\x1dGetTenantProcessesJSONRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1f\n" +
 	"\vstream_type\x18\x02 \x01(\tR\n" +
 	"streamType\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x03 \x01(\tR\tclusterId\"G\n" +
+	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x1b\n" +
+	"\tstream_id\x18\x04 \x01(\tR\bstreamId\"G\n" +
 	"\x1eGetTenantProcessesJSONResponse\x12%\n" +
 	"\x0eprocesses_json\x18\x01 \x01(\tR\rprocessesJson\"\x8c\x02\n" +
 	"\x1bListStorageArtifactsRequest\x12\x1b\n" +
