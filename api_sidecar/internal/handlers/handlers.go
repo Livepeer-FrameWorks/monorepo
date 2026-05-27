@@ -908,6 +908,18 @@ func HandleStreamSource(c *gin.Context) {
 		return
 	}
 
+	if ss := mistTrigger.GetStreamSource(); ss != nil {
+		if sourceURL, ok := control.GetDVRSourceOverride(ss.GetStreamName()); ok {
+			logger.WithFields(logging.Fields{
+				"stream_name": ss.GetStreamName(),
+				"source_url":  sourceURL,
+			}).Info("STREAM_SOURCE resolved to DVR source override")
+			incMistWebhook("STREAM_SOURCE", "local_dvr_source")
+			c.String(http.StatusOK, sourceURL)
+			return
+		}
+	}
+
 	// Resolve processing+ sources locally when an active job has staged
 	// the input on disk:
 	//

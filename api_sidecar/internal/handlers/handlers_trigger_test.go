@@ -119,6 +119,27 @@ func TestTriggerHandlersApplyTenantContext(t *testing.T) {
 	}
 }
 
+func TestHandleStreamSourceUsesDVRSourceOverride(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+	control.RegisterDVRSourceOverride("live+stream-1", "dtsc://source-node/live+stream-1")
+	t.Cleanup(func() { control.ClearDVRSourceOverride("live+stream-1") })
+
+	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+		t.Fatalf("DVR source override should be resolved locally, forwarded trigger: %+v", trigger)
+		return nil, nil
+	})
+
+	ctx, recorder := newWebhookContext("live+stream-1")
+	HandleStreamSource(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if got := recorder.Body.String(); got != "dtsc://source-node/live+stream-1" {
+		t.Fatalf("expected DVR source override response, got %q", got)
+	}
+}
+
 func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 

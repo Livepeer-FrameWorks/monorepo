@@ -758,6 +758,7 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.
 	dm.mutex.Lock()
 	dm.sendCompletion(job, "completed", "")
 	delete(dm.jobs, dvrHash)
+	ClearDVRSourceOverride(job.StreamName)
 	dm.mutex.Unlock()
 
 	job.Logger.Info("DVR recording job stopped")
@@ -909,6 +910,11 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	streamName := dvrPushStreamName(job.InternalName, job.SourceURL)
 	job.TargetURI = targetURI
 	job.StreamName = streamName
+	sourceOverrideRegistered := false
+	if sourceURL := strings.TrimSpace(job.SourceURL); sourceURL != "" {
+		RegisterDVRSourceOverride(streamName, sourceURL)
+		sourceOverrideRegistered = true
+	}
 
 	var (
 		pushID int
@@ -921,6 +927,9 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 			break
 		}
 		if time.Now().Add(initialPushRetryEvery).After(deadline) {
+			if sourceOverrideRegistered {
+				ClearDVRSourceOverride(streamName)
+			}
 			return fmt.Errorf("failed to create initial push: %w", err)
 		}
 		job.Logger.WithFields(logging.Fields{
@@ -948,9 +957,10 @@ func dvrPushStreamName(internalName, sourceURL string) string {
 	if sourceURL == "" {
 		return fmt.Sprintf("live+%s", internalName)
 	}
+	fallback := fmt.Sprintf("live+%s", internalName)
 	u, err := url.Parse(sourceURL)
 	if err != nil || !strings.EqualFold(u.Scheme, "dtsc") {
-		return sourceURL
+		return fallback
 	}
 	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
 	if len(parts) >= 2 && parts[0] == "view" {
@@ -963,7 +973,7 @@ func dvrPushStreamName(internalName, sourceURL string) string {
 			return streamName
 		}
 	}
-	return sourceURL
+	return fallback
 }
 
 // monitorJob monitors a DVR job's progress and performs incremental sync
@@ -1035,6 +1045,7 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 				dm.sendCompletion(job, "failed", sanitizeDvrStorageError(err))
 				dm.mutex.Lock()
 				delete(dm.jobs, job.DVRHash)
+				ClearDVRSourceOverride(job.StreamName)
 				dm.mutex.Unlock()
 				return
 			}
@@ -1200,6 +1211,7 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			existingJob.Status = "failed"
 			dm.sendCompletion(existingJob, "failed", fmt.Sprintf("Push failed after %d retries", existingJob.RetryCount))
 			delete(dm.jobs, existingJob.DVRHash)
+			ClearDVRSourceOverride(existingJob.StreamName)
 		}
 		return
 	}
@@ -1214,6 +1226,7 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			existingJob.Status = "completed"
 			dm.sendCompletion(existingJob, "success", "")
 			delete(dm.jobs, existingJob.DVRHash)
+			ClearDVRSourceOverride(existingJob.StreamName)
 		}
 	}
 }
@@ -1508,6 +1521,7 @@ func (dm *DVRManager) stopJobAfterTerminalRejection(job *DVRJob) {
 	}
 	dm.mutex.Lock()
 	delete(dm.jobs, job.DVRHash)
+	ClearDVRSourceOverride(job.StreamName)
 	dm.mutex.Unlock()
 }
 

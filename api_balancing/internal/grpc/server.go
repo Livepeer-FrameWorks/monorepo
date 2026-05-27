@@ -1392,12 +1392,16 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		}
 		return nil, status.Error(codes.Unavailable, "DTSC output not available on source node")
 	}
+	sourceBaseURL := fullDTSC
+	if storageNodeID == sourceNodeID {
+		sourceBaseURL = ""
+	}
 
 	// Send gRPC control message to storage Helmsman
 	dvrReq := &pb.DVRStartRequest{
 		DvrHash:       dvrHash,
 		InternalName:  req.InternalName,
-		SourceBaseUrl: fullDTSC,
+		SourceBaseUrl: sourceBaseURL,
 		RequestId:     dvrHash,
 		Config:        config,
 		StreamId:      streamID,

@@ -193,6 +193,7 @@ func TestStartRecording_CreatesDirectories(t *testing.T) {
 func TestStartRecording_PushStartCalled(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 10}
 	dm := newDVRManagerWithMist(t, mc)
+	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
 
 	err := dm.StartRecording("hash-push", "stream-1", "test-stream", "http://source", &pb.DVRConfig{
 		SegmentDuration: 6,
@@ -201,8 +202,11 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mc.lastStreamName != "http://source" {
-		t.Fatalf("expected stream name 'http://source', got %s", mc.lastStreamName)
+	if mc.lastStreamName != "live+test-stream" {
+		t.Fatalf("expected stream name 'live+test-stream', got %s", mc.lastStreamName)
+	}
+	if got, ok := GetDVRSourceOverride("live+test-stream"); !ok || got != "http://source" {
+		t.Fatalf("DVR source override = %q, %v; want http://source, true", got, ok)
 	}
 	for _, want := range []string{"audio=source", "video=source", "subtitle=none", "meta=none"} {
 		if !strings.Contains(mc.lastTargetURI, want) {
@@ -251,7 +255,9 @@ func TestStartRecording_ExtractsMistStreamFromDTSCSource(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 13}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+test-stream", &pb.DVRConfig{
+	const sourceURL = "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+test-stream"
+	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
+	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", sourceURL, &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -260,6 +266,9 @@ func TestStartRecording_ExtractsMistStreamFromDTSCSource(t *testing.T) {
 
 	if mc.lastStreamName != "live+test-stream" {
 		t.Fatalf("expected Mist push stream live+test-stream, got %q", mc.lastStreamName)
+	}
+	if got, ok := GetDVRSourceOverride("live+test-stream"); !ok || got != sourceURL {
+		t.Fatalf("DVR source override = %q, %v; want %q, true", got, ok, sourceURL)
 	}
 }
 
