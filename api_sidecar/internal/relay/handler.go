@@ -203,22 +203,13 @@ func (s *Server) serveUpload(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
-	if strings.HasSuffix(file, ".dtsh") {
-		localPath := s.canonicalUploadPath(file)
-		if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			f, err := os.Open(localPath)
-			if err != nil {
-				s.serverError(c, "open warm upload sidecar", err)
-				return
-			}
-			defer f.Close()
-			if contentType := contentTypeForFile(localPath); contentType != "" {
-				c.Header("Content-Type", contentType)
-			}
-			http.ServeContent(c.Writer, c.Request, filepath.Base(localPath), info.ModTime(), f)
-			return
-		}
+	hash := hashFromFile(file)
+	if hash == "" {
 		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if strings.HasSuffix(file, ".dtsh") {
+		s.serveSidecarGetWithStream(c, "upload", hash, file, "")
 		return
 	}
 
@@ -239,7 +230,6 @@ func (s *Server) serveUpload(c *gin.Context) {
 		return
 	}
 
-	hash := hashFromFile(file)
 	ext := path.Ext(file)
 	rc := ResolveContext{
 		Ctx:       c.Request.Context(),

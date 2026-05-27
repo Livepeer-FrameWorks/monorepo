@@ -175,6 +175,9 @@ func fillUploadResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *p
 	resp.MediaPresignedUrl = mediaURL
 	resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
 	resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_MEM
+	if putURL, err := s3Client.GeneratePresignedPUT(s3Key.String+".dtsh", relayURLTTL); err == nil {
+		resp.DtshPresignedPut = putURL
+	}
 }
 
 func sendRelayResolveResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.RelayResolveResponse, logger logging.Logger) {

@@ -469,6 +469,43 @@ func TestUploadDtshGetServesWarmSidecarAfterMistGeneratesIt(t *testing.T) {
 	}
 }
 
+func TestUploadDtshGetUsesGenericSidecarResolve(t *testing.T) {
+	dir := t.TempDir()
+	hash := "uploadcold"
+	file := hash + ".mov.dtsh"
+	body := []byte("cold upload sidecar")
+	up := upstreamServer(t, body)
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		DtshPresignedGet: up.URL,
+	}}}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/upload/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+	target := filepath.Join(dir, "upload", file)
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("expected upload dtsh to be cached locally: %v", err)
+	}
+}
+
 func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
