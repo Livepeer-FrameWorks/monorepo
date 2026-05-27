@@ -387,7 +387,7 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string, req 
 	var profiles []livepeerJSONProfile
 	if processesJSON.Valid {
 		profiles = livepeerValidatedProfiles(processesJSON.String, req, source)
-		if mist.HasLivepeerProcesses(processesJSON.String) && len(profiles) == 0 {
+		if mist.HasLivepeerProcesses(processesJSON.String) && len(profiles) == 0 && len(req.Profiles) == 0 {
 			logger.WithFields(logging.Fields{
 				"manifest_id": manifestID,
 				"resolution":  req.ContentResolution,
@@ -404,6 +404,9 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string, req 
 }
 
 func livepeerValidatedProfiles(processesJSON string, req livepeerAuthRequest, source mist.SourceMediaInfo) []livepeerJSONProfile {
+	if len(req.Profiles) > 0 {
+		return req.Profiles
+	}
 	if len(req.Profiles) == 0 {
 		if source.Width <= 0 || source.Height <= 0 || source.FPS <= 0 {
 			return nil

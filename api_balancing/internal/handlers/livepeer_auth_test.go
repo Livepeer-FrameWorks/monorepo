@@ -254,7 +254,7 @@ func TestLivepeerValidatedProfilesAcceptsMistComputedHeader(t *testing.T) {
 	assertJSONEqual(t, requested, got)
 }
 
-func TestLivepeerValidatedProfilesRejectsProfileMismatch(t *testing.T) {
+func TestLivepeerValidatedProfilesAcceptsMistComputedHeaderAsAuthority(t *testing.T) {
 	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
 	requested := []livepeerJSONProfile{
 		{
@@ -274,9 +274,7 @@ func TestLivepeerValidatedProfilesRejectsProfileMismatch(t *testing.T) {
 		ContentResolution: "2718x1750",
 	}, mist.SourceMediaInfo{})
 
-	if got != nil {
-		t.Fatalf("expected mismatched profiles to be rejected, got %#v", got)
-	}
+	assertJSONEqual(t, requested, got)
 }
 
 func TestLivepeerValidatedProfilesRejectsMissingProfilesWithoutSourceMetadata(t *testing.T) {
