@@ -478,7 +478,7 @@ async function configureVideoDecoder(
     pipeline.wasmDecoder = null;
   }
 
-  const codecString = track.codecstring || track.codec.toLowerCase();
+  const codecString = mapVideoCodec(track);
 
   // Match reference rawws.js configOpts pattern:
   // codec, optimizeForLatency, description + hw acceleration hint
@@ -609,7 +609,7 @@ function emitWasmFrame(pipeline: PipelineState, output: WasmDecodedOutput): void
 function mapAudioCodec(track: PipelineState["track"]): string {
   const { codec, codecstring } = track;
   // If we have a full codec string like "mp4a.40.2", use it
-  if (codecstring && codecstring.startsWith("mp4a.")) {
+  if (codecstring && isBrowserAudioCodecString(codecstring)) {
     return codecstring;
   }
 
@@ -643,8 +643,62 @@ function mapAudioCodec(track: PipelineState["track"]): string {
       return "pcm-" + normalized.replace("pcm_", "").replace("le", "");
     default:
       log(`Unknown audio codec: ${codec}, trying as-is`);
-      return codecstring || codec;
+      return codec;
   }
+}
+
+function mapVideoCodec(track: PipelineState["track"]): string {
+  const codecstring = track.codecstring?.trim();
+  if (codecstring && isBrowserVideoCodecString(codecstring)) {
+    return codecstring;
+  }
+
+  switch (track.codec.toUpperCase()) {
+    case "H264":
+    case "AVC":
+    case "AVC1":
+      return "avc1.42E01E";
+    case "H265":
+    case "HEVC":
+    case "HEV1":
+    case "HVC1":
+      return "hev1.1.6.L93.B0";
+    case "VP8":
+      return "vp8";
+    case "VP9":
+      return "vp09.00.10.08";
+    case "AV1":
+      return "av01.0.01M.08";
+    default:
+      return track.codec.toLowerCase();
+  }
+}
+
+function isBrowserVideoCodecString(codecstring: string): boolean {
+  const lower = codecstring.toLowerCase();
+  return (
+    lower.startsWith("avc1.") ||
+    lower.startsWith("avc3.") ||
+    lower.startsWith("hev1.") ||
+    lower.startsWith("hvc1.") ||
+    lower.startsWith("av01.") ||
+    lower.startsWith("vp09.") ||
+    lower === "vp8" ||
+    lower === "theora"
+  );
+}
+
+function isBrowserAudioCodecString(codecstring: string): boolean {
+  const lower = codecstring.toLowerCase();
+  return (
+    lower.startsWith("mp4a.") ||
+    lower === "ac-3" ||
+    lower === "ec-3" ||
+    lower === "opus" ||
+    lower === "vorbis" ||
+    lower === "flac" ||
+    lower.startsWith("pcm")
+  );
 }
 
 function configureAudioDecoder(pipeline: PipelineState, description?: Uint8Array): void {

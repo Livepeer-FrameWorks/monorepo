@@ -85,6 +85,13 @@ describe("CodecUtils", () => {
         "avc1.64001f"
       );
     });
+
+    it("ignores protocol codec names in codecstring", () => {
+      expect(translateCodec({ codec: "H264", type: "video", codecstring: "H264" })).toBe(
+        "avc1.42E01E"
+      );
+      expect(translateCodec({ codec: "AAC", type: "audio", codecstring: "AAC" })).toBe("mp4a.40.2");
+    });
   });
 
   // =========================================================================

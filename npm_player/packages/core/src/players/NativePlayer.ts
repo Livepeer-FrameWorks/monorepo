@@ -3,6 +3,7 @@ import { isLiveStreamType } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { MistControlChannel } from "../core/MistControlChannel";
 import { buildQualityLevelsFromStreamTracks } from "../core/QualityLevels";
+import { translateCodec } from "../core/CodecUtils";
 import { normalizeLiveCatchupConfig } from "../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../core/mist/dead-point-recovery";
 import { LiveEdgeRateController } from "../core/mist/live-edge-rate-controller";
@@ -187,14 +188,7 @@ export class NativePlayerImpl extends BasePlayer {
       let hasPlayableTrack = false;
 
       for (const track of tracks) {
-        // Build codec string for testing
-        let codecString = "";
-        if (track.codecstring) {
-          codecString = track.codecstring;
-        } else {
-          codecString = this.translateCodecForHtml5(track);
-        }
-
+        const codecString = translateCodec(track);
         const testMimeType = `${shortMime};codecs="${codecString}"`;
 
         // Special handling for WebM - Chrome reports issues with codec strings
@@ -217,42 +211,6 @@ export class NativePlayerImpl extends BasePlayer {
     }
 
     return supportedTracks.length > 0 ? supportedTracks : false;
-  }
-
-  private translateCodecForHtml5(track: {
-    codec: string;
-    codecstring?: string;
-    init?: string;
-  }): string {
-    if (track.codecstring) return track.codecstring;
-
-    const bin2hex = (index: number) => {
-      if (!track.init || index >= track.init.length) return "00";
-      return ("0" + track.init.charCodeAt(index).toString(16)).slice(-2);
-    };
-
-    switch (track.codec) {
-      case "AAC":
-        return "mp4a.40.2";
-      case "MP3":
-        return "mp4a.40.34";
-      case "AC3":
-        return "ec-3";
-      case "H264":
-        return `avc1.${bin2hex(1)}${bin2hex(2)}${bin2hex(3)}`;
-      case "HEVC":
-        return `hev1.${bin2hex(1)}${bin2hex(6)}${bin2hex(7)}${bin2hex(8)}${bin2hex(9)}${bin2hex(10)}${bin2hex(11)}${bin2hex(12)}`;
-      case "VP8":
-        return "vp8";
-      case "VP9":
-        return "vp09.00.10.08";
-      case "AV1":
-        return "av01.0.04M.08";
-      case "Opus":
-        return "opus";
-      default:
-        return track.codec.toLowerCase();
-    }
   }
 
   private getAndroidVersion(): number | null {

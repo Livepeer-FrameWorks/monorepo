@@ -235,8 +235,14 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     codec: string;
     codecstring?: string;
     init?: string;
+    type?: string;
   }): string {
-    const codecStr = track.codecstring || track.codec?.toLowerCase() || "";
+    const codecStr = translateCodec({
+      type: track.type ?? "video",
+      codec: track.codec,
+      codecstring: track.codecstring,
+      init: track.init,
+    });
     // Simple hash of init data for cache key (just first/last bytes + length)
     const init = track.init ?? "";
     const initHash =
@@ -255,11 +261,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Check cache first
     if (WebCodecsPlayerImpl.codecCache.has(cacheKey)) {
       const cached = WebCodecsPlayerImpl.codecCache.get(cacheKey)!;
-      return { supported: cached, config: { codec: track.codecstring || track.codec } };
+      return { supported: cached, config: { codec: translateCodec(track) } };
     }
 
     // Build codec config using translateCodec for proper WebCodecs codec strings
-    const codecStr = translateCodec(track as any);
+    const codecStr = translateCodec(track);
     const config: any = { codec: codecStr };
 
     // Build properly formatted description from init data

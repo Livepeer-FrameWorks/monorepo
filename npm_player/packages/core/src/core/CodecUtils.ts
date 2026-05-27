@@ -35,8 +35,10 @@ export interface TrackInfo {
 export function translateCodec(track: TrackInfo): string {
   const codec = track.codec.toUpperCase();
 
-  // Use codecstring if available (MistServer provides this for some tracks)
-  if (track.codecstring) {
+  // Use codecstring only when it is already a browser/RFC 6381 codec string.
+  // Some Mist endpoints report protocol codec names such as "H264" here; those
+  // must still be translated before canPlayType()/MediaSource probes.
+  if (track.codecstring && isBrowserCodecString(track.codecstring, track.type)) {
     return track.codecstring;
   }
 
@@ -110,6 +112,39 @@ export function translateCodec(track: TrackInfo): string {
   }
 
   return codec.toLowerCase();
+}
+
+function isBrowserCodecString(codecstring: string, trackType: string): boolean {
+  const codec = codecstring.trim();
+  if (codec === "") return false;
+  const lower = codec.toLowerCase();
+
+  if (trackType === "video") {
+    return (
+      lower.startsWith("avc1.") ||
+      lower.startsWith("avc3.") ||
+      lower.startsWith("hev1.") ||
+      lower.startsWith("hvc1.") ||
+      lower.startsWith("av01.") ||
+      lower.startsWith("vp09.") ||
+      lower === "vp8" ||
+      lower === "theora"
+    );
+  }
+
+  if (trackType === "audio") {
+    return (
+      lower.startsWith("mp4a.") ||
+      lower === "ac-3" ||
+      lower === "ec-3" ||
+      lower === "opus" ||
+      lower === "vorbis" ||
+      lower === "flac" ||
+      lower.startsWith("pcm")
+    );
+  }
+
+  return false;
 }
 
 /**

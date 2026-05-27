@@ -67,4 +67,22 @@ describe("VideoJsPlayerImpl", () => {
     expect(canPlayType).toHaveBeenCalledWith('video/mp4;codecs="avc1.42E01E"');
     expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
   });
+
+  it("does not trust Mist shorthand codecstring values during browser codec probing", () => {
+    const source: StreamSource = {
+      type: "html5/application/vnd.apple.mpegurl",
+      url: "https://edge.example.com/view/hls/frameworks-demo/index.m3u8",
+    };
+    const streamInfo: StreamInfo = {
+      source: [source],
+      meta: { tracks: [{ type: "video", codec: "H264", codecstring: "H264" }] },
+      type: "live",
+    };
+
+    const result = new VideoJsPlayerImpl().isBrowserSupported(source.type, source, streamInfo);
+
+    expect(result).toEqual(["video"]);
+    expect(canPlayType).toHaveBeenCalledWith('video/mp4;codecs="avc1.42E01E"');
+    expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
+  });
 });
