@@ -381,6 +381,26 @@ describe("scorer", () => {
       expect(webcodecs.total).toBeLessThan(hls.total);
     });
 
+    it("quality ranks WebRTC below HLS for video-only streams", () => {
+      const common = {
+        maxPriority: 100,
+        totalSources: 2,
+        playbackMode: "quality" as const,
+      };
+      const webrtc = scorePlayer(["video"], 2, 0, {
+        ...common,
+        playerShortname: "mist-webrtc",
+        mimeType: "mist/webrtc",
+      });
+      const hls = scorePlayer(["video"], 2, 1, {
+        ...common,
+        playerShortname: "videojs",
+        mimeType: "html5/application/vnd.apple.mpegurl",
+      });
+
+      expect(webrtc.total).toBeLessThan(hls.total);
+    });
+
     it("auto ranks WHEP below MP4 and HLS for full A/V", () => {
       const common = {
         maxPriority: 100,

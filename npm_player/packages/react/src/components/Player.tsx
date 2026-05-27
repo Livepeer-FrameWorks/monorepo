@@ -95,6 +95,10 @@ const PlayerInner: React.FC<PlayerProps> = ({
     poster: thumbnailUrl || undefined,
     animatePreroll: options?.animatePreroll,
     debug: options?.debug,
+    forcePlayer: options?.forcePlayer,
+    forceType: options?.forceType,
+    forceSource: options?.forceSource,
+    playbackMode: options?.playbackMode,
     onStateChange: (playerState) => {
       onStateChange?.(playerState);
     },

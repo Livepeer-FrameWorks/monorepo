@@ -327,9 +327,9 @@
             {/each}
           </div>
           <div class="fw-dev-mode-desc">
-            {#if playbackMode === "auto"}Balanced: MP4/WS → WHEP → HLS{/if}
+            {#if playbackMode === "auto"}Balanced: HTTP/MSE first{/if}
             {#if playbackMode === "low-latency"}WHEP/WebRTC first (sub-1s delay){/if}
-            {#if playbackMode === "quality"}MP4/WS first, HLS fallback{/if}
+            {#if playbackMode === "quality"}HLS first, WebRTC fallback{/if}
           </div>
         </div>
 

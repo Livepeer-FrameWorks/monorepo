@@ -663,10 +663,10 @@ export class FwDevModePanel extends LitElement {
           </div>
           <div class="fw-dev-mode-desc">
             ${this.playbackMode === "auto"
-              ? "Balanced: MP4/WS \u2192 WHEP \u2192 HLS"
+              ? "Balanced: HTTP/MSE first"
               : this.playbackMode === "low-latency"
                 ? "WHEP/WebRTC first (<1s delay)"
-                : "MP4/WS first, HLS fallback"}
+                : "HLS first, WebRTC fallback"}
           </div>
         </div>
 

@@ -333,7 +333,7 @@ createPlayer({
 | Mode          | Preference                 | Use Case              |
 | ------------- | -------------------------- | --------------------- |
 | `low-latency` | WebRTC → MP4/WS → HLS/DASH | Real-time interaction |
-| `quality`     | MP4/WS → HLS/DASH → WebRTC | Stable, high quality  |
+| `quality`     | HLS/DASH → MP4/WS → WebRTC | Stable, high quality  |
 | `vod`         | HLS/MP4 (penalize WHEP)    | Pre-recorded content  |
 | `auto`        | Balanced score-based       | Default               |
 

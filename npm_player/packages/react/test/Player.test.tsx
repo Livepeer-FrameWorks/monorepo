@@ -118,4 +118,28 @@ describe("Player", () => {
       expect.objectContaining({ controls: true })
     );
   });
+
+  it("forwards playback selection options to the controller hook", () => {
+    render(
+      <Player
+        contentId="stream-1"
+        contentType="live"
+        options={{
+          playbackMode: "quality",
+          forcePlayer: "hlsjs",
+          forceType: "html5/application/vnd.apple.mpegurl",
+          forceSource: 2,
+        }}
+      />
+    );
+
+    expect(mocks.usePlayerController).toHaveBeenCalledWith(
+      expect.objectContaining({
+        playbackMode: "quality",
+        forcePlayer: "hlsjs",
+        forceType: "html5/application/vnd.apple.mpegurl",
+        forceSource: 2,
+      })
+    );
+  });
 });

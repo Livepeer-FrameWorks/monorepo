@@ -357,9 +357,9 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
               ))}
             </div>
             <div className="fw-dev-mode-desc">
-              {playbackMode === "auto" && "Balanced: MP4/WS → WHEP → HLS"}
+              {playbackMode === "auto" && "Balanced: HTTP/MSE first"}
               {playbackMode === "low-latency" && "WHEP/WebRTC first (<1s delay)"}
-              {playbackMode === "quality" && "MP4/WS first, HLS fallback"}
+              {playbackMode === "quality" && "HLS first, WebRTC fallback"}
             </div>
           </div>
 
