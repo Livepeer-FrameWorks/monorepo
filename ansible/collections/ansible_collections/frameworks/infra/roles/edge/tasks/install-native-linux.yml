@@ -6,6 +6,10 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_version: "{{ edge_mistserver_version }}"
+    mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
+    mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
+    mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
 - name: Ensure edge durable storage directory
@@ -23,6 +27,10 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_version: "{{ edge_mistserver_version }}"
+    mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
+    mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
+    mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
 - name: Flush mistserver handlers before service
@@ -35,6 +43,10 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_version: "{{ edge_mistserver_version }}"
+    mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
+    mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
+    mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
 - name: Flush mistserver handlers before validate
@@ -47,6 +59,10 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_version: "{{ edge_mistserver_version }}"
+    mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
+    mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
+    mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
     mistserver_api_password: "{{ edge_mist_api_password }}"
 
 - name: Apply caddy bootstrap

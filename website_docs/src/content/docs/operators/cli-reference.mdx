@@ -1944,6 +1944,8 @@ frameworks edge doctor --domain edge1.example.com
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `frameworks edge drift`          | Survey observed edge service state, `.edge.env` keys, and HTTPS health; exits non-zero on divergence.           |
 | `frameworks edge diagnose media` | Run MistServer media diagnostics, including HLS validation and analyzer checks for active or specified streams. |
+| `frameworks edge mist`           | MistServer-specific edge diagnostics.                                                                           |
+| `frameworks edge mist cores`     | Collect and analyze MistController core dumps.                                                                  |
 | `frameworks edge mode [mode]`    | Read or change Helmsman node mode. Valid modes are `normal`, `draining`, and `maintenance`.                     |
 
 **Examples:**
@@ -1956,6 +1958,35 @@ frameworks edge diagnose media \
   --target http://localhost:8080/hls/live/index.m3u8
 frameworks edge mode draining --reason deploy --ssh admin@edge1.example.com
 ```
+
+### frameworks edge mist cores collect
+
+Collect the latest MistController core dump, MistServer artifact manifest, config snapshot, and service logs from a native edge over SSH.
+
+```bash
+frameworks edge mist cores collect admin@edge1.example.com
+frameworks edge mist cores collect admin@edge1.example.com --out ./edge1-mist-core.tar.gz
+```
+
+**Flags:**
+
+- `--out` - Local output tarball path
+- `--service` - systemd unit to include in logs
+- `--since` - journalctl time window to include
+- `--ssh-key` - SSH private key path
+
+### frameworks edge mist cores analyze
+
+Analyze a collected MistController core bundle. If the bundle contains a MistServer artifact manifest with a debug-symbol artifact URL, the CLI downloads the matching symbols into the local cache before invoking `gdb` or `lldb`.
+
+```bash
+frameworks edge mist cores analyze ./edge1-mist-core.tar.gz
+frameworks edge mist cores analyze ./edge1-mist-core.tar.gz --cache-dir ~/.cache/frameworks/mistserver-debug
+```
+
+**Flags:**
+
+- `--cache-dir` - Debug symbol cache directory
 
 ---
 

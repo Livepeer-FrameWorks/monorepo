@@ -245,6 +245,12 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	}
 	vars["edge_mistserver_artifact_url"] = mistURL
 	vars["edge_mistserver_artifact_checksum"] = mistSum
+	mistDebugURL, mistDebugSum, err := edgeExternalDebugBinary(manifest, "mistserver", arch)
+	if err != nil {
+		return nil, err
+	}
+	vars["edge_mistserver_debug_artifact_url"] = mistDebugURL
+	vars["edge_mistserver_debug_artifact_checksum"] = mistDebugSum
 
 	helmURL, helmSum, err := edgeServiceBinary(manifest, "helmsman", remoteOS, remoteArch)
 	if err != nil {
@@ -402,11 +408,33 @@ func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, s
 	}
 	for i := range dep.Binaries {
 		bin := &dep.Binaries[i]
-		if strings.Contains(bin.Name, arch) && bin.URL != "" {
+		if strings.Contains(bin.Name, arch) && !isDebugArtifactName(bin.Name) && bin.URL != "" {
 			return bin.URL, bin.Checksum, nil
 		}
 	}
 	return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
+}
+
+func edgeExternalDebugBinary(manifest *gitops.Manifest, name, arch string) (string, string, error) {
+	dep := manifest.GetExternalDependency(name)
+	if dep == nil {
+		return "", "", fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
+	}
+	for i := range dep.Binaries {
+		bin := &dep.Binaries[i]
+		if strings.Contains(bin.Name, arch) && isDebugArtifactName(bin.Name) && bin.URL != "" {
+			return bin.URL, bin.Checksum, nil
+		}
+	}
+	return "", "", nil
+}
+
+func isDebugArtifactName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(lower, "-debug-") ||
+		strings.HasSuffix(lower, "-debug.tar.gz") ||
+		strings.HasSuffix(lower, ".debug") ||
+		strings.Contains(lower, "/debug/")
 }
 
 func edgeServiceBinary(manifest *gitops.Manifest, name, remoteOS, remoteArch string) (string, string, error) {

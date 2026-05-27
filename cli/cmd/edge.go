@@ -67,6 +67,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeUpdateCmd())
 	edge.AddCommand(newEdgeCertCmd())
 	edge.AddCommand(newEdgeLogsCmd())
+	edge.AddCommand(newEdgeMistCmd())
 	edge.AddCommand(newEdgeDoctorCmd())
 	edge.AddCommand(newEdgeDriftCmd())
 	edge.AddCommand(newEdgeDiagnoseCmd())

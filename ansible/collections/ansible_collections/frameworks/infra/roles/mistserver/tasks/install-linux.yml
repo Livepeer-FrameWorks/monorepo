@@ -88,3 +88,62 @@
   when:
     - not ansible_check_mode
     - mistserver_ldd_missing.stdout | trim | length > 0
+
+- name: Write MistServer artifact manifest
+  ansible.builtin.copy:
+    dest: "{{ mistserver_manifest_file }}"
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0644"
+    content: |
+      {{
+        {
+          "component": "mistserver",
+          "version": mistserver_version,
+          "artifact_url": mistserver_artifact_url,
+          "artifact_checksum": mistserver_artifact_checksum,
+          "debug_artifact_url": mistserver_debug_artifact_url,
+          "debug_artifact_checksum": mistserver_debug_artifact_checksum,
+          "install_dir": mistserver_install_dir,
+          "controller_binary": mistserver_install_dir ~ "/bin/MistController"
+        } | to_nice_json
+      }}
+
+- name: Fail when MistServer debug symbols are requested without an artifact
+  ansible.builtin.fail:
+    msg: mistserver_install_debug_symbols=true requires mistserver_debug_artifact_url.
+  when:
+    - mistserver_install_debug_symbols | bool
+    - mistserver_debug_artifact_url | trim | length == 0
+
+- name: Download MistServer debug symbols
+  ansible.builtin.get_url:
+    url: "{{ mistserver_debug_artifact_url }}"
+    dest: "/tmp/mistserver-debug.tar.gz"
+    checksum: "{{ mistserver_debug_artifact_checksum if mistserver_debug_artifact_checksum | length > 0 else omit }}"
+    mode: "0644"
+    timeout: 300
+  when:
+    - mistserver_install_debug_symbols | bool
+    - mistserver_debug_artifact_url | trim | length > 0
+
+- name: Ensure MistServer debug symbols directory
+  ansible.builtin.file:
+    path: "{{ mistserver_debug_symbols_dir }}"
+    state: directory
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0755"
+  when: mistserver_install_debug_symbols | bool
+
+- name: Extract MistServer debug symbols
+  ansible.builtin.unarchive:
+    src: "/tmp/mistserver-debug.tar.gz"
+    dest: "{{ mistserver_debug_symbols_dir }}"
+    remote_src: true
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+  when:
+    - not ansible_check_mode
+    - mistserver_install_debug_symbols | bool
+    - mistserver_debug_artifact_url | trim | length > 0

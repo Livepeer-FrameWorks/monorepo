@@ -7,6 +7,11 @@
 mistserver_artifact_url: ""
 mistserver_artifact_checksum: ""
 mistserver_version: ""
+mistserver_debug_artifact_url: ""
+mistserver_debug_artifact_checksum: ""
+mistserver_install_debug_symbols: false
+mistserver_debug_symbols_dir: "{{ mistserver_install_dir }}/debug"
+mistserver_manifest_file: "{{ mistserver_install_dir }}/manifest.json"
 
 mistserver_api_user: frameworks
 # Required. Go-side callers generate a random hex string per host. Stored in

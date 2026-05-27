@@ -449,6 +449,7 @@ func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
 			Binaries: []gitops.ExternalBinary{
 				{Name: "docker-tag.txt", URL: "https://example.test/docker-tag.txt"},
 				{Name: "mistserver-darwin-arm64-development-c97caf1.tar.gz", URL: "https://example.test/darwin.tar.gz"},
+				{Name: "mistserver-linux-amd64-debug-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64-debug.tar.gz", Checksum: "sha256:def"},
 				{Name: "mistserver-linux-amd64-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64.tar.gz", Checksum: "sha256:abc"},
 				{Name: "mistserver-linux-arm64-development-c97caf1.tar.gz", URL: "https://example.test/linux-arm64.tar.gz"},
 			},
@@ -463,6 +464,29 @@ func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
 		t.Fatalf("url = %q", url)
 	}
 	if checksum != "sha256:abc" {
+		t.Fatalf("checksum = %q", checksum)
+	}
+}
+
+func TestEdgeExternalDebugBinaryMatchesMistServerDebugAssetName(t *testing.T) {
+	manifest := &gitops.Manifest{
+		ExternalDependencies: []gitops.ExternalDependency{{
+			Name: "mistserver",
+			Binaries: []gitops.ExternalBinary{
+				{Name: "mistserver-linux-amd64-v0.2.13.tar.gz", URL: "https://example.test/linux-amd64.tar.gz", Checksum: "sha256:runtime"},
+				{Name: "mistserver-linux-amd64-debug-v0.2.13.tar.gz", URL: "https://example.test/linux-amd64-debug.tar.gz", Checksum: "sha256:debug"},
+			},
+		}},
+	}
+
+	url, checksum, err := edgeExternalDebugBinary(manifest, "mistserver", "linux-amd64")
+	if err != nil {
+		t.Fatalf("edgeExternalDebugBinary returned error: %v", err)
+	}
+	if url != "https://example.test/linux-amd64-debug.tar.gz" {
+		t.Fatalf("url = %q", url)
+	}
+	if checksum != "sha256:debug" {
 		t.Fatalf("checksum = %q", checksum)
 	}
 }
