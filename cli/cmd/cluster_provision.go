@@ -550,9 +550,6 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Track successfully provisioned tasks for rollback
-	var completed []provisionedTask
-
 	// Execute each batch sequentially
 	runtimeData := make(map[string]any)
 
@@ -615,8 +612,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		}
 
 		var (
-			mu      sync.Mutex
-			results []batchResult
+			mu             sync.Mutex
+			results        []batchResult
+			batchCompleted []provisionedTask
 		)
 
 		g, gCtx := errgroup.WithContext(ctx)
@@ -624,7 +622,6 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			task := task
 			host, ok := manifest.GetHost(task.Host)
 			if !ok {
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("host %s not found in manifest", task.Host)
 			}
 
@@ -653,7 +650,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				mu.Lock()
 				results = append(results, batchResult{task: task, host: host, outcome: outcome, runtimeData: taskRD})
 				if !outcome.preexisting {
-					completed = append(completed, provisionedTask{task: task, host: host, config: outcome.config})
+					batchCompleted = append(batchCompleted, provisionedTask{task: task, host: host, config: outcome.config})
 				}
 				mu.Unlock()
 
@@ -666,8 +663,8 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 		if err := g.Wait(); err != nil {
 			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Batch failed: %v", err))
-			fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+			fmt.Fprintln(cmd.OutOrStdout(), "  Checking current batch for rollback-safe cleanup candidates...")
+			rollbackProvisionedTasks(ctx, cmd, sshPool, batchCompleted)
 			return err
 		}
 
@@ -704,8 +701,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if renderErr != nil {
 				bootstrapCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap render failed: %v", renderErr))
-				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "bootstrap render failed after services were provisioned")
 				return fmt.Errorf("bootstrap render failed: %w", renderErr)
 			}
 			runtimeData["bootstrap_desired_state"] = bootstrapYAML
@@ -716,8 +712,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				diagCtx, diagCancel := context.WithTimeout(ctx, 12*time.Second)
 				captureQuartermasterDiagnostics(diagCtx, cmd.OutOrStdout(), manifest, sshPool)
 				diagCancel()
-				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Quartermaster bootstrap failed after services were provisioned")
 				return fmt.Errorf("bootstrap failed: %w", err)
 			}
 			bootstrapCancel()
@@ -730,8 +725,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if idErr != nil {
 				resolveCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
-				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "control-plane data resolution failed")
 				return fmt.Errorf("resolve system tenant: %w", idErr)
 			}
 			runtimeData["system_tenant_id"] = systemTenantID
@@ -743,8 +737,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on quartermaster.internal for bootstrap and runtime discovery.")
 				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh reachability and re-run provisioning.")
-				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Quartermaster mesh reachability validation failed")
 				return fmt.Errorf("quartermaster mesh reachability failed: %w", err)
 			}
 			// Pre-resolve every cluster's owner_tenant alias to its UUID so the
@@ -764,8 +757,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				if anyClusterRunsLivepeerGateway(manifest) {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Cluster runs livepeer-gateway — owner tenant must resolve to UUID for telemetry attribution.")
-					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "cluster owner tenant resolution failed")
 					return fmt.Errorf("resolve cluster owner tenants for livepeer-gateway clusters: %w", ownerErr)
 				}
 				ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v (no livepeer-gateway services — continuing)", ownerErr))
@@ -788,8 +780,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if err := verifyYugabyteCluster(ctx, cmd, manifest, sshPool); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte cluster verification failed: %v", err))
 				if !ignoreValidation {
-					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Yugabyte verification failed")
 					return fmt.Errorf("yugabyte cluster verification failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite Yugabyte verification issues (--ignore-validation)")
@@ -797,14 +788,12 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			ybTarget, ybErr := resolveMigrationTargetFromParts(manifest, releaseRepos, "")
 			if ybErr != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("resolve migration target: %v", ybErr))
-				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "migration target resolution failed")
 				return fmt.Errorf("resolve migration target: %w", ybErr)
 			}
 			if err := initializeDeferredYugabyte(ctx, cmd, manifest, sshPool, sharedEnv, clusterEnvs, ybTarget); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Yugabyte initialization failed: %v", err))
-				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Yugabyte initialization failed")
 				return fmt.Errorf("yugabyte initialization failed: %w", err)
 			}
 		}
@@ -814,8 +803,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			if err := verifyKafkaControllerMesh(ctx, cmd, manifest, sshPool); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Kafka controller mesh verification failed: %v", err))
 				if !ignoreValidation {
-					fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Kafka controller mesh verification failed")
 					return fmt.Errorf("kafka controller mesh verification failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite Kafka controller mesh issues (--ignore-validation)")
@@ -826,8 +814,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			fmt.Fprintln(cmd.OutOrStdout(), "")
 			if err := initializeDeferredKafka(ctx, cmd, manifest, sshPool, releaseRepos); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Kafka topic initialization failed: %v", err))
-				fmt.Fprintln(cmd.OutOrStdout(), "  Rolling back previously provisioned services...")
-				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Kafka topic initialization failed")
 				return fmt.Errorf("kafka topic initialization failed: %w", err)
 			}
 		}
@@ -843,7 +830,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on mesh DNS for discovery.")
 				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh issues and re-run provisioning, or use --ignore-validation to skip.")
 				if !ignoreValidation {
-					rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+					reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "mesh health verification failed")
 					return fmt.Errorf("mesh health verification failed: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "  Warning: continuing despite mesh issues (--ignore-validation)")
@@ -5280,7 +5267,12 @@ func runProvisionPhase(parent context.Context, timeout time.Duration, phase stri
 	return nil
 }
 
-// rollbackProvisionedTasks stops previously provisioned services in reverse order.
+func reportAutomaticRollbackSkipped(out io.Writer, reason string) {
+	fmt.Fprintf(out, "  Automatic rollback skipped: %s. Services were left running; fix the issue and re-run provisioning or finalization.\n", reason)
+}
+
+// rollbackProvisionedTasks stops only tasks that explicitly opt in to automatic
+// cleanup. Production services and infrastructure are preserved by default.
 // Cleanup errors are collected and reported, not swallowed.
 func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh.Pool, tasks []provisionedTask) {
 	if len(tasks) == 0 {
@@ -5289,9 +5281,14 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 
 	rollbackTasks := make([]provisionedTask, 0, len(tasks))
 	preservedMesh := 0
+	preservedPersistent := 0
 	for _, task := range tasks {
 		if task.task.Phase == orchestrator.PhaseMesh {
 			preservedMesh++
+			continue
+		}
+		if !automaticRollbackAllowed(task.task) {
+			preservedPersistent++
 			continue
 		}
 		rollbackTasks = append(rollbackTasks, task)
@@ -5299,12 +5296,15 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 	if preservedMesh > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Preserving %d mesh substrate service(s).\n", preservedMesh)
 	}
+	if preservedPersistent > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Preserving %d service(s) not marked rollback-safe.\n", preservedPersistent)
+	}
 	if len(rollbackTasks) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "  No non-mesh services to roll back.")
+		fmt.Fprintln(cmd.OutOrStdout(), "  No rollback-safe services to clean up.")
 		return
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Stopping %d previously provisioned services...\n", len(rollbackTasks))
+	fmt.Fprintf(cmd.OutOrStdout(), "  Stopping %d rollback-safe service(s)...\n", len(rollbackTasks))
 
 	var rollbackFailures []string
 
@@ -5564,6 +5564,16 @@ func deferInfrastructureInitialize(taskType string) bool {
 	default:
 		return false
 	}
+}
+
+func automaticRollbackAllowed(task *orchestrator.Task) bool {
+	if task == nil {
+		return false
+	}
+	if allowed, ok := task.Metadata["rollback_safe"].(bool); ok {
+		return allowed
+	}
+	return false
 }
 
 // publicServiceType is shared with cli/pkg/clusterderive so the post-Ansible

@@ -625,6 +625,47 @@ func TestProvisionDoesNotRollbackOnServiceClusterReconciliationFailure(t *testin
 	}
 }
 
+func TestRollbackPreservesPersistentServicesByDefault(t *testing.T) {
+	var out bytes.Buffer
+	cmd := newTestCommandWithOutput(&out)
+	rollbackProvisionedTasks(context.Background(), cmd, nil, []provisionedTask{
+		{task: &orchestrator.Task{Name: "redis-foghorn", Type: "redis", Phase: orchestrator.PhaseInfrastructure}},
+		{task: &orchestrator.Task{Name: "nginx@regional-us-1", Type: "nginx", Phase: orchestrator.PhaseInterfaces}},
+		{task: &orchestrator.Task{Name: "vmauth@regional-us-1", Type: "vmauth", Phase: orchestrator.PhaseInterfaces}},
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "Preserving 3 service(s) not marked rollback-safe") {
+		t.Fatalf("expected persistent services to be preserved, got %q", got)
+	}
+	if strings.Contains(got, "Stopping redis") || strings.Contains(got, "Stopping nginx") || strings.Contains(got, "Stopping vmauth") {
+		t.Fatalf("persistent services must not be stopped by automatic rollback, got %q", got)
+	}
+}
+
+func TestAutomaticRollbackRequiresExplicitOptIn(t *testing.T) {
+	if automaticRollbackAllowed(&orchestrator.Task{Metadata: map[string]any{}}) {
+		t.Fatal("task without rollback_safe metadata must not be rollback-safe")
+	}
+	if !automaticRollbackAllowed(&orchestrator.Task{Metadata: map[string]any{"rollback_safe": true}}) {
+		t.Fatal("task with rollback_safe=true should be rollback-safe")
+	}
+}
+
+func TestProvisionRollbackIsCurrentBatchScoped(t *testing.T) {
+	raw, err := os.ReadFile("cluster_provision.go")
+	if err != nil {
+		t.Fatalf("read cluster_provision.go: %v", err)
+	}
+	src := string(raw)
+	if strings.Contains(src, "var completed []provisionedTask") || strings.Contains(src, "completed = append") {
+		t.Fatalf("provision rollback must not maintain a run-wide completed task list")
+	}
+	if !strings.Contains(src, "batchCompleted = append") {
+		t.Fatalf("provision rollback should track only the current batch")
+	}
+}
+
 func TestReconcileRemovedServicePlacementsKeepsAliasedPoolHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
