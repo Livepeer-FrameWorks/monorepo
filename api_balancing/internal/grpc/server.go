@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -718,48 +717,6 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	return data
 }
 
-func buildClipProcessingSourceURL(base, streamName, format, sourceKind string, startUnix, stopUnix int64) string {
-	query := url.Values{}
-	if sourceKind == "live" {
-		duration := stopUnix - startUnix
-		if duration < 1 {
-			duration = 1
-		}
-		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
-		query.Set("duration", strconv.FormatInt(duration, 10))
-	} else {
-		query.Set("startunix", strconv.FormatInt(startUnix, 10))
-		query.Set("stopunix", strconv.FormatInt(stopUnix, 10))
-	}
-
-	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(base), "/"))
-	if err != nil || u.Host == "" {
-		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), streamName, format, query.Encode())
-	}
-	path := strings.TrimRight(u.Path, "/")
-	if path == "" {
-		path = "/" + streamName + "." + format
-	} else {
-		path += "/" + streamName + "." + format
-	}
-	u.Path = path
-	u.RawQuery = query.Encode()
-	return u.String()
-}
-
-func isLoopbackSourceHost(base string) bool {
-	u, err := url.Parse(strings.TrimSpace(base))
-	if err != nil || u.Host == "" {
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		host = strings.Split(host, "/")[0]
-		host = strings.Split(host, ":")[0]
-		return host == "localhost" || host == "127.0.0.1" || host == "::1"
-	}
-	host := u.Hostname()
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
-
 // CreateClip creates a new clip from a stream
 func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
 	if req.StreamInternalName == "" {
@@ -930,10 +887,12 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		var sourceErr error
 		sourceStreamName, sourceErr = clipLiveSourceStreamName(ctx, req)
 		if sourceErr != nil {
-			_, _ = s.db.ExecContext(ctx, `
+			if _, markErr := s.db.ExecContext(ctx, `
 				UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
 				WHERE artifact_hash = $2 AND tenant_id = $3
-			`, fmt.Sprintf("clip source route unavailable: %v", sourceErr), clipHash, req.TenantId)
+			`, fmt.Sprintf("clip source route unavailable: %v", sourceErr), clipHash, req.TenantId); markErr != nil {
+				s.logger.WithError(markErr).Warn("Failed to mark clip artifact failed")
+			}
 			return nil, status.Errorf(codes.FailedPrecondition, "clip source route unavailable: %v", sourceErr)
 		}
 		if sourceHost != "" && sourceNodeID != "" && sourceNodeID != storageNodeID {

@@ -73,7 +73,7 @@ type StreamState struct {
 	Tracks           []StreamTrack  `json:"tracks"`
 	Issues           string         `json:"issues,omitempty"`
 	HasIssues        bool           `json:"has_issues"`
-	StartedAt        *time.Time     `json:"started_at,omitempty"` // When stream first went live
+	StartedAt        *time.Time     `json:"started_at,omitempty"` // Current live interval start
 	LastUpdate       time.Time      `json:"last_update"`
 	RawDetails       map[string]any `json:"raw_details,omitempty"` // Raw MistServer data
 	Viewers          int            `json:"viewers"`
@@ -342,9 +342,11 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 			InternalName: internalName,
 			NodeID:       nodeID,
 			TenantID:     tenantID,
-			StartedAt:    &now, // Track when stream first went live
 		}
 		sm.streams[internalName] = state
+	}
+	if state.StartedAt == nil || state.Status != "live" {
+		state.StartedAt = &now
 	}
 
 	// ensure instance container
@@ -360,11 +362,11 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 	// Update basic fields
 	state.BufferState = bufferState
 	state.Status = "live" // Set to live when buffer is available
-	state.LastUpdate = time.Now()
+	state.LastUpdate = now
 
 	inst.BufferState = bufferState
 	inst.Status = "live"
-	inst.LastUpdate = time.Now()
+	inst.LastUpdate = now
 
 	// Parse stream details if provided
 	if streamDetailsJSON != "" {
@@ -842,16 +844,23 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 
 func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
 	sm.mu.Lock()
+	now := time.Now()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
 		sm.streams[internalName] = union
 	}
+	if inputs > 0 {
+		if union.StartedAt == nil || union.Status != "live" {
+			union.StartedAt = &now
+		}
+		union.Status = "live"
+	}
 	union.TotalConnections = total
 	union.Inputs = inputs
 	union.BytesUp = up
 	union.BytesDown = down
-	union.LastUpdate = time.Now()
+	union.LastUpdate = now
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
@@ -860,12 +869,15 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 		inst = &StreamInstanceState{NodeID: nodeID}
 		sm.streamInstances[internalName][nodeID] = inst
 	}
+	if inputs > 0 {
+		inst.Status = "live"
+	}
 	inst.TotalConnections = total
 	inst.Inputs = inputs
 	inst.BytesUp = up
 	inst.BytesDown = down
 	inst.Replicated = replicated
-	inst.LastUpdate = time.Now()
+	inst.LastUpdate = now
 	streamPayload, _ := json.Marshal(union)
 	instPayload, _ := json.Marshal(inst)
 	sm.mu.Unlock()

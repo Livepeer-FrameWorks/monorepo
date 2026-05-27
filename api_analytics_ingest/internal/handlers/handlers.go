@@ -1120,7 +1120,7 @@ func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Cont
 		return time.Time{}, false
 	}
 	query := `
-		SELECT toUnixTimestamp(started_at) * 1000
+		SELECT started_at
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ?
 		  AND stream_id = ?
@@ -1140,15 +1140,15 @@ func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Cont
 	if !rows.Next() {
 		return time.Time{}, false
 	}
-	var startedAtMS int64
-	if err := rows.Scan(&startedAtMS); err != nil {
+	var startedAt time.Time
+	if err := rows.Scan(&startedAt); err != nil {
 		h.logger.WithError(err).Debug("Stream started_at lookup scan failed")
 		return time.Time{}, false
 	}
-	if startedAtMS <= 0 {
+	if startedAt.IsZero() {
 		return time.Time{}, false
 	}
-	return time.UnixMilli(startedAtMS).UTC(), true
+	return startedAt.UTC(), true
 }
 
 func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, eventID uuid.UUID, eventType string) bool {

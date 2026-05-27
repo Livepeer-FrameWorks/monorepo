@@ -777,6 +777,95 @@ func TestUpdateStreamFromBuffer_ParsesDetailsAndIssues(t *testing.T) {
 	}
 }
 
+func TestUpdateNodeStatsStartsLiveIntervalOnInput(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	internalName := "internal-input"
+	nodeID := "node-input"
+
+	sm.UpdateNodeStats(internalName, nodeID, 0, 1, 0, 0, false)
+
+	state := sm.GetStreamState(internalName)
+	if state == nil {
+		t.Fatal("expected stream state")
+	}
+	if state.Status != "live" {
+		t.Fatalf("expected live status, got %q", state.Status)
+	}
+	if state.StartedAt == nil {
+		t.Fatal("expected StartedAt to be set when inputs are present")
+	}
+
+	instances := sm.GetStreamInstances(internalName)
+	inst, ok := instances[nodeID]
+	if !ok {
+		t.Fatal("expected stream instance state")
+	}
+	if inst.Status != "live" {
+		t.Fatalf("expected instance status live, got %q", inst.Status)
+	}
+}
+
+func TestUpdateStreamFromBufferStartsExistingStatsOnlyState(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	internalName := "internal-buffer-after-stats"
+	nodeID := "node-buffer-after-stats"
+
+	sm.UpdateNodeStats(internalName, nodeID, 0, 0, 0, 0, false)
+	state := sm.GetStreamState(internalName)
+	if state == nil {
+		t.Fatal("expected stream state")
+	}
+	if state.StartedAt != nil {
+		t.Fatal("expected zero-input stats state to have no StartedAt")
+	}
+
+	if err := sm.UpdateStreamFromBuffer("stream-buffer-after-stats", internalName, nodeID, "tenant-buffer", "FULL", ""); err != nil {
+		t.Fatalf("UpdateStreamFromBuffer: %v", err)
+	}
+
+	state = sm.GetStreamState(internalName)
+	if state == nil {
+		t.Fatal("expected stream state after buffer update")
+	}
+	if state.Status != "live" {
+		t.Fatalf("expected live status, got %q", state.Status)
+	}
+	if state.StartedAt == nil {
+		t.Fatal("expected buffer update to set StartedAt on existing state")
+	}
+}
+
+func TestUpdateNodeStatsStartsNewIntervalAfterOffline(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	internalName := "internal-restart"
+	nodeID := "node-restart"
+
+	sm.UpdateNodeStats(internalName, nodeID, 0, 1, 0, 0, false)
+	first := sm.GetStreamState(internalName).StartedAt
+	if first == nil {
+		t.Fatal("expected first StartedAt")
+	}
+
+	time.Sleep(time.Millisecond)
+	sm.SetOffline(internalName, nodeID)
+	time.Sleep(time.Millisecond)
+	sm.UpdateNodeStats(internalName, nodeID, 0, 1, 0, 0, false)
+
+	state := sm.GetStreamState(internalName)
+	if state == nil || state.StartedAt == nil {
+		t.Fatal("expected restarted stream state with StartedAt")
+	}
+	if !state.StartedAt.After(*first) {
+		t.Fatalf("expected restart StartedAt %s to be after first %s", state.StartedAt, first)
+	}
+}
+
 func TestUpdateStreamFromBuffer_IgnoresNonStringIssues(t *testing.T) {
 	sm := NewStreamStateManager()
 

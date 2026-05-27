@@ -1566,6 +1566,9 @@ func TestStreamLifecycleStartedAtLookupRequiresLiveState(t *testing.T) {
 	if !found {
 		t.Fatal("expected stream_state_current lookup")
 	}
+	if strings.Contains(conn.queries[0].query, "toUnixTimestamp") {
+		t.Fatalf("expected DateTime lookup, got query %q", conn.queries[0].query)
+	}
 
 	stateBatch := conn.batches["stream_state_current"]
 	if stateBatch == nil || len(stateBatch.rows) != 1 {
@@ -1573,6 +1576,45 @@ func TestStreamLifecycleStartedAtLookupRequiresLiveState(t *testing.T) {
 	}
 	if stateBatch.rows[0][23] != event.Timestamp {
 		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateBatch.rows[0][23])
+	}
+}
+
+func TestStreamLifecyclePreservesExistingLiveStartedAt(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	startedAt := time.Unix(1709990000, 0).UTC()
+	conn.addQueryRow("periscope.stream_state_current", startedAt)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+				InternalName: "live+demo",
+				Status:       "live",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stateBatch := conn.batches["stream_state_current"]
+	if stateBatch == nil || len(stateBatch.rows) != 1 {
+		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
+	}
+	if got := stateBatch.rows[0][23]; got != startedAt {
+		t.Fatalf("expected started_at %v, got %#v", startedAt, got)
 	}
 }
 
@@ -2174,6 +2216,7 @@ type fakeClickhouseConn struct {
 	batches    map[string]*fakeBatch
 	duplicates map[string]map[uuid.UUID]bool
 	queries    []fakeQuery
+	queryRows  map[string][]any
 }
 
 type fakeQuery struct {
@@ -2186,6 +2229,7 @@ func newFakeClickhouseConn() *fakeClickhouseConn {
 	return &fakeClickhouseConn{
 		batches:    make(map[string]*fakeBatch),
 		duplicates: make(map[string]map[uuid.UUID]bool),
+		queryRows:  make(map[string][]any),
 	}
 }
 
@@ -2194,6 +2238,10 @@ func (f *fakeClickhouseConn) addDuplicate(table string, eventID uuid.UUID) {
 		f.duplicates[table] = make(map[uuid.UUID]bool)
 	}
 	f.duplicates[table][eventID] = true
+}
+
+func (f *fakeClickhouseConn) addQueryRow(table string, values ...any) {
+	f.queryRows[table] = values
 }
 
 func (f *fakeClickhouseConn) Contributors() []string { return nil }
@@ -2206,6 +2254,9 @@ func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string,
 func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	table := tableFromQuery(query, "from")
 	f.queries = append(f.queries, fakeQuery{table: table, query: query, args: append([]any(nil), args...)})
+	if values, ok := f.queryRows[table]; ok {
+		return &fakeRows{next: true, values: values}, nil
+	}
 	var eventID uuid.UUID
 	if len(args) > 0 {
 		if parsed, ok := args[0].(uuid.UUID); ok {
@@ -2257,7 +2308,8 @@ func (f *fakeBatchColumn) Append(any) error    { return nil }
 func (f *fakeBatchColumn) AppendRow(any) error { return nil }
 
 type fakeRows struct {
-	next bool
+	next   bool
+	values []any
 }
 
 func (f *fakeRows) Next() bool {
@@ -2267,7 +2319,24 @@ func (f *fakeRows) Next() bool {
 	}
 	return false
 }
-func (f *fakeRows) Scan(dest ...any) error           { return nil }
+func (f *fakeRows) Scan(dest ...any) error {
+	for i := range dest {
+		if i >= len(f.values) {
+			continue
+		}
+		switch d := dest[i].(type) {
+		case *time.Time:
+			if v, ok := f.values[i].(time.Time); ok {
+				*d = v
+			}
+		case *int64:
+			if v, ok := f.values[i].(int64); ok {
+				*d = v
+			}
+		}
+	}
+	return nil
+}
 func (f *fakeRows) ScanStruct(dest any) error        { return nil }
 func (f *fakeRows) ColumnTypes() []driver.ColumnType { return nil }
 func (f *fakeRows) Totals(dest ...any) error         { return nil }
