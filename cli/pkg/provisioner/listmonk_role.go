@@ -35,8 +35,8 @@ func listmonkRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig,
 	}, nil
 }
 
-func listmonkRoleDetect(_ context.Context, _ inventory.Host, _ RoleBuildHelpers) (*detect.ServiceState, error) {
-	return &detect.ServiceState{Exists: false, Running: false}, nil
+func listmonkRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+	return serviceRoleDetect("listmonk")(ctx, host, helpers)
 }
 
 // listmonkEnvMap renders the LISTMONK_* env keys Listmonk consumes, sourced
