@@ -367,7 +367,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 					d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, entry)
 				}
 
-				for _, ingressClusterID := range serviceIngressClusterIDs(serviceName, m, svc, clusterID) {
+				for _, ingressClusterID := range serviceIngressClusterIDs(serviceName, m, svc, hostKey, clusterID) {
 					domains, bundleID := clusterderive.AutoIngressDomainsForService(serviceName, svc, m, ingressClusterID)
 					if bundleID == "" || len(domains) == 0 {
 						continue
@@ -524,8 +524,8 @@ func serviceClusterIDForHost(m *inventory.Manifest, serviceName, hostKey string)
 	return m.ResolveCluster(serviceName)
 }
 
-func serviceIngressClusterIDs(serviceName string, m *inventory.Manifest, svc inventory.ServiceConfig, physicalClusterID string) []string {
-	if logical := clusterderive.LogicalServiceClusterIDs(serviceName, svc, m); len(logical) > 0 {
+func serviceIngressClusterIDs(serviceName string, m *inventory.Manifest, svc inventory.ServiceConfig, hostKey, physicalClusterID string) []string {
+	if logical, ok := clusterderive.HostScopedLogicalServiceClusterIDs(serviceName, svc, m, hostKey); ok {
 		return logical
 	}
 	if physicalClusterID == "" {

@@ -96,6 +96,36 @@ func TestLogicalServiceClusterIDsDefaultsTelemetryToAllMediaClusters(t *testing.
 	}
 }
 
+func TestHostScopedLogicalServiceClusterIDsScopesTelemetryByRegion(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {Cluster: "regional-eu"},
+			"regional-us-1": {Labels: map[string]string{"region": "us-east"}},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu": {Name: "Regional EU", Type: "regional", Region: "eu-west"},
+			"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}, Region: "eu-west"},
+			"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}, Region: "us-east"},
+		},
+	}
+
+	got, ok := HostScopedLogicalServiceClusterIDs("vmauth", inventory.ServiceConfig{Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}}, manifest, "regional-eu-1")
+	if !ok {
+		t.Fatal("expected vmauth to resolve logical clusters")
+	}
+	if !slices.Equal(got, []string{"media-eu-1"}) {
+		t.Fatalf("regional-eu-1 clusters = %q, want media-eu-1", got)
+	}
+
+	got, ok = HostScopedLogicalServiceClusterIDs("vmauth", inventory.ServiceConfig{Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}}, manifest, "regional-us-1")
+	if !ok {
+		t.Fatal("expected vmauth to resolve logical clusters")
+	}
+	if !slices.Equal(got, []string{"media-us-1"}) {
+		t.Fatalf("regional-us-1 clusters = %q, want media-us-1", got)
+	}
+}
+
 func TestLogicalServiceClusterIDsHonorsExplicitClusters(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

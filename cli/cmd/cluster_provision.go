@@ -4250,8 +4250,8 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 	if vmauth.Host != hostName && !containsHost(vmauth.Hosts, hostName) {
 		return nil
 	}
-	telemetryClusters := clusterderive.LogicalServiceClusterIDs("vmauth", vmauth, manifest)
-	if len(telemetryClusters) == 0 {
+	telemetryClusters, ok := clusterderive.HostScopedLogicalServiceClusterIDs("vmauth", vmauth, manifest, hostName)
+	if !ok || len(telemetryClusters) == 0 {
 		return nil
 	}
 	sort.Strings(telemetryClusters)

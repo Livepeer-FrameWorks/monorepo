@@ -153,6 +153,55 @@ func LogicalServiceClusterIDs(serviceName string, svc inventory.ServiceConfig, m
 	return nil
 }
 
+func HostScopedLogicalServiceClusterIDs(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest, hostKey string) ([]string, bool) {
+	clusterIDs := LogicalServiceClusterIDs(serviceName, svc, manifest)
+	if len(clusterIDs) == 0 {
+		return nil, false
+	}
+	serviceType, ok := ManifestServiceType(serviceName, svc)
+	if !ok || serviceType != "telemetry" || manifest == nil {
+		return clusterIDs, true
+	}
+	hostRegion := HostRegion(manifest, hostKey)
+	if hostRegion == "" {
+		return clusterIDs, true
+	}
+	filtered := make([]string, 0, len(clusterIDs))
+	hasRegionalTarget := false
+	for _, clusterID := range clusterIDs {
+		cluster := manifest.Clusters[clusterID]
+		targetRegion := strings.TrimSpace(cluster.Region)
+		if targetRegion == "" {
+			continue
+		}
+		hasRegionalTarget = true
+		if targetRegion == hostRegion {
+			filtered = append(filtered, clusterID)
+		}
+	}
+	if !hasRegionalTarget {
+		return clusterIDs, true
+	}
+	return filtered, true
+}
+
+func HostRegion(manifest *inventory.Manifest, hostKey string) string {
+	if manifest == nil || hostKey == "" {
+		return ""
+	}
+	host, ok := manifest.GetHost(hostKey)
+	if !ok {
+		return ""
+	}
+	if region := strings.TrimSpace(host.Labels["region"]); region != "" {
+		return region
+	}
+	if cluster, ok := manifest.Clusters[host.Cluster]; ok {
+		return strings.TrimSpace(cluster.Region)
+	}
+	return ""
+}
+
 func defaultMediaClusterID(manifest *inventory.Manifest) string {
 	mediaClusters := MediaClusterIDs(manifest)
 	if len(mediaClusters) == 0 {

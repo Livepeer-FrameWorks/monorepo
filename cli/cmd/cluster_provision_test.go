@@ -3674,26 +3674,28 @@ func TestBuildTaskConfigDedupesProxySites(t *testing.T) {
 	}
 }
 
-func TestBuildExtraProxyRoutesForHostUsesVMAUTHLogicalMediaClusters(t *testing.T) {
+func TestBuildExtraProxyRoutesForHostScopesVMAUTHByRegion(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {ExternalIP: "10.0.0.10", Cluster: "regional-eu"},
+			"regional-us-1": {ExternalIP: "10.0.0.11", Cluster: "regional-us"},
 		},
 		Clusters: map[string]inventory.ClusterConfig{
-			"regional-eu": {Name: "Regional EU", Type: "regional"},
-			"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}},
-			"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}},
+			"regional-eu": {Name: "Regional EU", Type: "regional", Region: "eu-west"},
+			"regional-us": {Name: "Regional US", Type: "regional", Region: "us-east"},
+			"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}, Region: "eu-west"},
+			"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}, Region: "us-east"},
 		},
 		Observability: map[string]inventory.ServiceConfig{
-			"vmauth": {Enabled: true, Host: "regional-eu-1", Port: 8427},
+			"vmauth": {Enabled: true, Hosts: []string{"regional-eu-1", "regional-us-1"}, Port: 8427},
 		},
 	}
 
 	routes := buildExtraProxyRoutesForHost(manifest, "regional-eu-1", "regional-eu")
-	if len(routes) != 2 {
-		t.Fatalf("routes len = %d, want 2: %#v", len(routes), routes)
+	if len(routes) != 1 {
+		t.Fatalf("routes len = %d, want 1: %#v", len(routes), routes)
 	}
 	domains := map[string]bool{}
 	for _, route := range routes {
@@ -3703,13 +3705,11 @@ func TestBuildExtraProxyRoutesForHostUsesVMAUTHLogicalMediaClusters(t *testing.T
 		}
 		domains[names[0]] = true
 	}
-	for _, want := range []string{
-		"telemetry.media-eu-1.frameworks.network",
-		"telemetry.media-us-1.frameworks.network",
-	} {
-		if !domains[want] {
-			t.Fatalf("missing route for %s; got %#v", want, domains)
-		}
+	if !domains["telemetry.media-eu-1.frameworks.network"] {
+		t.Fatalf("missing EU route; got %#v", domains)
+	}
+	if domains["telemetry.media-us-1.frameworks.network"] {
+		t.Fatalf("EU host must not publish US telemetry route; got %#v", domains)
 	}
 }
 

@@ -602,6 +602,55 @@ func TestDeriveVMAUTHDefaultsIngressToAllMediaClusters(t *testing.T) {
 	}
 }
 
+func TestDeriveVMAUTHIngressScopesRegionalHosts(t *testing.T) {
+	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Hosts["regional-eu-1"] = inventory.Host{ExternalIP: "203.0.113.10", Cluster: "regional-eu"}
+	m.Hosts["regional-us-1"] = inventory.Host{ExternalIP: "203.0.113.20", Cluster: "regional-us"}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"regional-eu": {Name: "Regional EU", Type: "regional", Region: "eu-west"},
+		"regional-us": {Name: "Regional US", Type: "regional", Region: "us-east"},
+		"media-eu-1":  {Name: "Media EU 1", Type: "edge", Default: true, Roles: []string{"media"}, Region: "eu-west"},
+		"media-us-1":  {Name: "Media US 1", Type: "edge", Roles: []string{"media"}, Region: "us-east"},
+	}
+	m.Observability = map[string]inventory.ServiceConfig{
+		"vmauth": {
+			Enabled: true,
+			Hosts:   []string{"regional-eu-1", "regional-us-1"},
+		},
+	}
+
+	d, err := Derive(m, DeriveOptions{})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	sites := map[string]IngressSite{}
+	for _, s := range d.Quartermaster.Ingress.Sites {
+		sites[s.ID] = s
+	}
+	euSite, ok := sites["vmauth-regional-eu-1-media-eu-1"]
+	if !ok {
+		t.Fatalf("missing EU vmauth site; got %+v", sites)
+	}
+	if !slices.Equal(euSite.Domains, []string{"telemetry.media-eu-1.frameworks.network"}) {
+		t.Fatalf("EU domains = %v", euSite.Domains)
+	}
+	if _, exists := sites["vmauth-regional-eu-1-media-us-1"]; exists {
+		t.Fatal("EU vmauth host must not publish US telemetry ingress")
+	}
+	usSite, ok := sites["vmauth-regional-us-1-media-us-1"]
+	if !ok {
+		t.Fatalf("missing US vmauth site; got %+v", sites)
+	}
+	if !slices.Equal(usSite.Domains, []string{"telemetry.media-us-1.frameworks.network"}) {
+		t.Fatalf("US domains = %v", usSite.Domains)
+	}
+	if _, exists := sites["vmauth-regional-us-1-media-eu-1"]; exists {
+		t.Fatal("US vmauth host must not publish EU telemetry ingress")
+	}
+}
+
 func TestDeriveChandlerLogicalIngressUsesPhysicalNodeCluster(t *testing.T) {
 	m := minimalManifest()
 	m.RootDomain = "frameworks.network"
