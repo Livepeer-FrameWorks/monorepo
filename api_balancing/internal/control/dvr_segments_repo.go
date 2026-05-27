@@ -270,6 +270,19 @@ func MarkDVRSegmentUploaded(ctx context.Context, artifactHash, segmentName strin
 	return nil
 }
 
+func DVRSegmentProgress(ctx context.Context, artifactHash string) (segmentCount int64, sizeBytes int64, err error) {
+	if db == nil {
+		return 0, 0, sql.ErrConnDone
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+		  FROM foghorn.dvr_segments
+		 WHERE artifact_hash = $1
+		   AND status NOT IN ('lost_local', 'reclaimed')
+	`, artifactHash).Scan(&segmentCount, &sizeBytes)
+	return segmentCount, sizeBytes, err
+}
+
 // MarkDVRSegmentDropped transitions a segment row to deleted_local (was
 // uploaded before eviction; chapter finalization can recover from S3)
 // or lost_local (lost before upload; any chapter overlapping the row

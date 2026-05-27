@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/state"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -141,6 +143,7 @@ func processRecordDVRSegment(
 		}, logger)
 		return
 	}
+	publishDVRSegmentProgress(ctx, dvrHash, "recording", sequence+1, 0, nodeID, logger)
 
 	presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, presignTTL)
 	if err != nil {
@@ -186,7 +189,14 @@ func processMarkDVRSegmentUploaded(req *pb.MarkDVRSegmentUploaded, nodeID string
 			"segment_name": segmentName,
 			"node_id":      nodeID,
 		}).Error("Failed to mark DVR segment uploaded")
+		return
 	}
+	count, size, err := DVRSegmentProgress(ctx, dvrHash)
+	if err != nil {
+		logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to aggregate DVR segment progress")
+		return
+	}
+	publishDVRSegmentProgress(ctx, dvrHash, "recording", count, size, nodeID, logger)
 }
 
 // processDVRSegmentDropped records a sidecar-reported eviction. was_uploaded
@@ -309,6 +319,20 @@ func resolveDVRTenantAndStream(ctx context.Context, dvrHash string, logger loggi
 		}
 	}
 	return "", "", false
+}
+
+func publishDVRSegmentProgress(ctx context.Context, dvrHash, status string, segmentCount, sizeBytes int64, nodeID string, logger logging.Logger) {
+	if dvrHash == "" || segmentCount < 0 || sizeBytes < 0 {
+		return
+	}
+	if err := state.DefaultManager().ApplyDVRProgress(ctx, dvrHash, status, uint64(sizeBytes), uint32(segmentCount), nodeID); err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"dvr_hash":      dvrHash,
+			"status":        status,
+			"segment_count": segmentCount,
+			"size_bytes":    sizeBytes,
+		}).Warn("Failed to publish DVR segment progress")
+	}
 }
 
 // dvrEffectiveWindowSeconds returns the resolved live seek window stamped

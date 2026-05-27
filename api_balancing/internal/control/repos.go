@@ -185,7 +185,7 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = $2,
-		    size_bytes = $3,
+		    size_bytes = GREATEST(COALESCE(size_bytes, 0), $3),
 		    updated_at = NOW()
 		WHERE artifact_hash = $1
 		  AND artifact_type = 'dvr'
