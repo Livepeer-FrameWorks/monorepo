@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -160,13 +161,8 @@ func (s *PurserServer) runBillingOutboxWorker(ctx context.Context) {
 }
 
 func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOutboxRow, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]billingOutboxRow, error) {
+	var out []billingOutboxRow
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		rows, qerr := tx.QueryContext(ctx, `
 			SELECT id::text, event_type, tenant_id::text, user_id, resource_type, resource_id,
 			       billing_event::text, attempts, created_at
@@ -178,7 +174,7 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 			LIMIT $2
 		`, fmt.Sprintf("%d seconds", int(billingOutboxLease.Seconds())), billingOutboxBatchSize)
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 		defer rows.Close()
 
@@ -190,13 +186,13 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 			)
 			if scanErr := rows.Scan(&r.id, &r.eventType, &r.tenantID, &r.userID,
 				&r.resourceType, &r.resourceID, &billingText, &r.attempts, &r.createdAt); scanErr != nil {
-				return nil, scanErr
+				return scanErr
 			}
 			r.billingJSON = []byte(billingText)
 			batch = append(batch, r)
 		}
 		if rowsErr := rows.Err(); rowsErr != nil {
-			return nil, rowsErr
+			return rowsErr
 		}
 
 		if len(batch) > 0 {
@@ -209,18 +205,13 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 				SET claimed_at = NOW()
 				WHERE id = ANY($1::uuid[])
 			`, asPGUUIDArray(ids)); uerr != nil {
-				return nil, uerr
+				return uerr
 			}
 		}
-		return batch, nil
-	}()
-	if err != nil {
-		return nil, err
-	}
-	if cerr := tx.Commit(); cerr != nil {
-		return nil, cerr
-	}
-	return out, nil
+		out = batch
+		return nil
+	})
+	return out, err
 }
 
 func (s *PurserServer) markBillingOutboxCompleted(ctx context.Context, id string) {

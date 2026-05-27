@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -699,35 +700,27 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 	// Serialize enqueue per artifact/job-type so retry-after-timeout returns the
 	// existing active job instead of creating a duplicate queued job.
 	if artifactHash == "" {
-		_, err := db.ExecContext(ctx, `
+		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			_, err := db.ExecContext(ctx, `
 			INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
 			VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
 		`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode)
+			return err
+		})
 		if err == nil {
 			NotifyProcessingJobQueued()
 		}
 		return jobID, err
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if tx != nil {
-			rollbackErr := tx.Rollback()
-			if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-				_ = rollbackErr
-			}
+	resultJobID := jobID
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, artifactHash, jobType); lockErr != nil {
+			return lockErr
 		}
-	}()
 
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, artifactHash, jobType); lockErr != nil {
-		return "", lockErr
-	}
-
-	var existingJobID string
-	err = tx.QueryRowContext(ctx, `
+		var existingJobID string
+		err := tx.QueryRowContext(ctx, `
 		SELECT job_id
 		FROM foghorn.processing_jobs
 		WHERE artifact_hash = $1
@@ -736,26 +729,22 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 		ORDER BY created_at
 		LIMIT 1
 	`, artifactHash, jobType).Scan(&existingJobID)
-	switch {
-	case err == nil:
-		if commitErr := tx.Commit(); commitErr != nil {
-			return "", commitErr
+		switch {
+		case err == nil:
+			resultJobID = existingJobID
+			return nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
 		}
-		tx = nil
-		NotifyProcessingJobQueued()
-		return existingJobID, nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return "", err
-	}
 
-	if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
 		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
 	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode); err != nil {
-		return "", err
-	}
+			return err
+		}
 
-	if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		   SET status = 'queued',
 		       updated_at = NOW()
@@ -764,15 +753,15 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 		   AND artifact_type = 'clip'
 		   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
 	`, artifactHash, tenantID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return "", commitErr
-	}
-	tx = nil
 	NotifyProcessingJobQueued()
-	return jobID, nil
+	return resultJobID, nil
 }
 
 // extractHLSTagURI extracts the URI value from HLS tags like

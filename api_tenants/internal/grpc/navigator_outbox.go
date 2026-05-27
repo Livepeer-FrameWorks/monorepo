@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -130,13 +131,8 @@ func (s *QuartermasterServer) runNavigatorCustomDomainOutboxWorker(ctx context.C
 }
 
 func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOutboxRow, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]navOutboxRow, error) {
+	var out []navOutboxRow
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		rows, qerr := tx.QueryContext(ctx, `
 			SELECT id::text, tenant_id::text, domain, action, attempts, created_at
 			FROM quartermaster.navigator_custom_domain_outbox
@@ -147,7 +143,7 @@ func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOut
 			LIMIT $2
 		`, fmt.Sprintf("%d seconds", int(navOutboxLease.Seconds())), navOutboxBatchSize)
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 		defer rows.Close()
 
@@ -155,12 +151,12 @@ func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOut
 		for rows.Next() {
 			var r navOutboxRow
 			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.domain, &r.action, &r.attempts, &r.createdAt); scanErr != nil {
-				return nil, scanErr
+				return scanErr
 			}
 			batch = append(batch, r)
 		}
 		if rowsErr := rows.Err(); rowsErr != nil {
-			return nil, rowsErr
+			return rowsErr
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
@@ -172,18 +168,13 @@ func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOut
 				SET claimed_at = NOW()
 				WHERE id = ANY($1::uuid[])
 			`, qmOutboxIDArray(ids)); uerr != nil {
-				return nil, uerr
+				return uerr
 			}
 		}
-		return batch, nil
-	}()
-	if err != nil {
-		return nil, err
-	}
-	if cerr := tx.Commit(); cerr != nil {
-		return nil, cerr
-	}
-	return out, nil
+		out = batch
+		return nil
+	})
+	return out, err
 }
 
 func (s *QuartermasterServer) markNavOutboxCompleted(ctx context.Context, id string) {

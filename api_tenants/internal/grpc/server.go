@@ -649,39 +649,35 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 // service type, preventing the TOCTOU race where two instances both see
 // "no rows" and both try to INSERT.
 func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceType, protocol string) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", status.Errorf(codes.Internal, "failed to begin service lookup transaction: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	// Advisory lock keyed on service type — second caller blocks until first commits
-	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serviceType)
-	if err != nil {
-		return "", status.Errorf(codes.Internal, "failed to acquire advisory lock: %v", err)
-	}
-
 	var serviceID string
-	err = tx.QueryRowContext(ctx, `
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		// Advisory lock keyed on service type — second caller blocks until first commits
+		_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, serviceType)
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to acquire advisory lock: %v", err)
+		}
+
+		err = tx.QueryRowContext(ctx, `
 		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
 	`, serviceType).Scan(&serviceID)
 
-	if errors.Is(err, sql.ErrNoRows) {
-		serviceID = serviceType
-		_, err = tx.ExecContext(ctx, `
+		if errors.Is(err, sql.ErrNoRows) {
+			serviceID = serviceType
+			_, err = tx.ExecContext(ctx, `
 			INSERT INTO quartermaster.services (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
 			VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())
 		`, serviceID, serviceType, serviceType, protocol)
-		if err != nil {
-			s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
-			return "", status.Errorf(codes.Internal, "failed to create service: %v", err)
+			if err != nil {
+				s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
+				return status.Errorf(codes.Internal, "failed to create service: %v", err)
+			}
+		} else if err != nil {
+			return status.Errorf(codes.Internal, "database error: %v", err)
 		}
-	} else if err != nil {
-		return "", status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", status.Errorf(codes.Internal, "failed to commit service lookup: %v", err)
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	return serviceID, nil
 }

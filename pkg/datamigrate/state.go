@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // Status is the lifecycle state of a job or run.
@@ -320,14 +322,9 @@ func MarkRunFailed(ctx context.Context, db *sql.DB, id string, scope ScopeKey, r
 // paused. A never-started registered job gets an explicit paused row so future
 // runs cannot proceed until resume.
 func PauseJob(ctx context.Context, db *sql.DB, id, releaseVersion string) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // committed path returns before defer matters
-
 	var status Status
-	if err := tx.QueryRowContext(ctx, `
+	return fwdb.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `
 		INSERT INTO _data_migrations (id, release_version, status, updated_at)
 		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (id) DO UPDATE
@@ -337,61 +334,58 @@ func PauseJob(ctx context.Context, db *sql.DB, id, releaseVersion string) error 
 			END,
 			updated_at = NOW()
 		RETURNING status`,
-		id, releaseVersion, string(StatusPaused), string(StatusCompleted)).Scan(&status); err != nil {
-		return fmt.Errorf("pause job %q: %w", id, err)
-	}
-	if status == StatusCompleted {
-		return fmt.Errorf("pause job %q: already completed", id)
-	}
-	if _, err := tx.ExecContext(ctx, `
+			id, releaseVersion, string(StatusPaused), string(StatusCompleted)).Scan(&status); err != nil {
+			return fmt.Errorf("pause job %q: %w", id, err)
+		}
+		if status == StatusCompleted {
+			return fmt.Errorf("pause job %q: already completed", id)
+		}
+		if _, err := tx.ExecContext(ctx, `
 		UPDATE _data_migration_runs
 		SET status=$2, lease_owner=NULL, lease_expires_at=NULL, updated_at=NOW()
 		WHERE id=$1 AND status <> $3`,
-		id, string(StatusPaused), string(StatusCompleted)); err != nil {
-		return fmt.Errorf("pause runs %q: %w", id, err)
-	}
-	return tx.Commit()
+			id, string(StatusPaused), string(StatusCompleted)); err != nil {
+			return fmt.Errorf("pause runs %q: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // ResumeJob returns paused job/run rows to pending. Non-paused and completed
 // jobs fail explicitly so operators know whether pause actually took effect.
 func ResumeJob(ctx context.Context, db *sql.DB, id string) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // committed path returns before defer matters
-
-	res, err := tx.ExecContext(ctx, `UPDATE _data_migrations SET status=$2, updated_at=NOW() WHERE id=$1 AND status=$3`,
-		id, string(StatusPending), string(StatusPaused))
-	if err != nil {
-		return fmt.Errorf("resume job %q: %w", id, err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("resume job %q: check affected rows: %w", id, err)
-	}
-	if rows == 0 {
-		var status Status
-		if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM _data_migrations WHERE id=$1`, id).Scan(&status); scanErr != nil {
-			if errors.Is(scanErr, sql.ErrNoRows) {
-				return fmt.Errorf("resume job %q: not paused", id)
+	return fwdb.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE _data_migrations SET status=$2, updated_at=NOW() WHERE id=$1 AND status=$3`,
+			id, string(StatusPending), string(StatusPaused))
+		if err != nil {
+			return fmt.Errorf("resume job %q: %w", id, err)
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("resume job %q: check affected rows: %w", id, err)
+		}
+		if rows == 0 {
+			var status Status
+			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM _data_migrations WHERE id=$1`, id).Scan(&status); scanErr != nil {
+				if errors.Is(scanErr, sql.ErrNoRows) {
+					return fmt.Errorf("resume job %q: not paused", id)
+				}
+				return fmt.Errorf("resume job %q: %w", id, scanErr)
 			}
-			return fmt.Errorf("resume job %q: %w", id, scanErr)
+			if status == StatusCompleted {
+				return fmt.Errorf("resume job %q: already completed", id)
+			}
+			return fmt.Errorf("resume job %q: not paused (status %s)", id, status)
 		}
-		if status == StatusCompleted {
-			return fmt.Errorf("resume job %q: already completed", id)
-		}
-		return fmt.Errorf("resume job %q: not paused (status %s)", id, status)
-	}
-	if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 		UPDATE _data_migration_runs
 		SET status=$2, updated_at=NOW()
 		WHERE id=$1 AND status=$3`,
-		id, string(StatusPending), string(StatusPaused)); err != nil {
-		return fmt.Errorf("resume runs %q: %w", id, err)
-	}
-	return tx.Commit()
+			id, string(StatusPending), string(StatusPaused)); err != nil {
+			return fmt.Errorf("resume runs %q: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // String formats a ScopeKey for log/error messages.

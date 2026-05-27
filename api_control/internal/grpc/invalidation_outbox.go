@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
@@ -235,13 +236,10 @@ func (s *CommodoreServer) runInvalidationOutboxWorker(ctx context.Context) {
 // guards against in-flight collisions; the lease window guards against
 // post-commit races between replicas.
 func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]invalidationOutboxRow, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]invalidationOutboxRow, error) {
+	var out []invalidationOutboxRow
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
+		s.recycleIdlePostgresConns()
+	}, func(tx *sql.Tx) error {
 		rows, qerr := tx.QueryContext(ctx, `
 			SELECT id, tenant_id, reason, internal_names, attempts,
 			       COALESCE(stream_id::text, ''), COALESCE(bundle_min_version, 0)
@@ -252,7 +250,7 @@ func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]i
 			LIMIT $1
 		`, invalidationOutboxBatchSize)
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 		defer rows.Close()
 
@@ -263,38 +261,36 @@ func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]i
 				rawNames []byte
 			)
 			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.reason, &rawNames, &r.attempts, &r.streamID, &r.bundleMinVersion); scanErr != nil {
-				return nil, scanErr
+				return scanErr
 			}
 			if len(rawNames) > 0 {
 				if uErr := json.Unmarshal(rawNames, &r.internalNames); uErr != nil {
-					return nil, uErr
+					return uErr
 				}
 			}
 			batch = append(batch, r)
 		}
-		return batch, rows.Err()
-	}()
-	if err != nil {
-		return nil, err
-	}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return rowsErr
+		}
 
-	// Lease the claimed rows by pushing next_attempt_at into the future. If
-	// dispatch crashes or the worker dies, the lease expires and another
-	// replica picks up the row.
-	for _, r := range out {
-		if _, lErr := tx.ExecContext(ctx, `
+		// Lease the claimed rows by pushing next_attempt_at into the future. If
+		// dispatch crashes or the worker dies, the lease expires and another
+		// replica picks up the row.
+		for _, r := range batch {
+			if _, lErr := tx.ExecContext(ctx, `
 			UPDATE commodore.playback_policy_invalidation_outbox
 			SET next_attempt_at = NOW() + ($1::bigint * INTERVAL '1 millisecond')
 			WHERE id = $2 AND status = 'pending'
 		`, invalidationOutboxLease.Milliseconds(), r.id); lErr != nil {
-			return nil, fmt.Errorf("lease outbox row %s: %w", r.id, lErr)
+				return fmt.Errorf("lease outbox row %s: %w", r.id, lErr)
+			}
 		}
-	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return out, nil
+		out = batch
+		return nil
+	})
+	return out, err
 }
 
 // tryDispatchInvalidationOutbox is the post-commit synchronous attempt that

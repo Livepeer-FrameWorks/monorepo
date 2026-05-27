@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 // HandleArgv is the standard entry point an adopting service wires into
@@ -181,19 +183,18 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 
 	scopes := []ScopeKey{scope}
 	if scope.IsZero() && m.Scopes != nil {
-		scopeDB := DB(db)
-		var tx *sql.Tx
+		var discovered []ScopeKey
 		if *dryRun {
-			tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-			if err != nil {
-				return fmt.Errorf("start read-only scope-discovery transaction: %w", err)
-			}
-			defer tx.Rollback() //nolint:errcheck // dry-run never commits
-			scopeDB = tx
+			err = fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+				var scopesErr error
+				discovered, scopesErr = m.Scopes(ctx, tx)
+				return scopesErr
+			})
+		} else {
+			discovered, err = m.Scopes(ctx, db)
 		}
-		discovered, scopesErr := m.Scopes(ctx, scopeDB)
-		if scopesErr != nil {
-			return fmt.Errorf("discover scopes for %q: %w", id, scopesErr)
+		if err != nil {
+			return fmt.Errorf("discover scopes for %q: %w", id, err)
 		}
 		if len(discovered) == 0 {
 			return fmt.Errorf("data migration %q has no scopes to run", id)
@@ -305,14 +306,12 @@ func runDryScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, i
 	if err != nil {
 		return err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("start read-only dry-run transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // dry-run never commits
-
-	prog, err := m.Run(ctx, tx, RunOptions{BatchSize: batchSize, DryRun: true, Scope: scope, Checkpoint: checkpoint})
-	if err != nil {
+	var prog Progress
+	if err := fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var runErr error
+		prog, runErr = m.Run(ctx, tx, RunOptions{BatchSize: batchSize, DryRun: true, Scope: scope, Checkpoint: checkpoint})
+		return runErr
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "%s/%s dry-run: scanned=%d changed=%d skipped=%d errors=%d done=%v\n",
@@ -360,12 +359,9 @@ func HandleVerify(ctx context.Context, openDB func() (*sql.DB, error), out io.Wr
 	if err != nil {
 		return fmt.Errorf("open service db: %w", err)
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("start read-only verify transaction: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // verify never commits
-	if err := m.Verify(ctx, tx); err != nil {
+	if err := fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		return m.Verify(ctx, tx)
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "%s verified\n", id)

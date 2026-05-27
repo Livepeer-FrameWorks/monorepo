@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
 )
 
@@ -95,5 +97,64 @@ func TestRetryPostgresDoesNotRetryPermanentError(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestWithRetryablePostgresTxRetriesBodyError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	attempts := 0
+	err = WithRetryablePostgresTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		attempts++
+		if attempts == 1 {
+			return &pq.Error{Code: "40001"}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithRetryablePostgresTx returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestWithRetryablePostgresTxRetriesCommitError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(&pq.Error{Code: "40001"})
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	attempts := 0
+	err = WithRetryablePostgresTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		attempts++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithRetryablePostgresTx returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

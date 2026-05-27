@@ -342,44 +342,42 @@ func MarkDVRSegmentDropped(
 	// writers (RecordDVRSegment can race here even though the artifact is
 	// terminal — Foghorn's terminal-state guard fires first, but in-flight
 	// writes may still arrive).
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx for lost_local insert: %w", err)
-	}
-	defer rollbackQuiet(tx)
-	var nextSeq int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(sequence), -1) + 1 FROM foghorn.dvr_segments WHERE artifact_hash = $1`,
-		artifactHash,
-	).Scan(&nextSeq); err != nil {
-		return fmt.Errorf("assign sequence for lost_local: %w", err)
-	}
-	var sizeArg interface{}
-	if sizeBytes > 0 {
-		sizeArg = sizeBytes
-	}
-	// The ON CONFLICT clause exists to handle the race where the row
-	// gets inserted between the UPDATE above and this INSERT — we want
-	// to win the race only against live source states. A delayed
-	// was_uploaded=false drop must NOT regress a terminal row
-	// (deleted_local / reclaimed / already lost_local) back to lost_local.
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.dvr_segments (
-			artifact_hash, segment_name, sequence,
-			media_start_ms, media_end_ms, duration_ms,
+	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		var nextSeq int64
+		if scanErr := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(sequence), -1) + 1 FROM foghorn.dvr_segments WHERE artifact_hash = $1`,
+			artifactHash,
+		).Scan(&nextSeq); scanErr != nil {
+			return fmt.Errorf("assign sequence for lost_local: %w", scanErr)
+		}
+		var sizeArg interface{}
+		if sizeBytes > 0 {
+			sizeArg = sizeBytes
+		}
+		// The ON CONFLICT clause exists to handle the race where the row
+		// gets inserted between the UPDATE above and this INSERT — we want
+		// to win the race only against live source states. A delayed
+		// was_uploaded=false drop must NOT regress a terminal row
+		// (deleted_local / reclaimed / already lost_local) back to lost_local.
+		if _, insertErr := tx.ExecContext(ctx, `
+			INSERT INTO foghorn.dvr_segments (
+				artifact_hash, segment_name, sequence,
+				media_start_ms, media_end_ms, duration_ms,
 			size_bytes, s3_key, status, drop_reason,
 			created_at, dropped_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, '', 'lost_local', $8, NOW(), NOW())
 		ON CONFLICT (artifact_hash, segment_name) DO UPDATE SET
 			status      = 'lost_local',
 			drop_reason = EXCLUDED.drop_reason,
-			dropped_at  = NOW()
-		  WHERE foghorn.dvr_segments.status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
-	`, artifactHash, segmentName, nextSeq, mediaStartMs, mediaEndMs, durationMs, sizeArg, reason); err != nil {
-		return fmt.Errorf("insert lost_local row: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit lost_local: %w", err)
+				dropped_at  = NOW()
+			  WHERE foghorn.dvr_segments.status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
+		`, artifactHash, segmentName, nextSeq, mediaStartMs, mediaEndMs, durationMs, sizeArg, reason); insertErr != nil {
+			return fmt.Errorf("insert lost_local row: %w", insertErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("record lost_local row: %w", err)
 	}
 	return nil
 }

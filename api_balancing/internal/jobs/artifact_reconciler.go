@@ -432,39 +432,31 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 			continue
 		}
 
-		tx, err := r.db.BeginTx(ctx, nil)
-		if err != nil {
-			continue
-		}
+		err = database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
+			_, insertErr := tx.ExecContext(ctx, `
+				INSERT INTO foghorn.artifacts
+					(artifact_hash, artifact_type, stream_internal_name, tenant_id,
+					 format, storage_location, sync_status, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, NULLIF($5,''), 'local', 'pending', NOW(), NOW())
+				ON CONFLICT (artifact_hash) DO NOTHING
+			`, c.hash, c.assetType, internalName, tenantID, c.format)
+			if insertErr != nil {
+				return insertErr
+			}
 
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts
-				(artifact_hash, artifact_type, stream_internal_name, tenant_id,
-				 format, storage_location, sync_status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, NULLIF($5,''), 'local', 'pending', NOW(), NOW())
-			ON CONFLICT (artifact_hash) DO NOTHING
-		`, c.hash, c.assetType, internalName, tenantID, c.format)
-		if err != nil {
-			tx.Rollback() //nolint:errcheck
-			continue
-		}
-
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifact_nodes
-				(artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)
-			VALUES ($1, $2, $3, $4, NOW(), false, NOW())
+			_, insertErr = tx.ExecContext(ctx, `
+				INSERT INTO foghorn.artifact_nodes
+					(artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)
+				VALUES ($1, $2, $3, $4, NOW(), false, NOW())
 			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 				file_path = EXCLUDED.file_path,
 				size_bytes = EXCLUDED.size_bytes,
-				last_seen_at = NOW(),
-				is_orphaned = false
-		`, c.hash, c.nodeID, c.filePath, c.sizeBytes)
+					last_seen_at = NOW(),
+					is_orphaned = false
+			`, c.hash, c.nodeID, c.filePath, c.sizeBytes)
+			return insertErr
+		})
 		if err != nil {
-			tx.Rollback() //nolint:errcheck
-			continue
-		}
-
-		if err := tx.Commit(); err != nil {
 			continue
 		}
 

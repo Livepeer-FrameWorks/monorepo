@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -69,4 +70,48 @@ func RetryPostgresWithHook(ctx context.Context, attempts int, baseDelay time.Dur
 		}
 	}
 	return err
+}
+
+func WithRetryablePostgresTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions, fn func(*sql.Tx) error) error {
+	return WithRetryablePostgresTxWithHook(ctx, db, opts, nil, fn)
+}
+
+func WithRetryablePostgresTxWithHook(ctx context.Context, db *sql.DB, opts *sql.TxOptions, onRetry func(error, int), fn func(*sql.Tx) error) error {
+	return RetryPostgresWithHook(ctx, DefaultRetryAttempts, 25*time.Millisecond, onRetry, func() error {
+		tx, err := db.BeginTx(ctx, opts)
+		if err != nil {
+			return err
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback() //nolint:errcheck // rollback is best-effort when replaying retryable tx failures
+			}
+		}()
+		if err := fn(tx); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	})
+}
+
+func WithRetryablePostgresRollbackTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions, fn func(*sql.Tx) error) error {
+	return RetryPostgres(ctx, DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		tx, err := db.BeginTx(ctx, opts)
+		if err != nil {
+			return err
+		}
+		if err := fn(tx); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // rollback-only helper returns the original body error
+			return err
+		}
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			return err
+		}
+		return nil
+	})
 }

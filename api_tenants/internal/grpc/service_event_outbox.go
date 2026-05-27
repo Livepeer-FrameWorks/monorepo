@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -142,13 +143,8 @@ func (s *QuartermasterServer) runServiceEventOutboxWorker(ctx context.Context) {
 }
 
 func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutboxRow, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]qmOutboxRow, error) {
+	var out []qmOutboxRow
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		rows, qerr := tx.QueryContext(ctx, `
 			SELECT id::text, payload::text, attempts, created_at
 			FROM quartermaster.service_event_outbox
@@ -159,7 +155,7 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 			LIMIT $2
 		`, fmt.Sprintf("%d seconds", int(qmOutboxLease.Seconds())), qmOutboxBatchSize)
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 		defer rows.Close()
 
@@ -170,13 +166,13 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 				payloadText string
 			)
 			if scanErr := rows.Scan(&r.id, &payloadText, &r.attempts, &r.createdAt); scanErr != nil {
-				return nil, scanErr
+				return scanErr
 			}
 			r.payload = []byte(payloadText)
 			batch = append(batch, r)
 		}
 		if rowsErr := rows.Err(); rowsErr != nil {
-			return nil, rowsErr
+			return rowsErr
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
@@ -188,18 +184,13 @@ func (s *QuartermasterServer) claimQMOutboxBatch(ctx context.Context) ([]qmOutbo
 				SET claimed_at = NOW()
 				WHERE id = ANY($1::uuid[])
 			`, qmOutboxIDArray(ids)); uerr != nil {
-				return nil, uerr
+				return uerr
 			}
 		}
-		return batch, nil
-	}()
-	if err != nil {
-		return nil, err
-	}
-	if cerr := tx.Commit(); cerr != nil {
-		return nil, cerr
-	}
-	return out, nil
+		out = batch
+		return nil
+	})
+	return out, err
 }
 
 func (s *QuartermasterServer) markQMOutboxCompleted(ctx context.Context, id string) {

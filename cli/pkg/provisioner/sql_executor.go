@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/ssh"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/lib/pq"
 )
@@ -106,18 +107,9 @@ func (d *DirectExecutor) ExecTx(ctx context.Context, conn ConnParams, fn func(Tx
 	}
 	defer db.Close()
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	if err := fn(&directTxExecutor{tx: tx}); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("%w (rollback also failed: %w)", err, rbErr)
-		}
-		return err
-	}
-	return tx.Commit()
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		return fn(&directTxExecutor{tx: tx})
+	})
 }
 
 type directTxExecutor struct {

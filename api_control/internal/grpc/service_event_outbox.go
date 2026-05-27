@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -142,13 +143,10 @@ func (s *CommodoreServer) runServiceEventOutboxWorker(ctx context.Context) {
 }
 
 func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) ([]commodoreServiceOutboxRow, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
-
-	out, err := func() ([]commodoreServiceOutboxRow, error) {
+	var out []commodoreServiceOutboxRow
+	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
+		s.recycleIdlePostgresConns()
+	}, func(tx *sql.Tx) error {
 		rows, qerr := tx.QueryContext(ctx, `
 			SELECT id::text, payload::text, attempts, created_at
 			FROM commodore.service_event_outbox
@@ -159,7 +157,7 @@ func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) 
 			LIMIT $2
 		`, fmt.Sprintf("%d seconds", int(commodoreServiceOutboxLease.Seconds())), commodoreServiceOutboxBatchSize)
 		if qerr != nil {
-			return nil, qerr
+			return qerr
 		}
 		defer rows.Close()
 
@@ -170,13 +168,13 @@ func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) 
 				payloadText string
 			)
 			if scanErr := rows.Scan(&r.id, &payloadText, &r.attempts, &r.createdAt); scanErr != nil {
-				return nil, scanErr
+				return scanErr
 			}
 			r.payload = []byte(payloadText)
 			batch = append(batch, r)
 		}
 		if rowsErr := rows.Err(); rowsErr != nil {
-			return nil, rowsErr
+			return rowsErr
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
@@ -188,18 +186,13 @@ func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) 
 				SET claimed_at = NOW()
 				WHERE id = ANY($1::uuid[])
 			`, commodoreServiceOutboxIDArray(ids)); uerr != nil {
-				return nil, uerr
+				return uerr
 			}
 		}
-		return batch, nil
-	}()
-	if err != nil {
-		return nil, err
-	}
-	if cerr := tx.Commit(); cerr != nil {
-		return nil, cerr
-	}
-	return out, nil
+		out = batch
+		return nil
+	})
+	return out, err
 }
 
 func (s *CommodoreServer) markCommodoreServiceOutboxCompleted(ctx context.Context, id string) {

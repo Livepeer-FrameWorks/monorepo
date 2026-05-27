@@ -131,13 +131,9 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 		intervalArg = c.IntervalSeconds.Int32
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin open chapter: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	res, txErr := tx.ExecContext(ctx, `
+	var notify bool
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		res, txErr := tx.ExecContext(ctx, `
 		UPDATE foghorn.dvr_chapters
 		   SET is_current = false,
 		       state      = CASE WHEN state = 'open' THEN 'closed' ELSE state END
@@ -145,20 +141,20 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 		   AND is_current = true
 		   AND chapter_id <> $2
 	`, c.ArtifactHash, c.ChapterID)
-	if txErr != nil {
-		return fmt.Errorf("close previous current chapter: %w", txErr)
-	}
-	closedPrevious, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("close previous current chapter rows affected: %w", err)
-	}
+		if txErr != nil {
+			return fmt.Errorf("close previous current chapter: %w", txErr)
+		}
+		closedPrevious, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("close previous current chapter rows affected: %w", err)
+		}
 
-	state := c.State
-	if state == "" {
-		state = ChapterStateOpen
-	}
+		state := c.State
+		if state == "" {
+			state = ChapterStateOpen
+		}
 
-	_, err = tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 		INSERT INTO foghorn.dvr_chapters (
 			chapter_id, artifact_hash, mode, interval_seconds,
 			start_ms, end_ms, is_current,
@@ -171,16 +167,19 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 		ON CONFLICT (chapter_id) DO UPDATE SET
 			is_current = EXCLUDED.is_current
 	`,
-		c.ChapterID, c.ArtifactHash, c.Mode, intervalArg,
-		c.StartMs, c.EndMs, state,
-	)
+			c.ChapterID, c.ArtifactHash, c.Mode, intervalArg,
+			c.StartMs, c.EndMs, state,
+		)
+		if err != nil {
+			return fmt.Errorf("open chapter: %w", err)
+		}
+		notify = state == ChapterStateClosed || closedPrevious > 0
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("open chapter: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if state == ChapterStateClosed || closedPrevious > 0 {
+	if notify {
 		notifyChapterClosed()
 	}
 	return nil
