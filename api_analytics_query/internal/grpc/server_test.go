@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -149,6 +150,34 @@ func TestWrapClickhouseError(t *testing.T) {
 			t.Fatalf("expected internal, got %s", st.Code())
 		}
 	})
+}
+
+func TestLookupLiveIntervalStartsPrefersCurrentStateStart(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &PeriscopeServer{
+		clickhouse: db,
+		logger:     logging.NewLoggerWithService("periscope-query-test"),
+	}
+	streamID := uuid.New()
+	startedAt := time.Date(2026, 5, 27, 17, 43, 7, 0, time.UTC)
+
+	mock.ExpectQuery(`(?s)if\(\s*ifNull\(s\.started_at, toDateTime\(0\)\) > ifNull\(last_end\.ended_at, toDateTime\(0\)\).*FROM periscope\.stream_state_current AS s FINAL`).
+		WithArgs("tenant-1", streamID, "tenant-1", streamID).
+		WillReturnRows(sqlmock.NewRows([]string{"stream_id", "started_at"}).
+			AddRow(streamID.String(), startedAt))
+
+	got := server.lookupLiveIntervalStarts(context.Background(), "tenant-1", []string{streamID.String()})
+	if !got[streamID.String()].Equal(startedAt) {
+		t.Fatalf("started_at = %v, want %v", got[streamID.String()], startedAt)
+	}
+	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
+		t.Fatalf("unmet mock expectations: %v", mockErr)
+	}
 }
 
 func TestGetLiveUsageSummaryPartialFailureFailsClosed(t *testing.T) {

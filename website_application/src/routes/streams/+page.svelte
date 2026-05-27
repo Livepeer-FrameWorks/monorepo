@@ -812,7 +812,13 @@
                           <TableCell class="px-4 py-2 text-sm text-foreground">
                             {#if stream.metrics?.isLive && stream.metrics?.startedAt}
                               {formatDuration(
-                                Date.now() - new Date(stream.metrics.startedAt).getTime()
+                                Math.max(
+                                  0,
+                                  Math.floor(
+                                    (Date.now() - new Date(stream.metrics.startedAt).getTime()) /
+                                      1000
+                                  )
+                                )
                               )}
                             {:else}
                               <span class="text-muted-foreground">-</span>

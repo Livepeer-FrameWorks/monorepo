@@ -1103,9 +1103,10 @@ func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID
 		)
 		SELECT
 			toString(s.stream_id) AS stream_id,
-			least(
-				ifNull(min(e.timestamp), if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)),
-				if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)
+			if(
+				ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)),
+				ifNull(s.started_at, s.updated_at),
+				ifNull(min(e.timestamp), s.updated_at)
 			) AS started_at
 		FROM periscope.stream_state_current AS s FINAL
 		LEFT JOIN last_end ON last_end.stream_id = s.stream_id

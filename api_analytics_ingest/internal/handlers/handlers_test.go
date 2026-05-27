@@ -1522,6 +1522,60 @@ func TestPushRewriteStartedAtLookupRequiresLiveState(t *testing.T) {
 	}
 }
 
+func TestStreamLifecycleStartedAtLookupRequiresLiveState(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+				InternalName: "live+demo",
+				Status:       "live",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var found bool
+	for _, q := range conn.queries {
+		if q.table != "periscope.stream_state_current" {
+			continue
+		}
+		found = true
+		if !strings.Contains(q.query, "AND status = ?") {
+			t.Fatalf("expected live-only current-state lookup, got query %q", q.query)
+		}
+		if len(q.args) != 3 || q.args[2] != "live" {
+			t.Fatalf("expected live status arg, got %#v", q.args)
+		}
+	}
+	if !found {
+		t.Fatal("expected stream_state_current lookup")
+	}
+
+	stateBatch := conn.batches["stream_state_current"]
+	if stateBatch == nil || len(stateBatch.rows) != 1 {
+		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
+	}
+	if stateBatch.rows[0][23] != event.Timestamp {
+		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateBatch.rows[0][23])
+	}
+}
+
 func TestPushRewriteDuplicateStillRefreshesCurrentState(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

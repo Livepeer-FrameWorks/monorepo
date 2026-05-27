@@ -622,14 +622,17 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		bufferState = "FULL"
 	}
 
-	// Convert started_at unix timestamp to time.Time if present
 	var startedAt interface{}
 	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
 		startedAt = time.Unix(*streamLifecycle.StartedAt, 0)
+	} else if status == "live" {
+		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
+			startedAt = existingStartedAt
+		} else {
+			startedAt = event.Timestamp
+		}
 	} else if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
 		startedAt = existingStartedAt
-	} else if status == "live" {
-		startedAt = event.Timestamp
 	}
 
 	if appendErr := stateBatch.Append(
