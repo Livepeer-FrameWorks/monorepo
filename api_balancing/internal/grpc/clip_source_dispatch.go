@@ -96,14 +96,12 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 		if durationMs <= 0 {
 			return 0, 0, fmt.Errorf("CLIP_NOW requires positive duration_sec")
 		}
-		offset := int64(0)
+		startOffsetMs := -durationMs
 		if req.StartUnix != nil {
-			offset = *req.StartUnix * 1000 // expected negative
+			startOffsetMs = *req.StartUnix * 1000 // expected negative
 		}
-		// CLIP_NOW = "the last <duration> seconds ending now-<|offset|>".
-		// Without an offset it's "the last <duration> seconds ending now".
-		endMsAbs = nowMs + offset
-		startMsAbs = endMsAbs - durationMs
+		startMsAbs = nowMs + startOffsetMs
+		endMsAbs = startMsAbs + durationMs
 
 	case pb.ClipMode_CLIP_MODE_UNSPECIFIED:
 		// Legacy callers may omit mode; treat StartUnix-only inputs as ABSOLUTE.

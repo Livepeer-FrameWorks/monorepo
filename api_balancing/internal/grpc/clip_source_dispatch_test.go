@@ -44,6 +44,28 @@ func TestPickClipSource_InShmWindowIsLive(t *testing.T) {
 	}
 }
 
+func TestResolveClipAbsoluteRangeMs_ClipNowUsesNegativeStartAsStartOffset(t *testing.T) {
+	durationSec := int64(30)
+	startUnix := -durationSec
+	req := &pb.CreateClipRequest{
+		Mode:        pb.ClipMode_CLIP_MODE_CLIP_NOW,
+		StartUnix:   &startUnix,
+		DurationSec: &durationSec,
+	}
+	before := time.Now().UnixMilli()
+	startMs, endMs, err := resolveClipAbsoluteRangeMs(req, "stream-1")
+	after := time.Now().UnixMilli()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := endMs - startMs; got != durationSec*1000 {
+		t.Fatalf("expected duration %dms, got %dms", durationSec*1000, got)
+	}
+	if startMs < before-durationSec*1000 || startMs > after-durationSec*1000 {
+		t.Fatalf("expected start around now-duration, got start=%d before=%d after=%d", startMs, before, after)
+	}
+}
+
 func TestPickClipSource_CrossesShmBoundary_Rejected(t *testing.T) {
 	srv, _ := newDispatchServer(t)
 	nowMs := time.Now().UnixMilli()

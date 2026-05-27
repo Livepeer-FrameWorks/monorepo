@@ -823,6 +823,16 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	clipEndMs := startMs + durationMs
 	dispatch, dispatchErr := s.pickClipSource(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
 	if dispatchErr != nil {
+		if s.decklogClient != nil {
+			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
+			errMsg := fmt.Sprintf("clip source dispatch: %v", dispatchErr)
+			failedData.Error = &errMsg
+			if clipCluster != "" {
+				failedData.OriginClusterId = &clipCluster
+				failedData.ServingClusterId = &clipCluster
+			}
+			go artifactoutbox.EnqueueClipLifecycleLogged(failedData)
+		}
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     req.GetTenantId(),
 			"stream_id":     req.GetStreamId(),
@@ -834,6 +844,21 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		}).Warn("Rejected clip source dispatch")
 		return nil, status.Errorf(codes.FailedPrecondition, "clip source dispatch: %v", dispatchErr)
 	}
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":              req.GetTenantId(),
+		"stream_id":              req.GetStreamId(),
+		"internal_name":          req.GetStreamInternalName(),
+		"clip_hash":              clipHash,
+		"start_ms":               startMs,
+		"end_ms":                 clipEndMs,
+		"source_kind":            dispatch.kind.String(),
+		"source_stream":          dispatch.streamName,
+		"source_node_id":         dispatch.sourceNodeID,
+		"source_dvr_hash":        dispatch.dvrHash,
+		"source_chapter_hash":    dispatch.chapterArtifactHash,
+		"requested_clip_mode":    req.GetMode().String(),
+		"requested_duration_sec": req.GetDurationSec(),
+	}).Info("Selected clip source dispatch")
 
 	// Live-style sources are harvested from their recording node when
 	// that differs from the clip output node. Same-node pulls use the
