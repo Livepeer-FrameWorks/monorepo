@@ -9,12 +9,12 @@ import (
 
 func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	input := `[
-		{"process":"AV","codec":"AAC","track_select":"video=none"},
-		{"process":"Livepeer","target_profiles":[
+		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},
+		{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[
 			{"name":"360p","bitrate":900000,"fps":30,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},
 			{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264Main","track_inhibit":"video=<850x480"}
 		]},
-		{"process":"Thumbs","exit_unmask":true}
+		{"process":"Thumbs","track_select":"video=lowres","exit_unmask":true}
 	]`
 
 	var got []map[string]any
@@ -92,18 +92,50 @@ func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) 
 	}
 }
 
+func TestNormalizeProcessConfigSelectorsMakesSchedulerInputsExplicit(t *testing.T) {
+	input := `[
+		{"process":"AV","codec":"AAC"},
+		{"process":"Thumbs","exit_unmask":true},
+		{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000}]}
+	]`
+
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(NormalizeProcessConfigSelectors(input)), &got); err != nil {
+		t.Fatalf("unmarshal normalized processes: %v", err)
+	}
+	if got[0]["track_select"] != "audio=all&video=none&subtitle=none" {
+		t.Fatalf("AV track_select = %v", got[0]["track_select"])
+	}
+	if got[1]["track_select"] != "video=lowres" {
+		t.Fatalf("Thumbs track_select = %v", got[1]["track_select"])
+	}
+	if got[2]["source_track"] != "maxbps" {
+		t.Fatalf("Livepeer source_track = %v", got[2]["source_track"])
+	}
+	if got[2]["track_select"] != "video=maxbps" {
+		t.Fatalf("Livepeer track_select = %v", got[2]["track_select"])
+	}
+}
+
+func TestNormalizeProcessConfigSelectorsPreservesExplicitSelectors(t *testing.T) {
+	input := `[{"process":"Thumbs","track_select":"video=maxbps"},{"process":"Livepeer","source_track":"1","track_select":"video=1"}]`
+	if got := NormalizeProcessConfigSelectors(input); got != input {
+		t.Fatalf("explicit selectors changed: %s", got)
+	}
+}
+
 func TestValidateProcessConfigShapeRejectsLivepeerFieldsOnExplicitAV(t *testing.T) {
 	badConfig := `[{"process":"AV","codec":"H264","height":360,"fps":30,"profile":"H264ConstrainedHigh"}]`
 	if err := ValidateProcessConfigShape(badConfig); err == nil {
 		t.Fatal("expected explicit AV config with Livepeer-style fields to fail")
 	}
 
-	livepeerConfig := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"fps":30,"profile":"H264ConstrainedHigh"}]}]`
+	livepeerConfig := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"fps":30,"profile":"H264ConstrainedHigh"}]}]`
 	if err := ValidateProcessConfigShape(livepeerConfig); err != nil {
 		t.Fatalf("Livepeer target profile should remain valid: %v", err)
 	}
 
-	localAVConfig := `[{"process":"AV","codec":"H264","bitrate":900000,"resolution":"640x360","framerate":30,"profile":"high"}]`
+	localAVConfig := `[{"process":"AV","codec":"H264","bitrate":900000,"resolution":"640x360","framerate":30,"profile":"high","track_select":"video=maxbps"}]`
 	if err := ValidateProcessConfigShape(localAVConfig); err != nil {
 		t.Fatalf("local AV config should be valid: %v", err)
 	}

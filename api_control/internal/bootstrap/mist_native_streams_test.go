@@ -61,8 +61,8 @@ func TestEncodeProcessPolicy_RejectsNonArrayShape(t *testing.T) {
 
 func TestEncodeProcessPolicy_AcceptsCanonicalMistArray(t *testing.T) {
 	policy := []any{
-		map[string]any{"process": "Thumbs", "x-LSP-name": "Thumbnail Sprites"},
-		map[string]any{"process": "AV", "codec": "AAC", "track_inhibit": "audio=aac"},
+		map[string]any{"process": "Thumbs", "track_select": "video=lowres", "x-LSP-name": "Thumbnail Sprites"},
+		map[string]any{"process": "AV", "codec": "AAC", "track_inhibit": "audio=aac", "track_select": "audio=all&video=none&subtitle=none"},
 	}
 	got, err := encodeProcessPolicy(policy)
 	if err != nil {
@@ -131,7 +131,7 @@ func TestReconcileMistNativeStreams_NoopOnIdempotentRerun(t *testing.T) {
 	defer db.Close()
 
 	source := "ts-exec:ffmpeg -re -stream_loop -1 -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -"
-	processPolicyJSON := `[{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]`
+	processPolicyJSON := `[{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]`
 
 	probeCols := []string{
 		"id", "title", "description", "ingest_mode", "always_on", "is_recording_enabled",
@@ -163,7 +163,7 @@ func TestReconcileMistNativeStreams_NoopOnIdempotentRerun(t *testing.T) {
 		PlacementCount:    1,
 		AllowedClusterIDs: []string{"cluster-edge"},
 		ProcessPolicy: []any{
-			map[string]any{"process": "Thumbs", "x-LSP-name": "Thumbnail Sprites"},
+			map[string]any{"process": "Thumbs", "track_select": "video=lowres", "x-LSP-name": "Thumbnail Sprites"},
 		},
 	}}, stubTenantResolver{tenantID: "tenant-uuid"})
 	if err != nil {

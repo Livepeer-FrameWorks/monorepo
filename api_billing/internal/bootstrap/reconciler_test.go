@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"regexp"
 	"testing"
 
@@ -33,11 +34,11 @@ func twoTierFixture() []CatalogTier {
 			},
 			TierLevel:            0,
 			IsDefaultPrepaid:     true,
-			ProcessesLive:        `[{"process":"AV"}]`,
-			ProcessesDVR:         `[{"process":"Thumbs"}]`,
-			ProcessesClip:        `[{"process":"Thumbs"}]`,
-			ProcessesDVRFinalize: `[{"process":"Thumbs"}]`,
-			ProcessesVOD:         `[{"process":"Thumbs"}]`,
+			ProcessesLive:        `[{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"}]`,
+			ProcessesDVR:         `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesClip:        `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesDVRFinalize: `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesVOD:         `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
 		},
 		{
 			TierName:        "free",
@@ -57,11 +58,11 @@ func twoTierFixture() []CatalogTier {
 			},
 			TierLevel:            1,
 			IsDefaultPostpaid:    true,
-			ProcessesLive:        `[{"process":"AV"}]`,
-			ProcessesDVR:         `[{"process":"Thumbs"}]`,
-			ProcessesClip:        `[{"process":"Thumbs"}]`,
-			ProcessesDVRFinalize: `[{"process":"Thumbs"}]`,
-			ProcessesVOD:         `[{"process":"Thumbs"}]`,
+			ProcessesLive:        `[{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"}]`,
+			ProcessesDVR:         `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesClip:        `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesDVRFinalize: `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
+			ProcessesVOD:         `[{"process":"Thumbs","track_select":"video=maxbps"}]`,
 		},
 	}
 }
@@ -191,6 +192,50 @@ func TestEmbeddedCatalogMistProcessShapes(t *testing.T) {
 		if tier.ProcessesVOD != "" {
 			if err := mist.ValidateProcessConfigShape(tier.ProcessesVOD); err != nil {
 				t.Fatalf("%s processes_vod: %v", tier.TierName, err)
+			}
+		}
+	}
+}
+
+func TestEmbeddedCatalogProcessConfigsAreSchedulerExplicit(t *testing.T) {
+	tiers, err := EmbeddedTiers()
+	if err != nil {
+		t.Fatalf("EmbeddedTiers: %v", err)
+	}
+	for _, tier := range tiers {
+		configs := map[string]string{
+			"processes_live":         tier.ProcessesLive,
+			"processes_dvr":          tier.ProcessesDVR,
+			"processes_clip":         tier.ProcessesClip,
+			"processes_dvr_finalize": tier.ProcessesDVRFinalize,
+			"processes_vod":          tier.ProcessesVOD,
+		}
+		for lifecycle, processesJSON := range configs {
+			if processesJSON == "" {
+				continue
+			}
+			var processes []map[string]any
+			if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+				t.Fatalf("%s %s parse: %v", tier.TierName, lifecycle, err)
+			}
+			for idx, proc := range processes {
+				switch proc["process"] {
+				case "AV":
+					if got, ok := proc["track_select"].(string); !ok || got == "" {
+						t.Fatalf("%s %s process[%d] AV missing explicit track_select", tier.TierName, lifecycle, idx)
+					}
+				case "Thumbs":
+					if got, ok := proc["track_select"].(string); !ok || got == "" {
+						t.Fatalf("%s %s process[%d] Thumbs missing explicit track_select", tier.TierName, lifecycle, idx)
+					}
+				case "Livepeer":
+					if got, ok := proc["source_track"].(string); !ok || got == "" {
+						t.Fatalf("%s %s process[%d] Livepeer missing explicit source_track", tier.TierName, lifecycle, idx)
+					}
+					if got, ok := proc["track_select"].(string); !ok || got == "" {
+						t.Fatalf("%s %s process[%d] Livepeer missing scheduler-visible track_select", tier.TierName, lifecycle, idx)
+					}
+				}
 			}
 		}
 	}

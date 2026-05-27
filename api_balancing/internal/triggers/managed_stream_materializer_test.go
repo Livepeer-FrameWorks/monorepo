@@ -70,7 +70,7 @@ func TestEnsureManagedStreamDVR_SuppressesRepeatWithinCooldown(t *testing.T) {
 		InternalName:       "internal-1",
 		TenantId:           "tenant-1",
 		IsRecordingEnabled: true,
-		DvrProcessesJson:   `[{"process":"AV","codec":"AAC"},{"process":"Thumbs","track_select":"video=maxbps"}]`,
+		DvrProcessesJson:   `[{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=maxbps"}]`,
 	}
 	m.EnsureManagedStreamDVR(context.Background(), ctx, "edge-a")
 	m.EnsureManagedStreamDVR(context.Background(), ctx, "edge-a")

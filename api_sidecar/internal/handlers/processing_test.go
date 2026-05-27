@@ -155,7 +155,7 @@ func TestExtractTrackMetadata_EmptyMeta(t *testing.T) {
 }
 
 func TestProcessingTracksCompleteAllowsMissingOptionalProcTracks(t *testing.T) {
-	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"video=none"},{"process":"Thumbs"}]`)
+	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=lowres"}]`)
 	presence := processingTrackPresence{
 		audioCodecs: map[string]bool{"AAC": true},
 		videoCodecs: map[string]bool{"H264": true, "JPEG": true},
@@ -176,7 +176,7 @@ func TestProcessingTracksCompleteAllowsMissingOptionalProcTracks(t *testing.T) {
 }
 
 func TestProcessingTracksReadyRequiresExplicitRequiredTracks(t *testing.T) {
-	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","required":true}]`)
+	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none","required":true}]`)
 	presence := processingTrackPresence{
 		audioCodecs: map[string]bool{"AAC": true},
 		videoCodecs: map[string]bool{"H264": true},
@@ -524,7 +524,7 @@ func TestShouldIgnoreProcessExitWhenTypeRetiredWithoutBootCount(t *testing.T) {
 func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testing.T) {
 	h := &ProcessingJobHandler{}
 	req := &pb.ProcessingJobRequest{
-		ProcessesJson: `[{"process":"Livepeer"}]`,
+		ProcessesJson: `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps"}]`,
 	}
 	processExitCh := make(chan ProcessExitEvent, 1)
 	processExitCh <- ProcessExitEvent{

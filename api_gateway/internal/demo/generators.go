@@ -33,6 +33,14 @@ const (
 	DemoVodPlaybackID     = "vod1a2b3c4d5e6fg"
 )
 
+const (
+	demoProcessesLive        = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]`
+	demoProcessesDVR         = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Thumbnail Sprites"}]`
+	demoProcessesClip        = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Clip Thumbnail Sprites"}]`
+	demoProcessesDVRFinalize = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Chapter Thumbnail Sprites"}]`
+	demoProcessesVOD         = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]`
+)
+
 // GenerateStreams creates realistic demo stream data
 func GenerateStreams() []*pb.Stream {
 	now := time.Now()
@@ -211,7 +219,7 @@ func GenerateViewerCountTimeSeries() []*pb.ViewerCountBucket {
 
 // GenerateBillingTiers creates demo billing tier data
 func GenerateBillingTiers() []*pb.BillingTier {
-	return []*pb.BillingTier{
+	tiers := []*pb.BillingTier{
 		{
 			Id:          "tier_demo_payg",
 			TierName:    "payg",
@@ -331,6 +339,18 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			IsEnterprise: true,
 		},
 	}
+	for _, tier := range tiers {
+		setDemoBillingTierProcesses(tier)
+	}
+	return tiers
+}
+
+func setDemoBillingTierProcesses(tier *pb.BillingTier) {
+	tier.ProcessesLive = demoProcessesLive
+	tier.ProcessesDvr = demoProcessesDVR
+	tier.ProcessesClip = demoProcessesClip
+	tier.ProcessesDvrFinalize = demoProcessesDVRFinalize
+	tier.ProcessesVod = demoProcessesVOD
 }
 
 // GenerateInvoices creates demo invoice data
@@ -599,14 +619,19 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 				SupportLevel:   "priority",
 				Sla:            true,
 			},
-			SupportLevel:    "priority",
-			SlaLevel:        "99.9%",
-			MeteringEnabled: true,
-			IsActive:        true,
-			TierLevel:       3,
-			IsEnterprise:    false,
-			CreatedAt:       timestamppb.New(now.Add(-90 * 24 * time.Hour)),
-			UpdatedAt:       timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+			SupportLevel:         "priority",
+			SlaLevel:             "99.9%",
+			MeteringEnabled:      true,
+			IsActive:             true,
+			TierLevel:            3,
+			IsEnterprise:         false,
+			ProcessesLive:        demoProcessesLive,
+			ProcessesDvr:         demoProcessesDVR,
+			ProcessesClip:        demoProcessesClip,
+			ProcessesDvrFinalize: demoProcessesDVRFinalize,
+			ProcessesVod:         demoProcessesVOD,
+			CreatedAt:            timestamppb.New(now.Add(-90 * 24 * time.Hour)),
+			UpdatedAt:            timestamppb.New(now.Add(-7 * 24 * time.Hour)),
 		},
 		BillingStatus:     "active",
 		NextBillingDate:   timestamppb.New(nextBilling),

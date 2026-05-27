@@ -197,7 +197,7 @@ ON CONFLICT (stream_id) DO UPDATE SET
 INSERT INTO commodore.stream_processing_config (stream_id, processes_live, updated_at)
 VALUES (
     '5eedfeed-11fe-ca57-feed-11feca5700f1',
-    '[{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]'::jsonb,
+    '[{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]'::jsonb,
     NOW()
 )
 ON CONFLICT (stream_id) DO UPDATE SET
@@ -263,11 +263,11 @@ ON CONFLICT (node_id) DO NOTHING;
 -- (purser.tier_entitlements) are seeded below as separate rows.
 WITH demo_process_config AS (
     SELECT
-        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_live,
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_live,
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr,
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_clip,
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr_finalize,
-        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"video=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"video=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
 )
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,

@@ -316,7 +316,7 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 
 	const streamName = "processing+artifact123"
-	const override = `[{"process":"AV","codec":"H264"}]`
+	const override = `[{"process":"AV","codec":"H264","track_select":"video=maxbps"}]`
 
 	setProcessingProcessOverride(streamName, override)
 	t.Cleanup(func() {

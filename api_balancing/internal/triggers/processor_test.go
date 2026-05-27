@@ -1778,7 +1778,7 @@ func newGatewayProcessor(t *testing.T, disc livepeerGatewayDiscoverer, localClus
 	return p
 }
 
-const gatewayTemplate = `[{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]"}]`
+const gatewayTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]"}]`
 
 func TestSubstituteGatewayURL_OriginWins(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string]string{
@@ -1949,7 +1949,7 @@ func TestSubstituteGatewayURL_NoTemplateIsNoop(t *testing.T) {
 	})
 	p := newGatewayProcessor(t, disc, "any-cluster")
 
-	const noTemplate = `[{"process":"AV","codec":"opus"}]`
+	const noTemplate = `[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"}]`
 	got := p.SubstituteGatewayURL(noTemplate, []string{"any-cluster"})
 
 	if got != noTemplate {

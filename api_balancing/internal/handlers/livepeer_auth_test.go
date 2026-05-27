@@ -170,7 +170,7 @@ func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.
 }
 
 func TestLivepeerProfilesFromProcessesJSONNormalizesMistLivepeerProfiles(t *testing.T) {
-	processesJSON := `[{"process":"AV","codec":"AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"https://livepeer.example\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
+	processesJSON := `[{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"https://livepeer.example\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
 
 	got := mist.LivepeerProfilesFromProcessesJSON(processesJSON, mist.SourceMediaInfo{
 		Width:  2718,
@@ -209,7 +209,7 @@ func TestLivepeerProfilesFromProcessesJSONNormalizesMistLivepeerProfiles(t *test
 }
 
 func TestLivepeerProfilesFromProcessesJSONDropsInhibitedProfiles(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}]}]`
+	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}]}]`
 
 	got := mist.LivepeerProfilesFromProcessesJSON(processesJSON, mist.SourceMediaInfo{
 		Width:  640,
@@ -222,7 +222,7 @@ func TestLivepeerProfilesFromProcessesJSONDropsInhibitedProfiles(t *testing.T) {
 }
 
 func TestLivepeerValidatedProfilesAcceptsMistComputedHeader(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
+	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
 	requested := []livepeerJSONProfile{
 		{
 			"name":    "360p",
@@ -255,7 +255,7 @@ func TestLivepeerValidatedProfilesAcceptsMistComputedHeader(t *testing.T) {
 }
 
 func TestLivepeerValidatedProfilesAcceptsMistComputedHeaderAsAuthority(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
+	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
 	requested := []livepeerJSONProfile{
 		{
 			"name":    "360p",
@@ -278,7 +278,7 @@ func TestLivepeerValidatedProfilesAcceptsMistComputedHeaderAsAuthority(t *testin
 }
 
 func TestLivepeerValidatedProfilesDerivesMissingProfilesFromContentResolution(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
+	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
 
 	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
 		ContentResolution: "2718x1750",
@@ -302,7 +302,7 @@ func TestLivepeerValidatedProfilesDerivesMissingProfilesFromContentResolution(t 
 }
 
 func TestLivepeerValidatedProfilesRejectsMissingProfilesWithoutSourceMetadata(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
+	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
 
 	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{}, mist.SourceMediaInfo{})
 	if got != nil {

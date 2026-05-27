@@ -127,6 +127,49 @@ func HasLivepeerProcesses(processesJSON string) bool {
 	return strings.Contains(processesJSON, `"Livepeer"`)
 }
 
+// NormalizeProcessConfigSelectors makes process track selection explicit before
+// returning configs to MistServer. Missing values are filled with the defaults
+// advertised and consumed by the corresponding Mist process binary.
+func NormalizeProcessConfigSelectors(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		processName, _ := proc["process"].(string)
+		switch processName {
+		case "AV":
+			if _, ok := nonEmptyString(proc["track_select"]); !ok {
+				proc["track_select"] = avTrackSelectForCodec(proc["codec"])
+				changed = true
+			}
+		case "Thumbs":
+			if _, ok := nonEmptyString(proc["track_select"]); !ok {
+				proc["track_select"] = "video=lowres"
+				changed = true
+			}
+		case "Livepeer":
+			if _, ok := nonEmptyString(proc["source_track"]); !ok {
+				proc["source_track"] = "maxbps"
+				changed = true
+			}
+			if _, ok := nonEmptyString(proc["track_select"]); !ok {
+				proc["track_select"] = "video=maxbps"
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
 // LivepeerProfilesFromProcessesJSON extracts the first Livepeer target_profiles
 // entry and normalizes it to match MistProcLivepeer's request header.
 func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaInfo) []LivepeerJSONProfile {
@@ -286,6 +329,23 @@ func evenInt(v float64) int {
 func copyProcessOption(dst, src map[string]interface{}, key string) {
 	if value, ok := src[key]; ok {
 		dst[key] = value
+	}
+}
+
+func nonEmptyString(value interface{}) (string, bool) {
+	str, ok := value.(string)
+	return str, ok && str != ""
+}
+
+func avTrackSelectForCodec(value interface{}) string {
+	codec, _ := value.(string)
+	switch strings.ToLower(codec) {
+	case "aac", "opus", "mp3", "flac", "wav":
+		return "audio=all&video=none&subtitle=none"
+	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
+		return "video=maxbps&audio=none&subtitle=none"
+	default:
+		return "audio=all&video=all"
 	}
 }
 

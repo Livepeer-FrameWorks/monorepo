@@ -40,6 +40,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -820,7 +821,7 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 
 	// {{gateway_url}} placeholder is left intact — Foghorn substitutes it
 	// with its local cluster's Livepeer gateway at cache/dispatch time.
-	return processesJSON
+	return mist.NormalizeProcessConfigSelectors(processesJSON)
 }
 
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
