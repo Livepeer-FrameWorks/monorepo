@@ -567,6 +567,66 @@ for unit in $units; do
   journal_unit "$unit" || true
 done
 echo
+echo "== privateer sync diagnostics =="
+if systemctl list-unit-files frameworks-privateer.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units frameworks-privateer.service --all --no-legend --no-pager >/dev/null 2>&1; then
+  systemctl show frameworks-privateer.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
+  echo "-- privateer safe env --"
+  if [ -f /etc/frameworks/privateer.env ]; then
+    grep -E '^(QUARTERMASTER_GRPC_ADDR|NAVIGATOR_GRPC_ADDR|PRIVATEER_(PORT|SYNC_INTERVAL|SYNC_TIMEOUT|CERT_SYNC_INTERVAL|DATA_DIR|STATIC_PEERS_FILE)|NODE_|CLUSTER_ID)=' /etc/frameworks/privateer.env 2>/dev/null || true
+  else
+    echo "(no /etc/frameworks/privateer.env)"
+  fi
+  echo "-- privateer sync errors --"
+  journal_unit frameworks-privateer.service | grep -Ei 'SyncMesh|sync infrastructure|sync after node registration|node registration|mesh revision|last-known|deadline|timeout|unavailable|failed' | tail -n 120 || true
+  echo "-- privateer health --"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 2 http://127.0.0.1:18012/healthz 2>&1 || true
+    echo
+    curl -fsS --max-time 2 http://127.0.0.1:18012/metrics 2>/dev/null | grep -Ei 'privateer|mesh|sync|wireguard' | tail -n 80 || true
+  fi
+  echo "-- wireguard --"
+  if command -v wg >/dev/null 2>&1; then
+    wg show 2>&1 || true
+  fi
+else
+  echo "(frameworks-privateer.service not installed)"
+fi
+echo
+echo "== redis sentinel diagnostics =="
+sentinel_units="$(
+  {
+    systemctl list-units --all --type=service 'frameworks-redis-*sentinel*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}'
+    systemctl list-unit-files 'frameworks-redis-*sentinel*.service' --type=service --no-legend --no-pager 2>/dev/null | awk '{print $1}'
+  } | sort -u
+)"
+if [ -z "$sentinel_units" ]; then
+  echo "(no named Redis Sentinel units)"
+else
+  printf '%%s\n' "$sentinel_units"
+  for unit in $sentinel_units; do
+    echo
+    echo "-- ${unit} status --"
+    systemctl show "$unit" -p Id -p LoadState -p ActiveState -p SubState -p ExecMainStatus -p MainPID -p NRestarts --no-page 2>/dev/null || true
+    echo "-- ${unit} recent sentinel lines --"
+    journal_unit "$unit" | grep -Ei 'sentinel|master|sdown|odown|failover|tilt|error|warn|denied|auth|timeout|connection|failed' | tail -n 80 || true
+  done
+fi
+echo "-- sentinel listeners --"
+ss -ltnp 2>/dev/null | grep ':26379' || true
+echo "-- sentinel configs --"
+for conf in /var/lib/frameworks/redis/*-sentinel/sentinel.conf; do
+  [ -f "$conf" ] || continue
+  echo "### $conf"
+  grep -E '^(port|bind|protected-mode|sentinel monitor|sentinel down-after-milliseconds|sentinel failover-timeout)' "$conf" 2>/dev/null || true
+done
+if command -v redis-cli >/dev/null 2>&1; then
+  for port in $(ss -ltn 2>/dev/null | awk '/:26379 / {print $4}' | sed -E 's/.*:([0-9]+)$/\1/' | sort -u); do
+    echo "-- redis-cli sentinel probe port ${port} --"
+    redis-cli -p "$port" INFO sentinel 2>&1 | sed -n '1,80p' || true
+    redis-cli -p "$port" SENTINEL masters 2>&1 | sed -n '1,120p' || true
+  done
+fi
+echo
 echo "== pki service certificate pairs =="
 if [ -d /etc/frameworks/pki/services ]; then
   for dir in /etc/frameworks/pki/services/*; do

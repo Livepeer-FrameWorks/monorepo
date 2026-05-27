@@ -94,27 +94,28 @@ type dnsService interface {
 }
 
 type Agent struct {
-	logger           logging.Logger
-	client           meshClient
-	wgManager        wireguard.Manager
-	dnsServer        dnsService
-	nodeID           string
-	nodeName         string
-	nodeType         string
-	clusterID        string
-	externalIP       string
-	internalIP       string
-	interfaceName    string
-	listenPort       int
-	syncInterval     time.Duration
-	syncTimeout      time.Duration
-	stopChan         chan struct{}
-	metrics          *Metrics
-	healthy          atomic.Bool
-	lastSyncSuccess  atomic.Int64 // Unix timestamp of last successful sync
-	consecutiveFails atomic.Int32
-	lastConfigMu     sync.Mutex
-	lastAppliedCfg   *wireguard.Config
+	logger            logging.Logger
+	client            meshClient
+	quartermasterAddr string
+	wgManager         wireguard.Manager
+	dnsServer         dnsService
+	nodeID            string
+	nodeName          string
+	nodeType          string
+	clusterID         string
+	externalIP        string
+	internalIP        string
+	interfaceName     string
+	listenPort        int
+	syncInterval      time.Duration
+	syncTimeout       time.Duration
+	stopChan          chan struct{}
+	metrics           *Metrics
+	healthy           atomic.Bool
+	lastSyncSuccess   atomic.Int64 // Unix timestamp of last successful sync
+	consecutiveFails  atomic.Int32
+	lastConfigMu      sync.Mutex
+	lastAppliedCfg    *wireguard.Config
 	// appliedRevision is the mesh_revision that came back with the most
 	// recent successful managed apply (post-DNS). Reported back to
 	// Quartermaster on subsequent SyncMesh requests so 'mesh wg audit'
@@ -299,36 +300,37 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	return &Agent{
-		logger:           cfg.Logger,
-		client:           client,
-		wgManager:        wg,
-		dnsServer:        dnsSrv,
-		interfaceName:    cfg.InterfaceName,
-		nodeType:         cfg.NodeType,
-		nodeName:         cfg.NodeName,
-		clusterID:        cfg.ClusterID,
-		externalIP:       cfg.ExternalIP,
-		internalIP:       cfg.InternalIP,
-		listenPort:       cfg.ListenPort,
-		syncInterval:     cfg.SyncInterval,
-		syncTimeout:      cfg.SyncTimeout,
-		stopChan:         make(chan struct{}),
-		nodeID:           resolveNodeID(cfg),
-		metrics:          cfg.Metrics,
-		registryClient:   registry,
-		ingressClient:    ingress,
-		navigatorClient:  navigatorClient,
-		certIssueToken:   cfg.CertIssueToken,
-		pkiBasePath:      cfg.PKIBasePath,
-		ingressTLSRoot:   pkgingress.TLSRoot,
-		ingressTrigger:   pkgingress.ReloadTrigger,
-		expectedServices: append([]string(nil), cfg.ExpectedServiceTypes...),
-		certSyncInterval: cfg.CertSyncInterval,
-		ingressVersions:  make(map[string]string),
-		staticPeersFile:  cfg.StaticPeersFile,
-		privateKeyFile:   cfg.PrivateKeyFile,
-		wireguardIP:      cfg.WireguardIP,
-		lastKnownPath:    cfg.LastKnownPath,
+		logger:            cfg.Logger,
+		client:            client,
+		quartermasterAddr: cfg.QuartermasterGRPCAddr,
+		wgManager:         wg,
+		dnsServer:         dnsSrv,
+		interfaceName:     cfg.InterfaceName,
+		nodeType:          cfg.NodeType,
+		nodeName:          cfg.NodeName,
+		clusterID:         cfg.ClusterID,
+		externalIP:        cfg.ExternalIP,
+		internalIP:        cfg.InternalIP,
+		listenPort:        cfg.ListenPort,
+		syncInterval:      cfg.SyncInterval,
+		syncTimeout:       cfg.SyncTimeout,
+		stopChan:          make(chan struct{}),
+		nodeID:            resolveNodeID(cfg),
+		metrics:           cfg.Metrics,
+		registryClient:    registry,
+		ingressClient:     ingress,
+		navigatorClient:   navigatorClient,
+		certIssueToken:    cfg.CertIssueToken,
+		pkiBasePath:       cfg.PKIBasePath,
+		ingressTLSRoot:    pkgingress.TLSRoot,
+		ingressTrigger:    pkgingress.ReloadTrigger,
+		expectedServices:  append([]string(nil), cfg.ExpectedServiceTypes...),
+		certSyncInterval:  cfg.CertSyncInterval,
+		ingressVersions:   make(map[string]string),
+		staticPeersFile:   cfg.StaticPeersFile,
+		privateKeyFile:    cfg.PrivateKeyFile,
+		wireguardIP:       cfg.WireguardIP,
+		lastKnownPath:     cfg.LastKnownPath,
 	}, nil
 }
 
@@ -642,6 +644,23 @@ func (a *Agent) syncSucceeded() {
 	}
 }
 
+func (a *Agent) syncDiagnosticFields(phase string, started time.Time, code codes.Code) logging.Fields {
+	fields := logging.Fields{
+		"phase":              phase,
+		"node_id":            a.nodeID,
+		"node_name":          a.nodeName,
+		"cluster_id":         a.clusterID,
+		"quartermaster_addr": a.quartermasterAddr,
+		"sync_timeout":       a.syncTimeout.String(),
+		"duration":           time.Since(started).String(),
+		"grpc_code":          code.String(),
+	}
+	if rev := a.appliedRevision.Load(); rev != nil {
+		fields["applied_mesh_revision"] = *rev
+	}
+	return fields
+}
+
 func (a *Agent) sync() {
 	// Tests may omit the Quartermaster client; startup mesh handling is
 	// independent from the managed overlay.
@@ -673,6 +692,7 @@ func (a *Agent) sync() {
 		req.AppliedMeshRevision = *rev
 	}
 
+	syncStarted := time.Now()
 	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 	if snap := collectResourceSnapshot(syncCtx, ""); snap != nil {
 		req.ResourceSnapshot = snap
@@ -682,29 +702,30 @@ func (a *Agent) sync() {
 	if err != nil {
 		code := status.Code(err)
 		if code == codes.NotFound || code == codes.FailedPrecondition {
-			a.logger.WithError(err).Warn("Node identity missing or stale in Quartermaster. Re-registering from local identity")
+			a.logger.WithError(err).WithFields(a.syncDiagnosticFields("sync", syncStarted, code)).Warn("Node identity missing or stale in Quartermaster. Re-registering from local identity")
 			registerCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 			registerErr := a.registerNode(registerCtx, pubKey)
 			cancel()
 			if registerErr != nil {
-				a.logger.WithError(registerErr).Error("Node registration failed")
+				a.logger.WithError(registerErr).WithFields(a.syncDiagnosticFields("registration", syncStarted, status.Code(registerErr))).Error("Node registration failed")
 				a.syncFailed()
 				return
 			}
 
 			// Retry sync after successful registration.
 			req.NodeId = a.nodeID
+			retryStarted := time.Now()
 			retryCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 			resp, err = a.client.SyncMesh(retryCtx, req)
 			cancel()
 			if err != nil {
-				a.logger.WithError(err).Error("Failed to sync after node registration")
+				a.logger.WithError(err).WithFields(a.syncDiagnosticFields("sync_after_registration", retryStarted, status.Code(err))).Error("Failed to sync after node registration")
 				a.syncFailed()
 				return
 			}
 		}
 		if err != nil {
-			a.logger.WithError(err).Error("Failed to sync infrastructure")
+			a.logger.WithError(err).WithFields(a.syncDiagnosticFields("sync", syncStarted, code)).Error("Failed to sync infrastructure")
 			a.syncFailed()
 			return
 		}
