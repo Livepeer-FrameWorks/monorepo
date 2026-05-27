@@ -1067,18 +1067,17 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 func maybeReconcileBatchServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
 	// Run after any assignment-backed service has been deployed in this batch so
 	// the service_instances rows exist before we wire assignment FKs.
-	any := false
+	requiredServiceTypes := []string{}
 	for _, name := range clusterAssignedServiceTypes() {
 		if batchContainsService(batch, name) {
-			any = true
-			break
+			requiredServiceTypes = append(requiredServiceTypes, name)
 		}
 	}
-	if !any {
+	if len(requiredServiceTypes) == 0 {
 		return nil
 	}
 
-	return reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, sess)
+	return reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, sess, requiredServiceTypes...)
 }
 
 // batchContainsPrivateer returns true if any task in the batch is a Privateer deployment.
@@ -1866,7 +1865,7 @@ var (
 	autoIngressDomainsForService = clusterderive.AutoIngressDomainsForService
 )
 
-func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session, requiredServiceTypes ...string) error {
 	token, ok := runtimeData["service_token"].(string)
 	if !ok || token == "" {
 		return fmt.Errorf("missing Quartermaster connection info for service-cluster reconciliation: service_token not set")
@@ -1880,7 +1879,7 @@ func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command,
 
 	var lastErr error
 	for attempt := 1; attempt <= 6; attempt++ {
-		lastErr = reconcileServiceClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client)
+		lastErr = reconcileServiceClusterAssignmentsWithClient(ctx, cmd.OutOrStdout(), manifest, client, requiredServiceTypes...)
 		if lastErr == nil {
 			return nil
 		}
@@ -1899,7 +1898,7 @@ func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command,
 	return lastErr
 }
 
-func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, client serviceClusterAssignmentClient) error {
+func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, client serviceClusterAssignmentClient, requiredServiceTypes ...string) error {
 	fmt.Fprintln(out, "  Reconciling service-cluster assignments...")
 
 	serviceIDs, err := serviceIDsByType(ctx, client)
@@ -1907,12 +1906,19 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		return err
 	}
 
+	required := map[string]struct{}{}
+	for _, serviceType := range requiredServiceTypes {
+		required[serviceType] = struct{}{}
+	}
+	requireAll := len(required) == 0
+
 	clusterAssignedServices := clusterAssignedServiceTypes()
 	plans := make([]serviceAssignmentPlan, 0, len(clusterAssignedServices))
 	for _, serviceName := range clusterAssignedServices {
 		serviceID := serviceIDs[serviceName]
 		if serviceID == "" {
-			if len(enabledClusterAssignedManifestServices(manifest, serviceName)) > 0 {
+			_, serviceRequired := required[serviceName]
+			if len(enabledClusterAssignedManifestServices(manifest, serviceName)) > 0 && (requireAll || serviceRequired) {
 				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog", serviceName)
 			}
 			continue

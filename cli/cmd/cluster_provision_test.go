@@ -534,6 +534,57 @@ func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *tes
 	}
 }
 
+func TestReconcileServiceClusterAssignmentsWithClientDefersMissingFutureService(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-central-primary": {Type: "edge", Roles: []string{"media"}, Default: true},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"chandler": {Enabled: true, Host: "core-1"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "core-1"},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("chandler"),
+		instances: map[string][]*pb.ServiceInstance{
+			"chandler": {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
+		},
+	}
+
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner, "chandler"); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if len(assigner.calls) != 1 || assigner.calls[0].GetServiceType() != "chandler" {
+		t.Fatalf("expected chandler-only assignment while vmauth has not registered yet, got %+v", assigner.calls)
+	}
+}
+
+func TestReconcileServiceClusterAssignmentsWithClientRequiresCurrentBatchService(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.10"},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "core-1"},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("chandler"),
+	}
+
+	err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner, "vmauth")
+	if err == nil || !strings.Contains(err.Error(), "vmauth service is enabled but missing from Quartermaster service catalog") {
+		t.Fatalf("expected missing vmauth catalog error, got %v", err)
+	}
+}
+
 func TestReconcileRemovedServicePlacementsKeepsAliasedPoolHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
