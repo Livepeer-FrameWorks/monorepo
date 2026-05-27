@@ -16,6 +16,8 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -341,7 +343,7 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 }
 
 // DoCreateClip creates a new clip
-func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*pb.ClipInfo, error) {
+func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (model.CreateClipResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -501,6 +503,16 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	clipResp, err := r.Clients.Commodore.CreateClip(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to create clip")
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.InvalidArgument, codes.FailedPrecondition, codes.Unavailable:
+				return &model.ValidationError{Message: st.Message()}, nil
+			case codes.NotFound:
+				return &model.NotFoundError{Message: st.Message(), ResourceType: "stream", ResourceID: streamID}, nil
+			case codes.PermissionDenied, codes.Unauthenticated:
+				return &model.AuthError{Message: st.Message()}, nil
+			}
+		}
 		return nil, fmt.Errorf("failed to create clip: %w", err)
 	}
 

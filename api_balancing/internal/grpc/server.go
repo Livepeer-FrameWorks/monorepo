@@ -823,6 +823,15 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	clipEndMs := startMs + durationMs
 	dispatch, dispatchErr := s.pickClipSource(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
 	if dispatchErr != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     req.GetTenantId(),
+			"stream_id":     req.GetStreamId(),
+			"internal_name": req.GetStreamInternalName(),
+			"clip_hash":     clipHash,
+			"start_ms":      startMs,
+			"end_ms":        clipEndMs,
+			"error":         dispatchErr,
+		}).Warn("Rejected clip source dispatch")
 		return nil, status.Errorf(codes.FailedPrecondition, "clip source dispatch: %v", dispatchErr)
 	}
 
