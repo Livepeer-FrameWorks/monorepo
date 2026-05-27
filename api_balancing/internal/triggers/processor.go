@@ -1416,6 +1416,13 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 	// Resolve the playback ID to its canonical internal name (e.g. "live+uuid" or "vod+hash").
 	target, err := control.ResolveStream(context.Background(), playbackID)
+	if (err != nil || target == nil || target.InternalName == "") && !strings.Contains(playbackID, "+") {
+		var abort bool
+		target, abort, err = p.resolveBarePlayRewriteTarget(playbackID)
+		if abort || err != nil {
+			return "", abort, err
+		}
+	}
 	if err != nil || target == nil {
 		p.logger.WithFields(logging.Fields{
 			"playback_id": playbackID,
@@ -1525,6 +1532,48 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 	// Return the resolved fully-qualified stream name (e.g. "live+uuid") to MistServer.
 	return target.InternalName, false, nil
+}
+
+func (p *Processor) resolveBarePlayRewriteTarget(streamName string) (*control.StreamTarget, bool, error) {
+	if p.commodoreClient == nil || strings.TrimSpace(streamName) == "" {
+		return nil, false, nil
+	}
+
+	streamCtx, lookupField, err := p.resolveBareManagedStreamContext(streamName)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"requested_stream": streamName,
+			"error":            err,
+		}).Warn("PLAY_REWRITE: bare managed stream lookup failed")
+		return nil, false, err
+	}
+	if streamCtx == nil || streamCtx.GetInternalName() == "" {
+		return nil, false, nil
+	}
+	if !streamCtx.GetAdmitted() {
+		if streamCtx.GetAdmissionReason() == "stream not found" {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("stream unavailable: %s", streamCtx.GetAdmissionReason())
+	}
+
+	resolvedName := control.MistSourceNameForIngestMode(streamCtx.GetInternalName(), streamCtx.GetIngestMode())
+	p.logger.WithFields(logging.Fields{
+		"requested_stream": streamName,
+		"lookup_field":     lookupField,
+		"internal_name":    streamCtx.GetInternalName(),
+		"resolved_stream":  resolvedName,
+		"ingest_mode":      streamCtx.GetIngestMode(),
+	}).Info("PLAY_REWRITE resolved bare managed stream")
+
+	return &control.StreamTarget{
+		InternalName: resolvedName,
+		IsVod:        false,
+		TenantID:     streamCtx.GetTenantId(),
+		StreamID:     streamCtx.GetStreamId(),
+		ContentType:  "live",
+		ClusterPeers: streamCtx.GetClusterPeers(),
+	}, false, nil
 }
 
 // handleStreamSource processes STREAM_SOURCE trigger (blocking)

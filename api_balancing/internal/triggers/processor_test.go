@@ -660,6 +660,55 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	}
 }
 
+func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T) {
+	oldCommodore := control.CommodoreClient
+	control.SetCommodoreClient(nil)
+	t.Cleanup(func() { control.SetCommodoreClient(oldCommodore) })
+
+	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
+	t.Cleanup(cleanup)
+	stub.resolveStreamContextByKey = map[string]*pb.ResolveStreamContextResponse{
+		"internal_name:60546679b497415db2338cd5cae54992": {
+			Admitted:     true,
+			IngestMode:   "mist_native",
+			StreamId:     "stream-uuid-1",
+			PlaybackId:   "frameworks-demo",
+			InternalName: "60546679b497415db2338cd5cae54992",
+			TenantId:     "tenant-system",
+		},
+	}
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+	processor.clusterID = "media-eu-1"
+
+	resp, abort, err := processor.handlePlayRewrite(&pb.MistTrigger{
+		NodeId: "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_PlayRewrite{
+			PlayRewrite: &pb.ViewerResolveTrigger{
+				RequestedStream: "60546679b497415db2338cd5cae54992",
+				ViewerHost:      "192.0.2.10",
+				OutputType:      "HTTP",
+				RequestUrl:      "https://edge.example/view/60546679b497415db2338cd5cae54992.mkv?duration=30&startunix=-60",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handlePlayRewrite failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort PLAY_REWRITE response")
+	}
+	if resp != "60546679b497415db2338cd5cae54992" {
+		t.Fatalf("unexpected PLAY_REWRITE response: %q", resp)
+	}
+	keys := stub.ResolveStreamContextKeys()
+	want := []string{"internal_name:60546679b497415db2338cd5cae54992"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected ResolveStreamContext lookups: got %v want %v", keys, want)
+	}
+}
+
 type stubCommodoreInternalService struct {
 	pb.UnimplementedInternalServiceServer
 	validateResponse          *pb.ValidateStreamKeyResponse
