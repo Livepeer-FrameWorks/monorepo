@@ -1533,7 +1533,7 @@ func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, t
 
 			UNION ALL
 
-			SELECT toUnixTimestamp64Milli(min(window_start)) AS first_ms
+			SELECT toUnixTimestamp(min(window_start)) * 1000 AS first_ms
 			FROM periscope.api_usage_5m_v
 			WHERE tenant_id = ?
 		)

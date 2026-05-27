@@ -5095,6 +5095,25 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 			}
 		}
 
+		// Pre-read prior service_instances state before writes. Yugabyte can
+		// only query-layer-retry read restarts when no earlier statement in the
+		// transaction has changed the snapshot; keeping both prior reads first
+		// avoids turning a harmless retryable read into a failed transaction.
+		siRows, err := tx.QueryContext(ctx, `
+		SELECT si.node_id, svc.type, si.cluster_id, COALESCE(si.health_status, '')
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.node_id = ANY($1)
+		  AND svc.type LIKE 'edge-%'
+	`, pq.Array(nodeIDs))
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to read prior edge service health: %v", err)
+		}
+		priorInst, err = scanPriorInst(siRows)
+		if err != nil {
+			return status.Errorf(codes.Internal, "scan prior si: %v", err)
+		}
+
 		// Per-node heartbeat + external_ip. Heartbeat ONLY for healthy nodes —
 		// listHealthyEdgeNodes gates aggregate `edge` DNS on n.last_heartbeat, so
 		// refreshing it for unhealthy reports would extend DNS eligibility for a
@@ -5120,23 +5139,6 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		WHERE n.node_id = payload.node_id
 	`, pq.Array(upNodeIDs), pq.Array(upExternalIPs), pq.Array(upRefreshHB)); execErr != nil {
 			return status.Errorf(codes.Internal, "failed to update node state: %v", execErr)
-		}
-
-		// Pre-read prior service_instances state per (node, edge-service_type) so
-		// we can detect health flips.
-		siRows, err := tx.QueryContext(ctx, `
-		SELECT si.node_id, svc.type, si.cluster_id, COALESCE(si.health_status, '')
-		FROM quartermaster.service_instances si
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.node_id = ANY($1)
-		  AND svc.type LIKE 'edge-%'
-	`, pq.Array(upNodeIDs))
-		if err != nil {
-			return status.Errorf(codes.Internal, "failed to read prior edge service health: %v", err)
-		}
-		priorInst, err = scanPriorInst(siRows)
-		if err != nil {
-			return status.Errorf(codes.Internal, "scan prior si: %v", err)
 		}
 
 		// UPSERT capabilities. We only INSERT when the cap is currently true —
@@ -5500,6 +5502,12 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	}
 
 	serviceTypeFilter := req.GetServiceType()
+	serviceLookupType := serviceTypeFilter
+	if serviceTypeFilter == "telemetry" {
+		// telemetry.<cluster> is the public remote-write ingress name; the
+		// backing service registered in Quartermaster is vmauth.
+		serviceLookupType = "vmauth"
+	}
 
 	// "edge" is the aggregate routing target (nearest eligible edge node).
 	// Health is determined by mesh heartbeat, not service_instance status.
@@ -5516,10 +5524,10 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	// Edge subtypes (edge-ingest/egress/storage/processing) keep the standard
 	// service_instances path: edge nodes are the media cluster physically, so
 	// si.cluster_id == the logical media cluster.
-	if dns.IsPoolAssignedServiceType(serviceTypeFilter) {
-		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
+	if dns.IsPoolAssignedServiceType(serviceLookupType) {
+		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 	}
-	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceTypeFilter, staleThreshold)
+	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 }
 
 // synthesizePublicHost builds the per-assignment FQDN for a pool-assigned

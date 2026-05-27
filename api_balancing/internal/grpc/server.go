@@ -1381,7 +1381,11 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		RetentionUntil: 0,
 	}
 
-	fullDTSC := control.BuildDTSCURI(sourceNodeID, "live+"+req.InternalName, s.logger)
+	sourceStreamName := control.MistSourceNameForIngestMode(req.InternalName, "push")
+	if ss := state.DefaultManager().GetStreamState(req.InternalName); ss != nil && ss.StreamName != "" {
+		sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+	}
+	fullDTSC := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if fullDTSC == "" {
 		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
 			ReportedStatus: "failed",

@@ -67,3 +67,37 @@ func TestBuildDTSCURI(t *testing.T) {
 		})
 	}
 }
+
+func TestMistSourceNameForIngestMode(t *testing.T) {
+	cases := []struct {
+		name       string
+		internal   string
+		ingestMode string
+		want       string
+	}{
+		{name: "push uses wildcard live stream", internal: "stream-a", ingestMode: "push", want: "live+stream-a"},
+		{name: "empty mode defaults to push", internal: "stream-a", want: "live+stream-a"},
+		{name: "pull uses pull wildcard stream", internal: "stream-a", ingestMode: "pull", want: "pull+stream-a"},
+		{name: "mist native keeps concrete bare stream", internal: "frameworks-demo", ingestMode: "mist_native", want: "frameworks-demo"},
+		{name: "prefixed stream passes through", internal: "dvr+dvr-a", ingestMode: "push", want: "dvr+dvr-a"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MistSourceNameForIngestMode(tc.internal, tc.ingestMode); got != tc.want {
+				t.Fatalf("MistSourceNameForIngestMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMistSourceNameFromObservedStream(t *testing.T) {
+	if got := MistSourceNameFromObservedStream("frameworks-demo"); got != "frameworks-demo" {
+		t.Fatalf("bare observed stream = %q, want concrete bare name", got)
+	}
+	if got := MistSourceNameFromObservedStream("tenantA+stream"); got != "live+tenantA+stream" {
+		t.Fatalf("unprefixed legacy internal name = %q, want live+ prefix", got)
+	}
+	if got := MistSourceNameFromObservedStream("live+stream-a"); got != "live+stream-a" {
+		t.Fatalf("live observed stream = %q", got)
+	}
+}

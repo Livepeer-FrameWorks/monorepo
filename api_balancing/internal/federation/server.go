@@ -294,9 +294,15 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 			continue
 		}
 
-		dtscURL := control.BuildDTSCURI(n.NodeID, "live+"+req.StreamName, s.logger)
-
 		ss := sm.GetStreamState(req.StreamName)
+		sourceStreamName := req.StreamName
+		if ss != nil && ss.StreamName != "" {
+			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+		} else {
+			sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
+		}
+		dtscURL := control.BuildDTSCURI(n.NodeID, sourceStreamName, s.logger)
+
 		var bufferState string
 		if ss != nil && ss.NodeID == n.NodeID {
 			bufferState = ss.BufferState
@@ -404,8 +410,13 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		}, nil
 	}
 
-	// Build DTSC pull URL — federation pulls are always live ingest streams.
-	dtscURL := control.BuildDTSCURI(sourceNodeID, "live+"+req.StreamName, s.logger)
+	sourceStreamName := req.StreamName
+	if ss.StreamName != "" {
+		sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+	} else {
+		sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
+	}
+	dtscURL := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if dtscURL == "" {
 		return &pb.OriginPullAck{
 			Accepted: false,

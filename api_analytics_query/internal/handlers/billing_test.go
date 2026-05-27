@@ -49,6 +49,35 @@ func TestAlignBillingCursorStartFloorsLegacyCursor(t *testing.T) {
 	}
 }
 
+func TestEarliestCanonicalBillingFactCastsAPIWindowStartFromDateTime(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
+	first := time.Date(2026, 5, 27, 10, 15, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT min\(first_ms\).*toUnixTimestamp\(min\(window_start\)\) \* 1000 AS first_ms`).
+		WithArgs("tenant-1", "tenant-1", "tenant-1", "tenant-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"first_ms"}).AddRow(first.UnixMilli()))
+
+	got, found, err := bs.earliestCanonicalBillingFact(context.Background(), "tenant-1")
+	if err != nil {
+		t.Fatalf("earliestCanonicalBillingFact error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected cursor seed to be found")
+	}
+	if !got.Equal(first) {
+		t.Fatalf("cursor seed = %s, want %s", got, first)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

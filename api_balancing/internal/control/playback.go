@@ -454,6 +454,43 @@ type PlaybackDependencies struct {
 	RemoteArtifacts RemoteArtifactLookup           // optional: hot artifact locations from peering
 }
 
+// MistSourceNameForIngestMode returns the concrete Mist stream surface used
+// when another MistServer pulls this stream via DTSC/source selection.
+func MistSourceNameForIngestMode(internalName, ingestMode string) string {
+	internalName = strings.TrimSpace(internalName)
+	if internalName == "" {
+		return ""
+	}
+	if strings.HasPrefix(internalName, "live+") ||
+		strings.HasPrefix(internalName, "pull+") ||
+		strings.HasPrefix(internalName, "dvr+") ||
+		strings.HasPrefix(internalName, "vod+") ||
+		strings.HasPrefix(internalName, "processing+") {
+		return internalName
+	}
+	switch strings.TrimSpace(ingestMode) {
+	case "pull":
+		return "pull+" + internalName
+	case "mist_native":
+		return internalName
+	default:
+		return "live+" + internalName
+	}
+}
+
+// MistSourceNameFromObservedStream preserves a concrete bare Mist stream name
+// observed from Helmsman while keeping wildcard push names on live+.
+func MistSourceNameFromObservedStream(streamName string) string {
+	streamName = strings.TrimSpace(streamName)
+	if streamName == "" {
+		return ""
+	}
+	if !strings.Contains(streamName, "+") {
+		return streamName
+	}
+	return MistSourceNameForIngestMode(streamName, "")
+}
+
 // ResolveArtifactPlayback resolves playback endpoints for any artifact (clip/dvr/vod) using playback ID
 func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, playbackID string) (*pb.ViewerEndpointResponse, error) {
 	if deps.DB == nil {

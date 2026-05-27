@@ -34,7 +34,9 @@ func testFederationServerWithCache(t *testing.T) (*FederationServer, *RemoteEdge
 func setLiveStreamState(t *testing.T, streamName, nodeID, tenantID, baseURL string) {
 	t.Helper()
 	sm := state.ResetDefaultManagerForTests()
-	sm.SetNodeInfo(nodeID, baseURL, true, nil, nil, "", "", nil)
+	sm.SetNodeInfo(nodeID, baseURL, true, nil, nil, "", "", map[string]any{
+		"DTSC": "dtsc://HOST/$",
+	})
 	if err := sm.UpdateStreamFromBuffer(streamName, streamName, nodeID, tenantID, "FULL", ""); err != nil {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
 	}
@@ -80,5 +82,27 @@ func TestNotifyOriginPullFailsWhenCacheUnavailable(t *testing.T) {
 	}
 	if ack.GetAccepted() {
 		t.Fatalf("expected cache failure to be rejected")
+	}
+}
+
+func TestNotifyOriginPullKeepsBareMistNativeStreamName(t *testing.T) {
+	server, _, _ := testFederationServerWithCache(t)
+	setLiveStreamState(t, "frameworks-demo", "source-1", "tenant-a", "https://edge-a.example.com")
+
+	ack, err := server.NotifyOriginPull(svcAuthCtx(), &pb.OriginPullNotification{
+		StreamName:    "frameworks-demo",
+		SourceNodeId:  "source-1",
+		DestClusterId: "cluster-b",
+		DestNodeId:    "dest-1",
+		TenantId:      "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("NotifyOriginPull error: %v", err)
+	}
+	if !ack.GetAccepted() {
+		t.Fatalf("expected origin pull accepted, reason=%q", ack.GetReason())
+	}
+	if got, want := ack.GetDtscUrl(), "dtsc://edge-a.example.com/frameworks-demo"; got != want {
+		t.Fatalf("DTSC URL = %q, want %q", got, want)
 	}
 }

@@ -1373,10 +1373,16 @@ func (pm *PeerManager) pushStreamAds() {
 				streams[streamName] = si
 			}
 			isOrigin := si.ss.NodeID == snap.NodeID && si.ss.Inputs > 0
+			sourceStreamName := streamName
+			if si.ss.StreamName != "" {
+				sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
+			} else {
+				sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
+			}
 			si.edges = append(si.edges, &pb.PeerStreamEdge{
 				NodeId:      snap.NodeID,
 				BaseUrl:     ns.BaseURL,
-				DtscUrl:     control.BuildDTSCURI(snap.NodeID, "live+"+streamName, pm.logger),
+				DtscUrl:     control.BuildDTSCURI(snap.NodeID, sourceStreamName, pm.logger),
 				IsOrigin:    isOrigin,
 				BwAvailable: snap.BWAvailable,
 				CpuPercent:  snap.CPU,

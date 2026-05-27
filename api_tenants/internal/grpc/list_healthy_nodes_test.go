@@ -211,6 +211,43 @@ func TestListHealthyNodesForDNS_ServiceTypeReturnsMatchingNodes(t *testing.T) {
 	}
 }
 
+func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	publicType := "telemetry"
+	lookupType := "vmauth"
+
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
+		WithArgs(lookupType).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+		WithArgs(lookupType, int32(300)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
+		WithArgs(lookupType, int32(300)).
+		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "regional-eu-1", "media-eu-1", "regional-eu-1", "core", "1.2.3.4")...))
+
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+		ServiceType: &publicType,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetNodes()) != 1 {
+		t.Fatalf("expected telemetry to resolve backing vmauth node, got %d", len(resp.GetNodes()))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 func TestListHealthyNodesForDNS_ServiceTypeExcludesOtherServices(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -471,12 +508,12 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
 			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
-	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\).*FROM quartermaster\.service_instances si.*svc\.type LIKE 'edge-%'`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Two caps on → two ON CONFLICT upserts. The other two caps are false →
 	// no row exists → no UPDATE issued.
 	for range []int{0, 1} {
@@ -532,14 +569,14 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
 			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
-	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Prior state: edge-egress instance was healthy. Now cap is off.
 	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\)`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
 			AddRow("edge-eu-1", "edge-egress", "cluster-eu", "healthy"))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Cap is off + existing row → UPDATE to unhealthy.
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'`).
 		WithArgs("edge-egress", "edge-eu-1").

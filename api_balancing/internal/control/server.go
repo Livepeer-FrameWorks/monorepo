@@ -6827,8 +6827,21 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		streamInternalName string
 	)
 	bareName := mist.ExtractInternalName(internalName)
+	bareMistNative := false
+	var resolvedStreamID, resolvedTenantID, resolvedOriginCluster string
+	if !strings.Contains(internalName, "+") && CommodoreClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		resp, err := CommodoreClient.ResolveStreamContext(ctx, "", "", bareName, localClusterID)
+		cancel()
+		if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
+			bareMistNative = true
+			resolvedStreamID = resp.GetStreamId()
+			resolvedTenantID = resp.GetTenantId()
+			resolvedOriginCluster = resp.GetOriginClusterId()
+		}
+	}
 	switch {
-	case strings.HasPrefix(internalName, "live+"):
+	case strings.HasPrefix(internalName, "live+") || bareMistNative:
 		isLive = true
 		streamInternalName = bareName
 		// In-memory StreamState carries StreamID + TenantID populated by
@@ -6838,6 +6851,14 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			thumbnailKey = ss.StreamID
 			thumbTenantID = ss.TenantID
 		}
+		if thumbnailKey == "" && resolvedStreamID != "" {
+			thumbnailKey = resolvedStreamID
+			state.DefaultManager().SetStreamStreamID(bareName, resolvedStreamID)
+		}
+		if thumbTenantID == "" {
+			thumbTenantID = resolvedTenantID
+		}
+		thumbOriginCluster = resolvedOriginCluster
 		if (thumbnailKey == "" || thumbOriginCluster == "") && CommodoreClient != nil {
 			resp, err := CommodoreClient.ResolveInternalName(context.Background(), bareName)
 			if err != nil || resp == nil {
@@ -6872,7 +6893,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			"stream_name":   internalName,
 			"internal_name": bareName,
 			"stream_id":     thumbnailKey,
-		}).Info("Resolved live stream_id for thumbnail S3 key")
+		}).Info("Resolved live/mist_native stream_id for thumbnail S3 key")
 	case strings.HasPrefix(internalName, "vod+"):
 		conn := GetDB()
 		if conn == nil {
@@ -6975,7 +6996,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 			"artifact_hash": thumbnailKey,
 		}).Info("Resolved DVR artifact hash for thumbnail S3 key")
 	default:
-		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+, vod+, or dvr+")
+		logger.WithField("internal_name", internalName).Warn("Thumbnail upload from unrecognised stream prefix; expected live+, mist_native bare name, vod+, processing+, or dvr+")
 		return
 	}
 

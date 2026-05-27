@@ -1564,6 +1564,24 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return p.resolvePullSource(streamName, trigger)
 	}
 
+	if !strings.Contains(streamName, "+") && p.commodoreClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, p.clusterID)
+		cancel()
+		if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
+			base := control.FoghornBalancerBase(p.clusterID)
+			if base == "" {
+				p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base; aborting")
+				return "", true, nil
+			}
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"cluster_id":  p.clusterID,
+			}).Info("STREAM_SOURCE: mist_native stream returning balance URI")
+			return "balance:" + base, false, nil
+		}
+	}
+
 	// dvr+<dvr_internal_name>: rolling DVR surface for an actively
 	// recording stream. The origin serves the local rolling manifest;
 	// other edges DTSC-pull the dvr+<internal_name> stream from the
