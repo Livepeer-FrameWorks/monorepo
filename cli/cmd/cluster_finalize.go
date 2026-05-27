@@ -22,10 +22,12 @@ const (
 	clusterFinalizeStepPurserBootstrap clusterFinalizeStep = "purser-bootstrap"
 	clusterFinalizeStepPurserValidate  clusterFinalizeStep = "purser-validate"
 	clusterFinalizeStepCommodore       clusterFinalizeStep = "commodore-bootstrap"
+	clusterFinalizeStepAssignments     clusterFinalizeStep = "service-cluster-assignments"
 	clusterFinalizeStepControlPlane    clusterFinalizeStep = "control-plane-validation"
 	clusterFinalizeOnlyAll                                 = "all"
 	clusterFinalizeOnlyPurser                              = "purser"
 	clusterFinalizeOnlyCommodore                           = "commodore"
+	clusterFinalizeOnlyAssignments                         = "assignments"
 	clusterFinalizeOnlyValidation                          = "validation"
 )
 
@@ -41,14 +43,17 @@ func newClusterFinalizeCmd() *cobra.Command {
 		Long: `Run the idempotent control-plane finalization steps normally executed
 after cluster provisioning, without provisioning or restarting services.
 
-This reconciles service-owned bootstrap state and then validates the control
-plane. It is intended for resuming a failed provision epilogue after fixing the
-underlying data/config issue.`,
+This reconciles service-owned bootstrap state, service-cluster assignments, and
+then validates the control plane. It is intended for resuming a failed provision
+epilogue after fixing the underlying data/config issue.`,
 		Example: `  # Resume all post-provision finalization steps
   frameworks cluster finalize --gitops-dir ../gitops --cluster production
 
   # Retry only Commodore bootstrap after fixing stale stream state
   frameworks cluster finalize --gitops-dir ../gitops --cluster production --only commodore
+
+  # Reconcile public service assignments without restarting services
+  frameworks cluster finalize --gitops-dir ../gitops --cluster production --only assignments
 
   # Run only the final control-plane validation gate
   frameworks cluster finalize --gitops-dir ../gitops --cluster production --only validation`,
@@ -65,7 +70,7 @@ underlying data/config issue.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&only, "only", clusterFinalizeOnlyAll, "Finalization slice to run (all|purser|commodore|validation)")
+	cmd.Flags().StringVar(&only, "only", clusterFinalizeOnlyAll, "Finalization slice to run (all|purser|commodore|assignments|validation)")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip final control-plane validation when --only=all")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if control-plane validation has warnings")
 
@@ -187,6 +192,10 @@ func runClusterFinalize(cmd *cobra.Command, rc *resolvedCluster, only string, sk
 			if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "commodore", bootstrapYAML, commodoreBootstrapExtraArgs(cmd)); err != nil {
 				return fmt.Errorf("commodore bootstrap: %w", err)
 			}
+		case clusterFinalizeStepAssignments:
+			if err := reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, raSession); err != nil {
+				return fmt.Errorf("service-cluster assignments: %w", err)
+			}
 		case clusterFinalizeStepControlPlane:
 			if err := validateControlPlane(ctx, cmd, manifest, runtimeData, raSession); err != nil {
 				return err
@@ -210,6 +219,7 @@ func clusterFinalizePlan(only string, skipValidation bool) ([]clusterFinalizeSte
 			clusterFinalizeStepPurserBootstrap,
 			clusterFinalizeStepPurserValidate,
 			clusterFinalizeStepCommodore,
+			clusterFinalizeStepAssignments,
 		}
 		if !skipValidation {
 			steps = append(steps, clusterFinalizeStepControlPlane)
@@ -222,13 +232,15 @@ func clusterFinalizePlan(only string, skipValidation bool) ([]clusterFinalizeSte
 		return []clusterFinalizeStep{clusterFinalizeStepPurserBootstrap, clusterFinalizeStepPurserValidate}, nil
 	case clusterFinalizeOnlyCommodore:
 		return []clusterFinalizeStep{clusterFinalizeStepCommodore}, nil
+	case clusterFinalizeOnlyAssignments:
+		return []clusterFinalizeStep{clusterFinalizeStepAssignments}, nil
 	case clusterFinalizeOnlyValidation:
 		if skipValidation {
 			return nil, fmt.Errorf("--skip-validation cannot be used with --only=validation")
 		}
 		return []clusterFinalizeStep{clusterFinalizeStepControlPlane}, nil
 	default:
-		return nil, fmt.Errorf("invalid finalization slice: %s (must be all, purser, commodore, or validation)", only)
+		return nil, fmt.Errorf("invalid finalization slice: %s (must be all, purser, commodore, assignments, or validation)", only)
 	}
 }
 

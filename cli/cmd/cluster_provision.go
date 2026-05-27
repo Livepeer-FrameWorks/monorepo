@@ -1065,10 +1065,10 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 }
 
 func maybeReconcileBatchServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
-	// Run after any pool-assigned service has been deployed in this batch so
+	// Run after any assignment-backed service has been deployed in this batch so
 	// the service_instances rows exist before we wire assignment FKs.
 	any := false
-	for _, name := range pkgdns.PoolAssignedServiceTypes() {
+	for _, name := range clusterAssignedServiceTypes() {
 		if batchContainsService(batch, name) {
 			any = true
 			break
@@ -1907,12 +1907,12 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		return err
 	}
 
-	poolAssignedServices := pkgdns.PoolAssignedServiceTypes()
-	plans := make([]serviceAssignmentPlan, 0, len(poolAssignedServices))
-	for _, serviceName := range poolAssignedServices {
+	clusterAssignedServices := clusterAssignedServiceTypes()
+	plans := make([]serviceAssignmentPlan, 0, len(clusterAssignedServices))
+	for _, serviceName := range clusterAssignedServices {
 		serviceID := serviceIDs[serviceName]
 		if serviceID == "" {
-			if len(enabledPoolAssignedManifestServices(manifest, serviceName)) > 0 {
+			if len(enabledClusterAssignedManifestServices(manifest, serviceName)) > 0 {
 				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog", serviceName)
 			}
 			continue
@@ -1924,7 +1924,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		}
 		instances = serviceInstancesOnManifestHosts(manifest, instances)
 
-		configs := enabledPoolAssignedManifestServices(manifest, serviceName)
+		configs := enabledClusterAssignedManifestServices(manifest, serviceName)
 		if len(configs) == 0 {
 			plans = append(plans, serviceAssignmentPlan{serviceName: serviceName, instances: instances})
 			continue
@@ -1995,21 +1995,44 @@ type namedServiceConfig struct {
 	svc  inventory.ServiceConfig
 }
 
+func clusterAssignedServiceTypes() []string {
+	types := append([]string{}, pkgdns.PoolAssignedServiceTypes()...)
+	types = append(types, "vmauth")
+	return types
+}
+
 func enabledPoolAssignedManifestServices(manifest *inventory.Manifest, serviceType string) []namedServiceConfig {
+	return enabledClusterAssignedManifestServices(manifest, serviceType)
+}
+
+func enabledClusterAssignedManifestServices(manifest *inventory.Manifest, serviceType string) []namedServiceConfig {
 	if manifest == nil {
 		return nil
 	}
 	var configs []namedServiceConfig
-	for name, svc := range manifest.Services {
-		if !svc.Enabled {
-			continue
+	scan := func(services map[string]inventory.ServiceConfig) {
+		for name, svc := range services {
+			if !svc.Enabled {
+				continue
+			}
+			resolvedType, ok := clusterderive.ManifestServiceType(name, svc)
+			if !ok {
+				continue
+			}
+			switch {
+			case serviceType == "vmauth":
+				if !serviceDeployMatches(name, svc, "vmauth") || resolvedType != "telemetry" {
+					continue
+				}
+			case resolvedType != serviceType || !pkgdns.IsPoolAssignedServiceType(resolvedType):
+				continue
+			}
+			configs = append(configs, namedServiceConfig{name: name, svc: svc})
 		}
-		resolvedType, ok := clusterderive.ManifestServiceType(name, svc)
-		if !ok || resolvedType != serviceType || !pkgdns.IsPoolAssignedServiceType(resolvedType) {
-			continue
-		}
-		configs = append(configs, namedServiceConfig{name: name, svc: svc})
 	}
+	scan(manifest.Services)
+	scan(manifest.Interfaces)
+	scan(manifest.Observability)
 	sort.Slice(configs, func(i, j int) bool { return configs[i].name < configs[j].name })
 	return configs
 }

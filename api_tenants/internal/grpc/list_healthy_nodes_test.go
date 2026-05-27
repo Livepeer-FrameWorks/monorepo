@@ -223,13 +223,14 @@ func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
 	publicType := "telemetry"
 	lookupType := "vmauth"
 
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
+	queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1`
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT \(n\.id, sca\.cluster_id\)\) ` + queryShape).
 		WithArgs(lookupType).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT \(n\.id, sca\.cluster_id\)\) `+queryShape).
 		WithArgs(lookupType, int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
 		WithArgs(lookupType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "regional-eu-1", "media-eu-1", "regional-eu-1", "core", "1.2.3.4")...))
 
@@ -241,6 +242,9 @@ func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
 	}
 	if len(resp.GetNodes()) != 1 {
 		t.Fatalf("expected telemetry to resolve backing vmauth node, got %d", len(resp.GetNodes()))
+	}
+	if got := resp.GetNodes()[0].GetClusterId(); got != "media-eu-1" {
+		t.Fatalf("telemetry DNS cluster_id = %q, want assigned media cluster", got)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

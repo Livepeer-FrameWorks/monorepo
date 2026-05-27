@@ -348,13 +348,17 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *tes
 			"chandler":         {Enabled: true, Host: "core-1"},
 			"livepeer-gateway": {Enabled: true, Host: "core-1"},
 		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {Enabled: true, Host: "core-1"},
+		},
 	}
 	assigner := &fakeFoghornClusterAssigner{
-		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway"),
+		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway", "vmauth"),
 		instances: map[string][]*pb.ServiceInstance{
 			"foghorn":          {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
 			"chandler":         {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
 			"livepeer-gateway": {fakeServiceInstance("gateway-core-1", "livepeer-gateway", "core-1", "running")},
+			"vmauth":           {fakeServiceInstance("vmauth-core-1", "vmauth", "core-1", "running")},
 		},
 	}
 
@@ -363,10 +367,10 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *tes
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	// One assignment per pool service (foghorn/chandler/livepeer-gateway), each
-	// targeting the default media cluster.
-	if len(assigner.calls) != 3 {
-		t.Fatalf("expected 3 assignment calls, got %d (%v)", len(assigner.calls), assigner.calls)
+	// One assignment per cluster-backed public service, each targeting the
+	// default media cluster.
+	if len(assigner.calls) != 4 {
+		t.Fatalf("expected 4 assignment calls, got %d (%v)", len(assigner.calls), assigner.calls)
 	}
 	for _, call := range assigner.calls {
 		if call.GetClusterId() != "media-central-primary" {
@@ -379,7 +383,7 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *tes
 			t.Fatalf("expected one explicit instance id, got %v", call.GetInstanceIds())
 		}
 	}
-	if len(assigner.drains) != 3 {
+	if len(assigner.drains) != 4 {
 		t.Fatalf("expected existing assignments to be cleared first, got %d drains", len(assigner.drains))
 	}
 

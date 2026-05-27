@@ -5515,12 +5515,15 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	}
 	// Pool-style media services (foghorn, chandler, livepeer-gateway) resolve
 	// their logical media-cluster identity via service_cluster_assignments.
+	// Public telemetry DNS is backed by vmauth instances, but it has the same
+	// logical-cluster shape: vmauth runs on observability hosts and receives one
+	// assignment per media cluster it serves.
 	// The physical service_instances row stays bound to the host cluster, so
 	// reads must follow the assignment table to surface the right cluster_id.
 	// Edge subtypes (edge-ingest/egress/storage/processing) keep the standard
 	// service_instances path: edge nodes are the media cluster physically, so
 	// si.cluster_id == the logical media cluster.
-	if dns.IsPoolAssignedServiceType(serviceLookupType) {
+	if dns.IsPoolAssignedServiceType(serviceLookupType) || serviceTypeFilter == "telemetry" {
 		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 	}
 	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)

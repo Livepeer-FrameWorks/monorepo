@@ -19,6 +19,7 @@ func TestClusterFinalizePlan(t *testing.T) {
 				clusterFinalizeStepPurserBootstrap,
 				clusterFinalizeStepPurserValidate,
 				clusterFinalizeStepCommodore,
+				clusterFinalizeStepAssignments,
 				clusterFinalizeStepControlPlane,
 			},
 		},
@@ -30,6 +31,7 @@ func TestClusterFinalizePlan(t *testing.T) {
 				clusterFinalizeStepPurserBootstrap,
 				clusterFinalizeStepPurserValidate,
 				clusterFinalizeStepCommodore,
+				clusterFinalizeStepAssignments,
 			},
 		},
 		{
@@ -50,6 +52,11 @@ func TestClusterFinalizePlan(t *testing.T) {
 			name: "commodore",
 			only: clusterFinalizeOnlyCommodore,
 			want: []clusterFinalizeStep{clusterFinalizeStepCommodore},
+		},
+		{
+			name: "assignments",
+			only: clusterFinalizeOnlyAssignments,
+			want: []clusterFinalizeStep{clusterFinalizeStepAssignments},
 		},
 		{
 			name: "validation",
