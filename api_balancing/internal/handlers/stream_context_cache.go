@@ -45,6 +45,23 @@ func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
 	remoteEdgeCache = cache
 }
 
+func activeReplicationSource(ctx context.Context, streamName string) (string, bool) {
+	if remoteEdgeCache == nil || strings.TrimSpace(streamName) == "" {
+		return "", false
+	}
+	record, err := remoteEdgeCache.GetActiveReplication(ctx, streamName)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("stream", streamName).Warn("Source lookup: failed to read active origin-pull record")
+		}
+		return "", false
+	}
+	if record == nil || strings.TrimSpace(record.DTSCURL) == "" {
+		return "", false
+	}
+	return record.DTSCURL, true
+}
+
 // SetOriginPullInstanceID identifies this Foghorn instance when taking
 // cluster-wide origin-pull leases from HTTP handlers.
 func SetOriginPullInstanceID(instanceID string) {

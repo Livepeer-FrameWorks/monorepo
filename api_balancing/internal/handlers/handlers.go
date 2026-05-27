@@ -1490,6 +1490,20 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		handleGetPullSource(c, streamName, lat, lon, tagAdjust, clientIP, ctx, start)
 		return
 	}
+	if remoteDTSC, ok := activeReplicationSource(ctx, streamName); ok {
+		durationMs := float32(time.Since(start).Milliseconds())
+		if metrics != nil {
+			metrics.RoutingDecisions.WithLabelValues("source", "active_replication").Inc()
+			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+		}
+		logger.WithFields(logging.Fields{
+			"stream":   streamName,
+			"dtsc_url": remoteDTSC,
+		}).Info("Source lookup: using active origin-pull source")
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "active_replication", remoteDTSC, 0, 0, "", durationMs)
+		c.String(http.StatusOK, remoteDTSC)
+		return
+	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
 	if err != nil {
