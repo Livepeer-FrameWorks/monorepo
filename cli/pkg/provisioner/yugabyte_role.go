@@ -87,7 +87,7 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 // yugabyteRoleDetect does a pgrep-based reconnaissance over SSH before any
 // playbook runs. Pre-playbook reads are cheap and avoid re-running the
 // role on hosts that are already fully up.
-func yugabyteRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+func yugabyteRoleDetect(ctx context.Context, host inventory.Host, _ ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}

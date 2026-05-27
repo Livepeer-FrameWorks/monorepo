@@ -24,6 +24,6 @@ func nodeBaselineRoleVars(_ context.Context, _ inventory.Host, config ServiceCon
 	return vars, nil
 }
 
-func nodeBaselineRoleDetect(context.Context, inventory.Host, RoleBuildHelpers) (*detect.ServiceState, error) {
+func nodeBaselineRoleDetect(context.Context, inventory.Host, ServiceConfig, RoleBuildHelpers) (*detect.ServiceState, error) {
 	return &detect.ServiceState{Exists: false, Running: false}, nil
 }

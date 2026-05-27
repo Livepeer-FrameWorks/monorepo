@@ -5439,15 +5439,6 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		return nil, fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
-	var beforeState *detect.ServiceState
-	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
-		var detectErr error
-		beforeState, detectErr = prov.Detect(phaseCtx, host)
-		return detectErr
-	}); phaseErr != nil {
-		beforeState = &detect.ServiceState{Exists: true, Running: true}
-	}
-
 	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, err
@@ -5465,6 +5456,15 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 			}
 			config.Metadata[k] = v
 		}
+	}
+
+	var beforeState *detect.ServiceState
+	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
+		var detectErr error
+		beforeState, detectErr = provisioner.DetectWithConfig(phaseCtx, prov, host, config)
+		return detectErr
+	}); phaseErr != nil {
+		beforeState = &detect.ServiceState{Exists: true, Running: true}
 	}
 
 	// Preflight: check required external env vars
@@ -5528,7 +5528,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	var afterState *detect.ServiceState
 	if err := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
 		var detectErr error
-		afterState, detectErr = prov.Detect(phaseCtx, host)
+		afterState, detectErr = provisioner.DetectWithConfig(phaseCtx, prov, host, config)
 		return detectErr
 	}); err != nil {
 		afterState = nil

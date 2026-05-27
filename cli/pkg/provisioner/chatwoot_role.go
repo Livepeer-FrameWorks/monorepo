@@ -24,8 +24,8 @@ func chatwootRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig,
 	}, nil
 }
 
-func chatwootRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
-	return serviceRoleDetect("chatwoot")(ctx, host, helpers)
+func chatwootRoleDetect(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+	return serviceRoleDetect("chatwoot")(ctx, host, config, helpers)
 }
 
 // chatwootEnvMap assembles the non-secret environment the compose .env

@@ -25,6 +25,6 @@ func nodeTuningRoleVars(_ context.Context, _ inventory.Host, config ServiceConfi
 	return vars, nil
 }
 
-func nodeTuningRoleDetect(context.Context, inventory.Host, RoleBuildHelpers) (*detect.ServiceState, error) {
+func nodeTuningRoleDetect(context.Context, inventory.Host, ServiceConfig, RoleBuildHelpers) (*detect.ServiceState, error) {
 	return &detect.ServiceState{Exists: false, Running: false}, nil
 }

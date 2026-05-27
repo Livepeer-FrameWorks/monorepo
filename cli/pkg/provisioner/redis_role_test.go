@@ -34,6 +34,37 @@ func TestRedisStartupDiagnosticsIncludeRedisLog(t *testing.T) {
 	}
 }
 
+func TestRedisSystemdServiceNameIsInstanceScoped(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ServiceConfig
+		want string
+	}{
+		{
+			name: "unnamed default instance falls back to legacy detector",
+			cfg:  ServiceConfig{Metadata: map[string]any{}},
+			want: "",
+		},
+		{
+			name: "replica uses exact named service",
+			cfg:  ServiceConfig{Metadata: map[string]any{"instance": "foghorn-media-us-1-replica-regional-us-2", "redis_role": "replica"}},
+			want: "frameworks-redis-foghorn-media-us-1-replica-regional-us-2",
+		},
+		{
+			name: "sentinel uses sentinel unit suffix",
+			cfg:  ServiceConfig{Metadata: map[string]any{"instance_name": "foghorn-media-us-1", "redis_role": "sentinel"}},
+			want: "frameworks-redis-foghorn-media-us-1-sentinel",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redisSystemdServiceName(tt.cfg); got != tt.want {
+				t.Fatalf("redisSystemdServiceName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func readRedisRepoFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile("../../../" + path)

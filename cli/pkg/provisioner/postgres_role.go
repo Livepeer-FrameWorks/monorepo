@@ -119,7 +119,7 @@ func sanitizePostgresInstanceName(value string) string {
 
 // postgresRoleDetect checks whether a postgresql server is running on the host.
 // Cheap SSH probe — runs before any playbook.
-func postgresRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+func postgresRoleDetect(ctx context.Context, host inventory.Host, _ ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}

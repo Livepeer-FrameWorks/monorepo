@@ -658,7 +658,7 @@ func resolveGenericBinary(ctx context.Context, serviceName string, host inventor
 }
 
 func serviceRoleDetect(serviceName string) RoleDetector {
-	return func(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+	return func(ctx context.Context, host inventory.Host, _ ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 		if serviceName == "" || helpers.SSHPool == nil {
 			return &detect.ServiceState{Exists: false, Running: false}, nil
 		}

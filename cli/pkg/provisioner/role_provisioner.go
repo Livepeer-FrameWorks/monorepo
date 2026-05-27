@@ -20,8 +20,9 @@ type RoleVarsBuilder func(ctx context.Context, host inventory.Host, config Servi
 
 // RoleDetector is the Go-layer reconnaissance hook. Runs before any playbook
 // and does not mutate state — reports ServiceState for the orchestrator's
-// "does this already exist?" decision.
-type RoleDetector func(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error)
+// "does this already exist?" decision. The rendered ServiceConfig is included
+// so instance-scoped roles can detect the exact unit they are about to manage.
+type RoleDetector func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error)
 
 // RoleFingerprinter is the optional Go-layer desired-state hook used by
 // `cluster diff` and `cluster apply` to decide whether a host needs touching
@@ -188,10 +189,16 @@ func FindAnsibleRoot() (string, error) {
 
 // Detect delegates to the per-service detector or reports unknown.
 func (r *RolePlaybookProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
+	return r.DetectWithConfig(ctx, host, ServiceConfig{})
+}
+
+// DetectWithConfig delegates to the per-service detector with the rendered
+// ServiceConfig so rollback detection can stay instance-scoped.
+func (r *RolePlaybookProvisioner) DetectWithConfig(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.ServiceState, error) {
 	if r.Detector == nil {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}
-	return r.Detector(ctx, host, r.helpers())
+	return r.Detector(ctx, host, config, r.helpers())
 }
 
 // Fingerprint delegates to the per-service fingerprinter. Returns nil when

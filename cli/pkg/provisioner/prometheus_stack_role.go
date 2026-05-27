@@ -116,7 +116,7 @@ func vmauthUpstreamURL(env map[string]string) string {
 	return strings.TrimSuffix(upstream, "/")
 }
 
-func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}
@@ -126,7 +126,20 @@ func prometheusStackRoleDetect(ctx context.Context, host inventory.Host, helpers
 	if err != nil {
 		return nil, err
 	}
+	if serviceName := prometheusStackSystemdServiceName(config); serviceName != "" {
+		return detectSystemdUnit(ctx, runner, serviceName)
+	}
 	result, runErr := runner.Run(ctx, "systemctl is-active prometheus victoriametrics vmagent vmauth node_exporter 2>/dev/null | grep -qx active && echo RUNNING || echo NOT_RUNNING")
 	running := runErr == nil && result != nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 	return &detect.ServiceState{Exists: running, Running: running}, nil
+}
+
+func prometheusStackSystemdServiceName(config ServiceConfig) string {
+	component := firstNonEmpty(metaString(config.Metadata, "component"), metaString(config.Metadata, "service_name"))
+	switch component {
+	case "prometheus", "victoriametrics", "vmagent", "vmauth", "node_exporter":
+		return component
+	default:
+		return ""
+	}
 }

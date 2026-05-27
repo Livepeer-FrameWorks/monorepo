@@ -30,6 +30,22 @@ type Provisioner interface {
 	GetName() string
 }
 
+// ConfigDetector is implemented by provisioners whose detection needs the
+// rendered ServiceConfig. Instance-scoped roles use this to avoid treating an
+// unrelated unit on the same host as the service being changed.
+type ConfigDetector interface {
+	DetectWithConfig(ctx context.Context, host inventory.Host, config ServiceConfig) (*detect.ServiceState, error)
+}
+
+// DetectWithConfig runs a config-aware detector when available, otherwise it
+// falls back to the legacy config-free Provisioner detector.
+func DetectWithConfig(ctx context.Context, p Provisioner, host inventory.Host, config ServiceConfig) (*detect.ServiceState, error) {
+	if detector, ok := p.(ConfigDetector); ok {
+		return detector.DetectWithConfig(ctx, host, config)
+	}
+	return p.Detect(ctx, host)
+}
+
 // ServiceConfig holds service-specific configuration
 type ServiceConfig struct {
 	Mode       string            // "docker" or "native"

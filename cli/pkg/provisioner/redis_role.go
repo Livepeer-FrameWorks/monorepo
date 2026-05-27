@@ -72,7 +72,7 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	return vars, nil
 }
 
-func redisRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+func redisRoleDetect(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}
@@ -82,9 +82,23 @@ func redisRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuild
 	if err != nil {
 		return nil, err
 	}
+	if serviceName := redisSystemdServiceName(config); serviceName != "" {
+		return detectSystemdUnit(ctx, runner, serviceName)
+	}
 	result, err := runner.Run(ctx, "(pgrep -x redis-server || pgrep -x valkey-server) >/dev/null && echo RUNNING || echo NOT_RUNNING")
 	running := err == nil && strings.Contains(result.Stdout, "RUNNING") && !strings.Contains(result.Stdout, "NOT_RUNNING")
 	bin, binErr := runner.Run(ctx, "command -v redis-cli >/dev/null && echo EXISTS")
 	exists := binErr == nil && bin != nil && strings.Contains(bin.Stdout, "EXISTS")
 	return &detect.ServiceState{Exists: exists, Running: running}, nil
+}
+
+func redisSystemdServiceName(config ServiceConfig) string {
+	instance := firstNonEmpty(metaString(config.Metadata, "instance"), metaString(config.Metadata, "instance_name"))
+	if instance == "" {
+		return ""
+	}
+	if metaString(config.Metadata, "redis_role") == "sentinel" {
+		instance += "-sentinel"
+	}
+	return "frameworks-redis-" + instance
 }

@@ -67,7 +67,7 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 	return vars, nil
 }
 
-func clickhouseRoleDetect(ctx context.Context, host inventory.Host, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
+func clickhouseRoleDetect(ctx context.Context, host inventory.Host, _ ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {
 	if host.ExternalIP == "127.0.0.1" || host.ExternalIP == "localhost" {
 		return &detect.ServiceState{Exists: false, Running: false}, nil
 	}

@@ -37,3 +37,34 @@ func TestPrometheusStackRoleVarsMapsVMAUTHEdgeJWTKey(t *testing.T) {
 		t.Fatalf("vmauth_upstream_url = %v, want stripped upstream", got)
 	}
 }
+
+func TestPrometheusStackSystemdServiceNameIsComponentScoped(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ServiceConfig
+		want string
+	}{
+		{
+			name: "vmauth",
+			cfg:  ServiceConfig{Metadata: map[string]any{"component": "vmauth"}},
+			want: "vmauth",
+		},
+		{
+			name: "vmagent",
+			cfg:  ServiceConfig{Metadata: map[string]any{"service_name": "vmagent"}},
+			want: "vmagent",
+		},
+		{
+			name: "unknown falls back",
+			cfg:  ServiceConfig{Metadata: map[string]any{"component": "telemetry"}},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prometheusStackSystemdServiceName(tt.cfg); got != tt.want {
+				t.Fatalf("prometheusStackSystemdServiceName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
