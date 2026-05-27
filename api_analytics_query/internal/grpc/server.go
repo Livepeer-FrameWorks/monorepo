@@ -157,6 +157,63 @@ func sanitizeFloat64(v float64) float64 {
 	return v
 }
 
+func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantID string, startTime, endTime time.Time) (float64, int32, int32, error) {
+	var streamHours float64
+	var peakConcurrent, totalStreams int32
+	err := s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(sum(active_seconds) / 3600.0, 0) AS stream_hours,
+			toInt32(COALESCE(max(peak_viewers), 0)) AS peak_concurrent,
+			toInt32(COALESCE(uniqExact(stream_id), 0)) AS total_streams
+		FROM (
+			SELECT
+				stream_id,
+				toFloat64(active_seconds) AS active_seconds,
+				toUInt32(peak_viewers) AS peak_viewers
+			FROM periscope.stream_runtime_5m_v
+			WHERE tenant_id = ?
+			  AND window_start >= ?
+			  AND window_start <  ?
+
+			UNION ALL
+
+			SELECT
+				stream_id,
+				toFloat64(greatest(0, dateDiff('second', greatest(started_at, ?), least(now(), ?)))) AS active_seconds,
+				toUInt32(current_viewers) AS peak_viewers
+			FROM (
+				SELECT
+					s.stream_id AS stream_id,
+					s.current_viewers AS current_viewers,
+					least(
+						ifNull(min(e.timestamp), if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)),
+						if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)
+					) AS started_at
+				FROM periscope.stream_state_current AS s FINAL
+				LEFT JOIN (
+					SELECT stream_id, max(timestamp) AS ended_at
+					FROM periscope.stream_event_log
+					WHERE tenant_id = ?
+					  AND event_type = 'stream_end'
+					GROUP BY stream_id
+				) AS last_end ON last_end.stream_id = s.stream_id
+				LEFT JOIN periscope.stream_event_log AS e
+					ON e.tenant_id = s.tenant_id
+				   AND e.stream_id = s.stream_id
+				   AND e.timestamp > ifNull(last_end.ended_at, toDateTime(0))
+				   AND e.status = 'live'
+				   AND e.event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
+				WHERE s.tenant_id = ?
+				  AND s.status = 'live'
+				GROUP BY s.stream_id, s.current_viewers, s.started_at, s.updated_at, last_end.ended_at
+			)
+			WHERE started_at < ?
+			  AND now() >= ?
+		)
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, tenantID, endTime, startTime).Scan(&streamHours, &peakConcurrent, &totalStreams)
+	return streamHours, peakConcurrent, totalStreams, err
+}
+
 func wrapClickhouseError(err error, message string) error {
 	if err == nil {
 		return nil
@@ -846,10 +903,15 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 		resp.Status = streamStatus
 		resp.CurrentViewers = int64(currentViewers)
 
+		if streamStatus == "live" {
+			if liveStartedAt, ok := s.lookupLiveIntervalStarts(ctx, tenantID, []string{streamID})[streamID]; ok && !liveStartedAt.IsZero() {
+				startedAt = &liveStartedAt
+			}
+		}
 		if startedAt != nil && !startedAt.IsZero() {
 			resp.StartedAt = timestamppb.New(*startedAt)
 			if streamStatus == "live" {
-				resp.DurationSeconds = int64(time.Since(*startedAt).Seconds())
+				resp.DurationSeconds = max(0, int64(time.Since(*startedAt).Seconds()))
 			}
 		}
 		if updatedAt != nil && !updatedAt.IsZero() {
@@ -933,6 +995,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 	}
 	defer func() { _ = rows.Close() }()
 
+	liveStarts := s.lookupLiveIntervalStarts(ctx, tenantID, streamIDs)
 	for rows.Next() {
 		var streamID, streamStatus string
 		var startedAt, updatedAt *time.Time
@@ -955,10 +1018,15 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 			CurrentViewers: int64(currentViewers),
 		}
 
+		if streamStatus == "live" {
+			if liveStartedAt, ok := liveStarts[streamID]; ok && !liveStartedAt.IsZero() {
+				startedAt = &liveStartedAt
+			}
+		}
 		if startedAt != nil && !startedAt.IsZero() {
 			resp.StartedAt = timestamppb.New(*startedAt)
 			if streamStatus == "live" {
-				resp.DurationSeconds = int64(time.Since(*startedAt).Seconds())
+				resp.DurationSeconds = max(0, int64(time.Since(*startedAt).Seconds()))
 			}
 		}
 		if updatedAt != nil && !updatedAt.IsZero() {
@@ -991,6 +1059,85 @@ func joinStrings(strs []string, sep string) string {
 	result := strs[0]
 	for i := 1; i < len(strs); i++ {
 		result += sep + strs[i]
+	}
+	return result
+}
+
+func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID string, streamIDs []string) map[string]time.Time {
+	result := make(map[string]time.Time, len(streamIDs))
+	if len(streamIDs) == 0 {
+		return result
+	}
+	parsed := make([]uuid.UUID, 0, len(streamIDs))
+	for _, id := range streamIDs {
+		streamUUID, err := uuid.Parse(id)
+		if err == nil && streamUUID != uuid.Nil {
+			parsed = append(parsed, streamUUID)
+		}
+	}
+	if len(parsed) == 0 {
+		return result
+	}
+
+	placeholders := make([]string, len(parsed))
+	args := make([]any, 0, 1+len(parsed)+1+len(parsed))
+	args = append(args, tenantID)
+	for i, id := range parsed {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, tenantID)
+	for _, id := range parsed {
+		args = append(args, id)
+	}
+
+	inClause := joinStrings(placeholders, ", ")
+	query := fmt.Sprintf(`
+		WITH last_end AS (
+			SELECT stream_id, max(timestamp) AS ended_at
+			FROM periscope.stream_event_log
+			WHERE tenant_id = ?
+			  AND stream_id IN (%s)
+			  AND event_type = 'stream_end'
+			GROUP BY stream_id
+		)
+		SELECT
+			toString(s.stream_id) AS stream_id,
+			least(
+				ifNull(min(e.timestamp), if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)),
+				if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)
+			) AS started_at
+		FROM periscope.stream_state_current AS s FINAL
+		LEFT JOIN last_end ON last_end.stream_id = s.stream_id
+		LEFT JOIN periscope.stream_event_log AS e
+			ON e.tenant_id = s.tenant_id
+		   AND e.stream_id = s.stream_id
+		   AND e.timestamp > ifNull(last_end.ended_at, toDateTime(0))
+		   AND e.status = 'live'
+		   AND e.event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
+		WHERE s.tenant_id = ?
+		  AND s.stream_id IN (%s)
+		  AND s.status = 'live'
+		GROUP BY s.stream_id, s.started_at, s.updated_at, last_end.ended_at
+	`, inClause, inClause)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to resolve live interval starts from stream_event_log")
+		return result
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var streamID string
+		var startedAt time.Time
+		if err := rows.Scan(&streamID, &startedAt); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan live interval start")
+			continue
+		}
+		result[streamID] = startedAt
+	}
+	if err := rows.Err(); err != nil {
+		s.logger.WithError(err).Warn("Failed while resolving live interval starts")
 	}
 	return result
 }
@@ -2693,18 +2840,29 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		SELECT
 			COALESCE(sum(down_bytes_observed), 0) / 1073741824.0 as egress_gb,
 			COALESCE(sum(seconds_observed), 0) / 3600.0 as viewer_hours,
-			COALESCE(uniqExact(node_id, session_id), 0) as unique_viewers,
-			COALESCE(uniqExact(node_id, session_id), 0) as total_views
-		FROM periscope.viewer_usage_5m_v
-		WHERE tenant_id = ?
-		AND window_start >= ?
-		AND window_start <  ?
+			COALESCE(uniqExact(viewer_key), 0) as unique_viewers,
+			COALESCE(uniqExact(session_key), 0) as total_views,
+			COALESCE(max(window_viewers), 0) AS peak_viewers
+		FROM (
+			SELECT
+				u.window_start,
+				u.down_bytes_observed,
+				u.seconds_observed,
+				concat(toString(u.node_id), '|', u.session_id) AS session_key,
+				if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)) AS viewer_key,
+				uniqExact(concat(toString(u.node_id), '|', u.session_id)) OVER (PARTITION BY u.window_start) AS window_viewers
+			FROM periscope.viewer_usage_5m_v AS u
+			LEFT JOIN periscope.viewer_sessions_final_v AS s USING (tenant_id, node_id, session_id)
+			WHERE u.tenant_id = ?
+			  AND u.window_start >= ?
+			  AND u.window_start <  ?
+		)
 	`
 
 	var egressGb, viewerHours float64
-	var uniqueViewers, totalViews int64
+	var uniqueViewers, totalViews, peakViewers int64
 	err = s.clickhouse.QueryRowContext(ctx, historicalQuery, tenantID, startTime, endTime).Scan(
-		&egressGb, &viewerHours, &uniqueViewers, &totalViews,
+		&egressGb, &viewerHours, &uniqueViewers, &totalViews, &peakViewers,
 	)
 	if err == nil {
 		resp.EgressGb = egressGb
@@ -2712,44 +2870,18 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		resp.DeliveredMinutes = viewerHours * 60 // Convenience: viewer_hours * 60
 		resp.UniqueViewers = int32(uniqueViewers)
 		resp.TotalViews = totalViews
-		resp.PeakViewers = int32(uniqueViewers)
+		resp.PeakViewers = int32(peakViewers)
 	} else {
 		s.logger.WithError(err).Info("Failed to get historical metrics from viewer_usage_5m_v")
 	}
 
-	// Real streaming hours from the canonical stream runtime ledger.
-	ingestQuery := `
-		SELECT COALESCE(sum(active_seconds) / 3600.0, 0) AS stream_hours
-		FROM periscope.stream_runtime_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-	`
-
-	var streamHours float64
-	err = s.clickhouse.QueryRowContext(ctx, ingestQuery, tenantID, startTime, endTime).Scan(&streamHours)
+	streamHours, peakConcurrent, _, err := s.queryStreamRuntimeSummary(ctx, tenantID, startTime, endTime)
 	if err == nil {
 		resp.StreamHours = streamHours
 		resp.IngestHours = streamHours // Alias for clarity
-	} else {
-		s.logger.WithError(err).Info("Failed to get stream hours from stream_runtime_5m_v")
-	}
-
-	// Get peak concurrent viewers from the canonical stream runtime rollup.
-	peakConcurrentQuery := `
-		SELECT COALESCE(max(peak_viewers), 0) as peak_concurrent
-		FROM periscope.stream_runtime_5m_v
-		WHERE tenant_id = ?
-		AND window_start >= ?
-		AND window_start <  ?
-	`
-
-	var peakConcurrent int32
-	err = s.clickhouse.QueryRowContext(ctx, peakConcurrentQuery, tenantID, startTime, endTime).Scan(&peakConcurrent)
-	if err == nil {
 		resp.PeakConcurrentViewers = peakConcurrent
 	} else {
-		s.logger.WithError(err).Info("Failed to get peak concurrent viewers from stream_runtime_5m_v")
+		s.logger.WithError(err).Info("Failed to get stream runtime summary")
 	}
 
 	sanitizePlatformOverviewResponse(resp)
@@ -5401,35 +5533,14 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		s.logger.WithError(err).Warn(message)
 	}
 
-	// max_viewers + total_streams from the canonical stream runtime ledger.
+	// Stream runtime combines closed 5-minute ledger rows with current live intervals.
 	var maxViewers, totalStreams int32
-	queryCount++
-	queryCtx, cancel := withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
-		SELECT
-			COALESCE(max(peak_viewers), 0) AS max_viewers,
-			COALESCE(uniq(stream_id), 0) AS total_streams
-		FROM stream_runtime_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-	`, tenantID, startTime, endTime).Scan(&maxViewers, &totalStreams)
-	cancel()
-	recordQueryError(err, "Failed to query stream_runtime_5m_v for live usage")
-
-	// Stream hours from the canonical stream runtime ledger.
 	var streamHours float64
 	queryCount++
-	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
-		SELECT COALESCE(sum(active_seconds) / 3600.0, 0) AS stream_hours
-		FROM stream_runtime_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-	`, tenantID, startTime, endTime).Scan(&streamHours)
+	queryCtx, cancel := withClickhouseTimeout(ctx)
+	streamHours, maxViewers, totalStreams, err = s.queryStreamRuntimeSummary(queryCtx, tenantID, startTime, endTime)
 	cancel()
-	recordQueryError(err, "Failed to query stream_runtime_5m_v for live stream hours")
+	recordQueryError(err, "Failed to query stream runtime summary")
 	summary.MaxViewers = maxViewers
 	summary.TotalStreams = totalStreams
 	summary.StreamHours = streamHours

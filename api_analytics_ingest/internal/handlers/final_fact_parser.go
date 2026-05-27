@@ -365,7 +365,10 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 	if nodeID == "" {
 		nodeID = trigger.GetNodeId()
 	}
-	clusterID := trigger.GetClusterId()
+	clusterID := strings.TrimSpace(pb_.GetClusterId())
+	if clusterID == "" {
+		clusterID = strings.TrimSpace(trigger.GetClusterId())
+	}
 
 	// media_seconds = input media duration. For AV virtual segments
 	// MistServer emits both wall-clock seconds_since_last (in DurationMs)
@@ -870,24 +873,30 @@ func parseTenantID(s string) (uuid.UUID, bool) {
 }
 
 func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, tenantID uuid.UUID, streamID uuid.UUID, fallbackEndedAtMS int64) int64 {
+	startedFromEvents := h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+	if startedFromEvents > 0 && startedFromEvents < fallbackEndedAtMS {
+		return startedFromEvents
+	}
+
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT toUnixTimestamp(ifNull(started_at, updated_at)) * 1000
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ? AND stream_id = ?
+		  AND status = 'live'
 		LIMIT 1`,
 		tenantID, streamID)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start lookup failed; using STREAM_END time as zero-duration fallback")
-		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+		return fallbackEndedAtMS
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+		return fallbackEndedAtMS
 	}
 	var startedAtMS int64
 	if err := rows.Scan(&startedAtMS); err != nil {
 		h.logger.WithError(err).Debug("Stream start lookup scan failed; using STREAM_END time as zero-duration fallback")
-		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+		return fallbackEndedAtMS
 	}
 	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
 		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)

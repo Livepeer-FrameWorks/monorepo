@@ -1370,6 +1370,59 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	}
 }
 
+func TestRawProcessingFinalUsesPayloadClusterID(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	clusterID := "marketplace-edge-a"
+	trigger := &pb.MistTrigger{
+		NodeId:      "edge-1",
+		TriggerType: "LIVEPEER_SEGMENT_COMPLETE",
+		RequestId:   "source-event-processing",
+		Timestamp:   time.Now().UnixMilli(),
+		TenantId:    &tenantID,
+		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+			ProcessBilling: &pb.ProcessBillingEvent{
+				NodeId:        "edge-1",
+				StreamName:    "live+demo",
+				ProcessType:   "Livepeer",
+				DurationMs:    2000,
+				TenantId:      &tenantID,
+				StreamId:      &streamID,
+				OutputCodec:   stringPtr("h264"),
+				ClusterId:     &clusterID,
+				SegmentNumber: int32Ptr(42),
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"source_event_id": "source-event-processing",
+			"trigger_type":    "LIVEPEER_SEGMENT_COMPLETE",
+			"node_id":         "edge-1",
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	finalBatch := conn.batches["periscope.processing_segments_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected processing_segments_final row, got %#v", finalBatch)
+	}
+	if got := finalBatch.rows[0][8]; got != clusterID {
+		t.Fatalf("expected payload cluster_id %q, got %#v", clusterID, got)
+	}
+}
+
 func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -1423,6 +1476,84 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	}
 	if stateRow[23] != event.Timestamp {
 		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateRow[23])
+	}
+}
+
+func TestPushRewriteStartedAtLookupRequiresLiveState(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{StreamName: "live+demo"},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_rewrite",
+		Timestamp: time.Unix(1710000000, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var found bool
+	for _, q := range conn.queries {
+		if q.table != "periscope.stream_state_current" {
+			continue
+		}
+		found = true
+		if !strings.Contains(q.query, "AND status = ?") {
+			t.Fatalf("expected live-only current-state lookup, got query %q", q.query)
+		}
+		if len(q.args) != 3 || q.args[2] != "live" {
+			t.Fatalf("expected live status arg, got %#v", q.args)
+		}
+	}
+	if !found {
+		t.Fatal("expected stream_state_current lookup")
+	}
+}
+
+func TestPushRewriteDuplicateStillRefreshesCurrentState(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	eventID := uuid.New()
+	conn.addDuplicate("stream_event_log", eventID)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{StreamName: "live+demo"},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   eventID.String(),
+		EventType: "push_rewrite",
+		Timestamp: time.Unix(1710000000, 0),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if batch := conn.batches["stream_state_current"]; batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected duplicate push_rewrite to refresh current state, got %#v", batch)
+	}
+	if batch := conn.batches["stream_event_log"]; batch != nil {
+		t.Fatalf("expected duplicate push_rewrite to skip event log insert, got %#v", batch.rows)
 	}
 }
 
@@ -1988,6 +2119,13 @@ func mustMistTriggerData(t *testing.T, mt *pb.MistTrigger) map[string]interface{
 type fakeClickhouseConn struct {
 	batches    map[string]*fakeBatch
 	duplicates map[string]map[uuid.UUID]bool
+	queries    []fakeQuery
+}
+
+type fakeQuery struct {
+	table string
+	query string
+	args  []any
 }
 
 func newFakeClickhouseConn() *fakeClickhouseConn {
@@ -2013,6 +2151,7 @@ func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string,
 }
 func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	table := tableFromQuery(query, "from")
+	f.queries = append(f.queries, fakeQuery{table: table, query: query, args: append([]any(nil), args...)})
 	var eventID uuid.UUID
 	if len(args) > 0 {
 		if parsed, ok := args[0].(uuid.UUID); ok {

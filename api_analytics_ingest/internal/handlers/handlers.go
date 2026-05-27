@@ -1104,18 +1104,31 @@ func parseUUIDOrNil(value string) interface{} {
 }
 
 func (h *AnalyticsHandler) lookupCurrentStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool) {
+	return h.lookupCurrentStreamStartedAtByStatus(ctx, tenantID, streamID, "")
+}
+
+func (h *AnalyticsHandler) lookupCurrentLiveStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool) {
+	return h.lookupCurrentStreamStartedAtByStatus(ctx, tenantID, streamID, "live")
+}
+
+func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Context, tenantID string, streamID uuid.UUID, requiredStatus string) (time.Time, bool) {
 	tenantUUID, err := uuid.Parse(strings.TrimSpace(tenantID))
 	if err != nil || tenantUUID == uuid.Nil || streamID == uuid.Nil {
 		return time.Time{}, false
 	}
-	rows, err := h.clickhouse.Query(ctx, `
+	query := `
 		SELECT toUnixTimestamp(started_at) * 1000
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ?
 		  AND stream_id = ?
-		  AND started_at IS NOT NULL
-		LIMIT 1`,
-		tenantUUID, streamID)
+		  AND started_at IS NOT NULL`
+	args := []any{tenantUUID, streamID}
+	if requiredStatus != "" {
+		query += " AND status = ?"
+		args = append(args, requiredStatus)
+	}
+	query += " LIMIT 1"
+	rows, err := h.clickhouse.Query(ctx, query, args...)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream started_at lookup failed")
 		return time.Time{}, false
@@ -1445,6 +1458,10 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	streamUUID := parseUUID(mistTriggerStreamID(&mt))
 
 	if streamUUID != uuid.Nil {
+		startedAt := event.Timestamp
+		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, streamUUID); ok {
+			startedAt = existingStartedAt
+		}
 		stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
 			INSERT INTO stream_state_current (
 				tenant_id, stream_id, internal_name, node_id, status, buffer_state,
@@ -1483,7 +1500,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 			nil,
 			nil,
 			nil,
-			event.Timestamp,
+			startedAt,
 			event.Timestamp,
 		); appendErr != nil {
 			return appendErr
@@ -1491,6 +1508,10 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		if sendErr := stateBatch.Send(); sendErr != nil {
 			return sendErr
 		}
+	}
+
+	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+		return nil
 	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `

@@ -199,18 +199,17 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 	_, server, mock := newLiveUsageSummaryServer(t)
 
 	setupLiveUsageSummaryMocks(t, mock, map[string]error{
-		`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`:   sql.ErrConnDone,
-		`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`: sql.ErrConnDone,
-		liveViewerUsagePattern:                                 sql.ErrConnDone,
-		"FROM client_qoe_5m":                                   sql.ErrConnDone,
-		"FROM storage_gb_seconds_5m_v":                         sql.ErrConnDone,
-		"FROM processing_5m_v":                                 sql.ErrConnDone,
-		liveGeoSummaryPattern:                                  sql.ErrConnDone,
-		liveGeoBreakdownPattern:                                sql.ErrConnDone,
-		"FROM artifact_events":                                 sql.ErrConnDone,
-		"storage_scope = 'hot'":                                sql.ErrConnDone,
-		"storage_scope = 'cold'":                               sql.ErrConnDone,
-		"FROM storage_events":                                  sql.ErrConnDone,
+		liveRuntimeSummaryPattern:      sql.ErrConnDone,
+		liveViewerUsagePattern:         sql.ErrConnDone,
+		"FROM client_qoe_5m":           sql.ErrConnDone,
+		"FROM storage_gb_seconds_5m_v": sql.ErrConnDone,
+		"FROM processing_5m_v":         sql.ErrConnDone,
+		liveGeoSummaryPattern:          sql.ErrConnDone,
+		liveGeoBreakdownPattern:        sql.ErrConnDone,
+		"FROM artifact_events":         sql.ErrConnDone,
+		"storage_scope = 'hot'":        sql.ErrConnDone,
+		"storage_scope = 'cold'":       sql.ErrConnDone,
+		"FROM storage_events":          sql.ErrConnDone,
 	})
 
 	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
@@ -399,9 +398,10 @@ func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock
 }
 
 const (
-	liveViewerUsagePattern  = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
-	liveGeoSummaryPattern   = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
-	liveGeoBreakdownPattern = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
+	liveRuntimeSummaryPattern = `sum\(active_seconds\)[\s\S]*FROM periscope\.stream_runtime_5m_v`
+	liveViewerUsagePattern    = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
+	liveGeoSummaryPattern     = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
+	liveGeoBreakdownPattern   = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
 )
 
 func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides map[string]error) {
@@ -420,9 +420,8 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 		mock.ExpectQuery(pattern).WillReturnRows(sqlmock.NewRows(columns).AddRow(rowValues...))
 	}
 
-	expectQuery(`max\(peak_viewers\)[\s\S]*FROM stream_runtime_5m_v`, []string{"max_viewers", "total_streams"}, []any{int32(0), int32(0)})
-	expectQuery(`sum\(active_seconds\)[\s\S]*FROM stream_runtime_5m_v`, []string{"stream_hours"}, []any{float64(0)})
-	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "egress_bytes", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0)})
+	expectQuery(liveRuntimeSummaryPattern, []string{"stream_hours", "peak_concurrent", "total_streams"}, []any{float64(0), int32(0), int32(0)})
+	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "egress_bytes", "total_viewers", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0), uint32(0)})
 	expectQuery("FROM client_qoe_5m", []string{"peak_bandwidth"}, []any{float64(0)})
 	expectQuery("FROM storage_gb_seconds_5m_v", []string{"gb_seconds"}, []any{float64(0)})
 	expectQuery("FROM processing_5m_v", []string{
@@ -572,16 +571,13 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 	mock.ExpectQuery(`(?s)FROM client_qoe_5m\s+WHERE tenant_id = \?.*timestamp_5m >= \?.*timestamp_5m <\s+\?`).
 		WithArgs("tenant-1", start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"peak_bandwidth"}).AddRow(float64(123)))
-	mock.ExpectQuery(`(?s)FROM periscope\.viewer_usage_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
+	mock.ExpectQuery(`(?s)FROM periscope\.viewer_usage_5m_v AS u.*WHERE u\.tenant_id = \?.*u\.window_start >= \?.*u\.window_start <\s+\?`).
 		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"egress_gb", "viewer_hours", "unique_viewers", "total_views"}).
-			AddRow(float64(1.5), float64(2.0), int64(3), int64(4)))
-	mock.ExpectQuery(`(?s)sum\(active_seconds\).*FROM periscope\.stream_runtime_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
-		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"stream_hours"}).AddRow(float64(9)))
-	mock.ExpectQuery(`(?s)max\(peak_viewers\).*FROM periscope\.stream_runtime_5m_v\s+WHERE tenant_id = \?.*window_start >= \?.*window_start <\s+\?`).
-		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"peak_concurrent"}).AddRow(int32(8)))
+		WillReturnRows(sqlmock.NewRows([]string{"egress_gb", "viewer_hours", "unique_viewers", "total_views", "peak_viewers"}).
+			AddRow(float64(1.5), float64(2.0), int64(3), int64(4), int64(6)))
+	mock.ExpectQuery(`(?s)sum\(active_seconds\).*FROM periscope\.stream_runtime_5m_v.*UNION ALL.*FROM periscope\.stream_state_current AS s FINAL`).
+		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", end, start).
+		WillReturnRows(sqlmock.NewRows([]string{"stream_hours", "peak_concurrent", "total_streams"}).AddRow(float64(9), int32(8), int32(2)))
 
 	resp, err := server.GetPlatformOverview(context.Background(), &pb.GetPlatformOverviewRequest{
 		TenantId: "tenant-1",
@@ -593,7 +589,7 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPlatformOverview: %v", err)
 	}
-	if resp.TotalViews != 4 || resp.UniqueViewers != 3 || resp.PeakConcurrentViewers != 8 {
+	if resp.TotalViews != 4 || resp.UniqueViewers != 3 || resp.PeakViewers != 6 || resp.PeakConcurrentViewers != 8 {
 		t.Fatalf("unexpected overview viewer metrics: %+v", resp)
 	}
 	if resp.StreamHours != 9 || resp.IngestHours != 9 || resp.ViewerHours != 2 || resp.EgressGb != 1.5 {
