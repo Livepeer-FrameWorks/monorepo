@@ -779,8 +779,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 		if err := maybeReconcileBatchServiceClusterAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
 			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Service-cluster reconciliation failed: %v", err))
-			fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
-			rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+			fmt.Fprintln(cmd.OutOrStdout(), "  Provisioned services were left running; fix finalization and run `frameworks cluster finalize --only assignments`.")
 			return fmt.Errorf("service-cluster reconciliation failed: %w", err)
 		}
 
@@ -891,6 +890,13 @@ func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *in
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
+	// Quartermaster owns the catalog layer used by service-cluster assignment
+	// reconciliation. Re-run it here so finalization can apply any catalog
+	// rows added by the current CLI release before assigning services.
+	if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
+		return fmt.Errorf("quartermaster bootstrap: %w", err)
+	}
+
 	// Purser bootstrap reconciles the embedded tier catalog, cluster pricing,
 	// and customer billing. Idempotent — always safe to run; the no-pricing
 	// case is just an empty cluster_pricing reconcile. Failure is fatal: a
@@ -912,6 +918,10 @@ func postProvisionFinalize(ctx context.Context, cmd *cobra.Command, manifest *in
 	// empty and the subcommand is a parse-and-exit no-op. Failure is fatal.
 	if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "commodore", bootstrapYAML, commodoreBootstrapExtraArgs(cmd)); err != nil {
 		return fmt.Errorf("commodore bootstrap: %w", err)
+	}
+
+	if err := reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, sess); err != nil {
+		return fmt.Errorf("service-cluster assignments: %w", err)
 	}
 
 	return validateControlPlane(ctx, cmd, manifest, runtimeData, sess)
@@ -1069,6 +1079,12 @@ func maybeReconcileBatchServiceClusterAssignments(ctx context.Context, cmd *cobr
 	// the service_instances rows exist before we wire assignment FKs.
 	requiredServiceTypes := []string{}
 	for _, name := range clusterAssignedServiceTypes() {
+		// vmauth is not a self-registering application service. Its catalog
+		// entry is created by Quartermaster bootstrap and finalization performs
+		// the assignment pass after that catalog layer is reconciled.
+		if name == "vmauth" {
+			continue
+		}
 		if batchContainsService(batch, name) {
 			requiredServiceTypes = append(requiredServiceTypes, name)
 		}

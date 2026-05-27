@@ -19,12 +19,14 @@ import (
 type clusterFinalizeStep string
 
 const (
+	clusterFinalizeStepQuartermaster   clusterFinalizeStep = "quartermaster-bootstrap"
 	clusterFinalizeStepPurserBootstrap clusterFinalizeStep = "purser-bootstrap"
 	clusterFinalizeStepPurserValidate  clusterFinalizeStep = "purser-validate"
 	clusterFinalizeStepCommodore       clusterFinalizeStep = "commodore-bootstrap"
 	clusterFinalizeStepAssignments     clusterFinalizeStep = "service-cluster-assignments"
 	clusterFinalizeStepControlPlane    clusterFinalizeStep = "control-plane-validation"
 	clusterFinalizeOnlyAll                                 = "all"
+	clusterFinalizeOnlyQuartermaster                       = "quartermaster"
 	clusterFinalizeOnlyPurser                              = "purser"
 	clusterFinalizeOnlyCommodore                           = "commodore"
 	clusterFinalizeOnlyAssignments                         = "assignments"
@@ -49,6 +51,9 @@ epilogue after fixing the underlying data/config issue.`,
 		Example: `  # Resume all post-provision finalization steps
   frameworks cluster finalize --gitops-dir ../gitops --cluster production
 
+  # Re-apply Quartermaster catalog/ingress/service registry bootstrap only
+  frameworks cluster finalize --gitops-dir ../gitops --cluster production --only quartermaster
+
   # Retry only Commodore bootstrap after fixing stale stream state
   frameworks cluster finalize --gitops-dir ../gitops --cluster production --only commodore
 
@@ -70,7 +75,7 @@ epilogue after fixing the underlying data/config issue.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&only, "only", clusterFinalizeOnlyAll, "Finalization slice to run (all|purser|commodore|assignments|validation)")
+	cmd.Flags().StringVar(&only, "only", clusterFinalizeOnlyAll, "Finalization slice to run (all|quartermaster|purser|commodore|assignments|validation)")
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip final control-plane validation when --only=all")
 	cmd.Flags().BoolVar(&ignoreValidation, "ignore-validation", false, "Continue even if control-plane validation has warnings")
 
@@ -180,6 +185,10 @@ func runClusterFinalize(cmd *cobra.Command, rc *resolvedCluster, only string, sk
 
 	for _, step := range steps {
 		switch step {
+		case clusterFinalizeStepQuartermaster:
+			if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
+				return fmt.Errorf("quartermaster bootstrap: %w", err)
+			}
 		case clusterFinalizeStepPurserBootstrap:
 			if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
 				return fmt.Errorf("purser bootstrap: %w", err)
@@ -216,6 +225,7 @@ func clusterFinalizePlan(only string, skipValidation bool) ([]clusterFinalizeSte
 	switch only {
 	case clusterFinalizeOnlyAll:
 		steps := []clusterFinalizeStep{
+			clusterFinalizeStepQuartermaster,
 			clusterFinalizeStepPurserBootstrap,
 			clusterFinalizeStepPurserValidate,
 			clusterFinalizeStepCommodore,
@@ -225,6 +235,8 @@ func clusterFinalizePlan(only string, skipValidation bool) ([]clusterFinalizeSte
 			steps = append(steps, clusterFinalizeStepControlPlane)
 		}
 		return steps, nil
+	case clusterFinalizeOnlyQuartermaster:
+		return []clusterFinalizeStep{clusterFinalizeStepQuartermaster}, nil
 	case clusterFinalizeOnlyPurser:
 		if skipValidation {
 			return []clusterFinalizeStep{clusterFinalizeStepPurserBootstrap}, nil
@@ -240,12 +252,13 @@ func clusterFinalizePlan(only string, skipValidation bool) ([]clusterFinalizeSte
 		}
 		return []clusterFinalizeStep{clusterFinalizeStepControlPlane}, nil
 	default:
-		return nil, fmt.Errorf("invalid finalization slice: %s (must be all, purser, commodore, assignments, or validation)", only)
+		return nil, fmt.Errorf("invalid finalization slice: %s (must be all, quartermaster, purser, commodore, assignments, or validation)", only)
 	}
 }
 
 func finalizeStepsContainBootstrap(steps []clusterFinalizeStep) bool {
-	return finalizeStepsContain(steps, clusterFinalizeStepPurserBootstrap) ||
+	return finalizeStepsContain(steps, clusterFinalizeStepQuartermaster) ||
+		finalizeStepsContain(steps, clusterFinalizeStepPurserBootstrap) ||
 		finalizeStepsContain(steps, clusterFinalizeStepCommodore)
 }
 

@@ -16,6 +16,7 @@ func TestClusterFinalizePlan(t *testing.T) {
 			name: "all",
 			only: clusterFinalizeOnlyAll,
 			want: []clusterFinalizeStep{
+				clusterFinalizeStepQuartermaster,
 				clusterFinalizeStepPurserBootstrap,
 				clusterFinalizeStepPurserValidate,
 				clusterFinalizeStepCommodore,
@@ -28,11 +29,17 @@ func TestClusterFinalizePlan(t *testing.T) {
 			only:           clusterFinalizeOnlyAll,
 			skipValidation: true,
 			want: []clusterFinalizeStep{
+				clusterFinalizeStepQuartermaster,
 				clusterFinalizeStepPurserBootstrap,
 				clusterFinalizeStepPurserValidate,
 				clusterFinalizeStepCommodore,
 				clusterFinalizeStepAssignments,
 			},
+		},
+		{
+			name: "quartermaster",
+			only: clusterFinalizeOnlyQuartermaster,
+			want: []clusterFinalizeStep{clusterFinalizeStepQuartermaster},
 		},
 		{
 			name: "purser",

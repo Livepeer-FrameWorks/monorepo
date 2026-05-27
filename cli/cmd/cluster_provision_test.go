@@ -585,6 +585,46 @@ func TestReconcileServiceClusterAssignmentsWithClientRequiresCurrentBatchService
 	}
 }
 
+func TestMaybeReconcileBatchServiceClusterAssignmentsDefersVMAUTH(t *testing.T) {
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	err := maybeReconcileBatchServiceClusterAssignments(
+		context.Background(),
+		cmd,
+		[]*orchestrator.Task{{Type: "vmauth", ServiceID: "vmauth"}},
+		&inventory.Manifest{},
+		map[string]any{},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("maybeReconcileBatchServiceClusterAssignments returned error: %v", err)
+	}
+	if strings.Contains(out.String(), "Reconciling service-cluster assignments") {
+		t.Fatalf("vmauth batch assignment must be deferred to finalization, got output %q", out.String())
+	}
+}
+
+func TestProvisionDoesNotRollbackOnServiceClusterReconciliationFailure(t *testing.T) {
+	raw, err := os.ReadFile("cluster_provision.go")
+	if err != nil {
+		t.Fatalf("read cluster_provision.go: %v", err)
+	}
+	src := string(raw)
+	failure := `ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Service-cluster reconciliation failed: %v", err))`
+	idx := strings.Index(src, failure)
+	if idx < 0 {
+		t.Fatalf("missing service-cluster reconciliation failure handling")
+	}
+	block := src[idx:min(idx+350, len(src))]
+	if strings.Contains(block, "rollbackProvisionedTasks") {
+		t.Fatalf("service-cluster reconciliation failure must not rollback provisioned services; block:\n%s", block)
+	}
+	if !strings.Contains(block, "cluster finalize --only assignments") {
+		t.Fatalf("service-cluster reconciliation failure should point at finalize --only assignments; block:\n%s", block)
+	}
+}
+
 func TestReconcileRemovedServicePlacementsKeepsAliasedPoolHosts(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
