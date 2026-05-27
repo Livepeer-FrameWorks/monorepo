@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2251,11 +2252,16 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 		return ""
 	}
 
-	// Replace HOST with the actual node hostname
-	// Extract hostname from base URL (e.g., "https://mist-seattle.stronk.rocks" -> "mist-seattle.stronk.rocks")
-	hostname := nodeState.BaseURL
-	hostname = strings.TrimPrefix(hostname, "https://")
-	hostname = strings.TrimPrefix(hostname, "http://")
+	hostname := ExtractPublicHostFromOutputs(nodeState.Outputs)
+	if hostname == "" {
+		hostname = hostOnlyForMistTemplate(nodeState.BaseURL)
+	} else {
+		hostname = hostOnlyForMistTemplate(hostname)
+	}
+	if hostname == "" {
+		logger.WithField("node_id", nodeID).Info("Unable to determine DTSC host")
+		return ""
+	}
 
 	// Replace HOST placeholder with actual hostname
 	dtscURI := strings.ReplaceAll(dtscTemplate, "HOST", hostname)
@@ -2265,6 +2271,7 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 
 	// Remove trailing slash if present
 	baseDTSCURI = strings.TrimSuffix(baseDTSCURI, "/")
+	baseDTSCURI = normalizeDTSCBaseURI(baseDTSCURI)
 
 	logger.WithFields(logging.Fields{
 		"node_id":       nodeID,
@@ -2274,6 +2281,17 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	}).Info("Constructed DTSC base URI")
 
 	return baseDTSCURI
+}
+
+func normalizeDTSCBaseURI(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "dtsc" || u.Host == "" {
+		return raw
+	}
+	if u.Port() == "" {
+		u.Host = net.JoinHostPort(u.Hostname(), "4200")
+	}
+	return strings.TrimSuffix(u.String(), "/")
 }
 
 // GetDTSCBase returns the DTSC base URI (e.g., dtsc://HOST:PORT) for a node.

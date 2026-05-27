@@ -21,7 +21,7 @@ func TestBuildDTSCURI(t *testing.T) {
 
 	const nodeID = "node-dtsc-1"
 	const advertisedHost = "node-1.example.com"
-	sm.SetNodeInfo(nodeID, "https://"+advertisedHost, true, nil, nil, "", "", map[string]any{
+	sm.SetNodeInfo(nodeID, "https://"+advertisedHost+"/view/", true, nil, nil, "", "", map[string]any{
 		"DTSC": "dtsc://HOST/$",
 	})
 
@@ -37,13 +37,13 @@ func TestBuildDTSCURI(t *testing.T) {
 			name:       "live stream prefix preserved",
 			nodeID:     nodeID,
 			streamName: "live+stream_abc",
-			want:       "dtsc://" + advertisedHost + "/live+stream_abc",
+			want:       "dtsc://" + advertisedHost + ":4200/live+stream_abc",
 		},
 		{
 			name:       "dvr stream prefix preserved (no implicit live+)",
 			nodeID:     nodeID,
 			streamName: "dvr+dvr_int_001",
-			want:       "dtsc://" + advertisedHost + "/dvr+dvr_int_001",
+			want:       "dtsc://" + advertisedHost + ":4200/dvr+dvr_int_001",
 		},
 		{
 			name:       "node without DTSC output returns empty",

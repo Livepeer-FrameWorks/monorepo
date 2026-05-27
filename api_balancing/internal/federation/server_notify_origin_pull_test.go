@@ -102,7 +102,7 @@ func TestNotifyOriginPullKeepsBareMistNativeStreamName(t *testing.T) {
 	if !ack.GetAccepted() {
 		t.Fatalf("expected origin pull accepted, reason=%q", ack.GetReason())
 	}
-	if got, want := ack.GetDtscUrl(), "dtsc://edge-a.example.com/frameworks-demo"; got != want {
+	if got, want := ack.GetDtscUrl(), "dtsc://edge-a.example.com:4200/frameworks-demo"; got != want {
 		t.Fatalf("DTSC URL = %q, want %q", got, want)
 	}
 }
