@@ -1947,11 +1947,20 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 			if len(targets) == 0 {
 				return fmt.Errorf("%s has no logical media-cluster assignment", cfg.name)
 			}
-			instanceIDs, err := desiredServiceInstanceIDs(cfg.name, cfg.svc, instances)
-			if err != nil {
-				return err
-			}
+			targetScoped := shouldScopeServiceAssignmentInstancesByTarget(cfg.name, cfg.svc, manifest, targets)
 			for _, target := range targets {
+				hosts := serviceHosts(cfg.svc)
+				if targetScoped {
+					var err error
+					hosts, err = serviceHostsForAssignmentTarget(cfg.name, cfg.svc, manifest, target)
+					if err != nil {
+						return err
+					}
+				}
+				instanceIDs, err := desiredServiceInstanceIDs(cfg.name, hosts, instances)
+				if err != nil {
+					return err
+				}
 				plan.assignments = append(plan.assignments, serviceAssignmentTarget{
 					clusterID:   target,
 					instanceIDs: instanceIDs,
@@ -2131,8 +2140,74 @@ func drainServiceAssignments(ctx context.Context, client serviceClusterAssignmen
 	return nil
 }
 
-func desiredServiceInstanceIDs(serviceName string, svc inventory.ServiceConfig, instances []*pb.ServiceInstance) ([]string, error) {
+func shouldScopeServiceAssignmentInstancesByTarget(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest, targets []string) bool {
+	if serviceName != "vmauth" || manifest == nil || len(targets) < 2 {
+		return false
+	}
+	targetRegions := make(map[string]struct{})
+	for _, target := range targets {
+		if cluster, ok := manifest.Clusters[target]; ok {
+			if region := strings.TrimSpace(cluster.Region); region != "" {
+				targetRegions[region] = struct{}{}
+			}
+		}
+	}
+	if len(targetRegions) == 0 {
+		return false
+	}
+	for _, hostName := range serviceHosts(svc) {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			continue
+		}
+		if _, ok := targetRegions[strings.TrimSpace(host.Labels["region"])]; ok {
+			return true
+		}
+		hostCluster, ok := manifest.Clusters[host.Cluster]
+		if ok {
+			if _, ok := targetRegions[strings.TrimSpace(hostCluster.Region)]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func serviceHostsForAssignmentTarget(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest, targetClusterID string) ([]string, error) {
 	hosts := serviceHosts(svc)
+	if serviceName != "vmauth" || manifest == nil {
+		return hosts, nil
+	}
+	targetCluster, ok := manifest.Clusters[targetClusterID]
+	if !ok || strings.TrimSpace(targetCluster.Region) == "" {
+		return hosts, nil
+	}
+	targetRegion := strings.TrimSpace(targetCluster.Region)
+	filtered := make([]string, 0, len(hosts))
+	for _, hostName := range hosts {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(host.Labels["region"]) == targetRegion {
+			filtered = append(filtered, hostName)
+			continue
+		}
+		if strings.TrimSpace(host.Cluster) == targetClusterID {
+			filtered = append(filtered, hostName)
+			continue
+		}
+		if hostCluster, ok := manifest.Clusters[host.Cluster]; ok && strings.TrimSpace(hostCluster.Region) == targetRegion {
+			filtered = append(filtered, hostName)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("%s has no manifest hosts in region %s for cluster %s", serviceName, targetRegion, targetClusterID)
+	}
+	return filtered, nil
+}
+
+func desiredServiceInstanceIDs(serviceName string, hosts []string, instances []*pb.ServiceInstance) ([]string, error) {
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("%s needs host or hosts before service-cluster assignments can be reconciled", serviceName)
 	}

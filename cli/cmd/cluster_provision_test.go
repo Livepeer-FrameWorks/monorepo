@@ -450,6 +450,67 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstance
 	}
 }
 
+func TestReconcileServiceClusterAssignmentsWithClientScopesVMAUTHByTargetRegion(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "prod",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "203.0.113.10", Cluster: "regional-eu-primary"},
+			"regional-eu-2": {ExternalIP: "203.0.113.11", Cluster: "regional-eu-primary"},
+			"regional-eu-3": {ExternalIP: "203.0.113.12", Cluster: "regional-eu-primary"},
+			"regional-us-1": {ExternalIP: "203.0.113.20", Cluster: "regional-us-primary"},
+			"regional-us-2": {ExternalIP: "203.0.113.21", Cluster: "regional-us-primary"},
+			"regional-us-3": {ExternalIP: "203.0.113.22", Cluster: "regional-us-primary"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu-primary": {Type: "central", Region: "eu-west"},
+			"regional-us-primary": {Type: "central", Region: "us-east"},
+			"media-eu-1":          {Type: "edge", Region: "eu-west", Roles: []string{"media"}},
+			"media-us-1":          {Type: "edge", Region: "us-east", Roles: []string{"media"}},
+		},
+		Observability: map[string]inventory.ServiceConfig{
+			"vmauth": {
+				Enabled: true,
+				Hosts: []string{
+					"regional-eu-1", "regional-eu-2", "regional-eu-3",
+					"regional-us-1", "regional-us-2", "regional-us-3",
+				},
+				Clusters: []string{"media-eu-1", "media-us-1"},
+			},
+		},
+	}
+	assigner := &fakeFoghornClusterAssigner{
+		services: fakePoolServices("vmauth"),
+		instances: map[string][]*pb.ServiceInstance{
+			"vmauth": {
+				fakeServiceInstance("vmauth-eu-1", "vmauth", "regional-eu-1", "running"),
+				fakeServiceInstance("vmauth-eu-2", "vmauth", "regional-eu-2", "running"),
+				fakeServiceInstance("vmauth-eu-3", "vmauth", "regional-eu-3", "running"),
+				fakeServiceInstance("vmauth-us-1", "vmauth", "regional-us-1", "running"),
+				fakeServiceInstance("vmauth-us-2", "vmauth", "regional-us-2", "running"),
+				fakeServiceInstance("vmauth-us-3", "vmauth", "regional-us-3", "running"),
+			},
+		},
+	}
+
+	if err := reconcileServiceClusterAssignmentsWithClient(context.Background(), &bytes.Buffer{}, manifest, assigner); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	if len(assigner.calls) != 2 {
+		t.Fatalf("expected one vmauth assignment per media cluster, got %d", len(assigner.calls))
+	}
+	got := map[string]string{}
+	for _, call := range assigner.calls {
+		got[call.GetClusterId()] = strings.Join(call.GetInstanceIds(), ",")
+	}
+	if got["media-eu-1"] != "vmauth-eu-1,vmauth-eu-2,vmauth-eu-3" {
+		t.Fatalf("media-eu-1 assigned ids = %q", got["media-eu-1"])
+	}
+	if got["media-us-1"] != "vmauth-us-1,vmauth-us-2,vmauth-us-3" {
+		t.Fatalf("media-us-1 assigned ids = %q", got["media-us-1"])
+	}
+}
+
 func TestReconcileServiceClusterAssignmentsWithClientAssignsAliasedPoolInstances(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
