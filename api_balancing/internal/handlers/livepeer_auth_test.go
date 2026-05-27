@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -164,6 +165,73 @@ func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.
 	}
 	if cached := r.PositiveCache.get("processing+artifact123"); cached == nil {
 		t.Fatal("expected base processing manifest to be cached")
+	}
+}
+
+func TestLivepeerProfilesFromProcessesJSONNormalizesMistLivepeerProfiles(t *testing.T) {
+	processesJSON := `[{"process":"AV","codec":"AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"https://livepeer.example\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
+
+	got := livepeerProfilesFromProcessesJSON(processesJSON, sourceMediaInfo{
+		width:  2718,
+		height: 1750,
+		fps:    24,
+	})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 profiles, got %d: %#v", len(got), got)
+	}
+	want := []livepeerJSONProfile{
+		{
+			"name":    "360p",
+			"bitrate": float64(900000),
+			"fps":     24000,
+			"fpsDen":  1000,
+			"height":  352,
+			"width":   544,
+			"profile": "H264ConstrainedHigh",
+			"gop":     "0.0",
+		},
+		{
+			"name":    "480p",
+			"bitrate": float64(1600000),
+			"fps":     24000,
+			"fpsDen":  1000,
+			"height":  480,
+			"width":   736,
+			"profile": "H264ConstrainedHigh",
+			"gop":     "0.0",
+		},
+	}
+	assertJSONEqual(t, want, got)
+	if _, ok := got[0]["track_inhibit"]; ok {
+		t.Fatal("expected non-matching track_inhibit to be removed before auth response")
+	}
+}
+
+func TestLivepeerProfilesFromProcessesJSONDropsInhibitedProfiles(t *testing.T) {
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}]}]`
+
+	got := livepeerProfilesFromProcessesJSON(processesJSON, sourceMediaInfo{
+		width:  640,
+		height: 360,
+		fps:    30,
+	})
+	if len(got) != 0 {
+		t.Fatalf("expected inhibited profile to be dropped, got %#v", got)
+	}
+}
+
+func assertJSONEqual(t *testing.T, want, got interface{}) {
+	t.Helper()
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal want: %v", err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal got: %v", err)
+	}
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("json mismatch\nwant: %s\n got: %s", wantJSON, gotJSON)
 	}
 }
 
