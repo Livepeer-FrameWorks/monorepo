@@ -127,13 +127,13 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 		return fmt.Errorf("marshal USER_END payload: %w", err)
 	}
 
-	upBytes := vd.GetUpBytes()
-	if upBytes < 0 {
-		upBytes = 0
+	mistUpBytes := vd.GetUpBytes()
+	if mistUpBytes < 0 {
+		mistUpBytes = 0
 	}
-	downBytes := vd.GetDownBytes()
-	if downBytes < 0 {
-		downBytes = 0
+	mistDownBytes := vd.GetDownBytes()
+	if mistDownBytes < 0 {
+		mistDownBytes = 0
 	}
 
 	row := viewerSessionFinalRow{
@@ -152,8 +152,8 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 		longitude:           vd.GetLongitude(),
 		tags:                vd.GetTags(),
 		durationSeconds:     uint32(min64(duration, int64(^uint32(0)))),
-		uploadedBytes:       uint64(upBytes),
-		downloadedBytes:     uint64(downBytes),
+		uploadedBytes:       uint64(mistDownBytes),
+		downloadedBytes:     uint64(mistUpBytes),
 		secondsConnected:    secondsConnected,
 		sourceStartedAtMS:   sourceStartedAtMS,
 		sourceEndedAtMS:     sourceEndedAtMS,
@@ -878,6 +878,48 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, tenantID
 		tenantID, streamID)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start lookup failed; using STREAM_END time as zero-duration fallback")
+		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+	}
+	var startedAtMS int64
+	if err := rows.Scan(&startedAtMS); err != nil {
+		h.logger.WithError(err).Debug("Stream start lookup scan failed; using STREAM_END time as zero-duration fallback")
+		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+	}
+	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
+		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+	}
+	return startedAtMS
+}
+
+func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Context, tenantID uuid.UUID, streamID uuid.UUID, fallbackEndedAtMS int64) int64 {
+	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
+	rows, err := h.clickhouse.Query(ctx, `
+		SELECT toUnixTimestamp(min(timestamp)) * 1000
+		FROM periscope.stream_event_log
+		WHERE tenant_id = ?
+		  AND stream_id = ?
+		  AND timestamp <= ?
+		  AND timestamp > ifNull((
+		      SELECT max(timestamp)
+		      FROM periscope.stream_event_log
+		      WHERE tenant_id = ?
+		        AND stream_id = ?
+		        AND event_type = 'stream_end'
+		        AND timestamp < ?
+		  ), toDateTime(0))
+		  AND (
+		      event_type = 'stream_start'
+		      OR (event_type IN ('stream_lifecycle', 'stream_buffer', 'track_list_update') AND status = 'live')
+		  )
+		LIMIT 1`,
+		tenantID, streamID, endedAt,
+		tenantID, streamID, endedAt)
+	if err != nil {
+		h.logger.WithError(err).Debug("Stream start event-log lookup failed; using STREAM_END time as zero-duration fallback")
 		return fallbackEndedAtMS
 	}
 	defer func() { _ = rows.Close() }()
@@ -886,7 +928,7 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, tenantID
 	}
 	var startedAtMS int64
 	if err := rows.Scan(&startedAtMS); err != nil {
-		h.logger.WithError(err).Debug("Stream start lookup scan failed; using STREAM_END time as zero-duration fallback")
+		h.logger.WithError(err).Debug("Stream start event-log lookup scan failed; using STREAM_END time as zero-duration fallback")
 		return fallbackEndedAtMS
 	}
 	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {

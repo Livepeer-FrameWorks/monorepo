@@ -361,6 +361,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		WITH sessions AS (
 			SELECT
 				tenant_id, node_id, session_id,
+				argMax(host, projection_version_ms) AS host,
 				argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
 				argMax(closed_reason, projection_version_ms) AS closed_reason
 			FROM periscope.viewer_sessions_final
@@ -368,7 +369,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			  AND projection_version_ms < ?
 			GROUP BY tenant_id, node_id, session_id
 		)
-		SELECT COALESCE(uniqCombined(session_id), 0) as unique_users
+		SELECT COALESCE(uniqCombined(if(host != '', host, concat(toString(node_id), '|', session_id))), 0) as unique_users
 		FROM sessions
 		WHERE tenant_id = ?
 		  AND closed_reason = 'final'

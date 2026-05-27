@@ -1248,7 +1248,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 			bucket_start AS period_start,
 			bucket_start + %s AS period_end,
 			CASE
-				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers')
+				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users')
 					THEN MAX(usage_value)
 				ELSE SUM(usage_value)
 			END AS usage_value,
@@ -3424,7 +3424,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		SELECT cluster_id,
 		       usage_type,
 		       CASE
-		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers') THEN MAX(value)
+		           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users') THEN MAX(value)
 		           ELSE SUM(value)
 		       END AS total
 		FROM usage_rows

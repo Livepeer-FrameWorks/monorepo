@@ -626,6 +626,10 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	var startedAt interface{}
 	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
 		startedAt = time.Unix(*streamLifecycle.StartedAt, 0)
+	} else if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
+		startedAt = existingStartedAt
+	} else if status == "live" {
+		startedAt = event.Timestamp
 	}
 
 	if appendErr := stateBatch.Append(
@@ -1099,6 +1103,38 @@ func parseUUIDOrNil(value string) interface{} {
 	return parsed
 }
 
+func (h *AnalyticsHandler) lookupCurrentStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool) {
+	tenantUUID, err := uuid.Parse(strings.TrimSpace(tenantID))
+	if err != nil || tenantUUID == uuid.Nil || streamID == uuid.Nil {
+		return time.Time{}, false
+	}
+	rows, err := h.clickhouse.Query(ctx, `
+		SELECT toUnixTimestamp(started_at) * 1000
+		FROM periscope.stream_state_current FINAL
+		WHERE tenant_id = ?
+		  AND stream_id = ?
+		  AND started_at IS NOT NULL
+		LIMIT 1`,
+		tenantUUID, streamID)
+	if err != nil {
+		h.logger.WithError(err).Debug("Stream started_at lookup failed")
+		return time.Time{}, false
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return time.Time{}, false
+	}
+	var startedAtMS int64
+	if err := rows.Scan(&startedAtMS); err != nil {
+		h.logger.WithError(err).Debug("Stream started_at lookup scan failed")
+		return time.Time{}, false
+	}
+	if startedAtMS <= 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(startedAtMS).UTC(), true
+}
+
 func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, eventID uuid.UUID, eventType string) bool {
 	if eventID == uuid.Nil {
 		return false
@@ -1406,6 +1442,56 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(pr.GetStreamName())
 	env := analyticsEnvelopeColumns(event)
+	streamUUID := parseUUID(mistTriggerStreamID(&mt))
+
+	if streamUUID != uuid.Nil {
+		stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+			INSERT INTO stream_state_current (
+				tenant_id, stream_id, internal_name, node_id, status, buffer_state,
+				current_viewers, total_inputs, uploaded_bytes, downloaded_bytes,
+				viewer_seconds, has_issues, issues_description,
+				track_count, quality_tier, primary_width, primary_height,
+				primary_fps, primary_codec, primary_bitrate,
+				packets_sent, packets_lost, packets_retransmitted,
+				started_at, updated_at
+			)`)
+		if err != nil {
+			return err
+		}
+		defer closeClickHouseBatch(stateBatch)
+		if appendErr := stateBatch.Append(
+			event.TenantID,
+			streamUUID,
+			internalName,
+			mt.GetNodeId(),
+			"live",
+			"UNKNOWN",
+			uint32(0),
+			uint16(1),
+			uint64(0),
+			uint64(0),
+			uint64(0),
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			nil,
+			event.Timestamp,
+			event.Timestamp,
+		); appendErr != nil {
+			return appendErr
+		}
+		if sendErr := stateBatch.Send(); sendErr != nil {
+			return sendErr
+		}
+	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_event_log (
@@ -1450,7 +1536,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		parseUUID(mistTriggerStreamID(&mt)),
+		streamUUID,
 		internalName,
 		mt.GetNodeId(),
 		mt.GetClusterId(),
@@ -2241,9 +2327,15 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	}
 	defer closeClickHouseBatch(stateBatch)
 
+	streamUUID := parseUUID(streamID)
+	var startedAt interface{}
+	if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, streamUUID); ok {
+		startedAt = existingStartedAt
+	}
+
 	if appendErr := stateBatch.Append(
 		event.TenantID,
-		parseUUID(streamID),
+		streamUUID,
 		internalName,
 		nodeID,
 		"offline",
@@ -2265,7 +2357,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		nil,
 		nil,
 		nil,
-		nil,
+		startedAt,
 		event.Timestamp,
 	); appendErr != nil {
 		h.logger.Errorf("Failed to append stream_state_current offline row: %v", appendErr)

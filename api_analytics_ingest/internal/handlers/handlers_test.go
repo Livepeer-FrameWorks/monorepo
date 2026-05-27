@@ -1279,6 +1279,8 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 				Connector:  "hls",
 				Host:       "1.2.3.4",
 				Duration:   65,
+				UpBytes:    99,
+				DownBytes:  11,
 			},
 		},
 	}
@@ -1317,6 +1319,9 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	}
 	if finalBatch.rows[0][2] != "sess-final" {
 		t.Fatalf("expected session_id sess-final, got %#v", finalBatch.rows[0][2])
+	}
+	if finalBatch.rows[0][15] != uint64(11) || finalBatch.rows[0][16] != uint64(99) {
+		t.Fatalf("expected Mist USER_END bytes mapped to uploaded=11 downloaded=99, got uploaded=%#v downloaded=%#v", finalBatch.rows[0][15], finalBatch.rows[0][16])
 	}
 }
 
@@ -1407,6 +1412,17 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	}
 	if row[13] != lon {
 		t.Fatalf("expected longitude %v, got %#v", lon, row[13])
+	}
+	stateBatch := conn.batches["stream_state_current"]
+	if stateBatch == nil || len(stateBatch.rows) != 1 {
+		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
+	}
+	stateRow := stateBatch.rows[0]
+	if stateRow[4] != "live" || stateRow[5] != "UNKNOWN" {
+		t.Fatalf("expected live UNKNOWN state, got status=%#v buffer=%#v", stateRow[4], stateRow[5])
+	}
+	if stateRow[23] != event.Timestamp {
+		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateRow[23])
 	}
 }
 

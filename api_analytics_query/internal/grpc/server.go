@@ -5438,6 +5438,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	// current session facts that have not appeared in the usage ledger yet.
 	var totalSessionSeconds uint64
 	var egressBytes uint64
+	var totalViewers uint32
 	var uniqueViewers uint32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
@@ -5445,21 +5446,25 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		SELECT
 			toUInt64(COALESCE(sum(seconds_observed), 0)) AS total_session_seconds,
 			toUInt64(COALESCE(sum(down_bytes_observed), 0)) AS egress_bytes,
-			toUInt32(uniqExact(session_key)) AS unique_viewers
+			toUInt32(uniqExact(session_key)) AS total_viewers,
+			toUInt32(uniqExact(viewer_key)) AS unique_viewers
 		FROM (
 			SELECT
 				toUInt64(seconds_observed) AS seconds_observed,
 				toUInt64(down_bytes_observed) AS down_bytes_observed,
-				concat(toString(node_id), '|', session_id) AS session_key
-			FROM viewer_usage_5m_v
-			WHERE tenant_id = ?
-			  AND window_start >= ?
-			  AND window_start <  ?
+				concat(toString(u.node_id), '|', u.session_id) AS session_key,
+				if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)) AS viewer_key
+			FROM viewer_usage_5m_v u
+			LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+			WHERE u.tenant_id = ?
+			  AND u.window_start >= ?
+			  AND u.window_start <  ?
 			UNION ALL
 			SELECT
 				toUInt64(greatest(0, dateDiff('second', greatest(ifNull(connected_at, disconnected_at), ?), least(ifNull(disconnected_at, now()), ?)))) AS seconds_observed,
 				toUInt64(0) AS down_bytes_observed,
-				concat(toString(node_id), '|', session_id) AS session_key
+				concat(toString(node_id), '|', session_id) AS session_key,
+				concat(toString(node_id), '|', session_id) AS viewer_key
 			FROM viewer_sessions_current FINAL
 			WHERE tenant_id = ?
 			  AND ifNull(connected_at, disconnected_at) < ?
@@ -5472,13 +5477,13 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 			        AND window_start <  ?
 			  )
 		)
-	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &egressBytes, &uniqueViewers)
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, endTime, startTime, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &egressBytes, &totalViewers, &uniqueViewers)
 	cancel()
 	recordQueryError(err, "Failed to query viewer usage facts for live usage")
 	summary.ViewerHours = float64(totalSessionSeconds) / 3600.0
 	summary.EgressGb = float64(egressBytes) / (1024 * 1024 * 1024)
 	summary.UniqueUsers = int32(uniqueViewers)
-	summary.TotalViewers = int32(uniqueViewers) // total_viewers = unique viewers for live usage
+	summary.TotalViewers = int32(totalViewers)
 
 	// Peak bandwidth from client_qoe_5m (avg_bw_out is bytes/sec, convert to Mbps)
 	var peakBandwidthBytes float64

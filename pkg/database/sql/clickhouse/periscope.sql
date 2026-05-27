@@ -2196,7 +2196,7 @@ SELECT
     toUInt64(sum(u.seconds_observed))                          AS total_session_seconds,
     toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
     toUInt64(sum(u.down_bytes_observed))                        AS egress_bytes,
-    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
     now64(3)                                                   AS refresh_version_ms
 FROM viewer_usage_5m_v u
 LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
@@ -2239,10 +2239,10 @@ SELECT
     toStartOfHour(u.window_start) AS hour,
     u.tenant_id,
     s.country_code,
-    toUInt64(uniqCombined(u.session_id))                            AS viewer_count,
+    toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
     sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
     sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
-    uniqCombinedState(u.session_id)                                 AS unique_viewers_state,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
     now64(3)                                                        AS refresh_version_ms
 FROM viewer_usage_5m_v u
 LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
@@ -2293,10 +2293,10 @@ SELECT
     s.city,
     any(s.latitude)                                                 AS latitude,
     any(s.longitude)                                                AS longitude,
-    toUInt64(uniqCombined(u.session_id))                            AS viewer_count,
+    toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
     sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
     sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
-    uniqCombinedState(u.session_id)                                 AS unique_viewers_state,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
     now64(3)                                                        AS refresh_version_ms
 FROM viewer_usage_5m_v u
 INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
@@ -2345,7 +2345,7 @@ SELECT
     any(s.stream_name)                                         AS internal_name,
     toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
     toUInt64(uniqCombined(u.session_id))                       AS total_sessions,
-    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
     now64(3)                                                   AS refresh_version_ms
 FROM viewer_usage_5m_v u
 LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
@@ -2629,21 +2629,22 @@ TTL day + INTERVAL 1825 DAY;
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO tenant_viewer_daily_store AS
 SELECT
-    day,
-    tenant_id,
-    cluster_id,
-    sum(tud.seconds_observed) / 3600.0            AS viewer_hours,
-    sum(tud.down_bytes) / pow(1024, 3) AS egress_gb,
-    uniqCombinedMergeState(tud.unique_sessions_state) AS unique_viewers_state,
-    uniqCombinedMerge(tud.unique_sessions_state)  AS total_sessions,
-    now64(3)                                  AS refresh_version_ms
-FROM tenant_usage_daily AS tud
-WHERE (day, tenant_id, cluster_id) IN (
-    SELECT DISTINCT day, tenant_id, cluster_id
-    FROM tenant_usage_daily
-    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+    toDate(u.window_start) AS day,
+    u.tenant_id,
+    u.cluster_id,
+    sum(u.seconds_observed) / 3600.0 AS viewer_hours,
+    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
+    toUInt64(uniqCombined(u.session_id)) AS total_sessions,
+    now64(3) AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (toDate(u.window_start), u.tenant_id, u.cluster_id) IN (
+    SELECT DISTINCT toDate(window_start) AS day, tenant_id, cluster_id
+    FROM viewer_usage_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 )
-GROUP BY day, tenant_id, cluster_id;
+GROUP BY day, u.tenant_id, u.cluster_id;
 
 CREATE VIEW IF NOT EXISTS tenant_viewer_daily AS
 SELECT
@@ -2682,20 +2683,21 @@ TTL day + INTERVAL 1825 DAY;
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_analytics_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO tenant_analytics_daily_store AS
 SELECT
-    day,
-    tenant_id,
-    uniqCombinedMerge(tud.unique_streams_state)  AS total_streams,
-    uniqCombinedMerge(tud.unique_sessions_state) AS total_views,
-    uniqCombinedMergeState(tud.unique_sessions_state) AS unique_viewers_state,
-    sum(tud.down_bytes)                      AS egress_bytes,
-    now64(3)                                 AS refresh_version_ms
-FROM tenant_usage_daily AS tud
-WHERE (day, tenant_id) IN (
-    SELECT DISTINCT day, tenant_id
-    FROM tenant_usage_daily
-    WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+    toDate(u.window_start) AS day,
+    u.tenant_id,
+    toUInt64(uniqCombined(u.stream_id)) AS total_streams,
+    toUInt64(uniqCombined(u.session_id)) AS total_views,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
+    toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
+    now64(3) AS refresh_version_ms
+FROM viewer_usage_5m_v u
+LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+WHERE (toDate(u.window_start), u.tenant_id) IN (
+    SELECT DISTINCT toDate(window_start) AS day, tenant_id
+    FROM viewer_usage_5m_v
+    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 )
-GROUP BY day, tenant_id;
+GROUP BY day, u.tenant_id;
 
 CREATE VIEW IF NOT EXISTS tenant_analytics_daily AS
 SELECT
@@ -2742,7 +2744,7 @@ SELECT
     u.stream_id,
     any(s.stream_name)                                         AS internal_name,
     toUInt64(uniqCombined(u.session_id))                       AS total_views,
-    uniqCombinedState(u.session_id)                            AS unique_viewers_state,
+    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
     toUInt32(uniqCombined(s.country_code))                     AS unique_countries,
     toUInt32(uniqCombined(s.city))                             AS unique_cities,
     toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
