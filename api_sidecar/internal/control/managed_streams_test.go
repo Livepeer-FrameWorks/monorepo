@@ -229,6 +229,9 @@ func TestHandleApplyManagedStream_FirstApplyAddsStream(t *testing.T) {
 	if _, ok := addstream["frameworks-demo"]; !ok {
 		t.Fatalf("addstream did not include frameworks-demo: %+v", addstream)
 	}
+	if saves := mock.callsContainingKey("save"); len(saves) != 1 {
+		t.Fatalf("Apply must persist Mist config with save; got %d save calls", len(saves))
+	}
 }
 
 func TestHandleApplyManagedStream_IdempotentRepeat(t *testing.T) {
@@ -248,6 +251,9 @@ func TestHandleApplyManagedStream_IdempotentRepeat(t *testing.T) {
 	calls := mock.callsContainingKey("addstream")
 	if len(calls) != 1 {
 		t.Fatalf("repeat-Apply with identical fields should be a noop; got %d addstream calls", len(calls))
+	}
+	if saves := mock.callsContainingKey("save"); len(saves) != 1 {
+		t.Fatalf("repeat-Apply should only save the first materialization; got %d save calls", len(saves))
 	}
 }
 
@@ -270,6 +276,9 @@ func TestHandleApplyManagedStream_FieldChangeReAdds(t *testing.T) {
 	calls := mock.callsContainingKey("addstream")
 	if len(calls) != 2 {
 		t.Fatalf("field change should trigger a second addstream; got %d calls", len(calls))
+	}
+	if saves := mock.callsContainingKey("save"); len(saves) != 2 {
+		t.Fatalf("field change should persist both materializations; got %d save calls", len(saves))
 	}
 }
 
@@ -414,6 +423,9 @@ func TestHandleRetractManagedStream_KnownNameDeletes(t *testing.T) {
 
 	if len(mock.callsContainingKey("deletestream")) != 1 {
 		t.Fatalf("known-name retract should call deletestream once: %+v", mock.requests)
+	}
+	if saves := mock.callsContainingKey("save"); len(saves) != 2 {
+		t.Fatalf("apply and retract should both save Mist config; got %d save calls", len(saves))
 	}
 	appliedManagedStreams.Lock()
 	_, present := appliedManagedStreams.m["frameworks-demo"]

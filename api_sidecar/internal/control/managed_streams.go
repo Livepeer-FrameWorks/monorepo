@@ -268,6 +268,14 @@ func handleApplyManagedStream(logger logging.Logger, req *pb.ApplyManagedStream)
 		}).Error("Failed to apply managed stream to Mist")
 		return
 	}
+	if err := mistClient.Save(); err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.GetName(),
+			"stream_id":   req.GetStreamId(),
+			"error":       err,
+		}).Error("Failed to persist managed stream in Mist config")
+		return
+	}
 
 	appliedManagedStreams.Lock()
 	appliedManagedStreams.m[req.GetName()] = snapshot
@@ -315,6 +323,14 @@ func handleRetractManagedStream(logger logging.Logger, req *pb.RetractManagedStr
 			"stream_id":   req.GetStreamId(),
 			"error":       err,
 		}).Error("Failed to retract managed stream from Mist")
+		return
+	}
+	if err := mistClient.Save(); err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.GetName(),
+			"stream_id":   req.GetStreamId(),
+			"error":       err,
+		}).Error("Failed to persist managed stream retract in Mist config")
 		return
 	}
 
