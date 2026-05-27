@@ -1253,7 +1253,14 @@ func HandlePushEnd(c *gin.Context) {
 	// Signal local processing handler if this is a processing+ push
 	if pushEnd := mistTrigger.GetPushEnd(); pushEnd != nil {
 		if strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
-			SignalProcessingComplete(pushEnd.GetStreamName())
+			SignalProcessingPushEnd(ProcessingPushEndEvent{
+				StreamName:   pushEnd.GetStreamName(),
+				PushID:       pushEnd.GetPushId(),
+				TargetBefore: pushEnd.GetTargetUriBefore(),
+				TargetAfter:  pushEnd.GetTargetUriAfter(),
+				LogMessages:  pushEnd.GetLogMessages(),
+				PushStatus:   pushEnd.GetPushStatus(),
+			})
 		}
 	}
 

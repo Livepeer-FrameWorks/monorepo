@@ -435,6 +435,40 @@ func TestUploadDtshPutWithTrailingSlashLandsLocally(t *testing.T) {
 	}
 }
 
+func TestUploadDtshGetServesWarmSidecarAfterMistGeneratesIt(t *testing.T) {
+	dir := t.TempDir()
+	hash := "uploadwarm"
+	file := hash + ".mov.dtsh"
+	body := []byte("warm upload sidecar")
+	target := filepath.Join(dir, "upload", file)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/upload/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+}
+
 func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"

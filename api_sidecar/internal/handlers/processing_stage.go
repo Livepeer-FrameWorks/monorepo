@@ -151,6 +151,10 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	if sourceURL == "" {
 		return "", fmt.Errorf("source URL is required")
 	}
+	stageTimeout := processingSourceStageTimeout(req)
+	stageCtx, cancel := context.WithTimeout(context.Background(), stageTimeout)
+	defer cancel()
+
 	procDir := filepath.Join(h.storagePath, "processing")
 	if err := os.MkdirAll(procDir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir processing dir: %w", err)
@@ -163,7 +167,7 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	// instead of guessing zero. On HEAD failure (S3 quirk, network) fall
 	// back to admit-then-download with size=0; the engine handles unknowns.
 	var sizeBytes uint64
-	if size, ok := headContentLength(sourceURL); ok {
+	if size, ok := headContentLength(stageCtx, sourceURL); ok {
 		sizeBytes = size
 	}
 	sm := GetStorageManager()
@@ -184,7 +188,7 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	if err != nil {
 		return "", fmt.Errorf("create stage tmpfile: %w", err)
 	}
-	resp, err := httpGetSource(sourceURL)
+	resp, err := httpGetSource(stageCtx, sourceURL)
 	if err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)
@@ -217,15 +221,36 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	}
 	log.WithFields(logging.Fields{
 		"bytes":      written,
+		"timeout":    stageTimeout.String(),
 		"stage_type": label,
 	}).Debug("Wrote processing source stage")
 	return target, nil
 }
 
+func processingSourceStageTimeout(req *pb.ProcessingJobRequest) time.Duration {
+	if isClipProcessingSource(req) {
+		params := req.GetParams()
+		startUnix, startErr := strconv.ParseInt(params["source_start_unix"], 10, 64)
+		stopUnix, stopErr := strconv.ParseInt(params["source_stop_unix"], 10, 64)
+		if startErr == nil && stopErr == nil && stopUnix > startUnix {
+			d := time.Duration(stopUnix-startUnix)*time.Second + 30*time.Second
+			if d < 2*time.Minute {
+				return 2 * time.Minute
+			}
+			if d > 15*time.Minute {
+				return 15 * time.Minute
+			}
+			return d
+		}
+		return 2 * time.Minute
+	}
+	return 30 * time.Minute
+}
+
 // headContentLength issues a HEAD to learn the source size for admission.
 // Returns (size, true) on success.
-func headContentLength(sourceURL string) (uint64, bool) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, sourceURL, nil)
+func headContentLength(ctx context.Context, sourceURL string) (uint64, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, sourceURL, nil)
 	if err != nil {
 		return 0, false
 	}
@@ -240,11 +265,8 @@ func headContentLength(sourceURL string) (uint64, bool) {
 	return uint64(resp.ContentLength), true
 }
 
-// httpGetSource fetches a presigned source URL. Uses
-// NewRequestWithContext so the project's noctx lint check is satisfied;
-// cancellation is via process shutdown for now.
-func httpGetSource(sourceURL string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, sourceURL, nil)
+func httpGetSource(ctx context.Context, sourceURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return nil, err
 	}

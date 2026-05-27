@@ -39,9 +39,21 @@ type ProcessingJobHandler struct {
 
 // pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
 var (
-	pendingJobs   = map[string]chan struct{}{}
+	pendingJobs   = map[string]chan ProcessingPushEndEvent{}
 	pendingJobsMu sync.Mutex
 )
+
+// ProcessingPushEndEvent is the subset of Mist's PUSH_END trigger the
+// processing pipeline needs before treating a push as terminal.
+type ProcessingPushEndEvent struct {
+	StreamName     string
+	PushID         int64
+	TargetBefore   string
+	TargetAfter    string
+	LogMessages    string
+	PushStatus     string
+	PushStatusText string
+}
 
 var (
 	processingProcessOverrides   = map[string]string{}
@@ -63,15 +75,42 @@ func HasPendingJob(streamName string) bool {
 
 // SignalProcessingComplete is called from HandlePushEnd when a processing+ push ends.
 func SignalProcessingComplete(streamName string) {
+	SignalProcessingPushEnd(ProcessingPushEndEvent{StreamName: streamName, PushStatus: "0"})
+}
+
+// SignalProcessingPushEnd is called from HandlePushEnd when a processing+ push
+// ends. Mist reports failed mux/sink exits through PUSH_END status; treating
+// every PUSH_END as success makes the job fail later as a vague missing output.
+func SignalProcessingPushEnd(evt ProcessingPushEndEvent) {
 	pendingJobsMu.Lock()
-	ch, ok := pendingJobs[streamName]
+	ch, ok := pendingJobs[evt.StreamName]
 	pendingJobsMu.Unlock()
 	if ok {
 		select {
-		case ch <- struct{}{}:
+		case ch <- evt:
 		default:
 		}
 	}
+}
+
+func processingPushSucceeded(evt ProcessingPushEndEvent) bool {
+	status := strings.TrimSpace(evt.PushStatus)
+	return status == "" || status == "0"
+}
+
+func processingPushFailureMessage(evt ProcessingPushEndEvent) string {
+	status := strings.TrimSpace(evt.PushStatus)
+	if status == "" {
+		status = "unknown"
+	}
+	msg := fmt.Sprintf("processing push failed: status=%s", status)
+	if detail := strings.TrimSpace(evt.PushStatusText); detail != "" {
+		msg += " " + detail
+	}
+	if logs := strings.TrimSpace(evt.LogMessages); logs != "" {
+		msg += ": " + logs
+	}
+	return msg
 }
 
 func setProcessingProcessOverride(streamName, processesJSON string) {
@@ -219,7 +258,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	}
 
 	// Register completion channel BEFORE activating stream
-	doneCh := make(chan struct{}, 1)
+	doneCh := make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Lock()
 	pendingJobs[streamName] = doneCh
 	pendingJobsMu.Unlock()
@@ -273,7 +312,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
 				log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer readiness fallback")
 			}
-			doneCh = make(chan struct{}, 1)
+			doneCh = make(chan ProcessingPushEndEvent, 1)
 			pendingJobsMu.Lock()
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
@@ -310,7 +349,19 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 loop:
 	for {
 		select {
-		case <-doneCh:
+		case pushEnd := <-doneCh:
+			if !processingPushSucceeded(pushEnd) {
+				log.WithFields(logging.Fields{
+					"push_id":       pushEnd.PushID,
+					"push_status":   pushEnd.PushStatus,
+					"target_before": pushEnd.TargetBefore,
+					"target_after":  pushEnd.TargetAfter,
+					"push_logs":     pushEnd.LogMessages,
+				}).Error("Processing push ended with failure")
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
+				return
+			}
 			log.Info("Processing completed (PUSH_END received)")
 			break loop
 
@@ -335,7 +386,7 @@ loop:
 				}
 				// Fresh doneCh so any PUSH_END from the old push doesn't
 				// satisfy the completion check for the restarted push.
-				doneCh = make(chan struct{}, 1)
+				doneCh = make(chan ProcessingPushEndEvent, 1)
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
@@ -401,7 +452,7 @@ loop:
 					if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
 						log.WithError(deleteErr).Warn("Failed to delete stream for stall fallback")
 					}
-					doneCh = make(chan struct{}, 1)
+					doneCh = make(chan ProcessingPushEndEvent, 1)
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
@@ -476,9 +527,11 @@ loop:
 func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, vodDir, streamName, outputPath string) error {
 	if sm := GetStorageManager(); sm != nil {
 		var estSize uint64
-		if hint, ok := headContentLength(req.GetSourceUrl()); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if hint, ok := headContentLength(ctx, req.GetSourceUrl()); ok {
 			estSize = hint
 		}
+		cancel()
 		decision, decErr := sm.Decide(context.Background(), vodDir, admission.IntentProcessingOutput, estSize)
 		if decErr != nil || decision == admission.CacheReject {
 			log.WithError(decErr).WithField("est_size", estSize).Error("Processing output admission rejected")

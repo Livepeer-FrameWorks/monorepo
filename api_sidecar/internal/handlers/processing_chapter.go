@@ -107,7 +107,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		}
 	}()
 
-	doneCh := make(chan struct{}, 1)
+	doneCh := make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Lock()
 	pendingJobs[streamName] = doneCh
 	pendingJobsMu.Unlock()
@@ -180,7 +180,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
 				log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for readiness fallback")
 			}
-			doneCh = make(chan struct{}, 1)
+			doneCh = make(chan ProcessingPushEndEvent, 1)
 			pendingJobsMu.Lock()
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
@@ -223,7 +223,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
 			log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for fallback")
 		}
-		doneCh = make(chan struct{}, 1)
+		doneCh = make(chan ProcessingPushEndEvent, 1)
 		pendingJobsMu.Lock()
 		pendingJobs[streamName] = doneCh
 		pendingJobsMu.Unlock()
@@ -245,7 +245,19 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 loop:
 	for {
 		select {
-		case <-doneCh:
+		case pushEnd := <-doneCh:
+			if !processingPushSucceeded(pushEnd) {
+				log.WithFields(logging.Fields{
+					"push_id":       pushEnd.PushID,
+					"push_status":   pushEnd.PushStatus,
+					"target_before": pushEnd.TargetBefore,
+					"target_after":  pushEnd.TargetAfter,
+					"push_logs":     pushEnd.LogMessages,
+				}).Error("Chapter finalize: push ended with failure")
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
+				return
+			}
 			log.Info("Chapter finalize: PUSH_END received")
 			break loop
 		case evt := <-processExitCh:

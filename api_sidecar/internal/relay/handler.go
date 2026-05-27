@@ -204,6 +204,20 @@ func (s *Server) serveUpload(c *gin.Context) {
 		return
 	}
 	if strings.HasSuffix(file, ".dtsh") {
+		localPath := s.canonicalUploadPath(file)
+		if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			f, err := os.Open(localPath)
+			if err != nil {
+				s.serverError(c, "open warm upload sidecar", err)
+				return
+			}
+			defer f.Close()
+			if contentType := contentTypeForFile(localPath); contentType != "" {
+				c.Header("Content-Type", contentType)
+			}
+			http.ServeContent(c.Writer, c.Request, filepath.Base(localPath), info.ModTime(), f)
+			return
+		}
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}

@@ -914,9 +914,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	switch dispatch.kind {
 	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
 		sourceKind = "live"
-		if !strings.Contains(sourceStreamName, "+") {
-			sourceStreamName = "live+" + sourceStreamName
-		}
+		sourceStreamName = clipLiveSourceStreamName(sourceStreamName)
 	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
 		sourceKind = "dvr_rolling"
 	}
@@ -1381,10 +1379,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		RetentionUntil: 0,
 	}
 
-	sourceStreamName := control.MistSourceNameForIngestMode(req.InternalName, "push")
-	if ss := state.DefaultManager().GetStreamState(req.InternalName); ss != nil && ss.StreamName != "" {
-		sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
-	}
+	sourceStreamName := dvrSourceStreamName(req.InternalName)
 	fullDTSC := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if fullDTSC == "" {
 		final, finalErr := control.FinalizeDVR(ctx, dvrHash, control.FinalizeOptions{
@@ -1526,6 +1521,31 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		StorageNodeId: storageNodeID,
 		PlaybackId:    playbackID,
 	}, nil
+}
+
+func dvrSourceStreamName(internalName string) string {
+	sourceStreamName := control.MistSourceNameForIngestMode(internalName, "push")
+	ss := state.DefaultManager().GetStreamState(internalName)
+	if ss == nil {
+		return sourceStreamName
+	}
+	observed := strings.TrimSpace(ss.StreamName)
+	if observed == "" || !strings.Contains(observed, "+") {
+		return sourceStreamName
+	}
+	return control.MistSourceNameFromObservedStream(observed)
+}
+
+func clipLiveSourceStreamName(internalName string) string {
+	ss := state.DefaultManager().GetStreamState(internalName)
+	if ss == nil {
+		return control.MistSourceNameForIngestMode(internalName, "push")
+	}
+	observed := strings.TrimSpace(ss.StreamName)
+	if observed == "" {
+		return control.MistSourceNameForIngestMode(internalName, "push")
+	}
+	return control.MistSourceNameFromObservedStream(observed)
 }
 
 // StopDVR stops an active DVR recording

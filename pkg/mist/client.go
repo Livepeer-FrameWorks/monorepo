@@ -204,11 +204,22 @@ func (c *Client) PushList() ([]PushInfo, error) {
 		return []PushInfo{}, nil
 	}
 
+	pushes, err := parsePushList(pushListRaw)
+	if err != nil {
+		return nil, err
+	}
+	c.Logger.WithField("push_count", len(pushes)).Debug("Retrieved MistServer push list")
+	return pushes, nil
+}
+
+func parsePushList(pushListRaw interface{}) ([]PushInfo, error) {
+	if pushListRaw == nil {
+		return []PushInfo{}, nil
+	}
 	pushListArray, ok := pushListRaw.([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("unexpected push_list format")
 	}
-
 	var pushes []PushInfo
 	for _, pushRaw := range pushListArray {
 		pushArray, ok := pushRaw.([]interface{})
@@ -261,7 +272,6 @@ func (c *Client) PushList() ([]PushInfo, error) {
 		pushes = append(pushes, push)
 	}
 
-	c.Logger.WithField("push_count", len(pushes)).Debug("Retrieved MistServer push list")
 	return pushes, nil
 }
 

@@ -335,7 +335,7 @@ func TestHasPendingJob(t *testing.T) {
 	stream := "processing+test_pending_" + t.Name()
 
 	pendingJobsMu.Lock()
-	pendingJobs[stream] = make(chan struct{}, 1)
+	pendingJobs[stream] = make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Unlock()
 
 	if !HasPendingJob(stream) {
@@ -354,7 +354,7 @@ func TestHasPendingJob(t *testing.T) {
 func TestSignalProcessingComplete(t *testing.T) {
 	stream := "processing+test_signal_" + t.Name()
 
-	ch := make(chan struct{}, 1)
+	ch := make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Lock()
 	pendingJobs[stream] = ch
 	pendingJobsMu.Unlock()
@@ -368,13 +368,31 @@ func TestSignalProcessingComplete(t *testing.T) {
 	SignalProcessingComplete(stream)
 
 	select {
-	case <-ch:
+	case evt := <-ch:
+		if evt.PushStatus != "0" {
+			t.Fatalf("PushStatus = %q, want clean status", evt.PushStatus)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("expected signal on registered channel")
 	}
 
 	// Signaling an unregistered stream must not panic
 	SignalProcessingComplete("processing+nonexistent_stream")
+}
+
+func TestProcessingPushFailureMessageIncludesMistDetails(t *testing.T) {
+	evt := ProcessingPushEndEvent{
+		StreamName:  "processing+artifact",
+		PushStatus:  "7",
+		LogMessages: "Sink thread failed",
+	}
+	got := processingPushFailureMessage(evt)
+	if !strings.Contains(got, "status=7") || !strings.Contains(got, "Sink thread failed") {
+		t.Fatalf("failure message missing details: %q", got)
+	}
+	if processingPushSucceeded(evt) {
+		t.Fatal("expected non-zero push status to fail")
+	}
 }
 
 func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {

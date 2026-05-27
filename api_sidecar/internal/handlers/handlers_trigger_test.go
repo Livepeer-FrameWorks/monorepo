@@ -263,7 +263,7 @@ func TestHandlePlayRewriteAllowsLocalProcessingJob(t *testing.T) {
 
 	const streamName = "processing+artifact123"
 	pendingJobsMu.Lock()
-	pendingJobs[streamName] = make(chan struct{}, 1)
+	pendingJobs[streamName] = make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Unlock()
 	t.Cleanup(func() {
 		pendingJobsMu.Lock()
