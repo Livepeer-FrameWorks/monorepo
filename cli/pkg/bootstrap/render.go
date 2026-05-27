@@ -334,19 +334,10 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 				continue
 			}
 			serviceType, isPublic := clusterderive.ManifestServiceType(serviceName, svc)
-			defName := serviceName
-			if isPublic {
-				defName = serviceType
-			} else if deploy := strings.TrimSpace(svc.Deploy); deploy != "" {
-				defName = deploy
-			}
+			registryServiceName, registryServiceType, defName := serviceRegistryIdentity(serviceName, svc, serviceType, isPublic)
 			defs, hasDefs := servicedefs.Lookup(defName)
 			port := resolveServicePort(svc, defs)
 			notSelfRegister := !clusterderive.SelfRegisters(serviceType)
-			registryServiceName := serviceName
-			if pkgdns.IsPoolAssignedServiceType(serviceType) {
-				registryServiceName = serviceType
-			}
 
 			// One service may be deployed across multiple hosts in different
 			// clusters. Resolve cluster id per host so every row carries the
@@ -361,7 +352,7 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 				if notSelfRegister && isPublic && port != 0 {
 					entry := ServiceRegistryEntry{
 						ServiceName: registryServiceName,
-						Type:        serviceType,
+						Type:        registryServiceType,
 						ClusterID:   clusterID,
 						NodeID:      hostKey,
 						Port:        port,
@@ -476,6 +467,27 @@ func resolveServicePort(svc inventory.ServiceConfig, defs servicedefs.Service) i
 		return svc.GRPCPort
 	}
 	return defs.DefaultPort
+}
+
+func serviceRegistryIdentity(serviceName string, svc inventory.ServiceConfig, serviceType string, isPublic bool) (registryName, registryType, defName string) {
+	deployName := strings.TrimSpace(svc.Deploy)
+	defName = serviceName
+	if deployName != "" {
+		defName = deployName
+	}
+	if isPublic {
+		defName = serviceType
+	}
+
+	registryName = serviceName
+	registryType = serviceType
+	if deployName == "vmauth" || (deployName == "" && serviceName == "vmauth") {
+		return "vmauth", "vmauth", "vmauth"
+	}
+	if pkgdns.IsPoolAssignedServiceType(serviceType) {
+		registryName = serviceType
+	}
+	return registryName, registryType, defName
 }
 
 // splitHostPort separates "host:port" into pieces. Best-effort — empty string yields

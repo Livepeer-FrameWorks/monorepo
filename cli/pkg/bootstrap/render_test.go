@@ -560,7 +560,6 @@ func TestDeriveVMAUTHDefaultsIngressToAllMediaClusters(t *testing.T) {
 		"vmauth": {
 			Enabled: true,
 			Host:    "regional-eu-1",
-			Port:    8427,
 		},
 	}
 
@@ -586,6 +585,20 @@ func TestDeriveVMAUTHDefaultsIngressToAllMediaClusters(t *testing.T) {
 		if site.TLSBundleID != "wildcard-"+strings.ReplaceAll(clusterID+".frameworks.network", ".", "-") {
 			t.Fatalf("%s tls_bundle_id = %q", siteID, site.TLSBundleID)
 		}
+	}
+	registryEntries := map[string]ServiceRegistryEntry{}
+	for _, entry := range d.Quartermaster.ServiceRegistry {
+		registryEntries[entry.ServiceName] = entry
+	}
+	entry, ok := registryEntries["vmauth"]
+	if !ok {
+		t.Fatalf("missing vmauth service_registry entry; got %+v", registryEntries)
+	}
+	if entry.Type != "vmauth" {
+		t.Fatalf("vmauth service_registry type = %q, want vmauth", entry.Type)
+	}
+	if entry.Port != 8427 {
+		t.Fatalf("vmauth service_registry port = %d, want default 8427", entry.Port)
 	}
 }
 
