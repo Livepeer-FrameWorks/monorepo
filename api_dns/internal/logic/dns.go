@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_dns/internal/provider/bunny"
@@ -45,6 +46,11 @@ type DNSManager struct {
 	servicePorts  map[string]int    // Service type -> HTTP health check port
 	healthPaths   map[string]string // Service type -> health check path
 	certChecker   CertChecker       // optional; nil = no cert gating
+
+	bunnyCacheMu             sync.Mutex
+	bunnyZoneCache           map[string]*bunny.Zone
+	bunnyDelegationCheckedAt map[string]time.Time
+	cloudflareCleanupAt      map[string]time.Time
 }
 
 type cloudflareClient interface {
@@ -93,27 +99,35 @@ type desiredPool struct {
 	Longitude   *float64
 }
 
-const rootIngressPoolServiceType = "public-ingress"
+const (
+	rootIngressPoolServiceType = "public-ingress"
+	dnsProviderHousekeepingTTL = 10 * time.Minute
+)
 
 type quartermasterClient interface {
 	ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
+	ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*proto.ListHealthyNodesForDNSResponse, error)
+	GetCluster(ctx context.Context, clusterID string) (*proto.ClusterResponse, error)
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 }
 
 // NewDNSManager creates a new DNSManager
 func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
 	return &DNSManager{
-		cfClient:      cf,
-		qmClient:      qm,
-		logger:        logger,
-		domain:        rootDomain,
-		proxy:         loadProxyServices(),
-		recordTTL:     recordTTL,
-		lbTTL:         lbTTL,
-		staleAge:      staleAge,
-		monitorConfig: monitorConfig,
-		servicePorts:  defaultServicePorts(),
-		healthPaths:   defaultServiceHealthPaths(),
+		cfClient:                 cf,
+		qmClient:                 qm,
+		logger:                   logger,
+		domain:                   rootDomain,
+		proxy:                    loadProxyServices(),
+		recordTTL:                recordTTL,
+		lbTTL:                    lbTTL,
+		staleAge:                 staleAge,
+		monitorConfig:            monitorConfig,
+		servicePorts:             defaultServicePorts(),
+		healthPaths:              defaultServiceHealthPaths(),
+		bunnyZoneCache:           map[string]*bunny.Zone{},
+		bunnyDelegationCheckedAt: map[string]time.Time{},
+		cloudflareCleanupAt:      map[string]time.Time{},
 	}
 }
 
@@ -328,34 +342,21 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 func (m *DNSManager) SyncServiceForCluster(ctx context.Context, serviceType, clusterID string) (map[string]string, error) {
 	partialErrors := map[string]string{}
 
-	clustersResp, err := m.qmClient.ListClusters(ctx, nil)
+	clusterResp, err := m.qmClient.GetCluster(ctx, clusterID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list clusters: %w", err)
+		return nil, fmt.Errorf("failed to fetch cluster from Quartermaster: %w", err)
 	}
-
-	var target *proto.InfrastructureCluster
-	for _, c := range clustersResp.Clusters {
-		if c.GetClusterId() == clusterID {
-			target = c
-			break
-		}
-	}
+	target := clusterResp.GetCluster()
 	if target == nil {
 		return nil, fmt.Errorf("cluster %q not found", clusterID)
 	}
 
-	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, int(m.staleAge.Seconds()), serviceType)
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNSForCluster(ctx, int(m.staleAge.Seconds()), serviceType, clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
 
-	var nodes []dnsNode
-	for _, n := range nodesResp.GetNodes() {
-		if n.GetClusterId() != clusterID {
-			continue
-		}
-		nodes = append(nodes, dnsNodesFromProto([]*proto.InfrastructureNode{n})...)
-	}
+	nodes := dnsNodesFromProto(nodesResp.GetNodes())
 
 	provider := pkgdns.ProviderForServiceType(serviceType)
 	if provider == pkgdns.ProviderBunny && m.bunnyClient == nil {
@@ -363,11 +364,24 @@ func (m *DNSManager) SyncServiceForCluster(ctx context.Context, serviceType, clu
 	}
 
 	m.syncOneCluster(ctx, serviceType, provider, target, nodes, true, partialErrors)
+	if provider == pkgdns.ProviderBunny && target.GetIsPlatformOfficial() && hasGlobalRootLabel(serviceType) {
+		rootPartial, rootErr := m.syncBunnyRootService(ctx, serviceType, true)
+		if rootErr != nil {
+			partialErrors[serviceType+":global-root"] = rootErr.Error()
+		} else {
+			maps.Copy(partialErrors, rootPartial)
+		}
+	}
 
 	if len(partialErrors) == 0 {
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+func hasGlobalRootLabel(serviceType string) bool {
+	label, ok := pkgdns.PublicSubdomain(serviceType)
+	return ok && strings.TrimSpace(label) != ""
 }
 
 // syncOneCluster reconciles DNS for a single cluster's edge service type.
@@ -656,6 +670,10 @@ func (m *DNSManager) clearBunnyClusterService(ctx context.Context, fqdn, service
 // Caller must have already delegated the per-service zone via
 // EnsureBunnyZone(serviceType). No-ops cleanly if Bunny is not configured.
 func (m *DNSManager) SyncBunnyRootService(ctx context.Context, serviceType string) (map[string]string, error) {
+	return m.syncBunnyRootService(ctx, serviceType, false)
+}
+
+func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType string, authoritative bool) (map[string]string, error) {
 	if m.bunnyClient == nil {
 		return nil, nil
 	}
@@ -702,6 +720,17 @@ func (m *DNSManager) SyncBunnyRootService(ctx context.Context, serviceType strin
 	}
 	nodes := dnsNodesFromProto(filtered)
 	if len(nodes) == 0 {
+		if authoritative {
+			if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, "", bunny.RecordTypeA, nil); err != nil {
+				return nil, fmt.Errorf("clear root record set: %w", err)
+			}
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"zone":         zoneDomain,
+				"scope":        "global_root",
+			}).Info("Authoritative empty set; cleared global root Bunny DNS")
+			return nil, nil
+		}
 		m.logger.WithFields(logging.Fields{
 			"service_type": serviceType,
 			"zone":         zoneDomain,
@@ -742,25 +771,27 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		}
 	}
 
-	cleanupErrors, err := m.clearDNSConfig(ctx, fqdn)
-	if err != nil {
-		m.logger.WithError(err).WithField("fqdn", fqdn).Warn("Failed to clean old Cloudflare config after Bunny sync")
-		return map[string]string{fqdn + ":cloudflare-cleanup": err.Error()}, nil
+	cleanupErrors := map[string]string{}
+	if m.shouldRunCloudflareCleanup(fqdn) {
+		var err error
+		cleanupErrors, err = m.clearDNSConfig(ctx, fqdn)
+		if err != nil {
+			m.logger.WithError(err).WithField("fqdn", fqdn).Warn("Failed to clean old Cloudflare config after Bunny sync")
+			return map[string]string{fqdn + ":cloudflare-cleanup": err.Error()}, nil
+		}
+		m.markCloudflareCleanup(fqdn)
 	}
 	if serviceType == "foghorn" {
-		apexCleanup, cleanupErr := m.clearDNSConfig(ctx, zoneDomain)
-		if cleanupErr != nil {
-			m.logger.WithError(cleanupErr).WithField("fqdn", zoneDomain).Warn("Failed to clean old Cloudflare config after Bunny apex sync")
-			if cleanupErrors == nil {
-				cleanupErrors = map[string]string{}
+		if m.shouldRunCloudflareCleanup(zoneDomain) {
+			apexCleanup, cleanupErr := m.clearDNSConfig(ctx, zoneDomain)
+			if cleanupErr != nil {
+				m.logger.WithError(cleanupErr).WithField("fqdn", zoneDomain).Warn("Failed to clean old Cloudflare config after Bunny apex sync")
+				cleanupErrors[zoneDomain+":cloudflare-cleanup"] = cleanupErr.Error()
+				return cleanupErrors, nil
 			}
-			cleanupErrors[zoneDomain+":cloudflare-cleanup"] = cleanupErr.Error()
-			return cleanupErrors, nil
+			m.markCloudflareCleanup(zoneDomain)
+			maps.Copy(cleanupErrors, apexCleanup)
 		}
-		if cleanupErrors == nil && len(apexCleanup) > 0 {
-			cleanupErrors = map[string]string{}
-		}
-		maps.Copy(cleanupErrors, apexCleanup)
 	}
 	return cleanupErrors, nil
 }
@@ -789,6 +820,17 @@ func (m *DNSManager) bunnyRecordsForNodes(nodes []dnsNode, recordName, fqdn stri
 }
 
 func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain string, logFields logging.Fields) (*bunny.Zone, bool, error) {
+	cacheKey := bunnyZoneCacheKey(zoneDomain)
+	now := time.Now()
+	m.bunnyCacheMu.Lock()
+	m.ensureProviderCacheMapsLocked()
+	if zone := m.bunnyZoneCache[cacheKey]; zone != nil && now.Sub(m.bunnyDelegationCheckedAt[cacheKey]) < dnsProviderHousekeepingTTL {
+		zoneCopy := *zone
+		m.bunnyCacheMu.Unlock()
+		return &zoneCopy, false, nil
+	}
+	m.bunnyCacheMu.Unlock()
+
 	zone, created, err := m.bunnyClient.EnsureZone(ctx, zoneDomain)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to ensure Bunny zone %s: %w", zoneDomain, err)
@@ -802,7 +844,46 @@ func (m *DNSManager) ensureBunnyZoneDelegation(ctx context.Context, zoneDomain s
 	if err := m.ensureBunnyDelegation(zoneDomain, zone.Nameservers()); err != nil {
 		return nil, created, fmt.Errorf("failed to ensure Bunny delegation for %s: %w", zoneDomain, err)
 	}
+	m.bunnyCacheMu.Lock()
+	m.ensureProviderCacheMapsLocked()
+	zoneCopy := *zone
+	m.bunnyZoneCache[cacheKey] = &zoneCopy
+	m.bunnyDelegationCheckedAt[cacheKey] = time.Now()
+	m.bunnyCacheMu.Unlock()
 	return zone, created, nil
+}
+
+func bunnyZoneCacheKey(zoneDomain string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zoneDomain)), ".")
+}
+
+func (m *DNSManager) shouldRunCloudflareCleanup(fqdn string) bool {
+	key := strings.ToLower(strings.TrimSpace(fqdn))
+	m.bunnyCacheMu.Lock()
+	defer m.bunnyCacheMu.Unlock()
+	m.ensureProviderCacheMapsLocked()
+	last := m.cloudflareCleanupAt[key]
+	return last.IsZero() || time.Since(last) >= dnsProviderHousekeepingTTL
+}
+
+func (m *DNSManager) markCloudflareCleanup(fqdn string) {
+	key := strings.ToLower(strings.TrimSpace(fqdn))
+	m.bunnyCacheMu.Lock()
+	m.ensureProviderCacheMapsLocked()
+	m.cloudflareCleanupAt[key] = time.Now()
+	m.bunnyCacheMu.Unlock()
+}
+
+func (m *DNSManager) ensureProviderCacheMapsLocked() {
+	if m.bunnyZoneCache == nil {
+		m.bunnyZoneCache = map[string]*bunny.Zone{}
+	}
+	if m.bunnyDelegationCheckedAt == nil {
+		m.bunnyDelegationCheckedAt = map[string]time.Time{}
+	}
+	if m.cloudflareCleanupAt == nil {
+		m.cloudflareCleanupAt = map[string]time.Time{}
+	}
 }
 
 func bunnyRecordName(serviceType string) (string, bool) {

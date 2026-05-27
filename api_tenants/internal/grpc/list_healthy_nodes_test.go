@@ -480,6 +480,43 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 	}
 }
 
+func TestListHealthyNodesForDNS_FiltersByClusterID(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	serviceType := "edge-egress"
+	clusterID := "cluster-1"
+
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+		WithArgs(clusterID, serviceType).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+		WithArgs(clusterID, serviceType, int32(300)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*n\.cluster_id = \$1.*s\.type = \$2`).
+		WithArgs(clusterID, serviceType, int32(300)).
+		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-node-1", "edge", "5.6.7.8")...))
+
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+		ServiceType: &serviceType,
+		ClusterId:   &clusterID,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetNodes()) != 1 || resp.GetNodes()[0].GetClusterId() != clusterID {
+		t.Fatalf("expected one node in %s, got %#v", clusterID, resp.GetNodes())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
 // TestReportAliveNodesUpsertsEdgeCapabilities pins event-driven edge
 // membership ingestion: for each NodeAliveness with an edge-* capability set, QM
 // upserts the matching service_instances row. Caps not set are not

@@ -20,9 +20,17 @@ func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ int, _ st
 	return nil, errors.New("intentional test stub")
 }
 
+func (t *trackingQMClient) ListHealthyNodesForDNSForCluster(_ context.Context, _ int, _ string, _ string) (*proto.ListHealthyNodesForDNSResponse, error) {
+	return nil, errors.New("intentional test stub")
+}
+
 func (t *trackingQMClient) ListClusters(_ context.Context, _ *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error) {
 	t.listClustersCount++
 	return &proto.ListClustersResponse{}, nil
+}
+
+func (t *trackingQMClient) GetCluster(_ context.Context, _ string) (*proto.ClusterResponse, error) {
+	return &proto.ClusterResponse{}, nil
 }
 
 func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error) {

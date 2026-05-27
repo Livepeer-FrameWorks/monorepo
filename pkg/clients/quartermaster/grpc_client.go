@@ -517,11 +517,20 @@ func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region 
 // Quartermaster resolves edge queries (service_type "edge" or "edge-*") via
 // node_type + heartbeat; all other queries use the service_instance join.
 func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*pb.ListHealthyNodesForDNSResponse, error) {
+	return c.ListHealthyNodesForDNSForCluster(ctx, staleThresholdSeconds, serviceType, "")
+}
+
+// ListHealthyNodesForDNSForCluster lists DNS-eligible nodes for one cluster.
+// Empty clusterID leaves the request unscoped.
+func (c *GRPCClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*pb.ListHealthyNodesForDNSResponse, error) {
 	req := &pb.ListHealthyNodesForDNSRequest{
 		StaleThresholdSeconds: int32(staleThresholdSeconds),
 	}
 	if serviceType != "" {
 		req.ServiceType = &serviceType
+	}
+	if clusterID != "" {
+		req.ClusterId = &clusterID
 	}
 	return c.node.ListHealthyNodesForDNS(ctx, req)
 }

@@ -6098,6 +6098,7 @@ type ListHealthyNodesForDNSRequest struct {
 	NodeType              string                 `protobuf:"bytes,1,opt,name=node_type,json=nodeType,proto3" json:"node_type,omitempty"`
 	StaleThresholdSeconds int32                  `protobuf:"varint,2,opt,name=stale_threshold_seconds,json=staleThresholdSeconds,proto3" json:"stale_threshold_seconds,omitempty"`
 	ServiceType           *string                `protobuf:"bytes,3,opt,name=service_type,json=serviceType,proto3,oneof" json:"service_type,omitempty"` // Filter by services.type instead of node_type (takes precedence when set)
+	ClusterId             *string                `protobuf:"bytes,4,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`       // Limit DNS membership to one cluster when handling targeted wakeups
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -6149,6 +6150,13 @@ func (x *ListHealthyNodesForDNSRequest) GetStaleThresholdSeconds() int32 {
 func (x *ListHealthyNodesForDNSRequest) GetServiceType() string {
 	if x != nil && x.ServiceType != nil {
 		return *x.ServiceType
+	}
+	return ""
+}
+
+func (x *ListHealthyNodesForDNSRequest) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
 	}
 	return ""
 }
@@ -13463,12 +13471,15 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12@\n" +
 	"\n" +
 	"pagination\x18\x05 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xad\x01\n" +
+	"pagination\"\xe0\x01\n" +
 	"\x1dListHealthyNodesForDNSRequest\x12\x1b\n" +
 	"\tnode_type\x18\x01 \x01(\tR\bnodeType\x126\n" +
 	"\x17stale_threshold_seconds\x18\x02 \x01(\x05R\x15staleThresholdSeconds\x12&\n" +
-	"\fservice_type\x18\x03 \x01(\tH\x00R\vserviceType\x88\x01\x01B\x0f\n" +
-	"\r_service_type\"\x9f\x01\n" +
+	"\fservice_type\x18\x03 \x01(\tH\x00R\vserviceType\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"cluster_id\x18\x04 \x01(\tH\x01R\tclusterId\x88\x01\x01B\x0f\n" +
+	"\r_service_typeB\r\n" +
+	"\v_cluster_id\"\x9f\x01\n" +
 	"\x1eListHealthyNodesForDNSResponse\x127\n" +
 	"\x05nodes\x18\x01 \x03(\v2!.quartermaster.InfrastructureNodeR\x05nodes\x12\x1f\n" +
 	"\vtotal_nodes\x18\x02 \x01(\x05R\n" +

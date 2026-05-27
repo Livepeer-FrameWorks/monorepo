@@ -1064,6 +1064,7 @@ message ListHealthyNodesForDNSRequest {
   string node_type = 1;
   int32 stale_threshold_seconds = 2;
   optional string service_type = 3; // Filter by services.type instead of node_type (takes precedence when set)
+  optional string cluster_id = 4; // Limit DNS membership to one cluster when handling targeted wakeups
 }
 
 message ListHealthyNodesForDNSResponse {

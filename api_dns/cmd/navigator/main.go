@@ -412,10 +412,11 @@ func isPrivateClientIP(raw string) bool {
 	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
-// SyncDNS implements the gRPC SyncDNS method. When `cluster_id` is set, the
-// reconcile is scoped to that cluster's edge service type and is authoritative
-// (empty healthy set clears the record). Without `cluster_id`, behaviour is
-// the root-domain sync used by Quartermaster's existing tenant-alias paths.
+// SyncDNS implements the gRPC SyncDNS method. Cluster-scoped requests publish
+// one cluster's service record and, for platform-official Bunny clusters, also
+// refresh the matching root entrypoint. Unscoped Bunny requests refresh only
+// the root entrypoint; unscoped Cloudflare requests use the root service sync
+// path.
 func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
 	log := s.Logger.WithField("service_type", req.GetServiceType())
 	if req.ClusterId != nil {
@@ -429,6 +430,8 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (
 	)
 	if req.ClusterId != nil && req.GetClusterId() != "" {
 		partialErrors, err = s.DNSManager.SyncServiceForCluster(ctx, req.GetServiceType(), req.GetClusterId())
+	} else if pkgdns.ProviderForServiceType(req.GetServiceType()) == pkgdns.ProviderBunny {
+		partialErrors, err = s.DNSManager.SyncBunnyRootService(ctx, req.GetServiceType())
 	} else {
 		partialErrors, err = s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain())
 	}

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	geobucket "frameworks/api_tenants/internal/geo"
@@ -79,6 +80,8 @@ const (
 	foghornListenerInternalControl = "internal_control"
 	foghornInternalGRPCPort        = 18019
 	foghornExternalGRPCPort        = 18029
+	navigatorDNSSyncTimeout        = 30 * time.Second
+	navigatorDNSSyncConcurrency    = 4
 )
 
 func retryQueryContext(ctx context.Context, db *sql.DB, query string, args ...any) (*sql.Rows, error) {
@@ -5046,7 +5049,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 		if err != nil {
-			return status.Errorf(codes.Internal, "begin tx: %v", err)
+			return fmt.Errorf("begin tx: %w", err)
 		}
 		defer func() {
 			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
@@ -5066,11 +5069,11 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		WHERE node_id = ANY($1)
 	`, pq.Array(nodeIDs))
 		if err != nil {
-			return status.Errorf(codes.Internal, "read prior node state: %v", err)
+			return fmt.Errorf("read prior node state: %w", err)
 		}
 		priorNodes, err = scanPriorNodes(nodeRows)
 		if err != nil {
-			return status.Errorf(codes.Internal, "scan prior node: %v", err)
+			return fmt.Errorf("scan prior node: %w", err)
 		}
 
 		// Warn, but don't mutate, when Foghorn's view of cluster_id disagrees
@@ -5103,11 +5106,11 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		  AND svc.type LIKE 'edge-%'
 	`, pq.Array(nodeIDs))
 		if err != nil {
-			return status.Errorf(codes.Internal, "failed to read prior edge service health: %v", err)
+			return fmt.Errorf("failed to read prior edge service health: %w", err)
 		}
 		priorInst, err = scanPriorInst(siRows)
 		if err != nil {
-			return status.Errorf(codes.Internal, "scan prior si: %v", err)
+			return fmt.Errorf("scan prior si: %w", err)
 		}
 
 		// Per-node heartbeat + external_ip. Heartbeat ONLY for healthy nodes —
@@ -5134,7 +5137,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		FROM unnest($1::text[], $2::text[], $3::boolean[]) AS payload(node_id, ip, refresh_hb)
 		WHERE n.node_id = payload.node_id
 	`, pq.Array(upNodeIDs), pq.Array(upExternalIPs), pq.Array(upRefreshHB)); execErr != nil {
-			return status.Errorf(codes.Internal, "failed to update node state: %v", execErr)
+			return fmt.Errorf("failed to update node state: %w", execErr)
 		}
 
 		// UPSERT capabilities. We only INSERT when the cap is currently true —
@@ -5172,7 +5175,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 				    last_health_check = NOW(),
 				    updated_at = NOW()
 			`, instanceID, c.nodeID, c.serviceType); execErr != nil {
-					return status.Errorf(codes.Internal, "upsert healthy edge instance: %v", execErr)
+					return fmt.Errorf("upsert healthy edge instance: %w", execErr)
 				}
 			case !c.healthy && hadRow:
 				if _, execErr := tx.ExecContext(ctx, `
@@ -5185,18 +5188,18 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 				  AND svc.type = $1
 				  AND si.node_id = $2
 			`, c.serviceType, c.nodeID); execErr != nil {
-					return status.Errorf(codes.Internal, "mark edge instance unhealthy: %v", execErr)
+					return fmt.Errorf("mark edge instance unhealthy: %w", execErr)
 				}
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			return status.Errorf(codes.Internal, "commit: %v", err)
+			return fmt.Errorf("commit: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(codes.Internal, "report alive nodes: %v", err)
 	}
 
 	// Compute dirty (cluster, type) pairs across two change axes:
@@ -5248,31 +5251,70 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 	return &emptypb.Empty{}, nil
 }
 
-// fireNavigatorSyncForPairs dispatches Navigator.SyncDNS for each
-// (cluster, service_type) pair whose DNS-visible health set changed. Failures
-// are logged; the 60s Navigator reconcile loop is the durable backstop.
+// fireNavigatorSyncForPairs dispatches Navigator.SyncDNS for each dirty
+// (cluster, service_type) pair. Each pair gets an independent context so a slow
+// Bunny/Cloudflare write cannot cancel the rest of the batch.
 func (s *QuartermasterServer) fireNavigatorSyncForPairs(pairs map[dnsPairKey]struct{}) {
 	if s.navigatorClient == nil || len(pairs) == 0 {
 		return
 	}
-	go func() {
-		// Detached from the request ctx so the notify outlives the caller's deadline.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		for p := range pairs {
-			clusterID := p.clusterID
-			req := &pb.SyncDNSRequest{
-				ServiceType: p.serviceType,
-				ClusterId:   &clusterID,
-			}
-			if _, err := s.navigatorClient.SyncDNS(ctx, req); err != nil {
-				s.logger.WithError(err).WithFields(logging.Fields{
+	ordered := make([]dnsPairKey, 0, len(pairs))
+	for p := range pairs {
+		ordered = append(ordered, p)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].clusterID == ordered[j].clusterID {
+			return ordered[i].serviceType < ordered[j].serviceType
+		}
+		return ordered[i].clusterID < ordered[j].clusterID
+	})
+
+	go func(pairs []dnsPairKey) {
+		sem := make(chan struct{}, navigatorDNSSyncConcurrency)
+		var wg sync.WaitGroup
+		for _, p := range pairs {
+			p := p
+			sem <- struct{}{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				ctx, cancel := context.WithTimeout(context.Background(), navigatorDNSSyncTimeout)
+				defer cancel()
+
+				clusterID := p.clusterID
+				req := &pb.SyncDNSRequest{
+					ServiceType: p.serviceType,
+					ClusterId:   &clusterID,
+				}
+				started := time.Now()
+				resp, err := s.navigatorClient.SyncDNS(ctx, req)
+				if err != nil {
+					s.logger.WithError(err).WithFields(logging.Fields{
+						"cluster_id":   p.clusterID,
+						"service_type": p.serviceType,
+					}).Warn("Navigator SyncDNS notify failed; 60s repair loop will converge")
+					return
+				}
+				if !resp.GetSuccess() {
+					s.logger.WithFields(logging.Fields{
+						"cluster_id":   p.clusterID,
+						"service_type": p.serviceType,
+						"message":      resp.GetMessage(),
+						"errors":       resp.GetErrors(),
+					}).Warn("Navigator SyncDNS notify completed with errors; 60s repair loop will converge")
+					return
+				}
+				s.logger.WithFields(logging.Fields{
 					"cluster_id":   p.clusterID,
 					"service_type": p.serviceType,
-				}).Warn("Navigator SyncDNS notify failed; 60s repair loop will converge")
-			}
+					"duration_ms":  time.Since(started).Milliseconds(),
+				}).Debug("Navigator SyncDNS notify completed")
+			}()
 		}
-	}()
+		wg.Wait()
+	}(ordered)
 }
 
 // ListNodes returns nodes with optional filters
@@ -5490,6 +5532,10 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 				WHERE c.public_topology = true AND c.is_active = true
 			)
 		`
+	}
+	if clusterID := strings.TrimSpace(req.GetClusterId()); clusterID != "" {
+		baseArgs = append(baseArgs, clusterID)
+		baseWhere += fmt.Sprintf(" AND n.cluster_id = $%d", len(baseArgs))
 	}
 
 	staleThreshold := req.GetStaleThresholdSeconds()

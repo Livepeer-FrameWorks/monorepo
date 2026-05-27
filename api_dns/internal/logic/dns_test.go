@@ -177,10 +177,14 @@ func (f *fakeCloudflareClient) CreatePool(pool cloudflare.Pool) (*cloudflare.Poo
 
 type fakeQuartermasterClient struct {
 	serviceType      string
+	serviceTypes     []string
+	clusterID        string
+	clusterIDs       []string
 	staleAge         int
 	response         *proto.ListHealthyNodesForDNSResponse
 	err              error
 	callCount        int
+	getClusterID     string
 	clustersResponse *proto.ListClustersResponse
 	clustersErr      error
 }
@@ -218,8 +222,15 @@ func (f *fakeBunnyClient) ReconcileRecordSet(ctx context.Context, zoneID int64, 
 }
 
 func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
+	return f.ListHealthyNodesForDNSForCluster(ctx, staleThresholdSeconds, serviceType, "")
+}
+
+func (f *fakeQuartermasterClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*proto.ListHealthyNodesForDNSResponse, error) {
 	f.callCount++
 	f.serviceType = serviceType
+	f.serviceTypes = append(f.serviceTypes, serviceType)
+	f.clusterID = clusterID
+	f.clusterIDs = append(f.clusterIDs, clusterID)
 	f.staleAge = staleThresholdSeconds
 	return f.response, f.err
 }
@@ -229,6 +240,19 @@ func (f *fakeQuartermasterClient) ListClusters(ctx context.Context, pagination *
 		return &proto.ListClustersResponse{}, f.clustersErr
 	}
 	return f.clustersResponse, f.clustersErr
+}
+
+func (f *fakeQuartermasterClient) GetCluster(ctx context.Context, clusterID string) (*proto.ClusterResponse, error) {
+	f.getClusterID = clusterID
+	if f.clustersErr != nil {
+		return nil, f.clustersErr
+	}
+	for _, cluster := range f.clustersResponse.GetClusters() {
+		if cluster.GetClusterId() == clusterID {
+			return &proto.ClusterResponse{Cluster: cluster}, nil
+		}
+	}
+	return &proto.ClusterResponse{}, nil
 }
 
 func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
@@ -999,6 +1023,39 @@ func TestSyncBunnyRootServicePreservesDNSWhenNoPlatformNodes(t *testing.T) {
 	}
 }
 
+func TestSyncBunnyRootServiceAuthoritativeClearsWhenNoPlatformNodes(t *testing.T) {
+	var cleared bool
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:          "media-eu-1",
+			IsActive:           true,
+			IsPlatformOfficial: true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			if name != "" {
+				t.Fatalf("root service record name = %q, want apex", name)
+			}
+			if desired != nil {
+				t.Fatalf("authoritative clear desired records = %#v, want nil", desired)
+			}
+			cleared = true
+			return nil
+		},
+	}
+
+	if _, err := manager.syncBunnyRootService(context.Background(), "edge-ingest", true); err != nil {
+		t.Fatalf("syncBunnyRootService returned error: %v", err)
+	}
+	if !cleared {
+		t.Fatal("expected authoritative root sync to clear the Bunny record set")
+	}
+}
+
 func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
 	var got []bunny.Record
 	qm := &fakeQuartermasterClient{
@@ -1032,6 +1089,86 @@ func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
 	}
 	if got[0].Value != "198.51.100.10" {
 		t.Fatalf("root record IP = %q, want official node IP", got[0].Value)
+	}
+}
+
+func TestSyncServiceForClusterUsesScopedQuartermasterRead(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:   "media-eu-1",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+			NodeId:     "edge-eu-1",
+			ClusterId:  "media-eu-1",
+			ExternalIp: strPtr("198.51.100.10"),
+		}}},
+	}
+
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{}
+
+	partialErrors, err := manager.SyncServiceForCluster(context.Background(), "edge-ingest", "media-eu-1")
+	if err != nil {
+		t.Fatalf("SyncServiceForCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if len(qm.clusterIDs) == 0 || qm.clusterIDs[0] != "media-eu-1" {
+		t.Fatalf("ListHealthyNodesForDNSForCluster cluster IDs = %v, want first media-eu-1", qm.clusterIDs)
+	}
+	if qm.getClusterID != "media-eu-1" {
+		t.Fatalf("GetCluster ID = %q, want media-eu-1", qm.getClusterID)
+	}
+}
+
+func TestSyncServiceForClusterRefreshesRootForPlatformOfficialBunnyCluster(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+			ClusterId:          "media-eu-1",
+			ClusterType:        "edge",
+			IsActive:           true,
+			IsPlatformOfficial: true,
+		}}},
+		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+			NodeId:     "edge-eu-1",
+			ClusterId:  "media-eu-1",
+			ExternalIp: strPtr("198.51.100.10"),
+		}}},
+	}
+
+	var nextZoneID int64 = 40
+	zoneByID := map[int64]string{}
+	var reconciled []string
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		ensureZone: func(ctx context.Context, domain string) (*bunny.Zone, bool, error) {
+			nextZoneID++
+			zoneByID[nextZoneID] = domain
+			return &bunny.Zone{ID: nextZoneID, Domain: domain, Nameserver1: "kiki.bunny.net", Nameserver2: "coco.bunny.net"}, false, nil
+		},
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			reconciled = append(reconciled, zoneByID[zoneID]+":"+name)
+			return nil
+		},
+	}
+
+	partialErrors, err := manager.SyncServiceForCluster(context.Background(), "edge-ingest", "media-eu-1")
+	if err != nil {
+		t.Fatalf("SyncServiceForCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if !slices.Contains(reconciled, "media-eu-1.example.com:edge-ingest") {
+		t.Fatalf("cluster Bunny record was not reconciled: %v", reconciled)
+	}
+	if !slices.Contains(reconciled, "edge-ingest.example.com:") {
+		t.Fatalf("root Bunny record was not reconciled: %v", reconciled)
 	}
 }
 
@@ -1328,8 +1465,11 @@ func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 			Timeout:  5,
 			Retries:  2,
 		},
-		servicePorts: defaultServicePorts(),
-		healthPaths:  defaultServiceHealthPaths(),
+		servicePorts:             defaultServicePorts(),
+		healthPaths:              defaultServiceHealthPaths(),
+		bunnyZoneCache:           map[string]*bunny.Zone{},
+		bunnyDelegationCheckedAt: map[string]time.Time{},
+		cloudflareCleanupAt:      map[string]time.Time{},
 	}
 }
 
