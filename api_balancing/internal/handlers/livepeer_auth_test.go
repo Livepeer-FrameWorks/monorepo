@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/sirupsen/logrus"
@@ -139,7 +140,7 @@ func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = commod
-	r.ProcessingJob = func(_ context.Context, manifestID string) *LivepeerAuthContext {
+	r.ProcessingJob = func(_ context.Context, manifestID string, _ livepeerAuthRequest) *LivepeerAuthContext {
 		if manifestID != "processing+artifact123" {
 			return nil
 		}
@@ -171,10 +172,10 @@ func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.
 func TestLivepeerProfilesFromProcessesJSONNormalizesMistLivepeerProfiles(t *testing.T) {
 	processesJSON := `[{"process":"AV","codec":"AAC"},{"process":"Livepeer","hardcoded_broadcasters":"[{\"address\":\"https://livepeer.example\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
 
-	got := livepeerProfilesFromProcessesJSON(processesJSON, sourceMediaInfo{
-		width:  2718,
-		height: 1750,
-		fps:    24,
+	got := mist.LivepeerProfilesFromProcessesJSON(processesJSON, mist.SourceMediaInfo{
+		Width:  2718,
+		Height: 1750,
+		FPS:    24,
 	})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 profiles, got %d: %#v", len(got), got)
@@ -210,13 +211,80 @@ func TestLivepeerProfilesFromProcessesJSONNormalizesMistLivepeerProfiles(t *test
 func TestLivepeerProfilesFromProcessesJSONDropsInhibitedProfiles(t *testing.T) {
 	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}]}]`
 
-	got := livepeerProfilesFromProcessesJSON(processesJSON, sourceMediaInfo{
-		width:  640,
-		height: 360,
-		fps:    30,
+	got := mist.LivepeerProfilesFromProcessesJSON(processesJSON, mist.SourceMediaInfo{
+		Width:  640,
+		Height: 360,
+		FPS:    30,
 	})
 	if len(got) != 0 {
 		t.Fatalf("expected inhibited profile to be dropped, got %#v", got)
+	}
+}
+
+func TestLivepeerValidatedProfilesAcceptsMistComputedHeader(t *testing.T) {
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
+	requested := []livepeerJSONProfile{
+		{
+			"name":    "360p",
+			"bitrate": float64(900000),
+			"fps":     float64(24000),
+			"fpsDen":  float64(1000),
+			"height":  float64(352),
+			"width":   float64(544),
+			"profile": "H264ConstrainedHigh",
+			"gop":     "0.0",
+		},
+		{
+			"name":    "480p",
+			"bitrate": float64(1600000),
+			"fps":     float64(24000),
+			"fpsDen":  float64(1000),
+			"height":  float64(480),
+			"width":   float64(736),
+			"profile": "H264ConstrainedHigh",
+			"gop":     "0.0",
+		},
+	}
+
+	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
+		Profiles:          requested,
+		ContentResolution: "2718x1750",
+	}, mist.SourceMediaInfo{})
+
+	assertJSONEqual(t, requested, got)
+}
+
+func TestLivepeerValidatedProfilesRejectsProfileMismatch(t *testing.T) {
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
+	requested := []livepeerJSONProfile{
+		{
+			"name":    "360p",
+			"bitrate": float64(1),
+			"fps":     float64(24000),
+			"fpsDen":  float64(1000),
+			"height":  float64(352),
+			"width":   float64(544),
+			"profile": "H264ConstrainedHigh",
+			"gop":     "0.0",
+		},
+	}
+
+	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
+		Profiles:          requested,
+		ContentResolution: "2718x1750",
+	}, mist.SourceMediaInfo{})
+
+	if got != nil {
+		t.Fatalf("expected mismatched profiles to be rejected, got %#v", got)
+	}
+}
+
+func TestLivepeerValidatedProfilesRejectsMissingProfilesWithoutSourceMetadata(t *testing.T) {
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
+
+	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{}, mist.SourceMediaInfo{})
+	if got != nil {
+		t.Fatalf("expected missing request profiles without source metadata to be rejected, got %#v", got)
 	}
 }
 
@@ -238,7 +306,7 @@ func assertJSONEqual(t *testing.T, want, got interface{}) {
 func TestLivepeerAuth_ProcessingSessionManifestFallsThroughWhenJobMissing(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.ProcessingJob = func(context.Context, string) *LivepeerAuthContext { return nil }
+	r.ProcessingJob = func(context.Context, string, livepeerAuthRequest) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{TenantId: ""}}
 
 	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")

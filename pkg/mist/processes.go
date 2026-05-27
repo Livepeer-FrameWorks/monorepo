@@ -4,8 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
+
+// LivepeerJSONProfile is the go-livepeer JSON profile shape embedded in
+// MistServer Livepeer process configs.
+type LivepeerJSONProfile map[string]interface{}
+
+// SourceMediaInfo is the source video track metadata MistServer uses when it
+// expands Livepeer target_profiles before sending them to go-livepeer.
+type SourceMediaInfo struct {
+	Width  int
+	Height int
+	FPS    float64
+}
 
 // StripLivepeerProcesses removes Livepeer process entries from a MistServer
 // processes JSON array. Used when no Livepeer gateway is available in the cluster
@@ -138,6 +151,88 @@ func HasLivepeerProcesses(processesJSON string) bool {
 	return strings.Contains(processesJSON, `"Livepeer"`)
 }
 
+// LivepeerProfilesFromProcessesJSON extracts the first Livepeer target_profiles
+// entry and normalizes it to match MistProcLivepeer's request header.
+func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaInfo) []LivepeerJSONProfile {
+	var processes []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return nil
+	}
+	for _, proc := range processes {
+		var processName string
+		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
+			continue
+		}
+		var profiles []LivepeerJSONProfile
+		if err := json.Unmarshal(proc["target_profiles"], &profiles); err != nil {
+			return nil
+		}
+		return NormalizeLivepeerProfiles(profiles, source)
+	}
+	return nil
+}
+
+// NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles mutation
+// before it sets the Livepeer-Transcode-Configuration header.
+func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMediaInfo) []LivepeerJSONProfile {
+	if len(profiles) == 0 {
+		return nil
+	}
+	out := make([]LivepeerJSONProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		p := copyLivepeerProfile(profile)
+		if _, ok := p["gop"]; !ok {
+			p["gop"] = "0.0"
+		}
+		if !livepeerProfileNumberSet(p, "fps") {
+			fpks := int(math.Round(source.FPS * 1000))
+			if fpks == 0 {
+				fpks = 25000
+			}
+			p["fps"] = fpks
+			p["fpsDen"] = 1000
+		}
+		if _, ok := p["profile"]; !ok {
+			p["profile"] = "H264High"
+		}
+		if source.Width > 0 && source.Height > 0 {
+			width, hasWidth := livepeerProfileInt(p, "width")
+			height, hasHeight := livepeerProfileInt(p, "height")
+			switch {
+			case (!hasWidth || width == 0) && (!hasHeight || height == 0):
+				width = source.Width
+				height = source.Height
+			case !hasWidth || width == 0:
+				if source.Width < source.Height {
+					width = height
+					height = source.Height * width / source.Width
+				} else {
+					width = source.Width * height / source.Height
+				}
+			case !hasHeight || height == 0:
+				height = source.Height * width / source.Width
+			}
+			width = (width / 16) * 16
+			height = (height / 16) * 16
+			if width > 0 {
+				p["width"] = width
+			}
+			if height > 0 {
+				p["height"] = height
+			}
+		}
+		if shouldInhibitLivepeerProfile(p, source) {
+			continue
+		}
+		delete(p, "track_inhibit")
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // ValidateProcessConfigShape checks that explicit MistServer process configs use
 // option names consumed by the target process binary. Livepeer target_profiles are
 // intentionally exempt: those use go-livepeer's profile schema and are converted
@@ -216,6 +311,61 @@ func copyProcessOption(dst, src map[string]interface{}, key string) {
 	if value, ok := src[key]; ok {
 		dst[key] = value
 	}
+}
+
+func copyLivepeerProfile(profile LivepeerJSONProfile) LivepeerJSONProfile {
+	out := make(LivepeerJSONProfile, len(profile))
+	for k, v := range profile {
+		out[k] = v
+	}
+	return out
+}
+
+func livepeerProfileNumberSet(profile LivepeerJSONProfile, key string) bool {
+	v, ok := livepeerProfileFloat(profile, key)
+	return ok && v != 0
+}
+
+func livepeerProfileInt(profile LivepeerJSONProfile, key string) (int, bool) {
+	v, ok := livepeerProfileFloat(profile, key)
+	return int(v), ok
+}
+
+func livepeerProfileFloat(profile LivepeerJSONProfile, key string) (float64, bool) {
+	switch v := profile[key].(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func shouldInhibitLivepeerProfile(profile LivepeerJSONProfile, source SourceMediaInfo) bool {
+	if source.Width <= 0 || source.Height <= 0 {
+		return false
+	}
+	raw, ok := profile["track_inhibit"].(string)
+	if !ok || !strings.HasPrefix(raw, "video=<") {
+		return false
+	}
+	dims := strings.TrimPrefix(raw, "video=<")
+	parts := strings.SplitN(dims, "x", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	maxWidth, errW := strconv.Atoi(parts[0])
+	maxHeight, errH := strconv.Atoi(parts[1])
+	if errW != nil || errH != nil {
+		return false
+	}
+	return source.Width < maxWidth && source.Height < maxHeight
 }
 
 // livepeerProfileToCodec maps Livepeer profile names to MistProcAV codec names.

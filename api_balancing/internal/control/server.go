@@ -4781,9 +4781,20 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 	case "cache_update":
 		artifactHash := result.GetOutputs()["artifact_hash"]
 		processesJSON := result.GetOutputs()["processes_json"]
-		if artifactHash != "" && processesJSON != "" && onProcessConfigCacheUpdate != nil {
-			onProcessConfigCacheUpdate(artifactHash, processesJSON)
-			logger.WithField("artifact_hash", artifactHash).Info("Updated process config cache for Livepeer fallback")
+		if artifactHash != "" && processesJSON != "" {
+			if _, err := db.ExecContext(ctx, `
+				UPDATE foghorn.processing_jobs
+				   SET processes_json = $2,
+				       updated_at = NOW()
+				 WHERE artifact_hash = $1
+				   AND status IN ('queued', 'dispatched', 'processing')
+			`, artifactHash, processesJSON); err != nil {
+				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to persist processing process config update")
+			}
+			if onProcessConfigCacheUpdate != nil {
+				onProcessConfigCacheUpdate(artifactHash, processesJSON)
+			}
+			logger.WithField("artifact_hash", artifactHash).Info("Updated process config for Livepeer fallback")
 		}
 		return
 	case "completed":

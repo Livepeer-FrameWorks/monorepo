@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,15 +15,17 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 )
 
 // livepeerAuthRequest is the body sent by go-livepeer's auth webhook.
-// go-livepeer POSTs {"url": "<incomingRequestURL>"} on the first segment of a new session.
 type livepeerAuthRequest struct {
-	URL string `json:"url"`
+	URL               string                `json:"url"`
+	Profiles          []livepeerJSONProfile `json:"profiles,omitempty"`
+	ContentResolution string                `json:"contentResolution,omitempty"`
 }
 
 // livepeerAuthResponse is what go-livepeer expects back.
@@ -51,13 +52,7 @@ type LivepeerAuthContext struct {
 	Profiles     []livepeerJSONProfile
 }
 
-type livepeerJSONProfile map[string]interface{}
-
-type sourceMediaInfo struct {
-	width  int
-	height int
-	fps    float64
-}
+type livepeerJSONProfile = mist.LivepeerJSONProfile
 
 // HandleLivepeerAuth handles the auth webhook from go-livepeer gateways.
 // It validates that the manifestID in the push URL corresponds to an active
@@ -82,7 +77,7 @@ func HandleLivepeerAuth(c *gin.Context) {
 	}
 
 	resolver := defaultLivepeerAuthResolver()
-	authCtx, reason := resolver.Authorize(c.Request.Context(), manifestID)
+	authCtx, reason := resolver.AuthorizeRequest(c.Request.Context(), manifestID, req)
 	if authCtx == nil {
 		logger.WithFields(logging.Fields{
 			"manifest_id": manifestID,
@@ -159,7 +154,7 @@ type federationStreamQuerier interface {
 type LivepeerAuthResolver struct {
 	LocalCluster  string
 	StreamLookup  func(manifestID string) *LivepeerAuthContext
-	ProcessingJob func(ctx context.Context, manifestID string) *LivepeerAuthContext
+	ProcessingJob func(ctx context.Context, manifestID string, req livepeerAuthRequest) *LivepeerAuthContext
 	Commodore     commodoreInternalNameResolver
 	Federation    federationStreamQuerier
 	PeerAddrs     peerAddrResolver // shared with the rest of the handlers package
@@ -198,6 +193,10 @@ func defaultLivepeerAuthResolver() *LivepeerAuthResolver {
 // resolved tenant/stream context; (nil, reason) with one of the constants above
 // when the stream cannot be confirmed.
 func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string) (*LivepeerAuthContext, string) {
+	return r.AuthorizeRequest(ctx, manifestID, livepeerAuthRequest{})
+}
+
+func (r *LivepeerAuthResolver) AuthorizeRequest(ctx context.Context, manifestID string, req livepeerAuthRequest) (*LivepeerAuthContext, string) {
 	manifestIDs := livepeerAuthCandidateManifestIDs(manifestID)
 
 	// 1. Local in-memory state. Pub/sub keeps this in sync within a Foghorn pool
@@ -214,7 +213,8 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 	// 2. Positive-result cache. Avoids repeated Commodore + peer fan-out for the
 	// burst of segments at session startup. Caches the full auth context, not
 	// just a boolean, so the cached path still produces tenant attribution.
-	if r.PositiveCache != nil {
+	usePositiveCache := !(isProcessingManifestID(manifestID) && len(req.Profiles) > 0)
+	if usePositiveCache && r.PositiveCache != nil {
 		for _, candidate := range manifestIDs {
 			if c := r.PositiveCache.get(candidate); c != nil {
 				return c, ""
@@ -224,13 +224,16 @@ func (r *LivepeerAuthResolver) Authorize(ctx context.Context, manifestID string)
 
 	if isProcessingManifestID(manifestID) && r.ProcessingJob != nil {
 		for _, candidate := range manifestIDs {
-			if c := r.ProcessingJob(ctx, candidate); c != nil {
+			if c := r.ProcessingJob(ctx, candidate, req); c != nil {
 				if r.PositiveCache != nil {
 					r.PositiveCache.add(manifestID, c)
 					r.PositiveCache.add(candidate, c)
 				}
 				return c, ""
 			}
+		}
+		if len(req.Profiles) > 0 {
+			return nil, authRejectInvalidRequest
 		}
 	}
 
@@ -334,7 +337,7 @@ func livepeerAuthCandidateManifestIDs(manifestID string) []string {
 	return candidates
 }
 
-func lookupProcessingJobAuthContext(ctx context.Context, manifestID string) *LivepeerAuthContext {
+func lookupProcessingJobAuthContext(ctx context.Context, manifestID string, req livepeerAuthRequest) *LivepeerAuthContext {
 	if db == nil || !isProcessingManifestID(manifestID) {
 		return nil
 	}
@@ -371,19 +374,26 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string) *Liv
 	if strings.TrimSpace(tenantID) == "" {
 		return nil
 	}
-	source := sourceMediaInfo{}
+	source := mist.SourceMediaInfo{}
 	if width.Valid {
-		source.width = int(width.Int64)
+		source.Width = int(width.Int64)
 	}
 	if height.Valid {
-		source.height = int(height.Int64)
+		source.Height = int(height.Int64)
 	}
 	if fps.Valid {
-		source.fps = fps.Float64
+		source.FPS = fps.Float64
 	}
 	var profiles []livepeerJSONProfile
 	if processesJSON.Valid {
-		profiles = livepeerProfilesFromProcessesJSON(processesJSON.String, source)
+		profiles = livepeerValidatedProfiles(processesJSON.String, req, source)
+		if mist.HasLivepeerProcesses(processesJSON.String) && len(profiles) == 0 {
+			logger.WithFields(logging.Fields{
+				"manifest_id": manifestID,
+				"resolution":  req.ContentResolution,
+			}).Warn("livepeer auth: requested processing profiles rejected")
+			return nil
+		}
 	}
 	return &LivepeerAuthContext{
 		TenantID:     tenantID,
@@ -393,137 +403,99 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string) *Liv
 	}
 }
 
-func livepeerProfilesFromProcessesJSON(processesJSON string, source sourceMediaInfo) []livepeerJSONProfile {
-	var processes []map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
-		return nil
-	}
-	for _, proc := range processes {
-		var processName string
-		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
-			continue
-		}
-		var profiles []livepeerJSONProfile
-		if err := json.Unmarshal(proc["target_profiles"], &profiles); err != nil {
+func livepeerValidatedProfiles(processesJSON string, req livepeerAuthRequest, source mist.SourceMediaInfo) []livepeerJSONProfile {
+	if len(req.Profiles) == 0 {
+		if source.Width <= 0 || source.Height <= 0 || source.FPS <= 0 {
 			return nil
 		}
-		return normalizeLivepeerAuthProfiles(profiles, source)
+		return mist.LivepeerProfilesFromProcessesJSON(processesJSON, source)
 	}
-	return nil
-}
 
-func normalizeLivepeerAuthProfiles(profiles []livepeerJSONProfile, source sourceMediaInfo) []livepeerJSONProfile {
-	if len(profiles) == 0 {
+	if source.Width <= 0 || source.Height <= 0 {
+		if width, height, ok := parseContentResolution(req.ContentResolution); ok {
+			source.Width = width
+			source.Height = height
+		}
+	}
+	if source.FPS <= 0 {
+		source.FPS = fpsFromLivepeerProfiles(req.Profiles)
+	}
+	if source.Width <= 0 || source.Height <= 0 {
 		return nil
 	}
-	out := make([]livepeerJSONProfile, 0, len(profiles))
+
+	expected := mist.LivepeerProfilesFromProcessesJSON(processesJSON, source)
+	if !livepeerProfilesJSONEqual(expected, req.Profiles) {
+		return nil
+	}
+	return req.Profiles
+}
+
+func parseContentResolution(resolution string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(resolution)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func fpsFromLivepeerProfiles(profiles []livepeerJSONProfile) float64 {
 	for _, profile := range profiles {
-		p := copyLivepeerProfile(profile)
-		if _, ok := p["gop"]; !ok {
-			p["gop"] = "0.0"
-		}
-		if !livepeerProfileNumberSet(p, "fps") {
-			fpks := int(math.Round(source.fps * 1000))
-			if fpks == 0 {
-				fpks = 25000
-			}
-			p["fps"] = fpks
-			p["fpsDen"] = 1000
-		}
-		if _, ok := p["profile"]; !ok {
-			p["profile"] = "H264High"
-		}
-		if source.width > 0 && source.height > 0 {
-			width, hasWidth := livepeerProfileInt(p, "width")
-			height, hasHeight := livepeerProfileInt(p, "height")
-			switch {
-			case (!hasWidth || width == 0) && (!hasHeight || height == 0):
-				width = source.width
-				height = source.height
-			case !hasWidth || width == 0:
-				if source.width < source.height {
-					width = height
-					height = source.height * width / source.width
-				} else {
-					width = source.width * height / source.height
-				}
-			case !hasHeight || height == 0:
-				height = source.height * width / source.width
-			}
-			width = (width / 16) * 16
-			height = (height / 16) * 16
-			if width > 0 {
-				p["width"] = width
-			}
-			if height > 0 {
-				p["height"] = height
-			}
-		}
-		if shouldInhibitLivepeerProfile(p, source) {
+		fps, ok := livepeerProfileFloat(profile, "fps")
+		if !ok || fps <= 0 {
 			continue
 		}
-		delete(p, "track_inhibit")
-		out = append(out, p)
+		fpsDen, ok := livepeerProfileFloat(profile, "fpsDen")
+		if !ok || fpsDen <= 0 {
+			return fps
+		}
+		return fps / fpsDen
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func copyLivepeerProfile(profile livepeerJSONProfile) livepeerJSONProfile {
-	out := make(livepeerJSONProfile, len(profile))
-	for k, v := range profile {
-		out[k] = v
-	}
-	return out
-}
-
-func livepeerProfileNumberSet(profile livepeerJSONProfile, key string) bool {
-	v, ok := livepeerProfileFloat(profile, key)
-	return ok && v != 0
-}
-
-func livepeerProfileInt(profile livepeerJSONProfile, key string) (int, bool) {
-	v, ok := livepeerProfileFloat(profile, key)
-	return int(v), ok
+	return 0
 }
 
 func livepeerProfileFloat(profile livepeerJSONProfile, key string) (float64, bool) {
-	switch v := profile[key].(type) {
+	switch value := profile[key].(type) {
 	case float64:
-		return v, true
+		return value, true
+	case float32:
+		return float64(value), true
 	case int:
-		return float64(v), true
+		return float64(value), true
 	case int64:
-		return float64(v), true
+		return float64(value), true
 	case json.Number:
-		f, err := v.Float64()
-		return f, err == nil
+		n, err := value.Float64()
+		return n, err == nil
 	default:
 		return 0, false
 	}
 }
 
-func shouldInhibitLivepeerProfile(profile livepeerJSONProfile, source sourceMediaInfo) bool {
-	if source.width <= 0 || source.height <= 0 {
+func livepeerProfilesJSONEqual(a, b []livepeerJSONProfile) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	raw, ok := profile["track_inhibit"].(string)
-	if !ok || !strings.HasPrefix(raw, "video=<") {
+	if len(a) == 0 {
+		return true
+	}
+	aj, err := json.Marshal(a)
+	if err != nil {
 		return false
 	}
-	dims := strings.TrimPrefix(raw, "video=<")
-	parts := strings.SplitN(dims, "x", 2)
-	if len(parts) != 2 {
+	bj, err := json.Marshal(b)
+	if err != nil {
 		return false
 	}
-	maxWidth, errW := strconv.Atoi(parts[0])
-	maxHeight, errH := strconv.Atoi(parts[1])
-	if errW != nil || errH != nil {
-		return false
-	}
-	return source.width < maxWidth && source.height < maxHeight
+	return string(aj) == string(bj)
 }
 
 // authPositiveCache holds short-lived "this manifest is authorised" entries to
