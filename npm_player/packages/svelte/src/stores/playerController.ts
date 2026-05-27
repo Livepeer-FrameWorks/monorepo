@@ -445,6 +445,7 @@ export function createPlayerControllerStore(
           ...prev,
           currentPlayerInfo: controller!.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
+          playbackQuality: null,
           streamInfo: controller!.getStreamInfo(),
           thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
           loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,

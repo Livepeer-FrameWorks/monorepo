@@ -339,6 +339,7 @@ export class PlayerControllerHost implements ReactiveController {
         this.update({
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
+          playbackQuality: null,
           qualities: controller.getQualities(),
           textTracks: controller.getTextTracks(),
         });

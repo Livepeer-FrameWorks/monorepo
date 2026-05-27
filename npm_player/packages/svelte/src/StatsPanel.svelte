@@ -21,6 +21,8 @@
     protocol?: string;
     nodeId?: string;
     geoDistance?: number;
+    currentPlayer?: { name: string; shortname: string } | null;
+    currentSource?: { url: string; type: string } | null;
   }
 
   let {
@@ -33,6 +35,8 @@
     protocol = undefined,
     nodeId = undefined,
     geoDistance = undefined,
+    currentPlayer = null,
+    currentSource = null,
   }: Props = $props();
 
   // Video element stats (reactive)
@@ -111,6 +115,8 @@
       { label: "Frame Drop Rate", value: `${frameDropRate}%` },
       { label: "Stalls", value: String(stallCount) },
       { label: "Playback Rate", value: `${playbackRate}x` },
+      { label: "Player", value: currentPlayer?.name ?? currentPlayer?.shortname ?? "—" },
+      { label: "Source Type", value: currentSource?.type ?? "—" },
       { label: "Protocol", value: protocol ?? "—" },
       { label: "Node", value: nodeId ?? "—" },
       { label: "Geo Distance", value: geoDistance ? `${geoDistance.toFixed(0)} km` : "—" },
@@ -138,6 +144,10 @@
     if (metadata?.recordingSizeBytes) {
       const mb = (metadata.recordingSizeBytes / (1024 * 1024)).toFixed(1);
       result.push({ label: "Size", value: `${mb} MB` });
+    }
+
+    if (currentSource?.url) {
+      result.push({ label: "Source URL", value: currentSource.url });
     }
 
     return result;

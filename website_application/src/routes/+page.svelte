@@ -271,11 +271,14 @@
     realtimeStreams: realtimeData?.length || 0,
   });
 
-  // Calculate total bandwidth from live metrics (bandwidthInBps/OutBps are in bits/sec)
+  // Calculate total bandwidth in bytes/sec. Realtime subscriptions use bits/sec;
+  // PlatformOverview uses the latest ClickHouse QoE rate in bytes/sec as a fallback.
   let totalBandwidth = $derived(
     Object.values(liveMetrics).reduce((total: number, stream) => {
       return total + (stream.bandwidthInBps || 0) + (stream.bandwidthOutBps || 0);
-    }, 0)
+    }, 0) / 8 ||
+      usageData?.peakBandwidth ||
+      0
   );
 
   function copyToClipboard(text: string) {

@@ -487,6 +487,8 @@
             protocol={primaryEndpoint?.protocol}
             nodeId={primaryEndpoint?.nodeId}
             geoDistance={primaryEndpoint?.geoDistance}
+            currentPlayer={storeState.currentPlayerInfo}
+            currentSource={storeState.currentSourceInfo}
           />
 
           <!-- Dev mode toggle (when panel closed) -->

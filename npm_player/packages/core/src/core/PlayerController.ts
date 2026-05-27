@@ -3906,6 +3906,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           type: e.source.type,
         };
       }
+      this._playbackQuality = null;
 
       this.setState("connecting", {
         selectedPlayer: e.player,

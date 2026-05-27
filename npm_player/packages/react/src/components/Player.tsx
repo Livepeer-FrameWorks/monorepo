@@ -293,6 +293,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
                   protocol={primaryEndpoint?.protocol}
                   nodeId={primaryEndpoint?.nodeId}
                   geoDistance={primaryEndpoint?.geoDistance}
+                  currentPlayer={state.currentPlayerInfo}
+                  currentSource={state.currentSourceInfo}
                 />
 
                 {/* Dev Mode Panel toggle */}

@@ -124,6 +124,8 @@ export class FwStatsPanel extends LitElement {
     const quality = s.playbackQuality;
     const metadata = s.metadata;
     const streamState = s.streamState;
+    const currentPlayer = s.currentPlayerInfo;
+    const currentSource = s.currentSourceInfo;
     const primaryEndpoint = s.endpoints?.primary as
       | { protocol?: string; nodeId?: string; geoDistance?: number }
       | undefined;
@@ -156,6 +158,8 @@ export class FwStatsPanel extends LitElement {
       { label: "Frame Drop Rate", value: `${frameDropRate}%` },
       { label: "Stalls", value: String(stallCount) },
       { label: "Playback Rate", value: `${playbackRate}x` },
+      { label: "Player", value: currentPlayer?.name ?? currentPlayer?.shortname ?? "—" },
+      { label: "Source Type", value: currentSource?.type ?? "—" },
       { label: "Protocol", value: primaryEndpoint?.protocol ?? "—" },
       { label: "Node", value: primaryEndpoint?.nodeId ?? "—" },
       {
@@ -185,6 +189,9 @@ export class FwStatsPanel extends LitElement {
     if (metadata?.recordingSizeBytes) {
       const mb = (metadata.recordingSizeBytes / (1024 * 1024)).toFixed(1);
       stats.push({ label: "Size", value: `${mb} MB` });
+    }
+    if (currentSource?.url) {
+      stats.push({ label: "Source URL", value: currentSource.url });
     }
 
     return stats;

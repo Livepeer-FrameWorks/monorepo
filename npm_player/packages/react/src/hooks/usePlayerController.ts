@@ -456,6 +456,7 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
           ...prev,
           currentPlayerInfo: controller.getCurrentPlayerInfo(),
           currentSourceInfo: { url: source.url, type: source.type },
+          playbackQuality: null,
           qualities: controller.getQualities(),
           thumbnailCues: controller.getThumbnailCues?.() ?? prev.thumbnailCues,
           loadingPoster: controller.getLoadingPoster?.() ?? prev.loadingPoster,
