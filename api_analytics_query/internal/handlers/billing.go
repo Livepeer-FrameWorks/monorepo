@@ -1510,31 +1510,31 @@ func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, t
 	err := bs.clickhouse.QueryRowContext(ctx, `
 		SELECT min(first_ms)
 		FROM (
-			SELECT min(projection_version_ms) AS first_ms
+			SELECT toInt64(min(projection_version_ms)) AS first_ms
 			FROM periscope.viewer_sessions_final
 			WHERE tenant_id = ?
 
 			UNION ALL
 
-			SELECT min(projection_version_ms) AS first_ms
+			SELECT toInt64(min(projection_version_ms)) AS first_ms
 			FROM periscope.stream_sessions_final
 			WHERE tenant_id = ?
 
 			UNION ALL
 
-			SELECT min(projection_version_ms) AS first_ms
+			SELECT toInt64(min(projection_version_ms)) AS first_ms
 			FROM periscope.processing_segments_final
 			WHERE tenant_id = ?
 
 			UNION ALL
 
-			SELECT min(projection_version_ms) AS first_ms
+			SELECT toInt64(min(projection_version_ms)) AS first_ms
 			FROM periscope.storage_gb_seconds_5m
 			WHERE tenant_id = ?
 
 			UNION ALL
 
-			SELECT toUnixTimestamp(min(window_start)) * 1000 AS first_ms
+			SELECT toInt64(toUnixTimestamp(min(window_start)) * 1000) AS first_ms
 			FROM periscope.api_usage_5m_v
 			WHERE tenant_id = ?
 		)

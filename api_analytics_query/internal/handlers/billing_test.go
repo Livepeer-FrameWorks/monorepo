@@ -58,7 +58,7 @@ func TestEarliestCanonicalBillingFactCastsAPIWindowStartFromDateTime(t *testing.
 
 	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
 	first := time.Date(2026, 5, 27, 10, 15, 0, 0, time.UTC)
-	mock.ExpectQuery(`SELECT min\(first_ms\).*toUnixTimestamp\(min\(window_start\)\) \* 1000 AS first_ms`).
+	mock.ExpectQuery(`SELECT min\(first_ms\).*toInt64\(toUnixTimestamp\(min\(window_start\)\) \* 1000\) AS first_ms`).
 		WithArgs("tenant-1", "tenant-1", "tenant-1", "tenant-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"first_ms"}).AddRow(first.UnixMilli()))
 
