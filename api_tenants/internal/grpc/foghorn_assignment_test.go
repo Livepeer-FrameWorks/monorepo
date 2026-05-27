@@ -138,7 +138,7 @@ func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "addr", "control_cell", "control_region"}).
 			AddRow("11111111-1111-1111-1111-111111111111", "foghorn:18008", "media-eu-1", "eu"))
 	mock.ExpectBegin()
-	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0").
+	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.tenant_cluster_access.*VALUES").
@@ -179,7 +179,7 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region"}).
 			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu"))
 	mock.ExpectBegin()
-	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0").
+	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu").
 		WillReturnError(errors.New("stop after cluster insert"))
 	mock.ExpectRollback()
