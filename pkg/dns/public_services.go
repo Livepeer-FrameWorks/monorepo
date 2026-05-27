@@ -72,12 +72,14 @@ var poolAssignedServiceTypes = []string{
 	"foghorn",
 	"chandler",
 	"livepeer-gateway",
+	"vmauth",
 }
 
 var poolAssignedServiceTypeSet = map[string]struct{}{
 	"foghorn":          {},
 	"chandler":         {},
 	"livepeer-gateway": {},
+	"vmauth":           {},
 }
 
 const TenantAliasZoneLabel = "cdn"

@@ -1904,7 +1904,7 @@ func reconcileServiceClusterAssignments(ctx context.Context, cmd *cobra.Command,
 func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Writer, manifest *inventory.Manifest, client serviceClusterAssignmentClient, requiredServiceTypes ...string) error {
 	fmt.Fprintln(out, "  Reconciling service-cluster assignments...")
 
-	serviceIDs, err := serviceIDsByType(ctx, client)
+	serviceIDs, catalogSummary, err := serviceCatalogByType(ctx, client)
 	if err != nil {
 		return err
 	}
@@ -1922,7 +1922,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		if serviceID == "" {
 			_, serviceRequired := required[serviceName]
 			if len(enabledClusterAssignedManifestServices(manifest, serviceName)) > 0 && (requireAll || serviceRequired) {
-				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog", serviceName)
+				return fmt.Errorf("%s service is enabled but missing from Quartermaster service catalog (available: %s)", serviceName, catalogSummary)
 			}
 			continue
 		}
@@ -2005,9 +2005,7 @@ type namedServiceConfig struct {
 }
 
 func clusterAssignedServiceTypes() []string {
-	types := append([]string{}, pkgdns.PoolAssignedServiceTypes()...)
-	types = append(types, "vmauth")
-	return types
+	return pkgdns.PoolAssignedServiceTypes()
 }
 
 func enabledPoolAssignedManifestServices(manifest *inventory.Manifest, serviceType string) []namedServiceConfig {
@@ -2047,24 +2045,43 @@ func enabledClusterAssignedManifestServices(manifest *inventory.Manifest, servic
 }
 
 func serviceIDsByType(ctx context.Context, client serviceClusterAssignmentClient) (map[string]string, error) {
+	out, _, err := serviceCatalogByType(ctx, client)
+	return out, err
+}
+
+func serviceCatalogByType(ctx context.Context, client serviceClusterAssignmentClient) (map[string]string, string, error) {
 	resp, err := client.ListServices(ctx, &pb.CursorPaginationRequest{First: 1000})
 	if err != nil {
-		return nil, fmt.Errorf("list Quartermaster services: %w", err)
+		return nil, "", fmt.Errorf("list Quartermaster services: %w", err)
 	}
 	out := make(map[string]string, len(resp.GetServices()))
+	summary := make([]string, 0, len(resp.GetServices()))
 	for _, svc := range resp.GetServices() {
 		serviceType := strings.TrimSpace(svc.GetType())
 		if serviceType == "" {
 			serviceType = strings.TrimSpace(svc.GetServiceId())
 		}
-		if serviceType == "" || svc.GetServiceId() == "" {
+		serviceID := strings.TrimSpace(svc.GetServiceId())
+		if serviceID != "" {
+			summaryType := serviceType
+			if summaryType == "" {
+				summaryType = "unknown"
+			}
+			summary = append(summary, fmt.Sprintf("%s(type=%s)", serviceID, summaryType))
+		}
+		if serviceType == "" || serviceID == "" {
 			continue
 		}
-		if _, exists := out[serviceType]; !exists || svc.GetServiceId() == serviceType {
-			out[serviceType] = svc.GetServiceId()
+		if _, exists := out[serviceType]; !exists || serviceID == serviceType {
+			out[serviceType] = serviceID
 		}
 	}
-	return out, nil
+	sort.Strings(summary)
+	catalogSummary := strings.Join(summary, ", ")
+	if catalogSummary == "" {
+		catalogSummary = "none"
+	}
+	return out, catalogSummary, nil
 }
 
 func serviceInstancesForService(ctx context.Context, client serviceClusterAssignmentClient, serviceID string) ([]*pb.ServiceInstance, error) {

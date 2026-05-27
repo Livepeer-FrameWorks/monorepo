@@ -182,6 +182,18 @@ func TestIsClusterScopedServiceType(t *testing.T) {
 	}
 }
 
+func TestPoolAssignedServiceTypesIncludesVMAUTH(t *testing.T) {
+	if !slices.Contains(PoolAssignedServiceTypes(), "vmauth") {
+		t.Fatal("PoolAssignedServiceTypes() should include vmauth")
+	}
+	if !IsPoolAssignedServiceType("vmauth") {
+		t.Fatal("vmauth should be pool-assigned")
+	}
+	if IsPoolAssignedServiceType("telemetry") {
+		t.Fatal("telemetry is the public DNS name; vmauth is the assigned backing service")
+	}
+}
+
 func TestClusterSlug(t *testing.T) {
 	tests := []struct {
 		name        string

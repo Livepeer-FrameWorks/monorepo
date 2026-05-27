@@ -84,22 +84,32 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1`
 	var serviceID string
 	err := exec.QueryRowContext(ctx, probeSQL, e.ServiceName).Scan(&serviceID)
+	protocol := e.Protocol
+	if protocol == "" {
+		protocol = "http"
+	}
 	if err == nil {
 		if _, updateErr := exec.ExecContext(ctx, `
 			UPDATE quartermaster.services
-			SET plane = $2, updated_at = NOW()
-			WHERE service_id = $1 AND COALESCE(plane, '') <> $2
-		`, serviceID, serviceEntryPlane(e)); updateErr != nil {
-			return "", fmt.Errorf("update service catalog plane: %w", updateErr)
+			SET name = $2,
+			    plane = $3,
+			    type = $4,
+			    protocol = $5,
+			    updated_at = NOW()
+			WHERE service_id = $1
+			  AND (
+			      name <> $2
+			   OR COALESCE(plane, '') <> $3
+			   OR COALESCE(type, '') <> $4
+			   OR COALESCE(protocol, '') <> $5
+			  )
+		`, serviceID, e.ServiceName, serviceEntryPlane(e), e.Type, protocol); updateErr != nil {
+			return "", fmt.Errorf("update service catalog: %w", updateErr)
 		}
 		return serviceID, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("probe service catalog: %w", err)
-	}
-	protocol := e.Protocol
-	if protocol == "" {
-		protocol = "http"
 	}
 	const insertSQL = `
 	INSERT INTO quartermaster.services
