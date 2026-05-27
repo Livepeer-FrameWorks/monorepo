@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestWaitForStreamSourceWithHintUsesHealthyTriggerNode(t *testing.T) {
@@ -76,15 +77,18 @@ func TestDVRSourceStreamNamePreservesConcretePrefixedObservation(t *testing.T) {
 	}
 }
 
-func TestClipLiveSourceStreamNamePreservesConcreteBareObservation(t *testing.T) {
+func TestClipLiveSourceStreamNameFallsBackToFullLiveName(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
 	sm.UpdateStreamFromBuffer("demo_stream", "demo_stream", "edge-node-1", "tenant-1", "FULL", "")
 
-	got := clipLiveSourceStreamName("demo_stream")
-	if got != "demo_stream" {
-		t.Fatalf("clipLiveSourceStreamName() = %q, want demo_stream", got)
+	got, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{StreamInternalName: "demo_stream"})
+	if err != nil {
+		t.Fatalf("clipLiveSourceStreamName() error = %v", err)
+	}
+	if got != "live+demo_stream" {
+		t.Fatalf("clipLiveSourceStreamName() = %q, want live+demo_stream", got)
 	}
 }
 
@@ -92,7 +96,10 @@ func TestClipLiveSourceStreamNameFallsBackToLiveWildcard(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	got := clipLiveSourceStreamName("demo_stream")
+	got, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{StreamInternalName: "demo_stream"})
+	if err != nil {
+		t.Fatalf("clipLiveSourceStreamName() error = %v", err)
+	}
 	if got != "live+demo_stream" {
 		t.Fatalf("clipLiveSourceStreamName() = %q, want live+demo_stream", got)
 	}

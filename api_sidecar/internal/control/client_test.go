@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -304,6 +305,34 @@ func TestDownloadToFileDiskFull(t *testing.T) {
 	message := sanitizeStorageError(err)
 	if message != "Download failed: storage node out of space" {
 		t.Fatalf("unexpected error message: %s", message)
+	}
+}
+
+func TestDownloadToFileRejectsTinyMistResponse(t *testing.T) {
+	originalHasSpaceFor := hasSpaceFor
+	hasSpaceFor = func(string, uint64) error { return nil }
+	t.Cleanup(func() {
+		hasSpaceFor = originalHasSpaceFor
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := strings.Repeat("x", 44)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.Header().Set("Content-Type", "video/webm")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	dst := filepath.Join(t.TempDir(), "clip.mkv")
+	err := downloadToFile(server.URL, dst)
+	if err == nil {
+		t.Fatal("expected tiny media response error")
+	}
+	if !strings.Contains(err.Error(), "too little media") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Fatalf("expected destination to be absent, stat error: %v", statErr)
 	}
 }
 

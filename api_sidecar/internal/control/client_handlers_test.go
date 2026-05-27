@@ -508,7 +508,7 @@ func TestHandleClipPull_LocalLiveSourceUsesMistStreamName(t *testing.T) {
 	var sent []*pb.ControlMessage
 	req := &pb.ClipPullRequest{
 		ClipHash:         "clip-1",
-		StreamName:       "stream-1",
+		StreamName:       "live+stream-1",
 		OutputStreamName: "stream-1",
 		Format:           "mp4",
 		OutputName:       "clip-1",
@@ -518,7 +518,7 @@ func TestHandleClipPull_LocalLiveSourceUsesMistStreamName(t *testing.T) {
 	handleClipPull(logging.NewLogger(), req, func(m *pb.ControlMessage) { sent = append(sent, m) })
 
 	if !strings.HasPrefix(requestedURL, "http://mistserver:8080/live+stream-1.mp4?") {
-		t.Fatalf("requested URL = %q, want local Mist live stream path", requestedURL)
+		t.Fatalf("requested URL = %q, want supplied Mist stream path", requestedURL)
 	}
 	done := sent[len(sent)-1].GetClipDone()
 	if done == nil || done.GetStatus() != "success" {

@@ -1027,7 +1027,6 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	}
 
 	mistBase := req.GetSourceBaseUrl()
-	localMistSource := mistBase == ""
 	if mistBase == "" {
 		mistBase = deriveMistHTTPBase(cfg.MistServerURL)
 	}
@@ -1080,9 +1079,6 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 
 	// Build MistServer URL using the source stream name.
 	q := buildClipParams(req)
-	if localMistSource && req.GetSourceKind() == pb.ClipPullRequest_SOURCE_KIND_LIVE && !strings.Contains(sourceStreamName, "+") {
-		sourceStreamName = "live+" + sourceStreamName
-	}
 	clipURL := buildClipURL(mistBase, sourceStreamName, format, q)
 
 	root := cfg.StorageLocalPath
@@ -1245,6 +1241,8 @@ func buildClipParamsAt(req *pb.ClipPullRequest, nowUnix int64) string {
 var hasSpaceFor = storage.HasSpaceFor
 var downloadClipFile = downloadToFile
 
+const minClipDownloadedBytes = 1024
+
 func downloadToFile(url, dst string) error {
 	ctx := context.Background()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -1279,13 +1277,18 @@ func downloadToFile(url, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	written, err := io.Copy(f, resp.Body)
+	if err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
+	}
+	if written < minClipDownloadedBytes {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("mist returned too little media: %d bytes", written)
 	}
 	if err := os.Rename(tmpPath, dst); err != nil {
 		_ = os.Remove(tmpPath)
