@@ -26,7 +26,7 @@ func NewReverseProxyProvisioner(serviceName string, defaultPort int, pool *ssh.P
 		RoleName:         "frameworks.infra.reverse_proxy:" + serviceName,
 		PlaybookSelector: reverseProxyPlaybookSelector(serviceName),
 		Builder:          reverseProxyVarsBuilder(serviceName, defaultPort),
-		Detector:         nil,
+		Detector:         serviceRoleDetect(serviceName),
 		AnsibleRoot:      root,
 		Executor:         exec,
 		Ensurer: &ansiblerun.CollectionEnsurer{

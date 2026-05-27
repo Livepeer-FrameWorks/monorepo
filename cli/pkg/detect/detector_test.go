@@ -95,6 +95,48 @@ func TestDetect_DockerRequiresExactContainerName(t *testing.T) {
 	}
 }
 
+func TestDetect_DockerVersionFromDigestPinnedImage(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1, stderr: "No such file"},
+			{
+				matchPrefix: "docker ps -a --filter name=frameworks-nginx ",
+				exitCode:    0,
+				stdout:      "frameworks-nginx|running|nginx:1.29.3-alpine@sha256:abcdef",
+			},
+			{matchPrefix: "docker inspect", exitCode: 0, stdout: "true"},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "nginx")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Version != "1.29.3-alpine" {
+		t.Fatalf("version=%q, want 1.29.3-alpine", state.Version)
+	}
+}
+
+func TestDockerImageVersion(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"foghorn:v0.2.69": "v0.2.69",
+		"ghcr.io/livepeer-frameworks/foghorn:v0.2.69":        "v0.2.69",
+		"nginx:1.29.3-alpine@sha256:abcdef":                  "1.29.3-alpine",
+		"registry.local:5000/livepeer/foghorn:v0.2.69":       "v0.2.69",
+		"registry.local:5000/livepeer/foghorn@sha256:abcdef": "",
+		"registry.local:5000/livepeer/foghorn":               "",
+		"sha256:abcdef":                                      "",
+	}
+	for image, want := range tests {
+		if got := dockerImageVersion(image); got != want {
+			t.Fatalf("dockerImageVersion(%q)=%q, want %q", image, got, want)
+		}
+	}
+}
+
 // TestDetect_AllMethodsFailReturnsNotFound verifies that exhaustively failing
 // probes yield Exists=false rather than bubbling up an error.
 func TestDetect_AllMethodsFailReturnsNotFound(t *testing.T) {

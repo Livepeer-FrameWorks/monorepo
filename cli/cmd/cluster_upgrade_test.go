@@ -72,7 +72,7 @@ func TestCollectUpgradeableServices_DeduplicatesMultiHost(t *testing.T) {
 	}
 }
 
-func TestCollectUpgradeableServices_SingleHost(t *testing.T) {
+func TestCollectUpgradeableServices_SkipsPrivateerMeshRole(t *testing.T) {
 	plan := &orchestrator.ExecutionPlan{
 		Batches: [][]*orchestrator.Task{
 			{
@@ -83,10 +83,32 @@ func TestCollectUpgradeableServices_SingleHost(t *testing.T) {
 	}
 
 	got := collectUpgradeableServices(plan)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 services, got %d: %v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 service, got %d: %v", len(got), got)
 	}
-	if got[0] != "privateer" || got[1] != "bridge" {
-		t.Fatalf("expected [privateer bridge], got %v", got)
+	if got[0] != "bridge" {
+		t.Fatalf("expected [bridge], got %v", got)
+	}
+}
+
+func TestUpgradeRollbackSupported(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		version string
+		mode    string
+		want    bool
+	}{
+		{name: "native", version: "v0.2.69", mode: "native", want: true},
+		{name: "docker", version: "v0.2.69", mode: "docker", want: true},
+		{name: "missing version", version: "", mode: "native", want: false},
+		{name: "unknown mode", version: "v0.2.69", mode: "unknown", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := upgradeRollbackSupported(tt.version, tt.mode); got != tt.want {
+				t.Fatalf("upgradeRollbackSupported(%q,%q)=%v, want %v", tt.version, tt.mode, got, tt.want)
+			}
+		})
 	}
 }

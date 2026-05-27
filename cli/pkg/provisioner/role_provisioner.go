@@ -102,8 +102,9 @@ type RolePlaybookProvisioner struct {
 	Builder RoleVarsBuilder
 
 	// Detector is optional. When nil, Detect returns {Exists:false,Running:false}
-	// which causes the orchestrator to always run the role (safe default —
-	// idempotent tasks short-circuit on state match).
+	// which causes the orchestrator to always run the role. Provisioners used by
+	// cluster provisioning must register a detector so rollback can distinguish
+	// preexisting services from services created in the current run.
 	Detector RoleDetector
 
 	// Fingerprinter is optional. When nil, Fingerprint returns a nil

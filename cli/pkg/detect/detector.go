@@ -168,13 +168,7 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 		state.Metadata["image"] = parts[2]
 		state.Metadata["container_name"] = parts[0]
 
-		// Extract version from image tag
-		if strings.Contains(parts[2], ":") {
-			imageParts := strings.Split(parts[2], ":")
-			if len(imageParts) == 2 {
-				state.Version = imageParts[1]
-			}
-		}
+		state.Version = dockerImageVersion(parts[2])
 
 		return &DetectionResult{Method: "docker", Success: true, State: state}, nil
 	}
@@ -190,6 +184,25 @@ func exactDockerContainerRow(stdout, containerName string) []string {
 		}
 	}
 	return nil
+}
+
+func dockerImageVersion(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return ""
+	}
+	if strings.HasPrefix(image, "sha256:") {
+		return ""
+	}
+	if beforeDigest, _, ok := strings.Cut(image, "@"); ok {
+		image = beforeDigest
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon <= lastSlash {
+		return ""
+	}
+	return strings.TrimSpace(image[lastColon+1:])
 }
 
 // detectFromSystemd checks for systemd service

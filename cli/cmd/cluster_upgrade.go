@@ -459,8 +459,12 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	// Store previous version for potential rollback
 	previousVersion := state.Version
 	previousMode := state.Mode
+	canRollback := upgradeRollbackSupported(previousVersion, previousMode)
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
+	if !canRollback {
+		fmt.Fprintf(cmd.OutOrStderr(), "  WARNING: automatic rollback disabled; current version/mode is incomplete (version=%q mode=%q)\n", previousVersion, previousMode)
+	}
 	currentPlatformVersion := ""
 	if releases.ServiceDatabase(serviceName) != "" {
 		platformVersion, platformVersionErr := detectServicePlatformVersion(ctx, sshPool, host, deployName, state)
@@ -610,7 +614,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Health check failed: %v\n", err)
 
 			// Attempt rollback unless --no-rollback is set
-			if !noRollback {
+			if !noRollback && canRollback {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n[ROLLBACK] Reverting to previous version %s...\n", previousVersion)
 
 				// Rollback uses the same config surface but pinned to the
@@ -647,6 +651,12 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 				fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Rolled back to %s\n", previousVersion)
 				return fmt.Errorf("upgrade failed, rolled back to %s", previousVersion)
+			}
+			if !noRollback && !canRollback {
+				fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed and automatic rollback is unavailable.")
+				fmt.Fprintln(cmd.OutOrStderr(), "Rollback requires a detected docker/native mode and concrete previous version.")
+				fmt.Fprintln(cmd.OutOrStderr(), "Check service logs with: frameworks cluster logs "+serviceName)
+				return fmt.Errorf("health validation failed; rollback unavailable")
 			}
 
 			fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed!")
@@ -785,6 +795,12 @@ func waitForHealth(ctx context.Context, check func() error, interval, timeout ti
 	}
 }
 
+func upgradeRollbackSupported(version, mode string) bool {
+	version = strings.TrimSpace(version)
+	mode = strings.TrimSpace(mode)
+	return version != "" && (mode == "docker" || mode == "native")
+}
+
 // collectUpgradeableServices extracts deduplicated service IDs from app and
 // interface plan tasks. Mesh and infrastructure phases have role/fanout
 // semantics and are not valid inputs to runUpgrade's single-service loop.
@@ -797,6 +813,9 @@ func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 				continue
 			}
 			svcID := task.ServiceID
+			if svcID == "privateer" {
+				continue
+			}
 			if !seen[svcID] {
 				seen[svcID] = true
 				services = append(services, svcID)
