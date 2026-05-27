@@ -1801,10 +1801,10 @@ enum GQL {
 
   static let GetNetworkStatus = """
   # Public network status for marketing/status maps. Anonymous callers receive
-  # official platform topology, including node and service placement. Authenticated
-  # tenants receive official topology plus subscribed or owned clusters, with
-  # cluster-level load counters for every visible cluster; private node and
-  # service placement is included only for owned clusters.
+  # clusters explicitly published to public topology, including public node
+  # placement. Authenticated tenants receive public topology plus subscribed or
+  # owned clusters, with cluster-level load counters for every visible cluster;
+  # service-instance inventory is included only for owned clusters.
   query GetNetworkStatus {
     networkStatus {
       clusters {
