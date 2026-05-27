@@ -728,6 +728,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     "media error",
     "decode error",
     "source not supported",
+    "failed to open media",
+    "not suitable",
+    "notsupportederror",
   ];
 
   // ============================================================================
@@ -2401,10 +2404,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     // When live stream is offline, prefer idle/offline UI over blocking error overlays.
+    // Browser media elements can turn a valid source into NETWORK_NO_SOURCE after
+    // a cold-start 4xx; the online transition owns reloading that source.
     if (
       this.isEffectivelyLive() &&
       this.streamState?.isOnline === false &&
-      /offline|not found|stream not found/i.test(error)
+      /offline|not found|stream not found|failed to open media|not suitable|notsupportederror/i.test(
+        error
+      )
     ) {
       this.log(`Suppressing offline error while stream is offline: ${error}`);
       return;
@@ -3148,15 +3155,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     }
 
+    const mediaElementFailed = this.videoElement
+      ? this.isMediaElementInTerminalError(this.videoElement)
+      : false;
     const needsFreshAttach =
       !this.videoElement ||
       !this.currentPlayer ||
       this.state === "error" ||
       this.state === "gateway_error" ||
-      this.state === "no_endpoint";
+      this.state === "no_endpoint" ||
+      mediaElementFailed;
 
     if (needsFreshAttach) {
-      this.log("Stream came online, refreshing player attach from Mist state");
+      this.log(
+        mediaElementFailed
+          ? "Stream came online after media element error, refreshing player attach"
+          : "Stream came online, refreshing player attach from Mist state"
+      );
       if (streamInfo?.source && Array.isArray(streamInfo.source) && streamInfo.source.length > 0) {
         await this.initializeLateFromStreamState(streamInfo);
         return;
@@ -3178,6 +3193,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     } catch (e) {
       this.log(`Play on online transition failed: ${e}`);
     }
+  }
+
+  private isMediaElementInTerminalError(video: HTMLVideoElement): boolean {
+    const networkNoSource =
+      typeof HTMLMediaElement !== "undefined" ? HTMLMediaElement.NETWORK_NO_SOURCE : 3;
+    return Boolean(video.error) || video.networkState === networkNoSource;
   }
 
   private async attemptConfiguredAutoplay(

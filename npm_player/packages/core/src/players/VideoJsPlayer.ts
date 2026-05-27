@@ -1,6 +1,7 @@
 import { BasePlayer } from "../core/PlayerInterface";
 import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { isFileProtocol } from "../core/detector";
+import { translateCodec } from "../core/CodecUtils";
 import type {
   StreamSource,
   StreamInfo,
@@ -87,29 +88,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
           continue;
         }
 
-        // Build codec string
-        let codecString = track.codec;
-        if (track.init) {
-          // Use init data for accurate codec string like HLS.js does
-          const bin2hex = (idx: number) => {
-            if (!track.init || idx >= track.init.length) return "00";
-            return ("0" + track.init.charCodeAt(idx).toString(16)).slice(-2);
-          };
-          switch (track.codec) {
-            case "H264":
-              codecString = `avc1.${bin2hex(1)}${bin2hex(2)}${bin2hex(3)}`;
-              break;
-            case "AAC":
-              codecString = "mp4a.40.2";
-              break;
-            case "MP3":
-              codecString = "mp4a.40.34";
-              break;
-            case "HEVC":
-              codecString = "hev1.1.6.L93.B0";
-              break;
-          }
-        }
+        const codecString = translateCodec(track);
 
         // Test with video element canPlayType
         const mimeToTest =
