@@ -185,6 +185,13 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.skipEvent(event, "non_canonical_stream_event")
 	case "push_end":
 		err = h.skipEvent(event, "non_canonical_stream_event")
+	case "push_input_close":
+		// PUSH_INPUT_CLOSE is the source-presence "publisher gone" edge
+		// owned by Foghorn's AdmitAndReserve admission state machine.
+		// It MUST NOT mutate stream_state_current — the ingest session
+		// is owned by accepted PUSH_REWRITE only. Audited at metric/log
+		// level here; no session-state side effect.
+		err = h.skipEvent(event, "source_presence_audit_only")
 	case "push_out_start":
 		err = h.skipEvent(event, "non_canonical_stream_event")
 	case "stream_track_list":
@@ -3354,7 +3361,9 @@ func storageStateFromAction(action pb.StorageLifecycleData_Action) (storageLocat
 	case pb.StorageLifecycleData_ACTION_EVICTED:
 		return "s3", "synced", false, true, true
 	case pb.StorageLifecycleData_ACTION_CACHE_STARTED:
-		return "defrosting", "synced", false, true, false
+		// Read-through relay started filling a local cache block. The
+		// authoritative bytes remain on S3; storage_location stays 's3'.
+		return "s3", "synced", false, true, true
 	case pb.StorageLifecycleData_ACTION_CACHED:
 		return "local", "synced", true, true, false
 	case pb.StorageLifecycleData_ACTION_DELETED:

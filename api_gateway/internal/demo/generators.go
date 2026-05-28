@@ -561,11 +561,9 @@ func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
 		FrozenDvrBytes:  3_221_225_472, // 3 GB
 		FrozenVodBytes:  8_589_934_592, // 8 GB
 
-		// Freeze/defrost operations
-		FreezeCount:  12,
-		FreezeBytes:  4_294_967_296, // 4 GB
-		DefrostCount: 5,
-		DefrostBytes: 2_147_483_648, // 2 GB
+		// Freeze (S3 upload) operations
+		FreezeCount: 12,
+		FreezeBytes: 4_294_967_296, // 4 GB
 	}
 }
 
@@ -2751,7 +2749,7 @@ func GenerateStorageEventsConnection(internalName *string) *model.StorageEventsC
 			TenantId:       "00000000-0000-0000-0000-000000000001",
 			StreamId:       streamFilter,
 			AssetHash:      "fedcba98765432109876543210fedcba",
-			Action:         "defrosted",
+			Action:         "cached",
 			AssetType:      "dvr",
 			SizeBytes:      250000000, // 250 MB
 			S3Url:          stringPtr("s3://frameworks-demo/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8"),
@@ -2766,7 +2764,7 @@ func GenerateStorageEventsConnection(internalName *string) *model.StorageEventsC
 			TenantId:  "00000000-0000-0000-0000-000000000001",
 			StreamId:  streamFilter,
 			AssetHash: "fedcba98765432109876543210fedcba",
-			Action:    "defrost_started",
+			Action:    "cache_started",
 			AssetType: "dvr",
 			SizeBytes: 250000000,
 			S3Url:     stringPtr("s3://frameworks-demo/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba/fedcba98765432109876543210fedcba.m3u8"),

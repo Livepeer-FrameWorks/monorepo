@@ -481,7 +481,7 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	}, []any{uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0)})
 	expectQuery("storage_scope = 'hot'", []string{"clip_bytes", "dvr_bytes", "vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("storage_scope = 'cold'", []string{"frozen_clip_bytes", "frozen_dvr_bytes", "frozen_vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
-	expectQuery("FROM storage_events", []string{"freeze_count", "freeze_bytes", "defrost_count", "defrost_bytes"}, []any{uint32(0), uint64(0), uint32(0), uint64(0)})
+	expectQuery("FROM storage_events", []string{"freeze_count", "freeze_bytes"}, []any{uint32(0), uint64(0)})
 }
 
 func TestGetAPIUsageCursorPredicateStaysInWhere(t *testing.T) {

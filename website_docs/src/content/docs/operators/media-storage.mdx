@@ -218,15 +218,31 @@ s3://bucket/uploads/{tenant_id}/{upload_hash}.{container}
 
 Sidecars (`.dtsh`, `.gop`) live next to their media object with the
 sidecar suffix appended. Don't hand-manipulate these prefixes — use
-the artifact APIs and the freeze/defrost flow so Foghorn's ledger stays
+the artifact APIs and the freeze flow so Foghorn's ledger stays
 consistent.
 
 ## Multi-Cluster Sourcing
 
 When a viewer's edge isn't the origin cluster for the artifact, the
-relay's resolve step routes through Foghorn's federation client to mint
-a presigned URL against the artifact's home S3 bucket. The edge then
-streams from that S3, not from the home cluster's Helmsman.
+relay's resolve step routes through Foghorn's federation client.
+Origin returns one of two URL shapes:
+
+- **Synced**: a presigned URL against the artifact's home S3 bucket.
+  The edge streams from that S3 directly, not from the home cluster's
+  Helmsman.
+- **Hot-but-unsynced**: a short-lived peer-relay URL pointing at the
+  origin node's Helmsman, with an `artifact_relay` JWT (5min TTL,
+  bound to that specific node + artifact + request path). The edge
+  fetches blocks directly from that origin node with the token as
+  `Authorization: Bearer`, and caches them locally identically to the
+  S3 path. Once S3 sync catches up, the next cold miss naturally
+  falls back to the presigned S3 URL.
+
+The JWT is signed with origin Foghorn's own service key; only
+same-cluster Helmsmans validate it. The requesting cluster forwards
+it opaquely. This keeps S3 credentials and signing keys inside their
+home cluster while still letting freshly-recorded artifacts serve
+viewers across the federation immediately.
 
 Operationally, this means cross-cluster playback adds S3 egress at the
 home cluster's S3 region but does not add cross-cluster bandwidth

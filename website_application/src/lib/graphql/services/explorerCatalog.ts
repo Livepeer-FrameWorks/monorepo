@@ -334,7 +334,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
       {
         id: "storage-events",
         title: "Storage Events",
-        description: "Freeze, defrost, and retention lifecycle events.",
+        description: "Freeze, relay cache fill, and retention lifecycle events.",
         operationType: "query",
         templatePath: "operations/queries/GetStorageEventsConnection.gql",
         variables: {
@@ -639,7 +639,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         description: "Live storage lifecycle events.",
         operationType: "subscription",
         templatePath: "operations/subscriptions/StorageEventsLive.gql",
-        expectedPayload: "Storage freeze, defrost, upload, and retention events.",
+        expectedPayload: "Storage freeze, relay cache fill, upload, and retention events.",
         variables: {
           streamId: "stream_global_id",
         },

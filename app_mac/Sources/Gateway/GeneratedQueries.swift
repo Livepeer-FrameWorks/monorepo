@@ -235,11 +235,9 @@ enum GQL {
     frozenClipBytes
     frozenDvrBytes
     frozenVodBytes
-    # Freeze/defrost operations
+    # Freeze (S3 upload) operations
     freezeCount
     freezeBytes
-    defrostCount
-    defrostBytes
   }
   """
 
@@ -2649,7 +2647,7 @@ enum GQL {
   """
 
   static let GetStorageEventsConnection = """
-  # Fetch storage lifecycle events (freeze/defrost)
+  # Fetch storage lifecycle events (freeze + read-through cache fills)
   query GetStorageEventsConnection(
     $streamId: ID
     $assetType: String
@@ -5200,7 +5198,7 @@ enum GQL {
 
   static let StorageEventsLive = """
   # Real-time storage operations for clips/DVR
-  # Tracks freeze/defrost lifecycle and storage usage
+  # Tracks freeze + relay cache lifecycle and storage usage
   subscription StorageEventsLive($streamId: ID) {
     liveStorageEvents(streamId: $streamId) {
       timestamp

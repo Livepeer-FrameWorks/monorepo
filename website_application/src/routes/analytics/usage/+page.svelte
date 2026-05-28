@@ -1590,8 +1590,7 @@
               (storageSource?.clipsCreated ?? 0) > 0 ||
               (storageSource?.dvrCreated ?? 0) > 0 ||
               (storageSource?.vodCreated ?? 0) > 0 ||
-              (storageSource?.freezeCount ?? 0) > 0 ||
-              (storageSource?.defrostCount ?? 0) > 0}
+              (storageSource?.freezeCount ?? 0) > 0}
             {#if hasStorageActivity}
               <div class="slab">
                 <div class="slab-header">
@@ -1682,27 +1681,17 @@
                     </div>
                   </div>
 
-                  <!-- Freeze/Defrost Operations -->
-                  {#if (storageSource?.freezeCount ?? 0) > 0 || (storageSource?.defrostCount ?? 0) > 0}
+                  <!-- Freeze (S3 upload) Operations -->
+                  {#if (storageSource?.freezeCount ?? 0) > 0}
                     <div class="border-t border-border/30 pt-4">
                       <div class="text-xs text-muted-foreground mb-2">Tier Operations</div>
-                      <div class="grid grid-cols-2 gap-4 text-sm">
-                        <div class="flex justify-between">
-                          <span class="text-info">Frozen</span>
-                          <span class="font-mono">
-                            {storageSource?.freezeCount ?? 0} ({formatBytes(
-                              storageSource?.freezeBytes ?? 0
-                            )})
-                          </span>
-                        </div>
-                        <div class="flex justify-between">
-                          <span class="text-warning">Defrosted</span>
-                          <span class="font-mono">
-                            {storageSource?.defrostCount ?? 0} ({formatBytes(
-                              storageSource?.defrostBytes ?? 0
-                            )})
-                          </span>
-                        </div>
+                      <div class="flex justify-between text-sm">
+                        <span class="text-info">Frozen</span>
+                        <span class="font-mono">
+                          {storageSource?.freezeCount ?? 0} ({formatBytes(
+                            storageSource?.freezeBytes ?? 0
+                          )})
+                        </span>
                       </div>
                     </div>
                   {/if}

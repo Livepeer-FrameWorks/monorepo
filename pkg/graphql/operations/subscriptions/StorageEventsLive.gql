@@ -1,5 +1,5 @@
 # Real-time storage operations for clips/DVR
-# Tracks freeze/defrost lifecycle and storage usage
+# Tracks freeze + relay cache lifecycle and storage usage
 subscription StorageEventsLive($streamId: ID) {
   liveStorageEvents(streamId: $streamId) {
     timestamp

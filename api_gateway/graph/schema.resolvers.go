@@ -1979,16 +1979,6 @@ func (r *liveUsageSummaryResolver) FreezeBytes(ctx context.Context, obj *proto.L
 	return int(obj.GetFreezeBytes()), nil
 }
 
-// DefrostCount is the resolver for the defrostCount field.
-func (r *liveUsageSummaryResolver) DefrostCount(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
-	return int(obj.GetDefrostCount()), nil
-}
-
-// DefrostBytes is the resolver for the defrostBytes field.
-func (r *liveUsageSummaryResolver) DefrostBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
-	return int(obj.GetDefrostBytes()), nil
-}
-
 // MandateID is the resolver for the mandateId field.
 func (r *mollieMandateResolver) MandateID(ctx context.Context, obj *proto.MollieMandate) (string, error) {
 	return obj.MollieMandateId, nil

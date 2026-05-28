@@ -39,12 +39,13 @@ Foghorn can run as multiple instances per cluster with Redis as the shared state
 
 ## Service Responsibilities
 
-| Component                   | Role                                                                                   | Data                                                                                                                                                                                      |
-| --------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()` | Stream states, node states, artifacts, viewer sessions                                                                                                                                    |
-| RedisStateStore             | Redis CRUD operations, pub/sub publisher                                               | All `{cluster_id}:*` keys                                                                                                                                                                 |
-| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                    | Only leader runs PeerChannel connections                                                                                                                                                  |
-| RemoteEdgeCache             | Federation-specific Redis cache (separate key namespace)                               | `remote_edges`, `remote_replications`, `active_replications`, `edge_summary`, `stream_ads`, `playback_index`, `remote_live_streams`, `remote_artifacts`, `stream_peers`, `peer_heartbeat` |
+| Component                   | Role                                                                                                                              | Data                                                                                                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()`                                            | Stream states, node states, artifacts, viewer sessions                                                                                                                                                            |
+| RedisStateStore             | Redis CRUD operations, pub/sub publisher                                                                                          | All `{cluster_id}:*` keys                                                                                                                                                                                         |
+| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                                                               | Only leader runs PeerChannel connections                                                                                                                                                                          |
+| RemoteEdgeCache             | Federation telemetry cache (Redis). Scope narrowed: stream identity / playback index / active-replication moved to StreamRegistry | `remote_edges`, `remote_replications`, `edge_summary`, `remote_live_streams`, `remote_artifacts`, `stream_peers`, `peer_heartbeat`                                                                                |
+| StreamRegistry              | Unified per-stream identity + per-peer Locations + admission state. Redis-backed with cross-instance pubsub fanout                | `registry:source:{internal_name}`, `registry:artifact:{hash}` — federation-fed via UpsertFederatedSource; admission state via MarkSourceActive/Inactive; replication state via MarkReplicating/RecordOutboundPull |
 
 ## Data Flows
 
@@ -94,14 +95,14 @@ Loop prevention: the relay handler always calls `SendLocal*` (never `Send*`), so
 
 All 11 push commands that depend on the specific Helmsman stream:
 
-| Severity  | Operation                                                           | Impact if unreachable            |
-| --------- | ------------------------------------------------------------------- | -------------------------------- |
-| Critical  | SendStopSessions                                                    | Billing: sessions keep running   |
-| Critical  | SendDVRStop                                                         | Disk fills, recording won't stop |
-| Critical  | PushOperationalMode                                                 | Node ignores drain/maintenance   |
-| Critical  | SendConfigSeed (TLS)                                                | Stale certs, eventual expiry     |
-| Important | SendDVRStart, SendClipPull, SendDefrostRequest, SendDtshSyncRequest | Feature doesn't work             |
-| Low       | SendClipDelete, SendDVRDelete, SendVodDelete                        | Orphan cleanup retries later     |
+| Severity  | Operation                                       | Impact if unreachable            |
+| --------- | ----------------------------------------------- | -------------------------------- |
+| Critical  | SendStopSessions                                | Billing: sessions keep running   |
+| Critical  | SendDVRStop                                     | Disk fills, recording won't stop |
+| Critical  | PushOperationalMode                             | Node ignores drain/maintenance   |
+| Critical  | SendConfigSeed (TLS)                            | Stale certs, eventual expiry     |
+| Important | SendDVRStart, SendClipPull, SendDtshSyncRequest | Feature doesn't work             |
+| Low       | SendClipDelete, SendDVRDelete, SendVodDelete    | Orphan cleanup retries later     |
 
 #### Connection Ownership Keys
 
@@ -124,6 +125,58 @@ Provisioning should set `FOGHORN_RELAY_ADVERTISE_ADDR` from the node's mesh DNS 
 #### Cross-Cluster Interaction
 
 Federation commands (e.g., PrepareArtifact from Cluster A) land on a random Foghorn instance in Cluster B via DNS load balancing. If that instance doesn't hold the target node's stream, the relay transparently forwards to the correct instance within Cluster B. Federation callers are unaware of the relay hop.
+
+### Delivery Semantics
+
+A successful `Send*` return does not mean the Helmsman or the underlying MistServer received the command. `SendLocal*` (e.g., `SendLocalDVRStop` at `api_balancing/internal/control/server.go:1642`) returns whatever `c.stream.Send(msg)` returns — gRPC accepted the message into its send buffer. The bytes may still be lost if the underlying connection dies before flush.
+
+The HA forward layer (`commandRelay.forward` at `server.go:539`) adds one more layer of confirmation: peer A returns `ForwardCommandResponse{Delivered: true}` (`api_balancing/internal/grpc/relay_server.go:108`) only if its `SendLocal*` dispatch succeeded. This still represents buffer-accept on the peer, not Mist confirmation.
+
+Three patterns exist in the codebase for getting stronger guarantees. Each command-type should be classified into one of them.
+
+#### Pattern 1 — Reverse-direction ack with `RequestId` correlation
+
+The bidirectional control stream is already used for request/response on commands that return data. Helmsman issues the controller call, then sends a response message back through the same stream with the original `RequestId` (`pb.ControlMessage` payload variants). Foghorn waits on a per-`RequestId` channel.
+
+Current users:
+
+- `ValidateEdgeToken` — response at `server.go:2679`
+- `EdgeMistAdminSession` — response at `server.go:2810`
+- `ThumbnailUpload` — response at `server.go:5493`
+
+Most other commands carry a `RequestId` field (see `RelayRequestID` at `server.go:665`) but no response handler exists for them; the field is used only for logs.
+
+#### Pattern 2 — Intent in Redis with atomic consume
+
+Desired action is written to a Redis key with TTL. The instance that observes the completion event consumes it atomically. Any instance can write, any instance can consume; no in-process registry is involved.
+
+Current users:
+
+- Pending DVR stop: `{cluster_id}:pending_dvr_stop:{internal_name}` with TTL `pendingDVRStopTTL = 30 * time.Minute` (`api_balancing/internal/state/redis_store.go:17`); consumed via the `getAndDelete` Lua script (`redis_store.go:32-38`) when `StartDVR` arrives.
+- Origin-pull arbitration: `{cluster_id}:origin_pull_lock:{stream_name}` via `SET NX EX` with the holder's `instanceID`; released via owner-checked Lua (`releaseLeaseScript`, `redis_store.go:48-54`).
+
+#### Pattern 3 — Periodic reconcile loop
+
+A loop on each instance re-derives desired state from authoritative storage and re-sends to current `conn_owner`. Transient failures heal on the next tick without per-command retry logic.
+
+Current users:
+
+- TLS certificate distribution: `StartCertRefreshLoop` (`server.go:5915`) re-issues `ConfigSeed` to every node every interval; a single drop is healed on the next tick.
+
+#### Known Delivery Gaps
+
+These are control commands where the current "fire once, return buffer-accept" semantic is the only convergence mechanism. They are tracked here as backlog; they are not addressed in code yet.
+
+| Command                                         | Current semantic                                         | Why a single drop matters                                                                                              | Proposed pattern                                                                                                                                                           |
+| ----------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `commandRelay.forward` stale-owner path         | Evict and return error (`server.go:580-583, 595-598`)    | During connection failover the new owner has already written its key; the caller never sees it                         | One re-`GetConnOwner` and retry after `evictStale()`                                                                                                                       |
+| `SendStopSessions` (tenant kill)                | Per-node loop, log on error, continue                    | No observer event corresponds to "sessions stopped"; tenant keeps streaming through delinquency                        | Pattern 1: Helmsman acks with terminated count                                                                                                                             |
+| `SendDVRStop` on a running stream               | One-shot send via relay (`server.go:1656-1674`)          | Disk continues filling until the publisher disconnects                                                                 | Pattern 2: write `{cluster_id}:dvr_stop_intent:{internal_name}:{dvr_hash}` with TTL; `RECORDING_END` handler does GETDEL; sweep retries unmatched intents older than grace |
+| `ActivatePushTargets` / `DeactivatePushTargets` | One-shot send via relay                                  | Desired-state by nature; a drop leaves the node in the opposite state until the next user action triggers a fresh send | Pattern 3: per-node reconcile against the desired push-target set                                                                                                          |
+| `ApplyManagedStream` / `RetractManagedStream`   | One-shot send via relay                                  | Same as above; desired-state managed-stream configs                                                                    | Pattern 3: per-node reconcile against the desired managed-stream set                                                                                                       |
+| `ClipDelete` / `DvrDelete` / `VodDelete`        | One-shot send; populates `RequestId` that is never acked | Orphan cleanup is the failure mode; eventually retried by cleanup loops                                                | Drop the unused `RequestId` for explicitness, or wire pattern 1 if cleanup confirmation becomes load-bearing                                                               |
+
+Send-buffer race (`c.stream.Send` returns nil, TCP dies before flush) is only fully solved by an end-to-end ack — pattern 1 for commands that need it. For pattern-2 and pattern-3 commands the race is benign: the observer event or the next reconcile tick re-converges. gRPC keepalive eventually marks the dead stream so future sends to that node go through the relay path with a fresh `conn_owner`.
 
 ### Rehydration on Startup
 
@@ -151,16 +204,13 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 | `{cluster_id}:artifacts:{node_id}`                      | JSON: list of artifacts stored on that node                                   | None                 |
 | `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr`                                                | 60s                  |
 
-### Federation State (RemoteEdgeCache)
+### Federation Telemetry (RemoteEdgeCache)
 
 | Key Pattern                                                     | Value                                                   | TTL |
 | --------------------------------------------------------------- | ------------------------------------------------------- | --- |
 | `{cluster_id}:remote_edges:{peer_cluster}:{node_id}`            | JSON: EdgeTelemetry (BW, CPU, RAM, geo)                 | 30s |
 | `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}` | JSON: ReplicationEvent (available, DTSC URL)            | 5m  |
-| `{cluster_id}:active_replications:{stream_name}`                | JSON: ActiveReplicationRecord (source, dest, DTSC URL)  | 5m  |
 | `{cluster_id}:edge_summary:{peer_cluster}`                      | JSON: EdgeSummaryRecord (smoothed per-edge data)        | 60s |
-| `{cluster_id}:stream_ads:{peer_cluster}:{internal_name}`        | JSON: StreamAdRecord (edges, playback_id, origin)       | 15s |
-| `{cluster_id}:playback_index:{playback_id}`                     | String: internal_name                                   | 30s |
 | `{cluster_id}:remote_live_streams:{tenant_id}:{internal_name}`  | JSON: RemoteLiveStreamEntry                             | 30s |
 | `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`   | JSON: RemoteArtifactEntry                               | 90s |
 | `{cluster_id}:stream_peers:{peer_cluster}`                      | JSON: active stream names for a stream-scoped peer      | 60s |
@@ -168,9 +218,24 @@ Merge-not-replace: rehydration merges Redis data with any state already received
 | `{cluster_id}:peer_addresses`                                   | Hash: cluster_id → addr                                 | 30s |
 | `{cluster_id}:peer_heartbeat:{peer_cluster}`                    | JSON: PeerHeartbeatRecord (version, streams, BW, edges) | 30s |
 
-### Pub/Sub Channel
+### Stream Registry (control.StreamRegistry)
 
-`foghorn:{cluster_id}:state_updates` — JSON notification with `{type, id}` fields. Receivers fetch the updated key from their local Redis connection.
+Per-stream identity + per-peer Locations + admission state. Replaces the federation cache's per-stream entries (StreamAdRecord, PlaybackIndex, ActiveReplicationRecord — all deleted). Expiry is operational, not TTL-keyed: `SweepStaleLocations` runs every 30s and ages out Locations whose `UpdatedAt` is older than `maxAge` (default 5m), plus per-OutboundPull entries by their `CreatedAt`.
+
+| Key Pattern                                    | Value                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `{cluster_id}:registry:source:{internal_name}` | JSON: StreamEntry (TenantID, PlaybackID, IngestMode, RuntimeName, OriginClusterID, Locations[cluster_id]→Location) |
+| `{cluster_id}:registry:artifact:{hash}`        | JSON: ArtifactEntry (Kind, InternalName, StreamID, TenantID, Status, RuntimeName, OriginClusterID, StorageCluster) |
+
+Location fields (per cluster, per stream):
+
+- **Federated (peer cluster)**: `IsOrigin`, `IsLiveNow`, `EdgeCandidates`, `AdTimestamp`
+- **Local (this cluster)**: `IsOrigin`, `IsLiveNow`, `SourceNodes`, `SourceActive`, `SourceInactiveAt`, `OwnerNodeID` (admission), `ReplicatingFrom` + `PullDTSCURL` + `DestNodeID` + `DestNodeBaseURL` + `PullSourceNodeID` (dest-side pull), `OutboundPullers[]` (source-side pulls)
+
+### Pub/Sub Channels
+
+- `foghorn:{cluster_id}:state_updates` — StreamStateManager notifications (`{type, id}`); receivers re-read from Redis.
+- `foghorn:{cluster_id}:registry_updates` — StreamRegistry RegistryChange messages (entity, operation, key, full payload); receivers apply in-place without re-reading Redis. Self-published messages are filtered by `instance_id` so only peers apply.
 
 ## docker-compose Topology
 
@@ -248,7 +313,8 @@ Manual smoke check with compose topology:
 - `api_balancing/cmd/foghorn` - Wiring: Redis connection, CLUSTER_ID, FOGHORN_INSTANCE_ID
 - `api_balancing/internal/control` - CommandRelay, Send*/SendLocal* wrappers, connection lifecycle hooks
 - `api_balancing/internal/grpc` - FoghornRelay gRPC handler (dispatches to SendLocal\*)
-- `api_balancing/internal/federation` - RemoteEdgeCache: federation Redis state, leader lease
+- `api_balancing/internal/federation` - RemoteEdgeCache: federation telemetry cache + leader lease
+- `api_balancing/internal/control` - StreamRegistry: per-stream identity + per-peer Locations + admission/replication state, with Redis backing (RedisRegistryStore) and cross-instance pubsub fanout
 - `pkg/proto` - FoghornRelay service definition
 - dev compose configuration - foghorn + foghorn-2 + foghorn-redis topology
 

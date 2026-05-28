@@ -2410,7 +2410,7 @@ type DVRRequest {
   manifestPath: String
   errorMessage: String
   # Cold storage info
-  storageLocation: String # "local", "s3", "freezing", "defrosting"
+  storageLocation: String # "local", "s3", "freezing"
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
   "True when at least one edge has a warm local copy."
@@ -2419,7 +2419,7 @@ type DVRRequest {
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when playback requires defrost/caching because no warm edge copy remains."
+  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
   isFrozen: Boolean
   frozenAt: Time
   s3Url: String
@@ -2700,7 +2700,7 @@ type VodAsset implements Node {
   filename: String
   "Current processing/storage status of the asset."
   status: VodAssetStatus!
-  "Where the asset is stored (s3, local, freezing, defrosting)."
+  "Where the asset is stored (s3, local, freezing)."
   storageLocation: String!
   "Current S3 sync state (pending, in_progress, synced, failed, lost_local)."
   syncStatus: String
@@ -2710,7 +2710,7 @@ type VodAsset implements Node {
   isSynced: Boolean!
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean!
-  "True when playback requires defrost/caching because no warm edge copy remains."
+  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
   isFrozen: Boolean!
 
   "File size in bytes (available after validation)."
@@ -4246,7 +4246,7 @@ type TenantStorageUsage {
   frozenVodBytes: Float!
 }
 
-# Storage lifecycle events (freeze/defrost operations)
+# Storage lifecycle events (freeze + read-through cache operations)
 type StorageEvent implements Node {
   id: ID!
   timestamp: Time!
@@ -5013,11 +5013,9 @@ type LiveUsageSummary {
   frozenDvrBytes: Int!
   frozenVodBytes: Int!
 
-  # Freeze/defrost operations
+  # Freeze (S3 upload) operations
   freezeCount: Int!
   freezeBytes: Int!
-  defrostCount: Int!
-  defrostBytes: Int!
 }
 
 type CountryMetrics {
@@ -5617,7 +5615,7 @@ type Clip implements Node {
   isSynced: Boolean
   "True when the S3 copy includes the Mist .dtsh index."
   isFinalized: Boolean
-  "True when playback requires defrost/caching because no warm edge copy remains."
+  "True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3."
   isFrozen: Boolean
   "When the clip will be auto-deleted."
   expiresAt: Time

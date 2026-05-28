@@ -4387,7 +4387,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 	}, nil
 }
 
-// GetStorageEvents returns storage lifecycle events (freeze/defrost operations) from storage_events table
+// GetStorageEvents returns storage lifecycle events (freeze + read-through cache fill operations) from storage_events table
 func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStorageEventsRequest) (*pb.GetStorageEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -5858,28 +5858,26 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	summary.FrozenDvrBytes = coldFrozenDvrBytes
 	summary.FrozenVodBytes = coldFrozenVodBytes
 
-	// Sync/cache operations (from storage_events)
-	var freezeCount, defrostCount uint32
-	var freezeBytes, defrostBytes uint64
+	// Freeze (S3 upload) operations from storage_events. Read-through cache
+	// fills are tracked separately as relay observability, not as a tenant
+	// usage metric.
+	var freezeCount uint32
+	var freezeBytes uint64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = s.clickhouse.QueryRowContext(queryCtx, `
 			SELECT
 				countIf(action = 'synced') AS freeze_count,
-				sumIf(size_bytes, action = 'synced') AS freeze_bytes,
-				countIf(action = 'cached') AS defrost_count,
-				sumIf(size_bytes, action = 'cached') AS defrost_bytes
+				sumIf(size_bytes, action = 'synced') AS freeze_bytes
 			FROM storage_events
 			WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
 		`, tenantID, startTime, endTime).Scan(
-		&freezeCount, &freezeBytes, &defrostCount, &defrostBytes,
+		&freezeCount, &freezeBytes,
 	)
 	cancel()
-	recordQueryError(err, "Failed to query storage_events for freeze/defrost operations")
+	recordQueryError(err, "Failed to query storage_events for freeze operations")
 	summary.FreezeCount = freezeCount
 	summary.FreezeBytes = freezeBytes
-	summary.DefrostCount = defrostCount
-	summary.DefrostBytes = defrostBytes
 
 	if queryFailures > 0 {
 		return nil, wrapClickhouseError(lastErr, "database error")

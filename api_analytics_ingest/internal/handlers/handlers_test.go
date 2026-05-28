@@ -1423,6 +1423,54 @@ func TestRawProcessingFinalUsesPayloadClusterID(t *testing.T) {
 	}
 }
 
+func TestPushInputCloseDoesNotMutateStreamStateCurrent(t *testing.T) {
+	// PUSH_INPUT_CLOSE is the source-presence "publisher gone" edge owned
+	// by Foghorn's AdmitAndReserve admission state machine. Periscope
+	// must never use it to mutate stream_state_current — that would
+	// close the ingest session incorrectly. The handler skips the
+	// event with a typed reason and never touches any current-state row.
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &pb.MistTrigger_PushInputClose{
+			PushInputClose: &pb.PushInputCloseTrigger{
+				StreamName:    "live+demo",
+				RemoteHost:    "203.0.113.7",
+				BinaryName:    "MistInRTMP",
+				Pid:           42,
+				MachineReason: "EOF",
+				HumanReason:   "upstream end-of-file",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "push_input_close",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if batch := conn.batches["stream_state_current"]; batch != nil && len(batch.rows) > 0 {
+		t.Fatalf("PUSH_INPUT_CLOSE must not write stream_state_current; got %d rows", len(batch.rows))
+	}
+	if batch := conn.batches["stream_event_log"]; batch != nil && len(batch.rows) > 0 {
+		// Today the skip path also does not write the event log; if a future
+		// change adds audit-row insertion that's fine, but make the
+		// expectation explicit so changes are intentional.
+		t.Fatalf("PUSH_INPUT_CLOSE today is skip-only; got %d stream_event_log rows", len(batch.rows))
+	}
+}
+
 func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

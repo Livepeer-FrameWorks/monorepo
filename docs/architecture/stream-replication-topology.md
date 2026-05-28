@@ -29,12 +29,12 @@ Producer                            Cluster A                                Clu
 
 ## Service Responsibilities
 
-| Component              | Role                                                                                                          | Data                                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| MistServer             | Media transport: receives push ingest, serves DTSC pulls, delivers to viewers (HLS/DASH/WebRTC)               | Raw media data; reports stream metrics via triggers |
-| Helmsman (api_sidecar) | MistServer control sidecar: forwards triggers to Foghorn, applies configuration                               | Trigger payloads, MistServer API                    |
-| Foghorn                | Orchestrator: decides which node pulls from which source, builds DTSC URIs, tracks replication state          | StreamState, NodeState, ActiveReplication           |
-| Foghorn federation     | Cross-cluster: QueryStream for candidate discovery, NotifyOriginPull for handshake, PeerChannel for telemetry | RemoteEdgeCache, ReplicationEvent                   |
+| Component              | Role                                                                                                          | Data                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MistServer             | Media transport: receives push ingest, serves DTSC pulls, delivers to viewers (HLS/DASH/WebRTC)               | Raw media data; reports stream metrics via triggers                                                                                                           |
+| Helmsman (api_sidecar) | MistServer control sidecar: forwards triggers to Foghorn, applies configuration                               | Trigger payloads, MistServer API                                                                                                                              |
+| Foghorn                | Orchestrator: decides which node pulls from which source, builds DTSC URIs, tracks replication state          | StreamState, NodeState, StreamRegistry                                                                                                                        |
+| Foghorn federation     | Cross-cluster: QueryStream for candidate discovery, NotifyOriginPull for handshake, PeerChannel for telemetry | StreamRegistry per-peer Locations (federated identity, replicating-now, outbound pullers); RemoteEdgeCache (edge telemetry, peer heartbeat, remote artifacts) |
 
 ## Data Flows
 
@@ -71,7 +71,7 @@ Viewer requests stream on Edge A2 (doesn't have it yet)
 
 **Key path**: `handleGetSource` at `api_balancing/internal/handlers`. This is an HTTP endpoint, not a gRPC trigger. MistServer calls it directly when it needs to pull a stream.
 
-**Two source resolution mechanisms**: MistServer has two ways to resolve sources — the HTTP `/?source=` load balancer endpoint (above) and the `STREAM_SOURCE` blocking trigger (below). For live streams, the load balancer handles it. For VOD/artifacts, STREAM_SOURCE handles it. See the "Source Resolution" sections for details.
+**Two source resolution mechanisms**: MistServer has two ways to resolve sources — the HTTP `/?source=` load balancer endpoint (above) and the `STREAM_SOURCE` blocking trigger (below). `STREAM_SOURCE` is the primary entry for every stream type; the HTTP `/?source=` endpoint is the balancer-template fallback for cold cases that need geo-aware load balancing (mostly pull/native local-edge selection). See the "Source Resolution" sections for details.
 
 ### Cross-Cluster Replication: Origin-Pull
 
@@ -97,12 +97,12 @@ Viewer → Foghorn A (stream not on any local edge)
       - Loop check: verify no circular replication via RemoteReplicationEntry
       - Select local edge with capacity
       - NotifyOriginPull → Foghorn B (stream, source_node, dest_cluster, dest_node)
-      - Foghorn B validates, stores ActiveReplicationRecord, returns DTSC URL
-      - Foghorn A records the in-flight pull and returns a local endpoint; MistServer starts the DTSC pull when its playback/source path asks for the stream
-      - Store local ActiveReplicationRecord in Redis (5-min TTL bridge)
+      - Foghorn B validates, records the outbound pull on its StreamRegistry (Location[B-local].OutboundPullers), returns DTSC URL
+      - Foghorn A calls StreamRegistry.MarkReplicating(internal_name, peer=B, pullDTSCURL, destNodeID, destNodeBaseURL, sourceNodeID) so /balance, /source, and `/debug/stream-registry` all see the in-flight pull on Location[A-local]
+      - The SweepStaleLocations ticker (30s tick / 5-min maxAge) ages out the mark if the pull never completes — same expiry budget the old federation cache TTL used
 
 4. MistServer on A2 pulls from B1 via DTSC over public internet
-5. Stream appears in A's local state → checkReplicationCompletion clears ActiveReplication
+5. Stream appears in A's local state → `checkReplicationCompletion` calls StreamRegistry.ClearReplicating on A and ClearOutboundPull on B
 6. ReplicationEvent broadcast to all peers: "stream now available on Cluster A"
 7. Subsequent viewers served from local edge A2
 ```
@@ -111,11 +111,12 @@ Viewer → Foghorn A (stream not on any local edge)
 
 MistServer asks Foghorn "where should I pull this stream from?" via HTTP `/?source=<stream>`.
 
-| Step | Logic                                                                                                                                                                                                     | Fallback |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| 1    | Local origin: `GetBestNodeWithScore(isSourceSelection=true)` — finds node with `Inputs > 0`, `!Replicated`; the HTTP handler returns `dtsc://<host>:4200`                                                 | → step 2 |
-| 2    | Cross-cluster: `resolveRemoteSource()` — looks up origin_cluster_id (from streamContext cache or Commodore), calls `QueryStream(is_source_selection=true)` on origin Foghorn, returns the peer's DTSC URL | → step 3 |
-| 3    | Fallback: `dtsc://localhost:4200` or the request's `fallback` query parameter — MistServer will accept a push or use local source                                                                         | —        |
+| Step | Logic                                                                                                                                                                                                      | Fallback |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 1    | Active replication: `StreamRegistry.LocalReplication` — if an origin-pull is arranged from a peer, return the peer's DTSC URL                                                                              | → step 2 |
+| 2    | Local origin: `GetBestNodeWithScore(isSourceSelection=true)` — finds node with `Inputs > 0`, `!Replicated`; the HTTP handler returns `dtsc://<host>:4200`                                                  | → step 3 |
+| 3    | Cross-cluster: `resolveRemoteSource()` — looks up origin_cluster_id (from streamContext cache or Commodore), calls `QueryStream(is_source_selection=true)` on origin Foghorn, returns the peer's DTSC URL  | → step 4 |
+| 4    | Terminal answer per stream type: `push://` for live+ (publishers boot ingest, viewers get clean OFFLINE via mist-side pre-check); `offline:<reason>` for pull+/native/vod/dvr/processing when not servable | —        |
 
 ### Source Resolution: `STREAM_SOURCE` trigger
 
@@ -125,25 +126,70 @@ The trigger chain: MistServer → Helmsman webhook (`/webhooks/mist/stream_sourc
 
 Helmsman mostly acts as a passthrough: it parses the raw webhook body into protobuf and forwards to Foghorn. The current exception is `processing+` streams, where Helmsman can return a local rewritten HLS manifest before forwarding if an active processing job has already produced one. On abort or error, Helmsman returns empty string to MistServer (use default source).
 
-Foghorn's handler routes by stream type:
+Foghorn's handler routes by stream type. Every branch starts with
+`federationOriginPullDTSC`, the shared hook that returns the peer DTSC
+URL when an inbound origin-pull is arranged on this cluster. Only when
+the federation hook misses does the branch run its type-specific
+resolution.
 
 ```
 Foghorn processor.handleStreamSource(trigger):
 
-  If live stream (live+ prefix):
-    → Abort (empty response → MistServer uses configured source / load balancer /?source= endpoint)
+  federationOriginPullDTSC fast-path (live+, pull+, dvr+, bare native):
+    → If StreamRegistry.LocalReplication has a PullDTSCURL → return peer DTSC
 
-  If processing+:
-    → Resolve to a local rewritten HLS manifest in Helmsman when present
-    → Otherwise Foghorn resolves a presigned S3 GET URL for the process input artifact
+  If live+:
+    → Empty response → MistServer uses the balance:<foghorn> template;
+      /source resolves DTSC if any node has the input, push:// otherwise
 
-  If VOD/artifact:
-    → ResolveArtifactInternalName via Commodore → get artifact_hash, origin_cluster_id
-    → Check local state: FindNodeByArtifactHash(hash)
-      → If found locally: return file path on the storage node
-    → If remote cluster has the artifact metadata: trigger async defrost and return empty so MistServer retries/defaults
-    → Otherwise return empty
+  If pull+:
+    → Empty response → balance: template → /source returns upstream URI
+      (allowed cluster) or federation DTSC (non-allowed)
+
+  If bare native (mist-native):
+    → Federation hook above, then balance: template → /source local LB
+
+  If dvr+:
+    → Recording-node DTSC (intra-cluster) or local manifest if this node
+      is the recording origin
+    → If neither resolves locally AND federation cache has a peer
+      cluster's `Location[peer].RecordingNodeID` for this stream's source,
+      `tryArrangeDVRCrossCluster` calls `federation.DefaultArrange` to
+      set up `dvr+<hash>` origin-pull from the peer's recording node
+    → offline:not_recorded otherwise
+
+  If vod+ / processing+:
+    → Helmsman read-through relay URL (local-or-S3 transparent);
+      offline:not_uploaded if the artifact doesn't exist
 ```
+
+### Cross-Cluster Federation Coverage
+
+Every cross-cluster stream-source resolution path is tracked and uses
+the same handshake primitives. No type has an ad-hoc fast path that
+bypasses `NotifyOriginPull` / `MarkReplicating` for live source streams
+or `PrepareArtifact` for artifacts.
+
+| Type          | Cross-cluster mechanism                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Tracked via                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `live+`       | gRPC viewer routing: `arrangeOriginPull`. HTTP `/source`: `arrangeRemoteOriginPullFromSource` (identifies caller via `state.NodeIDByClientIP`). Both call shared `federation.ArrangeOriginPull` → NotifyOriginPull + MarkReplicating.                                                                                                                                                                                                                                                                                                                  | StreamRegistry `LocalReplication`; source-cluster `OutboundPullers`                                   |
+| `pull+`       | Same shared helper. `handleGetPullSource` placement-fail path also federates so non-allowed clusters can serve viewers via DTSC from an allowed cluster.                                                                                                                                                                                                                                                                                                                                                                                               | Same registry tracking                                                                                |
+| bare native   | Same shared helper via federation hook in STREAM_SOURCE.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Same registry tracking                                                                                |
+| `dvr+`        | `StreamAdvertisement.dvr_recording_node_id` advertises the source-cluster recording node. Receiver's STREAM_SOURCE dvr+ → `tryArrangeDVRCrossCluster` → `federation.DefaultArrange` (sourceNode = peer's recording node, stream = `dvr+<hash>`).                                                                                                                                                                                                                                                                                                       | Same registry tracking — `Location[peer].RecordingNodeID` + `LocalReplication.PullDTSCURL`            |
+| `vod+`        | Mist → Helmsman relay → RelayResolve (gRPC control message) → Foghorn. Foghorn checks local artifact, falls back to `ResolveCrossClusterArtifactURL` → `PrepareArtifact` against origin cluster. Origin returns either a presigned S3 URL (synced) or a peer-relay URL + short-lived `artifact_relay` JWT pointing at a local origin node that still holds the canonical file on disk (hot-but-unsynced). Relay's block cache reads from either upstream transparently — Authorization header is attached only for peer URLs. No bytes copied locally. | Adopted `foghorn.artifacts` row (storage_cluster_id=peer); RelayResolve refreshes URL on cache expiry |
+| `processing+` | Same as vod+. Processing input reads cross-cluster artifacts through the same RelayResolve federation path.                                                                                                                                                                                                                                                                                                                                                                                                                                            | Same                                                                                                  |
+| Clips         | `ClipPullRequest.SourceBaseUrl` — Foghorn sets this to the remote cluster's Mist HTTP base when the source stream is cross-cluster. Helmsman downloads, stores locally, serves locally.                                                                                                                                                                                                                                                                                                                                                                | Local clip artifact row after download                                                                |
+
+The relay's federation entry point lives in `control/relay_resolve.go`:
+when local `foghorn.artifacts` doesn't have an `s3_url` (direct-dial
+case OR adopted-from-peer case), the resolver first tries
+`fillPeerRelayFromLocalOrigin` (a local origin node may hold the
+canonical full file even though S3 sync is pending), then falls back
+to `fillCrossClusterArtifactFromCommodore` → `PrepareArtifact` against
+the artifact's origin cluster. Origin returns whichever URL is
+authoritative for its current state — synced rows mint presigned S3,
+hot-but-unsynced rows mint a node-specific peer-relay URL + JWT
+without waiting on S3 sync.
 
 ## Origin Tracking
 
@@ -173,7 +219,7 @@ arrangeOriginPull():
 
 When `checkReplicationCompletion()` detects a stream is now live locally (pulled successfully), it:
 
-1. Deletes the `ActiveReplicationRecord`
+1. Calls `StreamRegistry.ClearReplicating(internal_name)` on the local Location (drops ReplicatingFrom + PullDTSCURL + DestNodeID + DestNodeBaseURL + PullSourceNodeID)
 2. Broadcasts `ReplicationEvent(available=true)` to all peers via PeerChannel
 3. Peers store this in `remote_replications` — subsequent viewers at the peer can redirect to us instead of pulling again
 
@@ -216,17 +262,24 @@ The topology is **implicit and dynamic** — there is no fixed origin/hub/edge h
 - `api_balancing/internal/handlers` - `arrangeOriginPull`: cross-cluster origin-pull lifecycle
 - `api_sidecar/internal/handlers` - `HandleStreamSource`: Helmsman STREAM_SOURCE webhook handler (with `processing+` local manifest shortcut)
 - `api_sidecar/internal/config` - STREAM_SOURCE trigger registration (`sync: true`, no stream filter)
-- `api_balancing/internal/triggers` - `handleStreamSource`: Foghorn STREAM_SOURCE handler (skips live, resolves process/artifact sources)
-- `api_balancing/internal/control` - `BuildDTSCURI`: uses the node's DTSC output template and appends `live+<stream>` for federation/origin-pull URLs
+- `api_balancing/internal/triggers` - `handleStreamSource`: Foghorn STREAM_SOURCE handler with shared `federationOriginPullDTSC` fast-path; resolves live/pull/native/dvr/vod/processing sources via per-prefix branches
+- `api_balancing/internal/control` - `BuildDTSCURI`: uses the node's DTSC output template and appends whatever runtime name the caller passes (`live+<x>`, `pull+<x>`, `dvr+<x>`, or bare for mist-native) for federation/origin-pull URLs
 - `api_balancing/internal/balancer` - `rateNodeWithReason`: `isSourceSelection` filtering, `rejectStreamReplicated`
 - `api_balancing/internal/state` - `StreamInstanceState`: `Inputs`, `Replicated` fields
-- `api_balancing/internal/federation` - `checkReplicationCompletion`: clears ActiveReplication, broadcasts ReplicationEvent
-- `api_balancing/internal/federation` - `ActiveReplicationRecord`, `RemoteReplicationEntry` with TTLs
+- `api_balancing/internal/federation` - `checkReplicationCompletion`: walks `StreamRegistry.AllLocalReplications()`, calls ClearReplicating + ClearOutboundPull, broadcasts ReplicationEvent
+- `api_balancing/internal/control` - `StreamRegistry` per-stream `Locations[cluster].{ReplicatingFrom, PullDTSCURL, DestNodeID, DestNodeBaseURL, PullSourceNodeID, OutboundPullers}` — replaces the federation cache's per-stream `ActiveReplicationRecord` / `StreamAdRecord` / `PlaybackIndex` (deleted)
+- `api_balancing/internal/control` - `SweepStaleLocations` (30s tick / 5-min maxAge) — ages out stale Locations + per-OutboundPull entries; replaces the federation cache's TTL-based expiry
+- `api_balancing/internal/federation` - `RemoteEdgeCache` (still in use) — edge telemetry, peer heartbeat, remote-artifact locations, edge summary; stream identity and per-stream replication state moved to StreamRegistry
+- `pkg/proto/ipc.proto` - `DVRUpdateSourceRequest` (control message 164) — Foghorn → Helmsman, refreshes the DVR storage node's source override when the publisher takes over to a different ingest node
 
 ## Gotchas
 
-- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — not just VOD. Helmsman forwards it to Foghorn except for the local `processing+` manifest shortcut. Foghorn's stream-source handler skips `live+` streams and resolves process/artifact sources. For live streams, MistServer falls back to its configured source (the load balancer's HTTP `/?source=` endpoint).
+- **STREAM_SOURCE is a general MistServer trigger**. It fires when any stream's source setting is loaded — for every stream type. Helmsman forwards it to Foghorn except for the local `processing+` manifest shortcut. Foghorn's handler runs `federationOriginPullDTSC` first for live+/pull+/dvr+/native, returning the peer DTSC URL when an inbound origin-pull is arranged; otherwise per-prefix resolution runs. For live+ with no federation, the handler returns empty so MistServer uses the `balance:<foghorn>` template, which calls `/source` and gets back either DTSC (if any edge has the input) or `push://` (publisher safety net; viewers get a clean OFFLINE via the mist-side input-balancer pre-check).
 - **DTSC port handling differs by path**. The HTTP `/?source=` handler returns `dtsc://<host>:4200` directly. Federation/origin-pull URLs use `BuildDTSCURI`, which derives the DTSC base from the node's advertised `DTSC` output template.
 - **No cascade within a cluster**. If origin goes down, replicas lose their source. There's no automatic promotion of a replica to "relay" for other replicas.
-- **ActiveReplication bridges a timing gap**. Between `NotifyOriginPull` (arrangement) and the stream actually appearing in local state (MistServer pulls and reports metrics), `ActiveReplicationRecord` in Redis (5-min TTL) tells subsequent viewers "a pull is in progress, serve from expected local edge."
+- **The registry's replication mark bridges a timing gap**. Between `NotifyOriginPull` (arrangement) and the stream actually appearing in local state (MistServer pulls and reports metrics), `Location[local].ReplicatingFrom + PullDTSCURL + DestNodeID` on the StreamRegistry tells subsequent viewers "a pull is in progress, serve from expected local edge." `SweepStaleLocations` ages this out at the same 5-min budget the prior federation cache TTL used.
+- **Sweeper preserves active state**. `SweepStaleLocations` evicts Locations only when SourceActive=false, OwnerNodeID empty, ReplicatingFrom empty, and OutboundPullers empty. A long-running publisher with no admission events still has its admission state retained — only explicit clearing edges (PUSH_INPUT_CLOSE, ClearReplicating, ClearOutboundPull) zero those fields, and only then can the sweeper claim the Location.
+- **Registry hydration preserves Locations**. `store()` (called from `hydrate` on TTL refresh) merges identity into the existing cachedEntry rather than replacing it, so duplicate-ingest protection and origin-pull state survive cache refreshes.
+- **Publisher takeover propagates to in-flight DVRs**. When `AdmitAndReserve` returns `AcceptTakeover` for a stream that has an active DVR row, Foghorn dispatches `DVRUpdateSourceRequest` to the DVR's storage node so its push override is refreshed to the new ingest node's DTSC URL. Without this, the recording's pull would keep targeting the now-empty old source until retry budget exhausted.
+- **Drain on takeover uses `nuke_stream`, not `deletestream`**. `live+<x>` is a wildcard-derived runtime instance — `deletestream` only removes configured stream entries (`Controller::Storage["streams"]`), so it no-ops on the lingering runtime buffer. Helmsman's `handleDrainStream` calls `nuke_stream` after `StopSessions` to actually clear the buffer + viewer sessions.
 - **Cross-cluster replication is over public internet**. DTSC between MistServer nodes on different clusters traverses the public internet. No WireGuard mesh for edges. TLS on Foghorn gRPC; DTSC itself is unencrypted (media-only, no auth data).

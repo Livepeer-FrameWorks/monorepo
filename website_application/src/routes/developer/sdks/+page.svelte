@@ -759,13 +759,13 @@ await controller.stopStreaming();`,
               </a>
 
               <a
-                href={resolve("/developer/api")}
+                href={resolve("/developer/playground")}
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
               >
                 <Code2Icon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
                   <div class="font-medium text-foreground group-hover:text-primary">
-                    API Explorer
+                    GraphQL Playground
                   </div>
                   <div class="text-xs text-muted-foreground">Test the GraphQL API</div>
                 </div>

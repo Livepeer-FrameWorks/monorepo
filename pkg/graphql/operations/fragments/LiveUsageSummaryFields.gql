@@ -53,9 +53,7 @@ fragment LiveUsageSummaryFields on LiveUsageSummary {
   frozenClipBytes
   frozenDvrBytes
   frozenVodBytes
-  # Freeze/defrost operations
+  # Freeze (S3 upload) operations
   freezeCount
   freezeBytes
-  defrostCount
-  defrostBytes
 }

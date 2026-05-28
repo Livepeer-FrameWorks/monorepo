@@ -2365,7 +2365,7 @@ type VodAsset struct {
 	Filename *string `json:"filename,omitempty"`
 	// Current processing/storage status of the asset.
 	Status VodAssetStatus `json:"status"`
-	// Where the asset is stored (s3, local, freezing, defrosting).
+	// Where the asset is stored (s3, local, freezing).
 	StorageLocation string `json:"storageLocation"`
 	// Current S3 sync state (pending, in_progress, synced, failed, lost_local).
 	SyncStatus *string `json:"syncStatus,omitempty"`
@@ -2375,7 +2375,7 @@ type VodAsset struct {
 	IsSynced bool `json:"isSynced"`
 	// True when the S3 copy includes the Mist .dtsh index.
 	IsFinalized bool `json:"isFinalized"`
-	// True when playback requires defrost/caching because no warm edge copy remains.
+	// True when no warm edge copy remains; playback streams via Helmsman's read-through relay from S3.
 	IsFrozen bool `json:"isFrozen"`
 	// File size in bytes (available after validation).
 	SizeBytes *float64 `json:"sizeBytes,omitempty"`

@@ -208,7 +208,7 @@
     return byID;
   });
 
-  // Storage events (freeze/defrost) — deduplicate by id to avoid keyed-each errors
+  // Storage events (freeze + relay cache fills) — deduplicate by id to avoid keyed-each errors
   let storageEvents = $derived.by(() => {
     const nodes =
       $storageEventsStore.data?.analytics?.lifecycle?.storageEventsConnection?.edges?.map(
@@ -583,7 +583,7 @@
           .catch(() => null),
         // Fetch current artifact states for in-progress operations
         artifactStatesStore.fetch({ variables: { first: 50 } }).catch(() => null),
-        // Fetch storage events (freeze/defrost)
+        // Fetch storage events (freeze + relay cache fills)
         storageEventsStore
           .fetch({
             variables: {
@@ -1780,13 +1780,6 @@
                                   <LoaderIcon class="w-3 h-3 animate-spin" />
                                   Freezing...
                                 </span>
-                              {:else if artifact.storageLocation === "defrosting"}
-                                <span
-                                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-orange-400 bg-orange-400/10 border-orange-400/20"
-                                >
-                                  <LoaderIcon class="w-3 h-3 animate-spin" />
-                                  Defrosting...
-                                </span>
                               {:else if artifact.isFrozen}
                                 <span
                                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-blue-400 bg-blue-400/10 border-blue-400/20"
@@ -2041,7 +2034,7 @@
             {/if}
           </div>
 
-          <!-- Storage Activity (Freeze/Defrost Events) -->
+          <!-- Storage Activity (Freeze + Relay Cache Fill Events) -->
           {#if storageEvents.length > 0}
             <div class="slab col-span-full">
               <div class="slab-header">
