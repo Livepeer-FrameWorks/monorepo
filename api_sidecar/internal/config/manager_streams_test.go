@@ -49,8 +49,12 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	if got := streams["pull"]["source"]; got != "balance:http://foghorn:18008" {
 		t.Fatalf("pull source = %v", got)
 	}
-	if got := streams["live"]["source"]; got != "balance:http://foghorn:18008?fallback=push://" {
-		t.Fatalf("live source = %v", got)
+	// Live wildcard source: balance:<foghorn>, identical shape to pull.
+	// Foghorn's /source dispatch decides the terminal answer: DTSC when
+	// the stream is live anywhere, push:// as the publisher safety net,
+	// offline:<reason> when neither applies.
+	if got := streams["live"]["source"]; got != "balance:http://foghorn:18008" {
+		t.Fatalf("live source = %v, want balance:http://foghorn:18008", got)
 	}
 	if got := streams["live"]["DVR"]; got != 120000 {
 		t.Fatalf("live DVR = %v, want 120000", got)
@@ -95,6 +99,44 @@ func TestReconcileConfiguresGlobalStreamProcessTrigger(t *testing.T) {
 	}
 	if _, scoped := handler["streams"]; scoped {
 		t.Fatalf("STREAM_PROCESS must not be stream-scoped; managed streams use bare names: %#v", handler)
+	}
+}
+
+func TestReconcileConfiguresPushInputCloseTrigger(t *testing.T) {
+	mist := &recordingMistAPI{}
+	manager := &Manager{
+		mistClient: mist,
+		logger:     logging.NewLogger(),
+		lastSeed: &pb.ConfigSeed{
+			FoghornBalancerBase: "http://foghorn:18008",
+			Templates: []*pb.StreamTemplate{
+				{Def: &pb.StreamDef{Name: "live"}},
+			},
+		},
+	}
+
+	manager.reconcile()
+
+	if len(mist.updatedConfigs) == 0 {
+		t.Fatal("expected UpdateConfig call")
+	}
+	triggers, ok := mist.updatedConfigs[0]["triggers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing triggers in UpdateConfig: %#v", mist.updatedConfigs[0])
+	}
+	rawHandlers, ok := triggers["PUSH_INPUT_CLOSE"].([]any)
+	if !ok || len(rawHandlers) != 1 {
+		t.Fatalf("PUSH_INPUT_CLOSE trigger = %#v", triggers["PUSH_INPUT_CLOSE"])
+	}
+	handler, ok := rawHandlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("PUSH_INPUT_CLOSE handler = %#v", rawHandlers[0])
+	}
+	if got := handler["sync"]; got != false {
+		t.Fatalf("PUSH_INPUT_CLOSE must be async, got sync=%v", got)
+	}
+	if got, _ := handler["handler"].(string); got == "" || got[len(got)-len("/push_input_close"):] != "/push_input_close" {
+		t.Fatalf("PUSH_INPUT_CLOSE handler URL = %v", got)
 	}
 }
 

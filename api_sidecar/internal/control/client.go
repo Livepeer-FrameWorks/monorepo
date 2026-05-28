@@ -897,11 +897,6 @@ func runClient(addr string, logger logging.Logger) error {
 				if reclaimDVRSegmentHandler != nil {
 					go reclaimDVRSegmentHandler(x.ReclaimDvrSegment)
 				}
-			case *pb.ControlMessage_DefrostRequest:
-				// Handle defrost request from Foghorn
-				if defrostRequestHandler != nil {
-					go defrostRequestHandler(x.DefrostRequest)
-				}
 			case *pb.ControlMessage_FreezeRequest:
 				if freezeRequestHandler != nil {
 					go freezeRequestHandler(x.FreezeRequest)
@@ -925,6 +920,25 @@ func runClient(addr string, logger logging.Logger) error {
 				// Re-run USER_NEW for active sessions after a playback policy
 				// or signing-key change. Does NOT disconnect viewers.
 				go handleInvalidateSessions(logger, x.InvalidateSessionsRequest)
+			case *pb.ControlMessage_DrainStreamRequest:
+				// Old-owner drain on publisher takeover: unload lingering
+				// buffer + disconnect viewers so they reselect via the new
+				// owner. Idempotent.
+				go handleDrainStream(logger, x.DrainStreamRequest, func(m *pb.ControlMessage) {
+					if err := stream.Send(m); err != nil {
+						logger.WithError(err).Warn("Failed to send DrainStreamResponse")
+					}
+				})
+			case *pb.ControlMessage_DvrUpdateSourceRequest:
+				// Storage-node DVR source refresh on publisher takeover:
+				// the source moved to a different ingest node, so the
+				// recorded override URL is stale. Refresh + force-recreate
+				// the push so the next pull lands on the new source.
+				go handleDVRUpdateSource(logger, x.DvrUpdateSourceRequest, func(m *pb.ControlMessage) {
+					if err := stream.Send(m); err != nil {
+						logger.WithError(err).Warn("Failed to send DVRUpdateSourceResponse")
+					}
+				})
 			case *pb.ControlMessage_ActivatePushTargets:
 				go handleActivatePushTargets(logger, x.ActivatePushTargets)
 			case *pb.ControlMessage_DeactivatePushTargets:
@@ -1145,13 +1159,16 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	// freeze pipeline uploads the sidecar alongside the media file. The
 	// handlers package owns the actual GenerateDTSH HTTP poll, registered
 	// via SetClipDTSHGenerator at startup to avoid the
-	// handlers→control→handlers import cycle. Boots vod+<internal_name>
-	// — Foghorn's STREAM_SOURCE for vod+ resolves via internal_name, not
-	// clip_hash, so using the hash here would silently fail to resolve.
-	internalName := req.GetInternalName()
-	if gen := getClipDTSHGenerator(); gen != nil && internalName != "" {
-		clipStreamName := "vod+" + internalName
-		go gen(clipStreamName, clipHash)
+	// handlers→control→handlers import cycle. Foghorn is the sole
+	// authority for the artifact runtime name — Helmsman uses it
+	// verbatim, never re-derives.
+	artifactRuntimeName := strings.TrimSpace(req.GetArtifactRuntimeName())
+	if artifactRuntimeName == "" {
+		logger.WithField("clip_hash", clipHash).Warn("ClipPullRequest missing artifact_runtime_name; skipping DTSH generation")
+		return
+	}
+	if gen := getClipDTSHGenerator(); gen != nil {
+		go gen(artifactRuntimeName, clipHash)
 	}
 }
 
@@ -1386,27 +1403,29 @@ func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*p
 	dvrHash := req.GetDvrHash()
 	streamID := req.GetStreamId()
 	internalName := req.GetInternalName()
+	sourceRuntimeName := req.GetSourceRuntimeName()
 	sourceURL := req.GetSourceBaseUrl()
 	requestID := req.GetRequestId()
 	config := req.GetConfig()
 
 	logger.WithFields(logging.Fields{
-		"dvr_hash":        dvrHash,
-		"stream_id":       streamID,
-		"internal_name":   internalName,
-		"source_url":      sourceURL,
-		"request_id":      requestID,
-		"format":          config.GetFormat(),
-		"window_seconds":  config.GetDvrWindowSeconds(),
-		"max_entries":     config.GetMaxEntries(),
-		"retention_until": config.GetRetentionUntil(),
+		"dvr_hash":            dvrHash,
+		"stream_id":           streamID,
+		"internal_name":       internalName,
+		"source_runtime_name": sourceRuntimeName,
+		"source_url":          sourceURL,
+		"request_id":          requestID,
+		"format":              config.GetFormat(),
+		"window_seconds":      config.GetDvrWindowSeconds(),
+		"max_entries":         config.GetMaxEntries(),
+		"retention_until":     config.GetRetentionUntil(),
 	}).Info("Starting DVR recording")
 
 	// Initialize DVR manager if not already done
 	initDVRManager()
 
 	// Start the DVR recording job
-	if err := dvrManager.StartRecording(dvrHash, streamID, internalName, sourceURL, config, send); err != nil {
+	if err := dvrManager.StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL, config, send); err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"error":    err,
@@ -1634,9 +1653,6 @@ func SendDVRStreamEndNotification(internalName, nodeID string) error {
 // FreezePermissionHandler is called when Foghorn responds to a freeze permission request
 type FreezePermissionHandler func(*pb.FreezePermissionResponse)
 
-// DefrostRequestHandler is called when Foghorn sends a defrost request
-type DefrostRequestHandler func(*pb.DefrostRequest)
-
 // FreezeRequestHandler is called when Foghorn proactively requests a freeze/sync
 type FreezeRequestHandler func(*pb.FreezeRequest)
 
@@ -1649,7 +1665,6 @@ type ProcessingJobHandler func(*pb.ProcessingJobRequest, func(*pb.ControlMessage
 var (
 	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
 	freezePermissionMutex    = make(chan struct{}, 1)
-	defrostRequestHandler    DefrostRequestHandler
 	freezeRequestHandler     FreezeRequestHandler
 	dtshSyncRequestHandler   DtshSyncRequestHandler
 	processingJobHandler     ProcessingJobHandler
@@ -1664,11 +1679,6 @@ var (
 	relayResolveHandlers = make(map[string]chan *pb.RelayResolveResponse)
 	relayResolveMutex    = make(chan struct{}, 1)
 )
-
-// SetDefrostRequestHandler sets the callback for defrost requests from Foghorn
-func SetDefrostRequestHandler(handler DefrostRequestHandler) {
-	defrostRequestHandler = handler
-}
 
 // SetFreezeRequestHandler sets the callback for proactive freeze requests from Foghorn
 func SetFreezeRequestHandler(handler FreezeRequestHandler) {
@@ -2084,52 +2094,6 @@ func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes ui
 	return sendOrEnqueue(msg)
 }
 
-// SendDefrostProgress sends download progress to Foghorn
-func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	progress := &pb.DefrostProgress{
-		RequestId:          requestID,
-		AssetHash:          assetHash,
-		Percent:            percent,
-		BytesDownloaded:    bytesDownloaded,
-		SegmentsDownloaded: segmentsDownloaded,
-		TotalSegments:      totalSegments,
-		Message:            message,
-	}
-
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostProgress{DefrostProgress: progress}}
-	return stream.Send(msg)
-}
-
-// SendDefrostComplete sends defrost completion status to Foghorn with no
-// typed reason (REASON_UNSPECIFIED). Success and ready statuses use this.
-func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
-	return SendDefrostCompleteWithReason(requestID, assetHash, status, localPath, sizeBytes, errMsg, pb.DefrostComplete_REASON_UNSPECIFIED)
-}
-
-// SendDefrostCompleteWithReason is the failure-path variant: lets the caller
-// classify the failure (out-of-space, S3 error, local IO, presigned invalid)
-// so Foghorn can route the retry logic.
-func SendDefrostCompleteWithReason(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string, reason pb.DefrostComplete_Reason) error {
-	complete := &pb.DefrostComplete{
-		RequestId: requestID,
-		AssetHash: assetHash,
-		Status:    status,
-		LocalPath: localPath,
-		SizeBytes: sizeBytes,
-		Error:     errMsg,
-		NodeId:    getNodeID(),
-		Reason:    reason,
-	}
-
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
-	return sendOrEnqueue(msg)
-}
-
 // SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
 // Queued for retry on disconnect since these feed ClickHouse storage_events.
 func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
@@ -2446,6 +2410,126 @@ func handleInvalidateSessions(logger logging.Logger, req *pb.InvalidateSessionsR
 		"reason":       req.Reason,
 		"stream_names": req.StreamNames,
 	}).Info("Successfully invalidated sessions; viewers will renegotiate against fresh policy")
+}
+
+// handleDrainStream drops the lingering Mist buffer for a runtime name
+// and disconnects its viewer sessions on this node. Issued by Foghorn
+// from the AdmitAndReserve takeover path before the new owner is
+// admitted, so viewers don't keep talking to a stale buffer after the
+// publisher moves nodes. Idempotent — when the stream is absent we still
+// return success with unloaded=false.
+func handleDrainStream(logger logging.Logger, req *pb.DrainStreamRequest, send func(*pb.ControlMessage)) {
+	runtimeName := strings.TrimSpace(req.GetRuntimeName())
+	if runtimeName == "" {
+		return
+	}
+
+	cfg := currentConfig
+	if cfg == nil {
+		logger.WithField("runtime_name", runtimeName).Warn("config not initialized; cannot drain stream")
+		if send != nil {
+			send(&pb.ControlMessage{Payload: &pb.ControlMessage_DrainStreamResponse{
+				DrainStreamResponse: &pb.DrainStreamResponse{
+					RuntimeName: runtimeName,
+					Error:       "config not initialized",
+				},
+			}})
+		}
+		return
+	}
+	mistClient := mist.NewClient(logger)
+	if cfg.MistServerURL != "" {
+		mistClient.BaseURL = cfg.MistServerURL
+	}
+
+	logger.WithFields(logging.Fields{
+		"runtime_name": runtimeName,
+		"reason":       req.GetReason(),
+	}).Info("Draining lingering Mist stream on takeover")
+
+	// Disconnect viewer sessions first so they reselect via PLAY_REWRITE
+	// at the new owner. The Mist stop_sessions API doesn't return a count;
+	// the response counter is best-effort/0 today.
+	var partialErr string
+	if err := mistClient.StopSessions(runtimeName); err != nil {
+		logger.WithFields(logging.Fields{
+			"runtime_name": runtimeName,
+			"error":        err,
+		}).Warn("StopSessions during drain failed; continuing")
+		partialErr = "stop_sessions: " + err.Error()
+	}
+
+	// NukeStream (MistUtilNuke) is the correct operation for wildcard
+	// instances like live+<x> / processing+<x>: deletestream only removes
+	// configured stream entries (Controller::Storage["streams"]), and
+	// wildcard instances are runtime-only — not in that map. nuke_stream
+	// stops input/pull PIDs, wipes stream state, kills lingering
+	// processes, and unlinks locks. Asynchronous on the controller side;
+	// dispatch success counts as unloaded=true since there's no
+	// synchronous completion signal.
+	unloaded := false
+	if err := mistClient.NukeStream(runtimeName); err != nil {
+		logger.WithFields(logging.Fields{
+			"runtime_name": runtimeName,
+			"error":        err,
+		}).Warn("NukeStream during drain failed")
+		if partialErr != "" {
+			partialErr += "; "
+		}
+		partialErr += "nuke_stream: " + err.Error()
+	} else {
+		unloaded = true
+	}
+
+	// Clear any DVR override the previous owner registered for this
+	// runtime name so a takeover doesn't leave a stale STREAM_SOURCE
+	// override pointing at a now-gone source URL.
+	ClearDVRSourceOverride(runtimeName)
+
+	if send != nil {
+		send(&pb.ControlMessage{Payload: &pb.ControlMessage_DrainStreamResponse{
+			DrainStreamResponse: &pb.DrainStreamResponse{
+				RuntimeName: runtimeName,
+				Unloaded:    unloaded,
+				Error:       partialErr,
+			},
+		}})
+	}
+}
+
+// handleDVRUpdateSource refreshes the DVR source override + force-recreates
+// the Mist push for the named dvr_hash. Issued by Foghorn from the
+// AdmitAndReserve takeover path when the new ingest owner is on a
+// different node from where the DVR was first set up — without this, the
+// recorded sourceURL points at the now-empty old source and the push
+// stalls until retry budget exhausts. Idempotent: missing job returns
+// refreshed=false with no error.
+func handleDVRUpdateSource(logger logging.Logger, req *pb.DVRUpdateSourceRequest, send func(*pb.ControlMessage)) {
+	dvrHash := strings.TrimSpace(req.GetDvrHash())
+	if dvrHash == "" {
+		return
+	}
+	logger.WithFields(logging.Fields{
+		"dvr_hash":            dvrHash,
+		"source_runtime_name": req.GetSourceRuntimeName(),
+		"source_base_url":     req.GetSourceBaseUrl(),
+	}).Info("DVR source refresh requested on takeover")
+
+	initDVRManager()
+	refreshed, err := dvrManager.UpdateSource(dvrHash, req.GetSourceRuntimeName(), req.GetSourceBaseUrl())
+	var errMsg string
+	if err != nil {
+		errMsg = err.Error()
+	}
+	if send != nil {
+		send(&pb.ControlMessage{Payload: &pb.ControlMessage_DvrUpdateSourceResponse{
+			DvrUpdateSourceResponse: &pb.DVRUpdateSourceResponse{
+				DvrHash:   dvrHash,
+				Refreshed: refreshed,
+				Error:     errMsg,
+			},
+		}})
+	}
 }
 
 // activePushes tracks MistServer push IDs for multistream targets.

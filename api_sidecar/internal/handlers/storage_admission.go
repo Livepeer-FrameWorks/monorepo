@@ -9,45 +9,21 @@ import (
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
-// failDefrost is the shared failure path for defrostSingleFile: emits a
-// CACHE_FAILED lifecycle event and a DefrostComplete with status="failed"
-// and the typed reason. Foghorn routes retry decisions off
-// DefrostComplete.Reason.
-func (sm *StorageManager) failDefrost(req *pb.DefrostRequest, assetType AssetType, err error, reason pb.DefrostComplete_Reason) {
-	errStr := err.Error()
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-		Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-		AssetType: string(assetType),
-		AssetHash: req.GetAssetHash(),
-		Error:     &errStr,
-		Reason:    &reason,
-	})
-	if sm.sendDefrostCompleteWithReason != nil {
-		_ = sm.sendDefrostCompleteWithReason(req.GetRequestId(), req.GetAssetHash(), "failed", "", 0, errStr, reason) //nolint:errcheck // best-effort report
-	} else {
-		// Test fakes may not inject the reason-aware sender; fall back to the
-		// reason-less one so existing test fakes still work.
-		_ = sm.sendDefrostComplete(req.GetRequestId(), req.GetAssetHash(), "failed", "", 0, errStr) //nolint:errcheck // best-effort report
-	}
-}
-
-// Two-tier defrost admission control.
+// Two-tier disk-write admission control.
 //
-// Tier 1 (proactive, non-blocking): when defrost has room now but the
-// projected post-defrost usage would cross softCleanupThreshold, kick off a
-// background cleanup pass and return immediately. The 20 GB defrost does not
-// wait for cleanup.
+// Tier 1 (proactive, non-blocking): when the write fits now but the projected
+// post-write usage would cross softCleanupThreshold, kick off a background
+// cleanup pass and return immediately. The write does not wait for cleanup.
 //
-// Tier 2 (blocking): when free < expected_size_bytes, run cleanup
-// synchronously with a tight target. If still short after cleanup, return
-// storage.ErrInsufficientSpace so the caller can fail typed
-// (REASON_INSUFFICIENT_SPACE) and let Foghorn retry on another node.
+// Tier 2 (blocking): when free < expected size, run cleanup synchronously
+// with a tight target. If still short after cleanup, return
+// storage.ErrInsufficientSpace so callers can fail typed and let Foghorn
+// retry on another node.
 //
 // Edges run hot by design: background cleanup does NOT trim back to
-// targetThreshold. It frees just enough to keep room for the next defrost or
+// targetThreshold. It frees just enough to keep room for the next write or
 // two, then stops.
 
 // Admission types live in the admission package so the relay can consume the
@@ -61,9 +37,9 @@ const criticalRelayThresholdDefault = 0.95
 
 // Decide is the single typed admission entrypoint. Behavior per intent is
 // documented on the StorageIntent constants. Routes through the same
-// admitDefrost/ensureRoomForDefrost machinery for intents that require disk,
-// and short-circuits to CacheMemoryOnly/CacheReject for intents that can or
-// must avoid disk.
+// admitDiskWrite/ensureRoomForDiskWrite machinery for intents that require
+// disk, and short-circuits to CacheMemoryOnly/CacheReject for intents that
+// can or must avoid disk.
 func (sm *StorageManager) Decide(
 	ctx context.Context, dir string, intent admission.StorageIntent, sizeBytes uint64,
 ) (admission.CacheDecision, error) {
@@ -73,7 +49,7 @@ func (sm *StorageManager) Decide(
 
 	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentProcessingSourceStage,
 		admission.IntentUnsafeImportStage, admission.IntentDVRChapterFinalization:
-		if err := sm.admitDefrost(ctx, dir, sizeBytes); err != nil {
+		if err := sm.admitDiskWrite(ctx, dir, sizeBytes); err != nil {
 			return admission.CacheReject, err
 		}
 		return admission.CacheToDisk, nil
@@ -95,14 +71,14 @@ func (sm *StorageManager) Decide(
 			}
 			if sizeBytes > 0 && sizeBytes > space.AvailableBytes {
 				if leases.IsDestructiveCleanupAllowed() {
-					if cleanupErr := sm.ensureRoomForDefrost(ctx, dir, sizeBytes); cleanupErr == nil {
+					if cleanupErr := sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes); cleanupErr == nil {
 						return admission.CacheToDisk, nil
 					}
 				}
 				return admission.CacheMemoryOnly, nil
 			}
 		}
-		if admitErr := sm.admitDefrost(ctx, dir, sizeBytes); admitErr != nil {
+		if admitErr := sm.admitDiskWrite(ctx, dir, sizeBytes); admitErr != nil {
 			// Playback cache is opportunistic — failed admission means we
 			// still serve, just without writing through to disk.
 			return admission.CacheMemoryOnly, nil //nolint:nilerr // intentional graceful degradation
@@ -138,10 +114,10 @@ func (sm *StorageManager) Decide(
 // lock-free.
 var backgroundCleanupRunning atomic.Bool
 
-// admitDefrost gates a defrost write. Returns nil to allow the defrost to
+// admitDiskWrite gates a disk write. Returns nil to allow the write to
 // proceed; returns storage.ErrInsufficientSpace when no amount of cleanup can
 // make room.
-func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeBytes uint64) error {
+func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBytes uint64) error {
 	if sizeBytes == 0 {
 		// Unknown size: skip preflight admission. The write itself will
 		// hit ENOSPC if the disk is too tight; that path remains the
@@ -154,16 +130,16 @@ func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeByte
 		// Path may not exist yet. Fall back to HasSpaceFor's stat-parent walk.
 		if err := storage.HasSpaceForWithinCapacity(dir, sizeBytes, sm.capacity); err != nil {
 			if errors.Is(err, storage.ErrInsufficientSpace) {
-				return sm.ensureRoomForDefrost(ctx, dir, sizeBytes)
+				return sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes)
 			}
-			return fmt.Errorf("admitDefrost statfs: %w", err)
+			return fmt.Errorf("admitDiskWrite statfs: %w", err)
 		}
 		return nil
 	}
 
 	// Tier 2 — blocking: no room right now.
 	if space.AvailableBytes < sizeBytes {
-		return sm.ensureRoomForDefrost(ctx, dir, sizeBytes)
+		return sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes)
 	}
 
 	// Tier 1 — proactive: room exists, but projected usage may cross the
@@ -178,12 +154,11 @@ func (sm *StorageManager) admitDefrost(ctx context.Context, dir string, sizeByte
 	return nil
 }
 
-// ensureRoomForDefrost is the Tier-2 synchronous path. Called when the disk
+// ensureRoomForDiskWrite is the Tier-2 synchronous path. Called when the disk
 // already has less free space than sizeBytes. Runs fallbackCleanup with an
-// explicit byte target (sizeBytes + the storage reserve), then re-checks. Returns
-// storage.ErrInsufficientSpace on failure so callers can emit
-// REASON_INSUFFICIENT_SPACE.
-func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, sizeBytes uint64) error {
+// explicit byte target (sizeBytes + the storage reserve), then re-checks.
+// Returns storage.ErrInsufficientSpace on failure.
+func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, dir string, sizeBytes uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		// Boot pause: cannot safely evict yet. Fail fast so Foghorn picks a
 		// different node.
@@ -192,7 +167,7 @@ func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, 
 
 	space, err := storage.EffectiveDiskSpace(dir, sm.capacity)
 	if err != nil {
-		return fmt.Errorf("ensureRoomForDefrost statfs: %w", err)
+		return fmt.Errorf("ensureRoomForDiskWrite statfs: %w", err)
 	}
 	needed := storage.RequiredAvailableBytes(sizeBytes)
 	if needed <= space.AvailableBytes {
@@ -202,13 +177,13 @@ func (sm *StorageManager) ensureRoomForDefrost(ctx context.Context, dir string, 
 
 	if cleanupErr := sm.fallbackCleanupWithTarget(dir, bytesToFree); cleanupErr != nil {
 		// Cleanup itself failed; propagate.
-		return fmt.Errorf("ensureRoomForDefrost cleanup: %w", cleanupErr)
+		return fmt.Errorf("ensureRoomForDiskWrite cleanup: %w", cleanupErr)
 	}
 
 	// Re-check.
 	space, err = storage.EffectiveDiskSpace(dir, sm.capacity)
 	if err != nil {
-		return fmt.Errorf("ensureRoomForDefrost recheck statfs: %w", err)
+		return fmt.Errorf("ensureRoomForDiskWrite recheck statfs: %w", err)
 	}
 	if space.AvailableBytes < sizeBytes {
 		return fmt.Errorf("%w: free=%dB need=%dB after cleanup", storage.ErrInsufficientSpace, space.AvailableBytes, sizeBytes)
@@ -238,9 +213,9 @@ func (sm *StorageManager) kickoffBackgroundCleanup(sizeBytes uint64) {
 			return
 		}
 
-		// Target: free up to 2× the defrost size, but stop earlier when we're
+		// Target: free up to 2× the write size, but stop earlier when we're
 		// already under softCleanupThreshold. The point is to set up room
-		// for the next defrost, not aggressively trim the disk.
+		// for the next write, not aggressively trim the disk.
 		target := sizeBytes * 2
 		if target == 0 {
 			target = uint64(float64(space.TotalBytes) * 0.05) // 5% of total as a safety floor

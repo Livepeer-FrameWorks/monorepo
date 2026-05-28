@@ -156,8 +156,8 @@ func getProcessingSourceOverride(streamName string) (string, bool) {
 
 func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logrus.Entry, mistClient *mist.Client, streamName string) {
 	h.stopProcessingPush(log, mistClient, streamName)
-	if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-		log.WithError(deleteErr).Warn("Failed to delete stream for Livepeer fallback")
+	if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
+		log.WithError(nukeErr).Warn("Failed to nuke stream for Livepeer fallback")
 	}
 	drainProcessingGeneration(log, mistClient, streamName)
 }
@@ -414,10 +414,12 @@ loop:
 				pendingJobsMu.Unlock()
 				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 				if waitErr != nil {
+					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
 					return
 				}
 				if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", pushErr), nil, "", 0)
 					return
 				}
@@ -477,10 +479,12 @@ loop:
 					pendingJobsMu.Unlock()
 					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 					if waitErr != nil {
+						h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback readiness: %v", waitErr), nil, "", 0)
 						return
 					}
 					if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+						h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 						h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("stall fallback restart: %v", pushErr), nil, "", 0)
 						return
 					}
@@ -516,16 +520,20 @@ loop:
 	h.sendProgress(send, req.GetJobId(), 100, sourceDurationMs, sourceDurationMs)
 
 	// Send result with output path so Foghorn can register the artifact
-	// in the warm cache immediately (same pattern as defrost completion).
-	// This must happen BEFORE DTSH generation because vod+ STREAM_SOURCE
-	// resolves via Foghorn's in-memory state.
+	// in the warm cache immediately. This must happen BEFORE DTSH
+	// generation because vod+ STREAM_SOURCE resolves via Foghorn's
+	// in-memory state.
 	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
 	log.Info("Processing job result sent, artifact registered with Foghorn")
 
 	// Generate DTSH by booting the output as vod+ (no MistProc* re-trigger).
 	// Foghorn now has the artifact registered, so vod+ STREAM_SOURCE resolves.
-	vodStreamName := "vod+" + req.GetInternalName()
-	if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
+	// Foghorn is the sole authority for the output runtime name; Helmsman
+	// uses it verbatim and skips generation when missing.
+	vodStreamName := strings.TrimSpace(req.GetOutputRuntimeName())
+	if vodStreamName == "" {
+		log.Warn("ProcessingJobRequest missing output_runtime_name; skipping DTSH generation (will be generated on first playback)")
+	} else if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
 		log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
 	}
 
@@ -1318,8 +1326,8 @@ func isCriticalProcess(evt ProcessExitEvent) bool {
 // cleanupFailedProcessing nukes the stream (kills input buffer + all processes)
 // and removes the partial output file. Used on terminal failure with no fallback.
 func (h *ProcessingJobHandler) cleanupFailedProcessing(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) {
-	if err := mistClient.DeleteStream(streamName); err != nil {
-		log.WithError(err).Warn("Failed to delete stream during cleanup")
+	if err := mistClient.NukeStream(streamName); err != nil {
+		log.WithError(err).Warn("Failed to nuke stream during cleanup")
 	}
 	if outputPath != "" {
 		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {

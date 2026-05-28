@@ -1290,6 +1290,47 @@ func HandlePushEnd(c *gin.Context) {
 	c.String(http.StatusOK, "OK")
 }
 
+// HandlePushInputClose handles PUSH_INPUT_CLOSE webhook.
+// Non-blocking: this is the publisher-source-disconnected edge Foghorn's
+// admission state machine uses to flip source_active=false on the owner
+// entry. Forward durable like PUSH_END so the signal survives transient
+// Foghorn outages.
+func HandlePushInputClose(c *gin.Context) {
+	incMistWebhook("PUSH_INPUT_CLOSE", "received")
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("push_input_close").Inc()
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		respondFinalTriggerReadError(c, logger, "PUSH_INPUT_CLOSE", err)
+		return
+	}
+
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushInputClose, body, getNodeID(), logger)
+	if err != nil {
+		incMistWebhook("PUSH_INPUT_CLOSE", "parse_error")
+		logger.WithFields(logging.Fields{"error": err}).Error("Failed to parse PUSH_INPUT_CLOSE trigger")
+		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushInputClose), body, err)
+		if walErr != nil {
+			respondDurableEnqueueError(c, logger, "PUSH_INPUT_CLOSE", sourceEventID, walErr)
+			return
+		}
+		incMistWebhook("PUSH_INPUT_CLOSE", "durably_enqueued_parse_error")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	applyTenantContext(mistTrigger)
+	sourceEventID, err := forwardDurable(string(mist.TriggerPushInputClose), body, mistTrigger)
+	if err != nil {
+		respondDurableEnqueueError(c, logger, "PUSH_INPUT_CLOSE", sourceEventID, err)
+		return
+	}
+	incMistWebhook("PUSH_INPUT_CLOSE", "durably_enqueued")
+	c.String(http.StatusOK, "OK")
+}
+
 // HandlePushOutStart handles PUSH_OUT_START webhook
 // This is a blocking trigger - validates and routes outbound pushes
 func HandlePushOutStart(c *gin.Context) {

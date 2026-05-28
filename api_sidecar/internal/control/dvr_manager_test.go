@@ -358,7 +358,7 @@ func TestStartRecording_AlreadyActive(t *testing.T) {
 	}
 	dm.jobs["hash-dup"] = &DVRJob{DVRHash: "hash-dup", Status: "recording"}
 
-	err := dm.StartRecording("hash-dup", "stream-1", "internal-1", "http://source", nil, nil)
+	err := dm.StartRecording("hash-dup", "stream-1", "internal-1", "live+internal-1", "http://source", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for duplicate hash")
 	}

@@ -177,8 +177,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 			setProcessingProcessOverride(streamName, localConfig)
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-			if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-				log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for readiness fallback")
+			if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
+				log.WithError(nukeErr).Warn("Chapter finalize: failed to nuke stream for readiness fallback")
 			}
 			doneCh = make(chan ProcessingPushEndEvent, 1)
 			pendingJobsMu.Lock()
@@ -220,8 +220,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 		setProcessingProcessOverride(streamName, localConfig)
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-		if deleteErr := mistClient.DeleteStream(streamName); deleteErr != nil {
-			log.WithError(deleteErr).Warn("Chapter finalize: failed to delete stream for fallback")
+		if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
+			log.WithError(nukeErr).Warn("Chapter finalize: failed to nuke stream for fallback")
 		}
 		doneCh = make(chan ProcessingPushEndEvent, 1)
 		pendingJobsMu.Lock()

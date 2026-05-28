@@ -35,7 +35,7 @@ type LocalSegmentRef struct {
 	Uploaded        bool      // ledger said status='uploaded'
 	InRollingWindow bool      // currently referenced by the active Mist playlist (if any)
 	ActiveRecording bool      // belongs to an active DVRJob on this node
-	ActiveViews     int       // refcount of in-flight defrosts/playbacks holding this segment
+	ActiveViews     int       // refcount of in-flight playbacks/relay reads holding this segment
 	LastAccessed    time.Time // bumped on view acquire
 	PinnedUntil     time.Time // active-view lease (clip harvest, in-flight finalization)
 	LedgerStatus    string    // pending|uploaded|failed_upload|deleted_local|orphan_unreachable|lost_local|reclaimed
@@ -84,7 +84,7 @@ func (idx *LocalSegmentIndex) MarkUploaded(dvrHash, segmentName, localPath strin
 }
 
 // TrackCachedSegment records a local segment file that is already backed by
-// S3. Recording uploads pass activeRecording=true; chapter defrost reuse passes
+// S3. Recording uploads pass activeRecording=true; chapter relay reuse passes
 // false because those files are a playback cache, not part of the active
 // recorder's hot set.
 func (idx *LocalSegmentIndex) TrackCachedSegment(dvrHash, segmentName, localPath string, sizeBytes int64, activeRecording bool) {
@@ -138,7 +138,7 @@ func (idx *LocalSegmentIndex) MarkRollingWindow(dvrHash, segmentName string, inW
 }
 
 // AcquireView bumps the ActiveViews refcount for a segment. Called when a
-// defrost / chapter playback starts using this local file. Pair with
+// chapter playback or relay read starts using this local file. Pair with
 // ReleaseView on completion.
 func (idx *LocalSegmentIndex) AcquireView(dvrHash, segmentName string) {
 	if idx == nil {

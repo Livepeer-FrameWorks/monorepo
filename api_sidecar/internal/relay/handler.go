@@ -157,7 +157,7 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		s.serverError(c, "relay resolve", err)
 		return
 	}
-	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.MediaPresignedURL == "" {
+	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
 		s.notPlayable(c, res)
 		return
 	}
@@ -243,7 +243,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 		s.serverError(c, "relay resolve upload", err)
 		return
 	}
-	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.MediaPresignedURL == "" {
+	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
 		s.notPlayable(c, res)
 		return
 	}
@@ -294,10 +294,14 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	if method == http.MethodHead {
 		method = http.MethodGet
 	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), method, res.MediaPresignedURL, nil)
+	upstream := res.UpstreamURL()
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 	if err != nil {
 		s.serverError(c, "build s3 request", err)
 		return
+	}
+	if res.PeerRelayAuthToken != "" {
+		req.Header.Set("Authorization", "Bearer "+res.PeerRelayAuthToken)
 	}
 	requestRange := ""
 	if c.Request.Method == http.MethodHead {
@@ -323,10 +327,13 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		}
 		resp.Body.Close()
 
-		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, res.MediaPresignedURL, nil)
+		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 		if retryErr != nil {
 			s.serverError(c, "build s3 retry request", retryErr)
 			return
+		}
+		if res.PeerRelayAuthToken != "" {
+			retryReq.Header.Set("Authorization", "Bearer "+res.PeerRelayAuthToken)
 		}
 		resp, err = s.httpc.Do(retryReq)
 		if err != nil {

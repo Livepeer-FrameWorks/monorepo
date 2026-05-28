@@ -521,14 +521,6 @@ func TestSendFreezeProgressDisconnected(t *testing.T) {
 	}
 }
 
-func TestSendDefrostProgressDisconnected(t *testing.T) {
-	clearConn()
-	err := SendDefrostProgress("req-1", "hash-1", 50, 1024, 5, 10, "downloading")
-	if err == nil {
-		t.Fatal("expected error for disconnected stream")
-	}
-}
-
 func TestSendStorageLifecycleDisconnected(t *testing.T) {
 	clearConn()
 	err := SendStorageLifecycle(&pb.StorageLifecycleData{})

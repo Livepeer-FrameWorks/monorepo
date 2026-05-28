@@ -131,36 +131,6 @@ func TestSendSyncComplete_DtshFalse(t *testing.T) {
 	}
 }
 
-// --- SendDefrostComplete ---
-
-func TestSendDefrostComplete_Connected(t *testing.T) {
-	stream := &fakeControlStream{}
-	storeConn(stream, "test-node")
-	t.Cleanup(clearConn)
-
-	err := SendDefrostComplete("req-5", "hash-defrost", "completed", "/data/clips/hash.mp4", 16384, "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	dc := stream.sent[0].GetDefrostComplete()
-	if dc == nil {
-		t.Fatal("expected DefrostComplete payload")
-	}
-	if dc.AssetHash != "hash-defrost" {
-		t.Fatalf("expected hash, got %q", dc.AssetHash)
-	}
-	if dc.LocalPath != "/data/clips/hash.mp4" {
-		t.Fatalf("expected local path, got %q", dc.LocalPath)
-	}
-	if dc.NodeId != "test-node" {
-		t.Fatalf("expected node ID, got %q", dc.NodeId)
-	}
-	if dc.SizeBytes != 16384 {
-		t.Fatalf("expected 16384, got %d", dc.SizeBytes)
-	}
-}
-
 // --- SendStorageLifecycle ---
 
 func TestSendStorageLifecycle_Connected(t *testing.T) {
@@ -225,39 +195,6 @@ func TestSendFreezeProgress_Connected(t *testing.T) {
 	}
 	if fp.BytesUploaded != 30000 {
 		t.Fatalf("expected 30000, got %d", fp.BytesUploaded)
-	}
-}
-
-// --- SendDefrostProgress ---
-
-func TestSendDefrostProgress_Connected(t *testing.T) {
-	stream := &fakeControlStream{}
-	storeConn(stream, "test-node")
-	t.Cleanup(clearConn)
-
-	err := SendDefrostProgress("req-7", "hash-dp", 50, 20000, 5, 10, "downloading segments")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	dp := stream.sent[0].GetDefrostProgress()
-	if dp == nil {
-		t.Fatal("expected DefrostProgress payload")
-	}
-	if dp.Percent != 50 {
-		t.Fatalf("expected 50%%, got %d", dp.Percent)
-	}
-	if dp.BytesDownloaded != 20000 {
-		t.Fatalf("expected 20000, got %d", dp.BytesDownloaded)
-	}
-	if dp.SegmentsDownloaded != 5 {
-		t.Fatalf("expected 5 segments downloaded, got %d", dp.SegmentsDownloaded)
-	}
-	if dp.TotalSegments != 10 {
-		t.Fatalf("expected 10 total segments, got %d", dp.TotalSegments)
-	}
-	if dp.Message != "downloading segments" {
-		t.Fatalf("expected message, got %q", dp.Message)
 	}
 }
 

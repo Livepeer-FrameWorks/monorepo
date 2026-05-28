@@ -73,6 +73,27 @@ const caddyfileTmpl = `{
 	handle @mist_admin {
 		reverse_proxy {{.HelmsmanUpstream}}
 	}
+
+	# Cross-cluster peer-relay reads of hot-but-unsynced artifacts.
+	# Scoped to the per-node edge FQDN so the route is invisible on
+	# tenant/customer hosts. Helmsman's middleware enforces the
+	# Authorization: Bearer artifact_relay JWT.
+	@artifact_relay {
+		host {{.EdgeDomain}}
+		path /internal/artifact/*
+	}
+	handle @artifact_relay {
+		reverse_proxy {{.HelmsmanUpstream}} {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				keepalive 64s
+			}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
 {{- end}}
 
 	handle /assets/* {

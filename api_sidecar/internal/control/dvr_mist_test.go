@@ -171,7 +171,7 @@ func TestStartRecording_CreatesDirectories(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 42}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-create", "stream-1", "test-internal", "http://source", &pb.DVRConfig{
+	err := dm.StartRecording("hash-create", "stream-1", "test-internal", "live+test-internal", "http://source", &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -195,7 +195,7 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 	dm := newDVRManagerWithMist(t, mc)
 	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
 
-	err := dm.StartRecording("hash-push", "stream-1", "test-stream", "http://source", &pb.DVRConfig{
+	err := dm.StartRecording("hash-push", "stream-1", "test-stream", "live+test-stream", "http://source", &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -215,19 +215,23 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 	}
 }
 
-func TestStartRecording_UsesLocalStreamWhenSourceURLMissing(t *testing.T) {
+func TestStartRecording_UsesSourceRuntimeNameVerbatim(t *testing.T) {
+	// Foghorn is authoritative for the runtime name. Helmsman uses what
+	// Foghorn sends verbatim — for a mist_native source the value is the
+	// bare internal name, NOT live+<internal>. This is the central bug
+	// the runtime-name field exists to fix.
 	mc := &startAwareFakeMist{pushIDToReturn: 11}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-local", "stream-1", "test-stream", "", &pb.DVRConfig{
+	err := dm.StartRecording("hash-local", "stream-1", "test-stream", "test-stream", "", &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if mc.lastStreamName != "live+test-stream" {
-		t.Fatalf("expected stream name 'live+test-stream', got %s", mc.lastStreamName)
+	if mc.lastStreamName != "test-stream" {
+		t.Fatalf("expected bare 'test-stream' (mist_native), got %q", mc.lastStreamName)
 	}
 }
 
@@ -236,7 +240,7 @@ func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 12, failStarts: 2}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "dtsc://source/live+test-stream", &pb.DVRConfig{
+	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "live+test-stream", "dtsc://source/live+test-stream", &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -251,13 +255,17 @@ func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
 	}
 }
 
-func TestStartRecording_ExtractsMistStreamFromDTSCSource(t *testing.T) {
+func TestStartRecording_RegistersSourceOverrideUnderRuntimeName(t *testing.T) {
+	// When the source is on a remote node Foghorn passes a DTSC URL in
+	// source_base_url plus the runtime name in source_runtime_name.
+	// Helmsman uses the runtime name verbatim and registers the override
+	// under that exact name — no derivation from the URL path.
 	mc := &startAwareFakeMist{pushIDToReturn: 13}
 	dm := newDVRManagerWithMist(t, mc)
 
 	const sourceURL = "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+test-stream"
 	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
-	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", sourceURL, &pb.DVRConfig{
+	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", "live+test-stream", sourceURL, &pb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -280,7 +288,7 @@ func TestStartRecording_PushStartError(t *testing.T) {
 	}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-fail", "stream-1", "test-stream", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-fail", "stream-1", "test-stream", "live+test-stream", "http://source", &pb.DVRConfig{}, nil)
 	if err == nil {
 		t.Fatal("expected error for PushStart failure")
 	}
@@ -296,7 +304,7 @@ func TestStopRecording_PushStopCalled(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 77}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-stop", "stream-1", "test-stop", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-stop", "stream-1", "test-stop", "live+test-stop", "http://source", &pb.DVRConfig{}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -326,7 +334,7 @@ func TestStopRecording_PushStopError(t *testing.T) {
 	}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-stoperr", "stream-1", "test-stoperr", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-stoperr", "stream-1", "test-stoperr", "live+test-stoperr", "http://source", &pb.DVRConfig{}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}

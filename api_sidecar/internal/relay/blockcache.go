@@ -3,7 +3,7 @@ package relay
 // Per-asset fixed-size block cache for cold VOD/clip/upload byte-range
 // playback. The relay's only persistent cache layer for single-file
 // artifacts: hot artifacts have their canonical full file on disk
-// (written by processing/clip-create/explicit defrost), cold artifacts
+// (written by processing/clip-create), cold artifacts
 // live in their .blocks/ sidecar directory until enough blocks
 // accumulate that pressure-driven cleanup or operator action removes
 // them.

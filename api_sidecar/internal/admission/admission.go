@@ -60,14 +60,14 @@ const (
 	// without writing to disk (bounded memory buffers only).
 	CacheMemoryOnly
 	// CacheReject — admission could not satisfy this intent. The caller
-	// should fail typed (relay → 503, defrost → ErrInsufficientSpace).
+	// should fail typed (relay → 503, disk-write → ErrInsufficientSpace).
 	CacheReject
 )
 
 // Admitter is the typed admission contract. handlers.StorageManager
 // implements it; the relay accepts it as a dependency so disk-write
-// decisions for cold fetches go through the same policy as defrost
-// and processing-output reservations.
+// decisions for cold fetches go through the same policy as
+// processing-output and DVR reservations.
 type Admitter interface {
 	Decide(ctx context.Context, dir string, intent StorageIntent, sizeBytes uint64) (CacheDecision, error)
 }

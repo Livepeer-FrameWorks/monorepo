@@ -72,7 +72,7 @@ func DeterministicPathsForAsset(basePath string, key AssetKey, mediaExt, streamI
 			base+".blocks",
 		)
 	case "dvr":
-		// Freeze + defrost write to storage/dvr/<stream>/<dvr_hash>/...
+		// Freeze writes to storage/dvr/<stream>/<dvr_hash>/...
 		// (../api_balancing/internal/control/server.go:5013 sets
 		// localRoot = filepath.Join(storageBase, "dvr", streamName,
 		// chapter.ArtifactHash)). When streamInternal is empty the

@@ -197,12 +197,14 @@ func main() {
 	var relayServer *relay.Server
 	if sm := handlers.GetStorageManager(); sm != nil {
 		relayServer = relay.New(relay.Options{
-			BasePath: cfg.StorageLocalPath,
-			Admitter: sm,
-			Resolver: relay.NewControlResolver(),
-			Freeze:   handlers.NewRelayFreezeHandoff(),
-			Heat:     leases.GlobalHeat(),
-			Logger:   logger,
+			BasePath:        cfg.StorageLocalPath,
+			Admitter:        sm,
+			Resolver:        relay.NewControlResolver(),
+			Freeze:          handlers.NewRelayFreezeHandoff(),
+			Heat:            leases.GlobalHeat(),
+			Logger:          logger,
+			NodeID:          cfg.NodeID,
+			RelayAuthSecret: []byte(cfg.ArtifactRelayJWTSecret),
 		})
 		relayServer.MountRoutes(r)
 	} else {
@@ -220,6 +222,7 @@ func main() {
 
 		// MistServer Webhooks (for event forwarding)
 		webhooks.POST("/mist/push_end", handlers.HandlePushEnd)
+		webhooks.POST("/mist/push_input_close", handlers.HandlePushInputClose)
 		webhooks.POST("/mist/push_out_start", handlers.HandlePushOutStart)
 		webhooks.POST("/mist/recording_end", handlers.HandleRecordingEnd)
 		webhooks.POST("/mist/stream_buffer", handlers.HandleStreamBuffer)

@@ -212,6 +212,7 @@ func (m *Manager) reconcile() {
 		"STREAM_SOURCE":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
 		"PUSH_OUT_START":    []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
 		"PUSH_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},
+		"PUSH_INPUT_CLOSE":  []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/push_input_close"), "sync": false}},
 		"USER_NEW":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_new"), "sync": true, "default": "true"}},
 		"USER_END":          []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/user_end"), "sync": false}},
 		"STREAM_BUFFER":     []any{map[string]any{"handler": join(webhookBase, "/webhooks/mist/stream_buffer"), "sync": false}},
@@ -1348,7 +1349,12 @@ func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
 }
 
 func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[string]any {
-	pushSource := "balance:" + base + "?fallback=push://"
+	// Both live and pull wildcards use balance:<foghorn> — the source
+	// resolution differs (live falls back to push:// for ingest, pull
+	// returns the upstream URI for allowed clusters) but the template
+	// shape is identical. The per-type terminal answer is decided by
+	// Foghorn's /source dispatch, not by template query params.
+	pushSource := "balance:" + base
 	pullSource := "balance:" + base
 
 	streams := map[string]map[string]any{}

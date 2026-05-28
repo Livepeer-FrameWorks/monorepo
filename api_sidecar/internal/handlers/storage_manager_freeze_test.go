@@ -58,12 +58,9 @@ func newTestStorageManager(t *testing.T) *StorageManager {
 		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
 		sendFreezeProgress:   func(_, _ string, _ uint32, _ uint64) error { return nil },
 		sendStorageLifecycle: func(_ *pb.StorageLifecycleData) error { return nil },
-		sendDefrostComplete:  func(_, _, _, _ string, _ uint64, _ string) error { return nil },
-		sendDefrostProgress:  func(_, _ string, _ uint32, _ uint64, _, _ int32, _ string) error { return nil },
 		requestCanDelete:     func(_ context.Context, _ string) (bool, string, int64, error) { return false, "", 0, nil },
 		sendArtifactDeleted:  func(_, _, _, _ string, _ uint64) error { return nil },
 	}
-	sm.defrostTracker.inFlight = make(map[string]*DefrostJob)
 	sm.freezeTracker.inFlight = make(map[string]bool)
 	return sm
 }

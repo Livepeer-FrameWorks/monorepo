@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,14 +57,19 @@ var (
 type DVRJob struct {
 	DVRHash      string
 	InternalName string
-	SourceURL    string
-	Config       *pb.DVRConfig
-	StartTime    time.Time
-	PushID       int // MistServer push ID
-	OutputDir    string
-	ManifestPath string
-	SendFunc     func(*pb.ControlMessage)
-	Logger       logging.Logger
+	// SourceRuntimeName is the Foghorn-authoritative Mist runtime name of
+	// the source stream Mist will push from (live+<x>, pull+<x>, or bare
+	// <x> for mist_native). Populated from DVRStartRequest.source_runtime_name.
+	// Used verbatim — Helmsman never re-derives or applies a live+ default.
+	SourceRuntimeName string
+	SourceURL         string
+	Config            *pb.DVRConfig
+	StartTime         time.Time
+	PushID            int // MistServer push ID
+	OutputDir         string
+	ManifestPath      string
+	SendFunc          func(*pb.ControlMessage)
+	Logger            logging.Logger
 
 	// Progress tracking
 	SegmentCount   int
@@ -253,7 +257,7 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 		if jobActive && SegmentInRollingManifest(job, name) {
 			continue
 		}
-		// Refuse to evict a segment currently under defrost or pinned by an
+		// Refuse to evict a segment currently pinned by an
 		// active view (clip harvest, in-flight finalization).
 		if idx != nil && !idx.EvictionEligible(dvrHash, name, 0) {
 			// Skip — caller will retry after the active view or pin clears.
@@ -513,7 +517,7 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 	job.syncMutex.Unlock()
 
 	// Update the per-segment local index. Eviction consults this index
-	// to keep segments held by an active view (defrost, clip harvest,
+	// to keep segments held by an active view (clip harvest,
 	// in-flight finalization) out of the deletion set.
 	if idx := localSegmentIndex; idx != nil {
 		idx.MarkUploaded(job.DVRHash, segName, filePath, info.Size())
@@ -536,8 +540,91 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 	// instead of a recovery bridge.
 }
 
-// StartRecording starts a new DVR recording job
-func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
+// UpdateSource refreshes the DVR source override + force-recreates the
+// Mist push for an existing job when the source publisher moves to a
+// different ingest node mid-recording. Called from the takeover-aware
+// DVRUpdateSourceRequest handler. Returns refreshed=false if no job for
+// the given hash exists locally (e.g. the storage node restarted and the
+// job is gone).
+//
+// Sequence is order-critical:
+//
+//  1. Stop the old push by recorded PushID — dvrPushMatchesJob inside
+//     createOrRecreatePush only matches on the CURRENT job.StreamName /
+//     TargetURI, so once we mutate StreamName the old push becomes
+//     orphan-invisible to that helper. Stop it first.
+//  2. Refresh overrides (clear old name, register new).
+//  3. Mutate job.StreamName + SourceURL + SourceRuntimeName.
+//  4. Recreate the push and write the returned PushID back into the job
+//     so monitor/stop paths point at the new push, not the old one.
+func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string) (refreshed bool, err error) {
+	dm.mutex.Lock()
+	job, exists := dm.jobs[dvrHash]
+	dm.mutex.Unlock()
+	if !exists {
+		return false, nil
+	}
+
+	oldStreamName := strings.TrimSpace(job.StreamName)
+	oldPushID := job.PushID
+	newStreamName := strings.TrimSpace(sourceRuntimeName)
+	if newStreamName == "" {
+		newStreamName = job.InternalName
+	}
+
+	// Stop the old Mist push by its recorded ID before any job-field
+	// mutation so PushStop targets the actually-running push.
+	if oldPushID > 0 {
+		if stopErr := dm.mistClient.PushStop(oldPushID); stopErr != nil {
+			job.Logger.WithError(stopErr).WithFields(logging.Fields{
+				"dvr_hash":    dvrHash,
+				"old_push_id": oldPushID,
+			}).Warn("DVR update-source: stop of old push failed; continuing with recreate")
+		}
+	}
+
+	if oldStreamName != "" && oldStreamName != newStreamName {
+		ClearDVRSourceOverride(oldStreamName)
+	}
+	if strings.TrimSpace(sourceURL) != "" {
+		RegisterDVRSourceOverride(newStreamName, sourceURL)
+	}
+
+	dm.mutex.Lock()
+	job.SourceRuntimeName = sourceRuntimeName
+	job.SourceURL = sourceURL
+	job.StreamName = newStreamName
+	dm.mutex.Unlock()
+
+	// Recreate the push and update PushID so subsequent stop / monitor
+	// calls target the live push rather than the dead one.
+	newPushID, pushErr := dm.createOrRecreatePush(job)
+	if pushErr != nil {
+		job.Logger.WithError(pushErr).WithFields(logging.Fields{
+			"dvr_hash":            dvrHash,
+			"source_runtime_name": sourceRuntimeName,
+		}).Warn("DVR update-source push recreate failed; will retry via monitor loop")
+		return true, pushErr
+	}
+	dm.mutex.Lock()
+	job.PushID = newPushID
+	dm.mutex.Unlock()
+
+	job.Logger.WithFields(logging.Fields{
+		"dvr_hash":            dvrHash,
+		"source_runtime_name": sourceRuntimeName,
+		"new_source_url":      sourceURL,
+		"old_push_id":         oldPushID,
+		"new_push_id":         newPushID,
+	}).Info("DVR source refreshed and push recreated for takeover")
+	return true, nil
+}
+
+// StartRecording starts a new DVR recording job. sourceRuntimeName is the
+// Foghorn-authoritative Mist runtime name for the source stream (live+<x>
+// / pull+<x> / bare native). Helmsman uses it verbatim as the Mist
+// push_start.stream argument and never re-derives.
+func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
@@ -561,19 +648,20 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 
 	// Create DVR job
 	job := &DVRJob{
-		DVRHash:        dvrHash,
-		InternalName:   internalName,
-		SourceURL:      sourceURL,
-		Config:         config,
-		StartTime:      time.Now(),
-		OutputDir:      outputDir,
-		ManifestPath:   filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash)),
-		SendFunc:       sendFunc,
-		Logger:         dm.logger,
-		Status:         "starting",
-		MaxRetries:     MaxDVRRetries,
-		RetryCount:     0,
-		SyncedSegments: make(map[string]bool), // Initialize sync tracking
+		DVRHash:           dvrHash,
+		InternalName:      internalName,
+		SourceRuntimeName: sourceRuntimeName,
+		SourceURL:         sourceURL,
+		Config:            config,
+		StartTime:         time.Now(),
+		OutputDir:         outputDir,
+		ManifestPath:      filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash)),
+		SendFunc:          sendFunc,
+		Logger:            dm.logger,
+		Status:            "starting",
+		MaxRetries:        MaxDVRRetries,
+		RetryCount:        0,
+		SyncedSegments:    make(map[string]bool), // Initialize sync tracking
 	}
 
 	// Start the recording process via MistServer push
@@ -904,10 +992,14 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		maxEntries,
 	)
 
-	// Store for recreation attempts. Mist push_start.stream is a stream
-	// name, not a source URL; STREAM_SOURCE owns resolving that name when
-	// the stream is not already local.
-	streamName := dvrPushStreamName(job.InternalName, job.SourceURL)
+	// Foghorn is the sole authority for the source runtime name —
+	// resolved from the stream registry's RuntimeNameFor(ingest_mode,
+	// internal_name) and supplied via DVRStartRequest.source_runtime_name.
+	// Helmsman uses it verbatim and fails closed when missing.
+	streamName := strings.TrimSpace(job.SourceRuntimeName)
+	if streamName == "" {
+		return fmt.Errorf("DVR start missing source_runtime_name for hash %s", job.DVRHash)
+	}
 	job.TargetURI = targetURI
 	job.StreamName = streamName
 	sourceOverrideRegistered := false
@@ -950,30 +1042,6 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	}).Info("Started DVR recording via MistServer push")
 
 	return nil
-}
-
-func dvrPushStreamName(internalName, sourceURL string) string {
-	sourceURL = strings.TrimSpace(sourceURL)
-	if sourceURL == "" {
-		return fmt.Sprintf("live+%s", internalName)
-	}
-	fallback := fmt.Sprintf("live+%s", internalName)
-	u, err := url.Parse(sourceURL)
-	if err != nil || !strings.EqualFold(u.Scheme, "dtsc") {
-		return fallback
-	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-	if len(parts) >= 2 && parts[0] == "view" {
-		if streamName, unescapeErr := url.PathUnescape(parts[1]); unescapeErr == nil && streamName != "" {
-			return streamName
-		}
-	}
-	if len(parts) == 1 && parts[0] != "" {
-		if streamName, unescapeErr := url.PathUnescape(parts[0]); unescapeErr == nil && streamName != "" {
-			return streamName
-		}
-	}
-	return fallback
 }
 
 // monitorJob monitors a DVR job's progress and performs incremental sync

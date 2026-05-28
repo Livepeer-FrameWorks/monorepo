@@ -100,7 +100,7 @@ func TestBackgroundCleanupSentinel_SingleRunner(t *testing.T) {
 
 func TestAdmissionThresholds_ProjectedUsageDecision(t *testing.T) {
 	// Pure-math sanity check of the soft-threshold projection used by
-	// admitDefrost: when (used + size) / total > softCleanupThreshold the
+	// admitDiskWrite: when (used + size) / total > softCleanupThreshold the
 	// proactive cleanup tier should fire. This isolates the policy decision
 	// from the syscalls that would normally feed it.
 

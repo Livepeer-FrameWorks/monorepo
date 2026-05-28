@@ -134,7 +134,7 @@ func TestDeterministicPathsForAsset(t *testing.T) {
 	t.Run("dvr_with_stream", func(t *testing.T) {
 		paths := DeterministicPathsForAsset("/base", AssetKey{Type: "dvr", Hash: "dh"}, "", "streamA", []string{"seg1.ts"})
 		// Both flat and nested layouts present so cleanup pins whichever
-		// the writer chose; freeze/defrost uses the nested form.
+		// the writer chose; freeze uses the nested form.
 		for _, want := range []string{
 			"/base/dvr/dh/segments/seg1.ts",
 			"/base/dvr/streamA/dh/segments/seg1.ts",

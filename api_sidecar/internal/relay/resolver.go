@@ -35,7 +35,26 @@ type ResolveResult struct {
 	PolicyHint         pb.RelayResolveResponse_CacheDecisionHint
 	Error              string
 	StreamInternalName string // for DVR: top dir in storage/dvr/<stream>/<dvr_hash>/
+	// Peer-relay fallback: when the origin cluster holds the canonical
+	// full file but it isn't synced to S3 yet, Foghorn returns a URL
+	// pointing at the origin node's Helmsman in place of
+	// MediaPresignedURL. PeerRelayAuthToken is a short-lived JWT
+	// validated by the origin Helmsman as Authorization: Bearer.
+	PeerRelayURL       string
+	PeerRelayAuthToken string
 	cachedAt           time.Time
+}
+
+// UpstreamURL returns the URL the block-cache fetcher should GET.
+// Peer-relay takes precedence when set; otherwise the S3 presigned URL.
+func (r *ResolveResult) UpstreamURL() string {
+	if r == nil {
+		return ""
+	}
+	if r.PeerRelayURL != "" {
+		return r.PeerRelayURL
+	}
+	return r.MediaPresignedURL
 }
 
 // IntentFromHint maps a Foghorn-provided CacheDecisionHint to the local
@@ -89,6 +108,8 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 		PolicyHint:         resp.GetPolicyHint(),
 		Error:              resp.GetError(),
 		StreamInternalName: resp.GetStreamInternalName(),
+		PeerRelayURL:       resp.GetPeerRelayUrl(),
+		PeerRelayAuthToken: resp.GetPeerRelayAuthToken(),
 		cachedAt:           time.Now(),
 	}, nil
 }

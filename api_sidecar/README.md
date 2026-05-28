@@ -19,7 +19,7 @@ Edge sidecar that turns a MistServer node into a fully managed, hands-off media 
   - Processing jobs for clips, DVR chapters, VOD uploads, and transcode workloads
   - DVR recording (DVRStartRequest/DVRStopRequest -> HLS segment capture)
   - Clip/DVR/VOD deletion notifications
-  - Freeze/defrost and incremental `.dtsh` sync for S3-backed storage
+  - Freeze and incremental `.dtsh` sync for S3-backed storage
   - Thumbnail upload requests for `poster.jpg`, `sprite.jpg`, and `sprite.vtt`
   - Session termination and push-target activation/deactivation commands
 
@@ -40,7 +40,7 @@ Helmsman registers with Foghorn announcing boolean capability fields and role la
 ## Event types (forwarded to Foghorn)
 
 - MistServer trigger events: `PUSH_REWRITE`, `PLAY_REWRITE`, `STREAM_SOURCE`, `PUSH_OUT_START`, `PUSH_END`, `USER_NEW`, `USER_END`, `STREAM_BUFFER`, `STREAM_END`, `LIVE_TRACK_LIST`, `RECORDING_END`, `RECORDING_SEGMENT`, `STREAM_PROCESS`, `PROCESS_EXIT`, Livepeer/process segment completion, and `THUMBNAIL_UPDATED`
-- Synthetic events from polling and storage/process managers: `STREAM_LIFECYCLE_UPDATE`, `NODE_LIFECYCLE_UPDATE`, `CLIENT_LIFECYCLE_UPDATE`, `storage_lifecycle`, `storage_snapshot`, freeze/defrost progress/completion, processing job progress/results, and push-target status reports
+- Synthetic events from polling and storage/process managers: `STREAM_LIFECYCLE_UPDATE`, `NODE_LIFECYCLE_UPDATE`, `CLIENT_LIFECYCLE_UPDATE`, `storage_lifecycle`, `storage_snapshot`, freeze progress/completion, processing job progress/results, and push-target status reports
 
 ## Deployment model
 

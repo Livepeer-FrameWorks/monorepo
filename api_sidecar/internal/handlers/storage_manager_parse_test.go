@@ -1,12 +1,7 @@
 package handlers
 
 import (
-	"errors"
-	"fmt"
-	"sync/atomic"
 	"testing"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 func TestParseHLSManifest_Standard(t *testing.T) {
@@ -109,73 +104,4 @@ segments/chunk001.ts`
 	if m.Segments[0].Name != "chunk000.ts" {
 		t.Fatalf("expected base name extracted, got %s", m.Segments[0].Name)
 	}
-}
-
-func TestDefrostJobDeduplication(t *testing.T) {
-	sm := &StorageManager{logger: logging.NewLogger()}
-	sm.defrostTracker.inFlight = make(map[string]*DefrostJob)
-
-	// First call should create
-	job1, shouldInitiate := sm.getOrCreateDefrostJob("hash-1", AssetTypeClip, "req-1")
-	if !shouldInitiate {
-		t.Fatal("first call should initiate")
-	}
-	if job1.AssetHash != "hash-1" {
-		t.Fatalf("expected hash-1, got %s", job1.AssetHash)
-	}
-	if job1.Waiters != 1 {
-		t.Fatalf("expected 1 waiter, got %d", job1.Waiters)
-	}
-
-	// Second call should return same job
-	job2, shouldInitiate2 := sm.getOrCreateDefrostJob("hash-1", AssetTypeClip, "req-2")
-	if shouldInitiate2 {
-		t.Fatal("second call should NOT initiate")
-	}
-	if job2 != job1 {
-		t.Fatal("expected same job pointer")
-	}
-	if atomic.LoadInt32(&job2.Waiters) != 2 {
-		t.Fatalf("expected 2 waiters, got %d", atomic.LoadInt32(&job2.Waiters))
-	}
-
-	// Different hash should create new job
-	job3, shouldInitiate3 := sm.getOrCreateDefrostJob("hash-2", AssetTypeDVR, "req-3")
-	if !shouldInitiate3 {
-		t.Fatal("different hash should initiate")
-	}
-	if job3 == job1 {
-		t.Fatal("different hash should create different job")
-	}
-}
-
-func TestMarkDefrostJobDone(t *testing.T) {
-	sm := &StorageManager{logger: logging.NewLogger()}
-	sm.defrostTracker.inFlight = make(map[string]*DefrostJob)
-
-	job, _ := sm.getOrCreateDefrostJob("hash-1", AssetTypeClip, "req-1")
-
-	testErr := fmt.Errorf("test error")
-	sm.markDefrostJobDone("hash-1", testErr, "/data/restored.mp4", 4096)
-
-	// Check Done channel is closed
-	select {
-	case <-job.Done:
-		// good
-	default:
-		t.Fatal("Done channel should be closed")
-	}
-
-	if !errors.Is(job.Err, testErr) {
-		t.Fatalf("expected test error, got %v", job.Err)
-	}
-	if job.LocalPath != "/data/restored.mp4" {
-		t.Fatalf("expected path, got %s", job.LocalPath)
-	}
-	if job.SizeBytes != 4096 {
-		t.Fatalf("expected 4096, got %d", job.SizeBytes)
-	}
-
-	// Double-call should not panic (closeOnce protection)
-	sm.markDefrostJobDone("hash-1", nil, "", 0)
 }

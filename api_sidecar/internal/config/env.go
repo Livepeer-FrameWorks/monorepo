@@ -38,9 +38,8 @@ type HelmsmanConfig struct {
 
 	// Cold storage thresholds (S3 credentials are held by Foghorn, not here!)
 	// Helmsman receives presigned URLs from Foghorn for secure uploads/downloads
-	FreezeThreshold       float64 // Start freezing at this disk usage % (default: 85)
-	TargetAfterFreeze     float64 // Target usage after freeze (default: 70)
-	DefrostTimeoutSeconds int     // Max wait for sync defrost (default: 30)
+	FreezeThreshold   float64 // Start freezing at this disk usage % (default: 85)
+	TargetAfterFreeze float64 // Target usage after freeze (default: 70)
 
 	// Capabilities (all default to true)
 	CapIngest     bool
@@ -72,6 +71,13 @@ type HelmsmanConfig struct {
 	// RequestedMode is the operational mode this node requests on registration.
 	// Foghorn is authoritative and may override this based on DB-persisted state.
 	RequestedMode string
+
+	// ArtifactRelayJWTSecret is the HMAC secret used to validate inbound
+	// artifact_relay JWTs on /internal/artifact/*. Origin Foghorn signs
+	// with the same secret; only same-cluster Helmsmans validate. Empty
+	// disables non-loopback access to the relay routes (loopback still
+	// works for the normal Mist→Helmsman path).
+	ArtifactRelayJWTSecret string
 }
 
 // LoadHelmsmanConfig loads configuration from environment variables.
@@ -94,9 +100,8 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		StorageCapacityBytes: parseUint64(config.GetEnv("HELMSMAN_STORAGE_CAPACITY_BYTES", "0")),
 
 		// Cold storage thresholds (S3 creds are in Foghorn, not here!)
-		FreezeThreshold:       parseFloat64(config.GetEnv("HELMSMAN_FREEZE_THRESHOLD", "0.85")),
-		TargetAfterFreeze:     parseFloat64(config.GetEnv("HELMSMAN_TARGET_AFTER_FREEZE", "0.70")),
-		DefrostTimeoutSeconds: config.GetEnvInt("HELMSMAN_DEFROST_TIMEOUT_SECONDS", 30),
+		FreezeThreshold:   parseFloat64(config.GetEnv("HELMSMAN_FREEZE_THRESHOLD", "0.85")),
+		TargetAfterFreeze: parseFloat64(config.GetEnv("HELMSMAN_TARGET_AFTER_FREEZE", "0.70")),
 
 		// Capabilities (default true)
 		CapIngest:     config.GetEnvBool("HELMSMAN_CAP_INGEST", true),
@@ -113,6 +118,11 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
+
+		// Artifact relay JWT secret (shared with Foghorn; same key used
+		// for other service-tier JWTs). Empty disables peer-relay
+		// inbound access.
+		ArtifactRelayJWTSecret: config.GetEnv("JWT_SECRET", ""),
 
 		// gRPC TLS / trust
 		GRPCAllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"io"
@@ -61,20 +60,6 @@ type FreezeCandidate struct {
 	Priority     float64 // Lower = higher priority for freezing
 }
 
-// DefrostJob tracks an in-flight defrost operation
-type DefrostJob struct {
-	RequestID string
-	AssetHash string
-	AssetType AssetType
-	StartedAt time.Time
-	Done      chan struct{}
-	closeOnce sync.Once // Prevents double-close panic
-	Err       error
-	LocalPath string
-	SizeBytes uint64
-	Waiters   int32 // Number of concurrent requests waiting
-}
-
 // ParsedManifest holds data extracted from an HLS manifest
 type ParsedManifest struct {
 	TargetDuration int
@@ -87,7 +72,7 @@ type ParsedSegment struct {
 	Duration float64
 }
 
-// StorageManager manages cold storage operations (freeze/defrost)
+// StorageManager manages cold storage operations (freeze)
 type StorageManager struct {
 	logger   logging.Logger
 	basePath string
@@ -100,22 +85,19 @@ type StorageManager struct {
 	presignedClient PresignedTransfer
 
 	// Control IPC — function fields so tests can inject fakes
-	requestFreezePermission       func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
-	sendSyncComplete              func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
-	sendFreezeComplete            func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
-	sendFreezeProgress            func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
-	sendStorageLifecycle          func(data *pb.StorageLifecycleData) error
-	sendDefrostComplete           func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error
-	sendDefrostCompleteWithReason func(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string, reason pb.DefrostComplete_Reason) error
-	sendDefrostProgress           func(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error
-	requestCanDelete              func(ctx context.Context, assetHash string) (bool, string, int64, error)
-	sendArtifactDeleted           func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
+	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
+	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
+	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
+	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
+	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
+	requestCanDelete        func(ctx context.Context, assetHash string) (bool, string, int64, error)
+	sendArtifactDeleted     func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
 
 	// Thresholds
 	freezeThreshold      float64       // Start freezing at this % (default: 85%)
 	targetThreshold      float64       // Target usage after freeze (default: 70%)
 	deleteThreshold      float64       // Delete even frozen assets if above this % (default: 95%)
-	softCleanupThreshold float64       // Defrost projected-usage trigger for proactive background cleanup (default: freezeThreshold)
+	softCleanupThreshold float64       // Projected-usage trigger for proactive background cleanup (default: freezeThreshold)
 	minRetentionHours    int           // Never freeze assets younger than this
 	checkInterval        time.Duration // Normal polling interval
 
@@ -123,12 +105,6 @@ type StorageManager struct {
 	urgentFreezeCh  chan struct{}
 	lastUrgentCheck time.Time
 	urgentDebounce  time.Duration
-
-	// Defrost tracking
-	defrostTracker struct {
-		mu       sync.RWMutex
-		inFlight map[string]*DefrostJob
-	}
 
 	// Freeze tracking
 	freezeTracker struct {
@@ -171,19 +147,15 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		urgentFreezeCh:       make(chan struct{}, 1),
 		urgentDebounce:       2 * time.Second,
 
-		requestFreezePermission:       control.RequestFreezePermission,
-		sendSyncComplete:              control.SendSyncComplete,
-		sendFreezeComplete:            control.SendFreezeComplete,
-		sendFreezeProgress:            control.SendFreezeProgress,
-		sendStorageLifecycle:          control.SendStorageLifecycle,
-		sendDefrostComplete:           control.SendDefrostComplete,
-		sendDefrostCompleteWithReason: control.SendDefrostCompleteWithReason,
-		sendDefrostProgress:           control.SendDefrostProgress,
-		requestCanDelete:              control.RequestCanDelete,
-		sendArtifactDeleted:           control.SendArtifactDeleted,
+		requestFreezePermission: control.RequestFreezePermission,
+		sendSyncComplete:        control.SendSyncComplete,
+		sendFreezeComplete:      control.SendFreezeComplete,
+		sendFreezeProgress:      control.SendFreezeProgress,
+		sendStorageLifecycle:    control.SendStorageLifecycle,
+		requestCanDelete:        control.RequestCanDelete,
+		sendArtifactDeleted:     control.SendArtifactDeleted,
 	}
 
-	storageManager.defrostTracker.inFlight = make(map[string]*DefrostJob)
 	storageManager.freezeTracker.inFlight = make(map[string]bool)
 
 	// SoftCleanupThreshold defaults to freezeThreshold when caller didn't set
@@ -196,22 +168,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	// Start monitoring in background
 	go storageManager.start()
 
-	// Register handlers for cold storage operations from Foghorn. DVR
-	// "archive defrost" retired with the chapter-VOD refactor — Foghorn
-	// rejects those calls outright, and chapter playback flows through
-	// the standard vod/<chapter_artifact_hash> relay path.
-	control.SetDefrostRequestHandler(func(req *pb.DefrostRequest) {
-		ctx := context.Background()
-		switch req.GetAssetType() {
-		case "clip":
-			_, _ = storageManager.DefrostClip(ctx, req)
-		case "vod":
-			_, _ = storageManager.DefrostVOD(ctx, req)
-		default:
-			logger.WithField("asset_type", req.GetAssetType()).Warn("Defrost ignored: unsupported asset_type")
-		}
-	})
-
+	// Register handlers for cold storage operations from Foghorn.
 	control.SetFreezeRequestHandler(storageManager.HandleFreezeRequest)
 
 	control.SetDtshSyncRequestHandler(func(req *pb.DtshSyncRequest) {
@@ -390,7 +347,7 @@ type StorageThresholds struct {
 	FreezeThreshold float64
 	TargetThreshold float64
 	CapacityBytes   uint64
-	// SoftCleanupThreshold is the projected post-defrost usage at which the
+	// SoftCleanupThreshold is the projected post-write usage at which the
 	// admission path kicks off proactive background cleanup. 0 means default
 	// to FreezeThreshold.
 	SoftCleanupThreshold float64
@@ -1071,189 +1028,6 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	return nil
 }
 
-func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.DefrostRequest, assetType AssetType) (*pb.DefrostComplete, error) {
-	// Check if already defrosting
-	job, shouldInitiate := sm.getOrCreateDefrostJob(req.AssetHash, assetType, req.RequestId)
-	if !shouldInitiate {
-		// Wait for existing defrost
-		select {
-		case <-job.Done:
-			if job.Err != nil {
-				return nil, job.Err
-			}
-			return &pb.DefrostComplete{
-				RequestId: req.RequestId,
-				AssetHash: req.AssetHash,
-				Status:    "success",
-				LocalPath: job.LocalPath,
-				SizeBytes: job.SizeBytes,
-			}, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-
-	defer sm.completeDefrostJob(req.AssetHash)
-
-	// Check if already local
-	if _, err := os.Stat(req.LocalPath); err == nil {
-		var sizeBytes uint64
-		if info, statErr := os.Stat(req.LocalPath); statErr == nil {
-			sizeBytes = uint64(info.Size())
-		}
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_CACHED,
-			AssetType: string(assetType),
-			AssetHash: req.AssetHash,
-			SizeBytes: sizeBytes,
-			LocalPath: &req.LocalPath,
-		})
-		_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
-		sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, sizeBytes)
-		return &pb.DefrostComplete{
-			RequestId: req.RequestId,
-			AssetHash: req.AssetHash,
-			Status:    "success",
-			LocalPath: req.LocalPath,
-			SizeBytes: sizeBytes,
-		}, nil
-	}
-
-	// Validate presigned URL
-	presignedURL := req.PresignedGetUrl
-	if presignedURL == "" {
-		err := fmt.Errorf("no presigned GET URL provided for defrost")
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_PRESIGNED_INVALID)
-		return nil, err
-	}
-
-	// Ensure destination directory exists
-	destDir := filepath.Dir(req.LocalPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_LOCAL_IO)
-		return nil, fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	// Two-tier admission: when expected size is known, ensure the disk can
-	// accept this download. Tier 1 kicks off background cleanup proactively;
-	// Tier 2 blocks until cleanup makes room. Fails typed on inability.
-	if req.GetExpectedSizeBytes() > 0 {
-		if err := sm.admitDefrost(ctx, destDir, req.GetExpectedSizeBytes()); err != nil {
-			sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-			if errors.Is(err, storage.ErrInsufficientSpace) {
-				sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_INSUFFICIENT_SPACE)
-				return nil, err
-			}
-			sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_LOCAL_IO)
-			return nil, err
-		}
-	}
-
-	// Notify cache refill started
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_CACHE_STARTED,
-		AssetType: string(assetType),
-		AssetHash: req.AssetHash,
-	})
-
-	startTime := time.Now()
-
-	// Download .dtsh if available (check SegmentUrls)
-	// Filenames are typically hash.ext. .dtsh is hash.ext.dtsh
-	dtshName := filepath.Base(req.LocalPath) + ".dtsh"
-	if url, ok := req.SegmentUrls[dtshName]; ok {
-		dtshPath := req.LocalPath + ".dtsh"
-		if err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, url, dtshPath, nil); err != nil {
-			sm.logger.WithError(err).Warn("Failed to download .dtsh file")
-			// Non-fatal, MistServer will regenerate it
-		} else {
-			sm.logger.WithField("file", dtshPath).Info("Defrosted .dtsh file")
-		}
-	}
-
-	// Download from S3 using presigned URL
-	err := sm.presignedClient.DownloadToFileFromPresignedURL(ctx, presignedURL, req.LocalPath, func(downloaded int64) {
-		_ = sm.sendDefrostProgress(req.RequestId, req.AssetHash, 0, uint64(downloaded), 0, 0, "downloading")
-	})
-
-	duration := time.Since(startTime)
-
-	if err != nil {
-		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
-		sm.failDefrost(req, assetType, err, pb.DefrostComplete_REASON_DOWNLOAD_ERROR)
-		return nil, fmt.Errorf("failed to download from S3: %w", err)
-	}
-
-	// Get file size
-	info, _ := os.Stat(req.LocalPath)
-	var sizeBytes uint64
-	if info != nil {
-		sizeBytes = uint64(info.Size())
-	}
-
-	// Notify completion (asset now cached locally from S3)
-	durationMs := duration.Milliseconds()
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:     pb.StorageLifecycleData_ACTION_CACHED,
-		AssetType:  string(assetType),
-		AssetHash:  req.AssetHash,
-		SizeBytes:  sizeBytes,
-		LocalPath:  &req.LocalPath,
-		DurationMs: &durationMs,
-	})
-
-	sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, sizeBytes)
-
-	// Send completion to Foghorn
-	_ = sm.sendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
-
-	// Generate DTSH immediately so first viewer doesn't hit regen latency.
-	// Boot as vod+ (no processes) via the json endpoint which triggers input → DTSH.
-	mistServerURL := os.Getenv("MISTSERVER_URL")
-	if mistServerURL != "" && !strings.HasSuffix(req.LocalPath, ".dtsh") {
-		if req.InternalName == "" {
-			sm.logger.WithField("asset_hash", req.AssetHash).Warn("Defrost missing internal_name, skipping DTSH generation")
-		} else {
-			vodStreamName := "vod+" + req.InternalName
-			go func() {
-				dtshLog := sm.logger.WithFields(logging.Fields{
-					"asset_hash":  req.AssetHash,
-					"stream_name": vodStreamName,
-				})
-				if err := GenerateDTSHForPath(mistServerURL, vodStreamName, req.LocalPath+".dtsh", dtshLog); err != nil {
-					dtshLog.WithError(err).Warn("Post-defrost DTSH generation failed")
-				}
-			}()
-		}
-	}
-
-	sm.logger.WithFields(logging.Fields{
-		"asset_hash": req.AssetHash,
-		"size_mb":    float64(sizeBytes) / (1024 * 1024),
-		"duration":   duration,
-	}).Info("Asset defrosted from S3")
-
-	return &pb.DefrostComplete{
-		RequestId: req.RequestId,
-		AssetHash: req.AssetHash,
-		Status:    "success",
-		LocalPath: req.LocalPath,
-		SizeBytes: sizeBytes,
-	}, nil
-}
-
-// DefrostClip downloads a clip from S3 back to local storage using presigned GET URL
-func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
-	return sm.defrostSingleFile(ctx, req, AssetTypeClip)
-}
-
-// DefrostVOD downloads a VOD asset from S3 back to local storage using presigned GET URL
-func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
-	return sm.defrostSingleFile(ctx, req, AssetTypeVOD)
-}
-
 // evictBlockCaches walks vod/ and clips/ for *.blocks/ directories and
 // RemoveAll's them in oldest-mtime-first order until bytesTarget is met
 // or the supply is exhausted. Returns the actual byte count freed.
@@ -1323,63 +1097,8 @@ func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
 	return freed
 }
 
-// Helper methods for defrost job tracking
-
-func (sm *StorageManager) getOrCreateDefrostJob(assetHash string, assetType AssetType, requestID string) (*DefrostJob, bool) {
-	return sm.getOrCreateDefrostJobKeyed(assetHash, assetType, requestID, assetHash)
-}
-
-func (sm *StorageManager) getOrCreateDefrostJobKeyed(assetHash string, assetType AssetType, requestID, key string) (*DefrostJob, bool) {
-	sm.defrostTracker.mu.Lock()
-	defer sm.defrostTracker.mu.Unlock()
-
-	if job, exists := sm.defrostTracker.inFlight[key]; exists {
-		atomic.AddInt32(&job.Waiters, 1)
-		return job, false // Don't initiate, wait for existing
-	}
-
-	job := &DefrostJob{
-		RequestID: requestID,
-		AssetHash: assetHash,
-		AssetType: assetType,
-		StartedAt: time.Now(),
-		Done:      make(chan struct{}),
-		Waiters:   1,
-	}
-	sm.defrostTracker.inFlight[key] = job
-	return job, true // Should initiate
-}
-
-func (sm *StorageManager) markDefrostJobDone(assetHash string, err error, localPath string, sizeBytes uint64) {
-	sm.markDefrostJobDoneKeyed(assetHash, err, localPath, sizeBytes, assetHash)
-}
-
-func (sm *StorageManager) markDefrostJobDoneKeyed(_ string, err error, localPath string, sizeBytes uint64, key string) {
-	sm.defrostTracker.mu.Lock()
-	defer sm.defrostTracker.mu.Unlock()
-
-	if job, exists := sm.defrostTracker.inFlight[key]; exists {
-		job.Err = err
-		job.LocalPath = localPath
-		job.SizeBytes = sizeBytes
-		job.closeOnce.Do(func() {
-			close(job.Done)
-		})
-	}
-}
-
-func (sm *StorageManager) completeDefrostJob(assetHash string) {
-	sm.completeDefrostJobKeyed(assetHash)
-}
-
-func (sm *StorageManager) completeDefrostJobKeyed(key string) {
-	sm.defrostTracker.mu.Lock()
-	defer sm.defrostTracker.mu.Unlock()
-	delete(sm.defrostTracker.inFlight, key)
-}
-
 // parseHLSManifest parses an HLS manifest to extract segment names and durations.
-// This is used during freeze/defrost to preserve the original manifest metadata
+// This is used during freeze to preserve the original manifest metadata
 // instead of regenerating with hardcoded values.
 func parseHLSManifest(content string) (*ParsedManifest, error) {
 	result := &ParsedManifest{
@@ -1497,9 +1216,9 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 }
 
 // fallbackCleanupWithTarget runs the same eviction loop as fallbackCleanup but
-// with an explicit byte target. Used by the defrost admission path
-// (admitDefrost / ensureRoomForDefrost) which knows exactly how much room it
-// needs and does not want to aggressively trim back to targetThreshold.
+// with an explicit byte target. Used by the disk-write admission path
+// (admitDiskWrite / ensureRoomForDiskWrite) which knows exactly how much room
+// it needs and does not want to aggressively trim back to targetThreshold.
 func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		sm.logger.Debug("fallbackCleanupWithTarget skipped: destructive cleanup paused")
