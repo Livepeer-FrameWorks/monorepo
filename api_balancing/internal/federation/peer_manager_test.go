@@ -476,75 +476,66 @@ func (s *testPeerChannelStream) SendMsg(any) error { return nil }
 
 func (s *testPeerChannelStream) RecvMsg(any) error { return io.EOF }
 
+// TestCheckReplicationCompletion_RequiresDestinationNodeLive preserves
+// the behavioural intent of the cache-backed predecessor: when the local
+// dest node hasn't gone live yet, the replication mark must NOT be
+// cleared by checkReplicationCompletion. The in-flight record now lives
+// on the unified stream registry.
 func TestCheckReplicationCompletion_RequiresDestinationNodeLive(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "cluster-a", cache, true)
-	ctx := context.Background()
 
-	record := &ActiveReplicationRecord{
-		StreamName:    "tenant1+stream1",
-		SourceNodeID:  "source-node",
-		SourceCluster: "cluster-b",
-		DestCluster:   "cluster-a",
-		DestNodeID:    "dest-node",
-		BaseURL:       "edge.dest.example.com",
-		CreatedAt:     time.Now(),
-	}
-	if err := cache.SetActiveReplication(ctx, record); err != nil {
-		t.Fatalf("SetActiveReplication: %v", err)
-	}
+	priorRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
+
+	const internalName = "tenant1+stream1"
+	registry.MarkReplicating(internalName, "cluster-b", "dtsc://src/"+internalName, "dest-node", "edge.dest.example.com", "source-node")
 
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	// A different node has the stream live — checkReplicationCompletion
+	// must not match it to the dest-node we recorded.
 	sm.SetNodeInfo("other-node", "edge.other.example.com", true, nil, nil, "", "", nil)
-	if err := sm.UpdateStreamFromBuffer("stream1", record.StreamName, "other-node", "tenant1", "FULL", ""); err != nil {
+	if err := sm.UpdateStreamFromBuffer("stream1", internalName, "other-node", "tenant1", "FULL", ""); err != nil {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
 	}
 
 	pm.checkReplicationCompletion()
 
-	got, err := cache.GetActiveReplication(ctx, record.StreamName)
-	if err != nil {
-		t.Fatalf("GetActiveReplication: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected active replication to remain when destination node is not live")
+	if _, ok := registry.LocalReplication(context.Background(), internalName); !ok {
+		t.Fatal("expected replication mark to remain when destination node is not live")
 	}
 }
 
+// TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive
+// preserves the matching positive case: when the dest node has gone live,
+// the registry mark is cleared and the peer broadcast fires.
 func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "cluster-a", cache, true)
-	ctx := context.Background()
 
-	record := &ActiveReplicationRecord{
-		StreamName:    "tenant1+stream1",
-		SourceNodeID:  "source-node",
-		SourceCluster: "cluster-b",
-		DestCluster:   "cluster-a",
-		DestNodeID:    "dest-node",
-		BaseURL:       "edge.dest.example.com",
-		CreatedAt:     time.Now(),
-	}
-	if err := cache.SetActiveReplication(ctx, record); err != nil {
-		t.Fatalf("SetActiveReplication: %v", err)
-	}
+	priorRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
+
+	const internalName = "tenant1+stream1"
+	const destNodeID = "dest-node"
+	registry.MarkReplicating(internalName, "cluster-b", "dtsc://src/"+internalName, destNodeID, "edge.dest.example.com", "source-node")
 
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	sm.SetNodeInfo(record.DestNodeID, "edge.dest.example.com", true, nil, nil, "", "", nil)
-	if err := sm.UpdateStreamFromBuffer("stream1", record.StreamName, record.DestNodeID, "tenant1", "FULL", ""); err != nil {
+	sm.SetNodeInfo(destNodeID, "edge.dest.example.com", true, nil, nil, "", "", nil)
+	if err := sm.UpdateStreamFromBuffer("stream1", internalName, destNodeID, "tenant1", "FULL", ""); err != nil {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
 	}
 
 	pm.checkReplicationCompletion()
 
-	got, err := cache.GetActiveReplication(ctx, record.StreamName)
-	if err != nil {
-		t.Fatalf("GetActiveReplication: %v", err)
-	}
-	if got != nil {
-		t.Fatal("expected active replication to be cleared when destination node is live")
+	if _, ok := registry.LocalReplication(context.Background(), internalName); ok {
+		t.Fatal("expected replication mark to be cleared when destination node is live")
 	}
 }
 
@@ -1128,6 +1119,11 @@ func TestUntrackStream_RemainingStreamsPersisted(t *testing.T) {
 
 func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 	cache, _ := setupTestCache(t)
+	// Stream-ad + playback-index storage now lives on the unified registry.
+	priorRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
 	pm := newTestPeerManager(t, "cluster-a", cache, false)
 	ctx := context.Background()
 	peerID := "remote-1"
@@ -1139,18 +1135,13 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed remote live stream: %v", err)
 	}
-	if err := cache.SetStreamAd(ctx, peerID, &StreamAdRecord{
-		InternalName: "live+ad",
+	// Pre-seed the registry as if a prior ad already placed the entry.
+	// The withdrawal message later in this test will clear it.
+	registry.UpsertFederatedSource(peerID, control.StreamEntry{
 		TenantID:     "tenant-a",
 		PlaybackID:   "play-del",
-		IsLive:       true,
-		Timestamp:    time.Now().Unix(),
-	}); err != nil {
-		t.Fatalf("seed stream ad: %v", err)
-	}
-	if err := cache.SetPlaybackIndex(ctx, "play-del", "live+ad"); err != nil {
-		t.Fatalf("seed playback index: %v", err)
-	}
+		InternalName: "live+ad",
+	}, control.Location{IsLiveNow: true, AdTimestamp: time.Now().Unix()})
 
 	stream := &testPeerChannelStream{
 		messages: []*pb.PeerMessage{
@@ -1320,23 +1311,25 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 		t.Fatalf("expected dead+stream to be deleted, got %+v", deadEntry)
 	}
 
-	ad2, err := cache.GetStreamAd(ctx, peerID, "live+ad2")
-	if err != nil || ad2 == nil {
-		t.Fatalf("expected stream ad cached, ad=%v err=%v", ad2, err)
+	// Stream ad + playback-id reverse index now resolve via the unified
+	// registry. The withdrawal ad for live+ad (IsLive=false) drops the
+	// entry and clears the play-del reverse index.
+	ad2Entry, ad2Err := registry.ResolveSourceByInternalName(ctx, "live+ad2")
+	if ad2Err != nil {
+		t.Fatalf("expected live+ad2 in registry: %v", ad2Err)
 	}
-	if idx, pidxErr := cache.GetPlaybackIndex(ctx, "play-2"); pidxErr != nil || idx != "live+ad2" {
-		t.Fatalf("expected playback index play-2 -> live+ad2, got %q err=%v", idx, pidxErr)
+	if _, ok := ad2Entry.Locations[peerID]; !ok {
+		t.Fatalf("expected Locations[%q] for live+ad2", peerID)
+	}
+	if byPlay, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-2"); lookupErr != nil || byPlay.InternalName != "live+ad2" {
+		t.Fatalf("expected play-2 -> live+ad2, got %q err=%v", byPlay.InternalName, lookupErr)
 	}
 
-	adDeleted, err := cache.GetStreamAd(ctx, peerID, "live+ad")
-	if err != nil {
-		t.Fatalf("GetStreamAd(live+ad): %v", err)
+	if _, lookupErr := registry.ResolveSourceByInternalName(ctx, "live+ad"); !errors.Is(lookupErr, control.ErrUnknownStream) {
+		t.Fatalf("expected live+ad withdrawn, got err=%v", lookupErr)
 	}
-	if adDeleted != nil {
-		t.Fatalf("expected live+ad to be deleted, got %+v", adDeleted)
-	}
-	if idx, pidxErr := cache.GetPlaybackIndex(ctx, "play-del"); pidxErr != nil || idx != "" {
-		t.Fatalf("expected playback index play-del cleared, got %q err=%v", idx, pidxErr)
+	if _, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-del"); !errors.Is(lookupErr, control.ErrUnknownStream) {
+		t.Fatalf("expected play-del cleared, got err=%v", lookupErr)
 	}
 
 	arts, err := cache.GetRemoteArtifacts(ctx, "artifact-1")

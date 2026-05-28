@@ -322,6 +322,11 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		Params:       params,
 		InternalName: internalName,
 	}
+	// Foghorn-authoritative runtime name for the processed OUTPUT
+	// artifact's DTSH boot post-transcode. Outputs are always vod+.
+	if internalName != "" {
+		req.OutputRuntimeName = "vod+" + internalName
+	}
 	if job.ProcessesJSON.Valid {
 		resolved := job.ProcessesJSON.String
 		if d.gatewayResolver != nil {

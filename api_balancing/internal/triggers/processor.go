@@ -14,6 +14,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
@@ -27,6 +28,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -132,6 +134,24 @@ type Processor struct {
 	// SetMetrics so the drop counter is available to the batcher.
 	clientBatcher   *clientLifecycleBatcher
 	clientBatcherMu sync.Mutex
+
+	// drainStream dispatches a DrainStreamRequest to the named owner node
+	// over the long-lived Connect(stream ControlMessage) channel. Set by
+	// the gRPC server bootstrap once the Helmsman control stream router
+	// is available. Nil-safe: AdmitAndReserve's takeover path no-ops the
+	// drain when unset (used in tests + unit-test contexts where the
+	// control plane isn't wired).
+	drainStream func(nodeID, runtimeName, reason string) error
+}
+
+// SetDrainStreamDispatcher wires the drain command dispatcher used by the
+// takeover path. Called from the gRPC server bootstrap once the Helmsman
+// control-stream router is constructed.
+func (p *Processor) SetDrainStreamDispatcher(fn func(nodeID, runtimeName, reason string) error) {
+	if p == nil {
+		return
+	}
+	p.drainStream = fn
 }
 
 // streamCacheHoldDuration is how long writes to the stream-context cache are
@@ -863,6 +883,8 @@ func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, 
 		return p.handlePushOutStart(trigger)
 	case *pb.MistTrigger_PushEnd:
 		return p.handlePushEnd(trigger)
+	case *pb.MistTrigger_PushInputClose:
+		return p.handlePushInputClose(trigger)
 	case *pb.MistTrigger_ViewerConnect:
 		return p.handleUserNew(trigger)
 	case *pb.MistTrigger_ViewerDisconnect:
@@ -1163,8 +1185,121 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}
 	}
 
+	// Source-presence admission: reject duplicates while a publisher is
+	// actively pushing on any node in this cluster; allow same-node resume
+	// after PUSH_INPUT_CLOSE; allow different-node takeover (with drain)
+	// after PUSH_INPUT_CLOSE. See docs in
+	// api_balancing/internal/control/stream_registry_admission.go.
+	//
+	// Fail closed when the registry is unavailable: this is the only
+	// duplicate-ingest gate, and silently admitting on a nil registry
+	// would split-brain ingest. A nil registry here is a bootstrap bug
+	// (registry is wired before the gRPC trigger listener) — surface it
+	// loudly rather than letting traffic through.
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		p.logger.WithFields(logging.Fields{
+			"internal_name":  streamValidation.GetInternalName(),
+			"candidate_node": trigger.GetNodeId(),
+		}).Error("Refusing ingest: stream registry not initialized")
+		return "", true, ingesterrors.New(
+			pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+			"ingest admission unavailable",
+		)
+	}
+	var admission control.AdmissionResult
+	// AdmitAndReserve atomically decides + flips SourceActive/OwnerNodeID
+	// under one write lock, so a second concurrent PUSH_REWRITE for the
+	// same stream cannot see stale "SourceActive=false" and also decide
+	// AcceptTakeover.
+	{
+		admission = registry.AdmitAndReserve(
+			streamValidation.GetInternalName(),
+			trigger.GetNodeId(),
+			func(ownerNodeID string) bool {
+				return p.isNodeHealthyForAdmission(ownerNodeID)
+			},
+		)
+		switch admission.Decision {
+		case control.AdmissionRejectDuplicate:
+			p.logger.WithFields(logging.Fields{
+				"internal_name":  streamValidation.GetInternalName(),
+				"candidate_node": trigger.GetNodeId(),
+			}).Warn("Rejecting duplicate ingest — publisher already active on this stream")
+			return "", true, ingesterrors.New(
+				pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
+				"another publisher is currently active on this stream",
+			)
+		}
+		// On any accept decision, mark the new owner as having the input
+		// so the balancer (rateNodeWithReason: rejects Inputs==0) picks
+		// it before the first STREAM_BUFFER arrives at Foghorn. Otherwise
+		// viewers landing in that ~poll-cadence window see no eligible
+		// node and the balancer returns "no suitable nodes".
+		state.DefaultManager().SetStreamInstanceInputs(
+			streamValidation.GetInternalName(),
+			trigger.GetNodeId(),
+			1,
+		)
+		switch admission.Decision {
+		case control.AdmissionAcceptTakeover:
+			p.logger.WithFields(logging.Fields{
+				"internal_name": streamValidation.GetInternalName(),
+				"new_owner":     trigger.GetNodeId(),
+				"old_owner":     admission.OldOwnerNodeID,
+			}).Info("Admitting publisher takeover; draining old owner")
+			// Mark old owner as having no input so the balancer stops
+			// selecting it before the drain RPC completes and before A's
+			// next poll/STREAM_BUFFER reports the buffer gone. Without
+			// this the balancer happily routes viewers to a node whose
+			// buffer is being nuked.
+			state.DefaultManager().SetStreamInstanceInputs(
+				streamValidation.GetInternalName(),
+				admission.OldOwnerNodeID,
+				0,
+			)
+			p.drainOldOwner(
+				admission.OldOwnerNodeID,
+				control.RuntimeNameForStream(registry, streamValidation.GetInternalName()),
+				fmt.Sprintf("takeover_by_node:%s", trigger.GetNodeId()),
+			)
+			// Refresh any active DVR's pinned source URL so the recording
+			// follows the publisher to the new owner. Runs async — waits
+			// for the new owner's STREAM_BUFFER to land before dispatching.
+			go control.RefreshActiveDVRSourceOnTakeover(
+				streamValidation.GetInternalName(),
+				trigger.GetNodeId(),
+				p.logger,
+			)
+		case control.AdmissionAcceptResume:
+			p.logger.WithFields(logging.Fields{
+				"internal_name": streamValidation.GetInternalName(),
+				"owner_node":    trigger.GetNodeId(),
+			}).Debug("Admitting same-node publisher resume")
+		}
+	}
+
 	if registerTenantStream {
 		state.DefaultTenantCapacity().RegisterStream(streamValidation.TenantId, streamValidation.GetInternalName())
+	}
+
+	// Mirror identity into the unified stream registry so /balance,
+	// /source, clip, DVR, and diagnostics see the same TenantID/StreamID
+	// the analytics cache is about to record. Single-source-of-truth for
+	// identity prevents the two stores from drifting after independent
+	// invalidations. ValidateStreamKey does not return ingest_mode; the
+	// registry's IngestMode/RuntimeName fields fill in on the next
+	// resolver hit (ResolveStreamContext) — for PUSH_REWRITE, this stream
+	// is definitively push, so we set it explicitly.
+	if control.StreamRegistryInstance != nil && streamValidation.GetInternalName() != "" {
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:        streamValidation.GetStreamId(),
+			TenantID:        streamValidation.GetTenantId(),
+			PlaybackID:      streamValidation.GetPlaybackId(),
+			InternalName:    streamValidation.GetInternalName(),
+			IngestMode:      control.IngestPush,
+			OriginClusterID: streamValidation.GetOriginClusterId(),
+		})
 	}
 
 	// Cache stream context (tenant + user + billing info)
@@ -1393,6 +1528,12 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		p.peerNotifier.BroadcastStreamLifecycle(streamValidation.InternalName, streamValidation.TenantId, true)
 	}
 
+	// Source-active flip happened atomically inside AdmitAndReserve at
+	// the admission decision above — no separate MarkSourceActive call
+	// needed here. The matching MarkSourceInactive fires from
+	// handlePushInputClose when the publisher disconnects, or from
+	// handleStreamEnd as a belt-and-suspenders if PUSH_INPUT_CLOSE was lost.
+
 	// Return wildcard stream name for MistServer routing (live+ format)
 	return fmt.Sprintf("live+%s", streamValidation.InternalName), false, nil
 }
@@ -1576,6 +1717,49 @@ func (p *Processor) resolveBarePlayRewriteTarget(streamName string) (*control.St
 	}, false, nil
 }
 
+// federationOriginPullDTSC checks whether an inbound origin-pull is
+// arranged on this cluster for the given runtime name. Returns
+// (dtscURL, handled):
+//
+//   - handled=true: caller should immediately return this result to Mist.
+//     dtscURL is the peer DTSC URL to pull from, or "" when the pull is
+//     pinned to another local edge (this edge must not start a duplicate
+//     untracked pull). In both cases Mist's fallback is appropriate.
+//   - handled=false: no origin-pull is arranged; caller continues with
+//     its normal source-resolution logic.
+//
+// This is the shared federation hook used by every STREAM_SOURCE branch
+// whose runtime name can participate in cross-cluster origin-pull
+// (live+, pull+, dvr+, bare mist-native).
+func (p *Processor) federationOriginPullDTSC(ctx context.Context, streamName, nodeID string) (string, bool) {
+	if strings.TrimSpace(streamName) == "" {
+		return "", false
+	}
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return "", false
+	}
+	loc, found := registry.LocalReplication(ctx, streamName)
+	if !found || loc.PullDTSCURL == "" {
+		return "", false
+	}
+	if loc.DestNodeID != "" && nodeID != "" && loc.DestNodeID != nodeID {
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"node_id":     nodeID,
+			"dest_node":   loc.DestNodeID,
+		}).Debug("STREAM_SOURCE: origin-pull pinned to another local edge")
+		return "", true
+	}
+	p.logger.WithFields(logging.Fields{
+		"stream_name":    streamName,
+		"node_id":        nodeID,
+		"source_cluster": loc.ReplicatingFrom,
+		"dtsc_url":       loc.PullDTSCURL,
+	}).Info("STREAM_SOURCE: origin-pull returning peer DTSC URI")
+	return loc.PullDTSCURL, true
+}
+
 // handleStreamSource processes STREAM_SOURCE trigger (blocking)
 func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, error) {
 	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamSource)
@@ -1590,14 +1774,18 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":     trigger.GetNodeId(),
 	}).Debug("Processing STREAM_SOURCE trigger")
 
-	// Pushed live streams have no static source; MistServer receives them from
-	// encoders. Pull streams are handled below.
+	// Pushed live streams normally fall back to the configured push://
+	// source. When this cluster has arranged an origin-pull for the stream,
+	// STREAM_SOURCE is the handoff point that gives Mist the peer DTSC URL.
 	if strings.HasPrefix(streamName, "live+") {
+		if dtsc, handled := p.federationOriginPullDTSC(context.Background(), streamName, trigger.GetNodeId()); handled {
+			return dtsc, false, nil
+		}
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
 			"node_id":     trigger.GetNodeId(),
-		}).Debug("STREAM_SOURCE not applicable for live streams; aborting")
-		return "", true, nil
+		}).Debug("STREAM_SOURCE: live stream has no origin-pull; using configured push source")
+		return "", false, nil
 	}
 
 	// processing+ streams: resolve to presigned S3 URL for processing input
@@ -1606,44 +1794,80 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return p.resolveProcessSource(artifactHash, trigger.GetNodeId())
 	}
 
-	// pull+ streams: return balance:<foghorn> so MistInBalancer asks /source for
-	// the chosen origin. The upstream URI itself stays server-side — we never
-	// embed it in the returned string (avoid trusting query-param fallbacks at
-	// /source). /source re-resolves via Commodore and scores upstream-vs-cluster.
+	// pull+ streams: when this cluster has arranged a cross-cluster
+	// origin-pull (another cluster already has the upstream and we DTSC-
+	// pull from them rather than dial upstream a second time), return the
+	// peer DTSC URL directly. Otherwise return balance:<foghorn> so
+	// MistInBalancer asks /source for the chosen origin. The upstream URI
+	// itself stays server-side — we never embed it in the returned string
+	// (avoid trusting query-param fallbacks at /source). /source
+	// re-resolves via Commodore and scores upstream-vs-cluster.
 	if strings.HasPrefix(streamName, "pull+") {
+		if dtsc, handled := p.federationOriginPullDTSC(context.Background(), streamName, trigger.GetNodeId()); handled {
+			return dtsc, false, nil
+		}
 		return p.resolvePullSource(streamName, trigger)
 	}
 
-	if !strings.Contains(streamName, "+") && p.commodoreClient != nil {
-		resp, lookupMode, err := p.resolveBareManagedStreamContext(streamName)
-		if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
-			base := control.FoghornBalancerBase(p.clusterID)
-			if base == "" {
-				p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base; aborting")
-				return "", true, nil
-			}
-			p.logger.WithFields(logging.Fields{
-				"stream_name":   streamName,
-				"internal_name": resp.GetInternalName(),
-				"lookup_mode":   lookupMode,
-				"cluster_id":    p.clusterID,
-			}).Info("STREAM_SOURCE: mist_native stream returning balance URI")
-			return "balance:" + base, false, nil
+	if !strings.Contains(streamName, "+") {
+		// Federation hook: if a cross-cluster origin-pull is arranged for
+		// this mist-native stream, return the peer DTSC URL directly
+		// instead of round-tripping through balance:<foghorn> + /source.
+		if dtsc, handled := p.federationOriginPullDTSC(context.Background(), streamName, trigger.GetNodeId()); handled {
+			return dtsc, false, nil
 		}
-		if err != nil {
-			p.logger.WithError(err).WithFields(logging.Fields{
-				"stream_name": streamName,
-				"cluster_id":  p.clusterID,
-			}).Warn("STREAM_SOURCE: mist_native stream context lookup failed")
-		} else if resp != nil && resp.GetAdmissionReason() != "" {
-			p.logger.WithFields(logging.Fields{
-				"stream_name":       streamName,
-				"lookup_mode":       lookupMode,
-				"ingest_mode":       resp.GetIngestMode(),
-				"admission_reason":  resp.GetAdmissionReason(),
-				"rejection_reason":  resp.GetRejectionReason().String(),
-				"resolved_internal": resp.GetInternalName(),
-			}).Debug("STREAM_SOURCE: bare stream is not an admitted mist_native source")
+		// Registry fast path: warm cache from a prior PUSH_REWRITE /
+		// managed-stream apply lets STREAM_SOURCE skip the Commodore
+		// round-trip entirely for the always-on case.
+		if control.StreamRegistryInstance != nil {
+			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), streamName); err == nil && entry.IngestMode == control.IngestMistNative {
+				base := control.FoghornBalancerBase(p.clusterID)
+				if base == "" {
+					p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base")
+					return control.OfflineUnavailable, false, nil
+				}
+				p.logger.WithFields(logging.Fields{
+					"stream_name":   streamName,
+					"internal_name": entry.InternalName,
+					"lookup_mode":   "registry",
+					"cluster_id":    p.clusterID,
+				}).Info("STREAM_SOURCE: mist_native stream returning balance URI")
+				return "balance:" + base, false, nil
+			}
+		}
+		// Cold path: resolve via Commodore so admission decisions and
+		// streamCache hydration stay in sync.
+		if p.commodoreClient != nil {
+			resp, lookupMode, err := p.resolveBareManagedStreamContext(streamName)
+			if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
+				base := control.FoghornBalancerBase(p.clusterID)
+				if base == "" {
+					p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base")
+					return control.OfflineUnavailable, false, nil
+				}
+				p.logger.WithFields(logging.Fields{
+					"stream_name":   streamName,
+					"internal_name": resp.GetInternalName(),
+					"lookup_mode":   lookupMode,
+					"cluster_id":    p.clusterID,
+				}).Info("STREAM_SOURCE: mist_native stream returning balance URI")
+				return "balance:" + base, false, nil
+			}
+			if err != nil {
+				p.logger.WithError(err).WithFields(logging.Fields{
+					"stream_name": streamName,
+					"cluster_id":  p.clusterID,
+				}).Warn("STREAM_SOURCE: mist_native stream context lookup failed")
+			} else if resp != nil && resp.GetAdmissionReason() != "" {
+				p.logger.WithFields(logging.Fields{
+					"stream_name":       streamName,
+					"lookup_mode":       lookupMode,
+					"ingest_mode":       resp.GetIngestMode(),
+					"admission_reason":  resp.GetAdmissionReason(),
+					"rejection_reason":  resp.GetRejectionReason().String(),
+					"resolved_internal": resp.GetInternalName(),
+				}).Debug("STREAM_SOURCE: bare stream is not an admitted mist_native source")
+			}
 		}
 	}
 
@@ -1655,9 +1879,15 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// served via dvr+ — finalized chapter artifacts are addressed by
 	// their VOD playback ID and flow through the standard vod+ path.
 	if strings.HasPrefix(streamName, "dvr+") {
+		// Fast path: an existing cross-cluster origin-pull arrangement
+		// for this dvr+ stream is already recorded — reuse it without
+		// touching DB or federation.
+		if dtsc, handled := p.federationOriginPullDTSC(context.Background(), streamName, trigger.GetNodeId()); handled {
+			return dtsc, false, nil
+		}
 		token := strings.TrimPrefix(streamName, "dvr+")
 		if token == "" {
-			return "", true, nil
+			return control.OfflineInvalidToken, false, nil
 		}
 		dispatch, dispatchErr := control.ResolveDVRArtifactDispatch(context.Background(), token)
 		if dispatchErr != nil {
@@ -1671,14 +1901,23 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 				"stream_name": streamName,
 				"token":       token,
 			}).Warn("STREAM_SOURCE: dvr+ token did not resolve to a DVR artifact; chapter playback uses the chapter artifact's VOD playbackId")
-			return "", true, nil
+			return control.OfflineNotRecorded, false, nil
 		}
 		if dispatch.RecordingNode == "" {
+			// Commodore knows the artifact + source stream but this
+			// Foghorn's local artifact_nodes has no recording entry —
+			// the recording is happening on a peer cluster. Federation
+			// ads carry the peer's recording_node_id on the source
+			// stream's federated Location; arrange a cross-cluster
+			// origin-pull for dvr+<hash> from that peer's node.
+			if dtsc, ok := p.tryArrangeDVRCrossCluster(context.Background(), streamName, dispatch, trigger.GetNodeId()); ok {
+				return dtsc, false, nil
+			}
 			p.logger.WithFields(logging.Fields{
 				"stream_name": streamName,
 				"dvr_hash":    dispatch.DVRHash,
 			}).Warn("STREAM_SOURCE: dvr+ resolution for finalized DVR — use chapter playbackId")
-			return "", true, nil
+			return control.OfflineNotRecorded, false, nil
 		}
 		if dispatch.RecordingNode == trigger.GetNodeId() {
 			localPath := control.LocalRollingDVRManifestPath(dispatch.StreamID, dispatch.DVRHash, trigger.GetNodeId())
@@ -1688,8 +1927,8 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 					"dvr_hash":    dispatch.DVRHash,
 					"stream_id":   dispatch.StreamID,
 					"node_id":     trigger.GetNodeId(),
-				}).Warn("STREAM_SOURCE: dvr+ rolling manifest path unresolved on recording origin; aborting")
-				return "", true, nil
+				}).Warn("STREAM_SOURCE: dvr+ rolling manifest path unresolved on recording origin")
+				return control.OfflineNotRecorded, false, nil
 			}
 			p.logger.WithFields(logging.Fields{
 				"stream_name": streamName,
@@ -1704,8 +1943,8 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 				"stream_name":    streamName,
 				"recording_node": dispatch.RecordingNode,
 				"viewer_node":    trigger.GetNodeId(),
-			}).Warn("STREAM_SOURCE: dvr+ no DTSC output advertised on recording origin; aborting")
-			return "", true, nil
+			}).Warn("STREAM_SOURCE: dvr+ no DTSC output advertised on recording origin")
+			return control.OfflineNotRecorded, false, nil
 		}
 		p.logger.WithFields(logging.Fields{
 			"stream_name":    streamName,
@@ -1720,26 +1959,20 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	artifactInternal := mist.ExtractInternalName(streamName)
 
 	artifactHash := ""
-	originClusterID := ""
 	contentType := ""
-	tenantID := ""
 	if control.CommodoreClient != nil && artifactInternal != "" {
 		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
 			artifactHash = resp.ArtifactHash
-			originClusterID = resp.GetOriginClusterId()
 			contentType = resp.GetContentType()
-			tenantID = resp.GetTenantId()
 		}
 	}
 	if artifactHash == "" {
 		// Chapter artifacts are vod+<artifact_hash> by construction and
 		// aren't registered in Commodore — resolve via foghorn directly
-		// to recover tenant/origin context for the relay URL path below.
+		// to recover the artifact context for the relay URL path below.
 		if chapter := control.ResolveChapterArtifactByHash(context.Background(), artifactInternal); chapter != nil {
 			artifactHash = chapter.ArtifactHash
-			originClusterID = chapter.OriginClusterID
 			contentType = "vod"
-			tenantID = chapter.TenantID
 		}
 	}
 	if artifactHash == "" {
@@ -1747,7 +1980,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			"internal_name": artifactInternal,
 			"stream_name":   streamName,
 		}).Warn("Artifact internal name not found; cannot resolve stream source")
-		return "", true, nil
+		return control.OfflineNotUploaded, false, nil
 	}
 
 	target, err := control.ResolveStream(context.Background(), streamName)
@@ -1770,7 +2003,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// Read-through relay: hand Mist a stable Helmsman URL for the artifact
 	// regardless of warm state. Helmsman either serves the local file
 	// (warm) or fetches from S3 via RelayResolve (cold), per admission
-	// policy. Defrost is no longer the playback gate.
+	// policy.
 	_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(artifactHash)
 	format := ""
 	if artifactInfo != nil {
@@ -1791,6 +2024,33 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// and may lag seed or processing corrections, so it only fills blanks.
 	desc := lookupArtifactDescriptor(context.Background(), artifactHash)
 	format = selectArtifactRelayFormat(desc, format)
+	// Direct-edge cross-cluster fill: viewer landed on an edge without
+	// going through /play, so we have no local artifact row and no
+	// warm state. When Commodore knows the origin cluster, ask it for
+	// the format (and trigger any peer-relay URL minting) so we can
+	// build a local Helmsman relay URL that will resolve through
+	// federation when the relay actually GETs it.
+	if format == "" {
+		originClusterID := ""
+		tenantID := ""
+		if control.CommodoreClient != nil && artifactInternal != "" {
+			if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
+				originClusterID = resp.GetOriginClusterId()
+				tenantID = resp.GetTenantId()
+			}
+		}
+		if originClusterID != "" && tenantID != "" {
+			if xc, err := control.ResolveCrossClusterArtifactURL(context.Background(), artifactHash, contentType, tenantID, originClusterID); err == nil && xc != nil && xc.Format != "" {
+				format = xc.Format
+				p.logger.WithFields(logging.Fields{
+					"artifact_hash":  artifactHash,
+					"origin_cluster": originClusterID,
+					"format":         format,
+					"peer_relay":     xc.PeerRelayURL != "",
+				}).Debug("STREAM_SOURCE: cross-cluster artifact format resolved from origin")
+			}
+		}
+	}
 	if format != "" {
 		kind := kindFromAssetType(contentType)
 		if kind == "" {
@@ -1801,15 +2061,14 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		}
 		relayURL := buildVODRelayURL(trigger.GetNodeId(), kind, artifactHash, format, desc.StreamInternal)
 		if relayURL == "" {
-			// No advertised relay base URL on this node — abort so Mist
-			// retries rather than receiving a 127.0.0.1 URL that would dial
-			// itself in container deployments.
+			// No advertised relay base URL on this node — return offline so
+			// Mist disconnects cleanly rather than dialing 127.0.0.1.
 			p.logger.WithFields(logging.Fields{
 				"artifact_hash": artifactHash,
 				"stream_name":   streamName,
 				"node_id":       trigger.GetNodeId(),
-			}).Warn("STREAM_SOURCE: VOD artifact — no relay base URL advertised by node; aborting")
-			return "", true, nil
+			}).Warn("STREAM_SOURCE: VOD artifact — no relay base URL advertised by node")
+			return control.OfflineUnavailable, false, nil
 		}
 
 		go func(tr *pb.MistTrigger, name string) {
@@ -1831,43 +2090,6 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return relayURL, false, nil
 	}
 
-	// Cross-cluster: check local foghorn.artifacts DB for adopted copy
-	if artifactHash != "" && control.GetDB() != nil {
-		var storageLocation string
-		dbErr := control.GetDB().QueryRowContext(context.Background(), `
-			SELECT COALESCE(storage_location, '')
-			FROM foghorn.artifacts
-			WHERE artifact_hash = $1 AND status != 'deleted' LIMIT 1
-		`, artifactHash).Scan(&storageLocation)
-		loc := strings.ToLower(strings.TrimSpace(storageLocation))
-		if dbErr == nil && loc == "defrosting" {
-			p.logger.WithField("artifact_hash", artifactHash).Debug("STREAM_SOURCE: artifact defrosting, MistServer will retry")
-			return "", true, nil
-		}
-	}
-
-	// Cross-cluster: if origin is remote and we don't have the artifact, trigger async defrost
-	if originClusterID != "" && artifactHash != "" && contentType != "" && tenantID != "" {
-		p.logger.WithFields(logging.Fields{
-			"artifact_hash":  artifactHash,
-			"origin_cluster": originClusterID,
-			"content_type":   contentType,
-		}).Info("STREAM_SOURCE: remote artifact — triggering async defrost")
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			nodeID, err := control.PickStorageNodeIDPublic()
-			if err != nil {
-				p.logger.WithError(err).Debug("No storage node for async remote defrost")
-				return
-			}
-			if _, err := control.StartDefrost(ctx, contentType, artifactHash, nodeID, 30*time.Second, p.logger); err != nil {
-				p.logger.WithError(err).Debug("Async remote defrost trigger failed")
-			}
-		}()
-		return "", true, nil
-	}
-
 	p.logger.WithFields(logging.Fields{
 		"artifact_hash": artifactHash,
 		"stream_name":   streamName,
@@ -1883,8 +2105,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		}
 	}(trigger, streamName)
 
-	// Return empty to let MistServer use default source (will fail for VOD)
-	return "", true, nil
+	return control.OfflineNotUploaded, false, nil
 }
 
 // ValidatePullSourceURI returns true when a URI is parseable, uses a
@@ -1905,12 +2126,12 @@ func ValidatePullSourceURI(uri string) bool {
 func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger) (string, bool, error) {
 	internalName := strings.TrimPrefix(streamName, "pull+")
 	if internalName == "" {
-		return "", true, nil
+		return control.OfflineInvalidToken, false, nil
 	}
 
 	if control.CommodoreClient == nil {
 		p.logger.WithField("stream_name", streamName).Error("Commodore client unavailable for pull source resolution")
-		return "", true, nil
+		return control.OfflineUnavailable, false, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1923,17 +2144,17 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 			"error":         err,
 		}).Warn("Failed to resolve pull source from Commodore")
 		p.recordPullSourceEvent(nil, internalName, "commodore_error", err.Error())
-		return "", true, nil
+		return control.OfflineUnavailable, false, nil
 	}
 	if resp == nil || !resp.GetFound() {
 		p.logger.WithField("stream_name", streamName).Warn("Pull source not found")
 		p.recordPullSourceEvent(resp, internalName, "not_found", "")
-		return "", true, nil
+		return control.OfflineNotConfigured, false, nil
 	}
 	if !resp.GetEnabled() {
 		p.logger.WithField("stream_name", streamName).Info("Pull source disabled by tenant; refusing to start input")
 		p.recordPullSourceEvent(resp, internalName, "disabled", "")
-		return "", true, nil
+		return control.OfflineDisabled, false, nil
 	}
 	class, classErr := pullsource.Classify(resp.GetSourceUri())
 	if class == pullsource.ClassBlocked {
@@ -1946,7 +2167,7 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 			detail = classErr.Error()
 		}
 		p.recordPullSourceEvent(resp, internalName, "blocked_uri", detail)
-		return "", true, nil
+		return control.OfflineBlockedURI, false, nil
 	}
 	// Defensive placement check: the bootstrap/CLI layer + runtime CRUD
 	// validators should have rejected misconfigured pulls upfront, but if
@@ -1971,13 +2192,17 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		if len(rejects) > 0 {
 			detail = formatTriggerPlacementRejects(rejects, triggerClusterID)
 		}
+		// This cluster can't dial the upstream itself (allowed_cluster_ids
+		// excludes it). Return "" non-abort so Mist's balance: template
+		// asks /source, which falls through to resolveRemoteSource and
+		// federates DTSC from an allowed cluster that's already pulling.
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
 			"cluster_id":  triggerClusterID,
 			"detail":      detail,
-		}).Warn("Pull source not placeable on the executing cluster; refusing")
-		p.recordPullSourceEvent(resp, internalName, "cluster_not_allowed", detail)
-		return "", true, nil
+		}).Info("Pull source not placeable here; delegating to /source for cross-cluster federation")
+		p.recordPullSourceEvent(resp, internalName, "cluster_not_allowed_delegate", detail)
+		return "", false, nil
 	}
 
 	if tid := resp.GetTenantId(); tid != "" {
@@ -1987,11 +2212,26 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 		trigger.StreamId = &sid
 	}
 
+	// Mirror identity into the unified stream registry so pull streams
+	// appear in /debug/stream-registry and registry-first source-runtime
+	// resolvers (clip, DVR, federation DTSC) hit warm cache rather than
+	// re-asking Commodore. ResolvePullSourceByInternalName carries no
+	// playback_id or origin_cluster_id; those fill in on the next
+	// ResolveStreamContext via the wire-two-writers path.
+	if control.StreamRegistryInstance != nil && internalName != "" {
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:     resp.GetStreamId(),
+			TenantID:     resp.GetTenantId(),
+			InternalName: internalName,
+			IngestMode:   control.IngestPull,
+		})
+	}
+
 	base := control.FoghornBalancerBase(triggerClusterID)
 	if base == "" {
 		p.logger.WithField("node_id", trigger.GetNodeId()).Error("Foghorn balancer base unresolved for pull source")
 		p.recordPullSourceEvent(resp, internalName, "foghorn_base_unresolved", trigger.GetNodeId())
-		return "", true, nil
+		return control.OfflineUnavailable, false, nil
 	}
 
 	p.logger.WithFields(logging.Fields{
@@ -2095,12 +2335,12 @@ func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNa
 // just spin the job. Abort instead so the trigger retries.
 func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, bool, error) {
 	if artifactHash == "" {
-		return "", true, nil
+		return control.OfflineInvalidToken, false, nil
 	}
 	db := control.GetDB()
 	if db == nil {
 		p.logger.Error("DB not available for process+ source resolution")
-		return "", true, nil
+		return control.OfflineUnavailable, false, nil
 	}
 
 	var jobSourceURL sql.NullString
@@ -2124,7 +2364,7 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 	}
 	if err != nil && err != sql.ErrNoRows {
 		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up processing job source")
-		return "", true, nil
+		return control.OfflineUnavailable, false, nil
 	}
 
 	var format string
@@ -2135,24 +2375,23 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 	`, artifactHash).Scan(&format)
 	if err != nil {
 		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up format for process+ source")
-		return "", true, nil
+		return control.OfflineNotUploaded, false, nil
 	}
 
 	if isRelaySafeFormat(format) {
 		relayURL := buildUploadRelayURL(nodeID, artifactHash, format)
 		if relayURL == "" {
-			// No relay base URL advertised by this node. Abort the
-			// trigger so processing is rescheduled rather than handing
-			// Mist a direct presigned-S3 URL that bypasses Helmsman
-			// admission/pressure handling. Mist retries STREAM_SOURCE
-			// after the abort window; Foghorn can pick another node
-			// (or the operator fixes the missing config).
+			// No relay base URL advertised by this node — return offline so
+			// Mist disconnects cleanly rather than dialing a direct
+			// presigned-S3 URL that bypasses Helmsman admission/pressure
+			// handling. Foghorn can pick another node when the operator
+			// fixes the missing config.
 			p.logger.WithFields(logging.Fields{
 				"artifact_hash": artifactHash,
 				"node_id":       nodeID,
 				"format":        format,
-			}).Warn("process+ source: no relay base URL advertised by node; aborting")
-			return "", true, nil
+			}).Warn("process+ source: no relay base URL advertised by node")
+			return control.OfflineUnavailable, false, nil
 		}
 		p.logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
@@ -2167,8 +2406,8 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		"artifact_hash": artifactHash,
 		"node_id":       nodeID,
 		"format":        format,
-	}).Warn("process+ source: unsafe-wrapper input not staged locally by Helmsman; aborting so Mist retries")
-	return "", true, nil
+	}).Warn("process+ source: unsafe-wrapper input not staged locally by Helmsman")
+	return control.OfflineUnavailable, false, nil
 }
 
 // handleStreamProcess returns cached MistServer process config for the
@@ -2342,6 +2581,67 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 
 	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
 		return "", false, decklogErr
+	}
+	return "", false, nil
+}
+
+// handlePushInputClose processes PUSH_INPUT_CLOSE (publisher source
+// disconnected). This is the canonical "source_active=false" edge that
+// the AdmitAndReserve admission state machine relies on. Non-blocking:
+// the response is ignored by Mist (this is an async trigger). Failure to
+// flip registry state still forwards the trigger to Decklog for audit.
+func (p *Processor) handlePushInputClose(trigger *pb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushInputClose)
+	if !ok {
+		return "", false, fmt.Errorf("unexpected payload type for PushInputClose: %T", trigger.GetTriggerPayload())
+	}
+	pic := payload.PushInputClose
+	internalName := mist.ExtractInternalName(pic.GetStreamName())
+
+	// processing+ push_input_close fires when a transcoding job's input
+	// process exits. That is sidecar-local job lifecycle, not publisher
+	// admission state — skip the registry flip.
+	if strings.HasPrefix(pic.GetStreamName(), "processing+") {
+		return "", false, nil
+	}
+
+	p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		pic.StreamId = &streamID
+	}
+	if nodeID := trigger.GetNodeId(); nodeID != "" && pic.NodeId == nil {
+		pic.NodeId = &nodeID
+	}
+
+	// Flip the registry's source-presence state. AdmitAndReserve reads
+	// this on the next PUSH_REWRITE for the same stream to decide
+	// resume vs takeover vs reject.
+	if registry := control.StreamRegistryInstance; registry != nil && internalName != "" {
+		registry.MarkSourceInactive(internalName, trigger.GetNodeId())
+	}
+
+	// Announce stream-offline to federated peers so a cross-cluster
+	// takeover doesn't have to wait ~10s for Mist's natural STREAM_END.
+	// Intra-cluster takeover is already responsive via the registry's
+	// source_active flip; this is the cross-cluster equivalent.
+	if p.peerNotifier != nil && internalName != "" {
+		p.peerNotifier.BroadcastStreamLifecycle(internalName, trigger.GetTenantId(), false)
+	}
+
+	// Forward to Decklog for audit. Periscope must NOT use this event to
+	// mutate stream_state_current — ingest session ownership stays with
+	// AdmitAndReserve's accepted PUSH_REWRITE.
+	if err := p.sendTriggerToDecklog(trigger); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"internal_name":  internalName,
+			"binary_name":    pic.GetBinaryName(),
+			"machine_reason": pic.GetMachineReason(),
+			"trigger_type":   trigger.GetTriggerType(),
+			"error":          err,
+		}).Error("Failed to send push_input_close trigger to Decklog")
+		if shouldSurfaceDecklogError(trigger) {
+			return "", false, err
+		}
 	}
 	return "", false, nil
 }
@@ -2623,6 +2923,17 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 
 	// Update state offline
 	state.DefaultManager().SetOffline(internalName, nodeID)
+
+	// Belt-and-suspenders source-presence flip: if PUSH_INPUT_CLOSE was
+	// lost (Helmsman crash mid-trigger, transport blip, parse error),
+	// STREAM_END is the corrective edge — by the time Mist declares the
+	// stream gone, any publisher must already be disconnected. The
+	// node-match guard inside MarkSourceInactive no-ops if the recorded
+	// OwnerNodeID doesn't match, so a STREAM_END on a stale node won't
+	// clear a different owner's live state.
+	if registry := control.StreamRegistryInstance; registry != nil {
+		registry.MarkSourceInactive(internalName, nodeID)
+	}
 
 	// Decrement the broadcaster's concurrent-stream count. Idempotent: a
 	// stream not in the set is a no-op, so duplicate STREAM_END fires are
@@ -3337,6 +3648,109 @@ func (p *Processor) resolveNodeClusterID(nodeID string) string {
 	return ""
 }
 
+// isNodeHealthyForAdmission reports whether a node currently has a fresh
+// health beat from the perspective of source-presence admission. Used by
+// AdmitAndReserve to short-circuit a stale source_active=true flag when
+// the recorded owner is down or unreachable — otherwise a node crash
+// without PUSH_INPUT_CLOSE would block legitimate takeover indefinitely.
+func (p *Processor) isNodeHealthyForAdmission(nodeID string) bool {
+	if strings.TrimSpace(nodeID) == "" {
+		return false
+	}
+	ns := state.DefaultManager().GetNodeState(nodeID)
+	if ns == nil {
+		return false
+	}
+	return ns.IsHealthy && !ns.IsStale
+}
+
+// tryArrangeDVRCrossCluster arranges a cross-cluster DTSC pull for
+// dvr+<token> when the source stream's federation cache says a peer
+// cluster is recording it. Returns (peerDTSC, true) on success.
+// Returns ("", false) when no federated recording is advertised or
+// arrangement fails — caller then returns offline:not_recorded.
+func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName string, dispatch *control.DVRArtifactDispatch, callerNodeID string) (string, bool) {
+	if dispatch == nil || dispatch.StreamInternalName == "" {
+		return "", false
+	}
+	if control.StreamRegistryInstance == nil {
+		return "", false
+	}
+	entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, dispatch.StreamInternalName)
+	if err != nil {
+		return "", false
+	}
+	var peerCluster, recordingNode string
+	for cid, loc := range entry.Locations {
+		if cid == p.clusterID {
+			continue
+		}
+		if loc.RecordingNodeID == "" {
+			continue
+		}
+		peerCluster = cid
+		recordingNode = loc.RecordingNodeID
+		break
+	}
+	if peerCluster == "" || recordingNode == "" {
+		return "", false
+	}
+	result, arrangeErr := federation.DefaultArrange(ctx, federation.ArrangeOriginPullRequest{
+		InternalName: runtimeName,
+		Remote: &pb.EdgeCandidate{
+			NodeId: recordingNode,
+		},
+		RemoteCluster:   peerCluster,
+		TenantID:        entry.TenantID,
+		DestNodeID:      callerNodeID,
+		DestNodeBaseURL: "",
+	})
+	if arrangeErr != nil || result == nil {
+		p.logger.WithError(arrangeErr).WithFields(logging.Fields{
+			"stream_name":    runtimeName,
+			"peer_cluster":   peerCluster,
+			"recording_node": recordingNode,
+		}).Warn("STREAM_SOURCE dvr+: cross-cluster ArrangeOriginPull failed")
+		return "", false
+	}
+	p.logger.WithFields(logging.Fields{
+		"stream_name":    runtimeName,
+		"peer_cluster":   peerCluster,
+		"recording_node": recordingNode,
+		"dtsc_url":       result.PullDTSCURL,
+	}).Info("STREAM_SOURCE dvr+: cross-cluster origin-pull arranged from recording node")
+	return result.PullDTSCURL, true
+}
+
+// drainOldOwner asks the prior owner node to unload the lingering Mist
+// buffer and disconnect viewer sessions for the runtime name, so viewers
+// don't keep talking to the stale buffer after takeover. Fire-and-forget:
+// admission must not block on completion (the new owner serves viewers
+// immediately). Dispatched as a DrainStreamRequest over the long-lived
+// Connect(stream ControlMessage) channel; the actual stop_sessions +
+// nuke_stream + DVR-override clear happens in
+// api_sidecar/internal/control/client.go handleDrainStream.
+func (p *Processor) drainOldOwner(oldOwnerNodeID, runtimeName, reason string) {
+	if p == nil || p.drainStream == nil || strings.TrimSpace(oldOwnerNodeID) == "" || strings.TrimSpace(runtimeName) == "" {
+		return
+	}
+	if err := p.drainStream(oldOwnerNodeID, runtimeName, reason); err != nil {
+		if p.metrics != nil && p.metrics.DrainDispatch != nil {
+			p.metrics.DrainDispatch.WithLabelValues("failed").Inc()
+		}
+		p.logger.WithFields(logging.Fields{
+			"old_owner":    oldOwnerNodeID,
+			"runtime_name": runtimeName,
+			"reason":       reason,
+			"error":        err,
+		}).Warn("drain dispatch to old owner failed; proceeding with takeover")
+		return
+	}
+	if p.metrics != nil && p.metrics.DrainDispatch != nil {
+		p.metrics.DrainDispatch.WithLabelValues("ok").Inc()
+	}
+}
+
 // resolveClusterOwnerTenantID resolves a cluster_id to its owner_tenant_id.
 // Uses a local cache to avoid repeated Quartermaster lookups.
 func (p *Processor) resolveClusterOwnerTenantID(clusterID string) string {
@@ -3657,6 +4071,20 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 		RequiresAuthKnown: true,
 	}
 
+	// Mirror identity into the unified stream registry so other Foghorn
+	// subsystems (routing, federation, diagnostics) see the same data
+	// without a second Commodore round-trip. ResolveIdentifierResponse
+	// carries no ingest_mode or playback_id; those fill in on the next
+	// resolver hit (ResolveStreamContext) that does carry them.
+	if control.StreamRegistryInstance != nil && resp.GetInternalName() != "" {
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:        resp.GetStreamId(),
+			TenantID:        resp.GetTenantId(),
+			InternalName:    resp.GetInternalName(),
+			OriginClusterID: resp.GetOriginClusterId(),
+		})
+	}
+
 	if resp.GetIdentifierType() == "playback_id" {
 		atomic.AddUint64(&p.streamCacheResPb, 1)
 	} else {
@@ -3713,12 +4141,42 @@ func (p *Processor) getStreamContext(ctx context.Context, streamName, tenantIDHi
 }
 
 // applyStreamContext enriches trigger with tenant/user/stream IDs if available.
+//
+// Dispatch is typed via streamident.Parse so artifact callbacks
+// (vod+/dvr+/processing+) and source callbacks (live+/pull+/bare) take
+// different lookup paths even when they happen to share an enrichment
+// cache. Source lookups consult the unified registry first for a warm-
+// cache fast path; on miss, both kinds fall through to getStreamContext
+// which goes via Commodore and seeds both streamCache and the registry.
 func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName string) streamContext {
 	tenantHint := ""
 	if trigger != nil && trigger.TenantId != nil {
 		tenantHint = *trigger.TenantId
 	}
-	info := p.getStreamContext(context.Background(), streamName, tenantHint)
+
+	var info streamContext
+	parsed := streamident.Parse(streamName)
+	if parsed.IsSource() || parsed.Kind == streamident.KindBare {
+		if control.StreamRegistryInstance != nil && parsed.Concrete != "" {
+			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), parsed.Concrete); err == nil && entry.TenantID != "" {
+				info.TenantID = entry.TenantID
+				info.StreamID = entry.StreamID
+				info.OriginClusterID = entry.OriginClusterID
+				info.Source = "stream_registry"
+			}
+		}
+	}
+	// Fall through to streamCache for billing/policy/quota fields the
+	// registry doesn't carry, and for artifact-kind lookups Commodore
+	// resolves via ResolveIdentifier. If the registry already populated
+	// the identity fields above, getStreamContext refreshes the rest of
+	// the streamContext on cache miss; on cache hit the cached entry
+	// supersedes the partial info above.
+	full := p.getStreamContext(context.Background(), streamName, tenantHint)
+	if full.TenantID != "" || full.StreamID != "" {
+		info = full
+	}
+
 	if trigger == nil {
 		return info
 	}

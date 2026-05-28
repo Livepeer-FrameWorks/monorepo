@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -81,6 +83,28 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *pb.ResolveS
 		MaxViewers:         caps.GetMaxViewers(),
 		IsFreeTier:         isFree,
 		AllowanceExhausted: exhausted,
+	}
+
+	// Mirror identity into the unified stream registry so routing /
+	// federation / diagnostics see the managed stream's identity without
+	// going back through Commodore.
+	if control.StreamRegistryInstance != nil {
+		ingestMode, modeErr := control.IngestModeFromWire(streamCtx.GetIngestMode())
+		if modeErr != nil {
+			// Commodore returned an admitted row without a usable
+			// ingest_mode: still hydrate identity so other resolves
+			// succeed; IngestMode stays 0 and RuntimeName fills in on
+			// the next resolver pass that knows the mode.
+			ingestMode = 0
+		}
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:        streamCtx.GetStreamId(),
+			TenantID:        tenantID,
+			PlaybackID:      streamCtx.GetPlaybackId(),
+			InternalName:    internalName,
+			IngestMode:      ingestMode,
+			OriginClusterID: streamCtx.GetOriginClusterId(),
+		})
 	}
 
 	cacheTTL := 10 * time.Minute

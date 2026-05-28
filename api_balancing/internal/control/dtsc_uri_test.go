@@ -46,6 +46,12 @@ func TestBuildDTSCURI(t *testing.T) {
 			want:       "dtsc://" + advertisedHost + ":4200/dvr+dvr_int_001",
 		},
 		{
+			name:       "vod stream prefix preserved",
+			nodeID:     nodeID,
+			streamName: "vod+asset_abc",
+			want:       "dtsc://" + advertisedHost + ":4200/vod+asset_abc",
+		},
+		{
 			name:       "node without DTSC output returns empty",
 			nodeID:     "node-no-dtsc",
 			streamName: "live+stream_abc",

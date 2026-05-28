@@ -116,11 +116,11 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	}
 
 	repo.mu.Lock()
-	if len(repo.addCachedNodePathCalls) != 1 {
-		t.Fatalf("expected 1 AddCachedNodeWithPath, got %d", len(repo.addCachedNodePathCalls))
+	if len(repo.originArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RegisterOriginArtifact, got %d", len(repo.originArtifactCalls))
 	}
-	call := repo.addCachedNodePathCalls[0]
-	if call.Hash != "art-hash" || call.NodeID != "node-1" || call.Path != "/data/processed/output.mp4" || call.Size != 5000 {
+	call := repo.originArtifactCalls[0]
+	if call.Hash != "art-hash" || call.NodeID != "node-1" || call.Path != "/data/processed/output.mp4" || call.Size != 5000 || !call.Complete {
 		t.Fatalf("unexpected call: %+v", call)
 	}
 	repo.mu.Unlock()

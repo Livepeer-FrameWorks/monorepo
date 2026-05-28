@@ -97,8 +97,8 @@ func main() {
 	foghornCfg := foghornconfig.Load()
 	control.SetLocalClusterID(foghornCfg.ClusterID)
 
-	// Storage base path for defrost operations when node has no StorageLocal.
-	// Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH for path reconstruction.
+	// Storage base path for local-path reconstruction (DVR dispatch) when node
+	// has no StorageLocal. Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH.
 	if storageBase := config.GetEnv("FOGHORN_DEFAULT_STORAGE_BASE", ""); storageBase != "" {
 		if !filepath.IsAbs(storageBase) {
 			logger.WithField("path", storageBase).Fatal("FOGHORN_DEFAULT_STORAGE_BASE must be absolute path")
@@ -726,6 +726,11 @@ func main() {
 			"CLIENT_LIFECYCLE batcher outcomes (send_failed/retry_succeeded)",
 			[]string{"reason"},
 		),
+		DrainDispatch: metricsCollector.NewCounter(
+			"drain_dispatch_total",
+			"AcceptTakeover drain dispatches to the prior owner node (ok/failed)",
+			[]string{"result"},
+		),
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
@@ -734,6 +739,16 @@ func main() {
 	if peerManager != nil {
 		triggerProcessor.SetPeerNotifier(peerManager)
 	}
+	// Drain dispatcher: wire the AdmitAndReserve takeover path to the
+	// long-lived Helmsman control stream. Uses the HA-aware SendDrainStream
+	// so a takeover initiated on one Foghorn instance can still drain an
+	// old owner connected to a peer instance.
+	triggerProcessor.SetDrainStreamDispatcher(func(nodeID, runtimeName, reason string) error {
+		return control.SendDrainStream(nodeID, &pb.DrainStreamRequest{
+			RuntimeName: runtimeName,
+			Reason:      reason,
+		})
+	})
 	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
 	handlers.SetTriggerProcessor(triggerProcessor)
 
@@ -747,6 +762,31 @@ func main() {
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
 	control.SetGeoIPCache(geoipCache)
+
+	// Unified stream registry: identity (push, pull, mist-native, federated
+	// peers) + artifact bookkeeping + replication state, with a periodic
+	// sweeper that ages stale Locations out.
+	streamRegistry := control.NewStreamRegistry(commodoreClient, foghornCfg.ClusterID, 30*time.Second)
+	streamRegistry.SetLivePresence(control.NewLivePresence(state.DefaultManager()))
+	streamRegistry.SetMissLogger(func(_ context.Context, refKind, key string) {
+		logger.WithFields(logging.Fields{
+			"ref_kind": refKind,
+			"key":      key,
+		}).Debug("stream_registry.miss")
+	})
+	if redisClient != nil {
+		registryRedis := control.NewRedisRegistryStore(redisClient, foghornCfg.ClusterID)
+		if sources, artifacts, syncErr := streamRegistry.EnableRedisSync(context.Background(), registryRedis, instanceID, logger); syncErr != nil {
+			logger.WithError(syncErr).Warn("Failed to enable stream-registry Redis sync")
+		} else {
+			logger.WithFields(logging.Fields{
+				"sources":   sources,
+				"artifacts": artifacts,
+			}).Info("Stream-registry rehydrated from Redis")
+		}
+	}
+	control.SetStreamRegistry(streamRegistry)
+	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
 
 	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips, artifacts)
 	state.DefaultManager().ConfigurePolicies(state.PoliciesConfig{
@@ -849,6 +889,35 @@ func main() {
 	if peerManager != nil {
 		handlers.SetPeerManager(peerManager)
 		foghornServer.SetPeerManager(peerManager)
+	}
+
+	// Wire the process-wide arrange-origin-pull deps so the trigger
+	// processor can federate cross-cluster DVR origin-pulls without
+	// constructing its own deps struct per call. Only set when all
+	// three federation primitives are available — without them
+	// federation.DefaultArrange returns ErrOriginPullDepsMissing and
+	// callers fall back to their non-federated path.
+	if remoteEdgeCache != nil && peerManager != nil && fedClient != nil {
+		federation.SetDefaultArrangeDeps(&federation.ArrangeOriginPullDeps{
+			Cache:        remoteEdgeCache,
+			PeerResolver: peerManager,
+			FedClient:    fedClient,
+			InstanceID:   instanceID,
+			ClusterID:    foghornCfg.ClusterID,
+			Logger:       logger,
+		})
+	}
+
+	// Wire the cross-cluster artifact resolver so RelayResolve can
+	// federate vod+/processing+ reads to peer S3 when the artifact
+	// isn't local. Without these deps RelayResolve silently 404s on
+	// non-local artifacts (today's behavior).
+	if peerManager != nil && fedClient != nil {
+		control.SetCrossClusterArtifactDeps(&control.CrossClusterArtifactDeps{
+			FedClient:      fedClient,
+			PeerResolver:   peerManager,
+			LocalClusterID: foghornCfg.ClusterID,
+		})
 	}
 
 	// Wire the storage resolver factory + federated mint delegate into the
@@ -963,12 +1032,16 @@ func main() {
 	if relayServer != nil {
 		internalRegistrars = append(internalRegistrars, relayServer.RegisterServices)
 	}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	// Same HMAC key signs cross-cluster peer-relay tokens — only origin
+	// cluster's Helmsmans validate, so the key never leaves the cluster.
+	control.SetArtifactRelaySecret([]byte(jwtSecret))
 	grpcServers, err := control.StartGRPCServers(context.Background(), control.GRPCServerConfig{
 		InternalBindAddr:   internalGRPCBindAddr,
 		ExternalBindAddr:   externalGRPCBindAddr,
 		Logger:             logger,
 		ServiceToken:       serviceToken,
-		JWTSecret:          os.Getenv("JWT_SECRET"),
+		JWTSecret:          jwtSecret,
 		InternalRegistrars: internalRegistrars,
 	})
 	if err != nil {
@@ -1058,16 +1131,6 @@ func main() {
 		chapterReclaimer.Start()
 		defer chapterReclaimer.Stop()
 	}
-
-	// Start stale defrost cleanup job (resets stuck defrosting artifacts)
-	staleDefrostJob := jobs.NewStaleDefrostCleanupJob(jobs.StaleDefrostCleanupConfig{
-		DB:         db,
-		Logger:     logger,
-		Interval:   1 * time.Minute,
-		StaleAfter: 10 * time.Minute,
-	})
-	staleDefrostJob.Start()
-	defer staleDefrostJob.Stop()
 
 	// Start stale freeze cleanup job (resets stuck freezing artifacts)
 	staleFreezeJob := jobs.NewStaleFreezeCleanupJob(jobs.StaleFreezeCleanupConfig{
@@ -1165,6 +1228,7 @@ func main() {
 	// Root page debug interface
 	router.GET("/dashboard", handlers.HandleRootPage)
 	router.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
+	router.GET("/debug/stream-registry", handlers.HandleStreamRegistry)
 	router.GET("/debug/served-clusters", handlers.HandleServedClusters)
 
 	// Viewer playback routes - generic player redirects via foghorn.* domain
@@ -1336,6 +1400,9 @@ func reconnectCommodore(
 		control.SetCommodoreClient(client)
 		if triggerProcessor != nil {
 			triggerProcessor.SetCommodoreClient(client)
+		}
+		if control.StreamRegistryInstance != nil {
+			control.StreamRegistryInstance.SetCommodoreClient(client)
 		}
 		logger.Info("Commodore reconnected")
 		return

@@ -58,7 +58,7 @@ func TestUpsertArtifacts_InsertsWithFKGuard(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// INSERT with WHERE EXISTS FK guard
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts").
-		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(1024), int64(0), int64(0), int64(0), int64(0)).
+		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(1024), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Mark stale
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true").
@@ -91,7 +91,7 @@ func TestUpsertArtifacts_RetriesDeadlock(t *testing.T) {
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts").
-		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0)).
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true").
 		WithArgs("node-1").
@@ -117,7 +117,7 @@ func TestUpsertArtifacts_RollbackOnError(t *testing.T) {
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
-		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0)).
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnError(fmt.Errorf("FK violation"))
 	mock.ExpectRollback()
 

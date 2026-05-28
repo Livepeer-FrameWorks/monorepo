@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
+
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"google.golang.org/grpc"
@@ -24,6 +26,11 @@ func (noopDVRCreator) StartDVR(context.Context, *pb.StartDVRRequest) (*pb.StartD
 
 func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 	cache, _ := setupTestCache(t)
+	// Stream-ad + playback-index now live on the unified registry.
+	prior := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prior) })
 	srv := NewFederationServer(FederationServerConfig{
 		Logger:    testLogger(),
 		ClusterID: "cluster-a",
@@ -123,6 +130,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 					Artifacts: []*pb.ArtifactLocation{{
 						ArtifactHash: "artifact-1",
 						ArtifactType: "clip",
+						TenantId:     "tenant-a",
 						NodeId:       "node-art",
 						BaseUrl:      "edge-art.example.com",
 						SizeBytes:    2048,
@@ -189,13 +197,25 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 		t.Fatalf("expected stream-live to be deleted on offline event, got %+v", live)
 	}
 
-	ad, err := cache.GetStreamAd(ctx, peerCluster, "stream-ad")
-	if err != nil || ad == nil {
-		t.Fatalf("expected stream ad cached, ad=%v err=%v", ad, err)
+	// Stream ad + playback-id reverse index now land on the registry, not
+	// the federation cache. Verify both via registry lookups.
+	entry, lookupErr := registry.ResolveSourceByInternalName(ctx, "stream-ad")
+	if lookupErr != nil {
+		t.Fatalf("expected stream ad in registry: %v", lookupErr)
 	}
-	playbackIdx, err := cache.GetPlaybackIndex(ctx, "play-1")
-	if err != nil || playbackIdx != "stream-ad" {
-		t.Fatalf("expected playback index play-1->stream-ad, got %q err=%v", playbackIdx, err)
+	peerLoc, ok := entry.Locations[peerCluster]
+	if !ok {
+		t.Fatalf("expected Locations[%q], got %v", peerCluster, entry.Locations)
+	}
+	if !peerLoc.IsOrigin {
+		t.Errorf("peer Location.IsOrigin = false")
+	}
+	if entry.PlaybackID != "play-1" {
+		t.Errorf("registry PlaybackID = %q, want play-1", entry.PlaybackID)
+	}
+	byPlayback, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-1")
+	if lookupErr != nil || byPlayback.InternalName != "stream-ad" {
+		t.Fatalf("expected playback-id resolve to stream-ad, got %q err=%v", byPlayback.InternalName, lookupErr)
 	}
 
 	artifacts, err := cache.GetRemoteArtifacts(ctx, "artifact-1")

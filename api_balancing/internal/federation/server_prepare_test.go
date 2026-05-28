@@ -43,42 +43,7 @@ func (f *fakeS3Client) DeletePrefix(_ context.Context, _ string) (int, error) {
 	return 0, nil
 }
 
-func TestPrepareArtifact_DefrostingState(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock.New: %v", err)
-	}
-	defer db.Close()
-
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster"}).
-		AddRow("clip-a", "stream-a", "clip", "mp4", "defrosting", "", 2048, nil)
-	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
-
-	srv := NewFederationServer(FederationServerConfig{
-		Logger:   logging.NewLogger(),
-		DB:       db,
-		S3Client: &storage.S3Client{},
-	})
-
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
-		ArtifactId: "hash-1",
-		TenantId:   "tenant-a",
-	})
-	if err != nil {
-		t.Fatalf("PrepareArtifact() err = %v", err)
-	}
-	if resp.GetReady() {
-		t.Fatalf("expected Ready=false for defrosting artifact, got true")
-	}
-	if resp.GetEstReadySeconds() != 15 {
-		t.Fatalf("expected EstReadySeconds=15, got %d", resp.GetEstReadySeconds())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("sql expectations: %v", err)
-	}
-}
-
-func TestPrepareArtifact_LocalState_TriggersFreeze(t *testing.T) {
+func TestPrepareArtifact_LocalState_NotReady(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -104,9 +69,6 @@ func TestPrepareArtifact_LocalState_TriggersFreeze(t *testing.T) {
 	}
 	if resp.GetReady() {
 		t.Fatalf("expected Ready=false for local artifact, got true")
-	}
-	if resp.GetEstReadySeconds() != 30 {
-		t.Fatalf("expected EstReadySeconds=30, got %d", resp.GetEstReadySeconds())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -365,9 +327,6 @@ func TestPrepareArtifact_FreezingState(t *testing.T) {
 	if resp.GetReady() {
 		t.Fatal("expected Ready=false for freezing artifact")
 	}
-	if resp.GetEstReadySeconds() != 30 {
-		t.Fatalf("expected 30 seconds, got %d", resp.GetEstReadySeconds())
-	}
 }
 
 func TestPrepareArtifact_ClipHashFallback(t *testing.T) {
@@ -451,9 +410,6 @@ func TestPrepareArtifact_SyncingState(t *testing.T) {
 	}
 	if resp.GetReady() {
 		t.Fatal("expected Ready=false for syncing artifact")
-	}
-	if resp.GetEstReadySeconds() != 30 {
-		t.Fatalf("expected 30 seconds, got %d", resp.GetEstReadySeconds())
 	}
 }
 

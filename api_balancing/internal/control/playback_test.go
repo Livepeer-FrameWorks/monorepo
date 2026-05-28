@@ -286,6 +286,30 @@ func TestBuildOutputsMapAcceptsMistDisplayOutputNames(t *testing.T) {
 	}
 }
 
+func TestBuildViewerEndpointFromOutputsAcceptsMistDisplayHLSName(t *testing.T) {
+	nodeOutputs := &NodeOutputs{
+		NodeID:  "edge-1",
+		BaseURL: "http://edge-egress.example.com/view",
+		Outputs: map[string]any{
+			"HLS (TS)": "http://public.example.com:18090/view/hls/$/index.m3u8",
+		},
+	}
+
+	endpoint := BuildViewerEndpointFromOutputs("edge-1", nodeOutputs, "stream", true)
+	if endpoint == nil {
+		t.Fatal("expected endpoint")
+	}
+	if endpoint.Protocol != "hls" {
+		t.Fatalf("protocol = %q, want hls", endpoint.Protocol)
+	}
+	if endpoint.Url != "http://public.example.com:18090/view/hls/stream/index.m3u8" {
+		t.Fatalf("url = %q", endpoint.Url)
+	}
+	if endpoint.Outputs["HLS"].Url != endpoint.Url {
+		t.Fatalf("canonical HLS output = %q, want %q", endpoint.Outputs["HLS"].Url, endpoint.Url)
+	}
+}
+
 func TestBuildOutputsMapDerivesStandardMistPlaybackOutputs(t *testing.T) {
 	outputs := BuildOutputsMap("http://public.example.com:18090/view", map[string]any{}, "stream", true)
 
@@ -611,7 +635,7 @@ func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err := resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-other", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}})
+	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-other", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}}, nil)
 	if err == nil {
 		t.Fatal("expected unauthorized origin cluster error")
 	}
@@ -627,7 +651,7 @@ func TestResolveRemoteArtifact_RejectsWhenTenantPeerDataMissing(t *testing.T) {
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err := resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-origin", "clip", "tenant-1", nil)
+	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", nil, nil)
 	if err == nil {
 		t.Fatal("expected authorization error when peer list is unavailable")
 	}
@@ -654,12 +678,9 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err = resolveRemoteArtifact(context.Background(), deps, "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}})
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
 	if err == nil {
-		t.Fatal("expected storage-node lookup error")
-	}
-	if !strings.Contains(err.Error(), "no local storage node") {
-		t.Fatalf("expected local storage node error, got %v", err)
+		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -720,17 +741,14 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err = resolveRemoteArtifact(context.Background(), deps,
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1",
 		"artifact-1", "cluster-origin", "clip", "tenant-1",
 		[]*pb.TenantClusterPeer{
 			{ClusterId: "cluster-origin"},
 			{ClusterId: "cluster-storage"},
-		})
+		}, nil)
 	if err == nil {
-		t.Fatal("expected storage-node lookup error after adoption")
-	}
-	if !strings.Contains(err.Error(), "no local storage node") {
-		t.Fatalf("expected local storage node error, got %v", err)
+		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

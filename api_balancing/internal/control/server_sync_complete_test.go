@@ -38,8 +38,8 @@ func TestProcessSyncComplete_Success_WithS3URL(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts.*SET storage_location = 'local'.*sync_status = 'synced'").
 		WithArgs("s3://bucket/key", true, "hash-1", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Post-sync VOD also persists vod_metadata.s3_key so future defrosts
-	// read the synced location rather than the original upload key.
+	// Post-sync VOD also persists vod_metadata.s3_key so future relay
+	// reads target the synced location rather than the original upload key.
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
 		WithArgs("hash-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))

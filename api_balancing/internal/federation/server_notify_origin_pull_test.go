@@ -2,7 +2,9 @@ package federation
 
 import (
 	"testing"
+	"time"
 
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -24,7 +26,13 @@ func testFederationServerWithCache(t *testing.T) (*FederationServer, *RemoteEdge
 		ClusterID: "cluster-a",
 		Cache:     cache,
 	})
+	// Install a per-test stream registry so NotifyOriginPull can record
+	// outbound pulls. Tests that want to exercise the registry-unavailable
+	// path clear it explicitly via control.SetStreamRegistry(nil).
+	prior := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-a", time.Minute))
 	t.Cleanup(func() {
+		control.SetStreamRegistry(prior)
 		_ = client.Close()
 		mr.Close()
 	})
@@ -65,10 +73,19 @@ func TestNotifyOriginPullRejectsTenantMismatch(t *testing.T) {
 	}
 }
 
-func TestNotifyOriginPullFailsWhenCacheUnavailable(t *testing.T) {
-	server, _, mr := testFederationServerWithCache(t)
+// TestNotifyOriginPullFailsWhenRegistryUnavailable preserves the intent
+// of the prior cache-availability check: if we can't durably track the
+// outbound pull, reject the request rather than silently acking a handoff
+// we can't observe. The handoff record moved from federation cache to
+// the unified stream registry; the rejection now fires when the registry
+// singleton is unset.
+func TestNotifyOriginPullFailsWhenRegistryUnavailable(t *testing.T) {
+	server, _, _ := testFederationServerWithCache(t)
 	setLiveStreamState(t, "tenantA+stream", "source-1", "tenant-a", "edge-a.example.com")
-	mr.Close()
+
+	priorRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(nil)
+	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
 
 	ack, err := server.NotifyOriginPull(svcAuthCtx(), &pb.OriginPullNotification{
 		StreamName:    "tenantA+stream",
@@ -81,7 +98,7 @@ func TestNotifyOriginPullFailsWhenCacheUnavailable(t *testing.T) {
 		t.Fatalf("NotifyOriginPull error: %v", err)
 	}
 	if ack.GetAccepted() {
-		t.Fatalf("expected cache failure to be rejected")
+		t.Fatalf("expected rejection when registry unavailable")
 	}
 }
 

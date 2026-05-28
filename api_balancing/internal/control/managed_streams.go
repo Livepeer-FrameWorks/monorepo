@@ -5,7 +5,6 @@ import (
 	"errors"
 	"hash/fnv"
 	"sort"
-	"sync"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -70,78 +69,32 @@ func (s managedStreamSnapshot) applyKey() managedStreamSnapshot {
 	return s
 }
 
-var managedStreamLastSent struct {
-	sync.Mutex
-	// clusterID -> nodeID -> streamID -> last Applied snapshot. Cluster scope
-	// keeps a per-cluster reconciler tick from retracting streams that belong
-	// to another served cluster's diff.
-	m map[string]map[string]map[string]managedStreamSnapshot
-}
-
-func init() {
-	managedStreamLastSent.m = make(map[string]map[string]map[string]managedStreamSnapshot)
-}
-
-// ForgetManagedStreamLastSent drops cached Apply state for a node across every
-// cluster Foghorn serves. Called when a Helmsman disconnects so a reconnect's
-// next reconciler tick re-emits Apply for whatever should be on that node.
+// ForgetManagedStreamLastSent drops cached Apply state for a node across
+// every cluster Foghorn serves. Called when a Helmsman disconnects so a
+// reconnect's next reconciler tick re-emits Apply for whatever should be
+// on that node.
 func ForgetManagedStreamLastSent(nodeID string) {
-	managedStreamLastSent.Lock()
-	for clusterID, nodes := range managedStreamLastSent.m {
-		delete(nodes, nodeID)
-		if len(nodes) == 0 {
-			delete(managedStreamLastSent.m, clusterID)
-		}
+	if StreamRegistryInstance == nil {
+		return
 	}
-	managedStreamLastSent.Unlock()
-	managedStreamVerifiedApplied.Lock()
-	delete(managedStreamVerifiedApplied.m, nodeID)
-	managedStreamVerifiedApplied.Unlock()
+	StreamRegistryInstance.ManagedForgetNode(nodeID)
 }
-
-// managedStreamVerifiedApplied caches the sidecar-reported applied
-// snapshot per node, updated on every Heartbeat. Stores the full apply
-// key (source / always_on / ingest_mode) — not just presence — so the
-// reconciler can detect Mist-add failures on UPDATE: if the new source
-// failed to land, the sidecar's appliedManagedStreams still reports the
-// previous config and presence-only verification would mask the drift.
-//
-// The reconciler treats a stream as verified only when the heartbeat
-// snapshot matches the desired apply key for that tick. Mismatched
-// snapshots trip re-Apply just like absent ones.
-var managedStreamVerifiedApplied = struct {
-	sync.Mutex
-	// nodeID -> stream_id -> apply key of the snapshot Mist has applied.
-	m map[string]map[string]managedStreamSnapshot
-}{m: make(map[string]map[string]managedStreamSnapshot)}
 
 // UpdateVerifiedAppliedFromHeartbeat replaces this node's verified-applied
 // set with the snapshot the sidecar just reported. Called from the
 // Heartbeat handler; nodeID is the canonical ID.
+//
+// Stores the full apply key (source / always_on / ingest_mode) — not just
+// presence — so the reconciler can detect Mist-add failures on UPDATE: if
+// the new source failed to land, the sidecar's appliedManagedStreams
+// still reports the previous config and presence-only verification would
+// mask the drift. The reconciler treats a stream as verified only when
+// the heartbeat snapshot matches the desired apply key for that tick.
 func UpdateVerifiedAppliedFromHeartbeat(nodeID string, applied []*pb.AppliedManagedStream) {
-	if nodeID == "" {
+	if StreamRegistryInstance == nil {
 		return
 	}
-	set := make(map[string]managedStreamSnapshot, len(applied))
-	for _, a := range applied {
-		sid := a.GetStreamId()
-		if sid == "" {
-			continue
-		}
-		set[sid] = managedStreamSnapshot{
-			sourceSpec:   a.GetSource(),
-			alwaysOn:     a.GetAlwaysOn(),
-			ingestMode:   a.GetIngestMode(),
-			internalName: a.GetName(),
-		}
-	}
-	managedStreamVerifiedApplied.Lock()
-	if len(set) == 0 {
-		delete(managedStreamVerifiedApplied.m, nodeID)
-	} else {
-		managedStreamVerifiedApplied.m[nodeID] = set
-	}
-	managedStreamVerifiedApplied.Unlock()
+	StreamRegistryInstance.ManagedSetVerifiedFromHeartbeat(nodeID, applied)
 }
 
 // managedStreamVerifiedAppliedMatches reports whether the sidecar's
@@ -151,31 +104,20 @@ func UpdateVerifiedAppliedFromHeartbeat(nodeID string, applied []*pb.AppliedMana
 // re-emit Apply, because a UPDATE that failed Mist-side still leaves the
 // previous-config snapshot in the sidecar's applied map.
 func managedStreamVerifiedAppliedMatches(nodeID, streamID string, desired managedStreamSnapshot) bool {
-	managedStreamVerifiedApplied.Lock()
-	defer managedStreamVerifiedApplied.Unlock()
-	set, ok := managedStreamVerifiedApplied.m[nodeID]
-	if !ok {
+	if StreamRegistryInstance == nil {
 		return false
 	}
-	got, ok := set[streamID]
-	if !ok {
-		return false
-	}
-	return got.applyKey() == desired.applyKey()
+	return StreamRegistryInstance.ManagedVerifiedMatches(nodeID, streamID, desired)
 }
 
 // managedStreamVerifiedAppliedPresent reports presence-only (used for
 // retract: any record of the stream means Mist still has the config,
 // regardless of which version).
 func managedStreamVerifiedAppliedPresent(nodeID, streamID string) bool {
-	managedStreamVerifiedApplied.Lock()
-	defer managedStreamVerifiedApplied.Unlock()
-	set, ok := managedStreamVerifiedApplied.m[nodeID]
-	if !ok {
+	if StreamRegistryInstance == nil {
 		return false
 	}
-	_, ok = set[streamID]
-	return ok
+	return StreamRegistryInstance.ManagedVerifiedPresent(nodeID, streamID)
 }
 
 // HydrateManagedStreamLastSentForNode seeds lastSent with the sidecar's
@@ -197,36 +139,10 @@ func managedStreamVerifiedAppliedPresent(nodeID, streamID string) bool {
 // stream down. Sidecar embeds stream_id in the owner tags on Apply so
 // Mist-config hydration recovers it across sidecar restarts too.
 func HydrateManagedStreamLastSentForNode(nodeID string, applied []*pb.AppliedManagedStream) {
-	if len(applied) == 0 {
+	if StreamRegistryInstance == nil {
 		return
 	}
-	managedStreamLastSent.Lock()
-	defer managedStreamLastSent.Unlock()
-	pending := managedStreamLastSent.m[managedStreamPendingClusterKey]
-	if pending == nil {
-		pending = make(map[string]map[string]managedStreamSnapshot)
-		managedStreamLastSent.m[managedStreamPendingClusterKey] = pending
-	}
-	nodeMap := pending[nodeID]
-	if nodeMap == nil {
-		nodeMap = make(map[string]managedStreamSnapshot)
-		pending[nodeID] = nodeMap
-	}
-	for _, a := range applied {
-		streamID := a.GetStreamId()
-		if streamID == "" {
-			// Sidecar could not recover stream_id — skip; without it we
-			// cannot key lastSent correctly. The reconciler's desired
-			// set + Apply path will record fresh state on the next tick.
-			continue
-		}
-		nodeMap[streamID] = managedStreamSnapshot{
-			sourceSpec:   a.GetSource(),
-			alwaysOn:     a.GetAlwaysOn(),
-			ingestMode:   a.GetIngestMode(),
-			internalName: a.GetName(),
-		}
-	}
+	StreamRegistryInstance.ManagedHydrateForNode(nodeID, applied)
 }
 
 // managedStreamPendingClusterKey holds hydrated-but-unclustered lastSent
@@ -239,41 +155,10 @@ const managedStreamPendingClusterKey = "__pending__"
 // at tick start so the elected-vs-applied diff for cluster X sees the
 // streams Helmsmen in cluster X reported on connect.
 func adoptHydratedManagedStreams(clusterID string, clusterNodes []string) {
-	managedStreamLastSent.Lock()
-	defer managedStreamLastSent.Unlock()
-	pending := managedStreamLastSent.m[managedStreamPendingClusterKey]
-	if pending == nil {
+	if StreamRegistryInstance == nil {
 		return
 	}
-	nodesInCluster := make(map[string]struct{}, len(clusterNodes))
-	for _, n := range clusterNodes {
-		nodesInCluster[n] = struct{}{}
-	}
-	for nodeID, streams := range pending {
-		if _, ok := nodesInCluster[nodeID]; !ok {
-			continue
-		}
-		bucket := managedStreamLastSent.m[clusterID]
-		if bucket == nil {
-			bucket = make(map[string]map[string]managedStreamSnapshot)
-			managedStreamLastSent.m[clusterID] = bucket
-		}
-		if existing, ok := bucket[nodeID]; ok {
-			// Merge hydrated entries beneath any already-recorded snapshots
-			// from a previous reconciler tick. Existing wins on conflict.
-			for sid, snap := range streams {
-				if _, present := existing[sid]; !present {
-					existing[sid] = snap
-				}
-			}
-		} else {
-			bucket[nodeID] = streams
-		}
-		delete(pending, nodeID)
-	}
-	if len(pending) == 0 {
-		delete(managedStreamLastSent.m, managedStreamPendingClusterKey)
-	}
+	StreamRegistryInstance.ManagedAdoptPending(clusterID, clusterNodes)
 }
 
 // StartManagedStreamReconciler runs Foghorn's managed-stream reconciler at
@@ -431,18 +316,10 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 	// a tick; concurrent ForgetManagedStreamLastSent / hydration mutate
 	// specific (cluster, node) entries which the per-stream write-back
 	// pattern below handles correctly.
-	managedStreamLastSent.Lock()
-	nodeLastSnap := make(map[string]map[string]managedStreamSnapshot)
-	if existing := managedStreamLastSent.m[clusterID]; existing != nil {
-		for n, m := range existing {
-			cp := make(map[string]managedStreamSnapshot, len(m))
-			for k, v := range m {
-				cp[k] = v
-			}
-			nodeLastSnap[n] = cp
-		}
+	nodeLastSnap := StreamRegistryInstance.ManagedSnapshotCluster(clusterID)
+	if nodeLastSnap == nil {
+		nodeLastSnap = make(map[string]map[string]managedStreamSnapshot)
 	}
-	managedStreamLastSent.Unlock()
 
 	for nodeID, streamSet := range elected {
 		nodeLast := nodeLastSnap[nodeID]
@@ -501,21 +378,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 					continue
 				}
 				snap.internalName = streamCtx.GetInternalName()
-				// Brief lock to write the new snapshot back; the rest of the
-				// per-stream work above ran without the global mutex held.
-				managedStreamLastSent.Lock()
-				cluster := managedStreamLastSent.m[clusterID]
-				if cluster == nil {
-					cluster = make(map[string]map[string]managedStreamSnapshot)
-					managedStreamLastSent.m[clusterID] = cluster
-				}
-				node := cluster[nodeID]
-				if node == nil {
-					node = make(map[string]managedStreamSnapshot)
-					cluster[nodeID] = node
-				}
-				node[sid] = snap
-				managedStreamLastSent.Unlock()
+				StreamRegistryInstance.ManagedSetLastSent(clusterID, nodeID, sid, snap)
 				// Keep the local snapshot consistent for the retract pass
 				// below (same tick).
 				if nodeLast == nil {
@@ -573,19 +436,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// Conditional on the recorded value matching this cluster,
 			// so a concurrent peer-cluster placement isn't clobbered.
 			clearActiveClusterForManagedStream(log, clusterID, sid)
-			managedStreamLastSent.Lock()
-			if cluster := managedStreamLastSent.m[clusterID]; cluster != nil {
-				if node := cluster[nodeID]; node != nil {
-					delete(node, sid)
-					if len(node) == 0 {
-						delete(cluster, nodeID)
-					}
-				}
-				if len(cluster) == 0 {
-					delete(managedStreamLastSent.m, clusterID)
-				}
-			}
-			managedStreamLastSent.Unlock()
+			StreamRegistryInstance.ManagedDeleteLastSent(clusterID, nodeID, sid)
 		}
 	}
 }

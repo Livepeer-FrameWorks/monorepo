@@ -618,7 +618,6 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 		{"ClipDelete", func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) }},
 		{"DVRDelete", func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) }},
 		{"VodDelete", func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) }},
-		{"DefrostRequest", func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) }},
 		{"DtshSyncRequest", func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) }},
 		{"StopSessions", func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) }},
 	}
@@ -700,7 +699,6 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"clip_delete":             func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
 		"dvr_delete":              func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) },
 		"vod_delete":              func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) },
-		"defrost":                 func() error { return SendDefrostRequest("node-1", &pb.DefrostRequest{}) },
 		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
 		"stop_sessions":           func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
 		"invalidate_sessions":     func() error { return SendInvalidateSessions("node-1", &pb.InvalidateSessionsRequest{}) },
@@ -711,6 +709,10 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"desired_state_update":    func() error { return SendDesiredStateUpdate("node-1", &pb.DesiredStateUpdate{}) },
 		"apply_managed_stream":    func() error { return SendApplyManagedStream("node-1", &pb.ApplyManagedStream{Name: "demo"}) },
 		"retract_managed_stream":  func() error { return SendRetractManagedStream("node-1", &pb.RetractManagedStream{Name: "demo"}) },
+		"drain_stream":            func() error { return SendDrainStream("node-1", &pb.DrainStreamRequest{RuntimeName: "live+demo"}) },
+		"dvr_update_source": func() error {
+			return SendDVRUpdateSource("node-1", &pb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"})
+		},
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

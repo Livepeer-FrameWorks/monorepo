@@ -327,7 +327,7 @@ func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.Nod
 	}
 	class, _ := pullsource.Classify(src.GetSourceUri()) //nolint:errcheck // class encodes the rejection
 	allowed := src.GetAllowedClusterIds()
-	// Fast path: public source with no placement pin — legacy behavior, any cluster.
+	// Public source with no placement pin: any cluster is eligible.
 	if class == pullsource.ClassPublic && len(allowed) == 0 {
 		return nodes, nil
 	}
@@ -563,7 +563,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
-				return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters)
+				return resolveRemoteArtifact(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters, artifactResp)
 			}
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
@@ -580,7 +580,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		}
 	}
 	if len(artifactNodes) == 0 {
-		// Check peer clusters for hot copies before falling through to S3/defrost
+		// Check peer clusters for hot copies before falling through to S3 relay
 		if deps.RemoteArtifacts != nil {
 			remoteHits, _ := deps.RemoteArtifacts.GetRemoteArtifacts(ctx, artifactResp.ArtifactHash)
 			var authorizedHits []*RemoteArtifactInfo
@@ -592,11 +592,19 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			if len(authorizedHits) > 0 {
 				best := pickBestRemoteArtifact(authorizedHits, deps.GeoLat, deps.GeoLon)
 				if best != nil {
+					// Construct the peer cluster's /play URL so the viewer
+					// follows a real redirect. Mirrors the live-cross-cluster
+					// pattern in handlers.go/grpc/server.go confirmRemoteEndpoint
+					// — Protocol="redirect" + populated Url is the contract
+					// consumers expect; the earlier bare NodeId/BaseUrl-only
+					// shape left consumers with nothing to dial.
+					playURL := "https://" + best.BaseURL + "/play/" + playbackID
 					return &pb.ViewerEndpointResponse{
 						Primary: &pb.ViewerEndpoint{
 							NodeId:      best.NodeID,
 							BaseUrl:     best.BaseURL,
-							Protocol:    "https",
+							Protocol:    "redirect",
+							Url:         playURL,
 							GeoDistance: CalculateGeoDistance(deps.GeoLat, deps.GeoLon, best.GeoLat, best.GeoLon),
 							ClusterId:   best.PeerCluster,
 						},
@@ -605,17 +613,13 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			}
 		}
 
-		// No warm nodes. The read-through artifact relay can stream from
-		// S3 to disk on demand, so we don't gate playback on defrost
-		// anymore — pick any storage-capable edge and let Mist
-		// STREAM_SOURCE → Helmsman relay → block cache materialize the
-		// bytes on the first viewer request.
+		// No warm nodes. The read-through artifact relay streams from S3
+		// on demand, so we don't gate playback on local copy — pick any
+		// storage-capable edge and let Mist STREAM_SOURCE → Helmsman
+		// relay → block cache materialize the bytes on first viewer
+		// request.
 		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
 		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
-		if location == "defrosting" {
-			// Existing in-flight defrost; let it finish.
-			return nil, NewDefrostingError(10, "defrost in progress")
-		}
 		if sync == "synced" || location == "s3" {
 			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
 			if tenantID != "" {
@@ -629,7 +633,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			artifactNodes = coldRanked
 		} else if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
 			// Federation fallback: artifact exists locally but not on any node and not in S3
-			return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters)
+			return resolveRemoteArtifact(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters, artifactResp)
 		} else {
 			return nil, fmt.Errorf("storage node unknown: no node assignment found")
 		}
@@ -1038,23 +1042,8 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 			continue
 		}
 
-		// Build URLs with view key (MistServer resolves via PLAY_REWRITE trigger)
-		// With correct pubaddr/pubhost, MistServer fills HTTP-based outputs with full URLs.
-		// Only direct protocols (RTMP, RTSP, SRT, DTSC) keep HOST placeholder.
-		var protocol, endpointURL string
-
-		// Extract public host from HTTP outputs for HOST replacement in direct protocols
-		publicHost := ExtractPublicHostFromOutputs(nodeOutputs.Outputs)
-
-		if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"]; ok {
-			protocol = "webrtc"
-			endpointURL = ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, viewKey, publicHost)
-		} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
-			protocol = "hls"
-			endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, viewKey)
-		}
-
-		if endpointURL == "" {
+		endpoint := BuildViewerEndpointFromOutputs(node.NodeID, nodeOutputs, viewKey, true)
+		if endpoint == nil {
 			continue
 		}
 
@@ -1063,16 +1052,8 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
 			geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
 		}
-
-		endpoint := &pb.ViewerEndpoint{
-			NodeId:      node.NodeID,
-			BaseUrl:     nodeOutputs.BaseURL,
-			Protocol:    protocol,
-			Url:         endpointURL,
-			GeoDistance: geoDistance,
-			LoadScore:   float64(node.Score),
-			Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, viewKey, true),
-		}
+		endpoint.GeoDistance = geoDistance
+		endpoint.LoadScore = float64(node.Score)
 		endpoints = append(endpoints, endpoint)
 	}
 
@@ -1447,6 +1428,35 @@ func addDerivedWebSocketOutput(outputs map[string]*pb.OutputEndpoint, protocol s
 	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsBase + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 }
 
+// BuildViewerEndpointFromOutputs selects the preferred browser-facing output
+// from a node's raw Mist outputs. Raw Mist names are display labels
+// ("HLS (TS)", "WebRTC with WebSocket signalling"); the returned Outputs map
+// uses FrameWorks' canonical protocol keys ("HLS", "MIST_WEBRTC", ...).
+func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, streamName string, isLive bool) *pb.ViewerEndpoint {
+	if nodeOutputs == nil || nodeOutputs.Outputs == nil {
+		return nil
+	}
+	publicHost := ExtractPublicHostFromOutputs(nodeOutputs.Outputs)
+	var protocol, endpointURL string
+	if webrtcURL, ok := findOutputRaw(nodeOutputs.Outputs, "WebRTC", "WebRTC with WebSocket signalling"); ok {
+		protocol = "webrtc"
+		endpointURL = ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, streamName, publicHost)
+	} else if hlsURL, ok := findOutputRaw(nodeOutputs.Outputs, "HLS", "HLS (TS)"); ok {
+		protocol = "hls"
+		endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, streamName)
+	}
+	if endpointURL == "" {
+		return nil
+	}
+	return &pb.ViewerEndpoint{
+		NodeId:   nodeID,
+		BaseUrl:  nodeOutputs.BaseURL,
+		Protocol: protocol,
+		Url:      endpointURL,
+		Outputs:  BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, isLive),
+	}
+}
+
 // BuildOutputsMap constructs the per-protocol outputs for a node/stream
 func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
 	outputs := make(map[string]*pb.OutputEndpoint)
@@ -1645,10 +1655,16 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 	return false
 }
 
-// resolveRemoteArtifact handles cross-cluster artifact resolution by calling
-// PrepareArtifact on the origin cluster's Foghorn. If the artifact is ready,
-// it creates a local adoption record and triggers defrost from the presigned URLs.
-func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
+// resolveRemoteArtifact handles cross-cluster artifact resolution by
+// calling PrepareArtifact on the origin cluster's Foghorn. The peer
+// validates the artifact, adopts the row locally (so future
+// permissions/lifecycle checks see it), and returns a viewer endpoint
+// pointing at a local edge. Bytes are read on demand by the relay's
+// federation path — RelayResolve federates back to the origin cluster
+// and reads block-by-block from either the origin's presigned S3 URL
+// (synced) or the origin node's Helmsman directly via a short-lived
+// artifact_relay JWT (hot-but-unsynced). No local copy is created.
+func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer, artifactResp *pb.ResolveArtifactPlaybackIDResponse) (*pb.ViewerEndpointResponse, error) {
 	if strings.EqualFold(contentType, "dvr") {
 		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
 	}
@@ -1710,11 +1726,12 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())
 	}
 	if !resp.GetReady() {
-		est := resp.GetEstReadySeconds()
-		if est == 0 {
-			est = 15
-		}
-		return nil, NewDefrostingError(int(est), "remote artifact being prepared")
+		// Fail-fast: same semantics as the STREAM_SOURCE cross-cluster
+		// path (cross_cluster_artifact.go). Origin's freeze pipeline
+		// hasn't put the bytes on S3 yet; caller surfaces an error and
+		// retries at the application layer rather than us hiding the
+		// retry behind a 202 polling loop.
+		return nil, fmt.Errorf("remote artifact not yet on S3: %w", ErrCrossClusterArtifactUnavailable)
 	}
 
 	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING). When the
@@ -1736,10 +1753,10 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
 			    storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
 		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID, storageCluster); dbErr != nil {
-			// Adoption is best-effort — defrost can still proceed using the
-			// presigned URLs we already have. Failing the playback request
-			// would be worse than serving a one-off defrost without a
-			// persisted lifecycle row.
+			// Adoption is best-effort — without the local row, the relay
+			// path still works via re-walked PrepareArtifact on each
+			// playback. Failing the request would be worse than serving
+			// without a persisted lifecycle row.
 			controlLogger().WithError(dbErr).WithFields(logging.Fields{
 				"artifact_hash":      artifactHash,
 				"tenant_id":          tenantID,
@@ -1749,16 +1766,9 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, arti
 		}
 	}
 
-	// Trigger local defrost using the origin cluster's presigned URLs
-	nodeID, err := pickStorageNodeID()
-	if err != nil {
-		return nil, fmt.Errorf("no local storage node for remote artifact defrost: %w", err)
-	}
-	if _, err := StartRemoteDefrost(ctx, contentType, artifactHash, nodeID, 30*time.Second, controlLogger(), resp.GetUrl(), resp.GetSegmentUrls()); err != nil {
-		if defrostErr, ok := errors.AsType[*DefrostingError](err); ok {
-			return nil, defrostErr
-		}
-		return nil, fmt.Errorf("failed to start remote artifact defrost: %w", err)
-	}
-	return nil, NewDefrostingError(10, "remote artifact defrost started")
+	// Row adopted; recurse into the local resolution path. The recursed
+	// call's DB query will find the adopted row and route playback through
+	// a local storage edge whose Helmsman relay reads peer S3 on demand
+	// via RelayResolve federation. No local byte copy is created.
+	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
 }

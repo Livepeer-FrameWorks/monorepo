@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 
@@ -89,14 +90,9 @@ func TestPlacementPick_RemoveOneNodeShiftsByOne(t *testing.T) {
 // verified. Without this gate, presence-only checking would mask Mist
 // add failures on update and pin routing at a stale config.
 func TestManagedStreamVerifiedAppliedMatches_DetectsSourceDrift(t *testing.T) {
-	managedStreamVerifiedApplied.Lock()
-	managedStreamVerifiedApplied.m = make(map[string]map[string]managedStreamSnapshot)
-	managedStreamVerifiedApplied.Unlock()
-	t.Cleanup(func() {
-		managedStreamVerifiedApplied.Lock()
-		managedStreamVerifiedApplied.m = make(map[string]map[string]managedStreamSnapshot)
-		managedStreamVerifiedApplied.Unlock()
-	})
+	prior := StreamRegistryInstance
+	SetStreamRegistry(NewStreamRegistry(nil, "cluster-a", time.Minute))
+	t.Cleanup(func() { SetStreamRegistry(prior) })
 
 	UpdateVerifiedAppliedFromHeartbeat("edge-1", []*pb.AppliedManagedStream{
 		{
@@ -265,39 +261,19 @@ func TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer(t 
 		client: &mockRelayClient{relay: fakeRelay},
 	}))
 
-	managedStreamLastSent.Lock()
-	managedStreamLastSent.m = map[string]map[string]map[string]managedStreamSnapshot{
-		"media-eu-1": {
-			"edge-eu-1": {
-				"stream-1": {
-					sourceSpec:   "ts-exec:cat /dev/null",
-					alwaysOn:     true,
-					ingestMode:   "mist_native",
-					internalName: "frameworks-demo",
-				},
-			},
-		},
+	priorRegistry := StreamRegistryInstance
+	SetStreamRegistry(NewStreamRegistry(nil, "cluster-a", time.Minute))
+	t.Cleanup(func() { SetStreamRegistry(priorRegistry) })
+
+	snap := managedStreamSnapshot{
+		sourceSpec:   "ts-exec:cat /dev/null",
+		alwaysOn:     true,
+		ingestMode:   "mist_native",
+		internalName: "frameworks-demo",
 	}
-	managedStreamLastSent.Unlock()
-	managedStreamVerifiedApplied.Lock()
-	managedStreamVerifiedApplied.m = map[string]map[string]managedStreamSnapshot{
-		"edge-eu-1": {
-			"stream-1": {
-				sourceSpec:   "ts-exec:cat /dev/null",
-				alwaysOn:     true,
-				ingestMode:   "mist_native",
-				internalName: "frameworks-demo",
-			},
-		},
-	}
-	managedStreamVerifiedApplied.Unlock()
-	t.Cleanup(func() {
-		managedStreamLastSent.Lock()
-		managedStreamLastSent.m = make(map[string]map[string]map[string]managedStreamSnapshot)
-		managedStreamLastSent.Unlock()
-		managedStreamVerifiedApplied.Lock()
-		managedStreamVerifiedApplied.m = make(map[string]map[string]managedStreamSnapshot)
-		managedStreamVerifiedApplied.Unlock()
+	StreamRegistryInstance.ManagedSetLastSent("media-eu-1", "edge-eu-1", "stream-1", snap)
+	StreamRegistryInstance.ManagedSetVerifiedFromHeartbeat("edge-eu-1", []*pb.AppliedManagedStream{
+		{StreamId: "stream-1", Name: snap.internalName, Source: snap.sourceSpec, AlwaysOn: snap.alwaysOn, IngestMode: snap.ingestMode},
 	})
 
 	reconcileClusterManagedStreams(ctx, logging.NewLogger(), "media-eu-1", []*pb.ManagedStreamRow{
@@ -427,14 +403,9 @@ func TestManagedStreamSnapshot_ApplyKeyTracksSourceChanges(t *testing.T) {
 // next tick to Apply (under stream_id) then Retract (the bare-name
 // hydrated entry) the same physical stream — race against itself.
 func TestHydrateManagedStreamLastSentForNode_KeyedByStreamID(t *testing.T) {
-	managedStreamLastSent.Lock()
-	managedStreamLastSent.m = make(map[string]map[string]map[string]managedStreamSnapshot)
-	managedStreamLastSent.Unlock()
-	t.Cleanup(func() {
-		managedStreamLastSent.Lock()
-		managedStreamLastSent.m = make(map[string]map[string]map[string]managedStreamSnapshot)
-		managedStreamLastSent.Unlock()
-	})
+	prior := StreamRegistryInstance
+	SetStreamRegistry(NewStreamRegistry(nil, "cluster-a", time.Minute))
+	t.Cleanup(func() { SetStreamRegistry(prior) })
 
 	HydrateManagedStreamLastSentForNode("edge-a", []*pb.AppliedManagedStream{
 		{
@@ -453,15 +424,9 @@ func TestHydrateManagedStreamLastSentForNode_KeyedByStreamID(t *testing.T) {
 		},
 	})
 
-	managedStreamLastSent.Lock()
-	defer managedStreamLastSent.Unlock()
-	pending := managedStreamLastSent.m[managedStreamPendingClusterKey]
-	if pending == nil {
-		t.Fatalf("hydration must land under pending-cluster bucket")
-	}
-	nodeMap := pending["edge-a"]
+	nodeMap := StreamRegistryInstance.ManagedListLastSent(managedStreamPendingClusterKey, "edge-a")
 	if nodeMap == nil {
-		t.Fatalf("missing edge-a entries in pending")
+		t.Fatalf("hydration must land under pending-cluster bucket")
 	}
 	if _, ok := nodeMap["stream-uuid-1"]; !ok {
 		t.Fatalf("entry must be keyed by stream_id, got map keys %v", keysOf(nodeMap))
@@ -517,33 +482,28 @@ func TestShouldRetractManagedStream(t *testing.T) {
 // scoping fix: forgetting a node clears it from every cluster bucket but
 // must not touch other nodes in those clusters.
 func TestForgetManagedStreamLastSent(t *testing.T) {
+	prior := StreamRegistryInstance
+	r := NewStreamRegistry(nil, "cluster-a", time.Minute)
+	SetStreamRegistry(r)
+	t.Cleanup(func() { SetStreamRegistry(prior) })
+
 	snap := func(src string) managedStreamSnapshot {
 		return managedStreamSnapshot{sourceSpec: src, alwaysOn: true, ingestMode: "mist_native"}
 	}
-	managedStreamLastSent.Lock()
-	managedStreamLastSent.m["cluster-a"] = map[string]map[string]managedStreamSnapshot{
-		"edge-1": {"stream-x": snap("ts-exec:cat /dev/null")},
-		"edge-2": {"stream-y": snap("ts-exec:cat /dev/null")},
-	}
-	managedStreamLastSent.m["cluster-b"] = map[string]map[string]managedStreamSnapshot{
-		"edge-1": {"stream-z": snap("ts-exec:cat /dev/zero")},
-	}
-	managedStreamLastSent.Unlock()
+	r.ManagedSetLastSent("cluster-a", "edge-1", "stream-x", snap("ts-exec:cat /dev/null"))
+	r.ManagedSetLastSent("cluster-a", "edge-2", "stream-y", snap("ts-exec:cat /dev/null"))
+	r.ManagedSetLastSent("cluster-b", "edge-1", "stream-z", snap("ts-exec:cat /dev/zero"))
 
 	ForgetManagedStreamLastSent("edge-1")
 
-	managedStreamLastSent.Lock()
-	defer managedStreamLastSent.Unlock()
-	if _, present := managedStreamLastSent.m["cluster-a"]["edge-1"]; present {
+	if _, present := r.ManagedGetLastSent("cluster-a", "edge-1", "stream-x"); present {
 		t.Fatalf("edge-1 in cluster-a not forgotten")
 	}
-	if _, present := managedStreamLastSent.m["cluster-a"]["edge-2"]; !present {
+	if _, present := r.ManagedGetLastSent("cluster-a", "edge-2", "stream-y"); !present {
 		t.Fatalf("edge-2 in cluster-a incorrectly forgotten")
 	}
-	// cluster-b only had edge-1; should now be empty AND cluster-b key dropped.
-	if _, present := managedStreamLastSent.m["cluster-b"]; present {
-		t.Fatalf("empty cluster-b bucket should have been dropped")
+	// cluster-b only had edge-1; the cluster bucket should now be empty.
+	if nodes := r.ManagedListClusterNodes("cluster-b"); len(nodes) != 0 {
+		t.Fatalf("empty cluster-b bucket should have been dropped, got nodes=%v", nodes)
 	}
-	// Cleanup so the package-level state doesn't leak into other tests.
-	delete(managedStreamLastSent.m, "cluster-a")
 }

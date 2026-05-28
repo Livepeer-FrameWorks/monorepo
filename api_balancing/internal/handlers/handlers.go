@@ -276,12 +276,6 @@ func Init(
 	// Share database connection with control package for clip operations
 	control.SetDB(database)
 
-	// Hydrate the in-memory defrost tracker from existing 'defrosting' rows.
-	// This handles Foghorn restart: a defrost that the previous process started
-	// is still tracked by Helmsman, so PickDefrostNode must count it too.
-	// Best-effort — the tracker self-heals via Increment/Decrement going forward.
-	go control.BootstrapDefrostTracker(context.Background(), nil)
-
 	// Share Commodore client with control package for unified resolution logic
 	control.CommodoreClient = cClient
 
@@ -1293,11 +1287,84 @@ func handleListServers(c *gin.Context) {
 	c.String(http.StatusOK, string(jsonBytes))
 }
 
-// resolveRemoteSource attempts cross-cluster source lookup when no local node has the stream.
-// Returns a DTSC URL from the origin cluster, or empty string if unavailable.
-func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) (dtscURL, remoteCluster string) {
-	if federationClient == nil || peerManager == nil {
+// arrangeRemoteOriginPullFromSource is the /source HTTP entry's
+// cross-cluster path. Unlike arrangeOriginPull (which the gRPC viewer
+// router calls and which picks the puller via LB), the caller IS the
+// puller — a Mist edge that fired STREAM_SOURCE on cold load. We
+// identify the caller from clientIP and pass it as DestNodeID so the
+// arrangement targets the real puller. Fails closed (returns "") when
+// the caller can't be identified or the arrangement fails so the
+// puller and registry never diverge.
+func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, clientIP string) (dtscURL, remoteCluster string) {
+	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon)
+	if candidate == nil {
 		return "", ""
+	}
+	internalName := mist.ExtractInternalName(streamName)
+	if internalName == "" {
+		internalName = streamName
+	}
+
+	callerNodeID := state.DefaultManager().NodeIDByClientIP(clientIP)
+	if callerNodeID == "" {
+		logger.WithFields(logging.Fields{
+			"stream":         streamName,
+			"client_ip":      clientIP,
+			"remote_cluster": cluster,
+		}).Warn("/source cross-cluster: caller IP did not match a known node; refusing to arrange untracked pull")
+		return "", ""
+	}
+
+	deps := &federation.ArrangeOriginPullDeps{
+		Cache:        remoteEdgeCache,
+		PeerResolver: peerManager,
+		FedClient:    federationClient,
+		InstanceID:   originPullInstanceID,
+		ClusterID:    clusterID,
+		Logger:       logger,
+		EventEmitter: emitFederationEvent,
+	}
+	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
+		InternalName:    internalName,
+		Remote:          candidate,
+		RemoteCluster:   cluster,
+		TenantID:        tenantID,
+		DestNodeID:      callerNodeID,
+		DestNodeBaseURL: "", // unknown from clientIP alone; MarkReplicating accepts empty
+		Lat:             lat,
+		Lon:             lon,
+	})
+	if err != nil || result == nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"stream":         streamName,
+			"remote_cluster": cluster,
+			"caller_node":    callerNodeID,
+		}).Warn("/source cross-cluster: ArrangeOriginPull failed; refusing untracked pull")
+		return "", ""
+	}
+	return result.PullDTSCURL, cluster
+}
+
+// resolveRemoteSource attempts cross-cluster source lookup when no
+// local node has the stream. Returns the DTSC URL from the origin
+// cluster and the cluster ID, or empty strings when unavailable. Thin
+// wrapper around resolveRemoteSourceCandidate for callers that only
+// need the URL.
+func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) (dtscURL, remoteCluster string) {
+	candidate, cluster, _ := resolveRemoteSourceCandidate(ctx, streamName, lat, lon)
+	if candidate == nil {
+		return "", ""
+	}
+	return candidate.DtscUrl, cluster
+}
+
+// resolveRemoteSourceCandidate is the full version that returns the
+// chosen EdgeCandidate. Needed by callers that want to arrange a
+// tracked origin-pull (NotifyOriginPull needs candidate.NodeId).
+// tenantID returned so the arrangement carries it through.
+func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64) (*pb.EdgeCandidate, string, string) {
+	if federationClient == nil || peerManager == nil {
+		return nil, "", ""
 	}
 
 	internalName := mist.ExtractInternalName(streamName)
@@ -1320,12 +1387,12 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 	}
 
 	if originClusterID == "" || originClusterID == clusterID {
-		return "", ""
+		return nil, "", ""
 	}
 
 	addr := peerManager.GetPeerAddr(originClusterID)
 	if addr == "" {
-		return "", ""
+		return nil, "", ""
 	}
 
 	resp, err := federationClient.QueryStream(ctx, originClusterID, addr, &pb.QueryStreamRequest{
@@ -1337,7 +1404,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 		IsSourceSelection: true,
 	})
 	if err != nil || resp == nil || len(resp.Candidates) == 0 {
-		return "", ""
+		return nil, "", ""
 	}
 
 	// Prefer origin node (has active input), otherwise best scored
@@ -1349,7 +1416,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 		}
 	}
 
-	return best.DtscUrl, originClusterID
+	return best, originClusterID, tenantID
 }
 
 // resolvePullSourceForSource looks up the full pull-source row for a
@@ -1403,15 +1470,15 @@ func pullUpstreamScore(upstream string) uint64 {
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
 	src := resolvePullSourceForSource(ctx, streamName)
 	if src == nil {
-		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable; refusing")
-		c.Status(http.StatusNotFound)
+		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable")
+		c.String(http.StatusOK, control.OfflineNotConfigured)
 		return
 	}
 	upstream := src.GetSourceUri()
 	class, classErr := pullsource.Classify(upstream)
 	if class == pullsource.ClassBlocked {
-		logger.WithError(classErr).WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI is in the always-blocked set; refusing")
-		c.Status(http.StatusNotFound)
+		logger.WithError(classErr).WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI is in the always-blocked set")
+		c.String(http.StatusOK, control.OfflineBlockedURI)
 		return
 	}
 	// /source runs on a specific Foghorn — which serves a specific media
@@ -1432,19 +1499,41 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 	}
 	eligible, rejects := pullsource.FilterPlacementClusters(class, src.GetAllowedClusterIds(), localCandidates)
 	if len(eligible) == 0 {
+		// This cluster can't dial upstream itself (allowed_cluster_ids
+		// excludes it). Fall through to cross-cluster federation: query
+		// the origin cluster (which IS allowed and presumably pulling)
+		// for its edge DTSC URL so this cluster serves viewers via DTSC
+		// rather than 404. Arrange the pull so it's tracked end-to-end.
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, clientIP)
+		if remoteDTSC != "" {
+			durationMs := float32(time.Since(start).Milliseconds())
+			if metrics != nil {
+				metrics.RoutingDecisions.WithLabelValues("source", "pull_federated").Inc()
+				metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+			}
+			logger.WithFields(logging.Fields{
+				"stream":         streamName,
+				"cluster_id":     localClusterID,
+				"remote_cluster": remoteCluster,
+				"dtsc_url":       remoteDTSC,
+			}).Info("Source lookup: pull source federated from allowed cluster")
+			go postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "pull_federated", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
+			c.String(http.StatusOK, remoteDTSC)
+			return
+		}
 		logger.WithFields(logging.Fields{
 			"stream":     streamName,
 			"cluster_id": localClusterID,
 			"rejects":    summarizePullPlacementRejects(rejects),
-		}).Warn("Source lookup: pull source not placeable on this cluster; refusing")
-		c.Status(http.StatusNotFound)
+		}).Warn("Source lookup: pull source not placeable on this cluster and no federated peer pulling")
+		c.String(http.StatusOK, control.OfflineNotPlaced)
 		return
 	}
 
 	upstreamScore := pullUpstreamScore(upstream)
 	if upstreamScore == 0 {
-		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI failed validation; refusing")
-		c.Status(http.StatusNotFound)
+		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI failed validation")
+		c.String(http.StatusOK, control.OfflineInvalidUpstream)
 		return
 	}
 
@@ -1486,11 +1575,26 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	if streamTenantID := getStreamTenantID(streamName); streamTenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, streamTenantID)
 	}
-	if strings.HasPrefix(streamName, "pull+") {
-		handleGetPullSource(c, streamName, lat, lon, tagAdjust, clientIP, ctx, start)
-		return
-	}
-	if remoteDTSC, ok := activeReplicationSource(ctx, streamName); ok {
+	// Active origin-pull check first — this covers every runtime name
+	// that can be federated (live+, pull+, dvr+, bare mist-native).
+	// When an origin-pull is arranged, the peer DTSC URL is the right
+	// answer regardless of any prefix-specific resolver below.
+	callerNodeID := state.DefaultManager().NodeIDByClientIP(clientIP)
+	if remoteDTSC, handled := activeReplicationSource(ctx, streamName, callerNodeID); handled {
+		if remoteDTSC == "" {
+			// Replication exists but pinned to another local edge.
+			// Refuse so this caller doesn't start a duplicate pull.
+			if metrics != nil {
+				metrics.RoutingDecisions.WithLabelValues("source", "replication_pinned_elsewhere").Inc()
+			}
+			logger.WithFields(logging.Fields{
+				"stream":      streamName,
+				"caller_node": callerNodeID,
+				"client_ip":   clientIP,
+			}).Info("Source lookup: replication pinned to a different local edge; refusing")
+			c.String(http.StatusOK, "offline:replication-pinned-elsewhere")
+			return
+		}
 		durationMs := float32(time.Since(start).Milliseconds())
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", "active_replication").Inc()
@@ -1504,11 +1608,19 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		c.String(http.StatusOK, remoteDTSC)
 		return
 	}
+	if strings.HasPrefix(streamName, "pull+") {
+		handleGetPullSource(c, streamName, lat, lon, tagAdjust, clientIP, ctx, start)
+		return
+	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
 	if err != nil {
-		// Cross-cluster source lookup: check if stream origin is on a remote peer
-		remoteDTSC, remoteCluster := resolveRemoteSource(ctx, streamName, lat, lon)
+		// Cross-cluster source lookup: arrange a tracked origin-pull
+		// when the stream lives on a peer cluster. Caller (Mist edge
+		// firing /source) IS the puller, so identify it from clientIP
+		// and pass to ArrangeOriginPull as DestNodeID. Fails closed
+		// when the caller can't be identified or the arrangement fails.
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, clientIP)
 		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {
@@ -1530,14 +1642,26 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		}
 		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 
-		fallback := query.Get("fallback")
-		if fallback == "" {
-			fallback = "dtsc://localhost:4200"
+		// Per-stream-type terminal answer when no node has the input.
+		// live+: return push:// unconditionally — publishers boot the
+		// ingest buffer via input_buffer; viewers fail the balancer's
+		// non-provider pre-check and get a clean STRMSTAT_OFFLINE
+		// disconnect. Live streams never explicitly return offline:
+		// because a publisher may arrive any moment.
+		// Other prefixes (bare/native fallback): empty body. The
+		// balancer's `if (!source.size())` branch writes
+		// STRMSTAT_OFFLINE and exits cleanly. Same effective behavior
+		// as an explicit "offline:" body.
+		var fallback string
+		if strings.HasPrefix(streamName, "live+") {
+			fallback = "push://"
+		} else {
+			fallback = query.Get("fallback")
 		}
 		logger.WithFields(logging.Fields{
 			"stream":   streamName,
 			"fallback": fallback,
-		}).Info("Source lookup: no node has active input for stream; returning fallback (MistServer will use push/local)")
+		}).Info("Source lookup: no node has active input for stream; returning terminal answer")
 		c.String(http.StatusOK, fallback)
 		return
 	}
@@ -1847,18 +1971,18 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 	if err != nil {
 		// Cross-cluster: check if an origin-pull was arranged for this stream
-		if remoteEdgeCache != nil {
-			if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil && record.DTSCURL != "" {
-				if u, parseErr := url.Parse(record.DTSCURL); parseErr == nil && u.Host != "" {
+		if control.StreamRegistryInstance != nil {
+			if loc, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok && loc.PullDTSCURL != "" {
+				if u, parseErr := url.Parse(loc.PullDTSCURL); parseErr == nil && u.Host != "" {
 					logger.WithFields(logging.Fields{
 						"stream":         streamName,
 						"dtsc_host":      u.Host,
-						"source_cluster": record.SourceCluster,
+						"source_cluster": loc.ReplicatingFrom,
 					}).Info("Cross-cluster balance: returning remote DTSC source")
 					c.String(http.StatusOK, u.Host)
 
 					durationMs := float32(time.Since(start).Milliseconds())
-					go postBalancingEventEx(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", record.DTSCURL, 0, 0, "", durationMs, record.SourceCluster)
+					go postBalancingEventEx(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", loc.PullDTSCURL, 0, 0, "", durationMs, loc.ReplicatingFrom)
 					return
 				}
 			}
@@ -2314,8 +2438,8 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointReques
 	// edge scoring entirely — let local scoring handle it (once DTSC pull completes, the
 	// stream appears locally and gets StreamBonus).
 	skipRemote := false
-	if remoteEdgeCache != nil {
-		if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+	if control.StreamRegistryInstance != nil {
+		if _, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok {
 			skipRemote = true
 		}
 	}
@@ -2346,13 +2470,18 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointReques
 	}
 
 	// If a remote cluster won the summary-level comparison, confirm with QueryStream.
-	// The remote foghorn scores its own local nodes and returns actual play-ready endpoints.
+	// The remote foghorn scores its own local nodes and returns actual play-ready
+	// endpoints. An infra-error from arrangement bubbles up as 5xx rather than
+	// silently degrading to the summary-level redirect.
 	if response.Primary != nil && response.Primary.ClusterId != "" {
-		confirmed := confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, streamTenantID, lat, lon)
+		confirmed, confirmErr := confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, streamTenantID, lat, lon)
+		if confirmErr != nil {
+			return nil, confirmErr
+		}
 		if confirmed != nil {
 			response = confirmed
 		}
-		// If confirmation failed, response still has the summary-level redirect — usable as fallback
+		// If confirmation soft-failed (nil, nil), response keeps the summary-level redirect — usable as fallback
 	}
 
 	// Emit routing event for analytics
@@ -2432,13 +2561,18 @@ func confirmRemoteStream(ctx context.Context, remoteClusterID, internalName, ten
 	return err == nil && resp != nil && len(resp.Candidates) > 0
 }
 
-// confirmRemoteEndpoint validates a summary-level remote win by calling QueryStream
-// on the winning cluster's foghorn. The remote foghorn scores its own local nodes
-// and returns actual play-ready endpoints. Falls back to nil (caller keeps original
-// response) if the remote cluster is unreachable or has no candidates.
-func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) *pb.ViewerEndpointResponse {
+// confirmRemoteEndpoint validates a summary-level remote win by calling
+// QueryStream on the winning cluster's foghorn. Three return shapes:
+//
+//	(non-nil, nil) — confirmed; caller swaps response for this richer one.
+//	(nil, nil)     — soft failure (peer unreachable, no candidates, no
+//	                  DTSC URL, LB miss); caller keeps the summary-level
+//	                  redirect.
+//	(nil, err)     — arrangement infra failure; caller surfaces 5xx to
+//	                  the viewer instead of silently degrading.
+func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	if federationClient == nil || peerManager == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Collect unique remote clusters from response (primary + fallbacks with ClusterId)
@@ -2460,7 +2594,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 		}
 	}
 	if len(remotes) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Fan out QueryStream to all candidate remote clusters in parallel
@@ -2508,15 +2642,20 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 		}
 	}
 	if bestCandidate == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Origin-pull arrangement: if we have local edge capacity, pull stream locally via DTSC
 	// so subsequent viewers are served from our cluster without cross-cluster hops.
+	// Infra-error propagates so the HTTP handler surfaces a 5xx instead of a
+	// silently-degraded redirect.
 	if remoteEdgeCache != nil && bestCandidate.DtscUrl != "" {
-		arranged := arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response.Metadata)
+		arranged, arrangeErr := arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response.Metadata)
+		if arrangeErr != nil {
+			return nil, arrangeErr
+		}
 		if arranged != nil {
-			return arranged
+			return arranged, nil
 		}
 	}
 
@@ -2548,159 +2687,79 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 		"remote_score":   bestCandidate.BwScore,
 	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
 
-	return confirmed
+	return confirmed, nil
 }
 
-// arrangeOriginPull attempts to set up a local DTSC pull from a remote source.
-// If successful, returns a response pointing to the local edge; otherwise nil.
-func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *pb.PlaybackMetadata) *pb.ViewerEndpointResponse {
-	// Already pulling this stream? Skip NotifyOriginPull and use existing record.
-	if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
-		endpoint := buildLocalEndpointFromReplication(record, viewKey)
-		if endpoint != nil {
-			return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
-		}
-		return nil
+// arrangeOriginPull attempts to set up a local DTSC pull from a remote
+// source. Three return shapes:
+//
+//	(non-nil, nil) — arrangement succeeded; viewer goes to local edge.
+//	(nil, nil)     — soft refusal (LB miss, contention, loop prevention);
+//	                  caller falls through to peer-redirect fallback.
+//	(nil, err)     — infra failure (registry/deps/peer/notify); caller
+//	                  surfaces 5xx via the HTTP handler. Use
+//	                  federation.IsArrangeInfraError to discriminate.
+//
+// Thin wrapper around federation.ArrangeOriginPull — supplies the LB
+// picker so the helper selects a local edge with capacity, then builds
+// the ViewerEndpoint from the resulting Location.
+func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *pb.PlaybackMetadata) (*pb.ViewerEndpointResponse, error) {
+	deps := &federation.ArrangeOriginPullDeps{
+		Cache:        remoteEdgeCache,
+		PeerResolver: peerManager,
+		FedClient:    federationClient,
+		InstanceID:   originPullInstanceID,
+		ClusterID:    clusterID,
+		Logger:       logger,
+		EventEmitter: emitFederationEvent,
 	}
-
-	lockOwner := originPullInstanceID
-	if lockOwner == "" {
-		lockOwner = "foghorn-http"
-	}
-	if !remoteEdgeCache.TryAcquireOriginPullLock(ctx, internalName, lockOwner) {
-		time.Sleep(50 * time.Millisecond)
-		if record, err := remoteEdgeCache.GetActiveReplication(ctx, internalName); err == nil && record != nil {
-			if endpoint := buildLocalEndpointFromReplication(record, viewKey); endpoint != nil {
-				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
-			}
-		}
-		return nil
-	}
-	defer remoteEdgeCache.ReleaseOriginPullLock(ctx, internalName, lockOwner)
-
-	// Loop prevention: don't pull from a cluster that's already pulling from us
-	if replications, _ := remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
-		for _, r := range replications {
-			if r.ClusterID == remoteCluster {
-				emitFederationEvent(&pb.FederationEventData{
-					EventType:                  pb.FederationEventType_REPLICATION_LOOP_PREVENTED,
-					RemoteCluster:              remoteCluster,
-					StreamName:                 &internalName,
-					BlockedCluster:             &remoteCluster,
-					ExistingReplicationCluster: &r.ClusterID,
-				})
-				return nil
-			}
-		}
-	}
-
-	// Find a healthy local edge with capacity (tenant-scoped on shared Foghorns)
-	lbCtx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
-	if tenantID != "" {
-		lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, tenantID)
-	}
-	localHost, _, _, _, _, err := lb.GetBestNodeWithScore(lbCtx, "", lat, lon, nil, "", false)
-	if err != nil {
-		return nil
-	}
-	localNodeID := lb.GetNodeIDByHost(localHost)
-	if localNodeID == "" {
-		return nil
-	}
-
-	// NotifyOriginPull: tell the source cluster we intend to pull
-	peerAddr := peerManager.GetPeerAddr(remoteCluster)
-	if peerAddr == "" {
-		return nil
-	}
-	ack, err := federationClient.NotifyOriginPull(ctx, remoteCluster, peerAddr, &pb.OriginPullNotification{
-		StreamName:    internalName,
-		SourceNodeId:  remote.NodeId,
-		DestClusterId: clusterID,
-		DestNodeId:    localNodeID,
-		TenantId:      tenantID,
-	})
-	if err != nil || !ack.GetAccepted() {
-		reason := "rejected"
-		if err != nil {
-			reason = err.Error()
-		}
-		emitFederationEvent(&pb.FederationEventData{
-			EventType:     pb.FederationEventType_ORIGIN_PULL_FAILED,
-			RemoteCluster: remoteCluster,
-			StreamName:    &internalName,
-			SourceNode:    &remote.NodeId,
-			FailureReason: &reason,
-		})
-		return nil
-	}
-
-	// Store the replication record so the balance endpoint can return the DTSC host
-	record := &federation.ActiveReplicationRecord{
-		StreamName:    internalName,
-		SourceNodeID:  remote.NodeId,
-		SourceCluster: remoteCluster,
-		DestCluster:   clusterID,
-		DestNodeID:    localNodeID,
-		DTSCURL:       ack.DtscUrl,
-		BaseURL:       localHost,
-		CreatedAt:     time.Now(),
-	}
-	_ = remoteEdgeCache.SetActiveReplication(ctx, record)
-
-	logger.WithFields(logging.Fields{
-		"stream":         internalName,
-		"source_cluster": remoteCluster,
-		"source_node":    remote.NodeId,
-		"dest_node":      localNodeID,
-		"dtsc_url":       ack.DtscUrl,
-	}).Info("Origin-pull arranged, serving viewer from local edge")
-
-	emitFederationEvent(&pb.FederationEventData{
-		EventType:     pb.FederationEventType_ORIGIN_PULL_ARRANGED,
+	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
+		InternalName:  internalName,
+		Remote:        remote,
 		RemoteCluster: remoteCluster,
-		StreamName:    &internalName,
-		SourceNode:    &remote.NodeId,
-		DestNode:      &localNodeID,
-		DtscUrl:       &ack.DtscUrl,
+		TenantID:      tenantID,
+		Lat:           lat,
+		Lon:           lon,
+		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, error) {
+			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
+			if pickTenant != "" {
+				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
+			}
+			host, _, _, _, _, pickErr := lb.GetBestNodeWithScore(lbCtx, "", pickLat, pickLon, nil, "", false)
+			if pickErr != nil {
+				return "", "", pickErr
+			}
+			return host, lb.GetNodeIDByHost(host), nil
+		},
 	})
-
-	endpoint := buildLocalEndpointFromReplication(record, viewKey)
-	if endpoint != nil {
-		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
+	if err != nil {
+		if federation.IsArrangeInfraError(err) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"stream":         internalName,
+				"remote_cluster": remoteCluster,
+			}).Error("ArrangeOriginPull: infra failure; refusing to silently redirect")
+			return nil, err
+		}
+		return nil, nil
 	}
-	return nil
+	if result == nil {
+		return nil, nil
+	}
+	endpoint := buildLocalEndpointFromReplication(result.DestNodeID, viewKey)
+	if endpoint != nil {
+		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
+	}
+	return nil, nil
 }
 
 // buildLocalEndpointFromReplication constructs a ViewerEndpoint from a local node
 // that has an in-flight or completed origin-pull replication.
-func buildLocalEndpointFromReplication(record *federation.ActiveReplicationRecord, viewKey string) *pb.ViewerEndpoint {
-	nodeOutputs, exists := control.GetNodeOutputs(record.DestNodeID)
+func buildLocalEndpointFromReplication(destNodeID, viewKey string) *pb.ViewerEndpoint {
+	nodeOutputs, exists := control.GetNodeOutputs(destNodeID)
 	if !exists || nodeOutputs.Outputs == nil {
 		return nil
 	}
-
-	publicHost := control.ExtractPublicHostFromOutputs(nodeOutputs.Outputs)
-	var protocol, endpointURL string
-
-	if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"]; ok {
-		protocol = "webrtc"
-		endpointURL = control.ResolveTemplateURLWithHost(webrtcURL, nodeOutputs.BaseURL, viewKey, publicHost)
-	} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
-		protocol = "hls"
-		endpointURL = control.ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, viewKey)
-	}
-	if endpointURL == "" {
-		return nil
-	}
-
-	return &pb.ViewerEndpoint{
-		NodeId:   record.DestNodeID,
-		BaseUrl:  nodeOutputs.BaseURL,
-		Protocol: protocol,
-		Url:      endpointURL,
-		Outputs:  control.BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, viewKey, true),
-	}
+	return control.BuildViewerEndpointFromOutputs(destNodeID, nodeOutputs, viewKey, true)
 }
 
 // queryStreamFanOut performs cold-start QueryStream fan-out to peer clusters when
@@ -3066,16 +3125,12 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	if err != nil {
-		var defrostErr *control.DefrostingError
-		if errors.As(err, &defrostErr) {
-			retryAfter := defrostErr.RetryAfterSeconds
-			if retryAfter <= 0 {
-				retryAfter = 10
-			}
-			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			respondPlaybackError(c, http.StatusAccepted, "DEFROSTING", "content defrosting in progress", gin.H{
-				"status":      "defrosting",
-				"retryAfter":  retryAfter,
+		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
+			// Fail-fast — peer origin hasn't pushed the artifact to S3
+			// yet. Surface as 503 (Service Unavailable) so callers retry
+			// at the app layer instead of us hiding a long polling loop
+			// behind a 202.
+			respondPlaybackError(c, http.StatusServiceUnavailable, "REMOTE_ARTIFACT_UNAVAILABLE", err.Error(), gin.H{
 				"contentType": contentType,
 				"contentId":   contentID,
 			})

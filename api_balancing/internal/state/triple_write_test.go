@@ -46,6 +46,12 @@ func (r *tripleWriteArtifactRepo) AddCachedNode(_ context.Context, _, _ string) 
 func (r *tripleWriteArtifactRepo) AddCachedNodeWithPath(_ context.Context, _, _, _ string, _ int64) error {
 	return nil
 }
+func (r *tripleWriteArtifactRepo) RegisterOriginArtifact(_ context.Context, _, _, _ string, _ int64, _ bool) error {
+	return nil
+}
+func (r *tripleWriteArtifactRepo) ListOriginNodes(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
 func (r *tripleWriteArtifactRepo) IsSynced(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }

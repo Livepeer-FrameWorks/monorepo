@@ -510,10 +510,20 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		}
 
 		// Upsert warm storage tracking — only if the lifecycle row exists (FK guard).
+		//
+		// Origin-wins: poller reports default to role='cache'. The CASE
+		// guards on UPDATE ensure that once a finalizer RPC has stamped a
+		// row as role='origin', no subsequent poller report can downgrade
+		// it. is_complete follows the same rule — only the origin
+		// authority flips it true; polling cannot.
+		role := a.Role
+		if role == "" {
+			role = "cache"
+		}
 		_, errExec = tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifact_nodes
-				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at)
-			SELECT $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW())
+				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at, role, is_complete)
+			SELECT $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()), $9, $10
 			WHERE EXISTS (SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = $1)
 			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 				file_path = EXCLUDED.file_path,
@@ -527,8 +537,10 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 					ELSE GREATEST(foghorn.artifact_nodes.last_accessed, EXCLUDED.last_accessed)
 				END,
 				last_seen_at = NOW(),
-				is_orphaned = false
-		`, a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes, a.AccessCount, a.LastAccessed)
+				is_orphaned = false,
+				role = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN 'origin' ELSE EXCLUDED.role END,
+				is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete ELSE EXCLUDED.is_complete END
+		`, a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes, a.AccessCount, a.LastAccessed, role, a.IsComplete)
 		if errExec != nil {
 			return errExec
 		}
@@ -648,15 +660,15 @@ func (r *artifactRepositoryDB) SetSyncStatus(ctx context.Context, artifactHash, 
 	return err
 }
 
-// AddCachedNode records that a node has a local copy of an artifact
+// AddCachedNode records that a node has a local copy of an artifact.
+// Cache-side write — does NOT downgrade an existing origin row.
 func (r *artifactRepositoryDB) AddCachedNode(ctx context.Context, artifactHash, nodeID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	// Upsert into artifact_nodes
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, last_seen_at, is_orphaned, cached_at)
-		VALUES ($1, $2, NOW(), false, NOW())
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, last_seen_at, is_orphaned, cached_at, role, is_complete)
+		VALUES ($1, $2, NOW(), false, NOW(), 'cache', false)
 		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 			last_seen_at = NOW(),
 			is_orphaned = false,
@@ -666,13 +678,14 @@ func (r *artifactRepositoryDB) AddCachedNode(ctx context.Context, artifactHash, 
 }
 
 // AddCachedNodeWithPath records that a node has a local copy of an artifact with path details.
+// Cache-side write — does NOT downgrade an existing origin row.
 func (r *artifactRepositoryDB) AddCachedNodeWithPath(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)
-		VALUES ($1, $2, $3, NULLIF($4, 0), NOW(), false, NOW())
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
+		VALUES ($1, $2, $3, NULLIF($4, 0), NOW(), false, NOW(), 'cache', false)
 		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 			file_path = EXCLUDED.file_path,
 			size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
@@ -681,6 +694,65 @@ func (r *artifactRepositoryDB) AddCachedNodeWithPath(ctx context.Context, artifa
 			cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
 	`, artifactHash, nodeID, filePath, sizeBytes)
 	return err
+}
+
+// RegisterOriginArtifact marks a node as the origin (canonical full
+// file holder) for an artifact. Called from finalizer RPCs that wrote
+// the file to disk (DVR finalize, clip create, upload commit,
+// processing finalize). complete=true flips is_complete authoritative;
+// pass complete=false at recording start to register the row before
+// finalization.
+//
+// Idempotent for the same writer. Origin upserts always set role to
+// 'origin'; once set, only another origin write can flip is_complete
+// (cache writes via AddCachedNode* preserve the existing
+// role/is_complete via their own guards).
+func (r *artifactRepositoryDB) RegisterOriginArtifact(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64, complete bool) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
+		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), NOW(), false, NOW(), 'origin', $5)
+		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+			file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), foghorn.artifact_nodes.file_path),
+			size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
+			last_seen_at = NOW(),
+			is_orphaned = false,
+			role = 'origin',
+			is_complete = CASE WHEN EXCLUDED.is_complete THEN true ELSE foghorn.artifact_nodes.is_complete END
+	`, artifactHash, nodeID, filePath, sizeBytes, complete)
+	return err
+}
+
+// ListOriginNodes returns node IDs that hold the canonical full file
+// for an artifact and have is_complete=true AND are not orphaned.
+// Empty result means no peer-relay fallback source is available.
+func (r *artifactRepositoryDB) ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT node_id FROM foghorn.artifact_nodes
+		WHERE artifact_hash = $1
+		  AND role = 'origin'
+		  AND is_complete = true
+		  AND is_orphaned = false
+		ORDER BY last_seen_at DESC
+	`, artifactHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var nodes []string
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, nodeID)
+	}
+	return nodes, rows.Err()
 }
 
 // GetCachedAt retrieves the cached_at timestamp for calculating warm duration

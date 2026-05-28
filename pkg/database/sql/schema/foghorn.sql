@@ -59,11 +59,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
         -- pending: not yet stored anywhere
         -- local: only on node(s), not synced to S3
         -- freezing: being uploaded to S3
-    -- s3: frozen to S3, may have warm copies
-    -- defrosting: being downloaded from S3
+        -- s3: frozen to S3; warm copies served via Helmsman read-through relay
     s3_url VARCHAR(500),
-    defrost_node_id VARCHAR(100),
-    defrost_started_at TIMESTAMP,
     sync_status VARCHAR(20) DEFAULT 'pending',
         -- pending: not synced
         -- in_progress: syncing
@@ -139,7 +136,6 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
       AND dvr_chapter_mode IS NOT NULL
       AND dvr_chapter_mode != ''
       AND dvr_chapter_backfill_complete = false;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_defrosting ON foghorn.artifacts(defrost_started_at) WHERE storage_location = 'defrosting';
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
@@ -179,6 +175,17 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
     is_orphaned BOOLEAN DEFAULT false,      -- Not seen in recent node reports
     cached_at TIMESTAMP,                    -- When cached locally (for warm duration tracking)
 
+    -- ===== PRESENCE ROLE =====
+    -- 'origin' = canonical full file written by the recording/processing
+    -- sidecar; eligible to serve cross-cluster peer-relay reads when
+    -- is_complete=true. 'cache' = sparse blocks fetched from S3 by a
+    -- block-cache holder; never authoritative for peer-relay.
+    role TEXT NOT NULL DEFAULT 'cache' CHECK (role IN ('origin', 'cache')),
+    -- Writer-authoritative: only flipped true by the finalizer RPC that
+    -- knows the file is fully written (FinalizeDVR, clip create, upload
+    -- commit). Polling never sets this.
+    is_complete BOOLEAN NOT NULL DEFAULT false,
+
     PRIMARY KEY (artifact_hash, node_id)
 );
 
@@ -190,6 +197,13 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_node ON foghorn.artifact_n
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_orphaned ON foghorn.artifact_nodes(is_orphaned) WHERE is_orphaned = true;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_seen ON foghorn.artifact_nodes(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_cached ON foghorn.artifact_nodes(cached_at);
+-- Peer-fallback resolver filters on (artifact_hash, role='origin',
+-- is_complete=true, is_orphaned=false). Include is_orphaned in the
+-- partial predicate so orphaned-but-not-cleaned rows stay out of the
+-- index and don't dilute selectivity during heartbeat lulls.
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_origin_complete
+    ON foghorn.artifact_nodes(artifact_hash)
+    WHERE role = 'origin' AND is_complete = true AND is_orphaned = false;
 
 -- ============================================================================
 -- DVR PER-SEGMENT LEDGER

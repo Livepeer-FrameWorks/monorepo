@@ -163,6 +163,7 @@ type mockArtifactRepo struct {
 	syncStatusCalls        []syncStatusCall
 	addCachedNodeCalls     []cachedNodeCall
 	addCachedNodePathCalls []cachedNodePathCall
+	originArtifactCalls    []originArtifactCall
 	markOrphanedCalls      []string
 }
 
@@ -175,6 +176,11 @@ type cachedNodeCall struct {
 type cachedNodePathCall struct {
 	Hash, NodeID, Path string
 	Size               int64
+}
+type originArtifactCall struct {
+	Hash, NodeID, Path string
+	Size               int64
+	Complete           bool
 }
 
 func (m *mockArtifactRepo) UpsertArtifacts(_ context.Context, _ string, _ []state.ArtifactRecord) error {
@@ -213,6 +219,17 @@ func (m *mockArtifactRepo) AddCachedNodeWithPath(ctx context.Context, hash, node
 		return m.addCachedNodeWithPathFn(ctx, hash, nodeID, path, size)
 	}
 	return nil
+}
+
+func (m *mockArtifactRepo) RegisterOriginArtifact(_ context.Context, hash, nodeID, path string, size int64, complete bool) error {
+	m.mu.Lock()
+	m.originArtifactCalls = append(m.originArtifactCalls, originArtifactCall{hash, nodeID, path, size, complete})
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mockArtifactRepo) ListOriginNodes(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
 }
 
 func (m *mockArtifactRepo) IsSynced(_ context.Context, _ string) (bool, error) {

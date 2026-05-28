@@ -12,11 +12,13 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -296,10 +298,14 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 
 		ss := sm.GetStreamState(req.StreamName)
 		sourceStreamName := req.StreamName
-		if ss != nil && ss.StreamName != "" {
+		if control.StreamRegistryInstance != nil {
+			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
+				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+			} else if ss != nil && strings.Contains(ss.StreamName, "+") {
+				sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+			}
+		} else if ss != nil && strings.Contains(ss.StreamName, "+") {
 			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
-		} else {
-			sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
 		}
 		dtscURL := control.BuildDTSCURI(n.NodeID, sourceStreamName, s.logger)
 
@@ -394,27 +400,54 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		}
 	}
 
-	// Verify stream exists on the selected source
+	// Verify stream exists locally. Live/pull/native rely on Mist state
+	// because their hotness IS Mist state. dvr+<token> is different:
+	// dvr+ is only Mist-active when a local viewer has it open, but the
+	// DVR can be playable (segments being written, playlist up to date)
+	// without Mist state. Source-side check for dvr+ consults the DVR
+	// recording row instead — Mist on the recording node bootstraps
+	// dvr+ on demand when the DTSC pull arrives.
 	sm := state.DefaultManager()
-	ss := sm.GetStreamState(req.StreamName)
-	if ss == nil {
-		return &pb.OriginPullAck{
-			Accepted: false,
-			Reason:   "stream not found locally",
-		}, nil
-	}
-	if req.TenantId != "" && ss.TenantID != "" && ss.TenantID != req.TenantId {
-		return &pb.OriginPullAck{
-			Accepted: false,
-			Reason:   "stream tenant mismatch",
-		}, nil
-	}
-
 	sourceStreamName := req.StreamName
-	if ss.StreamName != "" {
-		sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+	if strings.HasPrefix(req.StreamName, "dvr+") {
+		tenantID, recording := s.dvrRecordingTenant(ctx, strings.TrimPrefix(req.StreamName, "dvr+"))
+		if !recording {
+			return &pb.OriginPullAck{
+				Accepted: false,
+				Reason:   "dvr not recording locally",
+			}, nil
+		}
+		if req.TenantId != "" && tenantID != "" && tenantID != req.TenantId {
+			return &pb.OriginPullAck{
+				Accepted: false,
+				Reason:   "stream tenant mismatch",
+			}, nil
+		}
+		// For dvr+ the runtime name IS the source name; Mist's dvr+
+		// wildcard activates the stream on the incoming DTSC pull.
 	} else {
-		sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
+		ss := sm.GetStreamState(req.StreamName)
+		if ss == nil {
+			return &pb.OriginPullAck{
+				Accepted: false,
+				Reason:   "stream not found locally",
+			}, nil
+		}
+		if req.TenantId != "" && ss.TenantID != "" && ss.TenantID != req.TenantId {
+			return &pb.OriginPullAck{
+				Accepted: false,
+				Reason:   "stream tenant mismatch",
+			}, nil
+		}
+		if control.StreamRegistryInstance != nil {
+			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
+				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+			} else if strings.Contains(ss.StreamName, "+") {
+				sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+			}
+		} else if strings.Contains(ss.StreamName, "+") {
+			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+		}
 	}
 	dtscURL := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if dtscURL == "" {
@@ -424,31 +457,23 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		}, nil
 	}
 
-	// Get source node's base URL for the active replication record
-	ns := sm.GetNodeState(sourceNodeID)
-	baseURL := ""
-	if ns != nil {
-		baseURL = ns.BaseURL
-	}
-
-	// Store active replication record (bridges gap until stream appears in local RIB)
-	record := &ActiveReplicationRecord{
-		StreamName:    req.StreamName,
-		SourceNodeID:  sourceNodeID,
-		SourceCluster: s.clusterID,
-		DestCluster:   req.DestClusterId,
-		DestNodeID:    req.DestNodeId,
-		DTSCURL:       dtscURL,
-		BaseURL:       baseURL,
-		CreatedAt:     time.Now(),
-	}
-	if err := s.cache.SetActiveReplication(ctx, record); err != nil {
-		log.WithError(err).Error("Failed to store active replication record")
+	// Record source-side outbound pull on the unified registry. If the
+	// registry isn't installed we can't durably track the handoff, so
+	// refuse the request rather than silently ack a pull we can't
+	// observe.
+	if control.StreamRegistryInstance == nil {
+		log.Error("Cannot track outbound pull: stream registry unavailable")
 		return &pb.OriginPullAck{
 			Accepted: false,
 			Reason:   "origin-pull temporarily unavailable",
 		}, nil
 	}
+	control.StreamRegistryInstance.RecordOutboundPull(req.StreamName, control.OutboundPull{
+		DestClusterID: req.DestClusterId,
+		DestNodeID:    req.DestNodeId,
+		SourceNodeID:  sourceNodeID,
+		DTSCURL:       dtscURL,
+	})
 
 	log.WithFields(logging.Fields{
 		"source_node": sourceNodeID,
@@ -461,10 +486,40 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	}, nil
 }
 
+// dvrRecordingTenant looks up an active DVR recording by its runtime
+// token (the part after the "dvr+" prefix, which equals internal_name on
+// the recording row). Returns (tenantID, true) when a row is recording
+// locally and can serve cross-cluster DTSC pulls; (_, false) otherwise.
+// Used by NotifyOriginPull to gate dvr+ pulls without requiring Mist
+// state, which is only present when a local viewer has dvr+ open.
+func (s *FederationServer) dvrRecordingTenant(ctx context.Context, token string) (string, bool) {
+	if s.db == nil || token == "" {
+		return "", false
+	}
+	var tenantID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(tenant_id::text, '')
+		FROM foghorn.artifacts
+		WHERE internal_name = $1
+		  AND artifact_type = 'dvr'
+		  AND status = 'recording'
+		LIMIT 1
+	`, token).Scan(&tenantID)
+	if err != nil {
+		return "", false
+	}
+	return tenantID, true
+}
+
 // PrepareArtifact handles cross-cluster artifact preparation requests.
-// The origin cluster looks up the artifact in its local DB, verifies it is
-// synced to S3, and returns presigned GET URLs so the requesting cluster
-// can defrost the artifact without sharing S3 credentials.
+// The origin cluster looks up the artifact in its local DB and returns
+// one of: (a) a presigned S3 GET URL when sync_status='synced'; (b) a
+// node-specific peer_relay_url + short-lived artifact_relay JWT when
+// an origin node holds the canonical full file but S3 sync is pending
+// — the requesting cluster forwards the token opaquely and only the
+// origin cluster's Helmsmans validate it; (c) Ready=false when neither
+// applies, so the requesting cluster surfaces 503 (no polling).
+// S3 credentials never leave the origin cluster in either case.
 func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
@@ -480,9 +535,11 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
-	if s.db == nil || s.s3Client == nil {
+	if s.db == nil {
 		return &pb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
 	}
+	// s.s3Client is checked at the call sites that need to mint
+	// presigned URLs — the peer-relay fallback path doesn't need it.
 
 	log := s.logger.WithFields(logging.Fields{
 		"artifact_hash":      hash,
@@ -538,11 +595,30 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	if syncSt != "synced" {
 		switch location {
 		case "local", "freezing":
-			log.Info("PrepareArtifact: artifact not yet frozen, requesting async freeze")
-			go s.triggerAsyncFreeze(hash, artifactType, tenantID)
-			return &pb.PrepareArtifactResponse{Ready: false, EstReadySeconds: 30}, nil
-		case "defrosting":
-			return &pb.PrepareArtifactResponse{Ready: false, EstReadySeconds: 15}, nil
+			// Not yet on S3 — but the canonical file may exist on a
+			// local origin node and be servable via cross-cluster
+			// peer-relay. Mint a node-specific URL + JWT and hand it
+			// back to the requesting cluster, which forwards it
+			// opaquely into its own RelayResolveResponse. Recursion
+			// invariant: this is local-only; we never return another
+			// peer's peer URL.
+			if peerURL, token, ok := s.maybePeerRelay(ctx, hash, format, artifactType, streamInternalName, req.GetRequestingCluster(), log); ok {
+				log.Info("PrepareArtifact: returning peer-relay URL for hot-but-unsynced artifact")
+				resp := &pb.PrepareArtifactResponse{
+					Ready:              true,
+					Format:             format,
+					InternalName:       internalName,
+					StreamInternalName: streamInternalName,
+					PeerRelayUrl:       peerURL,
+					PeerRelayToken:     token,
+				}
+				if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+					resp.SizeBytes = uint64(sizeBytes.Int64)
+				}
+				return resp, nil
+			}
+			log.Info("PrepareArtifact: artifact not yet on S3; refusing")
+			return &pb.PrepareArtifactResponse{Ready: false}, nil
 		case "s3":
 			log.WithFields(logging.Fields{"storage_location": location, "sync_status": syncSt}).Warn("PrepareArtifact: metadata drift detected")
 			return &pb.PrepareArtifactResponse{Error: "artifact metadata inconsistent: s3 location without synced status"}, nil
@@ -562,6 +638,9 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	switch artType {
 	case "clip", "vod":
+		if s.s3Client == nil {
+			return &pb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
+		}
 		s3Key := s.buildArtifactS3Key(artType, tenantID, streamInternalName, hash, format)
 		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, 15*time.Minute)
 		if err != nil {
@@ -592,6 +671,104 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 
 	default:
 		return &pb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil
+	}
+}
+
+// maybePeerRelay constructs a peer-relay URL + JWT pointing at the
+// local origin node that holds the canonical full file for the named
+// artifact, when one exists. Called from PrepareArtifact to serve
+// cross-cluster requests for hot-but-unsynced artifacts without
+// waiting for S3 sync.
+//
+// Returns ok=false (with empty strings) when:
+//   - the artifact relay signing secret isn't configured;
+//   - no local artifact_nodes row qualifies (role='origin',
+//     is_complete=true, not orphaned);
+//   - the origin node has no base_url to address.
+//
+// Recursion invariant: this only looks up LOCAL origin rows. We never
+// return a peer URL that points at another cluster's relay — the
+// caller would then chain to a peer that points back at us in the
+// pathological case.
+func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, format, artifactType, streamInternalName, requestingCluster string, log logrus.FieldLogger) (string, string, bool) {
+	secret := control.GetArtifactRelaySecret()
+	if len(secret) == 0 || s.db == nil {
+		return "", "", false
+	}
+	var (
+		originNodeID string
+		baseURL      string
+	)
+	// COALESCE base_url from node_outputs — RegisterOriginArtifact
+	// doesn't populate per-row base_url (the StoredArtifact heartbeat
+	// proto is per-artifact, not per-node). node_outputs is the
+	// canonical per-node URL store updated by NodeLifecycle. Without
+	// the JOIN, processed VOD output + DVR chapter VOD rows would
+	// have empty base_url here and silently fall through to S3.
+	err := s.db.QueryRowContext(ctx, `
+		SELECT an.node_id, COALESCE(NULLIF(an.base_url, ''), no.base_url, '')
+		FROM foghorn.artifact_nodes an
+		LEFT JOIN foghorn.node_outputs no ON no.node_id = an.node_id
+		WHERE an.artifact_hash = $1
+		  AND an.role = 'origin'
+		  AND an.is_complete = true
+		  AND an.is_orphaned = false
+		  AND an.last_seen_at > NOW() - INTERVAL '90 seconds'
+		ORDER BY an.last_seen_at DESC
+		LIMIT 1
+	`, artifactHash).Scan(&originNodeID, &baseURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false
+	}
+	if err != nil {
+		log.WithError(err).Warn("PrepareArtifact peer-relay lookup failed")
+		return "", "", false
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "", "", false
+	}
+	path := peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalName)
+	if path == "" {
+		return "", "", false
+	}
+	peerURL := strings.TrimRight(baseURL, "/") + path
+	if strings.TrimSpace(requestingCluster) == "" {
+		requestingCluster = s.clusterID
+	}
+	token, _, mintErr := auth.GenerateArtifactRelayJWT(originNodeID, artifactHash, path, s.clusterID, requestingCluster, 0, secret)
+	if mintErr != nil {
+		log.WithError(mintErr).Warn("PrepareArtifact mint peer-relay token failed")
+		return "", "", false
+	}
+	return peerURL, token, true
+}
+
+// peerRelayArtifactPath mirrors Helmsman's per-kind route layout so the
+// peer URL we hand back lines up with where the origin node's relay
+// actually serves bytes.
+//
+//	vod  → /internal/artifact/vod/<hash>.<ext>            (flat)
+//	clip → /internal/artifact/clip/<stream>/<hash>.<ext>  (nested)
+//
+// Returns "" when required inputs are missing (empty format, or empty
+// stream for a clip — the relay route requires both segments).
+func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalName string) string {
+	ext := strings.TrimPrefix(strings.TrimSpace(format), ".")
+	if ext == "" {
+		ext = "mp4"
+	}
+	switch strings.ToLower(strings.TrimSpace(artifactType)) {
+	case "clip":
+		stream := strings.TrimSpace(streamInternalName)
+		if stream == "" {
+			return ""
+		}
+		return "/internal/artifact/clip/" + stream + "/" + artifactHash + "." + ext
+	case "vod", "":
+		return "/internal/artifact/vod/" + artifactHash + "." + ext
+	default:
+		return ""
 	}
 }
 
@@ -1323,20 +1500,6 @@ func (s *FederationServer) healMintArtifactRow(ctx context.Context, artifactHash
 	}
 }
 
-func (s *FederationServer) triggerAsyncFreeze(hash, artifactType, _tenantID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	nodeID, err := control.PickStorageNodeIDPublic()
-	if err != nil {
-		s.logger.WithError(err).WithField("artifact_hash", hash).Warn("No storage node for async freeze")
-		return
-	}
-	if _, err := control.StartDefrost(ctx, artifactType, hash, nodeID, 30*time.Second, s.logger); err != nil {
-		s.logger.WithError(err).WithField("artifact_hash", hash).Debug("Async freeze/defrost trigger failed (may already be in progress)")
-	}
-}
-
 // CreateRemoteClip handles a peer cluster requesting clip creation on the origin.
 // The origin has the live stream locally and can create the clip directly.
 func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
@@ -1528,7 +1691,7 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 			s.handlePeerHeartbeat(ctx, peerClusterID, payload.PeerHeartbeat)
 
 		case *pb.PeerMessage_CapacitySummary:
-			// CapacitySummary received — no handler yet (dCDN future)
+			// CapacitySummary is accepted on the wire but no consumer is wired.
 
 		default:
 			log.Warn("Unknown PeerMessage payload type, ignoring")
@@ -1636,6 +1799,19 @@ func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peer
 		return
 	}
 	for _, loc := range ad.Artifacts {
+		if loc.TenantId == "" {
+			// Refuse to cache an ad we can't attribute to a tenant — a
+			// peer running stale code could otherwise push artifacts with
+			// empty tenant that this cluster would then surface to every
+			// playback query regardless of scope. Receiver-side guard
+			// pairs with the producer-side filter in peer_manager.
+			s.logger.WithFields(logging.Fields{
+				"peer_cluster":  peerClusterID,
+				"artifact_hash": loc.ArtifactHash,
+				"node_id":       loc.NodeId,
+			}).Warn("handleArtifactAdvertisement: dropping ad with empty tenant")
+			continue
+		}
 		entry := &RemoteArtifactEntry{
 			ArtifactHash: loc.ArtifactHash,
 			ArtifactType: loc.ArtifactType,
@@ -1659,48 +1835,51 @@ func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peer
 	}
 }
 
-func (s *FederationServer) handleStreamAdvertisement(ctx context.Context, peerClusterID string, ad *pb.StreamAdvertisement) {
+func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClusterID string, ad *pb.StreamAdvertisement) {
 	if ad == nil {
 		return
 	}
-	edges := make([]*StreamAdEdge, 0, len(ad.Edges))
-	for _, e := range ad.Edges {
-		edges = append(edges, &StreamAdEdge{
-			NodeID:      e.NodeId,
-			BaseURL:     e.BaseUrl,
-			DTSCURL:     e.DtscUrl,
-			IsOrigin:    e.IsOrigin,
-			BWAvailable: e.BwAvailable,
-			CPUPercent:  e.CpuPercent,
-			ViewerCount: e.ViewerCount,
-			GeoLat:      e.GeoLat,
-			GeoLon:      e.GeoLon,
-			BufferState: e.BufferState,
-		})
-	}
-	record := &StreamAdRecord{
-		InternalName:    ad.InternalName,
-		TenantID:        ad.TenantId,
-		PlaybackID:      ad.PlaybackId,
-		OriginClusterID: peerClusterID,
-		IsLive:          ad.IsLive,
-		Edges:           edges,
-		Timestamp:       ad.Timestamp,
-	}
-	if err := s.cache.SetStreamAd(ctx, peerClusterID, record); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"peer_cluster":  peerClusterID,
-			"internal_name": ad.InternalName,
-		}).Warn("Failed to cache stream advertisement")
-	}
-	// Maintain playback_id reverse index for peer stream resolution
-	if ad.PlaybackId != "" && ad.IsLive {
-		if err := s.cache.SetPlaybackIndex(ctx, ad.PlaybackId, ad.InternalName); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"peer_cluster": peerClusterID,
-				"playback_id":  ad.PlaybackId,
-			}).Warn("Failed to cache playback index")
+	// Mirror the ad into the unified stream registry so source-routing
+	// callers (clip, DVR, federation DTSC, playback) and diagnostics see
+	// peer-owned streams. The StreamAdvertisement protocol carries no
+	// ingest_mode, so the federated entry's IngestMode stays 0 and
+	// receivers route via the stored peer DTSC URL handed back by
+	// NotifyOriginPull, never via a reconstructed runtime name.
+	if control.StreamRegistryInstance != nil {
+		ecands := make([]control.EdgeCandidate, 0, len(ad.Edges))
+		for _, e := range ad.Edges {
+			ecands = append(ecands, control.EdgeCandidate{
+				NodeID:      e.NodeId,
+				BaseURL:     e.BaseUrl,
+				DTSCURL:     e.DtscUrl,
+				IsOrigin:    e.IsOrigin,
+				BWAvailable: int64(e.BwAvailable),
+				CPUPercent:  e.CpuPercent,
+				ViewerCount: int32(e.ViewerCount),
+				GeoLat:      e.GeoLat,
+				GeoLon:      e.GeoLon,
+				BufferState: e.BufferState,
+			})
 		}
+		originCluster := ad.OriginClusterId
+		if originCluster == "" {
+			originCluster = peerClusterID
+		}
+		control.StreamRegistryInstance.UpsertFederatedSource(
+			peerClusterID,
+			control.StreamEntry{
+				TenantID:        ad.TenantId,
+				PlaybackID:      ad.PlaybackId,
+				InternalName:    ad.InternalName,
+				OriginClusterID: originCluster,
+			},
+			control.Location{
+				IsLiveNow:       ad.IsLive,
+				AdTimestamp:     ad.Timestamp,
+				EdgeCandidates:  ecands,
+				RecordingNodeID: ad.DvrRecordingNodeId,
+			},
+		)
 	}
 }
 

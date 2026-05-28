@@ -45,21 +45,34 @@ func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
 	remoteEdgeCache = cache
 }
 
-func activeReplicationSource(ctx context.Context, streamName string) (string, bool) {
-	if remoteEdgeCache == nil || strings.TrimSpace(streamName) == "" {
+// activeReplicationSource resolves an in-flight origin-pull for streamName
+// from the local registry. The bool return is tri-state via (url, handled):
+//
+//	("", false) — no active replication; caller falls through to other resolvers
+//	("", true)  — replication exists but pinned to a different edge; caller
+//	              must NOT fall through (would create a duplicate pull). Caller
+//	              should write an offline/empty response.
+//	(url, true) — replication exists and the caller is the pinned puller
+//	              (or no pin is set); return the URL to Mist.
+//
+// callerNodeID is the dest-edge resolved from the HTTP /source client IP.
+// When empty (caller not registered) we cannot prove the caller IS the
+// pinned puller, so any pin gates the response.
+func activeReplicationSource(ctx context.Context, streamName, callerNodeID string) (string, bool) {
+	if control.StreamRegistryInstance == nil || strings.TrimSpace(streamName) == "" {
 		return "", false
 	}
-	record, err := remoteEdgeCache.GetActiveReplication(ctx, streamName)
-	if err != nil {
-		if logger != nil {
-			logger.WithError(err).WithField("stream", streamName).Warn("Source lookup: failed to read active origin-pull record")
-		}
+	loc, ok := control.StreamRegistryInstance.LocalReplication(ctx, streamName)
+	if !ok || strings.TrimSpace(loc.PullDTSCURL) == "" {
 		return "", false
 	}
-	if record == nil || strings.TrimSpace(record.DTSCURL) == "" {
-		return "", false
+	if loc.DestNodeID != "" && callerNodeID != loc.DestNodeID {
+		// Pinned to another local edge. Refuse rather than letting the
+		// caller fall through and arrange a parallel pull the registry
+		// can't track.
+		return "", true
 	}
-	return record.DTSCURL, true
+	return loc.PullDTSCURL, true
 }
 
 // SetOriginPullInstanceID identifies this Foghorn instance when taking

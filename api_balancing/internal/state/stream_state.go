@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	neturl "net/url"
 	"strings"
 	"sync"
 	"time"
@@ -842,6 +843,45 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// SetStreamInstanceInputs forces the per-node Inputs counter for an
+// internal stream. The balancer's source-selection check at
+// balancer.go's rateNodeWithReason rejects any node with Inputs==0, so
+// admission/drain need to mark presence/absence immediately rather
+// than wait for the next STREAM_BUFFER event or poll tick. Callers:
+//
+//   - admit-side: set inputs=1 on the new owner when AdmitAndReserve
+//     accepts, so the balancer can pick that node before its first
+//     STREAM_BUFFER event arrives at Foghorn.
+//   - drain-side: set inputs=0 on the old owner when a takeover drain
+//     is dispatched, so the balancer stops sending viewers to the
+//     node whose buffer is being nuked.
+//
+// Narrow setter (does not clobber TotalConnections / BytesUp / BytesDown
+// the way UpdateNodeStats does, which is fed from Mist telemetry).
+func (sm *StreamStateManager) SetStreamInstanceInputs(internalName, nodeID string, inputs int) {
+	if strings.TrimSpace(internalName) == "" || strings.TrimSpace(nodeID) == "" {
+		return
+	}
+	sm.mu.Lock()
+	if sm.streamInstances[internalName] == nil {
+		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
+	}
+	inst := sm.streamInstances[internalName][nodeID]
+	if inst == nil {
+		inst = &StreamInstanceState{NodeID: nodeID}
+		sm.streamInstances[internalName][nodeID] = inst
+	}
+	inst.Inputs = inputs
+	inst.LastUpdate = time.Now()
+	instPayload, marshalErr := json.Marshal(inst)
+	sm.mu.Unlock()
+	if marshalErr != nil {
+		return
+	}
+
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
+}
+
 func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
 	sm.mu.Lock()
 	now := time.Now()
@@ -906,6 +946,86 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 	sm.mu.Unlock()
 
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
+}
+
+// NodeIDByClientIP looks up the registered node whose advertised
+// BaseURL host matches the given client IP. Returns "" when no match
+// is found.
+//
+// Used by /source (HTTP) to identify the calling Mist node from its
+// request IP so the origin-pull handshake's NotifyOriginPull /
+// MarkReplicating can target the actual puller. /source is called BY
+// the puller (unlike gRPC viewer routing where Foghorn picks the
+// puller via the load balancer).
+//
+// Matching is tolerant: tries exact host==IP first (covers deployments
+// that publish raw IPs in BaseURL), then resolves the host via DNS and
+// checks each resolved address. DNS lookup is cached only by the OS
+// resolver — if this becomes a hot-path cost, layer a per-host TTL
+// cache on top.
+func (sm *StreamStateManager) NodeIDByClientIP(clientIP string) string {
+	clientIP = strings.TrimSpace(clientIP)
+	if clientIP == "" {
+		return ""
+	}
+	parsed := net.ParseIP(clientIP)
+	if parsed == nil {
+		return ""
+	}
+	sm.mu.RLock()
+	nodes := make(map[string]string, len(sm.nodes))
+	for id, n := range sm.nodes {
+		if n != nil && n.BaseURL != "" {
+			nodes[id] = n.BaseURL
+		}
+	}
+	sm.mu.RUnlock()
+
+	// Pass 1: literal host match. Handles BaseURL forms like
+	// https://10.0.0.4:18007 or https://[fe80::1]:18007.
+	for id, baseURL := range nodes {
+		host := hostFromBaseURL(baseURL)
+		if host == "" {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.Equal(parsed) {
+			return id
+		}
+	}
+	// Pass 2: DNS resolve. Handles FQDN BaseURLs.
+	// Bounded context: this runs on the gRPC request path; a slow DNS
+	// resolver shouldn't stall stream resolution.
+	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer resolveCancel()
+	resolver := &net.Resolver{}
+	for id, baseURL := range nodes {
+		host := hostFromBaseURL(baseURL)
+		if host == "" {
+			continue
+		}
+		if net.ParseIP(host) != nil {
+			continue // already covered above
+		}
+		addrs, err := resolver.LookupHost(resolveCtx, host)
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ip := net.ParseIP(addr); ip != nil && ip.Equal(parsed) {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func hostFromBaseURL(baseURL string) string {
+	u, err := neturl.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	host := u.Hostname()
+	return host
 }
 
 // AliveNodeIDs returns IDs of nodes with a recent heartbeat within the given threshold.
@@ -1659,6 +1779,8 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 					HasDtsh:      a.GetHasDtsh(),
 					AccessCount:  int64(a.GetAccessCount()),
 					LastAccessed: a.GetLastAccessed(),
+					Role:         storedArtifactRoleToString(a.GetRole()),
+					IsComplete:   a.GetIsComplete(),
 				})
 			}
 			go func() {
@@ -1761,6 +1883,16 @@ func artifactTypeFromString(s string) pb.ArtifactEvent_ArtifactType {
 	default:
 		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
+}
+
+// storedArtifactRoleToString maps the heartbeat proto enum to the DB
+// role token. Polling-reported rows default to "cache"; ORIGIN is only
+// stamped by sidecar finalizer RPCs.
+func storedArtifactRoleToString(role pb.StoredArtifact_Role) string {
+	if role == pb.StoredArtifact_ROLE_ORIGIN {
+		return "origin"
+	}
+	return "cache"
 }
 
 // checkAndTriggerDtshSync checks for artifacts that have .dtsh locally but weren't synced with it
@@ -2985,6 +3117,17 @@ type ArtifactRepository interface {
 	AddCachedNode(ctx context.Context, artifactHash, nodeID string) error
 	// AddCachedNodeWithPath updates cache tracking with file path and size info.
 	AddCachedNodeWithPath(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64) error
+	// RegisterOriginArtifact marks a node as the origin (canonical full-file
+	// holder) for an artifact. Called by finalizer RPCs that wrote the file
+	// to disk. complete=true flips is_complete to authoritative-true; pass
+	// false at recording start (DVR) to record the row before finalization.
+	// Origin-wins semantics: once role='origin' is set, subsequent cache
+	// upserts on the same (artifact, node) cannot downgrade it.
+	RegisterOriginArtifact(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64, complete bool) error
+	// ListOriginNodes returns node IDs that hold the canonical full file
+	// for an artifact and have is_complete=true. Empty when no peer-relay
+	// fallback is available.
+	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
 	// IsSynced returns true if the artifact is synced to S3
 	IsSynced(ctx context.Context, artifactHash string) (bool, error)
 	// GetCachedAt retrieves the cached_at timestamp (Unix ms) for calculating warm duration
@@ -3012,6 +3155,14 @@ type ArtifactRecord struct {
 	HasDtsh      bool  // True if .dtsh index file exists locally
 	AccessCount  int64
 	LastAccessed int64 // Unix timestamp
+	// Role identifies which presence model this report describes.
+	// "origin" rows are written by the sidecar that finalized the file
+	// and are eligible to serve cross-cluster peer-relay reads when
+	// IsComplete=true. "cache" rows (default for poller reports) hold
+	// sparse block-cache content and cannot serve peers. Empty string
+	// is treated as "cache" by the repo.
+	Role       string
+	IsComplete bool
 }
 
 // ArtifactSyncInfo represents sync tracking state for an artifact

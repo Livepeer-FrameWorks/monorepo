@@ -120,21 +120,25 @@ func handleChapterFinalizeResult(
 		projectArtifactSizeToCommodore(ctx, playbackHash, sizeBytes, logger)
 	}
 
-	// Warm-cache registration so the chapter VOD is immediately
-	// playable on the node that produced it. Same hooks as the VOD
-	// processing branch — artifact_nodes row + in-memory state.
+	// Origin registration so the chapter VOD is immediately playable on
+	// the node that produced it, and so cross-cluster peer-relay can
+	// serve viewers on other edges before the chapter syncs to S3.
+	// Same hooks as the VOD processing branch — artifact_nodes row +
+	// in-memory state, both stamped role=origin, is_complete=true.
 	if outputPath != "" {
 		if artifactRepo != nil {
-			if err := artifactRepo.AddCachedNodeWithPath(ctx, playbackHash, nodeID, outputPath, sizeBytes); err != nil {
-				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: warm-cache add failed")
+			if err := artifactRepo.RegisterOriginArtifact(ctx, playbackHash, nodeID, outputPath, sizeBytes, true); err != nil {
+				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: origin registration failed")
 			}
 		}
 		state.DefaultManager().AddNodeArtifact(nodeID, &pb.StoredArtifact{
-			ClipHash:  playbackHash,
-			FilePath:  outputPath,
-			SizeBytes: uint64(sizeBytes),
-			CreatedAt: time.Now().Unix(),
-			Format:    "mkv",
+			ClipHash:   playbackHash,
+			FilePath:   outputPath,
+			SizeBytes:  uint64(sizeBytes),
+			CreatedAt:  time.Now().Unix(),
+			Format:     "mkv",
+			Role:       pb.StoredArtifact_ROLE_ORIGIN,
+			IsComplete: true,
 		})
 	}
 
@@ -379,7 +383,7 @@ func resolveChapterArtifactContent(ctx context.Context, input string) *ContentRe
 // resolveChapterArtifactPlaybackResp synthesizes a
 // ResolveArtifactPlaybackIDResponse for a chapter artifact_hash so
 // ResolveArtifactPlayback can flow through the standard
-// foghorn.artifacts placement/defrost path while preserving parent-DVR
+// foghorn.artifacts placement path while preserving parent-DVR
 // auth inheritance for hidden chapter VODs.
 //
 // Returns (nil, false) for any input that isn't a chapter artifact —

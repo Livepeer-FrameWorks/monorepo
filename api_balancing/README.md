@@ -28,7 +28,7 @@ Routes streaming traffic to the best available media nodes based on:
 - Maintains persistent gRPC streams with all connected Helmsman instances
 - Receives configured MistServer triggers and synthetic lifecycle/storage/processing events forwarded by Helmsman
 - Sends responses for blocking triggers (stream key validation, viewer auth)
-- Dispatches commands such as `ConfigSeed`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, `DefrostRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
+- Dispatches commands such as `ConfigSeed`, `DVRStartRequest`, `DVRStopRequest`, `DVRDeleteRequest`, `FreezeRequest`, session-stop, push-target, thumbnail-upload, and processing-job requests
 - Tracks node health, capabilities, and stream state
 
 ### Control / API Plane (Commodore, Quartermaster)
@@ -144,11 +144,11 @@ To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If
 
 ### Storage
 
-Foghorn reconstructs local file paths when defrosting artifacts from S3. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
+Foghorn reconstructs local file paths for DVR dispatch. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
 
-| Variable                       | Default                          | Description                                                                                                                                       |
-| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path for artifact defrost when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
+| Variable                       | Default                          | Description                                                                                                                  |
+| ------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
 
 ## Related
 

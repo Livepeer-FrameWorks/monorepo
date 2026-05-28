@@ -10,7 +10,6 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -957,6 +956,11 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		SourceKind:       dispatch.kind,
 		InternalName:     req.GetInternalName(),
 	}
+	// Foghorn-authoritative artifact runtime name for the post-download
+	// DTSH boot. Clips are always frozen VOD artifacts → vod+<internal>.
+	if clipInternal := req.GetInternalName(); clipInternal != "" {
+		clipReq.ArtifactRuntimeName = "vod+" + clipInternal
+	}
 	if dispatch.dvrHash != "" {
 		clipReq.SourceDvrHash = dispatch.dvrHash
 	}
@@ -1393,15 +1397,19 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		}, nil
 	}
 
-	// Store node assignment in foghorn.artifact_nodes
+	// Store node assignment in foghorn.artifact_nodes. The recording
+	// node is the origin (writes the canonical file as DVR segments
+	// land); is_complete stays false until FinalizeDVR confirms the
+	// recording is sealed.
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at, role, is_complete)
+		VALUES ($1, $2, $3, NOW(), 'origin', false)
 		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 			base_url = EXCLUDED.base_url,
 			last_seen_at = NOW(),
 			is_orphaned = false,
-			cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
+			cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW()),
+			role = 'origin'
 	`, dvrHash, storageNodeID, storageHost)
 
 	if err != nil {
@@ -1441,14 +1449,17 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		sourceBaseURL = ""
 	}
 
-	// Send gRPC control message to storage Helmsman
+	// Send gRPC control message to storage Helmsman. source_runtime_name
+	// is Foghorn-authoritative: Helmsman uses it verbatim as the Mist
+	// push_start.stream arg, no silent live+ default for mist_native.
 	dvrReq := &pb.DVRStartRequest{
-		DvrHash:       dvrHash,
-		InternalName:  req.InternalName,
-		SourceBaseUrl: sourceBaseURL,
-		RequestId:     dvrHash,
-		Config:        config,
-		StreamId:      streamID,
+		DvrHash:           dvrHash,
+		InternalName:      req.InternalName,
+		SourceRuntimeName: sourceStreamName,
+		SourceBaseUrl:     sourceBaseURL,
+		RequestId:         dvrHash,
+		Config:            config,
+		StreamId:          streamID,
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
@@ -1571,48 +1582,77 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	}, nil
 }
 
+// dvrSourceStreamName returns the Mist runtime name of the source stream
+// for a DVR push. Prefers the registry's RuntimeName (IngestMode-aware:
+// live+ for push, pull+ for pull, bare for mist_native). Falls back to
+// the observed Mist instance name and finally to the bare internal name.
+// Never defaults to live+ when the mode is unknown — that would mis-route
+// DVR for mist_native sources.
 func dvrSourceStreamName(internalName string) string {
-	sourceStreamName := control.MistSourceNameForIngestMode(internalName, "push")
-	ss := state.DefaultManager().GetStreamState(internalName)
-	if ss == nil {
-		return sourceStreamName
+	internalName = strings.TrimSpace(internalName)
+	if internalName == "" {
+		return ""
 	}
-	observed := strings.TrimSpace(ss.StreamName)
-	if observed == "" || !strings.Contains(observed, "+") {
-		return sourceStreamName
+	// Registry is authoritative when IngestMode is known: returns the
+	// canonical runtime name (bare for mist-native, live+/pull+ for
+	// push/pull). Bare-matches-internal isn't a "no entry" signal —
+	// check IngestMode directly so mist-native sources don't fall
+	// through to the observed-state path that only recognises `+`-bearing
+	// names.
+	if control.StreamRegistryInstance != nil {
+		entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), internalName)
+		if err == nil && entry.IngestMode != 0 {
+			return control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+		}
 	}
-	return control.MistSourceNameFromObservedStream(observed)
+	// Cold-cache fallback: trust the observed Mist instance name when it
+	// carries a prefix. Bare observed names fall through to bare
+	// internal_name — never to a silent live+ default.
+	if ss := state.DefaultManager().GetStreamState(internalName); ss != nil {
+		observed := strings.TrimSpace(ss.StreamName)
+		if observed != "" && strings.Contains(observed, "+") {
+			return control.MistSourceNameFromObservedStream(observed)
+		}
+	}
+	return internalName
 }
 
 func clipLiveSourceStreamName(ctx context.Context, req *pb.CreateClipRequest) (string, error) {
-	if playbackID := strings.TrimSpace(req.GetPlaybackId()); playbackID != "" {
-		if control.CommodoreClient == nil {
-			return "", fmt.Errorf("commodore client unavailable to resolve playback_id")
-		}
-		resp, err := control.CommodoreClient.ResolvePlaybackID(ctx, playbackID)
-		if err != nil {
-			return "", err
-		}
-		if resp.GetInternalName() == "" {
-			return "", fmt.Errorf("playback_id did not resolve to an internal stream")
-		}
-		return control.MistSourceNameForIngestMode(resp.GetInternalName(), resp.GetIngestMode()), nil
-	}
-
 	internalName := strings.TrimSpace(req.GetStreamInternalName())
-	if control.CommodoreClient != nil && internalName != "" {
-		resp, err := control.CommodoreClient.ResolveStreamContext(ctx, "", "", internalName, req.GetClusterId())
-		if err != nil {
-			return "", err
-		}
-		if resp.GetInternalName() != "" {
-			if !resp.GetAdmitted() {
-				return "", fmt.Errorf("stream context rejected: %s", resp.GetAdmissionReason())
-			}
-			return control.MistSourceNameForIngestMode(resp.GetInternalName(), resp.GetIngestMode()), nil
+	if internalName == "" {
+		return "", fmt.Errorf("stream_internal_name is required")
+	}
+	if control.StreamRegistryInstance != nil {
+		entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, internalName)
+		if err == nil && entry.IngestMode != 0 {
+			return control.RuntimeNameFor(entry.IngestMode, entry.InternalName), nil
 		}
 	}
-	return control.MistSourceNameForIngestMode(internalName, "push"), nil
+	if control.CommodoreClient == nil {
+		return "", fmt.Errorf("commodore client unavailable")
+	}
+	resp, err := control.CommodoreClient.ResolveStreamContext(ctx, "", "", internalName, req.GetClusterId())
+	if err != nil {
+		return "", err
+	}
+	if !resp.GetAdmitted() || resp.GetInternalName() == "" {
+		return "", fmt.Errorf("stream context rejected: %s", resp.GetAdmissionReason())
+	}
+	ingestMode, modeErr := control.IngestModeFromWire(resp.GetIngestMode())
+	if modeErr != nil {
+		return "", fmt.Errorf("ingest_mode %q: %w", resp.GetIngestMode(), modeErr)
+	}
+	if control.StreamRegistryInstance != nil {
+		control.StreamRegistryInstance.UpsertLocalSource(control.StreamEntry{
+			StreamID:        resp.GetStreamId(),
+			TenantID:        resp.GetTenantId(),
+			PlaybackID:      resp.GetPlaybackId(),
+			InternalName:    resp.GetInternalName(),
+			IngestMode:      ingestMode,
+			OriginClusterID: resp.GetOriginClusterId(),
+		})
+	}
+	return control.RuntimeNameFor(ingestMode, resp.GetInternalName()), nil
 }
 
 // StopDVR stops an active DVR recording
@@ -2017,8 +2057,8 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 
 	// Loop prevention: skip remote edges if we're already pulling this stream
 	skipRemote := false
-	if s.remoteEdgeCache != nil {
-		if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+	if control.StreamRegistryInstance != nil {
+		if _, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok {
 			skipRemote = true
 		}
 	}
@@ -2048,9 +2088,14 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
 
-	// If a remote cluster won the summary-level comparison, confirm with QueryStream
+	// If a remote cluster won the summary-level comparison, confirm with QueryStream.
+	// An infra-error from arrangement bubbles up as 5xx rather than silently
+	// degrading to a summary-level redirect.
 	if response.Primary != nil && response.Primary.ClusterId != "" {
-		confirmed := s.confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, tenantID, lat, lon)
+		confirmed, confirmErr := s.confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, tenantID, lat, lon)
+		if confirmErr != nil {
+			return nil, status.Errorf(codes.Unavailable, "%v", confirmErr)
+		}
 		if confirmed != nil {
 			response = confirmed
 		}
@@ -2098,11 +2143,18 @@ func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.
 	return candidates
 }
 
-// confirmRemoteEndpoint validates a summary-level remote win by calling QueryStream
-// on the winning cluster(s). Returns nil if confirmation fails (caller keeps original).
-func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) *pb.ViewerEndpointResponse {
+// confirmRemoteEndpoint validates a summary-level remote win by calling
+// QueryStream on the winning cluster(s). Returns:
+//
+//	(non-nil, nil) — confirmed; caller swaps the summary-level response
+//	                  for this richer one.
+//	(nil, nil)     — confirmation failed softly (LB miss, no peer reply,
+//	                  no DTSC URL); caller keeps the summary-level redirect.
+//	(nil, err)     — arrangement infra failure (registry/deps/peer/notify);
+//	                  caller surfaces 5xx instead of silently redirecting.
+func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	if s.federationClient == nil || s.peerManager == nil {
-		return nil
+		return nil, nil
 	}
 
 	type remoteHit struct {
@@ -2123,7 +2175,7 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 		}
 	}
 	if len(remotes) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	type queryResult struct {
@@ -2169,12 +2221,17 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 		}
 	}
 	if bestCandidate == nil {
-		return nil
+		return nil, nil
 	}
 
-	// Try origin-pull: pre-arrange local replication so MistServer can pull via DTSC
-	if arranged := s.arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response); arranged != nil {
-		return arranged
+	// Try origin-pull: pre-arrange local replication so MistServer can pull via DTSC.
+	// Infra-error propagates so the viewer sees 5xx instead of a silently-degraded redirect.
+	arranged, arrangeErr := s.arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response)
+	if arrangeErr != nil {
+		return nil, arrangeErr
+	}
+	if arranged != nil {
+		return arranged, nil
 	}
 
 	// No origin-pull possible — redirect viewer to the remote cluster directly
@@ -2203,126 +2260,100 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 		"remote_score":   bestCandidate.BwScore,
 	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
 
-	return confirmed
+	return confirmed, nil
 }
 
 // arrangeOriginPull pre-arranges a local DTSC pull from a remote source.
-// Returns a response pointing to the local edge, or nil if arrangement fails.
-// The actual DTSC pull happens when MistServer's PLAY_REWRITE trigger fires.
-func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *pb.ViewerEndpointResponse) *pb.ViewerEndpointResponse {
+// Three return shapes:
+//
+//	(non-nil, nil) — arrangement succeeded; viewer goes to local edge
+//	(nil, nil)     — soft refusal (no DTSC URL, contention, no local
+//	                  capacity, loop prevention); caller falls through to
+//	                  peer-redirect fallback
+//	(nil, err)     — infra failure (registry/deps/peer/notify); caller
+//	                  surfaces a 5xx so operators see the underlying break
+//	                  instead of a silently-degraded redirect. Use
+//	                  federation.IsArrangeInfraError to discriminate.
+//
+// Thin wrapper around federation.ArrangeOriginPull — the in-process
+// tryBeginOriginPull guard sits in front of the shared helper to coalesce
+// concurrent gRPC arrangement requests on this instance before they all
+// line up on the Redis lock.
+func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *pb.ViewerEndpointResponse) (*pb.ViewerEndpointResponse, error) {
 	if s.remoteEdgeCache == nil || remote.DtscUrl == "" {
-		return nil
+		return nil, nil
 	}
 
+	registry := control.StreamRegistryInstance
 	if !s.tryBeginOriginPull(internalName) {
-		if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
-			if endpoint := s.buildLocalEndpoint(record, viewKey); endpoint != nil {
-				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+		if registry != nil {
+			if loc, ok := registry.LocalReplication(ctx, internalName); ok {
+				if endpoint := s.buildLocalEndpoint(loc.DestNodeID, loc.DestNodeBaseURL, viewKey); endpoint != nil {
+					return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
+				}
 			}
 		}
-		return nil
+		return nil, nil
 	}
 	defer s.finishOriginPull(internalName)
 
-	// Already pulling this stream? Return the existing local endpoint.
-	if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
-		endpoint := s.buildLocalEndpoint(record, viewKey)
-		if endpoint != nil {
-			return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
-		}
-		_ = s.remoteEdgeCache.DeleteActiveReplication(ctx, internalName)
-	}
-
-	lockOwner := s.instanceID
-	if lockOwner == "" {
-		lockOwner = "foghorn-grpc"
-	}
-	if !s.remoteEdgeCache.TryAcquireOriginPullLock(ctx, internalName, lockOwner) {
-		time.Sleep(50 * time.Millisecond)
-		if record, err := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); err == nil && record != nil {
-			if endpoint := s.buildLocalEndpoint(record, viewKey); endpoint != nil {
-				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
-			}
-		}
-		return nil
-	}
-	defer s.remoteEdgeCache.ReleaseOriginPullLock(ctx, internalName, lockOwner)
-
-	// Loop prevention: don't pull from a cluster already pulling from us
-	if replications, _ := s.remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
-		for _, r := range replications {
-			if r.ClusterID == remoteCluster {
-				return nil
+	// Pre-clear a stale registry entry whose dest node disappeared so
+	// the shared helper re-runs NotifyOriginPull instead of reusing.
+	// This case is gRPC-specific (loop only invokes arrangeOriginPull
+	// when the registry didn't already resolve to a usable endpoint).
+	if registry != nil {
+		if loc, ok := registry.LocalReplication(ctx, internalName); ok {
+			if s.buildLocalEndpoint(loc.DestNodeID, loc.DestNodeBaseURL, viewKey) == nil {
+				registry.ClearReplicating(internalName)
 			}
 		}
 	}
 
-	// Find a healthy local edge with capacity (tenant-scoped on shared Foghorns)
-	lbCtx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
-	if tenantID != "" {
-		lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, tenantID)
+	deps := &federation.ArrangeOriginPullDeps{
+		Cache:        s.remoteEdgeCache,
+		PeerResolver: s.peerManager,
+		FedClient:    s.federationClient,
+		InstanceID:   s.instanceID,
+		ClusterID:    s.clusterID,
+		Logger:       s.logger,
 	}
-	localHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(lbCtx, "", lat, lon, nil, "", false)
-	if err != nil {
-		return nil
-	}
-	localNodeID := s.lb.GetNodeIDByHost(localHost)
-	if localNodeID == "" {
-		return nil
-	}
-
-	// NotifyOriginPull: tell the source cluster we intend to pull
-	peerAddr := s.peerManager.GetPeerAddr(remoteCluster)
-	if peerAddr == "" {
-		return nil
-	}
-	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	ack, err := s.federationClient.NotifyOriginPull(notifyCtx, remoteCluster, peerAddr, &pb.OriginPullNotification{
-		StreamName:    internalName,
-		SourceNodeId:  remote.NodeId,
-		DestClusterId: s.clusterID,
-		DestNodeId:    localNodeID,
-		TenantId:      tenantID,
+	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
+		InternalName:  internalName,
+		Remote:        remote,
+		RemoteCluster: remoteCluster,
+		TenantID:      tenantID,
+		Lat:           lat,
+		Lon:           lon,
+		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, error) {
+			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
+			if pickTenant != "" {
+				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
+			}
+			host, _, _, _, _, pickErr := s.lb.GetBestNodeWithScore(lbCtx, "", pickLat, pickLon, nil, "", false)
+			if pickErr != nil {
+				return "", "", pickErr
+			}
+			return host, s.lb.GetNodeIDByHost(host), nil
+		},
 	})
-	if err != nil || !ack.GetAccepted() {
-		return nil
+	if err != nil {
+		if federation.IsArrangeInfraError(err) {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"stream":         internalName,
+				"remote_cluster": remoteCluster,
+			}).Error("ArrangeOriginPull: infra failure; refusing to silently redirect")
+			return nil, err
+		}
+		return nil, nil
 	}
-
-	// Record the in-flight replication so balance/source endpoints return the DTSC URL
-	record := &federation.ActiveReplicationRecord{
-		StreamName:    internalName,
-		SourceNodeID:  remote.NodeId,
-		SourceCluster: remoteCluster,
-		DestCluster:   s.clusterID,
-		DestNodeID:    localNodeID,
-		DTSCURL:       ack.DtscUrl,
-		BaseURL:       localHost,
-		CreatedAt:     time.Now(),
+	if result == nil {
+		return nil, nil
 	}
-	if err := s.remoteEdgeCache.SetActiveReplication(ctx, record); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"stream":         internalName,
-			"source_cluster": remoteCluster,
-			"source_node":    remote.NodeId,
-			"dest_node":      localNodeID,
-		}).Warn("Origin-pull acked but local active replication cache write failed")
-		return nil
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"stream":         internalName,
-		"source_cluster": remoteCluster,
-		"source_node":    remote.NodeId,
-		"dest_node":      localNodeID,
-		"dtsc_url":       ack.DtscUrl,
-	}).Info("Origin-pull arranged via gRPC, serving viewer from local edge")
-
-	endpoint := s.buildLocalEndpoint(record, viewKey)
+	endpoint := s.buildLocalEndpoint(result.DestNodeID, result.DestNodeBaseURL, viewKey)
 	if endpoint != nil {
-		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func (s *FoghornGRPCServer) tryBeginOriginPull(streamName string) bool {
@@ -2347,33 +2378,20 @@ func (s *FoghornGRPCServer) finishOriginPull(streamName string) {
 	s.originPullMu.Unlock()
 }
 
-// buildLocalEndpoint constructs a ViewerEndpoint from a local node with an active replication.
-func (s *FoghornGRPCServer) buildLocalEndpoint(record *federation.ActiveReplicationRecord, viewKey string) *pb.ViewerEndpoint {
-	outputs, exists := control.GetNodeOutputs(record.DestNodeID)
+// buildLocalEndpoint constructs a ViewerEndpoint from a local node serving
+// an active inbound replication. Takes the dest-node identity directly so
+// callers can pass it from either the registry's Location or any other
+// origin-pull bookkeeping without round-tripping through a record type.
+func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, viewKey string) *pb.ViewerEndpoint {
+	outputs, exists := control.GetNodeOutputs(destNodeID)
 	if !exists || outputs.Outputs == nil {
 		return nil
 	}
-	publicHost := control.ExtractPublicHostFromOutputs(outputs.Outputs)
-	var protocol, endpointURL string
-	if webrtcURL, ok := outputs.Outputs["WebRTC"]; ok {
-		protocol = "webrtc"
-		endpointURL = control.ResolveTemplateURLWithHost(webrtcURL, outputs.BaseURL, viewKey, publicHost)
-	} else if hlsURL, ok := outputs.Outputs["HLS (TS)"]; ok {
-		protocol = "hls"
-		endpointURL = control.ResolveTemplateURL(hlsURL, outputs.BaseURL, viewKey)
-		if publicHost != "" {
-			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
-		}
+	endpoint := control.BuildViewerEndpointFromOutputs(destNodeID, outputs, viewKey, true)
+	if endpoint != nil && destNodeBaseURL != "" {
+		endpoint.BaseUrl = destNodeBaseURL
 	}
-	if endpointURL == "" {
-		return nil
-	}
-	return &pb.ViewerEndpoint{
-		NodeId:   record.DestNodeID,
-		BaseUrl:  record.BaseURL,
-		Protocol: protocol,
-		Url:      endpointURL,
-	}
+	return endpoint
 }
 
 // queryStreamFanOut performs cold-start QueryStream to peer clusters when EdgeSummary is empty.
@@ -2567,14 +2585,10 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 
 	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		var defrostErr *control.DefrostingError
-		if errors.As(err, &defrostErr) {
-			retryAfter := defrostErr.RetryAfterSeconds
-			if retryAfter <= 0 {
-				retryAfter = 10
-			}
-			_ = grpc.SetTrailer(ctx, metadata.Pairs("retry-after", strconv.Itoa(retryAfter)))
-			return nil, status.Error(codes.Unavailable, defrostErr.Error())
+		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
+			// Fail-fast — peer origin hasn't pushed the artifact to S3
+			// yet. codes.Unavailable; caller retries at the app layer.
+			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 		if strings.Contains(err.Error(), "not found") {
 			return nil, status.Error(codes.NotFound, err.Error())

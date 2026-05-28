@@ -36,14 +36,11 @@ func NewRemoteEdgeCache(client goredis.UniversalClient, clusterID string, logger
 const (
 	remoteEdgeTTL        = 30 * time.Second
 	remoteReplicationTTL = 5 * time.Minute
-	activeReplicationTTL = 5 * time.Minute
 	originPullLockTTL    = 15 * time.Second
 	edgeSummaryTTL       = 60 * time.Second
 	leaderLeaseTTL       = 15 * time.Second
 	peerAddrTTL          = 30 * time.Second
 	remoteLiveStreamTTL  = 30 * time.Second // refreshed every 5s by heartbeat
-	streamAdTTL          = 15 * time.Second // refreshed every 5s by pushStreamAds
-	playbackIndexTTL     = 30 * time.Second
 	peerHeartbeatTTL     = 30 * time.Second // 3 missed 10s heartbeats = dead
 )
 
@@ -111,10 +108,6 @@ func (c *RemoteEdgeCache) keyRemoteReplication(streamName, peerClusterID string)
 
 func (c *RemoteEdgeCache) keyRemoteReplicationPattern(streamName string) string {
 	return fmt.Sprintf("{%s}:remote_replications:%s:*", c.clusterID, streamName)
-}
-
-func (c *RemoteEdgeCache) keyActiveReplication(streamName string) string {
-	return fmt.Sprintf("{%s}:active_replications:%s", c.clusterID, streamName)
 }
 
 func (c *RemoteEdgeCache) keyOriginPullLock(streamName string) string {
@@ -204,57 +197,12 @@ func (c *RemoteEdgeCache) GetRemoteReplications(ctx context.Context, streamName 
 	return scanEntries[RemoteReplicationEntry](ctx, c.client, pattern)
 }
 
-// --- Active Replication Cache (bridge gap, per-stream, TTL 5m) ---
+// --- Origin Pull Locking (per-stream, short-lease) ---
 
-// ActiveReplicationRecord bridges the gap between "origin-pull arranged" and
-// "Helmsman reports stream on local edge". Written when NotifyOriginPull
-// succeeds; cleared when the stream enters the Local-RIB.
-type ActiveReplicationRecord struct {
-	StreamName    string    `json:"stream_name"`
-	SourceNodeID  string    `json:"source_node_id"`
-	SourceCluster string    `json:"source_cluster"`
-	DestCluster   string    `json:"dest_cluster"`
-	DestNodeID    string    `json:"dest_node_id"`
-	DTSCURL       string    `json:"dtsc_url"`
-	BaseURL       string    `json:"base_url"`
-	CreatedAt     time.Time `json:"created_at"`
-}
-
-// SetActiveReplication records an in-flight origin-pull.
-func (c *RemoteEdgeCache) SetActiveReplication(ctx context.Context, record *ActiveReplicationRecord) error {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("marshal active replication: %w", err)
-	}
-	key := c.keyActiveReplication(record.StreamName)
-	return c.client.Set(ctx, key, data, activeReplicationTTL).Err()
-}
-
-// GetActiveReplication returns the in-flight origin-pull record for a stream, or nil.
-func (c *RemoteEdgeCache) GetActiveReplication(ctx context.Context, streamName string) (*ActiveReplicationRecord, error) {
-	key := c.keyActiveReplication(streamName)
-	data, err := c.client.Get(ctx, key).Bytes()
-	if errors.Is(err, goredis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get active replication: %w", err)
-	}
-	var record ActiveReplicationRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("unmarshal active replication: %w", err)
-	}
-	return &record, nil
-}
-
-// DeleteActiveReplication removes the in-flight record (stream now in Local-RIB).
-func (c *RemoteEdgeCache) DeleteActiveReplication(ctx context.Context, streamName string) error {
-	return c.client.Del(ctx, c.keyActiveReplication(streamName)).Err()
-}
-
-// TryAcquireOriginPullLock elects one Foghorn instance to arrange the initial
-// origin pull for a stream. The active replication record remains the durable
-// handoff; this short lease only closes the concurrent arrange race.
+// TryAcquireOriginPullLock elects one Foghorn instance to arrange the
+// initial origin pull for a stream. The short lease only closes the
+// concurrent arrange race; the durable replication mark lives on
+// control.StreamRegistry.
 func (c *RemoteEdgeCache) TryAcquireOriginPullLock(ctx context.Context, streamName, owner string) bool {
 	if streamName == "" || owner == "" {
 		return false
@@ -270,25 +218,6 @@ func (c *RemoteEdgeCache) ReleaseOriginPullLock(ctx context.Context, streamName,
 		return
 	}
 	releaseLeaseScript.Run(ctx, c.client, []string{c.keyOriginPullLock(streamName)}, owner) //nolint:errcheck
-}
-
-// GetAllActiveReplications returns all in-flight replication records for this cluster.
-func (c *RemoteEdgeCache) GetAllActiveReplications(ctx context.Context) ([]*ActiveReplicationRecord, error) {
-	pattern := fmt.Sprintf("{%s}:active_replications:*", c.clusterID)
-	var records []*ActiveReplicationRecord
-	iter := c.client.Scan(ctx, 0, pattern, 100).Iterator()
-	for iter.Next(ctx) {
-		data, err := c.client.Get(ctx, iter.Val()).Bytes()
-		if err != nil {
-			continue
-		}
-		var record ActiveReplicationRecord
-		if err := json.Unmarshal(data, &record); err != nil {
-			continue
-		}
-		records = append(records, &record)
-	}
-	return records, iter.Err()
 }
 
 // --- Edge Summary (3G: official coverage cluster, TTL 60s) ---
@@ -496,116 +425,6 @@ func (c *RemoteEdgeCache) GetRemoteArtifacts(ctx context.Context, artifactHash s
 // GetAllRemoteArtifacts returns all cached remote artifacts across all peers.
 func (c *RemoteEdgeCache) GetAllRemoteArtifacts(ctx context.Context) ([]*RemoteArtifactEntry, error) {
 	return scanEntries[RemoteArtifactEntry](ctx, c.client, c.keyRemoteArtifactGlob())
-}
-
-// --- Stream Advertisement (per-stream, per-peer, TTL 15s) ---
-
-// StreamAdRecord stores a StreamAdvertisement from a peer cluster.
-type StreamAdRecord struct {
-	InternalName    string          `json:"internal_name"`
-	TenantID        string          `json:"tenant_id"`
-	PlaybackID      string          `json:"playback_id,omitempty"`
-	OriginClusterID string          `json:"origin_cluster_id"`
-	IsLive          bool            `json:"is_live"`
-	Edges           []*StreamAdEdge `json:"edges"`
-	Timestamp       int64           `json:"timestamp"`
-	PeerCluster     string          `json:"peer_cluster"`
-}
-
-// StreamAdEdge mirrors the StreamEdge proto for Redis storage.
-type StreamAdEdge struct {
-	NodeID      string  `json:"node_id"`
-	BaseURL     string  `json:"base_url"`
-	DTSCURL     string  `json:"dtsc_url"`
-	IsOrigin    bool    `json:"is_origin"`
-	BWAvailable uint64  `json:"bw_available"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	ViewerCount uint32  `json:"viewer_count"`
-	GeoLat      float64 `json:"geo_lat"`
-	GeoLon      float64 `json:"geo_lon"`
-	BufferState string  `json:"buffer_state"`
-}
-
-func (c *RemoteEdgeCache) keyStreamAd(peerClusterID, internalName string) string {
-	return fmt.Sprintf("{%s}:stream_ads:%s:%s", c.clusterID, peerClusterID, internalName)
-}
-
-func (c *RemoteEdgeCache) keyPlaybackIndex(playbackID string) string {
-	return fmt.Sprintf("{%s}:playback_index:%s", c.clusterID, playbackID)
-}
-
-// SetStreamAd stores a stream advertisement from a peer.
-func (c *RemoteEdgeCache) SetStreamAd(ctx context.Context, peerClusterID string, record *StreamAdRecord) error {
-	record.PeerCluster = peerClusterID
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("marshal stream ad: %w", err)
-	}
-	key := c.keyStreamAd(peerClusterID, record.InternalName)
-	if !record.IsLive {
-		playbackID := record.PlaybackID
-		if playbackID == "" {
-			if existing, lookupErr := c.GetStreamAd(ctx, peerClusterID, record.InternalName); lookupErr == nil && existing != nil {
-				playbackID = existing.PlaybackID
-			}
-		}
-
-		pipe := c.client.TxPipeline()
-		pipe.Del(ctx, key)
-		if playbackID != "" {
-			pipe.Del(ctx, c.keyPlaybackIndex(playbackID))
-		}
-		_, err = pipe.Exec(ctx)
-		return err
-	}
-	return c.client.Set(ctx, key, data, streamAdTTL).Err()
-}
-
-// GetStreamAd returns the stream advertisement from a specific peer for a stream.
-func (c *RemoteEdgeCache) GetStreamAd(ctx context.Context, peerClusterID, internalName string) (*StreamAdRecord, error) {
-	key := c.keyStreamAd(peerClusterID, internalName)
-	data, err := c.client.Get(ctx, key).Bytes()
-	if errors.Is(err, goredis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get stream ad: %w", err)
-	}
-	var record StreamAdRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("unmarshal stream ad: %w", err)
-	}
-	return &record, nil
-}
-
-// GetStreamAdsByName returns all peer advertisements for a given stream (across all peers).
-func (c *RemoteEdgeCache) GetStreamAdsByName(ctx context.Context, internalName string) ([]*StreamAdRecord, error) {
-	pattern := fmt.Sprintf("{%s}:stream_ads:*:%s", c.clusterID, internalName)
-	return scanEntries[StreamAdRecord](ctx, c.client, pattern)
-}
-
-// SetPlaybackIndex stores a playback_id → internal_name reverse mapping.
-func (c *RemoteEdgeCache) SetPlaybackIndex(ctx context.Context, playbackID, internalName string) error {
-	key := c.keyPlaybackIndex(playbackID)
-	return c.client.Set(ctx, key, internalName, playbackIndexTTL).Err()
-}
-
-// DeletePlaybackIndex removes a playback_id reverse mapping immediately.
-func (c *RemoteEdgeCache) DeletePlaybackIndex(ctx context.Context, playbackID string) error {
-	if playbackID == "" {
-		return nil
-	}
-	return c.client.Del(ctx, c.keyPlaybackIndex(playbackID)).Err()
-}
-
-// GetPlaybackIndex resolves a playback_id to an internal_name from peer advertisements.
-func (c *RemoteEdgeCache) GetPlaybackIndex(ctx context.Context, playbackID string) (string, error) {
-	key := c.keyPlaybackIndex(playbackID)
-	val, err := c.client.Get(ctx, key).Result()
-	if errors.Is(err, goredis.Nil) {
-		return "", nil
-	}
-	return val, err
 }
 
 // --- Peer Heartbeat (per-peer, TTL 30s) ---

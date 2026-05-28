@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/lib/pq"
 )
 
 // PeerManager manages PeerChannel lifecycles and periodic peer discovery.
@@ -936,37 +938,45 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 		case *pb.PeerMessage_StreamAd:
 			ad := payload.StreamAd
 			if ad != nil {
-				edges := make([]*StreamAdEdge, 0, len(ad.Edges))
-				for _, e := range ad.Edges {
-					edges = append(edges, &StreamAdEdge{
-						NodeID:      e.NodeId,
-						BaseURL:     e.BaseUrl,
-						DTSCURL:     e.DtscUrl,
-						IsOrigin:    e.IsOrigin,
-						BWAvailable: e.BwAvailable,
-						CPUPercent:  e.CpuPercent,
-						ViewerCount: e.ViewerCount,
-						GeoLat:      e.GeoLat,
-						GeoLon:      e.GeoLon,
-						BufferState: e.BufferState,
-					})
-				}
-				record := &StreamAdRecord{
-					InternalName:    ad.InternalName,
-					TenantID:        ad.TenantId,
-					PlaybackID:      ad.PlaybackId,
-					OriginClusterID: ad.OriginClusterId,
-					IsLive:          ad.IsLive,
-					Edges:           edges,
-					Timestamp:       ad.Timestamp,
-				}
-				if err := pm.cache.SetStreamAd(ctx, peerClusterID, record); err != nil {
-					pm.logger.WithError(err).Debug("Failed to cache stream ad from PeerChannel")
-				}
-				if ad.PlaybackId != "" && ad.IsLive {
-					if err := pm.cache.SetPlaybackIndex(ctx, ad.PlaybackId, ad.InternalName); err != nil {
-						pm.logger.WithError(err).Debug("Failed to update playback index from PeerChannel")
+				// Mirror PeerChannel-delivered ads into the unified stream
+				// registry so they land in the same inventory as
+				// gRPC-delivered ones (handleStreamAdvertisement does the
+				// same).
+				if control.StreamRegistryInstance != nil {
+					ecands := make([]control.EdgeCandidate, 0, len(ad.Edges))
+					for _, e := range ad.Edges {
+						ecands = append(ecands, control.EdgeCandidate{
+							NodeID:      e.NodeId,
+							BaseURL:     e.BaseUrl,
+							DTSCURL:     e.DtscUrl,
+							IsOrigin:    e.IsOrigin,
+							BWAvailable: int64(e.BwAvailable),
+							CPUPercent:  e.CpuPercent,
+							ViewerCount: int32(e.ViewerCount),
+							GeoLat:      e.GeoLat,
+							GeoLon:      e.GeoLon,
+							BufferState: e.BufferState,
+						})
 					}
+					originCluster := ad.OriginClusterId
+					if originCluster == "" {
+						originCluster = peerClusterID
+					}
+					control.StreamRegistryInstance.UpsertFederatedSource(
+						peerClusterID,
+						control.StreamEntry{
+							TenantID:        ad.TenantId,
+							PlaybackID:      ad.PlaybackId,
+							InternalName:    ad.InternalName,
+							OriginClusterID: originCluster,
+						},
+						control.Location{
+							IsLiveNow:       ad.IsLive,
+							AdTimestamp:     ad.Timestamp,
+							EdgeCandidates:  ecands,
+							RecordingNodeID: ad.DvrRecordingNodeId,
+						},
+					)
 				}
 			}
 
@@ -1282,6 +1292,17 @@ func (pm *PeerManager) pushArtifacts() {
 					tenantID = ss.TenantID
 				}
 			}
+			if tenantID == "" {
+				// Refuse to advertise an artifact we can't attribute to a
+				// tenant — empty TenantId would otherwise broadcast hot
+				// location across peers regardless of tenant scope.
+				pm.logger.WithFields(logging.Fields{
+					"artifact_hash": a.ClipHash,
+					"node_id":       snap.NodeID,
+					"stream_name":   a.StreamName,
+				}).Warn("pushArtifacts: skipping ad with unresolved tenant; check stream state hydration")
+				continue
+			}
 			locs = append(locs, &pb.ArtifactLocation{
 				ArtifactHash: a.ClipHash,
 				ArtifactType: artifactTypeToString(a.ArtifactType),
@@ -1311,7 +1332,14 @@ func (pm *PeerManager) pushArtifacts() {
 		}
 		var peerLocs []*pb.ArtifactLocation
 		for _, loc := range locs {
-			if len(ps.tenantIDs) == 0 || loc.TenantId == "" || slices.Contains(ps.tenantIDs, loc.TenantId) {
+			// Empty-scope peers (no tenant filter) accept everything; tenant-
+			// scoped peers only see ads for tenants they're entitled to.
+			// Empty TenantId was filtered upstream — guard here too so a
+			// malformed loc can't leak across peers.
+			if loc.TenantId == "" {
+				continue
+			}
+			if len(ps.tenantIDs) == 0 || slices.Contains(ps.tenantIDs, loc.TenantId) {
 				peerLocs = append(peerLocs, loc)
 			}
 		}
@@ -1332,6 +1360,61 @@ func (pm *PeerManager) pushArtifacts() {
 			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send artifact advertisement to peer")
 		}
 	}
+}
+
+// lookupDVRRecordingNodes returns a stream_internal_name -> node_id
+// map for streams in the supplied set that have an active DVR
+// recording. Active = artifact_type='dvr' AND status IN
+// (requested,starting,recording), recording node = the
+// non-orphaned artifact_nodes row (mirrors ResolveDVRArtifactDispatch's
+// invariant: exactly one non-orphaned row while status is active).
+//
+// Empty result when DB unavailable or query fails — federation ad
+// emission proceeds without dvr_recording_node_id and receiving
+// clusters fall through to their normal STREAM_SOURCE dvr+ branch.
+func (pm *PeerManager) lookupDVRRecordingNodes(names []string) map[string]string {
+	if len(names) == 0 {
+		return nil
+	}
+	db := control.GetDB()
+	if db == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `
+        SELECT a.stream_internal_name, an.node_id
+          FROM foghorn.artifacts a
+          JOIN foghorn.artifact_nodes an ON an.artifact_hash = a.artifact_hash
+         WHERE a.stream_internal_name = ANY($1)
+           AND a.artifact_type = 'dvr'
+           AND a.status IN ('requested','starting','recording')
+           AND COALESCE(an.is_orphaned, false) = false
+    `, pq.Array(names))
+	if err != nil {
+		pm.logger.WithError(err).Debug("DVR recording-node lookup for ad batch failed")
+		return nil
+	}
+	defer rows.Close()
+	out := make(map[string]string, len(names))
+	for rows.Next() {
+		var streamName, nodeID string
+		if err := rows.Scan(&streamName, &nodeID); err != nil {
+			pm.logger.WithError(err).Debug("DVR recording-node row scan failed")
+			continue
+		}
+		if existing, ok := out[streamName]; ok && existing != nodeID {
+			// Should be impossible per ResolveDVRArtifactDispatch's
+			// single-recording-node invariant; skip extras to stay
+			// deterministic.
+			continue
+		}
+		out[streamName] = nodeID
+	}
+	if err := rows.Err(); err != nil {
+		pm.logger.WithError(err).Debug("DVR recording-node row iteration ended with error")
+	}
+	return out
 }
 
 // pushStreamAds broadcasts a StreamAdvertisement per live stream to all connected
@@ -1374,10 +1457,14 @@ func (pm *PeerManager) pushStreamAds() {
 			}
 			isOrigin := si.ss.NodeID == snap.NodeID && si.ss.Inputs > 0
 			sourceStreamName := streamName
-			if si.ss.StreamName != "" {
+			if control.StreamRegistryInstance != nil {
+				if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), streamName); err == nil && entry.IngestMode != 0 {
+					sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+				} else if strings.Contains(si.ss.StreamName, "+") {
+					sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
+				}
+			} else if strings.Contains(si.ss.StreamName, "+") {
 				sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
-			} else {
-				sourceStreamName = control.MistSourceNameForIngestMode(sourceStreamName, "push")
 			}
 			si.edges = append(si.edges, &pb.PeerStreamEdge{
 				NodeId:      snap.NodeID,
@@ -1398,6 +1485,18 @@ func (pm *PeerManager) pushStreamAds() {
 		return
 	}
 
+	// Look up the recording node for any stream that has an active
+	// DVR. One query per ad batch — cheaper than per-stream and
+	// avoids touching the per-stream loop above. Receiver clusters
+	// stash this on the federated Location so cross-cluster
+	// STREAM_SOURCE dvr+<hash> can arrange a DTSC pull from the
+	// recording origin.
+	streamNames := make([]string, 0, len(streams))
+	for name := range streams {
+		streamNames = append(streamNames, name)
+	}
+	dvrRecordingNodes := pm.lookupDVRRecordingNodes(streamNames)
+
 	now := time.Now().Unix()
 	var messages []*pb.PeerMessage
 	for _, si := range streams {
@@ -1405,13 +1504,14 @@ func (pm *PeerManager) pushStreamAds() {
 			ClusterId: pm.clusterID,
 			Payload: &pb.PeerMessage_StreamAd{
 				StreamAd: &pb.StreamAdvertisement{
-					InternalName:    si.ss.InternalName,
-					TenantId:        si.ss.TenantID,
-					PlaybackId:      si.ss.PlaybackID,
-					OriginClusterId: pm.clusterID,
-					IsLive:          true,
-					Edges:           si.edges,
-					Timestamp:       now,
+					InternalName:       si.ss.InternalName,
+					TenantId:           si.ss.TenantID,
+					PlaybackId:         si.ss.PlaybackID,
+					OriginClusterId:    pm.clusterID,
+					IsLive:             true,
+					Edges:              si.edges,
+					Timestamp:          now,
+					DvrRecordingNodeId: dvrRecordingNodes[si.ss.InternalName],
 				},
 			},
 		})
@@ -1506,10 +1606,14 @@ func (pm *PeerManager) uptimeSeconds() int64 {
 	return int64(time.Since(pm.startTime).Seconds())
 }
 
-// checkReplicationCompletion detects when origin-pulled streams appear in local state,
-// clears the ActiveReplication record, and broadcasts a ReplicationEvent to peers.
+// checkReplicationCompletion detects when origin-pulled streams appear in
+// local state, clears the registry's replication mark, and broadcasts a
+// ReplicationEvent to peers. The "in-flight replication" state lives on
+// control.StreamRegistry; the local cluster's Location carries
+// ReplicatingFrom + PullDTSCURL + DestNodeID + DestNodeBaseURL +
+// PullSourceNodeID populated by MarkReplicating.
 func (pm *PeerManager) checkReplicationCompletion() {
-	if pm.cache == nil {
+	if control.StreamRegistryInstance == nil {
 		return
 	}
 	sm := state.DefaultManager()
@@ -1517,48 +1621,48 @@ func (pm *PeerManager) checkReplicationCompletion() {
 		return
 	}
 
-	ctx := context.Background()
-	records, err := pm.cache.GetAllActiveReplications(ctx)
-	if err != nil || len(records) == 0 {
+	replications := control.StreamRegistryInstance.AllLocalReplications()
+	if len(replications) == 0 {
 		return
 	}
 
-	for _, record := range records {
-		if record.DestCluster != pm.clusterID {
-			continue
-		}
-		st := sm.GetStreamState(record.StreamName)
+	for streamName, loc := range replications {
+		st := sm.GetStreamState(streamName)
 		if st == nil || st.Status != "live" {
 			continue
 		}
 
-		instances := sm.GetStreamInstances(record.StreamName)
-		destInstance, ok := instances[record.DestNodeID]
+		instances := sm.GetStreamInstances(streamName)
+		destInstance, ok := instances[loc.DestNodeID]
 		if !ok || destInstance.Status != "live" {
 			continue
 		}
 
-		_ = pm.cache.DeleteActiveReplication(ctx, record.StreamName)
+		control.StreamRegistryInstance.ClearReplicating(streamName)
+		nameCopy := streamName
+		destNode := loc.DestNodeID
+		sourceNode := loc.PullSourceNodeID
+		dtsc := loc.PullDTSCURL
 		pm.broadcastToPeers(&pb.PeerMessage{
 			ClusterId: pm.clusterID,
 			Payload: &pb.PeerMessage_ReplicationEvent{
 				ReplicationEvent: &pb.ReplicationEvent{
-					StreamName: record.StreamName,
-					NodeId:     record.DestNodeID,
+					StreamName: nameCopy,
+					NodeId:     destNode,
 					ClusterId:  pm.clusterID,
 					Available:  true,
-					BaseUrl:    record.BaseURL,
+					BaseUrl:    loc.DestNodeBaseURL,
 				},
 			},
 		})
-		pm.logger.WithField("stream", record.StreamName).Info("Replication complete, ActiveReplication cleared")
+		pm.logger.WithField("stream", nameCopy).Info("Replication complete, registry mark cleared")
 		pm.emitFederationEvent(&pb.FederationEventData{
 			EventType:     pb.FederationEventType_ORIGIN_PULL_COMPLETED,
-			RemoteCluster: record.SourceCluster,
-			StreamName:    &record.StreamName,
-			SourceNode:    &record.SourceNodeID,
-			DestNode:      &record.DestNodeID,
-			DtscUrl:       &record.DTSCURL,
+			RemoteCluster: loc.ReplicatingFrom,
+			StreamName:    &nameCopy,
+			SourceNode:    &sourceNode,
+			DestNode:      &destNode,
+			DtscUrl:       &dtsc,
 		})
 	}
 }

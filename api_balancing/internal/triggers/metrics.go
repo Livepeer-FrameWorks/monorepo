@@ -29,4 +29,11 @@ type ProcessorMetrics struct {
 	// blocking the trigger processor.
 	// Labels: reason ("send_failed", "retry_succeeded").
 	ClientLifecycleBatchDrops *prometheus.CounterVec
+
+	// DrainDispatch counts AcceptTakeover drain dispatches to the prior owner
+	// node. Drain is fire-and-forget so failures don't block takeover, but a
+	// non-zero failed rate correlates with "phantom buffer after takeover"
+	// reports — viewers may keep talking to the stale buffer until Mist's
+	// natural session timeout. Labels: result ("ok", "failed").
+	DrainDispatch *prometheus.CounterVec
 }

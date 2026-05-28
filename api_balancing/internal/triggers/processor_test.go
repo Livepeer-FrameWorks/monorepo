@@ -660,6 +660,256 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	}
 }
 
+func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	registry.MarkReplicating(
+		"stream-1",
+		"cluster-origin",
+		"dtsc://edge-origin:4200/live+stream-1",
+		"edge-local-1",
+		"https://edge-local-1.example/view",
+		"edge-origin-1",
+	)
+
+	processor := newTestProcessor(t)
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort STREAM_SOURCE response")
+	}
+	if resp != "dtsc://edge-origin:4200/live+stream-1" {
+		t.Fatalf("STREAM_SOURCE response = %q", resp)
+	}
+}
+
+func TestHandleStreamSource_LiveWithoutOriginPullFallsThroughToPushSource(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	processor := newTestProcessor(t)
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort fallback to configured push:// source")
+	}
+	if resp != "" {
+		t.Fatalf("STREAM_SOURCE response = %q, want empty fallback", resp)
+	}
+}
+
+// TestHandleStreamSource_PullOriginPullReturnsDTSC covers the pull+
+// federation case: another cluster already has the upstream and we
+// DTSC-pull from them rather than dialing the upstream a second time.
+// Before the federation hook, pull+ unconditionally returned
+// balance:<foghorn> here and re-dialed upstream via /source.
+func TestHandleStreamSource_PullOriginPullReturnsDTSC(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	registry.MarkReplicating(
+		"stream-pull-1",
+		"cluster-origin",
+		"dtsc://edge-origin:4200/pull+stream-pull-1",
+		"edge-local-1",
+		"https://edge-local-1.example/view",
+		"edge-origin-1",
+	)
+
+	processor := newTestProcessor(t)
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "pull+stream-pull-1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort STREAM_SOURCE response")
+	}
+	if resp != "dtsc://edge-origin:4200/pull+stream-pull-1" {
+		t.Fatalf("STREAM_SOURCE response = %q", resp)
+	}
+}
+
+// TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC pins the
+// dvr+ branch's federation hook. Cross-cluster DVR federation is wired
+// via tryArrangeDVRCrossCluster (processor.go); this test sets the
+// registry directly to verify the STREAM_SOURCE hook returns the peer
+// DTSC URL once the registry has a Location for the dvr+ runtime name.
+// Uses the dvr+ runtime name as-is for the registry key
+// (sourceInternalKey doesn't strip dvr+).
+func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	registry.MarkReplicating(
+		"dvr+abc123",
+		"cluster-origin",
+		"dtsc://edge-origin:4200/dvr+abc123",
+		"edge-local-1",
+		"https://edge-local-1.example/view",
+		"edge-origin-1",
+	)
+
+	processor := newTestProcessor(t)
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "dvr+abc123"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort STREAM_SOURCE response")
+	}
+	if resp != "dtsc://edge-origin:4200/dvr+abc123" {
+		t.Fatalf("STREAM_SOURCE response = %q", resp)
+	}
+}
+
+// TestHandleStreamSource_MistNativeOriginPullReturnsDTSC covers the bare
+// mist-native federation hook: a managed stream replicated cross-cluster
+// goes through STREAM_SOURCE directly rather than the balance: +
+// /source round-trip. Saves an HTTP hop on the federated case.
+func TestHandleStreamSource_MistNativeOriginPullReturnsDTSC(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	registry.MarkReplicating(
+		"frameworks-demo",
+		"cluster-origin",
+		"dtsc://edge-origin:4200/frameworks-demo",
+		"edge-local-1",
+		"https://edge-local-1.example/view",
+		"edge-origin-1",
+	)
+
+	processor := newTestProcessor(t)
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-1",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "frameworks-demo"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort STREAM_SOURCE response")
+	}
+	if resp != "dtsc://edge-origin:4200/frameworks-demo" {
+		t.Fatalf("STREAM_SOURCE response = %q", resp)
+	}
+}
+
+// TestHandleStreamSource_OfflineReasonsLockedIn pins the offline:<reason>
+// taxonomy returned from the various STREAM_SOURCE failure paths.
+// Players don't parse the suffix but operators rely on it for debugging,
+// so the strings are a stable contract. Mist's input_balancer recognizes
+// the "offline:" prefix and produces a clean STRMSTAT_OFFLINE
+// disconnect regardless of the suffix.
+func TestHandleStreamSource_OfflineReasonsLockedIn(t *testing.T) {
+	processor := newTestProcessor(t)
+
+	cases := []struct {
+		name   string
+		stream string
+		want   string
+	}{
+		{"dvr+ empty token", "dvr+", control.OfflineInvalidToken},
+		{"pull+ empty token", "pull+", control.OfflineInvalidToken},
+		{"processing+ empty hash", "processing+", control.OfflineInvalidToken},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+				NodeId: "edge-local-1",
+				TriggerPayload: &pb.MistTrigger_StreamSource{
+					StreamSource: &pb.StreamSourceTrigger{StreamName: tc.stream},
+				},
+			})
+			if err != nil {
+				t.Fatalf("handleStreamSource err: %v", err)
+			}
+			if abort {
+				t.Fatal("expected non-abort (offline: signal should flow back to balancer cleanly)")
+			}
+			if resp != tc.want {
+				t.Fatalf("STREAM_SOURCE response = %q, want %q", resp, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty
+// exercises the multi-edge guard shared by all four branches: when
+// origin-pull is arranged but pinned to a DIFFERENT local edge, this
+// edge must return "" so it doesn't start a duplicate untracked pull.
+// Mist's fallback (push:// for live, balance: for pull, etc.) handles
+// the not-this-edge case.
+func TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
+	registry.MarkReplicating(
+		"stream-pinned",
+		"cluster-origin",
+		"dtsc://edge-origin:4200/live+stream-pinned",
+		"edge-local-A", // pull pinned to edge-local-A
+		"https://edge-local-A.example/view",
+		"edge-origin-1",
+	)
+
+	processor := newTestProcessor(t)
+	// Different edge (edge-local-B) fires STREAM_SOURCE — must NOT pull.
+	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+		NodeId: "edge-local-B",
+		TriggerPayload: &pb.MistTrigger_StreamSource{
+			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-pinned"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamSource failed: %v", err)
+	}
+	if abort {
+		t.Fatal("expected non-abort (fallback) when pinned to another edge")
+	}
+	if resp != "" {
+		t.Fatalf("STREAM_SOURCE response = %q, want empty (pinned-to-other-edge guard)", resp)
+	}
+}
+
 func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T) {
 	oldCommodore := control.CommodoreClient
 	control.SetCommodoreClient(nil)
@@ -1402,6 +1652,9 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	sm.SetNodeInfo("edge-node-1", "http://edge.example/view", true, nil, nil, "", "", nil)
+	prevRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
 	response := &pb.ValidateStreamKeyResponse{
 		Valid:             true,
@@ -1642,6 +1895,10 @@ func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T)
 }
 
 func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-origin", time.Minute))
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
 	response := &pb.ValidateStreamKeyResponse{
 		Valid:           true,
 		TenantId:        "tenant-1",
@@ -1679,6 +1936,10 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 }
 
 func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
+	prevRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "demo-media", time.Minute))
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
 	response := &pb.ValidateStreamKeyResponse{
 		Valid:           true,
 		TenantId:        "tenant-1",

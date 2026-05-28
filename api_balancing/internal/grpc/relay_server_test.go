@@ -98,7 +98,6 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"clip_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipDelete{ClipDelete: &pb.ClipDeleteRequest{}}}, "clip_delete"},
 		{"dvr_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrDelete{DvrDelete: &pb.DVRDeleteRequest{}}}, "dvr_delete"},
 		{"vod_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_VodDelete{VodDelete: &pb.VodDeleteRequest{}}}, "vod_delete"},
-		{"defrost", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_Defrost{Defrost: &pb.DefrostRequest{}}}, "defrost_request"},
 		{"dtsh_sync", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DtshSync{DtshSync: &pb.DtshSyncRequest{}}}, "dtsh_sync_request"},
 		{"stop_sessions", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_StopSessions{StopSessions: &pb.StopSessionsRequest{}}}, "stop_sessions_request"},
 		{"invalidate_sessions", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &pb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
@@ -109,6 +108,8 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"desired_state_update", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: &pb.DesiredStateUpdate{}}}, "desired_state_update"},
 		{"apply_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &pb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
 		{"retract_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &pb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
+		{"drain_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DrainStream{DrainStream: &pb.DrainStreamRequest{RuntimeName: "live+demo"}}}, "drain_stream_request"},
+		{"dvr_update_source", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: &pb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"}}}, "dvr_update_source_request"},
 	}
 
 	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

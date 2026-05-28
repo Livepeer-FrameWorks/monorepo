@@ -359,12 +359,14 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	})
 
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
+	chapterInt := chapterInternalName(playbackHash)
 	req := &pb.ProcessingJobRequest{
 		JobId:                    "chapter-finalize-" + c.ChapterID,
 		TenantId:                 parent.tenantID,
 		ArtifactHash:             playbackHash,
 		JobType:                  "dvr_chapter_finalize",
-		InternalName:             chapterInternalName(playbackHash),
+		InternalName:             chapterInt,
+		OutputRuntimeName:        "vod+" + chapterInt,
 		ProcessesJson:            processesJSON,
 		DeadlineUnixMs:           deadline,
 		SourceChapterId:          c.ChapterID,

@@ -72,8 +72,6 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalDVRDelete(req.TargetNodeId, cmd.DvrDelete)
 	case *pb.ForwardCommandRequest_VodDelete:
 		err = control.SendLocalVodDelete(req.TargetNodeId, cmd.VodDelete)
-	case *pb.ForwardCommandRequest_Defrost:
-		err = control.SendLocalDefrostRequest(req.TargetNodeId, cmd.Defrost)
 	case *pb.ForwardCommandRequest_DtshSync:
 		err = control.SendLocalDtshSyncRequest(req.TargetNodeId, cmd.DtshSync)
 	case *pb.ForwardCommandRequest_StopSessions:
@@ -94,6 +92,10 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 		err = control.SendLocalApplyManagedStream(req.TargetNodeId, cmd.ApplyManagedStream)
 	case *pb.ForwardCommandRequest_RetractManagedStream:
 		err = control.SendLocalRetractManagedStream(req.TargetNodeId, cmd.RetractManagedStream)
+	case *pb.ForwardCommandRequest_DrainStream:
+		err = control.SendLocalDrainStream(req.TargetNodeId, cmd.DrainStream)
+	case *pb.ForwardCommandRequest_DvrUpdateSource:
+		err = control.SendLocalDVRUpdateSource(req.TargetNodeId, cmd.DvrUpdateSource)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}

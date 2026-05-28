@@ -33,12 +33,7 @@ type StreamTarget struct {
 	// TenantID associated with the stream/artifact.
 	TenantID string
 	// ContentType indicates the artifact type: "clip", "dvr", or "live"
-	ContentType string
-	// NeedsDefrost indicates the artifact is synced to S3 but not cached locally.
-	// Caller should trigger defrost and return 202 Accepted with Retry-After.
-	NeedsDefrost bool
-	// S3URL is the S3 location if NeedsDefrost is true
-	S3URL             string
+	ContentType       string
 	ClusterPeers      []*pb.TenantClusterPeer // Tenant's cluster context from Commodore
 	RequiresAuth      bool
 	RequiresAuthKnown bool
@@ -337,16 +332,14 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 		}
 	}
 
-	// Cache Miss: No local nodes have the artifact - check if synced to S3
+	// Cache miss: no local nodes have the artifact. Pick any storage-capable
+	// edge — Helmsman's read-through relay will fetch from S3 on demand the
+	// first time a viewer requests it. No bulk-copy step.
 	if artifactRepo != nil {
 		if info, err := artifactRepo.GetArtifactSyncInfo(ctx, artifactHash); err == nil && info != nil && info.SyncStatus == "synced" && info.S3URL != "" {
-			target.NeedsDefrost = true
-			target.S3URL = info.S3URL
 			if target.ContentType == "" {
 				target.ContentType = info.ArtifactType
 			}
-
-			// Pick any storage node for defrost (prefer one that's healthy and has storage capability)
 			if loadBalancerInstance != nil {
 				for _, node := range loadBalancerInstance.GetNodes() {
 					if node.CapStorage && node.IsHealthy {
