@@ -248,7 +248,7 @@ message DVRInfo {
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
   // Cold storage fields
-  optional string storage_location = 13;  // "local", "s3", "freezing", "defrosting"
+  optional string storage_location = 13;  // "local", "s3", "freezing"
   optional string s3_url = 14;
   optional google.protobuf.Timestamp frozen_at = 15;
   optional google.protobuf.Timestamp expires_at = 16;
@@ -603,7 +603,7 @@ message VodAssetInfo {
   string description = 4;
   string filename = 5;           // Original uploaded filename
   VodStatus status = 6;
-  string storage_location = 7;   // "s3", "local", "freezing", "defrosting"
+  string storage_location = 7;   // "s3", "local", "freezing"
 
   // File metadata (populated after validation)
   optional int64 size_bytes = 8;

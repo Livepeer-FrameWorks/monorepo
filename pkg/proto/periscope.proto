@@ -712,12 +712,12 @@ message ArtifactState {
   optional string processing_node_id = 18;
   google.protobuf.Timestamp updated_at = 19;
   optional google.protobuf.Timestamp expires_at = 20;
-  optional string storage_location = 21; // "local", "s3", "freezing", "defrosting"
+  optional string storage_location = 21; // "local", "s3", "freezing"
   optional string sync_status = 22;      // "pending", "in_progress", "synced", "failed", "lost_local"
   optional bool is_hot = 23;             // A warm edge copy is available.
   optional bool is_synced = 24;          // S3 has an authoritative copy.
   optional bool is_finalized = 25;       // S3 sync included the .dtsh index.
-  optional bool is_frozen = 26;          // No warm edge copy remains; playback must defrost/cache.
+  optional bool is_frozen = 26;          // No warm edge copy remains; playback served via relay read-through from S3.
 }
 
 message GetArtifactStateRequest {
@@ -982,14 +982,14 @@ message StorageUsageRecord {
   string storage_scope = 13; // hot | cold
 }
 
-// Storage lifecycle event (freeze/defrost operations)
+// Storage lifecycle event (freeze + read-through cache operations)
 message StorageEvent {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
   string stream_id = 4;
   string asset_hash = 5;           // clip_hash or dvr_hash
-  string action = 6;               // freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+  string action = 6;               // freeze_started, frozen, cache_started, cached, freeze_failed, cache_failed
   string asset_type = 7;           // clip, dvr
   uint64 size_bytes = 8;
   optional string s3_url = 9;
@@ -1093,11 +1093,11 @@ message LiveUsageSummary {
   uint64 frozen_dvr_bytes = 40;
   uint64 frozen_vod_bytes = 41;
 
-  // Freeze/defrost operations
+  // Freeze + read-through cache fill operations
   uint32 freeze_count = 42;
   uint64 freeze_bytes = 43;
-  uint32 defrost_count = 44;
-  uint64 defrost_bytes = 45;
+  reserved 44, 45;
+  reserved "defrost_count", "defrost_bytes";
 }
 
 message GetLiveUsageSummaryResponse {

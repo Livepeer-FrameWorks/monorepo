@@ -650,7 +650,7 @@ func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeI
 	return c.aggregated.GetStorageUsage(ctx, req)
 }
 
-// GetStorageEvents returns storage lifecycle events (freeze/defrost operations)
+// GetStorageEvents returns storage lifecycle events (freeze + read-through cache fill operations)
 func (c *GRPCClient) GetStorageEvents(ctx context.Context, tenantID string, streamID *string, assetType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageEventsResponse, error) {
 	if err := requireTenantID(tenantID); err != nil {
 		return nil, err

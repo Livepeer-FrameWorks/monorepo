@@ -82,6 +82,52 @@ func TestIsPlaybackViewerRequest(t *testing.T) {
 	}
 }
 
+func TestParseTriggerToProtobufPushInputClose(t *testing.T) {
+	logger := logging.NewLogger()
+	// 7-field payload matching MistServer
+	// src/controller/controller_capabilities.cpp:457 order.
+	payload := []byte("live+abc123\n203.0.113.7\nMistInRTMP\n42\nEOF\nupstream end-of-file\n{\"video_h264\":{\"codec\":\"H264\",\"type\":\"video\"}}\n")
+
+	trig, err := ParseTriggerToProtobuf(TriggerPushInputClose, payload, "node-1", logger)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	got := trig.GetPushInputClose()
+	if got == nil {
+		t.Fatalf("PushInputClose payload missing")
+	}
+	if got.GetStreamName() != "live+abc123" {
+		t.Errorf("stream_name=%q", got.GetStreamName())
+	}
+	if got.GetRemoteHost() != "203.0.113.7" {
+		t.Errorf("remote_host=%q", got.GetRemoteHost())
+	}
+	if got.GetBinaryName() != "MistInRTMP" {
+		t.Errorf("binary_name=%q", got.GetBinaryName())
+	}
+	if got.GetPid() != 42 {
+		t.Errorf("pid=%d", got.GetPid())
+	}
+	if got.GetMachineReason() != "EOF" {
+		t.Errorf("machine_reason=%q", got.GetMachineReason())
+	}
+	if got.GetHumanReason() != "upstream end-of-file" {
+		t.Errorf("human_reason=%q", got.GetHumanReason())
+	}
+	if got.GetTracksJson() == "" {
+		t.Errorf("tracks_json should be preserved as raw JSON")
+	}
+	if trig.Blocking {
+		t.Errorf("PUSH_INPUT_CLOSE must be non-blocking (async)")
+	}
+
+	// Short payload must fail loudly, not produce a partial trigger.
+	short := []byte("live+abc\n203.0.113.7\nMistInRTMP\n42\n")
+	if _, err := ParseTriggerToProtobuf(TriggerPushInputClose, short, "node-1", logger); err == nil {
+		t.Errorf("expected error on truncated payload")
+	}
+}
+
 func TestParseTriggerToProtobufRequestIdUnique(t *testing.T) {
 	logger := logging.NewLogger()
 	payload := []byte("rtmp://example/app/stream\nexample.com\nlive+stream_id\n")

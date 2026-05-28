@@ -138,7 +138,8 @@ message PrepareArtifactResponse {
   string url = 1;              // Presigned S3 GET URL (clip/vod single file)
   uint64 size_bytes = 2;
   bool ready = 3;              // True if artifact is immediately available
-  uint32 est_ready_seconds = 4; // Estimated time until ready (for async prep)
+  reserved 4;                  // retired est_ready_seconds — callers fail-fast on Ready=false now, no async-prep polling
+  reserved "est_ready_seconds";
   string error = 5;
   // Filename -> presigned GET URL for segmented non-DVR artifacts.
   // Parent DVR artifacts are rejected by PrepareArtifact; finalized
@@ -159,6 +160,20 @@ message PrepareArtifactResponse {
   // playback is per-chapter VOD artifacts now and never travels this RPC.
   reserved 11;
   reserved "dvr_segments";
+
+  // Peer-relay fallback for hot-but-unsynced artifacts. When the origin
+  // cluster holds the canonical full file on a specific node but has
+  // not yet synced to S3, peer_relay_url points at that node's
+  // Helmsman and peer_relay_token is a JWT minted by origin Foghorn
+  // (signed with origin's existing service key) bound to (origin node
+  // id, artifact_hash, request path, exp+5min). The requesting cluster
+  // forwards both fields opaquely into its own RelayResolveResponse;
+  // only the origin cluster's Helmsman validates the token. When set,
+  // url/segment_urls are empty. Recursion invariant: this path must
+  // not return another peer URL — origin Foghorn returns empty if its
+  // own origin row is also stale.
+  string peer_relay_url = 12;
+  string peer_relay_token = 13;
 }
 
 message RemoteClipRequest {
@@ -281,7 +296,7 @@ message EdgeSnapshot {
 // ArtifactAdvertisement carries hot artifact locations from a peer cluster.
 // Pushed via PeerChannel every 30s. The receiving cluster stores these in Redis
 // so playback resolution can route to peer edges that already have the artifact
-// warm, avoiding unnecessary S3 freeze/defrost round-trips.
+// warm, avoiding unnecessary S3 relay round-trips.
 message ArtifactAdvertisement {
   repeated ArtifactLocation artifacts = 1;
   int64 timestamp = 2; // Unix seconds
@@ -313,6 +328,13 @@ message StreamAdvertisement {
   bool is_live = 5;             // false = stream withdrawal
   repeated PeerStreamEdge edges = 6;
   int64 timestamp = 7;          // Unix seconds
+  // dvr_recording_node_id is the source-cluster node currently writing
+  // the rolling DVR (foghorn.artifacts row with artifact_type='dvr' AND
+  // status='recording') for this stream. Empty when the stream has no
+  // active DVR. Receivers store it on the federated Location so a
+  // cross-cluster STREAM_SOURCE dvr+<hash> can arrange an origin-pull
+  // to dtsc://<recording_node>/dvr+<hash>.
+  string dvr_recording_node_id = 8;
 }
 
 // PeerStreamEdge describes a single edge node serving a specific stream.

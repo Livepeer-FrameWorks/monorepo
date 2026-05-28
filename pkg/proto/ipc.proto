@@ -163,6 +163,8 @@ message ArtifactEvent {
 message ControlMessage {
   reserved 22, 23;
   reserved "dvr_ready_request", "dvr_ready_response";
+  reserved 44, 45, 46;
+  reserved "defrost_request", "defrost_progress", "defrost_complete";
 
   string request_id = 1; // Correlates requests/responses
   google.protobuf.Timestamp sent_at = 2;
@@ -201,9 +203,6 @@ message ControlMessage {
     FreezePermissionResponse freeze_permission_response = 41;
     FreezeProgress freeze_progress = 42;
     FreezeComplete freeze_complete = 43;
-    DefrostRequest defrost_request = 44;
-    DefrostProgress defrost_progress = 45;
-    DefrostComplete defrost_complete = 46;
     // Dual-storage sync operations (sync to S3 while keeping local)
     CanDeleteRequest can_delete_request = 47;
     CanDeleteResponse can_delete_response = 48;
@@ -282,6 +281,19 @@ message ControlMessage {
     // Idempotent: re-Applying with identical fields is a no-op.
     ApplyManagedStream apply_managed_stream = 160;
     RetractManagedStream retract_managed_stream = 161;
+    // Foghorn -> Helmsman: drain a specific runtime stream from the local
+    // Mist process. Issued from the AdmitAndReserve takeover path before
+    // the new owner is admitted, so old viewer sessions don't keep talking
+    // to the stale lingering buffer. Idempotent — missing stream is success.
+    DrainStreamRequest drain_stream_request = 162;
+    DrainStreamResponse drain_stream_response = 163;
+    // Foghorn -> Helmsman: refresh the DVR source override on the storage
+    // node when the source publisher takes over to a different ingest
+    // node. Without this, the DVR's registered override keeps pointing at
+    // the now-dead source URL and the push pull stalls until retry budget
+    // exhausts. Idempotent — missing job is a no-op success.
+    DVRUpdateSourceRequest dvr_update_source_request = 164;
+    DVRUpdateSourceResponse dvr_update_source_response = 165;
   }
 }
 
@@ -313,6 +325,42 @@ message ApplyManagedStream {
 message RetractManagedStream {
   string name = 1;                // bare Mist stream name
   string stream_id = 2;           // commodore.streams.id; for logging/correlation
+}
+
+// DrainStreamRequest is sent by Foghorn when admission moves ingest
+// ownership to a different node (takeover). The old owner must unload its
+// lingering Mist buffer and disconnect viewer sessions for that runtime
+// name so viewers don't keep talking to the stale buffer. Idempotent —
+// when the stream is absent locally, Helmsman returns unloaded=false with
+// sessions_disconnected=0 and no error.
+message DrainStreamRequest {
+  string runtime_name = 1;        // exact Mist source name to nuke
+  string reason = 2;              // e.g. "takeover_by_node:edge-us-2"
+}
+
+// DVRUpdateSourceRequest is sent by Foghorn when the source publisher
+// moves to a different ingest node mid-recording. The storage node has
+// a registered DVR source override pinning the push to the old source's
+// DTSC URL; this message refreshes that override so the next
+// createOrRecreatePush succeeds against the new owner. Idempotent —
+// missing dvr_hash is success.
+message DVRUpdateSourceRequest {
+  string dvr_hash = 1;            // identifies the in-flight recording job
+  string source_runtime_name = 2; // new Mist runtime name (live+<x> / pull+<x> / bare native)
+  string source_base_url = 3;     // new DTSC URL captured by Foghorn from the new source node
+}
+
+message DVRUpdateSourceResponse {
+  string dvr_hash = 1;
+  bool   refreshed = 2;           // true if the override was updated; false if no active job
+  string error = 3;               // empty on success; populated on partial failure
+}
+
+message DrainStreamResponse {
+  string runtime_name = 1;
+  bool   unloaded = 2;
+  uint32 sessions_disconnected = 3;
+  string error = 4;               // empty on success; populated on partial failure
 }
 
 // ModeChangeRequest is sent by Helmsman when a local agent or CLI requests
@@ -547,6 +595,11 @@ message ClipPullRequest {
   // historical surface they were cut from. Required — Helmsman
   // rejects clip pulls with an empty value.
   string output_stream_name = 23;
+  // Foghorn-authoritative runtime name for the clip ARTIFACT, used by
+  // Helmsman to boot the clip post-download for .dtsh generation. Always
+  // vod+<clip_internal_name> today (clips are frozen VOD), but populated
+  // from Foghorn's registry so Helmsman never derives runtime names.
+  string artifact_runtime_name = 24;
 }
 
 message ClipProgress {
@@ -620,6 +673,7 @@ message MistTrigger {
     StreamProcessTrigger stream_process = 38;
     ClientLifecycleBatch client_lifecycle_batch = 39;
     RawMistWebhookTrigger raw_mist_webhook = 40;
+    PushInputCloseTrigger push_input_close = 41;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -769,6 +823,11 @@ message DVRStartRequest {
   string tenant_id = 6;          // Tenant ID for the stream
   string user_id = 7;            // User ID for the stream
   string stream_id = 8;          // Public stream ID (UUID) - used for storage path
+  // Foghorn-authoritative runtime name for the source stream Helmsman will
+  // PUSH from. Derived by Foghorn's stream registry from
+  // (ingest_mode, internal_name): live+<x> for push, pull+<x> for pull, bare
+  // <x> for mist_native. Helmsman uses verbatim — never re-derives.
+  string source_runtime_name = 9;
 }
 
 // DVRConfig is the resolved per-session DVR configuration Foghorn passes to
@@ -996,7 +1055,8 @@ enum StorageLocation {
   STORAGE_LOCATION_LOCAL = 1;      // Asset is on local storage only
   STORAGE_LOCATION_S3 = 2;         // Asset is on S3 only (frozen)
   STORAGE_LOCATION_FREEZING = 3;   // Asset is being uploaded to S3
-  STORAGE_LOCATION_DEFROSTING = 4; // Asset is being downloaded from S3
+  reserved 4;
+  reserved "STORAGE_LOCATION_DEFROSTING";
 }
 
 // FreezeRequest tells Helmsman to upload an asset to S3 cold storage.
@@ -1037,35 +1097,6 @@ message FreezeComplete {
   bool local_missing = 7;
 }
 
-// DefrostRequest tells Helmsman to download an asset from S3 cold storage.
-// Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
-message DefrostRequest {
-  string request_id = 1;         // Request ID for tracking
-  string asset_type = 2;         // "clip" | "vod"
-  string asset_hash = 3;         // clip_hash or vod artifact hash
-  string tenant_id = 4;          // Tenant owning the asset
-  string stream_internal_name = 5; // Source stream's MistServer routing name
-  string presigned_get_url = 6;  // Presigned GET URL for download (time-limited, no creds needed)
-  string local_path = 7;         // Target local file/directory path
-  int32 timeout_seconds = 8;     // Max wait time for blocking defrost (0 = default 30s)
-  reserved 9;                    // bool streaming (DVR streaming defrost)
-  reserved "streaming";
-  int64 url_expiry_seconds = 10; // When the presigned URL expires
-  // Per-asset sidecar URLs (e.g. .dtsh). Keyed by filename relative to
-  // local_path.
-  map<string, string> segment_urls = 11;
-  string internal_name = 12;     // Artifact routing name (for vod+ stream name construction)
-  reserved 13 to 19;             // dvr_artifact_id / chapter_id / start_ms / end_ms /
-                                 // chapter_mode / chapter_interval_seconds / chapter_segments
-  reserved "dvr_artifact_id", "chapter_id", "start_ms", "end_ms",
-           "chapter_mode", "chapter_interval_seconds", "chapter_segments";
-  // Total expected on-disk bytes after defrost. Helmsman uses this for
-  // admission control (preflight space check + optional background cleanup).
-  // 0 means "unknown" — Helmsman skips admission and writes-then-fails on
-  // out-of-space.
-  uint64 expected_size_bytes = 20;
-}
-
 // DVRSegmentRef is one segment in the chapter-finalize segment list
 // Foghorn hands to Helmsman. Helmsman reads the local TS file when
 // available, falls back to presigned_get_url when the local copy is
@@ -1087,38 +1118,6 @@ message DVRSegmentRef {
   string status = 7;                  // 'uploaded' | 'lost_local' | 'deleted_local' | 'orphan_unreachable'
   int64  sequence = 8;                // foghorn.dvr_segments.sequence for HLS media sequence
   int64  size_bytes = 9;              // foghorn.dvr_segments.size_bytes; 0 = unknown
-}
-
-// DefrostProgress reports download progress for defrosting operations
-message DefrostProgress {
-  string request_id = 1;
-  string asset_hash = 2;
-  uint32 percent = 3;            // 0..100
-  uint64 bytes_downloaded = 4;
-  int32 segments_downloaded = 5; // For DVR streaming defrost
-  int32 total_segments = 6;      // For DVR streaming defrost
-  string message = 7;
-}
-
-// DefrostComplete indicates defrost operation has finished
-message DefrostComplete {
-  string request_id = 1;
-  string asset_hash = 2;
-  string status = 3;             // "success", "failed", "ready" (for streaming DVR)
-  string local_path = 4;         // Local file/directory path
-  uint64 size_bytes = 5;
-  string error = 6;              // Error message if failed
-  string node_id = 7;            // Node that now has a cached copy (for multi-node tracking)
-
-  // Typed failure reason. Set on status="failed"; UNSPECIFIED otherwise.
-  enum Reason {
-    REASON_UNSPECIFIED        = 0;
-    REASON_INSUFFICIENT_SPACE = 1;  // Helmsman tried to evict; still not enough room
-    REASON_DOWNLOAD_ERROR     = 2;  // presigned GET / network / S3
-    REASON_LOCAL_IO           = 3;  // mkdir/create/rename failed for non-space reasons
-    REASON_PRESIGNED_INVALID  = 4;  // missing/expired URL
-  }
-  Reason reason = 8;
 }
 
 // CanDeleteRequest is sent by Helmsman to check if a local asset can be safely deleted.
@@ -1192,9 +1191,18 @@ message RelayResolveResponse {
   // recording belongs to; on-disk DVR layout nests as
   // storage/dvr/<stream_internal_name>/<dvr_hash>/{chapters,segments} so the
   // relay needs this value to find warm local files and write cold fills to
-  // the same canonical location the defrost/freeze paths use. For VOD/clip
+  // the same canonical location the freeze/relay paths use. For VOD/clip
   // this is the Mist internal_name (vod+<name>) that addresses the artifact.
   string stream_internal_name = 13;
+
+  // Peer-relay fallback: when an artifact is hot on its origin node but
+  // not yet synced to S3, Foghorn returns a URL pointing at that origin
+  // node's Helmsman in place of media_presigned_url. The block-cache
+  // fetcher uses this URL exactly like an S3 URL but attaches the
+  // accompanying token as Authorization: Bearer. When peer_relay_url
+  // is set, media_presigned_url is empty.
+  string peer_relay_url = 14;
+  string peer_relay_auth_token = 15;
 }
 
 // AssetState tells the relay how to dispose of a resolve. Drives the
@@ -1251,7 +1259,7 @@ message StorageLifecycleData {
     ACTION_DELETED = 6;       // Asset deleted from both S3 and local (permanent removal)
     ACTION_SYNC_FAILED = 7;   // Upload to S3 failed (local copy retained)
     ACTION_EVICT_FAILED = 8;  // Local cache eviction failed
-    ACTION_CACHE_FAILED = 9;  // Download from S3 failed (defrost failure)
+    ACTION_CACHE_FAILED = 9;  // Read-through cache fill from S3 failed
     ACTION_LOCAL_MISSING = 10; // Local source file is gone before any sync; terminal.
                                // Foghorn transitions sync_status='lost_local' and stops retries.
   }
@@ -1266,14 +1274,21 @@ message StorageLifecycleData {
   optional string local_path = 8;
   optional string node_id = 9;
   optional string error = 10;
-  optional int64 duration_ms = 11;      // How long the operation took (sync/defrost duration)
+  optional int64 duration_ms = 11;      // How long the operation took (sync/cache fill duration)
   optional int64 warm_duration_ms = 12; // For EVICTED: how long asset was cached before eviction
   optional string cluster_id = 14;          // Cluster where the storage operation happened
   optional string origin_cluster_id = 15;   // Cluster that originally created the artifact
   optional bool dtsh_included = 17;         // True when the S3 sync included a Mist .dtsh index.
-  // Mirrors DefrostComplete.Reason for CACHE_FAILED rows so analytics can
+  // Typed failure reason for CACHE_FAILED rows so analytics can
   // distinguish "out of space" from "S3 5xx'd" from "local IO error."
-  optional DefrostComplete.Reason reason = 16;
+  enum CacheFailureReason {
+    CACHE_REASON_UNSPECIFIED        = 0;
+    CACHE_REASON_INSUFFICIENT_SPACE = 1;  // Eviction tried; still not enough room
+    CACHE_REASON_DOWNLOAD_ERROR     = 2;  // presigned GET / network / S3
+    CACHE_REASON_LOCAL_IO           = 3;  // mkdir/create/rename failed for non-space reasons
+    CACHE_REASON_PRESIGNED_INVALID  = 4;  // missing/expired URL
+  }
+  optional CacheFailureReason reason = 16;
 }
 
 // Typed MistServer trigger messages (matches mist package structures)
@@ -1356,6 +1371,31 @@ message PushEndTrigger {
   string push_status = 6;
   optional string node_id = 7;
   optional string stream_id = 8; // Enriched by Foghorn (UUID)
+}
+
+// PushInputCloseTrigger is emitted by MistServer when a publisher input
+// process exits (RTMP/SRT/WebRTC publisher disconnected or pushed input
+// closed). This is the source-presence "publisher gone" edge Foghorn's
+// admission state machine uses to flip source_active=false on the owner
+// entry. Distinct from PUSH_END (which fires for outbound push targets)
+// and from STREAM_END (which fires only after viewer activity also drains).
+//
+// Payload order verified against MistServer source
+// (src/controller/controller_capabilities.cpp:457 and
+// src/output/output.cpp:2209):
+//   stream name (string), remote host (string), binary name (string),
+//   pid (integer), machine-readable reason (string, enum),
+//   human-readable reason (string), tracks JSON (object).
+message PushInputCloseTrigger {
+  string stream_name = 1;
+  string remote_host = 2;
+  string binary_name = 3;    // e.g. "MistInRTMP", "MistInDTSC"
+  int64  pid = 4;
+  string machine_reason = 5; // short programmatic token
+  string human_reason = 6;   // free-text
+  string tracks_json = 7;    // raw JSON Mist provides; parsed downstream only if needed
+  optional string node_id = 8;
+  optional string stream_id = 9; // Enriched by Foghorn (UUID)
 }
 
 // ViewerConnectTrigger (formerly USER_NEW) indicates a viewer connection.
@@ -2101,6 +2141,24 @@ message StoredArtifact {
   uint64 access_count = 9;   // Local access count (best-effort, per node)
   int64 last_accessed = 10;  // Last access timestamp (Unix seconds)
   ArtifactEvent.ArtifactType artifact_type = 11; // Explicit artifact type (clip/dvr/vod)
+
+  // Presence role on this node. ORIGIN = canonical full file written by
+  // the recording/processing sidecar; eligible to serve cross-cluster
+  // peer-relay reads when is_complete=true. CACHE = sparse blocks
+  // fetched from S3; never authoritative for peer-relay. The polling
+  // path reports CACHE; finalizer RPCs report ORIGIN. Origin-wins
+  // upsert in Foghorn ensures CACHE writes can't downgrade an ORIGIN
+  // row.
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_CACHE       = 1;
+    ROLE_ORIGIN      = 2;
+  }
+  Role role = 12;
+  // Writer-authoritative completeness — only true when the finalizer
+  // RPC that wrote the file confirms it's fully written. Polling never
+  // sets this.
+  bool is_complete = 13;
 }
 
 message StreamProcess {
@@ -2280,6 +2338,11 @@ message ProcessingJobRequest {
   int64  chapter_start_ms = 23;
   int64  chapter_end_ms   = 24;
   repeated DVRChapterSegmentRef source_segments = 25;
+  // Foghorn-authoritative runtime name for the processed OUTPUT artifact's
+  // DTSH boot post-transcode. Always vod+<internal_name> today, but
+  // populated from Foghorn's registry so Helmsman never derives runtime
+  // names.
+  string output_runtime_name = 26;
 }
 
 // One source segment for a chapter finalize job. local_path is the

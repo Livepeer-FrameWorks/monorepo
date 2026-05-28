@@ -5704,12 +5704,12 @@ type ArtifactState struct {
 	ProcessingNodeId *string                `protobuf:"bytes,18,opt,name=processing_node_id,json=processingNodeId,proto3,oneof" json:"processing_node_id,omitempty"`
 	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	ExpiresAt        *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
-	StorageLocation  *string                `protobuf:"bytes,21,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"` // "local", "s3", "freezing", "defrosting"
+	StorageLocation  *string                `protobuf:"bytes,21,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"` // "local", "s3", "freezing"
 	SyncStatus       *string                `protobuf:"bytes,22,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`                // "pending", "in_progress", "synced", "failed", "lost_local"
 	IsHot            *bool                  `protobuf:"varint,23,opt,name=is_hot,json=isHot,proto3,oneof" json:"is_hot,omitempty"`                              // A warm edge copy is available.
 	IsSynced         *bool                  `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`                     // S3 has an authoritative copy.
 	IsFinalized      *bool                  `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`            // S3 sync included the .dtsh index.
-	IsFrozen         *bool                  `protobuf:"varint,26,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`                     // No warm edge copy remains; playback must defrost/cache.
+	IsFrozen         *bool                  `protobuf:"varint,26,opt,name=is_frozen,json=isFrozen,proto3,oneof" json:"is_frozen,omitempty"`                     // No warm edge copy remains; playback served via relay read-through from S3.
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -7642,7 +7642,7 @@ func (x *StorageUsageRecord) GetStorageScope() string {
 	return ""
 }
 
-// Storage lifecycle event (freeze/defrost operations)
+// Storage lifecycle event (freeze + read-through cache operations)
 type StorageEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // Unique ID for cursor pagination
@@ -7650,7 +7650,7 @@ type StorageEvent struct {
 	TenantId       string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	StreamId       string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
 	AssetHash      string                 `protobuf:"bytes,5,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"` // clip_hash or dvr_hash
-	Action         string                 `protobuf:"bytes,6,opt,name=action,proto3" json:"action,omitempty"`                        // freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+	Action         string                 `protobuf:"bytes,6,opt,name=action,proto3" json:"action,omitempty"`                        // freeze_started, frozen, cache_started, cached, freeze_failed, cache_failed
 	AssetType      string                 `protobuf:"bytes,7,opt,name=asset_type,json=assetType,proto3" json:"asset_type,omitempty"` // clip, dvr
 	SizeBytes      uint64                 `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	S3Url          *string                `protobuf:"bytes,9,opt,name=s3_url,json=s3Url,proto3,oneof" json:"s3_url,omitempty"`
@@ -8152,11 +8152,9 @@ type LiveUsageSummary struct {
 	FrozenClipBytes uint64 `protobuf:"varint,39,opt,name=frozen_clip_bytes,json=frozenClipBytes,proto3" json:"frozen_clip_bytes,omitempty"`
 	FrozenDvrBytes  uint64 `protobuf:"varint,40,opt,name=frozen_dvr_bytes,json=frozenDvrBytes,proto3" json:"frozen_dvr_bytes,omitempty"`
 	FrozenVodBytes  uint64 `protobuf:"varint,41,opt,name=frozen_vod_bytes,json=frozenVodBytes,proto3" json:"frozen_vod_bytes,omitempty"`
-	// Freeze/defrost operations
+	// Freeze + read-through cache fill operations
 	FreezeCount   uint32 `protobuf:"varint,42,opt,name=freeze_count,json=freezeCount,proto3" json:"freeze_count,omitempty"`
 	FreezeBytes   uint64 `protobuf:"varint,43,opt,name=freeze_bytes,json=freezeBytes,proto3" json:"freeze_bytes,omitempty"`
-	DefrostCount  uint32 `protobuf:"varint,44,opt,name=defrost_count,json=defrostCount,proto3" json:"defrost_count,omitempty"`
-	DefrostBytes  uint64 `protobuf:"varint,45,opt,name=defrost_bytes,json=defrostBytes,proto3" json:"defrost_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8488,20 +8486,6 @@ func (x *LiveUsageSummary) GetFreezeCount() uint32 {
 func (x *LiveUsageSummary) GetFreezeBytes() uint64 {
 	if x != nil {
 		return x.FreezeBytes
-	}
-	return 0
-}
-
-func (x *LiveUsageSummary) GetDefrostCount() uint32 {
-	if x != nil {
-		return x.DefrostCount
-	}
-	return 0
-}
-
-func (x *LiveUsageSummary) GetDefrostBytes() uint64 {
-	if x != nil {
-		return x.DefrostBytes
 	}
 	return 0
 }
@@ -16538,7 +16522,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\x1aGetLiveUsageSummaryRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x120\n" +
 	"\n" +
-	"time_range\x18\x02 \x01(\v2\x11.common.TimeRangeR\ttimeRange\"\xa0\x0f\n" +
+	"time_range\x18\x02 \x01(\v2\x11.common.TimeRangeR\ttimeRange\"\x80\x0f\n" +
 	"\x10LiveUsageSummary\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12=\n" +
 	"\fperiod_start\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vperiodStart\x129\n" +
@@ -16590,9 +16574,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\x10frozen_dvr_bytes\x18( \x01(\x04R\x0efrozenDvrBytes\x12(\n" +
 	"\x10frozen_vod_bytes\x18) \x01(\x04R\x0efrozenVodBytes\x12!\n" +
 	"\ffreeze_count\x18* \x01(\rR\vfreezeCount\x12!\n" +
-	"\ffreeze_bytes\x18+ \x01(\x04R\vfreezeBytes\x12#\n" +
-	"\rdefrost_count\x18, \x01(\rR\fdefrostCount\x12#\n" +
-	"\rdefrost_bytes\x18- \x01(\x04R\fdefrostBytes\"T\n" +
+	"\ffreeze_bytes\x18+ \x01(\x04R\vfreezeBytesJ\x04\b,\x10-J\x04\b-\x10.R\rdefrost_countR\rdefrost_bytes\"T\n" +
 	"\x1bGetLiveUsageSummaryResponse\x125\n" +
 	"\asummary\x18\x01 \x01(\v2\x1b.periscope.LiveUsageSummaryR\asummary\"\x85\x01\n" +
 	"\x16GetNetworkUsageRequest\x120\n" +

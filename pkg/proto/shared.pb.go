@@ -1624,7 +1624,7 @@ type DVRInfo struct {
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Cold storage fields
-	StorageLocation *string                `protobuf:"bytes,13,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"` // "local", "s3", "freezing", "defrosting"
+	StorageLocation *string                `protobuf:"bytes,13,opt,name=storage_location,json=storageLocation,proto3,oneof" json:"storage_location,omitempty"` // "local", "s3", "freezing"
 	S3Url           *string                `protobuf:"bytes,14,opt,name=s3_url,json=s3Url,proto3,oneof" json:"s3_url,omitempty"`
 	FrozenAt        *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=frozen_at,json=frozenAt,proto3,oneof" json:"frozen_at,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
@@ -4262,7 +4262,7 @@ type VodAssetInfo struct {
 	Description     string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
 	Filename        string                 `protobuf:"bytes,5,opt,name=filename,proto3" json:"filename,omitempty"` // Original uploaded filename
 	Status          VodStatus              `protobuf:"varint,6,opt,name=status,proto3,enum=shared.VodStatus" json:"status,omitempty"`
-	StorageLocation string                 `protobuf:"bytes,7,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"` // "s3", "local", "freezing", "defrosting"
+	StorageLocation string                 `protobuf:"bytes,7,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"` // "s3", "local", "freezing"
 	// File metadata (populated after validation)
 	SizeBytes   *int64  `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
 	DurationMs  *int32  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`     // Video duration in milliseconds

@@ -575,12 +575,11 @@ func (x *PrepareArtifactRequest) GetTenantId() string {
 }
 
 type PrepareArtifactResponse struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Url             string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Presigned S3 GET URL (clip/vod single file)
-	SizeBytes       uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Ready           bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`                                              // True if artifact is immediately available
-	EstReadySeconds uint32                 `protobuf:"varint,4,opt,name=est_ready_seconds,json=estReadySeconds,proto3" json:"est_ready_seconds,omitempty"` // Estimated time until ready (for async prep)
-	Error           string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Url       string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // Presigned S3 GET URL (clip/vod single file)
+	SizeBytes uint64                 `protobuf:"varint,2,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Ready     bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"` // True if artifact is immediately available
+	Error     string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
 	// Filename -> presigned GET URL for segmented non-DVR artifacts.
 	// Parent DVR artifacts are rejected by PrepareArtifact; finalized
 	// chapters are addressed as their own VOD artifacts and use the
@@ -594,8 +593,21 @@ type PrepareArtifactResponse struct {
 	// other fields on this response are ignored when redirect_cluster_id is
 	// set. Single hop only — chained redirects fail closed at the consumer.
 	RedirectClusterId string `protobuf:"bytes,10,opt,name=redirect_cluster_id,json=redirectClusterId,proto3" json:"redirect_cluster_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Peer-relay fallback for hot-but-unsynced artifacts. When the origin
+	// cluster holds the canonical full file on a specific node but has
+	// not yet synced to S3, peer_relay_url points at that node's
+	// Helmsman and peer_relay_token is a JWT minted by origin Foghorn
+	// (signed with origin's existing service key) bound to (origin node
+	// id, artifact_hash, request path, exp+5min). The requesting cluster
+	// forwards both fields opaquely into its own RelayResolveResponse;
+	// only the origin cluster's Helmsman validates the token. When set,
+	// url/segment_urls are empty. Recursion invariant: this path must
+	// not return another peer URL — origin Foghorn returns empty if its
+	// own origin row is also stale.
+	PeerRelayUrl   string `protobuf:"bytes,12,opt,name=peer_relay_url,json=peerRelayUrl,proto3" json:"peer_relay_url,omitempty"`
+	PeerRelayToken string `protobuf:"bytes,13,opt,name=peer_relay_token,json=peerRelayToken,proto3" json:"peer_relay_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -649,13 +661,6 @@ func (x *PrepareArtifactResponse) GetReady() bool {
 	return false
 }
 
-func (x *PrepareArtifactResponse) GetEstReadySeconds() uint32 {
-	if x != nil {
-		return x.EstReadySeconds
-	}
-	return 0
-}
-
 func (x *PrepareArtifactResponse) GetError() string {
 	if x != nil {
 		return x.Error
@@ -694,6 +699,20 @@ func (x *PrepareArtifactResponse) GetStreamInternalName() string {
 func (x *PrepareArtifactResponse) GetRedirectClusterId() string {
 	if x != nil {
 		return x.RedirectClusterId
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetPeerRelayUrl() string {
+	if x != nil {
+		return x.PeerRelayUrl
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetPeerRelayToken() string {
+	if x != nil {
+		return x.PeerRelayToken
 	}
 	return ""
 }
@@ -1707,7 +1726,7 @@ func (x *EdgeSnapshot) GetRoles() []string {
 // ArtifactAdvertisement carries hot artifact locations from a peer cluster.
 // Pushed via PeerChannel every 30s. The receiving cluster stores these in Redis
 // so playback resolution can route to peer edges that already have the artifact
-// warm, avoiding unnecessary S3 freeze/defrost round-trips.
+// warm, avoiding unnecessary S3 relay round-trips.
 type ArtifactAdvertisement struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Artifacts     []*ArtifactLocation    `protobuf:"bytes,1,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
@@ -1890,8 +1909,15 @@ type StreamAdvertisement struct {
 	IsLive          bool                   `protobuf:"varint,5,opt,name=is_live,json=isLive,proto3" json:"is_live,omitempty"`                             // false = stream withdrawal
 	Edges           []*PeerStreamEdge      `protobuf:"bytes,6,rep,name=edges,proto3" json:"edges,omitempty"`
 	Timestamp       int64                  `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"` // Unix seconds
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// dvr_recording_node_id is the source-cluster node currently writing
+	// the rolling DVR (foghorn.artifacts row with artifact_type='dvr' AND
+	// status='recording') for this stream. Empty when the stream has no
+	// active DVR. Receivers store it on the federated Location so a
+	// cross-cluster STREAM_SOURCE dvr+<hash> can arrange an origin-pull
+	// to dtsc://<recording_node>/dvr+<hash>.
+	DvrRecordingNodeId string `protobuf:"bytes,8,opt,name=dvr_recording_node_id,json=dvrRecordingNodeId,proto3" json:"dvr_recording_node_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StreamAdvertisement) Reset() {
@@ -1971,6 +1997,13 @@ func (x *StreamAdvertisement) GetTimestamp() int64 {
 		return x.Timestamp
 	}
 	return 0
+}
+
+func (x *StreamAdvertisement) GetDvrRecordingNodeId() string {
+	if x != nil {
+		return x.DvrRecordingNodeId
+	}
+	return ""
 }
 
 // PeerStreamEdge describes a single edge node serving a specific stream.
@@ -3283,23 +3316,24 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
 	"\ttenant_id\x18\x05 \x01(\tR\btenantIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\fdvr_start_msR\n" +
-	"dvr_end_ms\"\xf6\x03\n" +
+	"dvr_end_ms\"\xb3\x04\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12\x14\n" +
-	"\x05ready\x18\x03 \x01(\bR\x05ready\x12*\n" +
-	"\x11est_ready_seconds\x18\x04 \x01(\rR\x0festReadySeconds\x12\x14\n" +
+	"\x05ready\x18\x03 \x01(\bR\x05ready\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12_\n" +
 	"\fsegment_urls\x18\x06 \x03(\v2<.foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntryR\vsegmentUrls\x12\x16\n" +
 	"\x06format\x18\a \x01(\tR\x06format\x12#\n" +
 	"\rinternal_name\x18\b \x01(\tR\finternalName\x120\n" +
 	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x12.\n" +
 	"\x13redirect_cluster_id\x18\n" +
-	" \x01(\tR\x11redirectClusterId\x1a>\n" +
+	" \x01(\tR\x11redirectClusterId\x12$\n" +
+	"\x0epeer_relay_url\x18\f \x01(\tR\fpeerRelayUrl\x12(\n" +
+	"\x10peer_relay_token\x18\r \x01(\tR\x0epeerRelayToken\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\v\x10\fR\fdvr_segments\"\xb8\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fR\x11est_ready_secondsR\fdvr_segments\"\xb8\x03\n" +
 	"\x11RemoteClipRequest\x120\n" +
 	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -3408,7 +3442,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12\x1b\n" +
 	"\ttenant_id\x18\n" +
-	" \x01(\tR\btenantId\"\x95\x02\n" +
+	" \x01(\tR\btenantId\"\xc8\x02\n" +
 	"\x13StreamAdvertisement\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +
@@ -3417,7 +3451,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x11origin_cluster_id\x18\x04 \x01(\tR\x0foriginClusterId\x12\x17\n" +
 	"\ais_live\x18\x05 \x01(\bR\x06isLive\x128\n" +
 	"\x05edges\x18\x06 \x03(\v2\".foghorn_federation.PeerStreamEdgeR\x05edges\x12\x1c\n" +
-	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\"\xb8\x02\n" +
+	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x121\n" +
+	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\"\xb8\x02\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +

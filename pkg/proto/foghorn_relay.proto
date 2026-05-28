@@ -16,6 +16,8 @@ service FoghornRelay {
 }
 
 message ForwardCommandRequest {
+  reserved 17;
+  reserved "defrost";
   string target_node_id = 1;
   oneof command {
     helmsmancontrol.ConfigSeed config_seed = 10;
@@ -25,7 +27,6 @@ message ForwardCommandRequest {
     helmsmancontrol.ClipDeleteRequest clip_delete = 14;
     helmsmancontrol.DVRDeleteRequest dvr_delete = 15;
     helmsmancontrol.VodDeleteRequest vod_delete = 16;
-    helmsmancontrol.DefrostRequest defrost = 17;
     helmsmancontrol.DtshSyncRequest dtsh_sync = 18;
     helmsmancontrol.StopSessionsRequest stop_sessions = 19;
     helmsmancontrol.ActivatePushTargets activate_push_targets = 20;
@@ -40,6 +41,16 @@ message ForwardCommandRequest {
     // work correctly.
     helmsmancontrol.ApplyManagedStream apply_managed_stream = 26;
     helmsmancontrol.RetractManagedStream retract_managed_stream = 27;
+    // Old-owner drain on PUSH_REWRITE takeover. The new owner's PUSH_REWRITE
+    // may arrive at a Foghorn instance that doesn't hold the old owner's
+    // bidi stream; relay so the unload + session-disconnect lands on the
+    // right Helmsman.
+    helmsmancontrol.DrainStreamRequest drain_stream = 28;
+    // Storage-node DVR source refresh on takeover. The DVR's recording
+    // node may not be connected to the same Foghorn that handled the
+    // takeover PUSH_REWRITE; relay so the override refresh + push
+    // recreate lands on the right Helmsman.
+    helmsmancontrol.DVRUpdateSourceRequest dvr_update_source = 29;
   }
 }
 

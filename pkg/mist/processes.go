@@ -137,7 +137,10 @@ func NormalizeProcessConfigSelectors(processesJSON string) string {
 	}
 	changed := false
 	for _, proc := range processes {
-		processName, _ := proc["process"].(string)
+		processName, ok := proc["process"].(string)
+		if !ok {
+			continue
+		}
 		switch processName {
 		case "AV":
 			if _, ok := nonEmptyString(proc["track_select"]); !ok {
@@ -338,7 +341,10 @@ func nonEmptyString(value interface{}) (string, bool) {
 }
 
 func avTrackSelectForCodec(value interface{}) string {
-	codec, _ := value.(string)
+	codec, ok := value.(string)
+	if !ok {
+		return "audio=all&video=all"
+	}
 	switch strings.ToLower(codec) {
 	case "aac", "opus", "mp3", "flac", "wav":
 		return "audio=all&video=none&subtitle=none"

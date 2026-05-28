@@ -21,6 +21,7 @@ const (
 	TriggerStreamSource     TriggerType = "STREAM_SOURCE"
 	TriggerPushOutStart     TriggerType = "PUSH_OUT_START"
 	TriggerPushEnd          TriggerType = "PUSH_END"
+	TriggerPushInputClose   TriggerType = "PUSH_INPUT_CLOSE"
 	TriggerStreamBuffer     TriggerType = "STREAM_BUFFER"
 	TriggerStreamEnd        TriggerType = "STREAM_END"
 	TriggerUserNew          TriggerType = "USER_NEW"
@@ -216,6 +217,29 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_PushEnd{
 			PushEnd: trigger,
+		}
+
+	case TriggerPushInputClose:
+		// PUSH_INPUT_CLOSE payload (MistServer
+		// src/controller/controller_capabilities.cpp:457):
+		// stream_name, remote_host, binary_name, pid,
+		// machine_reason, human_reason, tracks_json.
+		if len(params) < 7 {
+			return nil, fmt.Errorf("PUSH_INPUT_CLOSE requires 7 parameters, got %d", len(params))
+		}
+		trigger := &pb.PushInputCloseTrigger{
+			StreamName:    params[0],
+			RemoteHost:    params[1],
+			BinaryName:    params[2],
+			MachineReason: params[4],
+			HumanReason:   params[5],
+			TracksJson:    params[6],
+		}
+		if pid, err := strconv.ParseInt(params[3], 10, 64); err == nil {
+			trigger.Pid = pid
+		}
+		mistTrigger.TriggerPayload = &pb.MistTrigger_PushInputClose{
+			PushInputClose: trigger,
 		}
 
 	case TriggerUserNew:

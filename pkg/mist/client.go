@@ -684,6 +684,18 @@ func (c *Client) DeleteStream(name string) error {
 	return err
 }
 
+// NukeStream clears a running stream instance and its shared-memory state.
+func (c *Client) NukeStream(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	command := map[string]interface{}{
+		"nuke_stream": name,
+	}
+	_, err := c.makeAPIRequest(command)
+	return err
+}
+
 // DeleteStreams deletes multiple streams by name
 func (c *Client) DeleteStreams(names []string) error {
 	if len(names) == 0 {
