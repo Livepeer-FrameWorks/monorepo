@@ -9,6 +9,11 @@
   let { toolName, error = "" }: Props = $props();
 
   const toolLabels: Record<string, { label: string; icon: string }> = {
+    skipper_preparing: { label: "Preparing request", icon: "Loader2" },
+    skipper_pre_retrieval: { label: "Searching docs and knowledge", icon: "BookOpen" },
+    skipper_compacting_context: { label: "Compacting conversation context", icon: "Layers" },
+    skipper_thinking: { label: "Thinking", icon: "Brain" },
+    skipper_synthesizing: { label: "Synthesizing answer", icon: "Sparkles" },
     search_knowledge: { label: "Searching knowledge base", icon: "BookOpen" },
     search_web: { label: "Searching the web", icon: "Globe" },
     diagnose_rebuffering: { label: "Diagnosing rebuffering", icon: "Activity" },

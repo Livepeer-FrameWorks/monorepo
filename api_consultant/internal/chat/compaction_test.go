@@ -123,6 +123,44 @@ func TestCompactMessagesTier3Emergency(t *testing.T) {
 	}
 }
 
+func TestCompactMessagesEmergencyPreservesActiveToolTurn(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: strings.Repeat("old question ", 200)},
+		{Role: "assistant", Content: strings.Repeat("old answer ", 200)},
+		{Role: "user", Content: "give me a snippet for live stream analytics"},
+		{
+			Role:    "assistant",
+			Content: "Let me grab the latest API docs for this!",
+			ToolCalls: []llm.ToolCall{{
+				ID:        "call-1",
+				Name:      "search_knowledge",
+				Arguments: `{"query":"live stream analytics python backend"}`,
+			}},
+		},
+		{
+			Role:       "tool",
+			Name:       "search_knowledge",
+			ToolCallID: "call-1",
+			Content:    strings.Repeat("knowledge result ", 200),
+		},
+	}
+
+	result := compactMessages(context.Background(), msgs, 10, nil)
+	if len(result) != 4 {
+		t.Fatalf("expected system plus active user/tool turn, got %#v", result)
+	}
+	if result[1].Role != "user" || result[1].Content != "give me a snippet for live stream analytics" {
+		t.Fatalf("expected current user request preserved before tool block, got %#v", result[1])
+	}
+	if result[2].Role != "assistant" || len(result[2].ToolCalls) != 1 {
+		t.Fatalf("expected assistant tool call preserved, got %#v", result[2])
+	}
+	if result[3].Role != "tool" || result[3].ToolCallID != "call-1" {
+		t.Fatalf("expected matching tool result preserved, got %#v", result[3])
+	}
+}
+
 func TestCompactMessagesSummaryFailure(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},

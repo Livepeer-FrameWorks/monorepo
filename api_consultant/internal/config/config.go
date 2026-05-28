@@ -18,6 +18,8 @@ type Config struct {
 	LLMAPIKey           string
 	LLMAPIURL           string
 	LLMMaxTokens        int
+	LLMContextWindow    int
+	PromptTokenBudget   int
 	EmbeddingProvider   string
 	EmbeddingModel      string
 	EmbeddingAPIKey     string
@@ -108,6 +110,8 @@ func LoadConfig() Config {
 		LLMAPIKey:           config.GetEnv("LLM_API_KEY", ""),
 		LLMAPIURL:           config.GetEnv("LLM_API_URL", ""),
 		LLMMaxTokens:        config.GetEnvInt("LLM_MAX_TOKENS", 4096),
+		LLMContextWindow:    config.GetEnvInt("LLM_CONTEXT_WINDOW", 0),
+		PromptTokenBudget:   config.GetEnvInt("SKIPPER_PROMPT_TOKEN_BUDGET", 0),
 		EmbeddingProvider:   config.GetEnv("EMBEDDING_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
 		EmbeddingModel:      config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
 		EmbeddingAPIKey:     config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),

@@ -147,15 +147,18 @@ func orphanToolResultText(msg llm.Message) string {
 }
 
 // summarizeMiddle generates a summary of the middle messages and returns
-// [system, summary_injection, ...last_N].
+// [system, summary_injection, ...tail]. The tail always includes the current
+// user request and any active tool-call/tool-result block, even if that keeps
+// more than keepLast messages.
 func summarizeMiddle(ctx context.Context, messages []llm.Message, keepLast int, provider llm.Provider) []llm.Message {
 	if len(messages) <= keepLast+1 {
 		return messages
 	}
 
 	system := messages[0]
-	tail := messages[len(messages)-keepLast:]
-	middle := messages[1 : len(messages)-keepLast]
+	tailStart := compactionTailStart(messages, keepLast)
+	tail := messages[tailStart:]
+	middle := messages[1:tailStart]
 
 	// Convert middle to Message type for generateSummary.
 	var chatMsgs []Message
@@ -182,12 +185,68 @@ func summarizeMiddle(ctx context.Context, messages []llm.Message, keepLast int, 
 	return result
 }
 
-// emergencyCompact keeps only system + last 1 message.
+// emergencyCompact keeps system plus the irreducible active turn tail.
 func emergencyCompact(messages []llm.Message) []llm.Message {
 	system := messages[0]
-	last := messages[len(messages)-1]
-	return []llm.Message{
-		system,
-		last,
+	tailStart := compactionTailStart(messages, 1)
+	result := make([]llm.Message, 0, len(messages)-tailStart+1)
+	result = append(result, system)
+	result = append(result, messages[tailStart:]...)
+	return result
+}
+
+func compactionTailStart(messages []llm.Message, keepLast int) int {
+	if len(messages) <= 1 {
+		return 0
 	}
+	if keepLast < 1 {
+		keepLast = 1
+	}
+	tailStart := len(messages) - keepLast
+	if tailStart < 1 {
+		tailStart = 1
+	}
+
+	if lastUser := lastRoleIndex(messages, "user"); lastUser >= 1 && lastUser < tailStart {
+		tailStart = lastUser
+	}
+
+	if toolBlockStart := trailingToolBlockStart(messages); toolBlockStart >= 1 && toolBlockStart < tailStart {
+		tailStart = toolBlockStart
+		if lastUser := lastRoleIndexBefore(messages, "user", toolBlockStart); lastUser >= 1 && lastUser < tailStart {
+			tailStart = lastUser
+		}
+	}
+
+	return tailStart
+}
+
+func trailingToolBlockStart(messages []llm.Message) int {
+	i := len(messages) - 1
+	for i >= 1 && messages[i].Role == "tool" {
+		i--
+	}
+	if i < 1 || i == len(messages)-1 {
+		return -1
+	}
+	if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+		return i
+	}
+	return -1
+}
+
+func lastRoleIndex(messages []llm.Message, role string) int {
+	return lastRoleIndexBefore(messages, role, len(messages))
+}
+
+func lastRoleIndexBefore(messages []llm.Message, role string, before int) int {
+	if before > len(messages) {
+		before = len(messages)
+	}
+	for i := before - 1; i >= 0; i-- {
+		if messages[i].Role == role {
+			return i
+		}
+	}
+	return -1
 }

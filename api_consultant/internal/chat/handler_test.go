@@ -595,7 +595,7 @@ func TestBuildPromptMessages_HistoryOrder(t *testing.T) {
 
 func TestBuildPromptMessages_TokenBudgetTrimsOldest(t *testing.T) {
 	// estimateTokens counts words (strings.Fields). Create many large messages
-	// that collectively exceed maxPromptTokenBudget so older ones get trimmed.
+	// that collectively exceed defaultPromptTokenBudget so older ones get trimmed.
 	longContent := strings.Repeat("word ", 2000) // 2000 tokens each
 	history := []Message{
 		{Role: "user", Content: longContent},
@@ -725,7 +725,7 @@ func TestBuildPromptMessages_UserMessageAlwaysLast(t *testing.T) {
 }
 
 func TestBuildPromptMessages_BudgetZeroStillWorks(t *testing.T) {
-	hugeUserMsg := strings.Repeat("word ", maxPromptTokenBudget+100)
+	hugeUserMsg := strings.Repeat("word ", defaultPromptTokenBudget+100)
 
 	history := []Message{
 		{Role: "user", Content: "old message"},

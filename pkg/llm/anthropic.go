@@ -179,13 +179,14 @@ func (s *anthropicStream) decodeEvent(data []byte) (Chunk, error) {
 	if err := json.Unmarshal(data, &event); err != nil {
 		return Chunk{}, fmt.Errorf("anthropic: decode event: %w", err)
 	}
+	usage := anthropicUsageFromEvent(event)
 	switch event.Type {
 	case "content_block_start":
 		if event.ContentBlock == nil {
-			return Chunk{}, nil
+			return Chunk{Usage: usage}, nil
 		}
 		if event.ContentBlock.Type == "text" {
-			return Chunk{Content: event.ContentBlock.Text}, nil
+			return Chunk{Content: event.ContentBlock.Text, Usage: usage}, nil
 		}
 		if event.ContentBlock.Type == "tool_use" {
 			callID := event.ContentBlock.ID
@@ -205,14 +206,15 @@ func (s *anthropicStream) decodeEvent(data []byte) (Chunk, error) {
 						Arguments: s.toolInputs[callID],
 					},
 				},
+				Usage: usage,
 			}, nil
 		}
 	case "content_block_delta":
 		if event.Delta == nil {
-			return Chunk{}, nil
+			return Chunk{Usage: usage}, nil
 		}
 		if event.Delta.Text != "" {
-			return Chunk{Content: event.Delta.Text}, nil
+			return Chunk{Content: event.Delta.Text, Usage: usage}, nil
 		}
 		if event.Delta.PartialJSON != "" {
 			callID := s.indexToID[event.Index]
@@ -225,10 +227,60 @@ func (s *anthropicStream) decodeEvent(data []byte) (Chunk, error) {
 						Arguments: s.toolInputs[callID],
 					},
 				},
+				Usage: usage,
 			}, nil
 		}
 	}
-	return Chunk{}, nil
+	return Chunk{Usage: usage}, nil
+}
+
+func anthropicUsageFromEvent(event anthropicEvent) *Usage {
+	if usage := usageFromMap(event.Usage); usage != nil {
+		return usage
+	}
+	if event.Message != nil {
+		if raw, ok := event.Message["usage"].(map[string]interface{}); ok {
+			return usageFromMap(raw)
+		}
+	}
+	return nil
+}
+
+func usageFromMap(raw map[string]interface{}) *Usage {
+	if raw == nil {
+		return nil
+	}
+	input := intFromInterface(raw["input_tokens"])
+	output := intFromInterface(raw["output_tokens"])
+	if input == 0 && output == 0 {
+		return nil
+	}
+	return &Usage{
+		InputTokens:  input,
+		OutputTokens: output,
+		TotalTokens:  input + output,
+	}
+}
+
+func intFromInterface(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0
+		}
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {

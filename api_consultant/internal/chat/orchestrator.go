@@ -44,6 +44,7 @@ type OrchestratorConfig struct {
 	MaxRounds       int
 	SearchLimit     int
 	GlobalTenantID  string
+	PromptBudget    int
 }
 
 const defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
@@ -65,6 +66,7 @@ type Orchestrator struct {
 	maxRounds       int
 	searchLimit     int
 	globalTenantID  string
+	promptBudget    int
 }
 
 type ToolDetail struct {
@@ -99,6 +101,13 @@ type ToolEventStreamer interface {
 	SendToolStart(toolName string) error
 	SendToolEnd(toolName string, errMsg string) error
 }
+
+const (
+	progressPreRetrieval = "skipper_pre_retrieval"
+	progressCompacting   = "skipper_compacting_context"
+	progressThinking     = "skipper_thinking"
+	progressSynthesizing = "skipper_synthesizing"
+)
 
 type ToolOutcome struct {
 	Content string
@@ -141,6 +150,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	if globalTenantID == "" {
 		globalTenantID = defaultGlobalTenantID
 	}
+	promptBudget := normalizePromptTokenBudget(cfg.PromptBudget)
 	return &Orchestrator{
 		llmProvider:     cfg.LLMProvider,
 		llmProviderName: cfg.LLMProviderName,
@@ -158,6 +168,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		maxRounds:       maxRounds,
 		searchLimit:     searchLimit,
 		globalTenantID:  globalTenantID,
+		promptBudget:    promptBudget,
 	}
 }
 
@@ -173,6 +184,15 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	var toolCalls []ToolCallRecord
 	var details []ToolDetail
 	inputTokens := 0
+	actualOutputTokens := 0
+	if o.logger != nil {
+		o.logger.WithField("provider", o.llmProviderName).
+			WithField("model", o.llmModelName).
+			WithField("messages", len(messages)).
+			WithField("tokens", countTokensInMessages(messages)).
+			WithField("prompt_token_budget", o.promptBudget).
+			Info("Skipper orchestrator run started")
+	}
 	filter := newConfidenceStreamFilter(streamer)
 	lastUserMessage := lastUserContent(messages)
 	isMCPInventoryQuestion := isMCPToolInventoryQuestion(lastUserMessage)
@@ -190,7 +210,9 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	if !isMCPInventoryQuestion && o.knowledge != nil && o.embedder != nil && len(messages) > 0 {
 		userMsg := messages[len(messages)-1]
 		if userMsg.Role == "user" && strings.TrimSpace(userMsg.Content) != "" {
+			sendProgressStart(streamer, progressPreRetrieval)
 			preResult := o.preRetrieve(ctx, userMsg.Content)
+			sendProgressEnd(streamer, progressPreRetrieval)
 			if preResult.Context != "" {
 				contextBlock := guardUntrustedContext("Pre-retrieved knowledge context", preResult.Context, maxPreRetrieveTokens)
 				if contextBlock != "" {
@@ -202,7 +224,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 						}
 					}
 					sources = appendSources(sources, preResult.Sources)
-					messages = compactMessages(ctx, messages, maxPromptTokenBudget, o.llmProvider)
+					messages = o.compactMessagesForRun(ctx, messages, "pre_retrieval", streamer)
 				}
 			}
 		}
@@ -213,22 +235,42 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			return OrchestratorResult{}, err
 		}
 
-		if countTokensInMessages(messages) > maxPromptTokenBudget {
-			messages = compactMessages(ctx, messages, maxPromptTokenBudget, o.llmProvider)
+		if countTokensInMessages(messages) > o.promptBudget {
+			messages = o.compactMessagesForRun(ctx, messages, "round_start", streamer)
 		}
 		messages = sanitizeToolProtocolMessages(messages)
 
-		inputTokens += countTokensInMessages(messages)
+		roundInputEstimate := countTokensInMessages(messages)
+		roundTools := o.toolsForContext(ctx)
 		llmStart := time.Now()
-		stream, err := o.llmProvider.Complete(ctx, messages, o.toolsForContext(ctx))
+		if o.logger != nil {
+			o.logger.WithField("round", round+1).
+				WithField("messages", len(messages)).
+				WithField("tokens", roundInputEstimate).
+				WithField("tools_available", len(roundTools)).
+				Info("Skipper LLM round started")
+		}
+		if round == 0 {
+			sendProgressStart(streamer, progressThinking)
+		} else {
+			sendProgressStart(streamer, progressSynthesizing)
+		}
+		stream, err := o.llmProvider.Complete(ctx, messages, roundTools)
 		if err != nil {
+			sendProgressEnd(streamer, progressThinking)
+			sendProgressEnd(streamer, progressSynthesizing)
 			llmCallsTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "error").Inc()
 			llmDuration.WithLabelValues(o.llmProviderName, o.llmModelName).Observe(time.Since(llmStart).Seconds())
+			if o.logger != nil {
+				o.logger.WithError(err).WithField("round", round+1).Warn("Skipper LLM request failed")
+			}
 			return OrchestratorResult{}, err
 		}
 
 		var pendingToolCalls []llm.ToolCall
 		var roundResponse strings.Builder
+		roundInputActual := 0
+		roundOutputActual := 0
 		for {
 			chunk, err := stream.Recv()
 			if err != nil {
@@ -236,12 +278,17 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 					break
 				}
 				_ = stream.Close()
+				if o.logger != nil {
+					o.logger.WithError(err).WithField("round", round+1).Warn("Skipper LLM stream failed")
+				}
 				return OrchestratorResult{}, err
 			}
 			if chunk.Content != "" {
 				response.WriteString(chunk.Content)
 				fullResponse.WriteString(chunk.Content)
 				roundResponse.WriteString(chunk.Content)
+				sendProgressEnd(streamer, progressThinking)
+				sendProgressEnd(streamer, progressSynthesizing)
 				if filterErr := filter.Write(chunk.Content); filterErr != nil {
 					_ = stream.Close()
 					return OrchestratorResult{}, filterErr
@@ -250,10 +297,35 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			if len(chunk.ToolCalls) > 0 {
 				pendingToolCalls = mergeToolCalls(pendingToolCalls, chunk.ToolCalls)
 			}
+			if chunk.Usage != nil {
+				if chunk.Usage.InputTokens > 0 {
+					roundInputActual = chunk.Usage.InputTokens
+				}
+				if chunk.Usage.OutputTokens > 0 {
+					roundOutputActual = chunk.Usage.OutputTokens
+				}
+			}
 		}
 		_ = stream.Close()
+		sendProgressEnd(streamer, progressThinking)
+		sendProgressEnd(streamer, progressSynthesizing)
+		if roundInputActual > 0 {
+			inputTokens += roundInputActual
+		} else {
+			inputTokens += roundInputEstimate
+		}
+		actualOutputTokens += roundOutputActual
 		llmCallsTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "success").Inc()
 		llmDuration.WithLabelValues(o.llmProviderName, o.llmModelName).Observe(time.Since(llmStart).Seconds())
+		if o.logger != nil {
+			o.logger.WithField("round", round+1).
+				WithField("duration_ms", time.Since(llmStart).Milliseconds()).
+				WithField("tool_calls", len(pendingToolCalls)).
+				WithField("response_tokens", estimateTokens(roundResponse.String())).
+				WithField("provider_input_tokens", roundInputActual).
+				WithField("provider_output_tokens", roundOutputActual).
+				Info("Skipper LLM round completed")
+		}
 		if err := filter.Flush(); err != nil {
 			return OrchestratorResult{}, err
 		}
@@ -298,6 +370,10 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 					_ = tes.SendToolStart(c.Name)
 					sseMu.Unlock()
 				}
+				toolStart := time.Now()
+				if o.logger != nil {
+					o.logger.WithField("tool", c.Name).Info("Skipper tool call started")
+				}
 				outcome, err := o.executeTool(ctx, c)
 				record := ToolCallRecord{Name: c.Name}
 				if c.Arguments != "" {
@@ -322,6 +398,15 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 					sseMu.Lock()
 					_ = tes.SendToolEnd(c.Name, errMsg)
 					sseMu.Unlock()
+				}
+				if o.logger != nil {
+					entry := o.logger.WithField("tool", c.Name).
+						WithField("duration_ms", time.Since(toolStart).Milliseconds())
+					if err != nil {
+						entry.WithError(err).Warn("Skipper tool call completed with error")
+					} else {
+						entry.Info("Skipper tool call completed")
+					}
 				}
 				results[idx] = toolResult{index: idx, record: record, outcome: outcome}
 			}(i, call)
@@ -371,6 +456,9 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	}
 
 	outputTokens := estimateTokens(content)
+	if actualOutputTokens > 0 {
+		outputTokens = actualOutputTokens
+	}
 	llmTokensTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "input").Add(float64(inputTokens))
 	llmTokensTotal.WithLabelValues(o.llmProviderName, o.llmModelName, "output").Add(float64(outputTokens))
 
@@ -386,6 +474,45 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			Output: outputTokens,
 		},
 	}, nil
+}
+
+func (o *Orchestrator) compactMessagesForRun(ctx context.Context, messages []llm.Message, phase string, streamer TokenStreamer) []llm.Message {
+	beforeTokens := countTokensInMessages(messages)
+	if beforeTokens <= o.promptBudget {
+		return messages
+	}
+	sendProgressStart(streamer, progressCompacting)
+	start := time.Now()
+	compacted := compactMessages(ctx, messages, o.promptBudget, o.llmProvider)
+	sendProgressEnd(streamer, progressCompacting)
+	afterTokens := countTokensInMessages(compacted)
+	if o.logger != nil {
+		o.logger.WithField("phase", phase).
+			WithField("messages_before", len(messages)).
+			WithField("messages_after", len(compacted)).
+			WithField("tokens_before", beforeTokens).
+			WithField("tokens_after", afterTokens).
+			WithField("prompt_token_budget", o.promptBudget).
+			WithField("duration_ms", time.Since(start).Milliseconds()).
+			Info("Skipper chat context compacted")
+	}
+	return compacted
+}
+
+func sendProgressStart(streamer TokenStreamer, name string) {
+	if tes, ok := streamer.(ToolEventStreamer); ok {
+		if err := tes.SendToolStart(name); err != nil {
+			return
+		}
+	}
+}
+
+func sendProgressEnd(streamer TokenStreamer, name string) {
+	if tes, ok := streamer.(ToolEventStreamer); ok {
+		if err := tes.SendToolEnd(name, ""); err != nil {
+			return
+		}
+	}
 }
 
 // docsAllowedTools lists tools permitted when mode=docs.
@@ -863,12 +990,21 @@ type SearchKnowledgeResponse struct {
 // best-effort and the LLM can still call search_knowledge explicitly.
 func (o *Orchestrator) preRetrieve(ctx context.Context, query string) SearchKnowledgeResponse {
 	start := time.Now()
+	if o.logger != nil {
+		o.logger.WithField("query_tokens", estimateTokens(query)).Info("Skipper pre-retrieval started")
+	}
 	embedding, err := o.embedder.EmbedQuery(ctx, query)
 	if err != nil {
+		if o.logger != nil {
+			o.logger.WithError(err).WithField("duration_ms", time.Since(start).Milliseconds()).Warn("Skipper pre-retrieval embedding failed")
+		}
 		return SearchKnowledgeResponse{}
 	}
 	tenantIDs := o.resolveKnowledgeTenants(ctx, "all")
 	if len(tenantIDs) == 0 {
+		if o.logger != nil {
+			o.logger.WithField("duration_ms", time.Since(start).Milliseconds()).Warn("Skipper pre-retrieval skipped without tenant")
+		}
 		return SearchKnowledgeResponse{}
 	}
 	var chunks []knowledge.Chunk
@@ -888,6 +1024,12 @@ func (o *Orchestrator) preRetrieve(ctx context.Context, query string) SearchKnow
 	searchQueriesTotal.WithLabelValues("pre_retrieval").Inc()
 	searchDuration.Observe(time.Since(start).Seconds())
 	searchResultsCount.Observe(float64(len(chunks)))
+	if o.logger != nil {
+		o.logger.WithField("duration_ms", time.Since(start).Milliseconds()).
+			WithField("tenant_count", len(tenantIDs)).
+			WithField("result_count", len(chunks)).
+			Info("Skipper pre-retrieval completed")
+	}
 	if len(chunks) == 0 {
 		return SearchKnowledgeResponse{}
 	}

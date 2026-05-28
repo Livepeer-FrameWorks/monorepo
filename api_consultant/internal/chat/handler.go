@@ -30,6 +30,7 @@ type ChatHandler struct {
 	UsageLogger        skipper.UsageLogger
 	Logger             logging.Logger
 	MaxHistoryMessages int
+	PromptTokenBudget  int
 
 	// conversationLocks serializes concurrent requests to the same conversation.
 	// For horizontal scaling, replace with pg_advisory_xact_lock.
@@ -198,7 +199,18 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 	if !isNewConversation && len(history) >= summaryThreshold {
 		summary, _ = h.Conversations.GetSummary(ctx, conversationID)
 	}
-	messages := buildPromptMessages(history, req.Message, req.PageURL, mode, summary)
+	promptBudget := normalizePromptTokenBudget(h.PromptTokenBudget)
+	messages := buildPromptMessagesWithBudget(history, req.Message, req.PageURL, mode, summary, promptBudget)
+	if h.Logger != nil {
+		h.Logger.WithField("conversation_id", conversationID).
+			WithField("tenant_id", tenantID).
+			WithField("mode", mode).
+			WithField("history_messages", len(history)).
+			WithField("prompt_messages", len(messages)).
+			WithField("prompt_tokens", countTokensInMessages(messages)).
+			WithField("prompt_token_budget", promptBudget).
+			Info("Skipper chat request prepared")
+	}
 
 	streamer, err := newSSEStreamer(c.Writer)
 	if err != nil {
@@ -427,6 +439,11 @@ func (h *ChatHandler) HandleUpdateConversation(c *gin.Context) {
 }
 
 func buildPromptMessages(history []Message, userMessage, pageURL, mode, summary string) []llm.Message {
+	return buildPromptMessagesWithBudget(history, userMessage, pageURL, mode, summary, defaultPromptTokenBudget)
+}
+
+func buildPromptMessagesWithBudget(history []Message, userMessage, pageURL, mode, summary string, promptTokenBudget int) []llm.Message {
+	promptTokenBudget = normalizePromptTokenBudget(promptTokenBudget)
 	systemContent := SystemPrompt
 	if mode == "docs" {
 		systemContent += DocsSystemPromptSuffix
@@ -463,7 +480,7 @@ func buildPromptMessages(history []Message, userMessage, pageURL, mode, summary 
 	// Token budget: trim oldest history first to fit the context window.
 	userTokens := estimateTokens(userMessage)
 	systemTokens := estimateTokens(systemContent)
-	budget := maxPromptTokenBudget - systemTokens - userTokens
+	budget := promptTokenBudget - systemTokens - userTokens
 	if budget < 0 {
 		budget = 0
 	}

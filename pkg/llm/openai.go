@@ -40,10 +40,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 		return nil, errors.New("openai model is required")
 	}
 	reqBody := openAIRequest{
-		Model:     p.model,
-		Messages:  openAIMessagesFrom(messages),
-		Stream:    true,
-		MaxTokens: p.maxTokens,
+		Model:         p.model,
+		Messages:      openAIMessagesFrom(messages),
+		Stream:        true,
+		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
+		MaxTokens:     p.maxTokens,
 	}
 	if len(tools) > 0 {
 		reqBody.Tools = make([]openAITool, 0, len(tools))
@@ -84,11 +85,16 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 }
 
 type openAIRequest struct {
-	Model     string          `json:"model"`
-	Messages  []openAIMessage `json:"messages"`
-	Stream    bool            `json:"stream"`
-	MaxTokens int             `json:"max_tokens,omitempty"`
-	Tools     []openAITool    `json:"tools,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []openAIMessage      `json:"messages"`
+	Stream        bool                 `json:"stream"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int                  `json:"max_tokens,omitempty"`
+	Tools         []openAITool         `json:"tools,omitempty"`
+}
+
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type openAIMessage struct {
@@ -122,6 +128,11 @@ type openAIStreamResponse struct {
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *struct {
+		InputTokens  int `json:"prompt_tokens"`
+		OutputTokens int `json:"completion_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -171,6 +182,13 @@ func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return Chunk{}, fmt.Errorf("openai: decode chunk: %w; payload_len=%d payload_sample=%s", err, len(data), badChunkSample(data))
 		}
+		if payload.Usage != nil && len(payload.Choices) == 0 {
+			return Chunk{Usage: &Usage{
+				InputTokens:  payload.Usage.InputTokens,
+				OutputTokens: payload.Usage.OutputTokens,
+				TotalTokens:  payload.Usage.TotalTokens,
+			}}, nil
+		}
 		if len(payload.Choices) == 0 {
 			return Chunk{}, nil
 		}
@@ -178,6 +196,13 @@ func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {
 		choice := payload.Choices[0]
 		delta := choice.Delta
 		chunk := Chunk{Content: delta.Content}
+		if payload.Usage != nil {
+			chunk.Usage = &Usage{
+				InputTokens:  payload.Usage.InputTokens,
+				OutputTokens: payload.Usage.OutputTokens,
+				TotalTokens:  payload.Usage.TotalTokens,
+			}
+		}
 
 		if len(delta.ToolCalls) > 0 {
 			for _, call := range delta.ToolCalls {

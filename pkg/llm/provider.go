@@ -23,6 +23,13 @@ type Stream interface {
 type Chunk struct {
 	Content   string
 	ToolCalls []ToolCall
+	Usage     *Usage
+}
+
+type Usage struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
 }
 
 type Message struct {
@@ -81,7 +88,7 @@ func (s *sseStream) Recv() (Chunk, error) {
 		if err != nil {
 			return Chunk{}, err
 		}
-		if chunk.Content == "" && len(chunk.ToolCalls) == 0 {
+		if chunk.Content == "" && len(chunk.ToolCalls) == 0 && chunk.Usage == nil {
 			continue
 		}
 		return chunk, nil

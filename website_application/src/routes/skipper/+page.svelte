@@ -360,7 +360,7 @@
     await scrollToBottom(true);
 
     isStreaming = true;
-    activeToolName = "";
+    activeToolName = "skipper_preparing";
     activeToolError = "";
 
     // Tear down any previous subscription

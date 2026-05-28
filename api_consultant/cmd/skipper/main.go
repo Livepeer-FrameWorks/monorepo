@@ -238,6 +238,13 @@ func main() {
 		logger.WithError(err).Warn("Failed to initialize LLM provider")
 		llmProvider = nil
 	}
+	promptTokenBudget := chat.ResolvePromptTokenBudget(cfg.LLMProvider, cfg.LLMModel, cfg.PromptTokenBudget, cfg.LLMContextWindow, cfg.LLMMaxTokens)
+	logger.WithField("provider", cfg.LLMProvider).
+		WithField("model", cfg.LLMModel).
+		WithField("prompt_token_budget", promptTokenBudget).
+		WithField("configured_context_window", cfg.LLMContextWindow).
+		WithField("configured_prompt_token_budget", cfg.PromptTokenBudget).
+		Info("Skipper prompt token budget configured")
 
 	embeddingClient, err := llm.NewEmbeddingClient(llm.Config{
 		Provider: cfg.EmbeddingProvider,
@@ -389,6 +396,7 @@ func main() {
 		Diagnostics:     baselineEvaluator,
 		SearchLimit:     cfg.SearchLimit,
 		GlobalTenantID:  globalTenantID,
+		PromptBudget:    promptTokenBudget,
 	})
 	var usageLogger skipper.UsageLogger
 	if decklogClient != nil {
@@ -397,6 +405,7 @@ func main() {
 	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, usageLogger, logger)
 	chatHandler.MaxHistoryMessages = cfg.MaxHistoryMessages
 	chatHandler.LLMProvider = llmProvider
+	chatHandler.PromptTokenBudget = promptTokenBudget
 
 	heartbeatInterval := config.GetEnv("HEARTBEAT_INTERVAL", "30m")
 	heartbeatDuration, err := time.ParseDuration(heartbeatInterval)
@@ -547,6 +556,7 @@ func main() {
 		UsageLogger:        usageLogger,
 		Logger:             logger,
 		MaxHistoryMessages: cfg.MaxHistoryMessages,
+		PromptTokenBudget:  promptTokenBudget,
 		Reports:            &reportStoreAdapter{store: reportStore},
 	})
 	grpcAuthCfg := middleware.GRPCAuthConfig{

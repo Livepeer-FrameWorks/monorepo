@@ -54,6 +54,7 @@ type GRPCServerConfig struct {
 	UsageLogger        skipper.UsageLogger
 	Logger             logging.Logger
 	MaxHistoryMessages int
+	PromptTokenBudget  int
 	Reports            ReportQuerier
 }
 
@@ -65,6 +66,7 @@ type GRPCServer struct {
 	usageLogger        skipper.UsageLogger
 	logger             logging.Logger
 	maxHistoryMessages int
+	promptTokenBudget  int
 	reports            ReportQuerier
 }
 
@@ -80,6 +82,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *GRPCServer {
 		usageLogger:        cfg.UsageLogger,
 		logger:             cfg.Logger,
 		maxHistoryMessages: maxHistory,
+		promptTokenBudget:  normalizePromptTokenBudget(cfg.PromptTokenBudget),
 		reports:            cfg.Reports,
 	}
 }
@@ -139,7 +142,17 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	if !isNewConversation && len(history) >= summaryThreshold {
 		summary, _ = s.conversations.GetSummary(ctx, conversationID)
 	}
-	messages := buildPromptMessages(history, message, req.GetPageUrl(), mode, summary)
+	messages := buildPromptMessagesWithBudget(history, message, req.GetPageUrl(), mode, summary, s.promptTokenBudget)
+	if s.logger != nil {
+		s.logger.WithField("conversation_id", conversationID).
+			WithField("tenant_id", tenantID).
+			WithField("mode", mode).
+			WithField("history_messages", len(history)).
+			WithField("prompt_messages", len(messages)).
+			WithField("prompt_tokens", countTokensInMessages(messages)).
+			WithField("prompt_token_budget", s.promptTokenBudget).
+			Info("Skipper gRPC chat request prepared")
+	}
 
 	streamer := &grpcStreamer{stream: stream}
 	result, err := s.orchestrator.Run(ctx, messages, streamer)
