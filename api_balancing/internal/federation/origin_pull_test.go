@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -102,6 +103,8 @@ func TestArrange_RegistryNil_Refused(t *testing.T) {
 
 func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	r := freshRegistry(t)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
 	fed := &fakeNotifyFedClient{}
 	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
 
@@ -118,6 +121,14 @@ func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	}
 	if loc.ReplicatingFrom != "cluster-peer" || loc.DestNodeID != "local-edge" {
 		t.Fatalf("unexpected location: %+v", loc)
+	}
+	instances := sm.GetStreamInstances("stream-1")
+	inst, ok := instances["local-edge"]
+	if !ok {
+		t.Fatal("expected local-edge stream instance")
+	}
+	if inst.Inputs != 1 || !inst.Replicated {
+		t.Fatalf("stream instance = %+v, want inputs=1 replicated=true", inst)
 	}
 	if len(fed.calls) != 1 || fed.calls[0].StreamName != "stream-1" {
 		t.Fatalf("NotifyOriginPull calls = %+v", fed.calls)

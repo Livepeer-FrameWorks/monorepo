@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
@@ -270,6 +271,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		destNodeBaseURL,
 		req.Remote.NodeId,
 	)
+	state.DefaultManager().UpdateNodeStats(req.InternalName, destNodeID, 0, 1, 0, 0, true)
 
 	d.Logger.WithFields(logging.Fields{
 		"stream":         req.InternalName,

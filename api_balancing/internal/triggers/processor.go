@@ -3477,9 +3477,27 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 
 	// Update stream stats for each stream
 	// CRITICAL: Extract internal name to match state keys (e.g., "live+demo_stream" -> "demo_stream")
+	observedStreams := make(map[string]struct{}, len(nu.GetStreams()))
 	for streamName, s := range nu.GetStreams() {
 		internalName := mist.ExtractInternalName(streamName)
-		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), s.GetReplicated())
+		observedStreams[internalName] = struct{}{}
+		replicated := s.GetReplicated()
+		if !replicated && control.StreamRegistryInstance != nil {
+			if loc, ok := control.StreamRegistryInstance.LocalReplication(context.Background(), internalName); ok && loc.DestNodeID == nu.GetNodeId() {
+				replicated = true
+			}
+		}
+		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
+	}
+	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
+		for _, internalName := range cleared {
+			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(internalName, nu.GetNodeId()) {
+				p.logger.WithFields(logging.Fields{
+					"node_id":       nu.GetNodeId(),
+					"internal_name": internalName,
+				}).Info("Node lifecycle cleared stale replicated stream")
+			}
+		}
 	}
 
 	previousArtifacts := func() []*pb.StoredArtifact {

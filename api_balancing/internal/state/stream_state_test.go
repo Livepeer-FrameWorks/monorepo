@@ -56,6 +56,35 @@ func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
 	}
 }
 
+func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
+	sm := NewStreamStateManager()
+	sm.TouchNode("edge-us-1", true)
+	sm.UpdateNodeStats("frameworks-demo", "edge-us-1", 3, 1, 100, 200, true)
+
+	cleared := sm.ReconcileNodeStreamPresence("edge-us-1", map[string]struct{}{})
+	if len(cleared) != 1 || cleared[0] != "frameworks-demo" {
+		t.Fatalf("cleared = %#v, want frameworks-demo", cleared)
+	}
+
+	instances := sm.GetStreamInstances("frameworks-demo")
+	inst, ok := instances["edge-us-1"]
+	if !ok {
+		t.Fatal("expected edge instance")
+	}
+	if inst.Inputs != 0 || inst.TotalConnections != 0 || inst.Status != "offline" || inst.Replicated {
+		t.Fatalf("instance after reconcile = %+v, want offline/non-replicated with zero inputs", inst)
+	}
+
+	snapshots := sm.GetBalancerNodeSnapshots()
+	if len(snapshots) != 1 {
+		t.Fatalf("snapshots = %d, want 1", len(snapshots))
+	}
+	stream := snapshots[0].Streams["frameworks-demo"]
+	if stream.Inputs != 0 || stream.Replicated {
+		t.Fatalf("balancer stream = %+v, want zero-input non-replicated", stream)
+	}
+}
+
 func TestVirtualViewerAggregatePenaltyPersistsToRedis(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})

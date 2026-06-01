@@ -926,6 +926,87 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// ReconcileNodeStreamPresence clears per-node stream instances that are
+// absent from Helmsman's current Mist stream snapshot.
+func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observed map[string]struct{}) []string {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil
+	}
+
+	type streamWrite struct {
+		internalName string
+		payload      []byte
+	}
+	type instanceWrite struct {
+		internalName string
+		payload      []byte
+	}
+
+	now := time.Now()
+	var cleared []string
+	var streamWrites []streamWrite
+	var instanceWrites []instanceWrite
+
+	sm.mu.Lock()
+	for internalName, instances := range sm.streamInstances {
+		if _, ok := observed[internalName]; ok {
+			continue
+		}
+		inst := instances[nodeID]
+		if inst == nil {
+			continue
+		}
+		if inst.Inputs == 0 && inst.TotalConnections == 0 && inst.Status == "offline" && !inst.Replicated {
+			continue
+		}
+
+		inst.Inputs = 0
+		inst.TotalConnections = 0
+		inst.Status = "offline"
+		inst.BufferState = "EMPTY"
+		inst.Replicated = false
+		inst.LastUpdate = now
+		if payload, err := json.Marshal(inst); err == nil {
+			instanceWrites = append(instanceWrites, instanceWrite{internalName: internalName, payload: payload})
+		}
+
+		union := sm.streams[internalName]
+		if union != nil {
+			totalInputs := 0
+			totalConnections := 0
+			for _, peer := range instances {
+				if peer == nil {
+					continue
+				}
+				totalInputs += peer.Inputs
+				totalConnections += peer.TotalConnections
+			}
+			union.Inputs = totalInputs
+			union.TotalConnections = totalConnections
+			if totalInputs == 0 {
+				union.Status = "offline"
+				union.BufferState = "EMPTY"
+			}
+			union.LastUpdate = now
+			if payload, err := json.Marshal(union); err == nil {
+				streamWrites = append(streamWrites, streamWrite{internalName: internalName, payload: payload})
+			}
+		}
+
+		cleared = append(cleared, internalName)
+	}
+	sm.mu.Unlock()
+
+	for _, w := range streamWrites {
+		sm.persistStreamWriteThrough(w.internalName, w.payload)
+	}
+	for _, w := range instanceWrites {
+		sm.persistStreamInstanceWriteThrough(w.internalName, nodeID, w.payload)
+	}
+	return cleared
+}
+
 // UpdateStreamInstanceInfo merges arbitrary info into the per-node instance RawDetails
 func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID string, info map[string]any) {
 	sm.mu.Lock()

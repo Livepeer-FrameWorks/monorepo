@@ -409,6 +409,10 @@ func (r *StreamRegistry) MarkReplicating(internalName, peerClusterID, pullDTSCUR
 	loc.DestNodeID = destNodeID
 	loc.DestNodeBaseURL = destNodeBaseURL
 	loc.PullSourceNodeID = pullSourceNodeID
+	loc.IsLiveNow = true
+	if destNodeID != "" {
+		loc.SourceNodes = []string{destNodeID}
+	}
 	loc.UpdatedAt = time.Now()
 	ce.entry.Locations[r.clusterID] = loc
 	ce.cached = time.Now()
@@ -506,9 +510,19 @@ func (r *StreamRegistry) ClearOutboundPull(internalName, destClusterID, destNode
 // ClearReplicating unmarks an in-flight replication when the upstream
 // pull terminates or expires.
 func (r *StreamRegistry) ClearReplicating(internalName string) {
+	_ = r.clearReplicating(internalName, "")
+}
+
+// ClearReplicatingForNode unmarks a replicated pull only when it belongs
+// to the node that just reported the stream absent.
+func (r *StreamRegistry) ClearReplicatingForNode(internalName, nodeID string) bool {
+	return r.clearReplicating(internalName, strings.TrimSpace(nodeID))
+}
+
+func (r *StreamRegistry) clearReplicating(internalName, nodeID string) bool {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
-		return
+		return false
 	}
 	var snapshot StreamEntry
 	var changed bool
@@ -516,10 +530,17 @@ func (r *StreamRegistry) ClearReplicating(internalName string) {
 	ce, ok := r.byInt[internalName]
 	if ok {
 		if loc, present := ce.entry.Locations[r.clusterID]; present {
+			if nodeID != "" && loc.DestNodeID != "" && loc.DestNodeID != nodeID {
+				r.mu.Unlock()
+				return false
+			}
 			loc.ReplicatingFrom = ""
 			loc.PullDTSCURL = ""
 			loc.DestNodeID = ""
 			loc.DestNodeBaseURL = ""
+			loc.PullSourceNodeID = ""
+			loc.IsLiveNow = false
+			loc.SourceNodes = nil
 			loc.UpdatedAt = time.Now()
 			ce.entry.Locations[r.clusterID] = loc
 			ce.cached = time.Now()
@@ -531,6 +552,7 @@ func (r *StreamRegistry) ClearReplicating(internalName string) {
 	if changed {
 		r.publishUpsertSource(snapshot)
 	}
+	return changed
 }
 
 // LocalReplication returns the local cluster's replication state for the

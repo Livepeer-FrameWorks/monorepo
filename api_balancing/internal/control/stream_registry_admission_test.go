@@ -240,3 +240,28 @@ func TestLocalReplicationAcceptsSourceRuntimeName(t *testing.T) {
 		t.Fatal("expected pull+ runtime name to resolve to stored replication")
 	}
 }
+
+func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
+	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	r.MarkReplicating("stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
+
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-b"); cleared {
+		t.Fatal("expected wrong node not to clear replication")
+	}
+	if _, ok := r.LocalReplication(context.Background(), "stream-1"); !ok {
+		t.Fatal("expected replication to remain after wrong-node clear")
+	}
+
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a"); !cleared {
+		t.Fatal("expected pinned node to clear replication")
+	}
+	if _, ok := r.LocalReplication(context.Background(), "stream-1"); ok {
+		t.Fatal("expected replication to be cleared")
+	}
+	r.mu.RLock()
+	loc := r.byInt["stream-1"].entry.Locations["cluster-A"]
+	r.mu.RUnlock()
+	if loc.IsLiveNow {
+		t.Fatal("expected local liveness to clear with replication")
+	}
+}
