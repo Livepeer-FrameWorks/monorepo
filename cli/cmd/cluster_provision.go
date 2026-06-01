@@ -4327,6 +4327,21 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 				applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
 			}
 			appendSite(site)
+
+			globalDomains, globalBundleID := clusterderive.PlatformGlobalRootIngressDomainsForService(name, svc, manifest, ingressClusterID)
+			if len(globalDomains) == 0 || globalBundleID == "" {
+				continue
+			}
+			globalSite := map[string]any{
+				"name":     name + "-global-root",
+				"domains":  globalDomains,
+				"upstream": fmt.Sprintf("127.0.0.1:%d", port),
+				"profile":  proxyRouteProfileForService(profileService),
+			}
+			globalSite["tls_bundle_id"] = globalBundleID
+			applyProxySiteIngressTLSDefaults(globalSite, globalBundleID)
+			applyProxySiteTLSBundleMetadata(globalSite, manifest, globalBundleID)
+			appendSite(globalSite)
 		}
 	}
 	for _, route := range proxyRouteSliceFromAny(extraRoutes) {

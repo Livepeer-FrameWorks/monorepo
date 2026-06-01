@@ -118,6 +118,47 @@ func PublicServiceRootDomain(serviceType string, manifest *inventory.Manifest, c
 	return pkgdns.NormalizeDomainScope(manifest.RootDomain)
 }
 
+// PlatformGlobalRootIngressDomainsForService returns the root media FQDNs
+// served by platform-operated pool services, such as foghorn.frameworks.network.
+func PlatformGlobalRootIngressDomainsForService(serviceName string, svc inventory.ServiceConfig, manifest *inventory.Manifest, clusterID string) ([]string, string) {
+	serviceType, ok := ManifestServiceType(serviceName, svc)
+	if !ok || !isPlatformGlobalRootServiceType(serviceType) {
+		return nil, ""
+	}
+	if !IsPlatformOfficialCluster(manifest, clusterID) {
+		return nil, ""
+	}
+	rootDomain := pkgdns.NormalizeDomainScope(manifest.RootDomain)
+	if rootDomain == "" {
+		return nil, ""
+	}
+	fqdn, ok := pkgdns.BunnyRootServiceFQDN(serviceType, rootDomain)
+	if !ok || fqdn == "" {
+		return nil, ""
+	}
+	return []string{fqdn}, TLSBundleID("wildcard", rootDomain)
+}
+
+func isPlatformGlobalRootServiceType(serviceType string) bool {
+	switch serviceType {
+	case "foghorn", "chandler", "livepeer-gateway":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsPlatformOfficialCluster(manifest *inventory.Manifest, clusterID string) bool {
+	if manifest == nil || clusterID == "" {
+		return false
+	}
+	cluster, ok := manifest.Clusters[clusterID]
+	if !ok {
+		return false
+	}
+	return cluster.PlatformOfficial || strings.TrimSpace(cluster.Class) == "platform_official"
+}
+
 // LogicalServiceClusterIDs returns the full set of logical media clusters a
 // cluster-scoped Bunny service is assigned to. Resolution order:
 //  1. svc.Clusters (M:N explicit list)

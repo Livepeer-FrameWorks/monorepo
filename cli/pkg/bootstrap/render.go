@@ -410,6 +410,31 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 						Kind:        "http",
 						Upstream:    IngressUpstream{Host: upstreamHost, Port: port},
 					}
+
+					globalDomains, globalBundleID := clusterderive.PlatformGlobalRootIngressDomainsForService(serviceName, svc, m, ingressClusterID)
+					if len(globalDomains) == 0 || globalBundleID == "" {
+						continue
+					}
+					bundleOwner := platformTLSBundleClusterID(m)
+					if bundleOwner == "" {
+						bundleOwner = ingressClusterID
+					}
+					upsertAutoTLSBundle(autoBundles, TLSBundle{
+						ID:        globalBundleID,
+						ClusterID: bundleOwner,
+						Domains:   clusterderive.WildcardBundleDomains(m.RootDomain),
+						Issuer:    "navigator",
+						Email:     resolveTLSBundleEmail(opts),
+					})
+					autoSites[serviceName+"-"+hostKey+"-global-root"] = IngressSite{
+						ID:          serviceName + "-" + hostKey + "-global-root",
+						ClusterID:   clusterID,
+						NodeID:      hostKey,
+						Domains:     globalDomains,
+						TLSBundleID: globalBundleID,
+						Kind:        "http",
+						Upstream:    IngressUpstream{Host: upstreamHost, Port: port},
+					}
 				}
 			}
 		}

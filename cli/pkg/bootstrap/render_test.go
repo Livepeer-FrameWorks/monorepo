@@ -698,6 +698,64 @@ func TestDeriveChandlerLogicalIngressUsesPhysicalNodeCluster(t *testing.T) {
 	}
 }
 
+func TestDerivePlatformPoolServicePublishesGlobalRootIngress(t *testing.T) {
+	m := minimalManifest()
+	m.RootDomain = "frameworks.network"
+	m.Hosts["regional-eu-1"] = inventory.Host{
+		ExternalIP:  "203.0.113.10",
+		WireguardIP: "10.99.0.10",
+		Cluster:     "regional-eu",
+	}
+	m.Clusters = map[string]inventory.ClusterConfig{
+		"regional-eu": {Name: "Regional EU", Type: "central"},
+		"media-eu-1":  {Name: "Media EU 1", Type: "edge", Roles: []string{"media"}, PlatformOfficial: true},
+	}
+	m.Services = map[string]inventory.ServiceConfig{
+		"foghorn-eu": {
+			Enabled: true,
+			Deploy:  "foghorn",
+			Host:    "regional-eu-1",
+			Cluster: "media-eu-1",
+			Port:    18008,
+		},
+	}
+
+	d, err := Derive(m, DeriveOptions{SharedEnv: map[string]string{"ACME_EMAIL": "ops@example.com"}})
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	sites := map[string]IngressSite{}
+	for _, s := range d.Quartermaster.Ingress.Sites {
+		sites[s.ID] = s
+	}
+	site, ok := sites["foghorn-eu-regional-eu-1-global-root"]
+	if !ok {
+		t.Fatalf("missing global root foghorn ingress site; got %+v", sites)
+	}
+	if !slices.Equal(site.Domains, []string{"foghorn.frameworks.network"}) {
+		t.Fatalf("global root foghorn domains = %v", site.Domains)
+	}
+	if site.TLSBundleID != "wildcard-frameworks-network" {
+		t.Fatalf("global root foghorn tls_bundle_id = %q", site.TLSBundleID)
+	}
+	if site.Upstream.Host != "10.99.0.10" || site.Upstream.Port != 18008 {
+		t.Fatalf("global root foghorn upstream = %+v", site.Upstream)
+	}
+
+	bundles := map[string]TLSBundle{}
+	for _, b := range d.Quartermaster.Ingress.TLSBundles {
+		bundles[b.ID] = b
+	}
+	bundle, ok := bundles["wildcard-frameworks-network"]
+	if !ok {
+		t.Fatalf("missing root wildcard bundle; got %+v", bundles)
+	}
+	if !slices.Equal(bundle.Domains, []string{"frameworks.network", "*.frameworks.network"}) {
+		t.Fatalf("root wildcard bundle domains = %v", bundle.Domains)
+	}
+}
+
 // TestDeriveLivepeerGatewayWalletFromServiceConfig confirms the manifest
 // authority path: putting eth_acct_addr in services.livepeer-gateway.config
 // works even when shared env doesn't carry the value.

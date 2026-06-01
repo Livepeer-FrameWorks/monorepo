@@ -3458,7 +3458,7 @@ func TestBuildTaskConfigProxySitesResolveDeployAliases(t *testing.T) {
 		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"regional-eu-primary": {Type: "central"},
-			"media-eu-1":          {Name: "media-eu-1", Type: "edge"},
+			"media-eu-1":          {Name: "media-eu-1", Type: "edge", PlatformOfficial: true},
 		},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn-eu":  {Enabled: true, Deploy: "foghorn", Host: "regional-eu-1", Cluster: "media-eu-1", Port: 18008},
@@ -3493,12 +3493,21 @@ func TestBuildTaskConfigProxySitesResolveDeployAliases(t *testing.T) {
 	}
 	for _, domain := range []string{
 		"foghorn.media-eu-1.frameworks.network",
+		"foghorn.frameworks.network",
 		"chandler.media-eu-1.frameworks.network",
+		"chandler.frameworks.network",
 		"livepeer.media-eu-1.frameworks.network",
+		"livepeer.frameworks.network",
 	} {
 		if _, ok := byDomain[domain]; !ok {
 			t.Fatalf("missing alias-derived proxy site for %s; got %#v", domain, sites)
 		}
+	}
+	if got := byDomain["foghorn.frameworks.network"]["upstream"]; got != "127.0.0.1:18008" {
+		t.Fatalf("global foghorn upstream = %v, want 127.0.0.1:18008", got)
+	}
+	if got := byDomain["foghorn.frameworks.network"]["tls_bundle_id"]; got != "wildcard-frameworks-network" {
+		t.Fatalf("global foghorn tls_bundle_id = %v, want wildcard-frameworks-network", got)
 	}
 	if _, ok := byDomain["foghorn.regional-eu-primary.frameworks.network"]; ok {
 		t.Fatalf("foghorn alias should not use physical host cluster domain; got %#v", sites)
