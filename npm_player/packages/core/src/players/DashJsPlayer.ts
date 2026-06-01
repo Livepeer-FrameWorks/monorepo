@@ -98,7 +98,9 @@ export class DashJsPlayerImpl extends BasePlayer {
       for (const track of tracks) {
         // Explicit DASH codec filtering - OPUS in fMP4 DASH doesn't work reliably
         if (trackType === "audio" && DASH_INCOMPATIBLE_AUDIO.includes(track.codec)) {
-          console.debug(`[DashJS] Codec incompatible with DASH fMP4: ${track.codec}`);
+          if (this.debugging) {
+            console.debug(`[DashJS] Codec incompatible with DASH fMP4: ${track.codec}`);
+          }
           continue;
         }
 
@@ -110,7 +112,7 @@ export class DashJsPlayerImpl extends BasePlayer {
         if (MediaSource.isTypeSupported && MediaSource.isTypeSupported(mimeType)) {
           hasPlayableTrack = true;
           break;
-        } else {
+        } else if (this.debugging) {
           console.debug(`[DashJS] Codec not supported: ${mimeType}`);
         }
       }
@@ -203,9 +205,7 @@ export class DashJsPlayerImpl extends BasePlayer {
       if (!skipEvents.includes(eventKey)) {
         this.dashPlayer.on(events[eventKey], (e: any) => {
           if (this.destroyed) return;
-          if (this.debugging) {
-            console.log("DASH event:", e.type);
-          }
+          this.debugLog("DASH event:", e.type);
         });
       }
     }
@@ -243,6 +243,12 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.emit("error", message);
   }
 
+  private debugLog(...args: unknown[]): void {
+    if (this.debugging) {
+      console.debug(...args);
+    }
+  }
+
   private createInternalRejectionHandler(
     options: PlayerOptions
   ): (e: PromiseRejectionEvent) => void {
@@ -270,6 +276,7 @@ export class DashJsPlayerImpl extends BasePlayer {
     streamInfo?: StreamInfo
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
+    this.debugging = options.debug === true;
     this.container = container;
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
@@ -304,19 +311,15 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.videoElement = video;
     container.appendChild(video);
 
-    // Set up event listeners
-    this.setupVideoEventListeners(video, options);
-    this.setupStalledHandling();
-
     try {
       // Dynamic import of DASH.js
-      console.debug("[DashJS] Importing dashjs module...");
+      this.debugLog("[DashJS] Importing dashjs module...");
       const mod = await import("dashjs");
       const dashjs = (mod as any).default || (mod as any);
-      console.debug("[DashJS] Module imported:", dashjs);
+      this.debugLog("[DashJS] Module imported:", dashjs);
 
       this.dashPlayer = dashjs.MediaPlayer().create();
-      console.debug("[DashJS] MediaPlayer created");
+      this.debugLog("[DashJS] MediaPlayer created");
       if (options.playbackHeaders && typeof this.dashPlayer.addRequestInterceptor === "function") {
         const playbackHeaders = options.playbackHeaders;
         this.dashPlayer.addRequestInterceptor((request: any) => {
@@ -346,17 +349,17 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       // Log key dashjs events for debugging
       this.dashPlayer.on("manifestLoaded", (e: any) => {
-        console.debug("[DashJS] manifestLoaded:", e);
+        this.debugLog("[DashJS] manifestLoaded:", e);
       });
       this.dashPlayer.on("canPlay", () => {
-        console.debug("[DashJS] canPlay event");
+        this.debugLog("[DashJS] canPlay event");
       });
 
       // Log stream initialization for debugging
       this.dashPlayer.on("streamInitialized", () => {
         if (this.destroyed) return;
         const isDynamic = this.dashPlayer.isDynamic?.() ?? false;
-        console.debug("[DashJS v5] streamInitialized - isDynamic:", isDynamic);
+        this.debugLog("[DashJS v5] streamInitialized - isDynamic:", isDynamic);
       });
 
       // Configure dashjs v5 streaming settings BEFORE initialization
@@ -409,9 +412,9 @@ export class DashJsPlayerImpl extends BasePlayer {
           abandonLoadTimeout: 5000,
           text: { defaultEnabled: false },
           delay: {
-            liveDelay: 2,
+            liveDelay: 5,
             liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: false,
+            useSuggestedPresentationDelay: true,
           },
         },
         debug: {
@@ -421,10 +424,10 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       if (this.debugging) {
         this.dashPlayer.on("fragmentLoadingStarted", (e: any) => {
-          console.debug("[DashJS] Fragment loading started:", e.request?.url?.split("/").pop());
+          this.debugLog("[DashJS] Fragment loading started:", e.request?.url?.split("/").pop());
         });
         this.dashPlayer.on("fragmentLoadingCompleted", (e: any) => {
-          console.debug("[DashJS] Fragment loading completed:", e.request?.url?.split("/").pop());
+          this.debugLog("[DashJS] Fragment loading completed:", e.request?.url?.split("/").pop());
         });
       }
       this.dashPlayer.on("fragmentLoadingAbandoned", (e: any) => {
@@ -435,9 +438,13 @@ export class DashJsPlayerImpl extends BasePlayer {
       });
 
       // dashjs v5: Initialize with URL
-      console.debug("[DashJS v5] Initializing with URL:", source.url);
+      this.debugLog("[DashJS v5] Initializing with URL:", source.url);
       this.dashPlayer.initialize(video, source.url, options.autoplay ?? false);
-      console.debug("[DashJS v5] Initialize called");
+      this.debugLog("[DashJS v5] Initialize called");
+
+      // Emit ready only after dash.js has attached the MPD to the media element.
+      this.setupVideoEventListeners(video, options);
+      this.setupStalledHandling();
 
       // Optional subtitle tracks helper from source extras (external tracks)
       try {
@@ -557,7 +564,7 @@ export class DashJsPlayerImpl extends BasePlayer {
 
     // DASH.js has a seekToLive method for live streams
     if (this.dashPlayer && typeof this.dashPlayer.seekToLive === "function") {
-      console.debug("[DashJS] jumpToLive using seekToLive()");
+      this.debugLog("[DashJS] jumpToLive using seekToLive()");
       this.dashPlayer.seekToLive();
       return;
     }
@@ -566,7 +573,7 @@ export class DashJsPlayerImpl extends BasePlayer {
     if (video.seekable && video.seekable.length > 0) {
       const liveEdge = video.seekable.end(video.seekable.length - 1);
       if (isFinite(liveEdge) && liveEdge > 0) {
-        console.debug("[DashJS] jumpToLive using seekable.end:", liveEdge);
+        this.debugLog("[DashJS] jumpToLive using seekable.end:", liveEdge);
         video.currentTime = liveEdge;
       }
     }
