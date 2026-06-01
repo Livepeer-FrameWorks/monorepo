@@ -126,100 +126,6 @@ func ApplyBootstrapMetadata(resp *pb.BootstrapServiceResponse) {
 	}
 }
 
-type clipLifecycleContext struct {
-	ClipHash     string
-	TenantID     string
-	UserID       string
-	InternalName string
-	StreamID     string
-
-	StartUnix   *int64
-	StopUnix    *int64
-	StartMs     *int64
-	StopMs      *int64
-	DurationSec *int64
-	ClipMode    *string
-}
-
-func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
-	if db == nil || requestID == "" {
-		return clipLifecycleContext{}
-	}
-
-	queryCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Get local context from foghorn.artifacts (denormalized fallback values).
-	var clipHash, internalName string
-	var fallbackTenantID sql.NullString
-	var fallbackUserID sql.NullString
-	err := db.QueryRowContext(queryCtx, `
-		SELECT artifact_hash, COALESCE(stream_internal_name, ''), tenant_id, user_id
-		FROM foghorn.artifacts
-		WHERE request_id = $1 AND artifact_type = 'clip'
-	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID, &fallbackUserID)
-	if err != nil || clipHash == "" {
-		return clipLifecycleContext{}
-	}
-
-	ctx := clipLifecycleContext{
-		ClipHash:     clipHash,
-		InternalName: internalName,
-	}
-	if fallbackTenantID.Valid {
-		ctx.TenantID = fallbackTenantID.String
-	}
-	if fallbackUserID.Valid {
-		ctx.UserID = fallbackUserID.String
-	}
-
-	// Prefer Commodore business registry for canonical tenant/stream attribution + timing enrichment.
-	if commodoreClient == nil {
-		return ctx
-	}
-
-	cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	resp, err := commodoreClient.ResolveClipHash(cctx, clipHash)
-	if err != nil || !resp.Found {
-		return ctx
-	}
-
-	if resp.TenantId != "" {
-		ctx.TenantID = resp.TenantId
-	}
-	if resp.UserId != "" {
-		ctx.UserID = resp.UserId
-	}
-	if resp.StreamInternalName != "" {
-		ctx.InternalName = resp.StreamInternalName
-	}
-	if resp.StreamId != "" {
-		ctx.StreamID = resp.StreamId
-	}
-	if resp.ClipMode != "" {
-		mode := resp.ClipMode
-		ctx.ClipMode = &mode
-	}
-
-	// Commodore stores clip timing as: start_time (unix ms), duration (ms).
-	if resp.StartTime > 0 && resp.Duration > 0 {
-		startMs := resp.StartTime
-		stopMs := resp.StartTime + resp.Duration
-		startUnix := startMs / 1000
-		stopUnix := stopMs / 1000
-		durationSec := resp.Duration / 1000
-
-		ctx.StartMs = &startMs
-		ctx.StopMs = &stopMs
-		ctx.StartUnix = &startUnix
-		ctx.StopUnix = &stopUnix
-		ctx.DurationSec = &durationSec
-	}
-
-	return ctx
-}
-
 // FoghornMetrics holds all Prometheus metrics for Foghorn.
 // DB connection-pool stats are registered separately via
 // monitoring.MetricsCollector.RegisterDBStats and read from db.Stats()
@@ -285,128 +191,10 @@ func Init(
 	// Cluster metadata (owner_tenant_id, self-geo) is now extracted from
 	// the single gRPC bootstrap in main.go via ApplyBootstrapMetadata.
 
-	// Register clip progress/done handlers to emit analytics
-	control.SetClipHandlers(
-		func(p *pb.ClipProgress) {
-			if decklogClient == nil {
-				return
-			}
-			cctx := getClipLifecycleContextByRequestID(p.GetRequestId())
-			clipData := &pb.ClipLifecycleData{
-				Stage:     pb.ClipLifecycleData_STAGE_PROGRESS,
-				ClipHash:  cctx.ClipHash,
-				RequestId: func() *string { s := p.GetRequestId(); return &s }(),
-				StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
-				// Enrichment fields added by Foghorn
-				TenantId: func() *string {
-					if cctx.TenantID != "" {
-						return &cctx.TenantID
-					} else {
-						return nil
-					}
-				}(),
-				StreamInternalName: func() *string {
-					if cctx.InternalName != "" {
-						return &cctx.InternalName
-					} else {
-						return nil
-					}
-				}(),
-				StreamId: func() *string {
-					if cctx.StreamID != "" {
-						return &cctx.StreamID
-					}
-					return nil
-				}(),
-				UserId: func() *string {
-					if cctx.UserID != "" {
-						return &cctx.UserID
-					}
-					return nil
-				}(),
-				StartUnix:   cctx.StartUnix,
-				StopUnix:    cctx.StopUnix,
-				StartMs:     cctx.StartMs,
-				StopMs:      cctx.StopMs,
-				DurationSec: cctx.DurationSec,
-				ClipMode:    cctx.ClipMode,
-			}
-			if p.GetPercent() > 0 {
-				percent := uint32(p.GetPercent())
-				clipData.ProgressPercent = &percent
-			}
-			go func() {
-				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
-					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip progress to Decklog")
-				}
-			}()
-		},
-		func(dn *pb.ClipDone) {
-			if decklogClient == nil {
-				return
-			}
-			cctx := getClipLifecycleContextByRequestID(dn.GetRequestId())
-			stage := pb.ClipLifecycleData_STAGE_DONE
-			if dn.GetStatus() != "success" {
-				stage = pb.ClipLifecycleData_STAGE_FAILED
-			}
-			clipData := &pb.ClipLifecycleData{
-				Stage:       stage,
-				ClipHash:    cctx.ClipHash,
-				RequestId:   func() *string { s := dn.GetRequestId(); return &s }(),
-				CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
-				// Enrichment fields added by Foghorn
-				TenantId: func() *string {
-					if cctx.TenantID != "" {
-						return &cctx.TenantID
-					} else {
-						return nil
-					}
-				}(),
-				StreamInternalName: func() *string {
-					if cctx.InternalName != "" {
-						return &cctx.InternalName
-					} else {
-						return nil
-					}
-				}(),
-				StreamId: func() *string {
-					if cctx.StreamID != "" {
-						return &cctx.StreamID
-					}
-					return nil
-				}(),
-				UserId: func() *string {
-					if cctx.UserID != "" {
-						return &cctx.UserID
-					}
-					return nil
-				}(),
-				StartUnix:   cctx.StartUnix,
-				StopUnix:    cctx.StopUnix,
-				StartMs:     cctx.StartMs,
-				StopMs:      cctx.StopMs,
-				DurationSec: cctx.DurationSec,
-				ClipMode:    cctx.ClipMode,
-			}
-			if fp := dn.GetFilePath(); fp != "" {
-				clipData.FilePath = &fp
-			}
-			if s3 := dn.GetS3Url(); s3 != "" {
-				clipData.S3Url = &s3
-			}
-			if sz := dn.GetSizeBytes(); sz > 0 {
-				clipData.SizeBytes = &sz
-			}
-			if er := dn.GetError(); er != "" {
-				clipData.Error = &er
-			}
-			go func() {
-				if err := artifactoutbox.EnqueueClipLifecycle(clipData); err != nil {
-					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip done to Decklog")
-				}
-			}()
-		},
+	// Register the artifact-deleted handler (node-local eviction/deletion
+	// reconciliation + DELETED lifecycle emission). Clip progress/done
+	// analytics are emitted by the processing pipeline, not here.
+	control.SetArtifactDeletedHandler(
 		func(ctx context.Context, del *pb.ArtifactDeleted) {
 			artifactHash := del.GetArtifactHash()
 			nodeID := del.GetNodeId()
@@ -1374,19 +1162,40 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 
 	// Try cached stream context first (populated from PUSH_REWRITE validation)
 	var tenantID, originClusterID string
+	var clusterPeers []*pb.TenantClusterPeer
 	if triggerProcessor != nil {
 		tenantID, originClusterID = triggerProcessor.GetStreamOrigin(internalName)
 	}
 
-	// Fallback: ask Commodore for the stream's origin cluster
+	// Fallback: ask Commodore for the stream's origin cluster (and the fresh
+	// cluster-peer envelope used to authorize the federation below).
 	if originClusterID == "" && commodoreClient != nil {
 		if resp, err := commodoreClient.ResolveInternalName(ctx, internalName); err == nil {
 			tenantID = resp.TenantId
 			originClusterID = resp.OriginClusterId
+			clusterPeers = resp.GetClusterPeers()
 		}
 	}
 
 	if originClusterID == "" || originClusterID == clusterID {
+		return nil, "", ""
+	}
+
+	// Front-door reauthorization: a cross-cluster source must be in the
+	// tenant's current cluster_peers before we federate (mirrors the dvr+
+	// arrange gate and /play). The cached fast path carries origin but no
+	// peers, so resolve them fresh; fail closed so a revoked peer can't keep
+	// being federated off stale cached origin state.
+	if clusterPeers == nil && commodoreClient != nil {
+		if resp, err := commodoreClient.ResolveInternalName(ctx, internalName); err == nil {
+			clusterPeers = resp.GetClusterPeers()
+		}
+	}
+	if !control.AuthoritativeClusterServable(originClusterID, clusterPeers) {
+		logger.WithFields(logging.Fields{
+			"stream":         streamName,
+			"origin_cluster": originClusterID,
+		}).Warn("/source cross-cluster: origin cluster not in tenant peer envelope; refusing to federate")
 		return nil, "", ""
 	}
 
@@ -2660,7 +2469,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 	}
 
 	// No origin-pull possible — redirect viewer to the remote cluster
-	playURL := "https://" + bestCandidate.BaseUrl + "/play/" + viewKey
+	playURL := control.PlaybackEdgeRedirectURL(bestCandidate.BaseUrl, viewKey)
 	confirmed := &pb.ViewerEndpointResponse{
 		Primary: &pb.ViewerEndpoint{
 			NodeId:    bestCandidate.NodeId,

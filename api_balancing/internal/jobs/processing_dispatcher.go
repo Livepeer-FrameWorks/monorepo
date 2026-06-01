@@ -197,11 +197,13 @@ func (d *ProcessingDispatcher) dispatch() {
 			UPDATE foghorn.processing_jobs
 			SET status = 'dispatched', updated_at = NOW()
 			WHERE job_id IN (
-				SELECT job_id FROM foghorn.processing_jobs
-				WHERE status = 'queued'
-				ORDER BY created_at
+				SELECT pj.job_id
+				FROM foghorn.processing_jobs pj
+				LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+				WHERE pj.status = 'queued'
+				ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.created_at
 				LIMIT 20
-				FOR UPDATE SKIP LOCKED
+				FOR UPDATE OF pj SKIP LOCKED
 			)
 			RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
 			          output_profiles, retry_count, processes_json, source_url,
@@ -571,16 +573,33 @@ func (d *ProcessingDispatcher) recoverStale() {
 		d.logger.WithField("artifacts", n).Info("Recovered stale processing jobs (requeued)")
 	}
 
-	// Fail jobs that exceeded max retries and reconcile their artifacts
+	// Fail jobs that exceeded max retries, AND the specific class of 'queued'
+	// jobs that can never make progress: a node-pinned clip whose source bytes
+	// live only on a now-unavailable node. dispatchJob keeps reverting such a
+	// job to 'queued' (refreshing updated_at, never incrementing retry_count,
+	// never entering dispatched/processing), so the retry-based sweep above can
+	// never catch it — without a terminal event it spins forever.
+	//
+	// The queued-terminal predicate is therefore gated on explicit source-bound
+	// intent, NOT on status='queued' alone: it requires a preferred node
+	// (preferred_node_id) AND a node-local source (source_kind live / dvr_rolling).
+	// A generic load-routed job (no preferred node, e.g. an upload transcode)
+	// stays queued and dispatches when capacity returns, so a cluster-wide
+	// processing outage no longer permanently fails recoverable jobs. Keyed on
+	// created_at, since revert refreshes updated_at every cycle.
+	queuedCutoff := time.Now().Add(-d.jobTTL * time.Duration(d.maxRetries+2))
 	rows, err := d.db.QueryContext(ctx, `
 		WITH failed AS (
 			UPDATE foghorn.processing_jobs
 			SET status = 'failed',
-			    error_message = 'max retries exceeded',
+			    error_message = CASE WHEN status = 'queued'
+			        THEN 'stuck queued: node-pinned source unavailable'
+			        ELSE 'max retries exceeded' END,
 			    updated_at = NOW()
-			WHERE status IN ('dispatched', 'processing')
-			  AND updated_at < $1
-			  AND retry_count >= $2
+			WHERE (status IN ('dispatched', 'processing') AND updated_at < $1 AND retry_count >= $2)
+			   OR (status = 'queued' AND created_at < $3
+			       AND preferred_node_id IS NOT NULL
+			       AND source_params->>'source_kind' IN ('live', 'dvr_rolling'))
 			RETURNING job_id, artifact_hash, tenant_id
 		)
 		SELECT f.job_id,
@@ -591,7 +610,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 		       COALESCE(a.stream_internal_name, '')
 		  FROM failed f
 		  LEFT JOIN foghorn.artifacts a ON f.artifact_hash = a.artifact_hash
-	`, ttlCutoff, d.maxRetries)
+	`, ttlCutoff, d.maxRetries, queuedCutoff)
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to mark exhausted processing jobs as failed")
 		return
@@ -639,10 +658,11 @@ func (d *ProcessingDispatcher) failClipArtifact(ctx context.Context, artifactHas
 	if _, err := d.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		   SET status = 'failed',
-		       error_message = $2,
+		       error_message = $3,
 		       updated_at = NOW()
 		 WHERE artifact_hash = $1
-	`, artifactHash, errorMsg); err != nil {
+		   AND tenant_id::text = $2
+	`, artifactHash, tenantID, errorMsg); err != nil {
 		d.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to mark exhausted clip artifact failed")
 	}
 

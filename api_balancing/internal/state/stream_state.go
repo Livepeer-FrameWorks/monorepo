@@ -2742,47 +2742,6 @@ func (sm *StreamStateManager) RehydrateStatus() (time.Time, string) {
 	return sm.lastRehydrateAt, sm.lastRehydrateErr
 }
 
-// ApplyClipProgress updates state and persists clip progress by request_id
-func (sm *StreamStateManager) ApplyClipProgress(ctx context.Context, requestID string, percent uint32, message string, nodeID string) error {
-	if sm.repos.Clips != nil && sm.writePolicies[EntityClip].Enabled && sm.writePolicies[EntityClip].Mode == WriteThrough {
-		_ = sm.repos.Clips.UpdateClipProgressByRequestID(ctx, requestID, percent)
-		if writeCounter != nil {
-			writeCounter(map[string]string{"entity": "clip", "op": "progress"})
-		}
-	}
-	if sm.repos.Clips != nil {
-		if internal, err := sm.repos.Clips.ResolveInternalNameByRequestID(ctx, requestID); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
-				"clip_status":   "processing",
-				"clip_progress": percent,
-				"clip_message":  message,
-			})
-		}
-	}
-	return nil
-}
-
-// ApplyClipDone updates state and persists clip completion by request_id
-func (sm *StreamStateManager) ApplyClipDone(ctx context.Context, requestID string, status string, filePath string, sizeBytes uint64, errorMsg string, nodeID string) error {
-	if sm.repos.Clips != nil && sm.writePolicies[EntityClip].Enabled && sm.writePolicies[EntityClip].Mode == WriteThrough {
-		_ = sm.repos.Clips.UpdateClipDoneByRequestID(ctx, requestID, status, filePath, int64(sizeBytes), errorMsg)
-		if writeCounter != nil {
-			writeCounter(map[string]string{"entity": "clip", "op": "done"})
-		}
-	}
-	if sm.repos.Clips != nil {
-		if internal, err := sm.repos.Clips.ResolveInternalNameByRequestID(ctx, requestID); err == nil && internal != "" {
-			sm.UpdateStreamInstanceInfo(internal, nodeID, map[string]any{
-				"clip_status": status,
-				"clip_path":   filePath,
-				"clip_size":   sizeBytes,
-				"clip_error":  errorMsg,
-			})
-		}
-	}
-	return nil
-}
-
 // ApplyDVRProgress updates state and persists DVR progress by hash
 func (sm *StreamStateManager) ApplyDVRProgress(ctx context.Context, dvrHash string, status string, sizeBytes uint64, segmentCount uint32, nodeID string) error {
 	if sm.repos.DVR != nil && sm.writePolicies[EntityDVR].Enabled && sm.writePolicies[EntityDVR].Mode == WriteThrough {
@@ -3079,8 +3038,6 @@ type NodeMaintenanceRecord struct {
 type ClipRepository interface {
 	ListActiveClips(ctx context.Context) ([]ClipRecord, error)
 	ResolveInternalNameByRequestID(ctx context.Context, requestID string) (string, error)
-	UpdateClipProgressByRequestID(ctx context.Context, requestID string, percent uint32) error
-	UpdateClipDoneByRequestID(ctx context.Context, requestID string, status string, storagePath string, sizeBytes int64, errorMsg string) error
 	// NeedsDtshSync returns true if the clip is synced to S3 but .dtsh wasn't included
 	NeedsDtshSync(ctx context.Context, clipHash string) bool
 }

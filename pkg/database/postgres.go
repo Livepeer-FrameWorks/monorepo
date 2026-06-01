@@ -25,6 +25,12 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 }
 
+const (
+	mustConnectTimeout      = 60 * time.Second
+	mustConnectInitialDelay = 500 * time.Millisecond
+	mustConnectMaxDelay     = 5 * time.Second
+)
+
 // DefaultConfig returns default database configuration
 func DefaultConfig() Config {
 	return Config{
@@ -65,11 +71,34 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 	return db, nil
 }
 
-// MustConnect is like Connect but panics on error
+// MustConnect is like Connect but exits after bounded startup retries.
 func MustConnect(cfg Config, logger logging.Logger) PostgresConn {
-	db, err := Connect(cfg, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to connect to database")
+	deadline := time.Now().Add(mustConnectTimeout)
+	delay := mustConnectInitialDelay
+	attempt := 1
+
+	for {
+		db, err := Connect(cfg, logger)
+		if err == nil {
+			return db
+		}
+
+		if time.Now().Add(delay).After(deadline) {
+			logger.WithError(err).WithField("attempt", attempt).Fatal("Failed to connect to database")
+		}
+
+		logger.WithError(err).WithFields(logging.Fields{
+			"attempt":  attempt,
+			"retry_in": delay.String(),
+		}).Warn("Database connection failed; retrying")
+
+		time.Sleep(delay)
+		if delay < mustConnectMaxDelay {
+			delay *= 2
+			if delay > mustConnectMaxDelay {
+				delay = mustConnectMaxDelay
+			}
+		}
+		attempt++
 	}
-	return db
 }

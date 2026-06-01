@@ -60,8 +60,6 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *pb.ForwardCommand
 	switch cmd := req.Command.(type) {
 	case *pb.ForwardCommandRequest_ConfigSeed:
 		err = control.SendLocalConfigSeed(req.TargetNodeId, cmd.ConfigSeed)
-	case *pb.ForwardCommandRequest_ClipPull:
-		err = control.SendLocalClipPull(req.TargetNodeId, cmd.ClipPull)
 	case *pb.ForwardCommandRequest_DvrStart:
 		err = control.SendLocalDVRStart(req.TargetNodeId, cmd.DvrStart)
 	case *pb.ForwardCommandRequest_DvrStop:

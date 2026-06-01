@@ -49,22 +49,3 @@ func projectArtifactSizeToCommodore(ctx context.Context, artifactHash string, si
 		}).Warn("Failed to notify Commodore of artifact size")
 	}
 }
-
-func projectArtifactSizeByRequestID(ctx context.Context, requestID string, sizeBytes int64, logger logging.Logger) {
-	if db == nil || requestID == "" {
-		return
-	}
-	var artifactHash string
-	if err := db.QueryRowContext(ctx, `
-		SELECT artifact_hash
-		  FROM foghorn.artifacts
-		 WHERE request_id = $1
-		 LIMIT 1
-	`, requestID).Scan(&artifactHash); err != nil {
-		if err != sql.ErrNoRows {
-			logger.WithError(err).WithField("request_id", requestID).Warn("Failed to resolve request for size projection")
-		}
-		return
-	}
-	projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
-}

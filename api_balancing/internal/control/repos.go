@@ -72,40 +72,6 @@ func (r *clipRepositoryDB) ResolveInternalNameByRequestID(ctx context.Context, r
 	return internalName, err
 }
 
-func (r *clipRepositoryDB) UpdateClipProgressByRequestID(ctx context.Context, requestID string, percent uint32) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'processing', updated_at = NOW()
-		WHERE request_id = $1 AND artifact_type = 'clip'
-	`, requestID)
-	return err
-}
-
-func (r *clipRepositoryDB) UpdateClipDoneByRequestID(ctx context.Context, requestID string, status string, storagePath string, sizeBytes int64, errorMsg string) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	var clipStatus string
-	if status == "success" {
-		clipStatus = "ready"
-	} else {
-		clipStatus = "failed"
-	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = $1,
-		    manifest_path = NULLIF($2, ''),
-		    size_bytes = $3,
-		    error_message = NULLIF($4, ''),
-		    updated_at = NOW()
-		WHERE request_id = $5 AND artifact_type = 'clip'
-	`, clipStatus, storagePath, sizeBytes, errorMsg, requestID)
-	return err
-}
-
 // NeedsDtshSync returns true if the clip is synced to S3 but .dtsh wasn't included
 func (r *clipRepositoryDB) NeedsDtshSync(ctx context.Context, clipHash string) bool {
 	if db == nil {
@@ -697,11 +663,11 @@ func (r *artifactRepositoryDB) AddCachedNodeWithPath(ctx context.Context, artifa
 }
 
 // RegisterOriginArtifact marks a node as the origin (canonical full
-// file holder) for an artifact. Called from finalizer RPCs that wrote
-// the file to disk (DVR finalize, clip create, upload commit,
-// processing finalize). complete=true flips is_complete authoritative;
-// pass complete=false at recording start to register the row before
-// finalization.
+// file holder) for an artifact. Called from finalizers that wrote the
+// file to disk: clip create, processing finalize, and DVR chapter
+// finalize (each with its own VOD artifact hash). complete=true flips
+// is_complete authoritative; pass complete=false at recording start to
+// register the row before finalization.
 //
 // Idempotent for the same writer. Origin upserts always set role to
 // 'origin'; once set, only another origin write can flip is_complete

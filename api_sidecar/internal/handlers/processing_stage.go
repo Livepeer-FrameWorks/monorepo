@@ -69,6 +69,9 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJ
 	}
 
 	base := deriveProcessingMistHTTPBase(h.mistServerURL)
+	if sourceBase := strings.TrimSpace(params["source_base_url"]); sourceBase != "" {
+		base = deriveProcessingMistHTTPBase(sourceBase)
+	}
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil || u.Host == "" {
 		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), sourceStream, sourceFormat, query.Encode())

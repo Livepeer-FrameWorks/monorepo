@@ -379,7 +379,7 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var syncStatus string
+	syncReported := false
 	sm.requestFreezePermission = func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
 		return &pb.FreezePermissionResponse{
 			RequestId:  "req-skip",
@@ -388,8 +388,8 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 			SkipUpload: true,
 		}, nil
 	}
-	sm.sendSyncComplete = func(_, _, status, _ string, _ uint64, _ string, _ bool, _ bool) error {
-		syncStatus = status
+	sm.sendSyncComplete = func(_, _, _, _ string, _ uint64, _ string, _ bool, _ bool) error {
+		syncReported = true
 		return nil
 	}
 
@@ -408,11 +408,15 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 	if atomic.LoadInt64(&fake.uploadFileCalls) != 0 {
 		t.Fatalf("expected zero uploads for skip_upload, got %d", atomic.LoadInt64(&fake.uploadFileCalls))
 	}
-	if syncStatus != "evicted_remote" {
-		t.Fatalf("expected status 'evicted_remote', got %q", syncStatus)
+	// FreezePermission only mints upload permission; it is not an eviction
+	// authority. A remote skip_upload is a no-op for the freeze path — the
+	// local warm copy is retained and dropped later by the CanDelete-gated
+	// cleanup pass, not here.
+	if syncReported {
+		t.Fatal("freeze path must not report sync/eviction for a remote skip_upload")
 	}
-	if _, err := os.Stat(clipPath); !os.IsNotExist(err) {
-		t.Fatal("expected local file to be deleted after skip_upload")
+	if _, err := os.Stat(clipPath); err != nil {
+		t.Fatalf("expected local file to be retained after skip_upload, stat err: %v", err)
 	}
 }
 

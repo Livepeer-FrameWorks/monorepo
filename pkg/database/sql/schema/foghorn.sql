@@ -181,9 +181,10 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
     -- is_complete=true. 'cache' = sparse blocks fetched from S3 by a
     -- block-cache holder; never authoritative for peer-relay.
     role TEXT NOT NULL DEFAULT 'cache' CHECK (role IN ('origin', 'cache')),
-    -- Writer-authoritative: only flipped true by the finalizer RPC that
-    -- knows the file is fully written (FinalizeDVR, clip create, upload
-    -- commit). Polling never sets this.
+    -- Writer-authoritative: only flipped true by a finalizer that knows the
+    -- file is fully written (clip create, processing finalize, DVR chapter
+    -- finalize — each registers its own VOD artifact hash). Polling never
+    -- sets this.
     is_complete BOOLEAN NOT NULL DEFAULT false,
 
     PRIMARY KEY (artifact_hash, node_id)

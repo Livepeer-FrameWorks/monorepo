@@ -145,65 +145,6 @@ VALUES (
     TRUE
 ) ON CONFLICT (key_value) DO NOTHING;
 
--- Local managed-stream fixture: loops the seeded VOD file through Mist's
--- always_on concrete-source path so docker-compose can exercise the same
--- Commodore -> Foghorn -> Helmsman -> Mist materialization used in production.
-INSERT INTO commodore.streams (
-    id, tenant_id, user_id, stream_key, playback_id, internal_name,
-    title, description, ingest_mode, always_on, is_recording_enabled
-)
-VALUES (
-    '5eedfeed-11fe-ca57-feed-11feca5700f1',
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    '5eedface-5e1f-da7a-face-5e1fda7a0001',
-    'sk_dev_managed_vod_loop',
-    'pb_dev_managed_vod_loop',
-    'dev_managed_vod_loop',
-    'Dev Managed VOD Loop',
-    'Docker dev fixture for Mist-native always_on stream materialization',
-    'mist_native',
-    TRUE,
-    FALSE
-)
-ON CONFLICT (internal_name) DO UPDATE SET
-    playback_id = EXCLUDED.playback_id,
-    title = EXCLUDED.title,
-    description = EXCLUDED.description,
-    ingest_mode = EXCLUDED.ingest_mode,
-    always_on = EXCLUDED.always_on,
-    is_recording_enabled = EXCLUDED.is_recording_enabled,
-    updated_at = NOW();
-
-INSERT INTO commodore.stream_mist_sources (
-    stream_id, source_spec, source_kind, placement_count, allowed_cluster_ids,
-    local_asset_paths
-)
-VALUES (
-    '5eedfeed-11fe-ca57-feed-11feca5700f1',
-    'ts-exec:ffmpeg -hide_banner -loglevel warning -re -stream_loop -1 -i /var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4 -c copy -f mpegts -',
-    'exec',
-    1,
-    ARRAY['demo-media']::text[],
-    '[{"path":"/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4","sha256":"1bee3aca5b2ebb305976fd678812969891bc819da9468e15d5cd00bc3b2a8131","note":"Visible seeded VOD asset mounted from infrastructure/demo-recordings."}]'::jsonb
-)
-ON CONFLICT (stream_id) DO UPDATE SET
-    source_spec = EXCLUDED.source_spec,
-    source_kind = EXCLUDED.source_kind,
-    placement_count = EXCLUDED.placement_count,
-    allowed_cluster_ids = EXCLUDED.allowed_cluster_ids,
-    local_asset_paths = EXCLUDED.local_asset_paths,
-    updated_at = NOW();
-
-INSERT INTO commodore.stream_processing_config (stream_id, processes_live, updated_at)
-VALUES (
-    '5eedfeed-11fe-ca57-feed-11feca5700f1',
-    '[{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]'::jsonb,
-    NOW()
-)
-ON CONFLICT (stream_id) DO UPDATE SET
-    processes_live = EXCLUDED.processes_live,
-    updated_at = NOW();
-
 -- Ensure cluster is owned by demo tenant to allow fingerprint-based association
 UPDATE quartermaster.infrastructure_clusters
 SET owner_tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001'
@@ -267,7 +208,7 @@ WITH demo_process_config AS (
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr,
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_clip,
         '[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Thumbnail Sprites"}]'::jsonb AS processes_dvr_finalize,
-        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
+        '[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none"},{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"},{"name":"720p","bitrate":3200000,"fps":0,"height":720,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1280x720"},{"name":"1080p","bitrate":6500000,"fps":0,"height":1080,"profile":"H264ConstrainedHigh","track_inhibit":"video=<1920x1080"}],"track_inhibit":"video=<640x360"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]'::jsonb AS processes_vod
 )
 INSERT INTO purser.billing_tiers (
     tier_name, display_name, description, base_price, currency,

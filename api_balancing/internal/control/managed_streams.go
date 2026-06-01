@@ -875,7 +875,7 @@ func sendLocalManagedStreamMessage(nodeID string, msg *pb.ControlMessage) error 
 
 // SendApplyManagedStream tries the local registry first, then forwards
 // via commandRelay if a peer Foghorn owns the connection. Mirrors the
-// SendClipPull / SendDVRStart pattern so multi-Foghorn-per-cluster works.
+// SendDVRStart pattern so multi-Foghorn-per-cluster works.
 func SendApplyManagedStream(nodeID string, req *pb.ApplyManagedStream) error {
 	err := SendLocalApplyManagedStream(nodeID, req)
 	if !shouldRelay(nodeID, err) {

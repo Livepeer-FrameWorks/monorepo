@@ -2065,11 +2065,11 @@
                         <TableCell>
                           <span
                             class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium {event.action ===
-                            'freeze'
+                            'synced'
                               ? 'bg-info/20 text-info border border-info/30'
                               : 'bg-warning/20 text-warning border border-warning/30'}"
                           >
-                            {#if event.action === "freeze"}
+                            {#if event.action === "synced"}
                               <SnowflakeIcon class="w-3 h-3" />
                             {:else}
                               <ZapIcon class="w-3 h-3" />

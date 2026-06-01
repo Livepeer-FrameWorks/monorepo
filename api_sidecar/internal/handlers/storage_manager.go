@@ -21,7 +21,6 @@ import (
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-	"github.com/sirupsen/logrus"
 )
 
 // PresignedTransfer abstracts presigned-URL upload/download so tests can
@@ -182,28 +181,6 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 		procHandler.Handle(req, send)
 	})
 
-	// Register the clip .dtsh generator through control to keep package
-	// ownership acyclic while sharing the Mist polling implementation.
-	mistURL := os.Getenv("MISTSERVER_URL")
-	control.SetClipDTSHGenerator(func(streamName, clipHash string) {
-		if mistURL == "" {
-			return
-		}
-		entry := logger.WithFields(logrus.Fields{
-			"clip_hash":   clipHash,
-			"stream_name": streamName,
-		})
-		dtshPath := findLocalClipDTSHPath(basePath, clipHash)
-		if err := GenerateDTSHForPath(mistURL, streamName, dtshPath, entry); err != nil {
-			entry.WithError(err).Debug("Post-clip DTSH generation failed (will regen on first playback)")
-			return
-		}
-		// Kick the storage manager so the freshly-generated .dtsh syncs
-		// to S3 in the same pass as the clip media, matching the VOD/chapter
-		// finalize path. Without this we'd wait for the late-DTSH poller scan.
-		TriggerStorageCheck()
-	})
-
 	// DVR finalize-time retry: Foghorn pushes RetryDVRSegmentUpload listing
 	// segments still pending/failed. For each, look up the local file under
 	// the active DVR's segments directory, the local segment index, or the
@@ -315,31 +292,6 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	}).Info("Storage manager initialized (presigned URL mode)")
 
 	return nil
-}
-
-func findLocalClipDTSHPath(basePath, clipHash string) string {
-	if basePath == "" || clipHash == "" {
-		return ""
-	}
-	clipsDir := filepath.Join(basePath, "clips")
-	var dtshPath string
-	if err := filepath.WalkDir(clipsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		ext := filepath.Ext(d.Name())
-		if strings.TrimSuffix(d.Name(), ext) == clipHash && IsVideoFile(ext) {
-			dtshPath = path + ".dtsh"
-			return fs.SkipAll
-		}
-		return nil
-	}); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ""
-	}
-	return dtshPath
 }
 
 // StorageThresholds holds configurable thresholds for storage management
@@ -817,82 +769,21 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		if reason == "" {
 			reason = "unknown"
 		}
-		if reason == "already_synced" {
-			sm.logger.WithField("asset_hash", asset.AssetHash).Debug("Skipping freeze — asset already synced to S3")
-			return nil
-		}
 		return fmt.Errorf("freeze not approved: %s", reason)
 	}
 
-	// Remote artifact: origin S3 has the authoritative copy — skip upload, just evict locally
+	// Remote artifact: the origin/storage cluster's S3 holds the authoritative
+	// copy, so there is nothing to upload. FreezePermission only mints upload
+	// permission — it is not an eviction authority. The local warm copy is a
+	// cache; dropping it is owned solely by the pressure-cleanup pass, which is
+	// gated on CanDelete (it returns remote_synced for exactly this case). Doing
+	// nothing here keeps eviction in one authority and avoids the freeze path
+	// racing cleanup on the same file.
 	if permResp.GetSkipUpload() {
 		sm.logger.WithFields(logging.Fields{
 			"asset_hash": asset.AssetHash,
 			"asset_type": asset.AssetType,
-		}).Info("Remote artifact skip_upload — evicting without S3 upload")
-
-		evictionDeferred := false
-		if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
-			if err := leases.DeleteFileIfUnleased(asset.FilePath); err != nil {
-				if errors.Is(err, leases.ErrLeaseHeld) {
-					sm.logger.WithFields(logging.Fields{
-						"asset_hash": asset.AssetHash,
-						"path":       asset.FilePath,
-					}).Info("skip_upload eviction deferred: lease held")
-					evictionDeferred = true
-				} else {
-					sm.logger.WithError(err).Warn("Failed to delete local copy of remote artifact")
-				}
-			} else {
-				_ = os.Remove(asset.FilePath + ".dtsh")
-				_ = os.Remove(asset.FilePath + ".gop")
-			}
-		} else {
-			dvrDir := asset.FilePath
-			if strings.HasSuffix(dvrDir, ".m3u8") {
-				dvrDir = filepath.Dir(dvrDir)
-			}
-			// Hard guard: never RemoveAll an active DVR directory, even on a
-			// remote skip_upload eviction. Active recordings are still writing
-			// segments to this tree; clobbering it loses unsynced segments
-			// without an explicit DVRSegmentDropped trail.
-			if control.IsActiveDVR(asset.AssetHash) {
-				sm.logger.WithFields(logging.Fields{
-					"asset_hash": asset.AssetHash,
-					"path":       dvrDir,
-				}).Warn("Refusing skip_upload directory eviction for active DVR")
-				evictionDeferred = true
-			} else if err := leases.DeleteDVRDirIfUnleased(dvrDir, asset.AssetHash); err != nil {
-				if errors.Is(err, leases.ErrLeaseHeld) {
-					sm.logger.WithFields(logging.Fields{
-						"asset_hash": asset.AssetHash,
-						"path":       dvrDir,
-					}).Info("skip_upload DVR eviction deferred: chapter lease held")
-					evictionDeferred = true
-				} else {
-					sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
-				}
-			}
-		}
-		if evictionDeferred {
-			errStr := "lease held"
-			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
-				AssetType: string(asset.AssetType),
-				AssetHash: asset.AssetHash,
-				SizeBytes: asset.SizeBytes,
-				Error:     &errStr,
-			})
-			_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evict_deferred", "", asset.SizeBytes, "lease held", false, false) //nolint:errcheck // best-effort report
-			return nil
-		}
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:    pb.StorageLifecycleData_ACTION_EVICTED,
-			AssetType: string(asset.AssetType),
-			AssetHash: asset.AssetHash,
-			SizeBytes: asset.SizeBytes,
-		})
-		_ = sm.sendSyncComplete(permResp.RequestId, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false, false) //nolint:errcheck // best-effort report
+		}).Debug("Remote artifact skip_upload — nothing to freeze; eviction deferred to CanDelete-gated cleanup")
 		return nil
 	}
 

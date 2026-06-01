@@ -92,7 +92,6 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		payload string
 	}{
 		{"config_seed", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: &pb.ConfigSeed{NodeId: "node-1"}}}, "config_seed"},
-		{"clip_pull", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipPull{ClipPull: &pb.ClipPullRequest{}}}, "clip_pull_request"},
 		{"dvr_start", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}}}, "dvr_start_request"},
 		{"dvr_stop", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}}}, "dvr_stop_request"},
 		{"clip_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipDelete{ClipDelete: &pb.ClipDeleteRequest{}}}, "clip_delete"},

@@ -248,7 +248,7 @@ COLD PLAYBACK (no local copy, read-through from S3):
 
 ## Cross-Cluster Artifact Access
 
-When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain either a time-limited presigned S3 URL (when the bytes are synced to S3) or a node-specific peer-relay URL with a short-lived `artifact_relay` JWT (when an origin node still holds the canonical full file locally but S3 sync is pending). Peer-relay reads do not require sharing S3 credentials across clusters and do not wait on S3 sync. DVR archive playback uses chapter VOD artifacts: each finalized chapter is a regular VOD-shaped artifact (`origin_type='dvr_chapter'`, `library_visible=false`) addressed by a Commodore-minted public `playbackId`, so cross-cluster chapter playback follows the same `PrepareArtifact` rules as any other VOD.
+When a viewer requests a clip or VOD that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain either a time-limited presigned S3 URL (when the bytes are synced to S3) or a node-specific peer-relay URL with an opaque capability grant (when an origin node still holds the canonical full file locally but S3 sync is pending). The grant carries no signing key — the origin node's Helmsman authorizes each pull online with its own Foghorn. Peer-relay reads do not require sharing S3 credentials across clusters and do not wait on S3 sync. DVR archive playback uses chapter VOD artifacts: each finalized chapter is a regular VOD-shaped artifact (`origin_type='dvr_chapter'`, `library_visible=false`) addressed by a Commodore-minted public `playbackId`, so cross-cluster chapter playback follows the same `PrepareArtifact` rules as any other VOD.
 
 ### Flow
 
@@ -259,13 +259,14 @@ Viewer → Foghorn A (clip/VOD not on local nodes, not in local S3)
       1. Lookup foghorn.artifacts by hash + tenant_id
       2. If sync_status='synced': mint presigned S3 GET URL
       3. Else if a local origin node has role='origin', is_complete=true:
-         mint artifact_relay JWT and return peer_relay_url +
-         peer_relay_token pointing at that node's Helmsman
+         mint an opaque peer-relay grant and return peer_relay_url +
+         peer_relay_grant_id pointing at that node's Helmsman
       4. Else: return Ready=false (Foghorn A surfaces 503; freeze
          pipeline lands bytes independently)
-  → Foghorn A returns URL (S3-presigned or peer-relay+token) to viewer
-    via STREAM_SOURCE trigger chain. Helmsman block cache attaches the
-    token as Authorization: Bearer when it's a peer URL.
+  → Foghorn A returns a local Helmsman relay URL to Mist via the
+    STREAM_SOURCE trigger chain. Helmsman's read-through relay then calls
+    RelayResolve to obtain the S3-presigned or peer-relay+grant URL,
+    attaching the grant as Authorization: Bearer when it's a peer URL.
 ```
 
 DVR chapter listing (read-only metadata, not playback bytes) flows through:
@@ -303,7 +304,7 @@ message PrepareArtifactResponse {
 }
 ```
 
-Key design choice: cross-cluster access works in two flavors. (a) When the artifact is on S3 (`sync_status='synced'`), `PrepareArtifact` returns a presigned GET URL. (b) When it's not yet on S3 but an origin node still holds the canonical full file on disk (`role='origin'`, `is_complete=true`, recently-seen), `PrepareArtifact` returns a node-specific `peer_relay_url` + short-lived `artifact_relay` JWT — same viewer UX, just block-fetched from the origin node's Helmsman instead of S3, no S3-sync wait. Only when neither qualifies does `PrepareArtifact` return `ready=false`; the requesting Foghorn surfaces a 503 (no polling, no async-prep ceremony). The freeze pipeline (driven by the artifact reconciler, kicked on VOD processing-complete and per-segment DVR sync, not by `PrepareArtifact`) lands the bytes asynchronously; the next viewer attempt picks up where the failed one left off. Chapter VOD artifacts follow the same rule — each finalized chapter is registered as an origin row at finalize time and is immediately eligible for peer-relay even before its own S3 sync completes.
+Key design choice: cross-cluster access works in two flavors. (a) When the artifact is on S3 (`sync_status='synced'`), `PrepareArtifact` returns a presigned GET URL. (b) When it's not yet on S3 but an origin node still holds the canonical full file on disk (`role='origin'`, `is_complete=true`, recently-seen), `PrepareArtifact` returns a node-specific `peer_relay_url` + opaque `peer_relay_grant_id` (authorized online by the origin Foghorn, no key on the edge) — same viewer UX, just block-fetched from the origin node's Helmsman instead of S3, no S3-sync wait. Only when neither qualifies does `PrepareArtifact` return `ready=false`; the requesting Foghorn surfaces a 503 (no polling, no async-prep ceremony). The freeze pipeline (driven by the artifact reconciler, kicked on VOD processing-complete and per-segment DVR sync, not by `PrepareArtifact`) lands the bytes asynchronously; the next viewer attempt picks up where the failed one left off. Chapter VOD artifacts follow the same rule — each finalized chapter is registered as an origin row at finalize time and is immediately eligible for peer-relay even before its own S3 sync completes.
 
 See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
 
