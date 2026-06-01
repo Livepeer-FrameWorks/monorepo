@@ -693,12 +693,22 @@ func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 	}
 }
 
-func TestHandleStreamSource_LiveWithoutOriginPullFallsThroughToPushSource(t *testing.T) {
+// TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource: with no
+// pre-arranged origin-pull, live+ returns balance:<base> so Mist's balancer
+// asks /source — the SAME unified resolver bare mist-native and pull+ use.
+// /source then runs local best-node selection, on-demand cross-cluster
+// origin-pull arrange, and the live+ push:// terminal. Dead-ending at "" here
+// (the old behavior) skipped straight to the local push input, so a viewer
+// landing directly on an edge before /play arranged the pull never discovered
+// a remote origin (US-ingest / EU-playback).
+func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T) {
+	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
 	processor := newTestProcessor(t)
+	processor.clusterID = "media-eu-1"
 	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &pb.MistTrigger_StreamSource{
@@ -709,10 +719,10 @@ func TestHandleStreamSource_LiveWithoutOriginPullFallsThroughToPushSource(t *tes
 		t.Fatalf("handleStreamSource failed: %v", err)
 	}
 	if abort {
-		t.Fatal("expected non-abort fallback to configured push:// source")
+		t.Fatal("expected non-abort balance delegation to /source")
 	}
-	if resp != "" {
-		t.Fatalf("STREAM_SOURCE response = %q, want empty fallback", resp)
+	if !strings.HasPrefix(resp, "balance:") {
+		t.Fatalf("STREAM_SOURCE response = %q, want balance:<base> delegation to /source", resp)
 	}
 }
 
@@ -2040,6 +2050,7 @@ func newGatewayProcessor(t *testing.T, disc livepeerGatewayDiscoverer, localClus
 }
 
 const gatewayTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]"}]`
+const gatewayProfileTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":30,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"}]}]`
 
 func TestSubstituteGatewayURL_OriginWins(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string]string{
@@ -2078,7 +2089,7 @@ func TestSubstituteGatewayURL_OfficialFallbackWhenOriginLacksGateway(t *testing.
 	}
 }
 
-func TestSubstituteGatewayURL_StripsWhenNoCandidateHasGateway(t *testing.T) {
+func TestSubstituteGatewayURL_FallsBackToLocalAVWhenNoCandidateHasGateway(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string]string{
 		"selfhost-cluster": "",
 		"platform-cluster": "",
@@ -2086,15 +2097,21 @@ func TestSubstituteGatewayURL_StripsWhenNoCandidateHasGateway(t *testing.T) {
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	got := p.SubstituteGatewayURL(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
+	got := p.SubstituteGatewayURL(gatewayProfileTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
 
 	if strings.Contains(got, "{{gateway_url}}") {
-		t.Fatalf("expected Livepeer process to be stripped, template still present: %q", got)
+		t.Fatalf("expected gateway template to be removed, template still present: %q", got)
 	}
 	if strings.Contains(got, "Livepeer") {
-		t.Fatalf("expected Livepeer process to be stripped, still present: %q", got)
+		t.Fatalf("expected Livepeer process to be converted to local AV, still present: %q", got)
 	}
-	// Each candidate cluster should have been queried exactly once before stripping.
+	if !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("expected local AV fallback process, got %q", got)
+	}
+	if !strings.Contains(got, `"resolution":"640x360"`) {
+		t.Fatalf("expected target profile to become local AV resolution, got %q", got)
+	}
+	// Each candidate cluster should have been queried exactly once before falling back.
 	for _, c := range []string{"selfhost-cluster", "platform-cluster", "foghorn-pool-1"} {
 		if disc.callCount(c) != 1 {
 			t.Fatalf("expected exactly 1 discovery call for %s, got %d", c, disc.callCount(c))
@@ -2145,10 +2162,13 @@ func TestSubstituteGatewayURL_DeduplicatesRepeatedCandidates(t *testing.T) {
 	p := newGatewayProcessor(t, disc, "cluster-x")
 
 	// origin == official == p.clusterID; resolver should de-duplicate.
-	got := p.SubstituteGatewayURL(gatewayTemplate, []string{"cluster-x", "cluster-x", "cluster-x"})
+	got := p.SubstituteGatewayURL(gatewayProfileTemplate, []string{"cluster-x", "cluster-x", "cluster-x"})
 
 	if strings.Contains(got, "{{gateway_url}}") {
-		t.Fatalf("expected Livepeer to be stripped on full miss, got %q", got)
+		t.Fatalf("expected gateway template to be removed on full miss, got %q", got)
+	}
+	if !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("expected local AV fallback on full miss, got %q", got)
 	}
 	if disc.callCount("cluster-x") != 1 {
 		t.Fatalf("expected cluster-x to be discovered exactly once despite being passed three times, got %d", disc.callCount("cluster-x"))
@@ -2170,7 +2190,7 @@ func TestSubstituteGatewayURL_NilCandidatesFallsBackToLocalCluster(t *testing.T)
 	}
 }
 
-func TestSubstituteGatewayURL_StripIncrementsServiceUnavailableCounter(t *testing.T) {
+func TestSubstituteGatewayURL_LocalFallbackIncrementsServiceUnavailableCounter(t *testing.T) {
 	disc := newFakeGatewayDiscoverer(map[string]string{
 		"selfhost-cluster": "",
 		"platform-cluster": "",

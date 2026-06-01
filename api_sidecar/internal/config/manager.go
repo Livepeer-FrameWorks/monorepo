@@ -1371,11 +1371,12 @@ func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[stri
 			source = pullSource
 		}
 		entry := map[string]any{
-			"name":          def.GetName(),
-			"source":        source,
-			"realtime":      def.GetRealtime(),
-			"stop_sessions": def.GetStopSessions(),
-			"tags":          def.GetTags(),
+			"name":                        def.GetName(),
+			"source":                      source,
+			"realtime":                    def.GetRealtime(),
+			"process_controlled_realtime": def.GetProcessControlledRealtime(),
+			"stop_sessions":               def.GetStopSessions(),
+			"tags":                        def.GetTags(),
 		}
 
 		// processing+ and dvr+ sources are resolved dynamically via

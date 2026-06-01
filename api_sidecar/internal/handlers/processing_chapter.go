@@ -111,10 +111,12 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 	pendingJobsMu.Lock()
 	pendingJobs[streamName] = doneCh
 	pendingJobsMu.Unlock()
+	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 	defer func() {
 		pendingJobsMu.Lock()
 		delete(pendingJobs, streamName)
 		pendingJobsMu.Unlock()
+		unregisterProcessingRecordingEndListener(streamName)
 	}()
 
 	processExitCh := RegisterProcessExitListener(streamName)
@@ -184,6 +186,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 			pendingJobsMu.Lock()
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
+			recordingEndCh = registerProcessingRecordingEndListener(streamName)
 			streamOutputs, _, readinessErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 			if readinessErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -211,6 +214,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 	defer progressTicker.Stop()
 	var lastMs int64
 	lastAdvance := time.Now()
+	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
 
 	restartWithLocalMistProc := func(reason string) error {
@@ -227,6 +231,11 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		pendingJobsMu.Lock()
 		pendingJobs[streamName] = doneCh
 		pendingJobsMu.Unlock()
+		recordingEndCh = registerProcessingRecordingEndListener(streamName)
+		// Discard any RECORDING_END captured from the retired push; the
+		// restarted push produces a fresh one. Otherwise the post-loop
+		// validation would run against the old push's bytes/duration.
+		recordingEnd = nil
 		var waitErr error
 		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -260,6 +269,14 @@ loop:
 			}
 			log.Info("Chapter finalize: PUSH_END received")
 			break loop
+		case recEnd := <-recordingEndCh:
+			recordingEnd = &recEnd
+			log.WithFields(logging.Fields{
+				"bytes":             recEnd.BytesWritten,
+				"media_duration_ms": recEnd.MediaDurationMs,
+				"file_path":         recEnd.FilePath,
+				"exit_reason":       recEnd.ExitReason,
+			}).Info("Chapter finalize: RECORDING_END received")
 		case evt := <-processExitCh:
 			evtFields := processExitFields(evt)
 			if shouldIgnoreProcessExit(evt, ignoredProcessExitBootCounts) {
@@ -317,6 +334,46 @@ loop:
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed",
 				fmt.Sprintf("chapter finalize timeout (%s)", deadline), nil, "", 0)
+			return
+		}
+	}
+
+	if recordingEnd == nil {
+		// Chapter finalize is a push-to-file like the main processing path:
+		// RECORDING_END is guaranteed and carries the only authoritative
+		// completion proof (bytes + media duration). The wait is an ordering
+		// cushion for the two triggers, not a "maybe it arrives" timeout — if
+		// it never comes, fail loudly rather than declaring success from file
+		// size alone. Matches processing.go (do not weaken to a file-size
+		// fallback here).
+		select {
+		case recEnd := <-recordingEndCh:
+			recordingEnd = &recEnd
+			log.WithFields(logging.Fields{
+				"bytes":             recEnd.BytesWritten,
+				"media_duration_ms": recEnd.MediaDurationMs,
+				"file_path":         recEnd.FilePath,
+				"exit_reason":       recEnd.ExitReason,
+			}).Info("Chapter finalize: RECORDING_END received after PUSH_END")
+		case <-time.After(5 * time.Second):
+			log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
+			return
+		}
+	}
+	if recordingEnd != nil {
+		if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
+			log.WithError(err).WithFields(logging.Fields{
+				"bytes":             recordingEnd.BytesWritten,
+				"media_duration_ms": recordingEnd.MediaDurationMs,
+				"file_path":         recordingEnd.FilePath,
+				"exit_reason":       recordingEnd.ExitReason,
+				"human_reason":      recordingEnd.HumanExitReason,
+			}).Error("Chapter finalize: recording validation failed")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed",
+				fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
 			return
 		}
 	}

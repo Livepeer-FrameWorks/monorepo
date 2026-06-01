@@ -43,6 +43,11 @@ var (
 	pendingJobsMu sync.Mutex
 )
 
+var (
+	pendingRecordingEnds   = map[string]chan ProcessingRecordingEndEvent{}
+	pendingRecordingEndsMu sync.Mutex
+)
+
 // ProcessingPushEndEvent is the subset of Mist's PUSH_END trigger the
 // processing pipeline needs before treating a push as terminal.
 type ProcessingPushEndEvent struct {
@@ -53,6 +58,19 @@ type ProcessingPushEndEvent struct {
 	LogMessages    string
 	PushStatus     string
 	PushStatusText string
+}
+
+type ProcessingRecordingEndEvent struct {
+	StreamName      string
+	FilePath        string
+	OutputProtocol  string
+	BytesWritten    int64
+	SecondsWriting  int64
+	TimeStarted     int64
+	TimeEnded       int64
+	MediaDurationMs int64
+	ExitReason      string
+	HumanExitReason string
 }
 
 var (
@@ -93,9 +111,76 @@ func SignalProcessingPushEnd(evt ProcessingPushEndEvent) {
 	}
 }
 
+func SignalProcessingRecordingEnd(evt ProcessingRecordingEndEvent) {
+	pendingRecordingEndsMu.Lock()
+	ch, ok := pendingRecordingEnds[evt.StreamName]
+	pendingRecordingEndsMu.Unlock()
+	if ok {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+func registerProcessingRecordingEndListener(streamName string) chan ProcessingRecordingEndEvent {
+	ch := make(chan ProcessingRecordingEndEvent, 1)
+	pendingRecordingEndsMu.Lock()
+	pendingRecordingEnds[streamName] = ch
+	pendingRecordingEndsMu.Unlock()
+	return ch
+}
+
+func unregisterProcessingRecordingEndListener(streamName string) {
+	pendingRecordingEndsMu.Lock()
+	delete(pendingRecordingEnds, streamName)
+	pendingRecordingEndsMu.Unlock()
+}
+
 func processingPushSucceeded(evt ProcessingPushEndEvent) bool {
 	status := strings.TrimSpace(evt.PushStatus)
-	return status == "" || status == "0"
+	if status == "" || status == "0" {
+		return true
+	}
+	if strings.HasPrefix(status, "{") {
+		// Mist's PUSH_END status field is always a JSON stats object for a
+		// completed push; treat any well-formed object as non-failure.
+		// Authoritative completion validation lives in RECORDING_END
+		// (validateProcessingRecordingEnd: bytes>0, duration>0), not here.
+		var parsed map[string]interface{}
+		return json.Unmarshal([]byte(status), &parsed) == nil
+	}
+	return false
+}
+
+func validateProcessingRecordingEnd(evt ProcessingRecordingEndEvent, outputPath string) error {
+	if strings.TrimSpace(evt.FilePath) != "" && strings.TrimSpace(outputPath) != "" {
+		reported := strings.Split(strings.TrimSpace(evt.FilePath), "#")[0]
+		if filepath.Clean(reported) != filepath.Clean(outputPath) {
+			return fmt.Errorf("recording target mismatch: got %s, want %s", evt.FilePath, outputPath)
+		}
+	}
+	// Mist's machine exit reason is the authority for output success; the byte
+	// and duration counts below are only sanity checks. A partially-flushed file
+	// can report positive bytes/duration yet still have aborted (WRITE_FAILURE,
+	// SEGFAULT, ...), so a non-CLEAN_* reason fails the recording outright.
+	if !mist.IsCleanExitReason(evt.ExitReason) {
+		reason := strings.TrimSpace(evt.ExitReason)
+		if reason == "" {
+			reason = "unknown"
+		}
+		if detail := strings.TrimSpace(evt.HumanExitReason); detail != "" {
+			return fmt.Errorf("recording did not finish cleanly: %s (%s)", reason, detail)
+		}
+		return fmt.Errorf("recording did not finish cleanly: %s", reason)
+	}
+	if evt.BytesWritten <= 0 {
+		return fmt.Errorf("recording wrote no bytes")
+	}
+	if evt.MediaDurationMs <= 0 {
+		return fmt.Errorf("recording wrote no media duration")
+	}
+	return nil
 }
 
 func processingPushFailureMessage(evt ProcessingPushEndEvent) string {
@@ -290,11 +375,13 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	pendingJobsMu.Lock()
 	pendingJobs[streamName] = doneCh
 	pendingJobsMu.Unlock()
+	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 
 	defer func() {
 		pendingJobsMu.Lock()
 		delete(pendingJobs, streamName)
 		pendingJobsMu.Unlock()
+		unregisterProcessingRecordingEndListener(streamName)
 	}()
 
 	// Register PROCESS_EXIT routing before starting the push so an immediate boot
@@ -341,6 +428,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 			pendingJobsMu.Lock()
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
+			recordingEndCh = registerProcessingRecordingEndListener(streamName)
 			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 			if waitErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -369,6 +457,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 
 	var lastMs int64
 	lastAdvance := time.Now()
+	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
 
 loop:
@@ -389,6 +478,14 @@ loop:
 			}
 			log.Info("Processing completed (PUSH_END received)")
 			break loop
+		case recEnd := <-recordingEndCh:
+			recordingEnd = &recEnd
+			log.WithFields(logging.Fields{
+				"bytes":             recEnd.BytesWritten,
+				"media_duration_ms": recEnd.MediaDurationMs,
+				"file_path":         recEnd.FilePath,
+				"exit_reason":       recEnd.ExitReason,
+			}).Info("Processing RECORDING_END received")
 
 		case evt := <-processExitCh:
 			evtFields := processExitFields(evt)
@@ -412,6 +509,12 @@ loop:
 				pendingJobsMu.Lock()
 				pendingJobs[streamName] = doneCh
 				pendingJobsMu.Unlock()
+				recordingEndCh = registerProcessingRecordingEndListener(streamName)
+				// Discard any RECORDING_END captured from the retired push;
+				// the restarted push produces a fresh one. Without this the
+				// post-loop validation would run against the old push's
+				// bytes/duration/path.
+				recordingEnd = nil
 				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 				if waitErr != nil {
 					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -477,6 +580,10 @@ loop:
 					pendingJobsMu.Lock()
 					pendingJobs[streamName] = doneCh
 					pendingJobsMu.Unlock()
+					recordingEndCh = registerProcessingRecordingEndListener(streamName)
+					// Discard any RECORDING_END from the retired push (see
+					// livepeer-fallback case): validate the restarted push only.
+					recordingEnd = nil
 					outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 					if waitErr != nil {
 						h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -506,6 +613,46 @@ loop:
 			log.Warn("Processing absolute timeout exceeded")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", "absolute timeout exceeded (4h)", nil, "", 0)
+			return
+		}
+	}
+
+	if recordingEnd == nil {
+		// PUSH_END and RECORDING_END both fire for a push-to-file stop, but
+		// from different Mist trigger sites with no guaranteed arrival order;
+		// the wait is an ordering cushion, not a "maybe it'll come" timeout.
+		// RECORDING_END carries the only authoritative completion proof
+		// (bytes + media duration + exit reason), so if it never arrives
+		// something is broken (trigger config, delivery, Mist regression) —
+		// fail loudly and let Foghorn requeue rather than declaring success
+		// from file size alone.
+		select {
+		case recEnd := <-recordingEndCh:
+			recordingEnd = &recEnd
+			log.WithFields(logging.Fields{
+				"bytes":             recEnd.BytesWritten,
+				"media_duration_ms": recEnd.MediaDurationMs,
+				"file_path":         recEnd.FilePath,
+				"exit_reason":       recEnd.ExitReason,
+			}).Info("Processing RECORDING_END received after PUSH_END")
+		case <-time.After(5 * time.Second):
+			log.Error("Processing PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
+			return
+		}
+	}
+	if recordingEnd != nil {
+		if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
+			log.WithError(err).WithFields(logging.Fields{
+				"bytes":             recordingEnd.BytesWritten,
+				"media_duration_ms": recordingEnd.MediaDurationMs,
+				"file_path":         recordingEnd.FilePath,
+				"exit_reason":       recordingEnd.ExitReason,
+				"human_reason":      recordingEnd.HumanExitReason,
+			}).Error("Processing recording validation failed")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
 			return
 		}
 	}
@@ -595,9 +742,9 @@ type processingTrackPresence struct {
 }
 
 // waitForProcessingStreamReady boots the processing+ wildcard stream and waits
-// until Mist has exposed the source tracks plus the configured MistProc output
-// tracks. Starting the file push before this point can permanently exclude
-// generated tracks from the muxed artifact.
+// until Mist has exposed source media. Mist's file-output path owns the
+// generated-track/header gate, so push_start can pin the stream before short
+// VOD inputs run to EOF.
 func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, streamName string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(req.GetProcessesJson())
 	deadline := time.Now().Add(45 * time.Second)
@@ -634,12 +781,12 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			lastErr = err
 		} else {
 			lastPresence = inspectProcessingActiveStream(streamData)
-			if processingTracksComplete(lastPresence, requirements) {
+			if lastPresence.sourceMedia {
 				log.WithFields(logrus.Fields{
 					"audio_codecs": mapKeys(lastPresence.audioCodecs),
 					"video_codecs": mapKeys(lastPresence.videoCodecs),
 					"meta_codecs":  mapKeys(lastPresence.metaCodecs),
-				}).Info("Processing stream ready for muxed output")
+				}).Info("Processing source stream ready for muxed output")
 				return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
 			}
 		}

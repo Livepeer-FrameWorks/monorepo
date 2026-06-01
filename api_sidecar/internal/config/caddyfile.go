@@ -76,8 +76,8 @@ const caddyfileTmpl = `{
 
 	# Cross-cluster peer-relay reads of hot-but-unsynced artifacts.
 	# Scoped to the per-node edge FQDN so the route is invisible on
-	# tenant/customer hosts. Helmsman's middleware enforces the
-	# Authorization: Bearer artifact_relay JWT.
+	# tenant/customer hosts. Helmsman's middleware requires an opaque
+	# peer-relay grant id (Authorization: Bearer) that Foghorn authorizes.
 	@artifact_relay {
 		host {{.EdgeDomain}}
 		path /internal/artifact/*

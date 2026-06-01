@@ -395,6 +395,84 @@ func TestProcessingPushFailureMessageIncludesMistDetails(t *testing.T) {
 	}
 }
 
+func TestProcessingPushStatusJSONIsInformational(t *testing.T) {
+	evt := ProcessingPushEndEvent{
+		StreamName: "processing+artifact",
+		PushStatus: `{"active_ms":4928,"bytes":20810580,"current_target":"/var/lib/mistserver/recordings/vod/artifact.mkv","tracks":[1]}`,
+	}
+	if !processingPushSucceeded(evt) {
+		t.Fatal("expected Mist PUSH_END status JSON to be treated as successful termination")
+	}
+}
+
+func TestSignalProcessingRecordingEnd(t *testing.T) {
+	stream := "processing+test_recording_" + t.Name()
+	ch := registerProcessingRecordingEndListener(stream)
+	defer unregisterProcessingRecordingEndListener(stream)
+
+	SignalProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		StreamName:      stream,
+		FilePath:        "/tmp/output.mkv",
+		BytesWritten:    12,
+		MediaDurationMs: 30,
+	})
+
+	select {
+	case evt := <-ch:
+		if evt.FilePath != "/tmp/output.mkv" || evt.BytesWritten != 12 {
+			t.Fatalf("recording event = %+v", evt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected recording end signal on registered channel")
+	}
+
+	SignalProcessingRecordingEnd(ProcessingRecordingEndEvent{StreamName: "processing+missing"})
+}
+
+func TestValidateProcessingRecordingEnd(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "artifact.mkv")
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    1024,
+		MediaDurationMs: 1000,
+		ExitReason:      "CLEAN_EOF",
+	}, outputPath); err != nil {
+		t.Fatalf("expected valid recording end: %v", err)
+	}
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    1024,
+		MediaDurationMs: 1000,
+		ExitReason:      "WRITE_FAILURE",
+		HumanExitReason: "disk full",
+	}, outputPath); err == nil {
+		t.Fatal("expected non-clean exit reason to fail despite positive bytes/duration")
+	}
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    1024,
+		MediaDurationMs: 1000,
+	}, outputPath); err == nil {
+		t.Fatal("expected missing exit reason to fail")
+	}
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    0,
+		MediaDurationMs: 1000,
+		ExitReason:      "CLEAN_EOF",
+	}, outputPath); err == nil {
+		t.Fatal("expected zero-byte recording to fail")
+	}
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    1024,
+		MediaDurationMs: 0,
+		ExitReason:      "CLEAN_EOF",
+	}, outputPath); err == nil {
+		t.Fatal("expected zero-duration recording to fail")
+	}
+}
+
 func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
 	req := &pb.ProcessingJobRequest{Params: map[string]string{

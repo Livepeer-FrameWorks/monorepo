@@ -1706,8 +1706,9 @@ func HandleLiveTrackList(c *gin.Context) {
 	c.String(http.StatusOK, "OK")
 }
 
-// HandleRecordingEnd handles RECORDING_END webhook
-// CORRECT MistServer format: stream name, path to file, output protocol name, bytes written, seconds writing took, unix start time, unix end time, media duration (ms)
+// HandleRecordingEnd handles the RECORDING_END webhook. MistServer payload
+// fields: stream name, path to file, output protocol name, bytes written,
+// seconds writing took, unix start time, unix end time, media duration (ms).
 func HandleRecordingEnd(c *gin.Context) {
 	incMistWebhook("RECORDING_END", "received")
 	body, err := io.ReadAll(c.Request.Body)
@@ -1738,6 +1739,10 @@ func HandleRecordingEnd(c *gin.Context) {
 		return
 	}
 
+	if rec := mistTrigger.GetRecordingComplete(); rec != nil && strings.HasPrefix(rec.GetStreamName(), "processing+") {
+		SignalProcessingRecordingEnd(processingRecordingEndEvent(rec))
+	}
+
 	// Durably persist before responding to Mist; forwarder drains the WAL
 	// and waits for Foghorn's MistTriggerAck (ack-after-Kafka).
 	applyTenantContext(mistTrigger)
@@ -1755,6 +1760,21 @@ func HandleRecordingEnd(c *gin.Context) {
 	TriggerStorageCheck()
 
 	c.String(http.StatusOK, "OK")
+}
+
+func processingRecordingEndEvent(rec *pb.RecordingCompleteTrigger) ProcessingRecordingEndEvent {
+	return ProcessingRecordingEndEvent{
+		StreamName:      rec.GetStreamName(),
+		FilePath:        rec.GetFilePath(),
+		OutputProtocol:  rec.GetOutputProtocol(),
+		BytesWritten:    rec.GetBytesWritten(),
+		SecondsWriting:  rec.GetSecondsWriting(),
+		TimeStarted:     rec.GetTimeStarted(),
+		TimeEnded:       rec.GetTimeEnded(),
+		MediaDurationMs: rec.GetMediaDurationMs(),
+		ExitReason:      rec.GetExitReason(),
+		HumanExitReason: rec.GetHumanExitReason(),
+	}
 }
 
 // HandleRecordingSegment handles RECORDING_SEGMENT webhook

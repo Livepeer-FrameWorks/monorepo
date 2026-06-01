@@ -128,6 +128,42 @@ func TestParseTriggerToProtobufPushInputClose(t *testing.T) {
 	}
 }
 
+func TestParseTriggerToProtobufRecordingEnd(t *testing.T) {
+	logger := logging.NewLogger()
+	// Full RECORDING_END payload per Output::getExitTriggerPayload
+	// (mistserver src/output/output.cpp): stream, target, output, bytes,
+	// secondsWriting, timeStarted, timeEnded, mediaDurationMs, firstPacketTime,
+	// lastPacketTime, machine exit reason, human exit reason.
+	payload := []byte("processing+job1\n/tmp/out.mkv\nMistOutMKV\n4096\n12\n1700000000\n1700000012\n12000\n0\n12000\nCLEAN_EOF\nclean end-of-file\n")
+
+	trig, err := ParseTriggerToProtobuf(TriggerRecordingEnd, payload, "node-1", logger)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	got := trig.GetRecordingComplete()
+	if got == nil {
+		t.Fatalf("RecordingComplete payload missing")
+	}
+	if got.GetBytesWritten() != 4096 {
+		t.Errorf("bytes_written=%d", got.GetBytesWritten())
+	}
+	if got.GetMediaDurationMs() != 12000 {
+		t.Errorf("media_duration_ms=%d", got.GetMediaDurationMs())
+	}
+	if got.GetExitReason() != "CLEAN_EOF" {
+		t.Errorf("exit_reason=%q", got.GetExitReason())
+	}
+	if got.GetHumanExitReason() != "clean end-of-file" {
+		t.Errorf("human_exit_reason=%q", got.GetHumanExitReason())
+	}
+	if !IsCleanExitReason(got.GetExitReason()) {
+		t.Errorf("CLEAN_EOF should be a clean exit reason")
+	}
+	if IsCleanExitReason("WRITE_FAILURE") || IsCleanExitReason("") {
+		t.Errorf("non-CLEAN_* reasons must not be clean")
+	}
+}
+
 func TestParseTriggerToProtobufRequestIdUnique(t *testing.T) {
 	logger := logging.NewLogger()
 	payload := []byte("rtmp://example/app/stream\nexample.com\nlive+stream_id\n")

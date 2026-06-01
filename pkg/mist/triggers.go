@@ -42,6 +42,20 @@ const (
 	TriggerNodeLifecycle   TriggerType = "NODE_LIFECYCLE_UPDATE"
 )
 
+// CleanExitReasonPrefix is the namespace Mist gives every clean machine exit
+// reason (mRExitReason). lib/defines.h enumerates CLEAN_EOF,
+// CLEAN_INTENDED_STOP, CLEAN_REMOTE_CLOSE, etc.; any reason without this prefix
+// (UNKNOWN, WRITE_FAILURE, SEGFAULT, ...) is a failure. The prefix is Mist's
+// own allowlist contract, so a future CLEAN_* reason is clean by construction.
+const CleanExitReasonPrefix = "CLEAN_"
+
+// IsCleanExitReason reports whether a Mist machine exit reason indicates the
+// output finished cleanly. It is the authority for output success; byte and
+// duration counts are only sanity checks.
+func IsCleanExitReason(reason string) bool {
+	return strings.HasPrefix(strings.TrimSpace(reason), CleanExitReasonPrefix)
+}
+
 // IsPlaybackViewerConnector reports whether a Mist connector represents an actual viewer session.
 func IsPlaybackViewerConnector(connector string) bool {
 	connector = strings.TrimSpace(connector)
@@ -441,6 +455,17 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			if mediaDurationMs, err := strconv.ParseInt(params[7], 10, 64); err == nil {
 				trigger.MediaDurationMs = mediaDurationMs
 			}
+		}
+		// params[8]=firstPacketTime, [9]=lastPacketTime, [10]=machine exit
+		// reason (mRExitReason), [11]=human exit reason. The machine reason is
+		// the authority for output success (CLEAN_* = clean).
+		if len(params) > 10 {
+			exitReason := strings.TrimSpace(params[10])
+			trigger.ExitReason = &exitReason
+		}
+		if len(params) > 11 {
+			humanExitReason := strings.TrimSpace(strings.Join(params[11:], "\n"))
+			trigger.HumanExitReason = &humanExitReason
 		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingComplete{
 			RecordingComplete: trigger,

@@ -320,8 +320,9 @@ func livepeerGatewayURLFromInstance(inst *pb.ServiceInstance) string {
 // who runs their own gateway wins over the platform fallback. Nil/empty
 // candidates falls back to p.clusterID.
 //
-// If no candidate has a gateway, Livepeer process entries are stripped (audio
-// transcode and thumbnail processes still run).
+// If no candidate has a gateway, Livepeer process entries fall back to local
+// MistProcAV so video processing still runs in dev/self-hosted clusters without
+// a Livepeer gateway.
 func (p *Processor) SubstituteGatewayURL(processesJSON string, candidates []string) string {
 	if !strings.Contains(processesJSON, "{{gateway_url}}") {
 		return processesJSON
@@ -350,12 +351,12 @@ func (p *Processor) SubstituteGatewayURL(processesJSON string, candidates []stri
 	}
 
 	p.logger.WithField("candidates", tried).Warn(
-		"Livepeer gateway not registered in any candidate cluster — stripping Livepeer processes (service_unavailable)",
+		"Livepeer gateway not registered in any candidate cluster — falling back to local MistProcAV (service_unavailable)",
 	)
 	if p.metrics != nil && p.metrics.ServiceResolutionRejected != nil {
 		p.metrics.ServiceResolutionRejected.WithLabelValues("service_unavailable", "livepeer-gateway").Inc()
 	}
-	return mist.StripLivepeerProcesses(processesJSON)
+	return mist.ReplaceLivepeerWithLocal(processesJSON)
 }
 
 func streamCacheSWR() time.Duration {
@@ -1774,18 +1775,37 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":     trigger.GetNodeId(),
 	}).Debug("Processing STREAM_SOURCE trigger")
 
-	// Pushed live streams normally fall back to the configured push://
-	// source. When this cluster has arranged an origin-pull for the stream,
-	// STREAM_SOURCE is the handoff point that gives Mist the peer DTSC URL.
+	// Live streams: reuse an already-arranged cross-cluster origin-pull when
+	// present, otherwise delegate to /source — the SAME unified resolver bare
+	// mist-native and pull+ use — rather than dead-ending at the local push
+	// source.
 	if strings.HasPrefix(streamName, "live+") {
 		if dtsc, handled := p.federationOriginPullDTSC(context.Background(), streamName, trigger.GetNodeId()); handled {
 			return dtsc, false, nil
 		}
+		// balance:<base> sends Mist's balancer to /source, which runs local
+		// best-node selection, then on-demand cross-cluster origin-pull arrange
+		// (arrangeRemoteOriginPullFromSource), then the live+ terminal push://
+		// fallback. Returning "" here would short-circuit straight to the local
+		// push input, so a viewer landing directly on an edge before /play or
+		// gRPC arranged the pull would never discover the remote origin
+		// (US-ingest / EU-playback). When no balancer base is resolvable we keep
+		// the "" push fallback — that's the legitimate publisher path, not an
+		// error.
+		base := control.FoghornBalancerBase(p.clusterID)
+		if base == "" {
+			p.logger.WithFields(logging.Fields{
+				"stream_name": streamName,
+				"node_id":     trigger.GetNodeId(),
+			}).Debug("STREAM_SOURCE: live stream has no Foghorn balancer base; using configured push source")
+			return "", false, nil
+		}
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
 			"node_id":     trigger.GetNodeId(),
-		}).Debug("STREAM_SOURCE: live stream has no origin-pull; using configured push source")
-		return "", false, nil
+			"cluster_id":  p.clusterID,
+		}).Info("STREAM_SOURCE: live+ returning balance URI for unified /source resolution")
+		return "balance:" + base, false, nil
 	}
 
 	// processing+ streams: resolve to presigned S3 URL for processing input
@@ -1960,16 +1980,27 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 
 	artifactHash := ""
 	contentType := ""
+	originClusterID := ""
+	tenantID := ""
+	var clusterPeers []*pb.TenantClusterPeer
 	if control.CommodoreClient != nil && artifactInternal != "" {
 		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
 			artifactHash = resp.ArtifactHash
 			contentType = resp.GetContentType()
+			originClusterID = resp.GetOriginClusterId()
+			tenantID = resp.GetTenantId()
+			clusterPeers = resp.GetClusterPeers()
 		}
 	}
 	if artifactHash == "" {
-		// Chapter artifacts are vod+<artifact_hash> by construction and
-		// aren't registered in Commodore — resolve via foghorn directly
-		// to recover the artifact context for the relay URL path below.
+		// Chapter artifacts DO get a commodore.vod_assets row at finalization
+		// (MintChapterPlaybackID), carrying origin_cluster_id + cluster_peers —
+		// so a publicly-referenced chapter resolves cross-cluster through the
+		// primary ResolveArtifactInternalName path above. This by-hash lookup
+		// is the local fallback for a raw vod+<artifact_hash> reference whose
+		// bare hash doesn't match a vod_assets internal_name (or arrives before
+		// the row is minted): it reads this Foghorn's DB only, so on a non-origin
+		// edge it returns nothing → offline (fail-safe), never a mis-serve.
 		if chapter := control.ResolveChapterArtifactByHash(context.Background(), artifactInternal); chapter != nil {
 			artifactHash = chapter.ArtifactHash
 			contentType = "vod"
@@ -2024,31 +2055,47 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	// and may lag seed or processing corrections, so it only fills blanks.
 	desc := lookupArtifactDescriptor(context.Background(), artifactHash)
 	format = selectArtifactRelayFormat(desc, format)
-	// Direct-edge cross-cluster fill: viewer landed on an edge without
-	// going through /play, so we have no local artifact row and no
-	// warm state. When Commodore knows the origin cluster, ask it for
-	// the format (and trigger any peer-relay URL minting) so we can
-	// build a local Helmsman relay URL that will resolve through
-	// federation when the relay actually GETs it.
-	if format == "" {
-		originClusterID := ""
-		tenantID := ""
-		if control.CommodoreClient != nil && artifactInternal != "" {
-			if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
-				originClusterID = resp.GetOriginClusterId()
-				tenantID = resp.GetTenantId()
+	// Front-door reauthorization (mirrors /play): the authoritative byte cluster
+	// — the adopted row's COALESCE(storage_cluster_id, origin_cluster_id) when we
+	// already hold it, else Commodore's fresh origin_cluster_id — must be local
+	// or in the tenant's fresh cluster_peers envelope. Refuse before adopting or
+	// handing Mist a relay URL, so a revoked peer stops serving on the next
+	// STREAM_SOURCE open. Local bytes always pass.
+	authoritativeCluster := desc.AuthoritativeCluster
+	if authoritativeCluster == "" {
+		authoritativeCluster = originClusterID
+	}
+	if !control.AuthoritativeClusterServable(authoritativeCluster, clusterPeers) {
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash":         artifactHash,
+			"authoritative_cluster": authoritativeCluster,
+		}).Warn("STREAM_SOURCE: artifact authoritative cluster not in tenant peer set; refusing")
+		return control.OfflineNotAuthorized, false, nil
+	}
+	// Direct-edge cross-cluster fill: viewer landed on an edge without going
+	// through /play, so there's no local artifact row and no warm state.
+	// STREAM_SOURCE is the front door here, so it must do the same
+	// resolve→authorize→adopt as /play (one shared path): enforce the tenant
+	// peer allowlist, federate, and adopt the local pointer row. RelayResolve
+	// then serves from that row. xc.StreamInternalName gives clips their
+	// nested relay route (clip/<stream>/<hash>.<ext>).
+	if !desc.Found && originClusterID != "" && tenantID != "" {
+		if xc, err := control.ResolveAndAdoptRemoteArtifact(context.Background(), artifactHash, contentType, artifactInternal, originClusterID, tenantID, clusterPeers); err == nil && xc != nil {
+			format = xc.Format
+			if xc.StreamInternalName != "" {
+				desc.StreamInternal = xc.StreamInternalName
 			}
-		}
-		if originClusterID != "" && tenantID != "" {
-			if xc, err := control.ResolveCrossClusterArtifactURL(context.Background(), artifactHash, contentType, tenantID, originClusterID); err == nil && xc != nil && xc.Format != "" {
-				format = xc.Format
-				p.logger.WithFields(logging.Fields{
-					"artifact_hash":  artifactHash,
-					"origin_cluster": originClusterID,
-					"format":         format,
-					"peer_relay":     xc.PeerRelayURL != "",
-				}).Debug("STREAM_SOURCE: cross-cluster artifact format resolved from origin")
-			}
+			p.logger.WithFields(logging.Fields{
+				"artifact_hash":  artifactHash,
+				"origin_cluster": originClusterID,
+				"format":         format,
+				"peer_relay":     xc.PeerRelayURL != "",
+			}).Debug("STREAM_SOURCE: cross-cluster artifact resolved + adopted from origin")
+		} else if err != nil {
+			p.logger.WithError(err).WithFields(logging.Fields{
+				"artifact_hash":  artifactHash,
+				"origin_cluster": originClusterID,
+			}).Debug("STREAM_SOURCE: cross-cluster resolve/authorize failed")
 		}
 	}
 	if format != "" {
@@ -3686,6 +3733,13 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 			continue
 		}
 		if loc.RecordingNodeID == "" {
+			continue
+		}
+		// Gate the recording peer against the tenant's fresh cluster-peer
+		// envelope: registry state can outlive a peer revocation, so a stale
+		// RecordingNodeID must not arrange a pull from a cluster the tenant is
+		// no longer allowed to reach.
+		if !control.AuthoritativeClusterServable(cid, dispatch.ClusterPeers) {
 			continue
 		}
 		peerCluster = cid

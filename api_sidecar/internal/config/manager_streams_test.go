@@ -12,7 +12,7 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	seed := &pb.ConfigSeed{
 		Templates: []*pb.StreamTemplate{
 			{Def: &pb.StreamDef{Name: "live", Tags: []string{"live"}}},
-			{Def: &pb.StreamDef{Name: "processing", Realtime: true, Tags: []string{"processing"}}},
+			{Def: &pb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, Tags: []string{"processing"}}},
 			{Def: &pb.StreamDef{Name: "processing+$", Realtime: true}},
 			{Def: &pb.StreamDef{Name: "processing+artifact-hash", Realtime: true}},
 			{Def: &pb.StreamDef{Name: "dvr", Tags: []string{"dvr"}}},
@@ -36,6 +36,9 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	}
 	if got := streams["dvr"]["realtime"]; got != false {
 		t.Fatalf("dvr realtime = %v, want false from seed", got)
+	}
+	if got := streams["processing"]["process_controlled_realtime"]; got != true {
+		t.Fatalf("processing process_controlled_realtime = %v, want true from seed", got)
 	}
 	if got := streams["dvr"]["DVR"]; got != 120000 {
 		t.Fatalf("dvr DVR = %v, want 120000", got)
