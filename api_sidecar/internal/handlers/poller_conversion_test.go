@@ -143,6 +143,40 @@ func TestConvertStreamAPI_FullPayload(t *testing.T) {
 	}
 }
 
+func TestConvertStreamAPI_ReplicatedFromMistTags(t *testing.T) {
+	streamData := map[string]interface{}{
+		"inputs": float64(1),
+		"tags":   []interface{}{"replicated"},
+	}
+
+	trigger := convertStreamAPIToMistTrigger("node-1", "live+test", "test", streamData, nil, nil, 0, logging.NewLogger())
+
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil {
+		t.Fatal("expected StreamLifecycleUpdate payload")
+	}
+	if !slu.GetReplicated() {
+		t.Fatal("expected replicated=true from Mist active_streams tags")
+	}
+}
+
+func TestConvertStreamAPI_ReplicatedFromMistRep(t *testing.T) {
+	streamData := map[string]interface{}{
+		"inputs": float64(1),
+		"rep":    true,
+	}
+
+	trigger := convertStreamAPIToMistTrigger("node-1", "live+test", "test", streamData, nil, nil, 0, logging.NewLogger())
+
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil {
+		t.Fatal("expected StreamLifecycleUpdate payload")
+	}
+	if !slu.GetReplicated() {
+		t.Fatal("expected replicated=true from Mist rep flag")
+	}
+}
+
 func TestConvertStreamAPI_MinimalPayload(t *testing.T) {
 	trigger := convertStreamAPIToMistTrigger("node-1", "live+test", "test", nil, nil, nil, 0, logging.NewLogger())
 
@@ -421,7 +455,7 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 			"live+demo_stream": map[string]interface{}{
 				"curr": []interface{}{float64(5), float64(1)},
 				"bw":   []interface{}{float64(100), float64(500)},
-				"rep":  true,
+				"tags": []interface{}{"replicated"},
 			},
 		},
 	}
@@ -511,7 +545,7 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 			t.Fatalf("expected 1 input, got %d", sd.Inputs)
 		}
 		if !sd.Replicated {
-			t.Fatal("expected replicated=true")
+			t.Fatal("expected replicated=true from Mist tags")
 		}
 	}
 	if nlu.ActiveStreams != 1 {

@@ -2056,10 +2056,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 						}
 					}
 
-					// Extract replicated status
-					if rep, ok := streamInfo["rep"].(bool); ok {
-						sd.Replicated = rep
-					}
+					sd.Replicated = mistStreamReplicated(streamInfo)
 
 					// Extract packet counts from pkts array
 					if pkts, ok := streamInfo["pkts"].([]any); ok {
@@ -2246,8 +2243,7 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 		downloadedBytes := uint64(downbytes)
 		streamLifecycleUpdate.DownloadedBytes = &downloadedBytes
 	}
-	// Extract replicated status (pull vs push stream)
-	if replicated, ok := streamData["replicated"].(bool); ok {
+	if replicated, ok := mistStreamReplicatedValue(streamData); ok {
 		streamLifecycleUpdate.Replicated = &replicated
 	}
 
@@ -2496,6 +2492,51 @@ func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]
 	}
 	if trackCount > 0 || len(trackDetails) > 0 {
 		return true
+	}
+	return false
+}
+
+func mistStreamReplicated(streamData map[string]any) bool {
+	replicated, ok := mistStreamReplicatedValue(streamData)
+	return ok && replicated
+}
+
+func mistStreamReplicatedValue(streamData map[string]any) (bool, bool) {
+	if streamData == nil {
+		return false, false
+	}
+	if replicated, ok := streamData["replicated"].(bool); ok {
+		return replicated, true
+	}
+	if replicated, ok := streamData["rep"].(bool); ok {
+		return replicated, true
+	}
+	if hasMistTag(streamData["tags"], "replicated") {
+		return true, true
+	}
+	return false, false
+}
+
+func hasMistTag(value any, want string) bool {
+	switch tags := value.(type) {
+	case []any:
+		for _, tag := range tags {
+			if s, ok := tag.(string); ok && s == want {
+				return true
+			}
+		}
+	case []string:
+		for _, tag := range tags {
+			if tag == want {
+				return true
+			}
+		}
+	case string:
+		for tag := range strings.FieldsSeq(tags) {
+			if tag == want {
+				return true
+			}
+		}
 	}
 	return false
 }
