@@ -405,6 +405,54 @@ func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	}
 }
 
+func TestDtshPutUsesCachedPresignedUpload(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+	body := []byte("generated dtsh bytes")
+	uploaded := make(chan []byte, 1)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method=%s want PUT", r.Method)
+		}
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upload body: %v", err)
+		}
+		uploaded <- got
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up.Close()
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	s.cache.Put("vod", hash, &ResolveResult{
+		DtshPresignedPut: up.URL,
+		URLTTLSeconds:    60,
+		cachedAt:         time.Now(),
+	})
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/internal/artifact/vod/"+file, bytes.NewReader(body))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+
+	select {
+	case got := <-uploaded:
+		if !bytes.Equal(got, body) {
+			t.Fatalf("uploaded=%q want=%q", got, body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for direct .dtsh upload")
+	}
+}
+
 func TestUploadDtshPutWithTrailingSlashLandsLocally(t *testing.T) {
 	dir := t.TempDir()
 	hash := "uploadabc"
