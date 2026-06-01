@@ -66,6 +66,9 @@ func TestUpdateNodeStatus_AllowsProviderRoleAcrossActiveClusters(t *testing.T) {
 	mock.ExpectQuery(`UPDATE quartermaster\.infrastructure_nodes n[\s\S]*c\.is_active = true[\s\S]*RETURNING n\.node_id, n\.cluster_id`).
 		WithArgs("edge-1", "maintenance", clusterID).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id"}).AddRow("edge-1", clusterID))
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'.*\(svc\.type = 'edge' OR svc\.type LIKE 'edge-%'\).*si\.node_id = \$1`).
+		WithArgs("edge-1").
+		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type[\s\S]*snapshot_cpu_percent[\s\S]*WHERE n\.node_id = \$1 OR n\.id::text = \$1`).
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
@@ -80,6 +83,49 @@ func TestUpdateNodeStatus_AllowsProviderRoleAcrossActiveClusters(t *testing.T) {
 	}
 	if resp.GetNode().GetStatus() != "active" {
 		t.Fatalf("node status = %q, want re-read node row", resp.GetNode().GetStatus())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestUpdateNodeStatus_FlipsAggregateEdgeInstanceUnhealthy verifies that taking
+// a node out of active status flips ALL its edge service instances unhealthy:
+// the aggregate `edge` row included, not only the edge-* subtypes. The predicate
+// must match `edge` exactly as well as `edge-%`.
+func TestUpdateNodeStatus_FlipsAggregateEdgeInstanceUnhealthy(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	clusterID := "cluster-1"
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT COALESCE(is_provider, false)
+		FROM quartermaster.tenants
+		WHERE id = $1
+	`)).
+		WithArgs("00000000-0000-0000-0000-000000000001").
+		WillReturnRows(sqlmock.NewRows([]string{"is_provider"}).AddRow(true))
+	mock.ExpectQuery(`UPDATE quartermaster\.infrastructure_nodes n[\s\S]*c\.is_active = true[\s\S]*RETURNING n\.node_id, n\.cluster_id`).
+		WithArgs("edge-1", "maintenance", clusterID).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id"}).AddRow("edge-1", clusterID))
+	// The unhealthy flip must cover both aggregate `edge` and edge-* subtypes.
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'.*\(svc\.type = 'edge' OR svc\.type LIKE 'edge-%'\).*si\.node_id = \$1`).
+		WithArgs("edge-1").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery(`SELECT n\.id, n\.node_id, n\.cluster_id, n\.node_name, n\.node_type[\s\S]*WHERE n\.node_id = \$1 OR n\.id::text = \$1`).
+		WithArgs("edge-1").
+		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
+
+	if _, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &pb.UpdateNodeStatusRequest{
+		NodeId:            "edge-1",
+		Status:            "maintenance",
+		ExpectedClusterId: &clusterID,
+	}); err != nil {
+		t.Fatalf("UpdateNodeStatus: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

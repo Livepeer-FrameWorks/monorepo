@@ -4275,10 +4275,10 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 	}
 
 	// Any non-active status transition makes the node ineligible for DNS.
-	// Aggregate `edge` DNS gates on n.status='active'; edge-* subtype DNS
-	// gates on service_instances.health_status. Flip every edge-* instance
-	// to 'unhealthy' so the polling Navigator reconcile would converge even
-	// if our targeted wake-up below fails.
+	// Both aggregate `edge` and the edge-* subtypes gate on
+	// service_instances.health_status (plus n.status='active'). Flip every
+	// edge service instance to 'unhealthy' so the polling Navigator reconcile
+	// would converge even if our targeted wake-up below fails.
 	if nextStatus != "active" {
 		if _, err := s.db.ExecContext(ctx, `
 			UPDATE quartermaster.service_instances si
@@ -4289,7 +4289,7 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 			    updated_at = NOW()
 			FROM quartermaster.services svc
 			WHERE svc.service_id = si.service_id
-			  AND svc.type LIKE 'edge-%'
+			  AND (svc.type = 'edge' OR svc.type LIKE 'edge-%')
 			  AND si.node_id = $1
 		`, canonicalNodeID); err != nil {
 			s.logger.WithError(err).WithField("node_id", canonicalNodeID).
@@ -4297,7 +4297,7 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 		}
 		if canonicalClusterID != "" {
 			pairs := map[dnsPairKey]struct{}{}
-			for _, mapping := range edgeCapToServiceType {
+			for _, mapping := range edgeServiceTypeDerivations {
 				pairs[dnsPairKey{canonicalClusterID, mapping.serviceType}] = struct{}{}
 			}
 			s.fireNavigatorSyncForPairs(pairs)
@@ -4901,13 +4901,17 @@ func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.Up
 	return &emptypb.Empty{}, nil
 }
 
-// edgeCapToServiceType maps a capability flag in NodeAliveness to the
-// corresponding services.type. The list is closed; new capability types must
-// land here and in pkg/dns/public_services.go in the same change.
-var edgeCapToServiceType = []struct {
+// edgeServiceTypeDerivations maps each edge services.type to the predicate that
+// decides whether a reporting node advertises it. The four capability subtypes
+// gate on their NodeAliveness flag; aggregate `edge` is unconditional: any
+// healthy edge node is an `edge` member regardless of capability. The list is
+// closed; new edge service types must land here and in pkg/dns/public_services.go
+// in the same change.
+var edgeServiceTypeDerivations = []struct {
 	serviceType string
 	cap         func(c *pb.EdgeCapabilities) bool
 }{
+	{"edge", func(c *pb.EdgeCapabilities) bool { return true }},
 	{"edge-ingest", func(c *pb.EdgeCapabilities) bool { return c.GetIngest() }},
 	{"edge-egress", func(c *pb.EdgeCapabilities) bool { return c.GetEgress() }},
 	{"edge-storage", func(c *pb.EdgeCapabilities) bool { return c.GetStorage() }},
@@ -4965,17 +4969,17 @@ func scanPriorInst(rows *sql.Rows) (map[string]instBefore, error) {
 // ReportAliveNodes ingests Foghorn's per-node DNS-relevant state. For each
 // reported node it:
 //
-//   - Refreshes infrastructure_nodes.last_heartbeat (only when is_healthy=true;
-//     refreshing on disconnect would extend the aggregate `edge` DNS gate,
-//     which uses n.last_heartbeat).
+//   - Refreshes infrastructure_nodes.last_heartbeat only when is_healthy=true;
+//     heartbeat remains mesh liveness, while DNS membership is carried by
+//     service_instances.health_status.
 //   - Updates external_ip when Foghorn sent a valid IP literal.
-//   - UPSERTs the edge-* service_instances rows that match the node's
-//     capability flags, marking them healthy when both the cap and the node
-//     are healthy. Caps that drop to false on an existing row become
+//   - UPSERTs the aggregate edge service_instance plus edge-* capability rows,
+//     marking them healthy when the derivation predicate and node health both
+//     allow it. Derived services that drop false on an existing row become
 //     'unhealthy' (present-but-unhealthy, not deleted).
 //
-// When any (cluster_id, edge-service_type) pair's DNS-visible state changes —
-// service_instances health flip, external_ip change, or cluster_id change —
+// When any (cluster_id, edge-service_type) pair's DNS-visible state changes,
+// from service_instances health, external_ip, or cluster_id changes,
 // Quartermaster fires Navigator.SyncDNS for that pair after commit. The 60s
 // Navigator reconcile loop is the backstop.
 func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
@@ -4998,7 +5002,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 	}
 
 	updates := make([]nodeUpdate, 0, len(nodes))
-	caps := make([]capState, 0, len(nodes)*len(edgeCapToServiceType))
+	caps := make([]capState, 0, len(nodes)*len(edgeServiceTypeDerivations))
 
 	for _, n := range nodes {
 		id := strings.TrimSpace(n.GetNodeId())
@@ -5023,7 +5027,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		}
 		updates = append(updates, u)
 
-		for _, mapping := range edgeCapToServiceType {
+		for _, mapping := range edgeServiceTypeDerivations {
 			caps = append(caps, capState{
 				nodeID:      id,
 				clusterID:   u.clusterID,
@@ -5036,9 +5040,9 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		return &emptypb.Empty{}, nil
 	}
 
-	// Ensure edge-* services rows exist BEFORE the main tx: ensureServiceExists
+	// Ensure edge service rows exist BEFORE the main tx: ensureServiceExists
 	// uses its own transaction with an advisory lock.
-	for _, mapping := range edgeCapToServiceType {
+	for _, mapping := range edgeServiceTypeDerivations {
 		if _, err := s.ensureServiceExists(ctx, mapping.serviceType, "http"); err != nil {
 			return nil, err
 		}
@@ -5103,7 +5107,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		FROM quartermaster.service_instances si
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.node_id = ANY($1)
-		  AND svc.type LIKE 'edge-%'
+		  AND (svc.type = 'edge' OR svc.type LIKE 'edge-%')
 	`, pq.Array(nodeIDs))
 		if err != nil {
 			return fmt.Errorf("failed to read prior edge service health: %w", err)
@@ -5113,10 +5117,9 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 			return fmt.Errorf("scan prior si: %w", err)
 		}
 
-		// Per-node heartbeat + external_ip. Heartbeat ONLY for healthy nodes —
-		// listHealthyEdgeNodes gates aggregate `edge` DNS on n.last_heartbeat, so
-		// refreshing it for unhealthy reports would extend DNS eligibility for a
-		// node Foghorn just declared dead.
+		// Per-node heartbeat + external_ip. Heartbeat is refreshed only for
+		// healthy nodes; edge DNS membership reads service_instances.health_status
+		// set below, so last_heartbeat stays a mesh liveness signal.
 		upNodeIDs := make([]string, 0, len(updates))
 		upExternalIPs := make([]string, 0, len(updates))
 		upRefreshHB := make([]bool, 0, len(updates))
@@ -5140,7 +5143,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 			return fmt.Errorf("failed to update node state: %w", execErr)
 		}
 
-		// UPSERT capabilities. We only INSERT when the cap is currently true —
+		// UPSERT derived edge service rows. We only INSERT when the derivation is true:
 		// don't materialise rows for caps a node has never advertised.
 		// For caps that flip false on an existing row we UPDATE to 'unhealthy'.
 		for _, c := range caps {
@@ -5166,6 +5169,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 				FROM quartermaster.infrastructure_nodes n
 				WHERE n.node_id = $2::varchar(100)
 				  AND n.status = 'active'
+				  AND n.node_type = 'edge'
 				ON CONFLICT (instance_id) DO UPDATE
 				SET node_id = EXCLUDED.node_id,
 				    service_id = EXCLUDED.service_id,
@@ -5203,11 +5207,11 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 	}
 
 	// Compute dirty (cluster, type) pairs across two change axes:
-	//   - health_status flip on an edge-* instance (cap toggled or node health flipped)
+	//   - health_status flip on an edge service instance
 	//   - external_ip change on the underlying node (A record value changes)
 	//
 	// Cluster moves are not mutated here, so the dirty cluster is always the
-	// persisted cluster — taken from prior row state or the node row.
+	// persisted cluster from prior row state or the node row.
 	dirty := map[dnsPairKey]struct{}{}
 	for _, c := range caps {
 		prior, hadRow := priorInst[c.nodeID+"|"+c.serviceType]
@@ -5231,7 +5235,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 			dirty[dnsPairKey{clusterForDirty, c.serviceType}] = struct{}{}
 		}
 	}
-	// IP deltas at the node level: wake every edge-* pair for the persisted cluster.
+	// IP deltas at the node level: wake every edge service pair for the persisted cluster.
 	for _, u := range updates {
 		prior, ok := priorNodes[u.nodeID]
 		if !ok || prior.clusterID == "" {
@@ -5240,7 +5244,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		if !u.hasExternalIP || prior.externalIP == u.externalIP {
 			continue
 		}
-		for _, mapping := range edgeCapToServiceType {
+		for _, mapping := range edgeServiceTypeDerivations {
 			dirty[dnsPairKey{prior.clusterID, mapping.serviceType}] = struct{}{}
 		}
 	}
@@ -5489,18 +5493,13 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 
 // ListHealthyNodesForDNS returns infrastructure nodes eligible for DNS records.
 //
-// Two resolution strategies based on service_type:
+// Most service types resolve through service_instances: a node is healthy when
+// it has a matching row with health_status='healthy' and a recent
+// last_health_check. Edge services use the same path; Foghorn's ReportAliveNodes
+// owns those rows. Pool-assigned media services resolve their logical cluster
+// through service_cluster_assignments.
 //
-//  1. Edge queries (service_type = "edge" or "edge-*"): resolves by node_type.
-//     Edge nodes run helmsman+mistserver and register capabilities at Foghorn,
-//     not via BootstrapService. Health is determined by last_heartbeat
-//     (refreshed by Foghorn → ReportAliveNodes).
-//
-//  2. Platform service queries (all other service_type values): resolves by
-//     service_instance join. A node is healthy when it has a service_instance
-//     with health_status='healthy' and a recent last_health_check.
-//
-// Both paths require: accessible cluster, non-empty external_ip.
+// All paths require: accessible cluster, non-empty external_ip.
 func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *pb.ListHealthyNodesForDNSRequest) (*pb.ListHealthyNodesForDNSResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
 
@@ -5551,14 +5550,11 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		serviceLookupType = "vmauth"
 	}
 
-	// "edge" is the aggregate routing target (nearest eligible edge node).
-	// Health is determined by mesh heartbeat, not service_instance status.
-	// "edge-*" subtypes (edge-egress, edge-ingest, etc.) are capability
-	// registrations written by Foghorn via BootstrapService — they use the
-	// standard service_instance path like any other service.
-	if serviceTypeFilter == models.NodeTypeEdge {
-		return s.listHealthyEdgeNodes(ctx, baseWhere, baseArgs, staleThreshold)
-	}
+	// Aggregate `edge` and the edge-* capability subtypes both resolve through
+	// the standard service_instances path: Foghorn's ReportAliveNodes writes a
+	// durable health row per (node, edge service type), so DNS membership and
+	// targeted Navigator wakeups react in seconds. The edge node is the media
+	// cluster physically, so si.cluster_id == the logical media cluster.
 	// Pool-style media services (foghorn, chandler, livepeer-gateway) resolve
 	// their logical media-cluster identity via service_cluster_assignments.
 	// Public telemetry DNS is backed by vmauth instances, but it has the same
@@ -5566,9 +5562,6 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	// assignment per media cluster it serves.
 	// The physical service_instances row stays bound to the host cluster, so
 	// reads must follow the assignment table to surface the right cluster_id.
-	// Edge subtypes (edge-ingest/egress/storage/processing) keep the standard
-	// service_instances path: edge nodes are the media cluster physically, so
-	// si.cluster_id == the logical media cluster.
 	if dns.IsPoolAssignedServiceType(serviceLookupType) || serviceTypeFilter == "telemetry" {
 		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 	}
@@ -5597,70 +5590,6 @@ func synthesizePublicHost(serviceType, clusterID, clusterName, baseURL string) s
 	return fqdn
 }
 
-// listHealthyEdgeNodes returns edge nodes with a recent heartbeat.
-// Edge nodes run helmsman+mistserver and register at Foghorn, not via
-// BootstrapService. Health is determined by last_heartbeat (refreshed by
-// Foghorn → ReportAliveNodes), not by service_instance status.
-func (s *QuartermasterServer) listHealthyEdgeNodes(ctx context.Context, baseWhere string, baseArgs []any, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
-	args := append([]any{}, baseArgs...)
-	args = append(args, models.NodeTypeEdge)
-	// n.status = 'active' is the operator-controlled DNS gate: maintenance/
-	// offline/retired/evicted nodes are excluded even when their heartbeat
-	// is fresh.
-	where := baseWhere + fmt.Sprintf(" AND n.node_type = $%d AND n.external_ip IS NOT NULL AND n.status = 'active'", len(baseArgs)+1)
-	argIdx := len(args) + 1
-
-	var totalNodes int32
-	totalQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, where)
-	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes)
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	healthArgs := append([]any{}, args...)
-	healthArgs = append(healthArgs, staleThreshold)
-	healthWhere := where + fmt.Sprintf(" AND n.last_heartbeat > NOW() - ($%d * INTERVAL '1 second')", argIdx)
-
-	var healthyNodes int32
-	healthyQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT n.id) FROM quartermaster.infrastructure_nodes n %s`, healthWhere)
-	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, healthyQuery, healthArgs...).Scan(&healthyNodes)
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	rows, err := retryQueryContext(ctx, s.db, fmt.Sprintf(`
-		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
-		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
-		       n.latitude, n.longitude,
-		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at%s%s
-		FROM quartermaster.infrastructure_nodes n
-		%s
-	`, prefixedNodeOwnerColumn, prefixedNodeSnapshotColumns, healthWhere), healthArgs...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var nodes []*pb.InfrastructureNode
-	for rows.Next() {
-		node, err := scanNode(rows)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan node")
-			continue
-		}
-		nodes = append(nodes, node)
-	}
-
-	return &pb.ListHealthyNodesForDNSResponse{
-		Nodes:        nodes,
-		TotalNodes:   totalNodes,
-		HealthyNodes: healthyNodes,
-	}, nil
-}
-
 // listHealthyServiceNodes returns nodes with healthy service instances matching the type.
 // Used for platform services (bridge, foghorn, chartroom, etc.) that register
 // via BootstrapService and have service_instance health tracking.
@@ -5679,6 +5608,14 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 	// excluded from DNS even when a recent Foghorn heartbeat marked the
 	// service_instances row healthy.
 	where += " AND n.external_ip IS NOT NULL AND n.status = 'active'"
+
+	// Edge service names (aggregate `edge` and the edge-* subtypes) must only
+	// ever surface edge nodes. The writer is Foghorn-only, but the read path
+	// stays defensive: a stray instance row can never route a non-edge node
+	// under an edge name.
+	if serviceTypeFilter == models.NodeTypeEdge || strings.HasPrefix(serviceTypeFilter, "edge-") {
+		where += " AND n.node_type = 'edge'"
+	}
 
 	servicesJoin := "\n\t\tJOIN quartermaster.services s ON si.service_id = s.service_id"
 	siJoin := `

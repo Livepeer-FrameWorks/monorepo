@@ -388,7 +388,12 @@ func TestListHealthyNodesForDNS_CustomStaleThreshold(t *testing.T) {
 	}
 }
 
-func TestListHealthyNodesForDNS_EdgeQueryUsesHeartbeatNotServiceInstances(t *testing.T) {
+// TestListHealthyNodesForDNS_EdgeAggregateUsesServiceInstancePath pins that
+// aggregate `edge` resolves through the durable service_instances path (like the
+// edge-* subtypes). Membership reads si.health_status, so a node Foghorn just
+// marked unhealthy drops in seconds. The node_type='edge' guard keeps a stray
+// non-edge instance from surfacing.
+func TestListHealthyNodesForDNS_EdgeAggregateUsesServiceInstancePath(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -399,18 +404,21 @@ func TestListHealthyNodesForDNS_EdgeQueryUsesHeartbeatNotServiceInstances(t *tes
 
 	edgeSvc := "edge"
 
-	// Edge path: total count — filters by node_type=edge
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
+	// Service-instance shape: the si/services joins (edge nodes are the FROM
+	// table, service_instances is JOINed), s.type=$1, and the defensive
+	// node_type='edge' guard. The healthy count gates on si.health_status, not
+	// n.last_heartbeat.
+	siEdgeShape := `JOIN quartermaster\.service_instances si.*JOIN quartermaster\.services s ON si\.service_id = s\.service_id.*s\.type = \$1.*n\.node_type = 'edge'`
+
+	mock.ExpectQuery(`(?s)SELECT COUNT\(DISTINCT n\.id\).*` + siEdgeShape).
 		WithArgs("edge").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
-	// Edge path: healthy count uses last_heartbeat (not si.health_status)
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
+	mock.ExpectQuery(`(?s)SELECT COUNT\(DISTINCT n\.id\).*`+siEdgeShape+`.*si\.health_status = 'healthy'`).
 		WithArgs("edge", int32(300)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
-	// Edge path: main query returns healthy edge nodes
-	mock.ExpectQuery(`SELECT DISTINCT n\.id, n\.node_id`).
+	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*`+siEdgeShape).
 		WithArgs("edge", int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "1.2.3.4")...))
 
@@ -518,10 +526,10 @@ func TestListHealthyNodesForDNS_FiltersByClusterID(t *testing.T) {
 }
 
 // TestReportAliveNodesUpsertsEdgeCapabilities pins event-driven edge
-// membership ingestion: for each NodeAliveness with an edge-* capability set, QM
-// upserts the matching service_instances row. Caps not set are not
-// materialised; existing rows for caps flipped off get UPDATE'd to unhealthy
-// (covered by a separate test).
+// membership ingestion: a healthy node always upserts the aggregate `edge` row
+// (unconditional), plus the matching service_instances row for each edge-*
+// capability that is set. Caps not set are not materialised; existing rows for
+// caps flipped off get UPDATE'd to unhealthy (covered by a separate test).
 func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -531,8 +539,9 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	// ensureServiceExists runs once per edge-* type (4 types), each in its own tx.
-	for range []string{"edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
+	// ensureServiceExists runs once per edge service type: aggregate `edge`
+	// plus the four capability subtypes, each in its own tx.
+	for range []string{"edge", "edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
 		mock.ExpectBegin()
 		mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
 			WithArgs(sqlmock.AnyArg()).
@@ -543,22 +552,22 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 		mock.ExpectCommit()
 	}
 
-	// Main tx: prior node read → update infrastructure_nodes → prior service_instances → per-cap upsert.
+	// Main tx: prior node read, node update, prior service_instances read, per-type upsert.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT node_id, cluster_id, COALESCE\(host\(external_ip\), ''\)\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = ANY\(\$1\)`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
 			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
-	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\).*FROM quartermaster\.service_instances si.*svc\.type LIKE 'edge-%'`).
+	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\).*FROM quartermaster\.service_instances si.*\(svc\.type = 'edge' OR svc\.type LIKE 'edge-%'\)`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}))
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Two caps on → two ON CONFLICT upserts. The other two caps are false →
-	// no row exists → no UPDATE issued.
-	for range []int{0, 1} {
-		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*SELECT \$1::varchar\(100\).*WHERE instance_id = \$1::varchar\(100\).*WHERE n\.node_id = \$2::varchar\(100\).*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
+	// Healthy node: aggregate `edge` upsert plus one upsert per set cap
+	// (ingest, egress). The two unset caps have no prior row, so no statement.
+	for range []int{0, 1, 2} {
+		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*SELECT \$1::varchar\(100\).*WHERE instance_id = \$1::varchar\(100\).*WHERE n\.node_id = \$2::varchar\(100\).*AND n\.node_type = 'edge'.*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
@@ -597,7 +606,7 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	for range []string{"edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
+	for range []string{"edge", "edge-ingest", "edge-egress", "edge-storage", "edge-processing"} {
 		mock.ExpectBegin()
 		mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(`SELECT service_id FROM quartermaster\.services`).WithArgs(sqlmock.AnyArg()).
@@ -610,7 +619,8 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).
 			AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
-	// Prior state: edge-egress instance was healthy. Now cap is off.
+	// Prior state: edge-egress instance was healthy. Now cap is off (but the
+	// node itself is still healthy, so aggregate `edge` stays a member).
 	mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type, si\.cluster_id, COALESCE\(si\.health_status, ''\)`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
@@ -618,7 +628,12 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Cap is off + existing row → UPDATE to unhealthy.
+	// Aggregate `edge` is unconditional: INSERT upsert (healthy) for the live
+	// node. Processed first because `edge` leads the derivation list.
+	mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// edge-egress cap is off + existing healthy row: UPDATE to unhealthy.
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'`).
 		WithArgs("edge-egress", "edge-eu-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
