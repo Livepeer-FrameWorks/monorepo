@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
@@ -22,10 +23,12 @@ const (
 )
 
 type Client struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
-	executor   failsafe.Executor[*http.Response]
+	apiKey           string
+	baseURL          string
+	httpClient       *http.Client
+	executor         failsafe.Executor[*http.Response]
+	recordSetLocks   map[string]*sync.Mutex
+	recordSetLocksMu sync.Mutex
 }
 
 func NewClient(apiKey string) *Client {
@@ -35,7 +38,8 @@ func NewClient(apiKey string) *Client {
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
-		executor: clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig()), //nolint:bodyclose
+		executor:       clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig()), //nolint:bodyclose
+		recordSetLocks: map[string]*sync.Mutex{},
 	}
 }
 
@@ -183,6 +187,27 @@ func (c *Client) DeleteRecord(ctx context.Context, zoneID, recordID int64) error
 
 func (c *Client) ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []Record) error {
 	name = normalizeRecordName(name)
+	unlock := c.lockRecordSet(zoneID, recordType, name)
+	defer unlock()
+
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if err := c.reconcileRecordSetOnce(ctx, zoneID, name, recordType, desired); err != nil {
+			lastErr = err
+			if !retryableRecordSetReconcileError(err) {
+				return err
+			}
+			if err := sleepRecordSetRetry(ctx, attempt); err != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func (c *Client) reconcileRecordSetOnce(ctx context.Context, zoneID int64, name string, recordType int, desired []Record) error {
 	current, err := c.ListRecords(ctx, zoneID)
 	if err != nil {
 		return err
@@ -233,6 +258,51 @@ func (c *Client) ReconcileRecordSet(ctx context.Context, zoneID int64, name stri
 		}
 	}
 	return nil
+}
+
+func (c *Client) lockRecordSet(zoneID int64, recordType int, name string) func() {
+	key := fmt.Sprintf("%d:%d:%s", zoneID, recordType, name)
+	c.recordSetLocksMu.Lock()
+	if c.recordSetLocks == nil {
+		c.recordSetLocks = map[string]*sync.Mutex{}
+	}
+	lock := c.recordSetLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		c.recordSetLocks[key] = lock
+	}
+	c.recordSetLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
+func retryableRecordSetReconcileError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "dnszone.record_not_found") {
+		return true
+	}
+	for _, status := range []string{"status=408", "status=409", "status=425", "status=429", "status=500", "status=502", "status=503", "status=504"} {
+		if strings.Contains(msg, status) {
+			return true
+		}
+	}
+	return false
+}
+
+func sleepRecordSetRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(100*(attempt+1)) * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func normalizeDomain(domain string) string {

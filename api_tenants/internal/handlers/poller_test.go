@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,39 @@ func TestPollOnceRetriesSchemaVersionMismatch(t *testing.T) {
 
 	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0); err != nil {
 		t.Fatalf("pollOnce returned error after retry: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollOnceExcludesFoghornOwnedEdgeServices(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
+		if expectedSQL != "poller excludes edge services" {
+			return nil
+		}
+		if !strings.Contains(actualSQL, "s.type <> 'edge'") {
+			return fmt.Errorf("poller query does not exclude aggregate edge service: %s", actualSQL)
+		}
+		if !strings.Contains(actualSQL, "s.type NOT LIKE 'edge-%'") {
+			return fmt.Errorf("poller query does not exclude edge capability services: %s", actualSQL)
+		}
+		return nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger())
+
+	rows := sqlmock.NewRows([]string{
+		"instance_id", "service_id", "cluster_id", "protocol", "advertise_host", "port",
+		"path", "last_health_check", "default_protocol", "assigned_cluster_id", "assigned_base_url",
+	})
+	mock.ExpectQuery("poller excludes edge services").WillReturnRows(rows)
+
+	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0); err != nil {
+		t.Fatalf("pollOnce returned error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

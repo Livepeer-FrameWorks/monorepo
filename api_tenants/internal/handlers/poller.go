@@ -186,7 +186,8 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	            LIMIT 1
 	        ) assigned ON TRUE
 	        WHERE si.status IN ('running','starting')
-	          AND si.service_id NOT LIKE 'edge-%'
+	          AND s.type <> 'edge'
+	          AND s.type NOT LIKE 'edge-%'
 	          AND (si.last_health_check IS NULL OR si.last_health_check < $1)
 	        ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
 	        LIMIT $2
