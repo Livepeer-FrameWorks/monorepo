@@ -22,11 +22,14 @@ func (h *relayFreezeHandoff) OnLocalDtshGenerated(kind, hash, localPath string) 
 		logger.WithField("asset_kind", kind).
 			WithField("asset_hash", hash).
 			WithField("local_path", localPath).
-			Debug("Relay accepted .dtsh PUT; nudging storage check")
+			Debug("Relay accepted .dtsh PUT; updating artifact report")
 	}
-	// Nudge the storage manager to re-scan; freeze candidate picks the
-	// new sidecar up promptly instead of waiting for the next periodic
-	// pass. Safe to call regardless of whether a freeze is needed —
-	// TriggerStorageCheck is rate-limited internally.
+	// The direct relay PUT already made the sidecar durable locally. Update
+	// the artifact heartbeat immediately so Foghorn can request incremental
+	// .dtsh sync without waiting for the 60s filesystem scan.
+	markLocalDtshPresent(kind, hash, localPath)
+	TriggerArtifactReport()
+
+	// Keep the storage-pressure path nudged as a secondary backstop.
 	TriggerStorageCheck()
 }

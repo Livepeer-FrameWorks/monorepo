@@ -3266,6 +3266,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
 		}).Warn("StreamLifecycleUpdate missing stream_id")
+		return "", false, nil
 	}
 
 	// Enrich with StartedAt from state manager (for duration calculation)
@@ -3327,7 +3328,7 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
-		}).Warn("Dropping client lifecycle update without stream_id")
+		}).Debug("Dropping client lifecycle update without stream_id")
 		return "", false, nil
 	}
 

@@ -13,6 +13,17 @@ import (
 
 // --- convertStreamAPIToMistTrigger ---
 
+func TestInternalMistRuntimeStreamDetection(t *testing.T) {
+	if !isInternalMistRuntimeStream("processing+artifact") {
+		t.Fatal("expected processing+ runtime to be internal")
+	}
+	for _, streamName := range []string{"live+stream", "pull+stream", "vod+asset", "dvr+asset", "bare-stream"} {
+		if isInternalMistRuntimeStream(streamName) {
+			t.Fatalf("expected %s to be external", streamName)
+		}
+	}
+}
+
 func TestConvertStreamAPI_FullPayload(t *testing.T) {
 	streamData := map[string]interface{}{
 		"viewers":     float64(42),
@@ -166,6 +177,25 @@ func TestConvertStreamAPI_ZeroInputPlaceholderIsNotLive(t *testing.T) {
 	}
 	if slu.Status != "waiting" {
 		t.Fatalf("expected waiting status for zero-input placeholder, got %q", slu.Status)
+	}
+}
+
+func TestConvertStreamAPI_ZeroInputsWithStaleTracksIsNotLive(t *testing.T) {
+	streamData := map[string]interface{}{
+		"viewers": float64(1),
+		"inputs":  float64(0),
+	}
+	tracks := []map[string]interface{}{
+		{"type": "video", "height": 480, "codec": "H264"},
+	}
+
+	trigger := convertStreamAPIToMistTrigger("node-1", "live+demo", "demo", streamData, nil, tracks, 1, logging.NewLogger())
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil {
+		t.Fatal("expected StreamLifecycleUpdate payload")
+	}
+	if slu.Status != "waiting" {
+		t.Fatalf("expected waiting status when Mist reports zero inputs, got %q", slu.Status)
 	}
 }
 
@@ -766,6 +796,80 @@ func TestScanVODDirectory_DuplicateHashKeepsFirstSortedFile(t *testing.T) {
 	}
 	if info.Format != "mp4" {
 		t.Fatalf("format = %q, want mp4", info.Format)
+	}
+}
+
+func TestMarkLocalDtshPresentVODUpdatesArtifactIndex(t *testing.T) {
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{artifactIndex: make(map[string]*ClipInfo)}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	base := t.TempDir()
+	vodDir := filepath.Join(base, "vod")
+	if err := os.MkdirAll(vodDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hash := "aabbccddeeff001122"
+	mediaPath := filepath.Join(vodDir, hash+".mkv")
+	if err := os.WriteFile(mediaPath, make([]byte, 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dtshPath := mediaPath + ".dtsh"
+	if err := os.WriteFile(dtshPath, make([]byte, 128), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	markLocalDtshPresent("vod", hash, dtshPath)
+
+	info := prometheusMonitor.artifactIndex[hash]
+	if info == nil {
+		t.Fatal("expected VOD artifact index entry")
+	}
+	if !info.HasDtsh {
+		t.Fatal("expected HasDtsh=true")
+	}
+	if info.FilePath != mediaPath {
+		t.Fatalf("file path = %q, want %q", info.FilePath, mediaPath)
+	}
+	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+		t.Fatalf("artifact type = %v, want VOD", info.ArtifactType)
+	}
+}
+
+func TestMarkLocalDtshPresentClipInfersStream(t *testing.T) {
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{artifactIndex: make(map[string]*ClipInfo)}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
+
+	base := t.TempDir()
+	streamDir := filepath.Join(base, "clips", "stream-a")
+	if err := os.MkdirAll(streamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hash := "bbccddeeff00112233"
+	mediaPath := filepath.Join(streamDir, hash+".mp4")
+	if err := os.WriteFile(mediaPath, make([]byte, 512), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dtshPath := mediaPath + ".dtsh"
+	if err := os.WriteFile(dtshPath, make([]byte, 64), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	markLocalDtshPresent("clip", hash, dtshPath)
+
+	info := prometheusMonitor.artifactIndex[hash]
+	if info == nil {
+		t.Fatal("expected clip artifact index entry")
+	}
+	if info.StreamName != "stream-a" {
+		t.Fatalf("stream name = %q, want stream-a", info.StreamName)
+	}
+	if !info.HasDtsh {
+		t.Fatal("expected HasDtsh=true")
+	}
+	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
+		t.Fatalf("artifact type = %v, want CLIP", info.ArtifactType)
 	}
 }
 

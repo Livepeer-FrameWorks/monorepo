@@ -23,6 +23,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,10 @@ import (
 // node and stream lifecycle on the 10s cadence. The clients API is QoE/diagnostic only;
 // USER_NEW/USER_END remain authoritative for connect/disconnect and billing.
 const clientLifecycleTickStride = 6
+
+func isInternalMistRuntimeStream(streamName string) bool {
+	return streamident.Parse(streamName).Kind == streamident.KindArtifactProcessing
+}
 
 // ClipInfo represents local clip metadata for VOD serving
 type ClipInfo struct {
@@ -296,10 +301,27 @@ func (pm *PrometheusMonitor) TriggerImmediatePoll() {
 	go pm.emitStreamLifecycle(nodeID, baseURL)
 }
 
+func (pm *PrometheusMonitor) TriggerArtifactReport() {
+	pm.mutex.RLock()
+	nodeID := pm.nodeID
+	baseURL := pm.baseURL
+	pm.mutex.RUnlock()
+	if nodeID == "" || baseURL == "" {
+		return
+	}
+	go pm.emitNodeLifecycle(nodeID, baseURL)
+}
+
 // TriggerImmediatePoll triggers immediate polling if the monitor is initialized
 func TriggerImmediatePoll() {
 	if prometheusMonitor != nil {
 		prometheusMonitor.TriggerImmediatePoll()
+	}
+}
+
+func TriggerArtifactReport() {
+	if prometheusMonitor != nil {
+		prometheusMonitor.TriggerArtifactReport()
 	}
 }
 
@@ -734,7 +756,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		geoContext = fmt.Sprintf("%.2f,%.2f", *latitude, *longitude)
 	}
 
-	monitorLogger.WithFields(logging.Fields{
+	activeStreamLog := monitorLogger.WithFields(logging.Fields{
 		"node_id":       nodeID,
 		"stream_name":   streamName,
 		"viewers":       viewers,
@@ -746,7 +768,12 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		"downbytes":     downbytes,
 		"health_tracks": len(trackDetails),
 		"location":      geoContext,
-	}).Info("Processing active stream")
+	})
+	if isInternalMistRuntimeStream(streamName) {
+		activeStreamLog.Debug("Processing internal active stream")
+		return
+	}
+	activeStreamLog.Info("Processing active stream")
 
 	// Analytics data forwarded via MistTrigger below
 
@@ -1070,6 +1097,9 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 					monitorLogger.WithField("streamData", client[streamIdx]).Error("Failed to parse stream name as string")
 					continue
 				}
+				if isInternalMistRuntimeStream(streamName) {
+					continue
+				}
 
 				protocol, ok := client[protocolIdx].(string)
 				if !ok {
@@ -1329,6 +1359,70 @@ func scanLocalArtifacts(basePath string) (uint64, int) {
 	}
 
 	return totalSize, artifactCount
+}
+
+func markLocalDtshPresent(kind, hash, localPath string) {
+	if prometheusMonitor == nil || hash == "" || localPath == "" || !strings.HasSuffix(localPath, ".dtsh") {
+		return
+	}
+	var artifactType pb.ArtifactEvent_ArtifactType
+	switch kind {
+	case "vod":
+		artifactType = pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+	case "clip":
+		artifactType = pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+	default:
+		return
+	}
+
+	mediaPath := strings.TrimSuffix(localPath, ".dtsh")
+	info, err := os.Stat(mediaPath)
+	if err != nil || info == nil || info.IsDir() {
+		return
+	}
+	ext := filepath.Ext(mediaPath)
+	if ext == "" {
+		return
+	}
+
+	prometheusMonitor.mutex.Lock()
+	defer prometheusMonitor.mutex.Unlock()
+
+	existing := prometheusMonitor.artifactIndex[hash]
+	if existing == nil {
+		existing = &ClipInfo{
+			CreatedAt:    info.ModTime(),
+			LastAccessed: info.ModTime(),
+		}
+	}
+	existing.FilePath = mediaPath
+	existing.Format = strings.TrimPrefix(ext, ".")
+	existing.SizeBytes = uint64(info.Size())
+	existing.HasDtsh = true
+	existing.ArtifactType = artifactType
+	if existing.CreatedAt.IsZero() {
+		existing.CreatedAt = info.ModTime()
+	}
+	if existing.LastAccessed.IsZero() {
+		existing.LastAccessed = info.ModTime()
+	}
+	if kind == "clip" {
+		if streamName := streamNameFromClipPath(localPath); streamName != "" {
+			existing.StreamName = streamName
+		}
+	}
+	prometheusMonitor.artifactIndex[hash] = existing
+	prometheusMonitor.lastArtifactScan = time.Now()
+}
+
+func streamNameFromClipPath(path string) string {
+	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "clips" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 // scanVODDirectory scans the VOD directory for user-uploaded assets
@@ -2394,10 +2488,13 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 }
 
 func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]any, trackCount int) bool {
-	if trackCount > 0 || len(trackDetails) > 0 {
+	if inputs, ok := streamData["inputs"].(float64); ok && inputs > 0 {
 		return true
 	}
-	if inputs, ok := streamData["inputs"].(float64); ok && inputs > 0 {
+	if _, ok := streamData["inputs"]; ok {
+		return false
+	}
+	if trackCount > 0 || len(trackDetails) > 0 {
 		return true
 	}
 	return false

@@ -2656,7 +2656,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		"blocking":       blocking,
 		"payload_type":   fmt.Sprintf("%T", trigger.GetTriggerPayload()),
 		"payload_is_nil": trigger.GetTriggerPayload() == nil,
-	}).Info("Processing typed MistServer trigger - TRACE")
+	}).Debug("Processing typed MistServer trigger")
 
 	if mistTriggerProcessor == nil {
 		incMistTrigger(triggerType, blocking, "processor_missing")
@@ -2721,7 +2721,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		logger.WithFields(logging.Fields{
 			"trigger_type": triggerType,
 			"request_id":   requestID,
-		}).Info("Successfully processed non-blocking trigger")
+		}).Debug("Successfully processed non-blocking trigger")
 		return
 	}
 
@@ -4407,7 +4407,7 @@ func processFreezeProgress(progress *pb.FreezeProgress, nodeID string, logger lo
 		"percent":        progress.GetPercent(),
 		"bytes_uploaded": progress.GetBytesUploaded(),
 		"node_id":        nodeID,
-	}).Info("Freeze progress update")
+	}).Debug("Freeze progress update")
 }
 
 // processFreezeComplete handles freeze completion from Helmsman

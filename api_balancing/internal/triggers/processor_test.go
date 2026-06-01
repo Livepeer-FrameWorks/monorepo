@@ -364,6 +364,33 @@ func TestHandleClientLifecycleDropsMissingStreamID(t *testing.T) {
 	}
 }
 
+func TestHandleStreamLifecycleDropsMissingStreamID(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+
+	tenantID := "tenant-1"
+	inputs := uint32(1)
+	p := &Processor{logger: logging.NewLogger()}
+
+	_, _, err := p.handleStreamLifecycleUpdate(&pb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+				TenantId:     &tenantID,
+				InternalName: "processing+artifact-1",
+				Status:       "live",
+				TotalInputs:  &inputs,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected missing stream_id to drop without error, got %v", err)
+	}
+	if got := state.DefaultManager().GetStreamState("artifact-1"); got != nil {
+		t.Fatalf("expected missing stream_id lifecycle not to update stream state, got %#v", got)
+	}
+}
+
 func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapChange(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
