@@ -351,6 +351,12 @@ func TestStopRecording_PushStopError(t *testing.T) {
 
 // --- createOrRecreatePush ---
 
+// jobPushSnap builds the lock-free identity snapshot createOrRecreatePush now
+// takes, from a test job that is not yet published into the manager.
+func jobPushSnap(job *DVRJob) pushIdentity {
+	return pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash}
+}
+
 func TestCreateOrRecreatePush_New(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 55}
 	dm := newDVRManagerWithMist(t, mc)
@@ -362,7 +368,7 @@ func TestCreateOrRecreatePush_New(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(job)
+	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -382,7 +388,7 @@ func TestCreateOrRecreatePush_WaitsForPushListVisibility(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(job)
+	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +413,7 @@ func TestCreateOrRecreatePush_StaleCleanup(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(job)
+	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -434,7 +440,7 @@ func TestCreateOrRecreatePush_MatchesMistExpandedDVRTarget(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(job)
+	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -467,7 +473,7 @@ func TestCreateOrRecreatePush_CleansMistExpandedStaleDVRTarget(t *testing.T) {
 		Logger:     logging.NewLogger(),
 	}
 
-	pushID, err := dm.createOrRecreatePush(job)
+	pushID, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -494,7 +500,7 @@ func TestCreateOrRecreatePush_PushListError(t *testing.T) {
 	}
 
 	// PushStart will succeed but subsequent PushList to find new push will fail
-	_, err := dm.createOrRecreatePush(job)
+	_, err := dm.createOrRecreatePush(jobPushSnap(job), job.Logger)
 	if err == nil {
 		t.Fatal("expected error when PushList fails after PushStart")
 	}
@@ -594,6 +600,7 @@ func TestMaintainPushStatus_FinalizingJobSkipped(t *testing.T) {
 		Status:  "finalizing",
 		Logger:  logging.NewLogger(),
 	}
+	dm.jobs["hash-finalizing"] = job
 
 	dm.maintainPushStatus(job)
 

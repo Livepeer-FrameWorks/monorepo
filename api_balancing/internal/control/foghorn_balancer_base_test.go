@@ -47,9 +47,11 @@ func TestComposeConfigSeedScopesRealtimeToProcessing(t *testing.T) {
 	seed := composeConfigSeed("node-1", nil, "", 0, "")
 
 	realtimeByName := map[string]bool{}
+	processControlledByName := map[string]bool{}
 	for _, template := range seed.GetTemplates() {
 		def := template.GetDef()
 		realtimeByName[def.GetName()] = def.GetRealtime()
+		processControlledByName[def.GetName()] = def.GetProcessControlledRealtime()
 	}
 
 	want := map[string]bool{
@@ -66,6 +68,14 @@ func TestComposeConfigSeedScopesRealtimeToProcessing(t *testing.T) {
 		}
 		if got != realtime {
 			t.Fatalf("template %q realtime = %v, want %v", name, got, realtime)
+		}
+	}
+	if !processControlledByName["processing"] {
+		t.Fatal("processing template must enable process-controlled realtime")
+	}
+	for name, processControlled := range processControlledByName {
+		if name != "processing" && processControlled {
+			t.Fatalf("template %q process_controlled_realtime = true, want false", name)
 		}
 	}
 }

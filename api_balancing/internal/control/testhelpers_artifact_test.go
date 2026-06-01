@@ -156,6 +156,8 @@ type mockArtifactRepo struct {
 	mu sync.Mutex
 
 	setSyncStatusFn         func(ctx context.Context, hash, status, s3URL string) error
+	getArtifactSyncInfoFn   func(ctx context.Context, hash string) (*state.ArtifactSyncInfo, error)
+	isSyncedFn              func(ctx context.Context, hash string) (bool, error)
 	addCachedNodeFn         func(ctx context.Context, hash, nodeID string) error
 	addCachedNodeWithPathFn func(ctx context.Context, hash, nodeID, path string, size int64) error
 	markNodeOrphanedFn      func(ctx context.Context, nodeID string) error
@@ -187,7 +189,10 @@ func (m *mockArtifactRepo) UpsertArtifacts(_ context.Context, _ string, _ []stat
 	return nil
 }
 
-func (m *mockArtifactRepo) GetArtifactSyncInfo(_ context.Context, _ string) (*state.ArtifactSyncInfo, error) {
+func (m *mockArtifactRepo) GetArtifactSyncInfo(ctx context.Context, hash string) (*state.ArtifactSyncInfo, error) {
+	if m.getArtifactSyncInfoFn != nil {
+		return m.getArtifactSyncInfoFn(ctx, hash)
+	}
 	return nil, nil
 }
 
@@ -232,7 +237,10 @@ func (m *mockArtifactRepo) ListOriginNodes(_ context.Context, _ string) ([]strin
 	return nil, nil
 }
 
-func (m *mockArtifactRepo) IsSynced(_ context.Context, _ string) (bool, error) {
+func (m *mockArtifactRepo) IsSynced(ctx context.Context, hash string) (bool, error) {
+	if m.isSyncedFn != nil {
+		return m.isSyncedFn(ctx, hash)
+	}
 	return false, nil
 }
 

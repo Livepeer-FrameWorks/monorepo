@@ -86,6 +86,14 @@ type DVRJob struct {
 	// Dual-storage: Incremental sync tracking
 	SyncedSegments map[string]bool // Track which segments already synced to S3
 	syncMutex      sync.Mutex      // Protects SyncedSegments
+
+	// pushGeneration is bumped under DVRManager.mutex on every change to push
+	// identity (PushID / StreamName / TargetURI) or terminal status. A push
+	// recreator snapshots it before releasing the lock for Mist network calls
+	// and commits a new PushID only if it is unchanged; a bumped generation
+	// means another writer (source takeover, stop, or a concurrent recreate)
+	// won the race, so the freshly-created push is stale and must be stopped.
+	pushGeneration uint64
 }
 
 // DVRMistClient abstracts MistServer push operations so tests can inject fakes.
@@ -558,25 +566,50 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 //  4. Recreate the push and write the returned PushID back into the job
 //     so monitor/stop paths point at the new push, not the old one.
 func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string) (refreshed bool, err error) {
+	// The source change is authoritative state: commit the new identity under
+	// the lock and bump the generation so a concurrent monitor recreate (which
+	// snapshotted the old generation) goes stale and won't fight us. Snapshot
+	// the values needed for the unlocked Mist calls in the same critical
+	// section.
+	var (
+		oldStreamName string
+		oldPushID     int
+		newStreamName string
+		logger        logging.Logger
+		snap          pushIdentity
+	)
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
-	dm.mutex.Unlock()
 	if !exists {
+		dm.mutex.Unlock()
 		return false, nil
 	}
-
-	oldStreamName := strings.TrimSpace(job.StreamName)
-	oldPushID := job.PushID
-	newStreamName := strings.TrimSpace(sourceRuntimeName)
+	oldStreamName = strings.TrimSpace(job.StreamName)
+	oldPushID = job.PushID
+	newStreamName = strings.TrimSpace(sourceRuntimeName)
 	if newStreamName == "" {
 		newStreamName = job.InternalName
 	}
+	job.SourceRuntimeName = sourceRuntimeName
+	job.SourceURL = sourceURL
+	job.StreamName = newStreamName
+	job.pushGeneration++
+	logger = job.Logger
+	snap = pushIdentity{
+		streamName: newStreamName,
+		targetURI:  job.TargetURI,
+		dvrHash:    dvrHash,
+		pushID:     oldPushID,
+		generation: job.pushGeneration,
+	}
+	dm.mutex.Unlock()
 
-	// Stop the old Mist push by its recorded ID before any job-field
-	// mutation so PushStop targets the actually-running push.
+	// Stop the old Mist push by its recorded ID. dvrPushMatches inside
+	// createOrRecreatePush keys on the NEW stream name, so the old push is
+	// orphan-invisible to that helper — stop it explicitly first.
 	if oldPushID > 0 {
 		if stopErr := dm.mistClient.PushStop(oldPushID); stopErr != nil {
-			job.Logger.WithError(stopErr).WithFields(logging.Fields{
+			logger.WithError(stopErr).WithFields(logging.Fields{
 				"dvr_hash":    dvrHash,
 				"old_push_id": oldPushID,
 			}).Warn("DVR update-source: stop of old push failed; continuing with recreate")
@@ -590,27 +623,30 @@ func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string)
 		RegisterDVRSourceOverride(newStreamName, sourceURL)
 	}
 
-	dm.mutex.Lock()
-	job.SourceRuntimeName = sourceRuntimeName
-	job.SourceURL = sourceURL
-	job.StreamName = newStreamName
-	dm.mutex.Unlock()
-
-	// Recreate the push and update PushID so subsequent stop / monitor
-	// calls target the live push rather than the dead one.
-	newPushID, pushErr := dm.createOrRecreatePush(job)
+	// Recreate the push without holding the lock, then commit the new PushID
+	// only if no other writer raced us. The monitor loop retries on failure.
+	newPushID, pushErr := dm.createOrRecreatePush(snap, logger)
 	if pushErr != nil {
-		job.Logger.WithError(pushErr).WithFields(logging.Fields{
+		logger.WithError(pushErr).WithFields(logging.Fields{
 			"dvr_hash":            dvrHash,
 			"source_runtime_name": sourceRuntimeName,
 		}).Warn("DVR update-source push recreate failed; will retry via monitor loop")
 		return true, pushErr
 	}
-	dm.mutex.Lock()
-	job.PushID = newPushID
-	dm.mutex.Unlock()
+	committed := dm.withFreshGeneration(snap, func(j *DVRJob) {
+		j.PushID = newPushID
+		j.pushGeneration++
+	})
+	if !committed {
+		// A concurrent takeover/stop won after we bumped the generation; the
+		// push we just created is orphaned. Stop it so it doesn't double-write.
+		if stopErr := dm.mistClient.PushStop(newPushID); stopErr != nil {
+			logger.WithError(stopErr).WithField("orphan_push_id", newPushID).Warn("DVR update-source: failed to stop orphaned push after stale recreate")
+		}
+		return true, nil
+	}
 
-	job.Logger.WithFields(logging.Fields{
+	logger.WithFields(logging.Fields{
 		"dvr_hash":            dvrHash,
 		"source_runtime_name": sourceRuntimeName,
 		"new_source_url":      sourceURL,
@@ -824,19 +860,24 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.
 	if sendFunc != nil {
 		job.SendFunc = sendFunc
 	}
+	// Mark the job finalizing and bump the generation under the lock before
+	// releasing it for the Mist call: maintainPushStatus skips finalizing jobs,
+	// and the generation bump makes any recreate already mid-flight commit
+	// stale (its new push gets stopped) so it can't resurrect the push we are
+	// about to stop. Archive playback is per-chapter VOD artifacts produced by
+	// the chapter-finalization pipeline; the rolling Mist playlist stays
+	// local-only and is never uploaded to S3.
+	job.Status = "finalizing"
+	job.pushGeneration++
+	stopPushID := job.PushID
+	dm.mutex.Unlock()
 
-	// Stop the MistServer push if running
-	if job.PushID > 0 {
-		if err := dm.mistClient.PushStop(job.PushID); err != nil {
+	// Stop the MistServer push if running (no lock held across the Mist call).
+	if stopPushID > 0 {
+		if err := dm.mistClient.PushStop(stopPushID); err != nil {
 			job.Logger.WithError(err).Warn("Failed to stop MistServer push")
 		}
 	}
-
-	// Mark the job finalizing. Archive playback is per-chapter VOD artifacts
-	// produced by the chapter-finalization pipeline; the rolling Mist playlist
-	// stays local-only and is never uploaded to S3.
-	job.Status = "finalizing"
-	dm.mutex.Unlock()
 
 	// Final sync: flush remaining segments to S3. syncNewSegments uses
 	// job.syncMutex internally and is idempotent (SyncedSegments tracks
@@ -844,10 +885,14 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.
 	dm.syncNewSegments(job)
 
 	dm.mutex.Lock()
-	dm.sendCompletion(job, "completed", "")
+	streamName := job.StreamName
 	delete(dm.jobs, dvrHash)
-	ClearDVRSourceOverride(job.StreamName)
+	ClearDVRSourceOverride(streamName)
 	dm.mutex.Unlock()
+
+	// Job is removed and now goroutine-private; send the terminal notification
+	// without holding the manager lock across the control-stream write.
+	dm.sendCompletion(job, "completed", "")
 
 	job.Logger.Info("DVR recording job stopped")
 	return nil
@@ -1012,9 +1057,12 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 		pushID int
 		err    error
 	)
+	// The job is still private (not yet in dm.jobs and no monitor running),
+	// so reading its identity here races with no other writer.
+	snap := pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash}
 	deadline := time.Now().Add(initialPushRetryFor)
 	for attempt := 0; ; attempt++ {
-		pushID, err = dm.createOrRecreatePush(job)
+		pushID, err = dm.createOrRecreatePush(snap, job.Logger)
 		if err == nil {
 			break
 		}
@@ -1104,16 +1152,24 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 				// Eviction didn't suffice (or there was nothing to evict).
 				// Stop cleanly so Foghorn can finalize what was uploaded.
 				job.Logger.WithError(err).Error("Stopping DVR recording: disk pressure persists after eviction pass")
-				if job.PushID > 0 {
-					if stopErr := dm.mistClient.PushStop(job.PushID); stopErr != nil {
+				// Commit the terminal status + bump the generation under the
+				// lock (so an in-flight recreate goes stale) and snapshot the
+				// fields the unlocked Mist call / cleanup need.
+				dm.mutex.Lock()
+				stopPushID := job.PushID
+				streamName := job.StreamName
+				job.Status = "failed"
+				job.pushGeneration++
+				dm.mutex.Unlock()
+				if stopPushID > 0 {
+					if stopErr := dm.mistClient.PushStop(stopPushID); stopErr != nil {
 						job.Logger.WithError(stopErr).Warn("Failed to stop MistServer push during disk-full shutdown")
 					}
 				}
-				job.Status = "failed"
 				dm.sendCompletion(job, "failed", sanitizeDvrStorageError(err))
 				dm.mutex.Lock()
 				delete(dm.jobs, job.DVRHash)
-				ClearDVRSourceOverride(job.StreamName)
+				ClearDVRSourceOverride(streamName)
 				dm.mutex.Unlock()
 				return
 			}
@@ -1146,7 +1202,10 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 			dm.syncNewSegments(job)
 
 		case <-time.After(5 * time.Minute): // Timeout if no updates
-			if job.Status == "starting" {
+			dm.mutex.RLock()
+			status := job.Status
+			dm.mutex.RUnlock()
+			if status == "starting" {
 				job.Logger.Warn("DVR job timeout during startup")
 				if err := dm.StopRecording(job.DVRHash); err != nil {
 					job.Logger.WithError(err).Warn("Failed to stop timed-out DVR job")
@@ -1179,14 +1238,22 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 		}
 	}
 
+	// Commit the counters and snapshot what the progress message needs under
+	// the lock (OutputDir is immutable post-creation, so the scan above is
+	// lock-free; Status/SendFunc are mutated by other goroutines). The send
+	// itself runs unlocked.
+	dm.mutex.Lock()
 	job.SegmentCount = segmentCount
 	job.TotalSizeBytes = totalSize
+	status := job.Status
+	dvrHash := job.DVRHash
+	sendFunc := job.SendFunc
+	dm.mutex.Unlock()
 
-	// Send progress update
-	if job.SendFunc != nil {
+	if sendFunc != nil {
 		progress := &pb.DVRProgress{
-			DvrHash:      job.DVRHash,
-			Status:       job.Status,
+			DvrHash:      dvrHash,
+			Status:       status,
 			SegmentCount: int32(segmentCount),
 			SizeBytes:    totalSize,
 			Message:      fmt.Sprintf("Recording %d segments", segmentCount),
@@ -1196,13 +1263,36 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 			SentAt:  timestamppb.Now(),
 			Payload: &pb.ControlMessage_DvrProgress{DvrProgress: progress},
 		}
-		job.SendFunc(msg)
+		sendFunc(msg)
 	}
 }
 
 // maintainPushStatus intelligently maintains push status with retry logic
 func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
-	switch job.Status {
+	// Snapshot the push identity + retry bookkeeping under the lock so the Mist
+	// calls below run unlocked. The pointer check guards against this monitor
+	// outliving its job (deleted then re-created for the same hash).
+	dm.mutex.RLock()
+	current, ok := dm.jobs[job.DVRHash]
+	if !ok || current != job {
+		dm.mutex.RUnlock()
+		return
+	}
+	status := job.Status
+	retryCount := job.RetryCount
+	maxRetries := job.MaxRetries
+	lastAttempt := job.LastPushAttempt
+	segmentCount := job.SegmentCount
+	snap := pushIdentity{
+		streamName: job.StreamName,
+		targetURI:  job.TargetURI,
+		dvrHash:    job.DVRHash,
+		pushID:     job.PushID,
+		generation: job.pushGeneration,
+	}
+	dm.mutex.RUnlock()
+
+	switch status {
 	case "finalizing", "completed", "completed_partial", "failed":
 		return // Don't maintain finalizing/terminal jobs
 	}
@@ -1218,7 +1308,7 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 	pushFound := false
 	pushHasErrors := false
 	for _, push := range pushes {
-		if push.ID == job.PushID {
+		if push.ID == snap.pushID {
 			pushFound = true
 
 			// Check push logs for recoverable vs non-recoverable errors
@@ -1235,91 +1325,148 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 	}
 
 	// If push missing or has errors, attempt recreation (unless we've exceeded retries)
-	if (!pushFound || pushHasErrors) && job.RetryCount < job.MaxRetries {
+	if (!pushFound || pushHasErrors) && retryCount < maxRetries {
 		// Calculate backoff delay
-		retryDelay := dm.calculateRetryDelay(job.RetryCount)
-		if time.Since(job.LastPushAttempt) < retryDelay {
+		retryDelay := dm.calculateRetryDelay(retryCount)
+		if time.Since(lastAttempt) < retryDelay {
 			return // Not time to retry yet
 		}
 
 		job.Logger.WithFields(logging.Fields{
-			"retry_count": job.RetryCount,
+			"retry_count": retryCount,
 			"push_found":  pushFound,
 			"has_errors":  pushHasErrors,
 		}).Info("Recreating DVR push due to failure or absence")
 
-		// Attempt to recreate push
-		newPushID, err := dm.createOrRecreatePush(job)
+		// Attempt to recreate push without the lock held.
+		newPushID, err := dm.createOrRecreatePush(snap, job.Logger)
 		if err != nil {
-			job.Logger.WithError(err).WithField("retry_count", job.RetryCount).Warn("Failed to recreate push")
-			job.RetryCount++
-			job.LastPushAttempt = time.Now()
+			// Advance retry bookkeeping only if a takeover/stop didn't win
+			// meanwhile; no push identity change, so don't bump generation.
+			dm.withFreshGeneration(snap, func(j *DVRJob) {
+				j.RetryCount++
+				j.LastPushAttempt = time.Now()
+			})
+			job.Logger.WithError(err).WithField("retry_count", retryCount).Warn("Failed to recreate push")
 			return
 		}
 
-		// Update job with new push ID
-		job.PushID = newPushID
-		job.RetryCount++
-		job.LastPushAttempt = time.Now()
+		// Commit the new push id only if our snapshot is still current.
+		committed := dm.withFreshGeneration(snap, func(j *DVRJob) {
+			j.PushID = newPushID
+			j.pushGeneration++
+			j.RetryCount++
+			j.LastPushAttempt = time.Now()
+		})
+		if !committed {
+			// A source takeover / stop / concurrent recreate won; the push we
+			// just started is orphaned and must be stopped to avoid a
+			// double-writer onto the same DVR target.
+			if stopErr := dm.mistClient.PushStop(newPushID); stopErr != nil {
+				job.Logger.WithError(stopErr).WithField("orphan_push_id", newPushID).Warn("Failed to stop orphaned DVR push after stale recreate")
+			}
+			return
+		}
 		job.Logger.WithFields(logging.Fields{
 			"new_push_id": newPushID,
-			"retry_count": job.RetryCount,
+			"retry_count": retryCount + 1,
 		}).Info("Successfully recreated DVR push")
 
 		return
 	}
 
-	// If push disappeared and we've exhausted retries, fail the job
-	if !pushFound && job.RetryCount >= job.MaxRetries {
+	// If push disappeared and we've exhausted retries, fail the job. Mutate +
+	// delete under the lock, then send the terminal notification unlocked (the
+	// removed job is goroutine-private; never hold the lock across SendFunc).
+	if !pushFound && retryCount >= maxRetries {
 		dm.mutex.Lock()
-		defer dm.mutex.Unlock()
-
-		if existingJob, exists := dm.jobs[job.DVRHash]; exists {
-			existingJob.Logger.WithField("retry_count", existingJob.RetryCount).Error("DVR push failed after maximum retries")
-			existingJob.Status = "failed"
-			dm.sendCompletion(existingJob, "failed", fmt.Sprintf("Push failed after %d retries", existingJob.RetryCount))
-			delete(dm.jobs, existingJob.DVRHash)
-			ClearDVRSourceOverride(existingJob.StreamName)
+		// Identity guard: only terminate if the map still holds THIS job. A
+		// stop+restart for the same hash during the unlocked PushList above
+		// would otherwise make this stale monitor kill the fresh job.
+		exists := dm.jobs[job.DVRHash] == job
+		if exists {
+			job.Status = "failed"
+			job.pushGeneration++
+			delete(dm.jobs, job.DVRHash)
+			ClearDVRSourceOverride(job.StreamName)
+		}
+		dm.mutex.Unlock()
+		if exists {
+			job.Logger.WithField("retry_count", retryCount).Error("DVR push failed after maximum retries")
+			dm.sendCompletion(job, "failed", fmt.Sprintf("Push failed after %d retries", retryCount))
 		}
 		return
 	}
 
 	// If push disappeared but we have segments, recording might have completed naturally
-	if !pushFound && job.SegmentCount > 0 {
+	if !pushFound && segmentCount > 0 {
 		dm.mutex.Lock()
-		defer dm.mutex.Unlock()
-
-		if existingJob, exists := dm.jobs[job.DVRHash]; exists {
-			existingJob.Logger.Info("DVR recording completed successfully")
-			existingJob.Status = "completed"
-			dm.sendCompletion(existingJob, "success", "")
-			delete(dm.jobs, existingJob.DVRHash)
-			ClearDVRSourceOverride(existingJob.StreamName)
+		exists := dm.jobs[job.DVRHash] == job
+		if exists {
+			job.Status = "completed"
+			job.pushGeneration++
+			delete(dm.jobs, job.DVRHash)
+			ClearDVRSourceOverride(job.StreamName)
+		}
+		dm.mutex.Unlock()
+		if exists {
+			job.Logger.Info("DVR recording completed successfully")
+			dm.sendCompletion(job, "success", "")
 		}
 	}
 }
 
-// createOrRecreatePush creates or recreates a MistServer push for DVR recording
-func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
+// pushIdentity is a lock-free snapshot of a job's push-relevant fields, taken
+// under DVRManager.mutex so the Mist network calls that follow (PushStart /
+// PushStop / PushList) run without holding the global lock. generation pins the
+// value at snapshot time; commits are gated on it being unchanged.
+type pushIdentity struct {
+	streamName string
+	targetURI  string
+	dvrHash    string
+	pushID     int
+	generation uint64
+}
+
+// withFreshGeneration runs fn under the manager lock iff the job still exists
+// and its pushGeneration matches the snapshot. It returns false (without
+// running fn) when stale — i.e. another writer advanced the generation while
+// the caller was doing Mist I/O. fn must bump pushGeneration when it changes
+// push identity so a slower concurrent recreate also goes stale.
+func (dm *DVRManager) withFreshGeneration(snap pushIdentity, fn func(job *DVRJob)) bool {
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+	job, ok := dm.jobs[snap.dvrHash]
+	if !ok || job.pushGeneration != snap.generation {
+		return false
+	}
+	fn(job)
+	return true
+}
+
+// createOrRecreatePush creates or recreates a MistServer push for DVR
+// recording. It reads only the snapshot, never the live job, so it can run
+// without the manager lock held.
+func (dm *DVRManager) createOrRecreatePush(snap pushIdentity, logger logging.Logger) (int, error) {
 	// First, try to stop any existing push with the same stream/target
 	pushes, err := dm.mistClient.PushList()
 	if err != nil {
-		job.Logger.WithError(err).Debug("Could not list existing pushes for cleanup")
+		logger.WithError(err).Debug("Could not list existing pushes for cleanup")
 	} else {
 		// Clean up any existing pushes for this stream/target combination
 		for _, push := range pushes {
-			if dvrPushMatchesJob(push, job) {
+			if dvrPushMatches(push, snap.streamName, snap.targetURI, snap.dvrHash) {
 				if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
-					job.Logger.WithError(stopErr).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
+					logger.WithError(stopErr).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
 				} else {
-					job.Logger.WithField("old_push_id", push.ID).Debug("Cleaned up old push")
+					logger.WithField("old_push_id", push.ID).Debug("Cleaned up old push")
 				}
 			}
 		}
 	}
 
 	// Create new push
-	if pushErr := dm.mistClient.PushStart(job.StreamName, job.TargetURI); pushErr != nil {
+	if pushErr := dm.mistClient.PushStart(snap.streamName, snap.targetURI); pushErr != nil {
 		return 0, fmt.Errorf("failed to start push: %w", pushErr)
 	}
 
@@ -1330,7 +1477,7 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 			return 0, fmt.Errorf("failed to get push list after creation: %w", err)
 		}
 		for _, push := range pushes {
-			if dvrPushMatchesJob(push, job) {
+			if dvrPushMatches(push, snap.streamName, snap.targetURI, snap.dvrHash) {
 				return push.ID, nil
 			}
 		}
@@ -1343,17 +1490,17 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 	return 0, fmt.Errorf("failed to find created push in push list")
 }
 
-func dvrPushMatchesJob(push mist.PushInfo, job *DVRJob) bool {
-	if job == nil || push.StreamName != job.StreamName {
+func dvrPushMatches(push mist.PushInfo, streamName, targetURI, dvrHash string) bool {
+	if push.StreamName != streamName {
 		return false
 	}
-	if job.TargetURI != "" && (push.TargetURI == job.TargetURI || push.ActualURI == job.TargetURI) {
+	if targetURI != "" && (push.TargetURI == targetURI || push.ActualURI == targetURI) {
 		return true
 	}
-	if job.DVRHash == "" {
+	if dvrHash == "" {
 		return false
 	}
-	return strings.Contains(push.TargetURI, job.DVRHash) || strings.Contains(push.ActualURI, job.DVRHash)
+	return strings.Contains(push.TargetURI, dvrHash) || strings.Contains(push.ActualURI, dvrHash)
 }
 
 // calculateRetryDelay calculates exponential backoff delay for push retries
@@ -1365,7 +1512,15 @@ func (dm *DVRManager) calculateRetryDelay(retryCount int) time.Duration {
 
 // sendCompletion sends DVR completion notification
 func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string) {
-	if job.SendFunc == nil {
+	// SendFunc and TotalSizeBytes are mutated by other goroutines under the
+	// lock (StopRecordingWithSender / updateProgress); snapshot them here so the
+	// terminal payload can't tear against an in-flight progress write. All
+	// callers invoke this without holding dm.mutex, so the RLock is safe.
+	dm.mutex.RLock()
+	sendFunc := job.SendFunc
+	sizeBytes := job.TotalSizeBytes
+	dm.mutex.RUnlock()
+	if sendFunc == nil {
 		return
 	}
 
@@ -1377,14 +1532,14 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 		Error:           errorMsg,
 		ManifestPath:    job.ManifestPath,
 		DurationSeconds: durationSeconds,
-		SizeBytes:       job.TotalSizeBytes,
+		SizeBytes:       sizeBytes,
 	}
 
 	msg := &pb.ControlMessage{
 		SentAt:  timestamppb.Now(),
 		Payload: &pb.ControlMessage_DvrStopped{DvrStopped: stopped},
 	}
-	job.SendFunc(msg)
+	sendFunc(msg)
 }
 
 func sanitizeDvrStorageError(err error) string {
@@ -1582,14 +1737,28 @@ func (dm *DVRManager) UploadSegmentForRetry(ctx context.Context, filePath, presi
 // push (best-effort; PushStop failures are logged but the job is removed
 // regardless) and drop the local DVRJob.
 func (dm *DVRManager) stopJobAfterTerminalRejection(job *DVRJob) {
-	if job.PushID > 0 && dm.mistClient != nil {
-		if err := dm.mistClient.PushStop(job.PushID); err != nil {
+	// Snapshot push identity + mark terminal + bump the generation under the
+	// lock (so an in-flight recreate commits stale and stops its own push),
+	// then stop this push without the lock held.
+	dm.mutex.Lock()
+	stopPushID := job.PushID
+	streamName := job.StreamName
+	job.Status = "failed"
+	job.pushGeneration++
+	dm.mutex.Unlock()
+	if stopPushID > 0 && dm.mistClient != nil {
+		if err := dm.mistClient.PushStop(stopPushID); err != nil {
 			job.Logger.WithError(err).Warn("PushStop after terminal rejection failed; removing job anyway")
 		}
 	}
 	dm.mutex.Lock()
-	delete(dm.jobs, job.DVRHash)
-	ClearDVRSourceOverride(job.StreamName)
+	// Identity guard: only remove if the map still holds THIS job, so a
+	// stop+restart for the same hash racing this terminal callback can't wipe
+	// the fresh job.
+	if dm.jobs[job.DVRHash] == job {
+		delete(dm.jobs, job.DVRHash)
+		ClearDVRSourceOverride(streamName)
+	}
 	dm.mutex.Unlock()
 }
 

@@ -105,8 +105,8 @@ func (r *StreamRegistry) rehydrateFromRedis(store *RedisRegistryStore, logger lo
 }
 
 // maxLocationUpdatedAt returns the latest UpdatedAt across every Location on
-// the entry. Used as a monotonic version stamp for applyRedisChange's stale-
-// snapshot guard.
+// the entry. Used as the tombstone-ordering stamp for applyRedisChange's
+// stale-delete guard.
 func maxLocationUpdatedAt(e StreamEntry) time.Time {
 	var t time.Time
 	for _, loc := range e.Locations {
@@ -117,11 +117,83 @@ func maxLocationUpdatedAt(e StreamEntry) time.Time {
 	return t
 }
 
+// mergeStreamEntry merges an incoming peer snapshot into the local view of a
+// source. Locations is per-cluster state, so each Location is reconciled
+// independently (newest UpdatedAt wins) rather than the whole entry being
+// replaced — a snapshot that is fresh for one cluster but stale for another
+// must never roll back the fresher cluster's Location. Locations only the
+// local side knows are preserved (no per-Location tombstones exist, so a
+// snapshot that omits a cluster is treated as "no opinion", not a removal).
+// Stable identity fields are taken from the local side, filled from incoming
+// only when locally empty.
+func mergeStreamEntry(existing, incoming StreamEntry) StreamEntry {
+	merged := existing
+	if merged.StreamID == "" {
+		merged.StreamID = incoming.StreamID
+	}
+	if merged.TenantID == "" {
+		merged.TenantID = incoming.TenantID
+	}
+	if merged.PlaybackID == "" {
+		merged.PlaybackID = incoming.PlaybackID
+	}
+	if merged.InternalName == "" {
+		merged.InternalName = incoming.InternalName
+	}
+	if merged.IngestMode == 0 {
+		merged.IngestMode = incoming.IngestMode
+	}
+	if merged.RuntimeName == "" {
+		merged.RuntimeName = incoming.RuntimeName
+	}
+	if merged.OriginClusterID == "" {
+		merged.OriginClusterID = incoming.OriginClusterID
+	}
+	if merged.HydratedAt.IsZero() {
+		merged.HydratedAt = incoming.HydratedAt
+	}
+	if len(incoming.Locations) == 0 {
+		return merged
+	}
+	// Copy the existing map so we never mutate the cached entry in place.
+	locs := make(map[string]Location, len(merged.Locations)+len(incoming.Locations))
+	for cid, loc := range merged.Locations {
+		locs[cid] = loc
+	}
+	for cid, inLoc := range incoming.Locations {
+		cur, ok := locs[cid]
+		// Take incoming when the cluster is new locally or incoming is
+		// newer-or-equal; keep the strictly-newer local Location otherwise.
+		if !ok || !inLoc.UpdatedAt.Before(cur.UpdatedAt) {
+			locs[cid] = inLoc
+		}
+	}
+	merged.Locations = locs
+	return merged
+}
+
 func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 	switch change.Entity {
 	case RegistryEntitySource:
 		if change.Operation == RegistryOpDelete {
 			r.mu.Lock()
+			// Tombstone ordering: a StreamEntry is per-cluster state, and a
+			// stale peer delete must not wipe an entry that was re-admitted
+			// locally after the delete was published. Drop the delete when any
+			// local Location is fresher than the delete's publish stamp.
+			if existing, ok := r.byInt[change.Key]; ok && change.PublishedAtUnixNano > 0 {
+				if local := maxLocationUpdatedAt(existing.entry); !local.IsZero() && local.UnixNano() > change.PublishedAtUnixNano {
+					r.mu.Unlock()
+					if r.redisLogger != nil {
+						r.redisLogger.WithFields(map[string]any{
+							"internal_name": change.Key,
+							"delete_ts":     change.PublishedAtUnixNano,
+							"local_ts":      local.UnixNano(),
+						}).Debug("applyRedisChange: dropping stale source delete")
+					}
+					return
+				}
+			}
 			r.removeSourceByKeyLocked(change.Key)
 			r.mu.Unlock()
 			return
@@ -131,40 +203,37 @@ func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 			return
 		}
 		r.mu.Lock()
-		// Stale-pubsub guard: when a local AdmitAndReserve / NotifyOriginPull
-		// runs concurrent with an older snapshot from a peer instance still
-		// in the pubsub queue, the peer's snapshot can arrive AFTER our
-		// fresher local mutation. Refuse to overwrite a newer local entry
-		// with an older incoming one, keyed off Location.UpdatedAt.
-		incoming := maxLocationUpdatedAt(e)
+		// Per-Location merge instead of wholesale replace: Locations is
+		// per-cluster state, so a snapshot that is fresh for cluster B but
+		// stale for cluster A must not roll back A's SourceActive/owner state.
+		// Each Location is merged independently, newest UpdatedAt wins, and
+		// Locations only the local side knows are preserved (CRDT-style).
+		merged := e
 		if existing, ok := r.byInt[e.InternalName]; ok && e.InternalName != "" {
-			localTS := maxLocationUpdatedAt(existing.entry)
-			if !localTS.IsZero() && incoming.Before(localTS) {
-				r.mu.Unlock()
-				if r.redisLogger != nil {
-					r.redisLogger.WithFields(map[string]any{
-						"internal_name": e.InternalName,
-						"incoming_ts":   incoming,
-						"local_ts":      localTS,
-					}).Debug("applyRedisChange: dropping stale pubsub snapshot")
-				}
-				return
-			}
+			merged = mergeStreamEntry(existing.entry, e)
 		}
-		ce := &cachedEntry{entry: e, cached: time.Now()}
-		if e.StreamID != "" {
-			r.byID[e.StreamID] = ce
+		ce := &cachedEntry{entry: merged, cached: time.Now()}
+		if merged.StreamID != "" {
+			r.byID[merged.StreamID] = ce
 		}
-		if e.InternalName != "" {
-			r.byInt[e.InternalName] = ce
+		if merged.InternalName != "" {
+			r.byInt[merged.InternalName] = ce
 		}
-		if e.PlaybackID != "" {
-			r.byPlay[e.PlaybackID] = ce
+		if merged.PlaybackID != "" {
+			r.byPlay[merged.PlaybackID] = ce
 		}
 		r.mu.Unlock()
 	case RegistryEntityArtifact:
 		if change.Operation == RegistryOpDelete {
 			r.artifacts.mu.Lock()
+			// Stale-ordering guard, symmetric to the upsert below: drop a delete
+			// published before the entry we currently hold was last cached, so an
+			// out-of-order pubsub delete can't wipe a fresher local re-upsert.
+			if existing, ok := r.artifacts.byHash[change.Key]; ok &&
+				change.PublishedAtUnixNano > 0 && change.PublishedAtUnixNano < existing.cached.UnixNano() {
+				r.artifacts.mu.Unlock()
+				return
+			}
 			r.removeArtifactByKeyLocked(change.Key)
 			r.artifacts.mu.Unlock()
 			return
@@ -279,10 +348,11 @@ func (r *StreamRegistry) publishDeleteSource(internalName string) {
 		log.WithError(err).WithField("internal_name", internalName).Warn("Stream-registry Redis DeleteSource failed")
 	}
 	if err := store.Publish(RegistryChange{
-		InstanceID: instance,
-		Entity:     RegistryEntitySource,
-		Operation:  RegistryOpDelete,
-		Key:        internalName,
+		InstanceID:          instance,
+		Entity:              RegistryEntitySource,
+		Operation:           RegistryOpDelete,
+		Key:                 internalName,
+		PublishedAtUnixNano: time.Now().UnixNano(),
 	}); err != nil && log != nil {
 		log.WithError(err).WithField("internal_name", internalName).Debug("Stream-registry pubsub source delete failed")
 	}
@@ -328,10 +398,11 @@ func (r *StreamRegistry) publishDeleteArtifact(hash string) {
 		log.WithError(err).WithField("artifact_hash", hash).Warn("Stream-registry Redis DeleteArtifact failed")
 	}
 	if err := store.Publish(RegistryChange{
-		InstanceID: instance,
-		Entity:     RegistryEntityArtifact,
-		Operation:  RegistryOpDelete,
-		Key:        hash,
+		InstanceID:          instance,
+		Entity:              RegistryEntityArtifact,
+		Operation:           RegistryOpDelete,
+		Key:                 hash,
+		PublishedAtUnixNano: time.Now().UnixNano(),
 	}); err != nil && log != nil {
 		log.WithError(err).WithField("artifact_hash", hash).Debug("Stream-registry pubsub artifact delete failed")
 	}

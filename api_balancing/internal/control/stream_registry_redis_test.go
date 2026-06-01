@@ -17,6 +17,55 @@ func newTestRedis(t *testing.T) (*RedisRegistryStore, goredis.UniversalClient, *
 	return NewRedisRegistryStore(client, "cluster-test"), client, mr
 }
 
+func TestMergeStreamEntry_PerLocationNewestWins(t *testing.T) {
+	tEarly := time.Unix(100, 0)
+	tLate := time.Unix(200, 0)
+
+	// Local view: clusterA freshly admitted (T=late, SourceActive), clusterB stale.
+	existing := StreamEntry{
+		InternalName: "s1",
+		Locations: map[string]Location{
+			"A": {ClusterID: "A", UpdatedAt: tLate, SourceActive: true, OwnerNodeID: "nodeA"},
+			"B": {ClusterID: "B", UpdatedAt: tEarly},
+		},
+	}
+	// Incoming peer snapshot: fresh for B, but STALE for A (predates the admit).
+	incoming := StreamEntry{
+		InternalName: "s1",
+		Locations: map[string]Location{
+			"A": {ClusterID: "A", UpdatedAt: tEarly, SourceActive: false},
+			"B": {ClusterID: "B", UpdatedAt: tLate, IsLiveNow: true},
+		},
+	}
+
+	merged := mergeStreamEntry(existing, incoming)
+
+	// A must keep the fresher local state (not rolled back to SourceActive=false).
+	if a := merged.Locations["A"]; !a.SourceActive || a.OwnerNodeID != "nodeA" || !a.UpdatedAt.Equal(tLate) {
+		t.Fatalf("location A rolled back by stale snapshot: %+v", a)
+	}
+	// B must take the fresher incoming state.
+	if b := merged.Locations["B"]; !b.IsLiveNow || !b.UpdatedAt.Equal(tLate) {
+		t.Fatalf("location B not updated from fresher snapshot: %+v", b)
+	}
+
+	// A Location only the incoming side knows is added (union, no tombstones).
+	withC := mergeStreamEntry(existing, StreamEntry{
+		InternalName: "s1",
+		Locations:    map[string]Location{"C": {ClusterID: "C", UpdatedAt: tLate}},
+	})
+	if _, ok := withC.Locations["C"]; !ok {
+		t.Fatal("incoming-only location C should be merged in")
+	}
+	if a := withC.Locations["A"]; !a.SourceActive {
+		t.Fatal("merging an unrelated location must not disturb A")
+	}
+	// The merge must not mutate the existing entry's map in place.
+	if _, leaked := existing.Locations["C"]; leaked {
+		t.Fatal("mergeStreamEntry mutated the existing entry's Locations map")
+	}
+}
+
 func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 	store, _, _ := newTestRedis(t)
 
