@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"github.com/gin-gonic/gin"
 )
 
 func TestActiveReplicationSource(t *testing.T) {
@@ -44,5 +46,31 @@ func TestActiveReplicationSource(t *testing.T) {
 
 	if got, handled := activeReplicationSource(context.Background(), "other-stream", "edge-us-1"); handled || got != "" {
 		t.Fatalf("unexpected source for other stream: %q handled=%v", got, handled)
+	}
+}
+
+func TestSourceCallerNodeIDPrefersBalancerPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/source/by-node/edge-us-1?source=frameworks-demo", nil)
+	c.Request = req
+
+	got := sourceCallerNodeID(c, req.URL.Query(), "203.0.113.10")
+	if got != "edge-us-1" {
+		t.Fatalf("sourceCallerNodeID = %q, want edge-us-1", got)
+	}
+}
+
+func TestSourceCallerNodeIDTrimsTrailingPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/source/by-node/edge-us-1/extra?source=frameworks-demo", nil)
+	c.Request = req
+
+	got := sourceCallerNodeID(c, req.URL.Query(), "203.0.113.10")
+	if got != "edge-us-1" {
+		t.Fatalf("sourceCallerNodeID = %q, want edge-us-1", got)
 	}
 }

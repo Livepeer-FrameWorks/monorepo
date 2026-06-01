@@ -103,6 +103,53 @@ func TestProcessMistTrigger_DurableAckReportsProcessorError(t *testing.T) {
 	}
 }
 
+func TestProcessMistTrigger_DropsStaleControlStream(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevLocalClusterID := localClusterID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localClusterID = prevLocalClusterID
+	})
+
+	currentStream := &captureStream{}
+	staleStream := &captureStream{}
+	cleanup := SetupTestRegistry("node-1", currentStream)
+	t.Cleanup(cleanup)
+
+	capture := &captureMistTriggerProcessor{}
+	mistTriggerProcessor = capture
+	localClusterID = "cluster-local"
+
+	trigger := &pb.MistTrigger{
+		TriggerType: "USER_END",
+		Blocking:    false,
+		RequestId:   "req-stale",
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{StreamName: "live+abc"},
+		},
+	}
+
+	processMistTrigger(trigger, "node-1", staleStream, logging.Logger(logrus.New()))
+
+	if capture.last != nil {
+		t.Fatal("processor received stale trigger")
+	}
+	msg := staleStream.lastSent()
+	if msg == nil {
+		t.Fatal("expected durable ack for stale trigger")
+	}
+	ack := msg.GetMistTriggerAck()
+	if ack == nil {
+		t.Fatalf("expected MistTriggerAck, got %T", msg.GetPayload())
+	}
+	if ack.GetSuccess() {
+		t.Fatal("expected stale trigger ack to fail")
+	}
+	if ack.GetRequestId() != "req-stale" {
+		t.Fatalf("expected request id req-stale, got %q", ack.GetRequestId())
+	}
+}
+
 func TestProcessMistTrigger_PrefersNodeRegistryCluster(t *testing.T) {
 	prevProcessor := mistTriggerProcessor
 	prevLocalClusterID := localClusterID

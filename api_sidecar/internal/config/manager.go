@@ -1299,7 +1299,7 @@ func (m *Manager) ensureStreams(current map[string]any, seed *pb.ConfigSeed) err
 			return fmt.Errorf("delete stale wildcard streams: %w", err)
 		}
 	}
-	streams := streamConfigsFromSeed(seed, base)
+	streams := streamConfigsFromSeed(seed, base, os.Getenv("NODE_ID"))
 	if len(streams) == 0 {
 		return nil
 	}
@@ -1314,7 +1314,7 @@ func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
 	if base == "" {
 		return fmt.Errorf("ConfigSeed missing foghorn_balancer_base; cannot verify MistServer streams")
 	}
-	expected := streamConfigsFromSeed(seed, base)
+	expected := streamConfigsFromSeed(seed, base, os.Getenv("NODE_ID"))
 	if len(expected) == 0 {
 		return nil
 	}
@@ -1348,14 +1348,15 @@ func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
 	return nil
 }
 
-func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[string]any {
+func streamConfigsFromSeed(seed *pb.ConfigSeed, base, nodeID string) map[string]map[string]any {
 	// Both live and pull wildcards use balance:<foghorn> — the source
 	// resolution differs (live falls back to push:// for ingest, pull
 	// returns the upstream URI for allowed clusters) but the template
 	// shape is identical. The per-type terminal answer is decided by
 	// Foghorn's /source dispatch, not by template query params.
-	pushSource := "balance:" + base
-	pullSource := "balance:" + base
+	sourceBase := sourceBalancerBase(base, nodeID)
+	pushSource := "balance:" + sourceBase
+	pullSource := "balance:" + sourceBase
 
 	streams := map[string]map[string]any{}
 	for _, t := range seed.GetTemplates() {
@@ -1401,6 +1402,22 @@ func streamConfigsFromSeed(seed *pb.ConfigSeed, base string) map[string]map[stri
 		streams[def.GetName()] = entry
 	}
 	return streams
+}
+
+func sourceBalancerBase(base, nodeID string) string {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return base
+	}
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return base
+	}
+	pathPrefix := strings.TrimRight(u.Path, "/")
+	rawPrefix := strings.TrimRight(u.EscapedPath(), "/")
+	u.Path = pathPrefix + "/source/by-node/" + nodeID
+	u.RawPath = rawPrefix + "/source/by-node/" + url.PathEscape(nodeID)
+	return u.String()
 }
 
 func staleManagedWildcardStreams(current map[string]any) []string {

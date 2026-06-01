@@ -20,7 +20,7 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 		},
 	}
 
-	streams := streamConfigsFromSeed(seed, "http://foghorn:18008")
+	streams := streamConfigsFromSeed(seed, "http://foghorn:18008", "edge-node-1")
 
 	if _, ok := streams["processing+$"]; ok {
 		t.Fatal("processing+$ must not be synced as a configured Mist stream")
@@ -49,15 +49,15 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	if got := streams["dvr"]["inputtimeout"]; got != 12 {
 		t.Fatalf("dvr inputtimeout = %v, want 12", got)
 	}
-	if got := streams["pull"]["source"]; got != "balance:http://foghorn:18008" {
+	if got := streams["pull"]["source"]; got != "balance:http://foghorn:18008/source/by-node/edge-node-1" {
 		t.Fatalf("pull source = %v", got)
 	}
 	// Live wildcard source: balance:<foghorn>, identical shape to pull.
 	// Foghorn's /source dispatch decides the terminal answer: DTSC when
 	// the stream is live anywhere, push:// as the publisher safety net,
 	// offline:<reason> when neither applies.
-	if got := streams["live"]["source"]; got != "balance:http://foghorn:18008" {
-		t.Fatalf("live source = %v, want balance:http://foghorn:18008", got)
+	if got := streams["live"]["source"]; got != "balance:http://foghorn:18008/source/by-node/edge-node-1" {
+		t.Fatalf("live source = %v, want balance:http://foghorn:18008/source/by-node/edge-node-1", got)
 	}
 	if got := streams["live"]["DVR"]; got != 120000 {
 		t.Fatalf("live DVR = %v, want 120000", got)
@@ -67,6 +67,14 @@ func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
 	}
 	if got := streams["live"]["inputtimeout"]; got != 12 {
 		t.Fatalf("live inputtimeout = %v, want 12", got)
+	}
+}
+
+func TestSourceBalancerBasePreservesExistingPathAndQuery(t *testing.T) {
+	got := sourceBalancerBase("https://foghorn.internal/base?x=1", "edge/node 1")
+	want := "https://foghorn.internal/base/source/by-node/edge%2Fnode%201?x=1"
+	if got != want {
+		t.Fatalf("sourceBalancerBase = %q, want %q", got, want)
 	}
 }
 

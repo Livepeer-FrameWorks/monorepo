@@ -166,6 +166,82 @@ type conn struct {
 	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
 }
 
+func currentControlConn(nodeID string, stream pb.HelmsmanControl_ConnectServer) (*conn, bool) {
+	if registry == nil {
+		return nil, false
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil || c.stream != stream {
+		return nil, false
+	}
+	return c, true
+}
+
+func controlStreamIsCurrentOrUntracked(nodeID string, stream pb.HelmsmanControl_ConnectServer) bool {
+	if registry == nil {
+		return true
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return true
+	}
+	return c.stream == stream
+}
+
+func removeCurrentControlConn(nodeID, canonicalID string, stream pb.HelmsmanControl_ConnectServer) []string {
+	if registry == nil {
+		return nil
+	}
+	removed := make([]string, 0, 2)
+	registry.mu.Lock()
+	if c, ok := registry.conns[nodeID]; ok && c.stream == stream {
+		delete(registry.conns, nodeID)
+		removed = append(removed, nodeID)
+	}
+	if canonicalID != "" && canonicalID != nodeID {
+		if c, ok := registry.conns[canonicalID]; ok && c.stream == stream {
+			delete(registry.conns, canonicalID)
+			removed = append(removed, canonicalID)
+		}
+	}
+	registry.mu.Unlock()
+	return removed
+}
+
+func releaseConnOwnerForDisconnect(nodeID string, log logging.Logger) bool {
+	rs := GetRedisStore()
+	if rs == nil {
+		return true
+	}
+	deleted, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr())
+	if err != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
+		return false
+	}
+	if deleted {
+		return true
+	}
+	owner, err := rs.GetConnOwner(context.Background(), nodeID)
+	if err != nil {
+		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to inspect conn owner after disconnect")
+		return false
+	}
+	return owner.InstanceID == ""
+}
+
+func cleanupControlDisconnect(nodeID, canonicalID string, stream pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+	for _, id := range removeCurrentControlConn(nodeID, canonicalID, stream) {
+		if releaseConnOwnerForDisconnect(id, log) {
+			state.DefaultManager().MarkNodeDisconnected(id)
+		}
+		ForgetManagedStreamLastSent(id)
+	}
+}
+
 // lockedStream serializes Send on a single Helmsman control stream. gRPC's
 // ServerStream.SendMsg is NOT safe for concurrent goroutines, but the
 // per-message handlers in Connect run as separate `go process*()` goroutines
@@ -201,6 +277,7 @@ func init() {
 var quartermasterClient *qmclient.GRPCClient
 var navigatorClient *navclient.Client
 var serverCert serverCertHolder
+var errStreamNotCurrent = errors.New("helmsman control stream is not current for node")
 
 // serverCertHolder stores the current server TLS certificate set, updated
 // atomically by the CertRefreshLoop when file-based or Navigator-backed TLS
@@ -946,6 +1023,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		if err != nil {
 			break
 		}
+		if nodeID != "" {
+			if _, ok := currentControlConn(nodeID, stream); !ok {
+				registry.log.WithField("node_id", nodeID).Warn("Closing stale Helmsman control stream")
+				return nil
+			}
+		}
 		switch x := msg.GetPayload().(type) {
 		case *pb.ControlMessage_Register:
 			nodeID = x.Register.GetNodeId()
@@ -977,34 +1060,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
 			cleanup := func() {
-				registry.mu.Lock()
-				delete(registry.conns, nodeID)
-				if canonicalNodeID != "" && canonicalNodeID != nodeID {
-					if c, ok := registry.conns[canonicalNodeID]; ok && c.stream == stream {
-						delete(registry.conns, canonicalNodeID)
-					}
-				}
-				registry.mu.Unlock()
-				state.DefaultManager().MarkNodeDisconnected(nodeID)
-				if canonicalNodeID != "" && canonicalNodeID != nodeID {
-					state.DefaultManager().MarkNodeDisconnected(canonicalNodeID)
-				}
-				// Drop managed-stream Apply state for the disconnected node
-				// so the next reconciler tick re-emits Apply on reconnect.
-				ForgetManagedStreamLastSent(nodeID)
-				if canonicalNodeID != "" && canonicalNodeID != nodeID {
-					ForgetManagedStreamLastSent(canonicalNodeID)
-				}
-				if rs := GetRedisStore(); rs != nil {
-					if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-						registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
-					}
-					if canonicalNodeID != "" && canonicalNodeID != nodeID {
-						if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), canonicalNodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-							registry.log.WithError(err).WithField("node_id", canonicalNodeID).Warn("Failed to clean conn owner in Redis")
-						}
-					}
-				}
+				cleanupControlDisconnect(nodeID, canonicalNodeID, stream, registry.log)
 			}
 
 			// HA: register connection ownership in Redis so peer instances can relay commands
@@ -1295,15 +1351,14 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				canonicalNodeID := nodeID
 				registry.mu.Lock()
 				c := registry.conns[nodeID]
-				if c != nil {
+				if c != nil && c.stream == stream {
 					c.last = time.Now()
 					if c.canonicalID != "" {
 						canonicalNodeID = c.canonicalID
 					}
 				}
 				registry.mu.Unlock()
-				if c == nil {
-					// Connection was removed (e.g. activation failed) — terminate stream
+				if c == nil || c.stream != stream {
 					return nil
 				}
 				state.DefaultManager().TouchNode(nodeID, true)
@@ -1443,33 +1498,11 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		}
 	}
 	if nodeID != "" {
-		registry.mu.Lock()
-		c := registry.conns[nodeID]
-		canonicalID := ""
-		if c != nil {
+		canonicalID := nodeID
+		if c, ok := currentControlConn(nodeID, stream); ok && c.canonicalID != "" {
 			canonicalID = c.canonicalID
 		}
-		delete(registry.conns, nodeID)
-		if canonicalID != "" && canonicalID != nodeID {
-			if cc, ok := registry.conns[canonicalID]; ok && cc.stream == stream {
-				delete(registry.conns, canonicalID)
-			}
-		}
-		registry.mu.Unlock()
-		state.DefaultManager().MarkNodeDisconnected(nodeID)
-		if canonicalID != "" && canonicalID != nodeID {
-			state.DefaultManager().MarkNodeDisconnected(canonicalID)
-		}
-		if rs := GetRedisStore(); rs != nil {
-			if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), nodeID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-				registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to clean conn owner in Redis")
-			}
-			if canonicalID != "" && canonicalID != nodeID {
-				if _, err := rs.DeleteConnOwnerIfMatch(context.Background(), canonicalID, GetInstanceID(), GetAdvertiseAddr()); err != nil {
-					registry.log.WithError(err).WithField("node_id", canonicalID).Warn("Failed to clean conn owner in Redis")
-				}
-			}
-		}
+		cleanupControlDisconnect(nodeID, canonicalID, stream, registry.log)
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
@@ -2648,6 +2681,27 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()
 	_, needsDurableAck := triggerTypesNeedingDurableAck[triggerType]
+
+	if !controlStreamIsCurrentOrUntracked(nodeID, stream) {
+		incMistTrigger(triggerType, blocking, "stale_connection")
+		logger.WithFields(logging.Fields{
+			"trigger_type": triggerType,
+			"request_id":   requestID,
+			"node_id":      nodeID,
+		}).Warn("Dropping MistServer trigger from stale Helmsman control stream")
+		if blocking {
+			sendMistTriggerResponse(stream, &pb.MistTriggerResponse{
+				RequestId: requestID,
+				Response:  "",
+				Abort:     true,
+				ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+			}, logger)
+		}
+		if needsDurableAck {
+			sendMistTriggerAck(stream, requestID, errStreamNotCurrent, logger)
+		}
+		return
+	}
 
 	logger.WithFields(logging.Fields{
 		"trigger_type":   triggerType,

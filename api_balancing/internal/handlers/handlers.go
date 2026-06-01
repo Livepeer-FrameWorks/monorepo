@@ -494,6 +494,15 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 		return
 	}
 
+	if strings.HasPrefix(path, sourceByNodePathPrefix) {
+		if source := query.Get("source"); source != "" {
+			handleGetSource(c, source, query)
+			return
+		}
+		c.String(http.StatusBadRequest, "Missing source")
+		return
+	}
+
 	// Handle stream balancing: /<stream>
 	streamName := strings.TrimPrefix(path, "/")
 
@@ -1078,12 +1087,12 @@ func handleListServers(c *gin.Context) {
 // arrangeRemoteOriginPullFromSource is the /source HTTP entry's
 // cross-cluster path. Unlike arrangeOriginPull (which the gRPC viewer
 // router calls and which picks the puller via LB), the caller IS the
-// puller — a Mist edge that fired STREAM_SOURCE on cold load. We
-// identify the caller from clientIP and pass it as DestNodeID so the
-// arrangement targets the real puller. Fails closed (returns "") when
-// the caller can't be identified or the arrangement fails so the
-// puller and registry never diverge.
-func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, clientIP string) (dtscURL, remoteCluster string) {
+// puller — a Mist edge that fired STREAM_SOURCE on cold load. The
+// caller node ID comes from the Foghorn-issued balancer path where
+// available, with client IP matching only when the path identity is
+// absent. Fails closed (returns "") when the caller can't be identified
+// or the arrangement fails so the puller and registry never diverge.
+func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, callerNodeID, clientIP string) (dtscURL, remoteCluster string) {
 	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon)
 	if candidate == nil {
 		return "", ""
@@ -1093,7 +1102,6 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 		internalName = streamName
 	}
 
-	callerNodeID := state.DefaultManager().NodeIDByClientIP(clientIP)
 	if callerNodeID == "" {
 		logger.WithFields(logging.Fields{
 			"stream":         streamName,
@@ -1276,7 +1284,7 @@ func pullUpstreamScore(upstream string) uint64 {
 	return 1
 }
 
-func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, ctx context.Context, start time.Time) {
+func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, callerNodeID, clientIP string, ctx context.Context, start time.Time) {
 	src := resolvePullSourceForSource(ctx, streamName)
 	if src == nil {
 		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable")
@@ -1313,7 +1321,7 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		// the origin cluster (which IS allowed and presumably pulling)
 		// for its edge DTSC URL so this cluster serves viewers via DTSC
 		// rather than 404. Arrange the pull so it's tracked end-to-end.
-		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, clientIP)
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP)
 		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {
@@ -1359,6 +1367,22 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 	c.String(http.StatusOK, upstream)
 }
 
+const sourceByNodePathPrefix = "/source/by-node/"
+
+func sourceCallerNodeID(c *gin.Context, query url.Values, clientIP string) string {
+	path := strings.TrimSpace(c.Request.URL.Path)
+	if strings.HasPrefix(path, sourceByNodePathPrefix) {
+		rest := strings.TrimPrefix(path, sourceByNodePathPrefix)
+		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		if nodeID, err := url.PathUnescape(rest); err == nil && strings.TrimSpace(nodeID) != "" {
+			return strings.TrimSpace(nodeID)
+		}
+	}
+	return state.DefaultManager().NodeIDByClientIP(clientIP)
+}
+
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
 func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	start := time.Now()
@@ -1368,6 +1392,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 
 	// Get client IP for same-host detection (like C++)
 	clientIP := c.ClientIP()
+	callerNodeID := sourceCallerNodeID(c, query, clientIP)
 
 	// Optional capability filter
 	requireCap := query.Get("cap") // ingest|edge|storage|processing or comma-separated
@@ -1388,7 +1413,6 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	// that can be federated (live+, pull+, dvr+, bare mist-native).
 	// When an origin-pull is arranged, the peer DTSC URL is the right
 	// answer regardless of any prefix-specific resolver below.
-	callerNodeID := state.DefaultManager().NodeIDByClientIP(clientIP)
 	if remoteDTSC, handled := activeReplicationSource(ctx, streamName, callerNodeID); handled {
 		if remoteDTSC == "" {
 			// Replication exists but pinned to another local edge.
@@ -1418,7 +1442,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		return
 	}
 	if strings.HasPrefix(streamName, "pull+") {
-		handleGetPullSource(c, streamName, lat, lon, tagAdjust, clientIP, ctx, start)
+		handleGetPullSource(c, streamName, lat, lon, tagAdjust, callerNodeID, clientIP, ctx, start)
 		return
 	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
@@ -1429,7 +1453,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		// firing /source) IS the puller, so identify it from clientIP
 		// and pass to ArrangeOriginPull as DestNodeID. Fails closed
 		// when the caller can't be identified or the arrangement fails.
-		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, clientIP)
+		remoteDTSC, remoteCluster := arrangeRemoteOriginPullFromSource(ctx, streamName, lat, lon, callerNodeID, clientIP)
 		if remoteDTSC != "" {
 			durationMs := float32(time.Since(start).Milliseconds())
 			if metrics != nil {
