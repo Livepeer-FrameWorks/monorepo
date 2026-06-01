@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // DVRArtifactDispatch is the bundled state STREAM_SOURCE needs to route a
@@ -26,6 +28,11 @@ type DVRArtifactDispatch struct {
 	Status             string
 	RecordingNode      string
 	RequiresAuth       bool
+	// ClusterPeers is the tenant's freshly-resolved cluster-peer envelope from
+	// Commodore. A cross-cluster DVR arrange must gate the recording peer
+	// against this so a revoked peer can't keep serving rolling DVR off stale
+	// registry state.
+	ClusterPeers []*pb.TenantClusterPeer
 }
 
 // ResolveDVRArtifactDispatch maps a DVR artifact internal_name (the token
@@ -58,6 +65,7 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 		PlaybackID:         dvr.GetPlaybackId(),
 		TenantID:           dvr.GetTenantId(),
 		RequiresAuth:       artifact.GetRequiresAuth(),
+		ClusterPeers:       artifact.GetClusterPeers(),
 	}
 	if db == nil {
 		return out, nil

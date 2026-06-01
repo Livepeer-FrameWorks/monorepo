@@ -16,17 +16,24 @@ import (
 // sidecar) so production-colocated Mist sees 127.0.0.1 while container
 // deployments see the inter-container address (e.g. helmsman:18007).
 //
-// For clips, streamInternal carries the owning stream's internal_name and
-// is encoded as a path segment (clips/<stream>/<hash>.<ext>), NOT a query
-// parameter. Mist appends ".dtsh" to the entire input string for sidecar
-// read/write (mistserver/src/input/input.cpp); a query-string-encoded
-// stream would mutate to ?s=stream.dtsh and the relay's dtsh dispatch
-// would miss. Path encoding survives Mist's ".dtsh" suffixing intact.
-// Empty streamInternal means "flat layout only"; safe for VOD which always
-// lives at vod/<hash>.<ext>.
+// The URL carries NO auth token: Mist derives the sidecar request as
+// input + ".dtsh" (mistserver/src/input/input.cpp), and a query token would
+// mutate to ?artifact_relay_token=TOK.dtsh — leaving the path at <hash>.<ext>,
+// so the request routes to the media handler and never reaches the .dtsh
+// dispatch. The Mist→Helmsman hop is a same-node sidecar trust boundary
+// instead: Helmsman's relay accepts it via loopback (production colocation) or
+// HELMSMAN_RELAY_TRUSTED_CIDR (docker, where Mist dials helmsman:18007).
 //
-// Returns "" when the node has no advertised relay URL — callers treat that
-// as a hard signal to abort STREAM_SOURCE rather than fabricating a default.
+// For clips, streamInternal carries the owning stream's internal_name and is
+// encoded as a path segment (clips/<stream>/<hash>.<ext>), NOT a query
+// parameter, so it too survives Mist's ".dtsh" suffixing. A clip REQUIRES the
+// stream segment: Helmsman only serves clips on the nested route and 404s a
+// flat clip path, so an empty streamInternal here is a hard error, not a flat
+// fallback. VOD/upload stay flat at <kind>/<hash>.<ext>.
+//
+// Returns "" when the node has no advertised relay URL, or for a clip with no
+// stream — callers treat "" as a hard signal to abort STREAM_SOURCE rather than
+// fabricating a default (or, here, an impossible-to-serve flat clip URL).
 func buildVODRelayURL(nodeID, kind, artifactHash, format, streamInternal string) string {
 	base := control.GetRelayBaseURL(nodeID)
 	if base == "" {
@@ -36,10 +43,28 @@ func buildVODRelayURL(nodeID, kind, artifactHash, format, streamInternal string)
 	if ext == "" {
 		return ""
 	}
-	if kind == "clip" && streamInternal != "" {
-		return fmt.Sprintf("%s/internal/artifact/clip/%s/%s%s", base, url.PathEscape(streamInternal), artifactHash, ext)
+	path := relayArtifactPath(kind, artifactHash, ext, streamInternal)
+	if path == "" {
+		return ""
 	}
-	return fmt.Sprintf("%s/internal/artifact/%s/%s%s", base, kind, artifactHash, ext)
+	return base + path
+}
+
+// relayArtifactPath builds the Helmsman relay path for an artifact, or "" when
+// no valid path exists. Clips REQUIRE the stream segment — Helmsman only serves
+// them on the nested /clip/<stream>/<file> route and 404s a flat clip path — so
+// an empty stream yields "" (caller aborts), never a flat fallback. VOD/upload
+// are flat. The stream segment is PathEscaped to match the federation and
+// same-cluster peer-relay builders so the minted grant path and the requested
+// path are byte-identical. ext must already be normalized (e.g. ".mp4").
+func relayArtifactPath(kind, artifactHash, ext, streamInternal string) string {
+	if kind == "clip" {
+		if streamInternal == "" {
+			return ""
+		}
+		return fmt.Sprintf("/internal/artifact/clip/%s/%s%s", url.PathEscape(streamInternal), artifactHash, ext)
+	}
+	return fmt.Sprintf("/internal/artifact/%s/%s%s", kind, artifactHash, ext)
 }
 
 // buildUploadRelayURL constructs the Mist source URL for a processing-input
@@ -54,7 +79,8 @@ func buildUploadRelayURL(nodeID, uploadHash, ext string) string {
 	if !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
 	}
-	return fmt.Sprintf("%s/internal/artifact/upload/%s%s", base, uploadHash, ext)
+	path := fmt.Sprintf("/internal/artifact/upload/%s%s", uploadHash, ext)
+	return base + path
 }
 
 // normalizeExt accepts either "mkv" or ".mkv" and returns ".mkv". Empty in,
@@ -91,9 +117,19 @@ func isRelaySafeFormat(ext string) bool {
 // format means we can't fabricate a valid relay URL; callers fall back
 // to abort.
 type artifactDescriptor struct {
+	// Found reports whether a local foghorn.artifacts row exists. Cross-cluster
+	// adoption keys on this, NOT on Format: warm in-memory state can carry a
+	// format while the DB row is still missing, and RelayResolve 404s a missing
+	// row — so the front door must adopt whenever the row is absent.
+	Found          bool
 	Format         string
 	ArtifactType   string
 	StreamInternal string
+	// AuthoritativeCluster is the row's COALESCE(storage_cluster_id,
+	// origin_cluster_id) — the cluster that actually holds the bytes.
+	// STREAM_SOURCE reauthorizes an already-adopted cross-cluster row against
+	// this before handing Mist a relay URL.
+	AuthoritativeCluster string
 }
 
 func selectArtifactRelayFormat(desc artifactDescriptor, warmFormat string) string {
@@ -109,19 +145,22 @@ func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifact
 		return artifactDescriptor{}
 	}
 	var (
-		format         sql.NullString
-		artifactType   sql.NullString
-		streamInternal sql.NullString
+		format               sql.NullString
+		artifactType         sql.NullString
+		streamInternal       sql.NullString
+		authoritativeCluster sql.NullString
 	)
 	err := db.QueryRowContext(ctx, `
-		SELECT format, artifact_type, stream_internal_name FROM foghorn.artifacts
+		SELECT format, artifact_type, stream_internal_name,
+		       COALESCE(storage_cluster_id, origin_cluster_id)
+		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND status != 'deleted'
 		LIMIT 1
-	`, artifactHash).Scan(&format, &artifactType, &streamInternal)
+	`, artifactHash).Scan(&format, &artifactType, &streamInternal, &authoritativeCluster)
 	if err != nil {
 		return artifactDescriptor{}
 	}
-	d := artifactDescriptor{}
+	d := artifactDescriptor{Found: true}
 	if format.Valid {
 		d.Format = format.String
 	}
@@ -130,6 +169,9 @@ func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifact
 	}
 	if streamInternal.Valid {
 		d.StreamInternal = streamInternal.String
+	}
+	if authoritativeCluster.Valid {
+		d.AuthoritativeCluster = authoritativeCluster.String
 	}
 	return d
 }

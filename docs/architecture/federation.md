@@ -90,11 +90,12 @@ Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
 3. If sync_status='synced': mints presigned S3 GET URL → returns to A
 4. Else if a local origin node has the canonical full file on disk
    (foghorn.artifact_nodes row with role='origin', is_complete=true,
-   recently-seen): Foghorn B mints a short-lived artifact_relay JWT
-   (5min TTL, bound to {origin node id, artifact_hash, request path})
-   and returns peer_relay_url + peer_relay_token → A. Cluster A's
-   Helmsman block cache fetches blocks directly from origin node's
-   Helmsman with the token as Authorization: Bearer. No S3 sync wait.
+   recently-seen): Foghorn B mints a short-lived opaque capability grant
+   (5min TTL, stored in B's Redis, bound to {origin node id, artifact_hash,
+   allowed media + .dtsh paths}) and returns peer_relay_url +
+   peer_relay_grant_id → A. Cluster A's Helmsman block cache fetches blocks
+   directly from origin node's Helmsman with the grant id as
+   Authorization: Bearer. No S3 sync wait.
 5. Else: returns Ready=false; Foghorn A surfaces 503 to the viewer.
    The freeze pipeline lands the bytes asynchronously; the next viewer
    attempt picks up where the failed one left off.
@@ -103,12 +104,15 @@ Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
 For clip/VOD: returns a single URL — either S3-presigned or peer-relay.
 ```
 
-The peer-relay JWT is signed with origin Foghorn's own service key.
-Only same-cluster Helmsmans validate the token; the requesting cluster
-treats it as opaque and forwards it through to its local block cache.
-This keeps trust boundaries intact (no cross-cluster key distribution)
-while letting hot-but-unsynced artifacts serve viewers immediately
-across the federation.
+The peer-relay grant is an opaque random id, not a self-validating token:
+the serving edge holds no signing key. When the origin node's Helmsman
+receives the pull, it asks its own Foghorn (AuthorizeRelayPull over the
+control stream) to confirm the grant against the artifact, serving node,
+and exact request path that Foghorn minted. The requesting cluster treats
+the id as opaque and forwards it through to its local block cache. This
+keeps trust boundaries intact (no key on edges, no cross-cluster key
+distribution; a grant's access ends when its short TTL expires, with no explicit revoke) while letting
+hot-but-unsynced artifacts serve viewers immediately across the federation.
 
 DVR archive playback does not use whole-artifact `PrepareArtifact`. A DVR can
 run for months; replay is sliced into finalized chapter VOD artifacts:

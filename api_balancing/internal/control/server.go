@@ -166,11 +166,30 @@ type conn struct {
 	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
 }
 
+// lockedStream serializes Send on a single Helmsman control stream. gRPC's
+// ServerStream.SendMsg is NOT safe for concurrent goroutines, but the
+// per-message handlers in Connect run as separate `go process*()` goroutines
+// and several send on this same bidi stream (the high-frequency
+// AuthorizeRelayPull among them). Wrapping the stream once at Connect entry and
+// using it everywhere (conn.stream + handler dispatch) funnels every Send
+// through this mutex with no call-site changes. Recv is left on the embedded
+// stream: concurrent Send+Recv is allowed by gRPC, only concurrent Send+Send is
+// not.
+type lockedStream struct {
+	pb.HelmsmanControl_ConnectServer
+	sendMu sync.Mutex
+}
+
+func (s *lockedStream) Send(msg *pb.ControlMessage) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	return s.HelmsmanControl_ConnectServer.Send(msg)
+}
+
 var registry *Registry
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
-var artifactRelaySecret atomic.Pointer[[]byte]
 var servedClusters atomic.Pointer[sync.Map]
 var chandlerBaseMu sync.RWMutex
 var resolvedChandlerBaseURL string
@@ -409,17 +428,14 @@ type NodeOutputs struct {
 }
 
 // Optional analytics callbacks set by handlers package
-var clipProgressHandler func(*pb.ClipProgress)
-var clipDoneHandler func(*pb.ClipDone)
 var artifactDeletedHandler func(context.Context, *pb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
 var artifactMapUpdatedHandler func(nodeID string)
 
-// SetClipHandlers registers callbacks for analytics emission
-func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(context.Context, *pb.ArtifactDeleted)) {
-	clipProgressHandler = onProgress
-	clipDoneHandler = onDone
+// SetArtifactDeletedHandler registers the callback for node-local
+// artifact deletion/eviction reconciliation + DELETED lifecycle emission.
+func SetArtifactDeletedHandler(onDeleted func(context.Context, *pb.ArtifactDeleted)) {
 	artifactDeletedHandler = onDeleted
 }
 
@@ -626,8 +642,6 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 	switch req.GetCommand().(type) {
 	case *pb.ForwardCommandRequest_ConfigSeed:
 		return "config_seed"
-	case *pb.ForwardCommandRequest_ClipPull:
-		return "clip_pull"
 	case *pb.ForwardCommandRequest_DvrStart:
 		return "dvr_start"
 	case *pb.ForwardCommandRequest_DvrStop:
@@ -665,8 +679,6 @@ func RelayCommandType(req *pb.ForwardCommandRequest) string {
 
 func RelayRequestID(req *pb.ForwardCommandRequest) string {
 	switch cmd := req.GetCommand().(type) {
-	case *pb.ForwardCommandRequest_ClipPull:
-		return cmd.ClipPull.GetRequestId()
 	case *pb.ForwardCommandRequest_DvrStart:
 		return cmd.DvrStart.GetRequestId()
 	case *pb.ForwardCommandRequest_DvrStop:
@@ -717,31 +729,6 @@ func SetLocalClusterID(id string) {
 // GetLocalClusterID returns the primary cluster ID for this Foghorn instance.
 func GetLocalClusterID() string {
 	return localClusterID
-}
-
-// SetArtifactRelaySecret stores the HMAC secret used to sign short-lived
-// JWTs that authorize cross-cluster peer-relay reads against origin
-// Helmsman nodes. Same key Foghorn uses for its other service-tier
-// JWTs — only the origin cluster's own Helmsmans validate, so the key
-// never crosses cluster boundaries.
-func SetArtifactRelaySecret(secret []byte) {
-	if len(secret) == 0 {
-		artifactRelaySecret.Store(nil)
-		return
-	}
-	cp := append([]byte(nil), secret...)
-	artifactRelaySecret.Store(&cp)
-}
-
-// GetArtifactRelaySecret returns the configured signing secret, or nil
-// if peer-relay token issuance is disabled. Exposed for the federation
-// package which mints tokens on behalf of cross-cluster requesters.
-func GetArtifactRelaySecret() []byte {
-	ptr := artifactRelaySecret.Load()
-	if ptr == nil {
-		return nil
-	}
-	return *ptr
 }
 
 // AddServedCluster registers an additional cluster served by this Foghorn.
@@ -947,6 +934,11 @@ type Server struct {
 }
 
 func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
+	// Serialize Send across the goroutine-dispatched handlers below; gRPC
+	// SendMsg is not concurrency-safe. Reassigning the parameter means every
+	// downstream use (conn.stream storage, stream-identity comparisons, handler
+	// dispatch) shares this one wrapper, so all sends funnel through its mutex.
+	stream = &lockedStream{HelmsmanControl_ConnectServer: stream}
 	var nodeID string
 	// On initial message we expect a Register
 	for {
@@ -1293,16 +1285,6 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 				}(x.Register, canonicalNodeID, clusterID, peerAddr)
 			}
-		case *pb.ControlMessage_ClipProgress:
-			if clipProgressHandler != nil {
-				go clipProgressHandler(x.ClipProgress)
-			}
-			go handleClipProgress(x.ClipProgress, nodeID, registry.log)
-		case *pb.ControlMessage_ClipDone:
-			if clipDoneHandler != nil {
-				go clipDoneHandler(x.ClipDone)
-			}
-			go handleClipDone(x.ClipDone, nodeID, registry.log)
 		case *pb.ControlMessage_ArtifactDeleted:
 			if artifactDeletedHandler != nil {
 				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
@@ -1387,6 +1369,17 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			// chapter refs for an asset it's about to serve over
 			// /internal/artifact/*. Same control-stream pattern as CanDelete.
 			go processRelayResolveRequest(x.RelayResolveRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_AuthorizeRelayPullRequest:
+			// Serving edge asks Foghorn to authorize an inbound peer-relay
+			// pull against the grant Foghorn minted at resolve time. nodeID is
+			// the node_id this control connection registered with (the same
+			// value the grant was minted against), so the origin-node binding
+			// is consistent mint↔authorize. NOTE: it's the registered id, not
+			// reconciled to the fingerprint/enrollment-resolved canonical id —
+			// the node binding is defense-in-depth on top of the opaque grant
+			// (exact path + hash + 5-min TTL + origin-cluster-only validation),
+			// not a standalone trust boundary.
+			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
@@ -1513,40 +1506,6 @@ func CleanupLocalConnOwners(ctx context.Context) {
 			registry.log.WithField("node_id", nodeID).Info("Cleaned conn owner during shutdown")
 		}
 	}
-}
-
-func SendLocalClipPull(nodeID string, req *pb.ClipPullRequest) error {
-	registry.mu.RLock()
-	c := registry.conns[nodeID]
-	registry.mu.RUnlock()
-	if c == nil {
-		return ErrNotConnected
-	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ClipPullRequest{ClipPullRequest: req},
-		SentAt:  timestamppb.Now(),
-	}
-	return c.stream.Send(msg)
-}
-
-// SendClipPull sends a ClipPullRequest to the given node, relaying via HA if needed.
-func SendClipPull(nodeID string, req *pb.ClipPullRequest) error {
-	err := SendLocalClipPull(nodeID, req)
-	if !shouldRelay(nodeID, err) {
-		return err
-	}
-	if commandRelay == nil {
-		return ErrNotConnected
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
-		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: req},
-	}); relayErr != nil {
-		return relayFailure(err, relayErr)
-	}
-	return nil
 }
 
 // SendLocalDrainStream dispatches an old-owner drain over the named node's
@@ -2306,80 +2265,6 @@ func shouldRelay(nodeID string, err error) bool {
 	return c == nil
 }
 
-// handleClipProgress processes clip progress updates from Helmsman nodes
-func handleClipProgress(progress *pb.ClipProgress, nodeID string, logger logging.Logger) {
-	requestID := progress.GetRequestId()
-	percent := progress.GetPercent()
-	message := progress.GetMessage()
-
-	logger.WithFields(logging.Fields{
-		"request_id": requestID,
-		"percent":    percent,
-		"message":    message,
-	}).Info("Clip progress update")
-
-	_ = state.DefaultManager().ApplyClipProgress(streamCtx(), requestID, percent, message, nodeID)
-}
-
-// handleClipDone processes clip completion notifications from Helmsman nodes
-func handleClipDone(done *pb.ClipDone, nodeID string, logger logging.Logger) {
-	requestID := done.GetRequestId()
-	filePath := done.GetFilePath()
-	sizeBytes := done.GetSizeBytes()
-	status := done.GetStatus()
-	errorMsg := done.GetError()
-
-	logger.WithFields(logging.Fields{
-		"request_id": requestID,
-		"file_path":  filePath,
-		"size_bytes": sizeBytes,
-		"status":     status,
-		"error":      errorMsg,
-	}).Info("Clip processing completed")
-
-	_ = state.DefaultManager().ApplyClipDone(streamCtx(), requestID, status, filePath, sizeBytes, errorMsg, nodeID)
-	if status == "success" {
-		projectArtifactSizeByRequestID(streamCtx(), requestID, int64(sizeBytes), logger)
-		// Clip writer finalized on this node — register the row as
-		// origin so cross-cluster peer-relay can serve the file before
-		// it syncs to S3. Same shape as the VOD processing finalize.
-		registerClipOriginByRequestID(streamCtx(), requestID, nodeID, filePath, int64(sizeBytes), logger)
-	}
-}
-
-// registerClipOriginByRequestID resolves the clip's artifact_hash from
-// foghorn.artifacts by the writer's request_id, then upserts the
-// (artifact_hash, node_id) row as role='origin', is_complete=true.
-// Mirrors projectArtifactSizeByRequestID's lookup shape; safe to call
-// when artifactRepo or db is nil (returns silently).
-func registerClipOriginByRequestID(ctx context.Context, requestID, nodeID, filePath string, sizeBytes int64, logger logging.Logger) {
-	if db == nil || artifactRepo == nil || requestID == "" || nodeID == "" {
-		return
-	}
-	var artifactHash string
-	if err := db.QueryRowContext(ctx, `
-		SELECT artifact_hash
-		  FROM foghorn.artifacts
-		 WHERE request_id = $1
-		 LIMIT 1
-	`, requestID).Scan(&artifactHash); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			logger.WithError(err).WithField("request_id", requestID).Warn("Clip done: failed to resolve artifact_hash for origin registration")
-		}
-		return
-	}
-	if artifactHash == "" {
-		return
-	}
-	if err := artifactRepo.RegisterOriginArtifact(ctx, artifactHash, nodeID, filePath, sizeBytes, true); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
-			"request_id":    requestID,
-			"artifact_hash": artifactHash,
-			"node_id":       nodeID,
-		}).Warn("Clip done: origin registration failed")
-	}
-}
-
 func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger logging.Logger) {
 	artifactHash := deleted.GetArtifactHash()
 	reason := deleted.GetReason()
@@ -2949,7 +2834,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		},
 		{
 			Id:    "processing",
-			Def:   &pb.StreamDef{Name: "processing", Realtime: true, StopSessions: false, Tags: []string{"processing"}},
+			Def:   &pb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, StopSessions: false, Tags: []string{"processing"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"processing"},
 		},
@@ -4331,20 +4216,16 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
-	// Already synced to S3 — no need to re-freeze
+	// Already synced means the asset is eligible for local eviction, not
+	// that this delete attempt should trust stale metadata blindly. Return
+	// fresh presigned URLs below so pressure cleanup refreshes the durable
+	// object immediately before deleting the local warm copy.
 	if syncStatus.Valid && syncStatus.String == "synced" {
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
 			"asset_type": assetType,
 			"node_id":    nodeID,
-		}).Debug("Asset already synced to S3, rejecting freeze permission")
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
-			RequestId: requestID,
-			AssetHash: assetHash,
-			Approved:  false,
-			Reason:    "already_synced",
-		}, logger)
-		return
+		}).Debug("Asset already synced to S3; issuing refresh freeze before eviction")
 	}
 
 	// Generate presigned URLs
@@ -5481,30 +5362,30 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 		return
 	}
 
-	// Check if artifact is synced to S3
-	synced, err := artifactRepo.IsSynced(context.Background(), assetHash)
+	ctx := context.Background()
+	info, err := artifactRepo.GetArtifactSyncInfo(ctx, assetHash)
 	if err != nil {
-		logger.WithError(err).WithField("asset_hash", assetHash).Error("Failed to check sync status")
+		logger.WithError(err).WithField("asset_hash", assetHash).Error("Failed to get sync status")
 		response.Reason = "db_error"
 		sendCanDeleteResponse(stream, response, logger)
 		return
 	}
 
-	if synced {
+	if durable, reason := verifyDurableArtifactCopy(ctx, info, logger); durable {
 		response.SafeToDelete = true
-		response.Reason = "synced"
+		response.Reason = reason
 
 		// Calculate warm duration (how long asset was cached before eviction)
-		cachedAt, err := artifactRepo.GetCachedAt(context.Background(), assetHash)
+		cachedAt, err := artifactRepo.GetCachedAt(ctx, assetHash)
 		if err == nil && cachedAt > 0 {
 			warmDurationMs := time.Now().UnixMilli() - cachedAt
 			response.WarmDurationMs = warmDurationMs
 			logger.WithFields(logging.Fields{
 				"asset_hash":       assetHash,
 				"warm_duration_ms": warmDurationMs,
-			}).Info("Asset synced to S3, safe to delete local copy")
+			}).Info("Asset durable copy verified, safe to delete local copy")
 		} else {
-			logger.WithField("asset_hash", assetHash).Info("Asset synced to S3, safe to delete local copy (no cached_at)")
+			logger.WithField("asset_hash", assetHash).Info("Asset durable copy verified, safe to delete local copy (no cached_at)")
 		}
 	} else {
 		// Check if this is a remote artifact (storage cluster's S3 holds the
@@ -5516,7 +5397,7 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 		// tenant's record this delete belongs to and could bleed a remote
 		// disposition across tenants.
 		if db != nil {
-			authoritativeCluster, ok := lookupAuthoritativeClusterUnambiguous(context.Background(), assetHash, logger)
+			authoritativeCluster, ok := lookupAuthoritativeClusterUnambiguous(ctx, assetHash, logger)
 			if ok && authoritativeCluster != "" && !isServedCluster(authoritativeCluster) {
 				response.SafeToDelete = true
 				response.Reason = "remote_synced"
@@ -5530,15 +5411,14 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 		}
 
 		// Check if sync is in progress
-		info, err := artifactRepo.GetArtifactSyncInfo(context.Background(), assetHash)
-		if err != nil {
-			response.Reason = "db_error"
-		} else if info == nil {
+		if info == nil {
 			response.Reason = "not_found"
 		} else if info.SyncStatus == "in_progress" {
 			response.Reason = "sync_pending"
 		} else if info.SyncStatus == "failed" {
 			response.Reason = "sync_failed"
+		} else if info.SyncStatus == "synced" {
+			_, response.Reason = verifyDurableArtifactCopy(ctx, info, logger)
 		} else {
 			response.Reason = "not_synced"
 		}
@@ -5549,6 +5429,50 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 	}
 
 	sendCanDeleteResponse(stream, response, logger)
+}
+
+func verifyDurableArtifactCopy(ctx context.Context, info *state.ArtifactSyncInfo, logger logging.Logger) (bool, string) {
+	if info == nil {
+		return false, "not_found"
+	}
+	if info.SyncStatus != "synced" {
+		return false, "not_synced"
+	}
+	if info.S3URL == "" {
+		return false, "synced_missing_s3_url"
+	}
+	if s3Client == nil {
+		return false, "s3_not_configured"
+	}
+	key, err := s3Client.ParseS3URL(info.S3URL)
+	if err != nil || key == "" {
+		if logger != nil && err != nil {
+			logger.WithError(err).WithField("asset_hash", info.ArtifactHash).Warn("Failed to parse synced artifact S3 URL")
+		}
+		return false, "s3_url_invalid"
+	}
+	keys, err := s3Client.ListPrefix(ctx, key)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"asset_hash": info.ArtifactHash,
+				"s3_key":     key,
+			}).Warn("Failed to verify synced artifact in S3")
+		}
+		return false, "s3_verify_failed"
+	}
+	for _, got := range keys {
+		if got == key {
+			return true, "synced_verified"
+		}
+	}
+	if logger != nil {
+		logger.WithFields(logging.Fields{
+			"asset_hash": info.ArtifactHash,
+			"s3_key":     key,
+		}).Warn("Artifact marked synced but durable object is missing")
+	}
+	return false, "s3_object_missing"
 }
 
 // sendCanDeleteResponse sends a CanDeleteResponse back to Helmsman

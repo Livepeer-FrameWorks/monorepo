@@ -153,8 +153,8 @@ func TestDeterministicPathsForAsset(t *testing.T) {
 	})
 	t.Run("clip_with_stream", func(t *testing.T) {
 		paths := DeterministicPathsForAsset("/base", AssetKey{Type: "clip", Hash: "ch"}, ".mp4", "streamA", nil)
-		// Clip layout is stream-nested only — Foghorn requires
-		// output_stream_name on ClipPullRequest, so the flat
+		// Clip layout is stream-nested only — the clip's source stream
+		// name is required to build the path, so the flat
 		// /base/clips/<hash>.<ext> shape never appears.
 		for _, want := range []string{
 			"/base/clips/streamA/ch.mp4",

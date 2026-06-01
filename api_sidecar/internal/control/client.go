@@ -12,11 +12,9 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +50,25 @@ type DeleteVodFunc func(vodHash string) (uint64, error)
 type streamConn struct {
 	stream pb.HelmsmanControl_ConnectClient
 	nodeID string
+}
+
+// lockedClientStream serializes Send on the single Helmsman→Foghorn control
+// stream. gRPC's ClientStream.SendMsg is NOT safe for concurrent goroutines,
+// but the Recv loop dispatches handlers as separate goroutines and many
+// Request*/Send* helpers (the high-frequency RequestAuthorizeRelayPull among
+// them) send on this same bidi stream. Wrapping the stream once at connect and
+// storing that wrapper funnels every Send through this mutex with no call-site
+// changes. Recv stays on the embedded stream: gRPC allows concurrent Send+Recv,
+// only Send+Send is unsafe.
+type lockedClientStream struct {
+	pb.HelmsmanControl_ConnectClient
+	sendMu sync.Mutex
+}
+
+func (s *lockedClientStream) Send(msg *pb.ControlMessage) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	return s.HelmsmanControl_ConnectClient.Send(msg)
 }
 
 var activeConn atomic.Pointer[streamConn]
@@ -754,6 +771,12 @@ func runClient(addr string, logger logging.Logger) error {
 		return err
 	}
 
+	// Serialize every Send on this bidi stream for its lifetime: the Recv loop
+	// below fans out handler goroutines and many Request*/Send* helpers
+	// (RequestAuthorizeRelayPull on the hot relay path among them) send
+	// concurrently, but gRPC's ClientStream.SendMsg is not concurrency-safe.
+	stream = &lockedClientStream{HelmsmanControl_ConnectClient: stream}
+
 	// Send Register using config values
 	nodeID := cfg.NodeID
 	roles := deriveRolesFromConfig(cfg)
@@ -822,8 +845,6 @@ func runClient(addr string, logger logging.Logger) error {
 				return
 			}
 			switch x := msg.GetPayload().(type) {
-			case *pb.ControlMessage_ClipPullRequest:
-				go handleClipPull(logger, x.ClipPullRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_DvrStartRequest:
 				go handleDVRStart(logger, x.DvrStartRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_DvrStopRequest:
@@ -908,6 +929,9 @@ func runClient(addr string, logger logging.Logger) error {
 				// Relay resolve response: route to the waiting goroutine keyed
 				// by request_id.
 				go handleRelayResolveResponse(x.RelayResolveResponse)
+			case *pb.ControlMessage_AuthorizeRelayPullResponse:
+				// Authorize-relay-pull response: route to the waiting goroutine.
+				go handleAuthorizeRelayPullResponse(x.AuthorizeRelayPullResponse)
 			case *pb.ControlMessage_DtshSyncRequest:
 				// Handle incremental .dtsh sync request from Foghorn
 				if dtshSyncRequestHandler != nil {
@@ -1033,230 +1057,7 @@ func foghornControlServerName(addr, override string) string {
 	return foghornInternalServerName
 }
 
-func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*pb.ControlMessage)) {
-	cfg := currentConfig
-	if cfg == nil {
-		logger.Warn("config not initialized; dropping clip request")
-		return
-	}
-
-	mistBase := req.GetSourceBaseUrl()
-	if mistBase == "" {
-		mistBase = deriveMistHTTPBase(cfg.MistServerURL)
-	}
-	mistBase = strings.TrimRight(mistBase, "/")
-	format := req.GetFormat()
-	if format == "" {
-		format = "mp4"
-	}
-
-	// Use clip_hash for secure file naming (no tenant info exposed)
-	clipHash := req.GetClipHash()
-	// stream_name = the Mist source Foghorn picked (live internal_name,
-	// dvr+<internal>, or vod+<chapter_artifact_hash>). Used ONLY for
-	// the /view/ pull URL.
-	sourceStreamName := req.GetStreamName()
-	// output_stream_name = the owning stream's internal_name. All
-	// clips for a given stream share this storage namespace
-	// regardless of which historical surface they were cut from.
-	// Required — Foghorn always populates this field. A missing
-	// value is a Foghorn bug; reject the request rather than fall
-	// back to the source-stream namespace (which would scatter
-	// chapter clips under chapter-artifact-hashed dirs).
-	outputStreamName := req.GetOutputStreamName()
-	if outputStreamName == "" {
-		logger.WithFields(logging.Fields{
-			"clip_hash":     clipHash,
-			"source_stream": sourceStreamName,
-			"request_id":    req.GetRequestId(),
-		}).Error("Clip pull rejected: output_stream_name is required")
-		if send != nil {
-			send(&pb.ControlMessage{
-				SentAt: timestamppb.Now(),
-				Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{
-					RequestId: req.GetRequestId(),
-					Status:    "failed",
-					Error:     "missing output_stream_name (Foghorn bug)",
-				}},
-			})
-		}
-		return
-	}
-	logger.WithFields(logging.Fields{
-		"clip_hash":     clipHash,
-		"source_stream": sourceStreamName,
-		"output_stream": outputStreamName,
-		"source_kind":   req.GetSourceKind().String(),
-		"source_dvr":    req.GetSourceDvrHash(),
-		"source_vod":    req.GetSourceChapterArtifactHash(),
-	}).Debug("Clip pull source dispatch")
-
-	// Build MistServer URL using the source stream name.
-	q := buildClipParams(req)
-	clipURL := buildClipURL(mistBase, sourceStreamName, format, q)
-
-	root := cfg.StorageLocalPath
-	if root == "" {
-		logger.Warn("storage path not configured; dropping clip request")
-		return
-	}
-
-	// Storage path: clips/{output_stream_name}/{clip_hash}.{format}.
-	// Foghorn's relay URL generation and DTSH boot path both resolve
-	// the clip's owning stream via foghorn.artifacts.stream_internal_name,
-	// so the file MUST land under that name — not the source surface.
-	clipDir := filepath.Join(root, "clips", outputStreamName)
-	_ = os.MkdirAll(clipDir, 0755)
-	dst := filepath.Join(clipDir, fmt.Sprintf("%s.%s", clipHash, format))
-
-	requestID := req.GetRequestId()
-
-	// progress 0%
-	if send != nil {
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipProgress{ClipProgress: &pb.ClipProgress{RequestId: requestID, Percent: 0, Message: "starting"}}})
-	}
-	if err := downloadClipFile(clipURL, dst); err != nil {
-		userErr := sanitizeStorageError(err)
-		logger.WithError(err).WithFields(logging.Fields{
-			"clip_url":   clipURL,
-			"clip_hash":  clipHash,
-			"request_id": requestID,
-		}).Error("Clip pull failed")
-		if send != nil {
-			send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{RequestId: requestID, FilePath: dst, SizeBytes: 0, Status: "failed", Error: userErr}}})
-		}
-		return
-	}
-	info, _ := os.Stat(dst)
-	logger.WithFields(logging.Fields{
-		"file":          dst,
-		"clip_hash":     clipHash,
-		"source_stream": sourceStreamName,
-		"output_stream": outputStreamName,
-		"request_id":    requestID,
-		"bytes": func() int64 {
-			if info != nil {
-				return info.Size()
-			}
-			return 0
-		}(),
-	}).Info("Clip pulled successfully")
-
-	if send != nil {
-		var size uint64
-		if info != nil {
-			size = uint64(info.Size())
-		}
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipProgress{ClipProgress: &pb.ClipProgress{RequestId: requestID, Percent: 100, Message: "downloaded"}}})
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{RequestId: requestID, FilePath: dst, SizeBytes: size, Status: "success"}}})
-	}
-	if onStorageWrite != nil {
-		onStorageWrite()
-	}
-
-	// Proactively generate .dtsh for the clip so the first relay viewer
-	// doesn't pay header-discovery latency over HTTP::URIReader and the
-	// freeze pipeline uploads the sidecar alongside the media file. The
-	// handlers package owns the actual GenerateDTSH HTTP poll, registered
-	// via SetClipDTSHGenerator at startup to avoid the
-	// handlers→control→handlers import cycle. Foghorn is the sole
-	// authority for the artifact runtime name — Helmsman uses it
-	// verbatim, never re-derives.
-	artifactRuntimeName := strings.TrimSpace(req.GetArtifactRuntimeName())
-	if artifactRuntimeName == "" {
-		logger.WithField("clip_hash", clipHash).Warn("ClipPullRequest missing artifact_runtime_name; skipping DTSH generation")
-		return
-	}
-	if gen := getClipDTSHGenerator(); gen != nil {
-		go gen(artifactRuntimeName, clipHash)
-	}
-}
-
-// ClipDTSHGenerator is registered by handlers at startup. Invoked
-// asynchronously after a clip download completes; the implementation
-// boots the stream in Mist via /json_<streamName>.js which triggers the
-// input module to write a .dtsh sidecar.
-type ClipDTSHGenerator func(streamName, clipHash string)
-
-var (
-	clipDTSHGen   ClipDTSHGenerator
-	clipDTSHGenMu sync.RWMutex
-)
-
-// SetClipDTSHGenerator wires a clip-completion DTSH generator. Called by
-// handlers package init.
-func SetClipDTSHGenerator(g ClipDTSHGenerator) {
-	clipDTSHGenMu.Lock()
-	clipDTSHGen = g
-	clipDTSHGenMu.Unlock()
-}
-
-func getClipDTSHGenerator() ClipDTSHGenerator {
-	clipDTSHGenMu.RLock()
-	defer clipDTSHGenMu.RUnlock()
-	return clipDTSHGen
-}
-
-func deriveMistHTTPBase(base string) string {
-	u, err := url.Parse(strings.TrimSpace(base))
-	if err != nil || u.Host == "" {
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		host = strings.Split(host, "/")[0]
-		host = strings.Split(host, ":")[0]
-		if host == "" {
-			return strings.TrimRight(base, "/")
-		}
-		return "http://" + host + ":8080"
-	}
-	port := u.Port()
-	if port == "" || port == "4242" {
-		port = "8080"
-	}
-	return u.Scheme + "://" + u.Hostname() + ":" + port
-}
-
-func buildClipURL(base, streamName, format, query string) string {
-	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(base), "/"))
-	if err != nil || u.Host == "" {
-		return fmt.Sprintf("%s/%s.%s?%s", strings.TrimRight(base, "/"), streamName, format, query)
-	}
-	path := strings.TrimRight(u.Path, "/")
-	if path == "" {
-		path = "/" + streamName + "." + format
-	} else {
-		path = path + "/" + streamName + "." + format
-	}
-	u.Path = path
-	u.RawQuery = query
-	return u.String()
-}
-
-func buildClipParams(req *pb.ClipPullRequest) string {
-	return buildClipParamsAt(req, time.Now().Unix())
-}
-
-func buildClipParamsAt(req *pb.ClipPullRequest, nowUnix int64) string {
-	var parts []string
-	if req.GetSourceKind() == pb.ClipPullRequest_SOURCE_KIND_LIVE && req.StartUnix != nil && req.StopUnix != nil {
-		duration := req.GetStopUnix() - req.GetStartUnix()
-		if duration < 1 {
-			duration = 1
-		}
-		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix()-nowUnix, 10))
-		parts = append(parts, "duration="+strconv.FormatInt(duration, 10))
-	} else if req.StartUnix != nil {
-		parts = append(parts, "startunix="+strconv.FormatInt(req.GetStartUnix(), 10))
-		if req.StopUnix != nil {
-			parts = append(parts, "stopunix="+strconv.FormatInt(req.GetStopUnix(), 10))
-		}
-	}
-	parts = append(parts, "dl="+urlEscape(fmt.Sprintf("%s.%s", req.GetOutputName(), req.GetFormat())))
-	return strings.Join(parts, "&")
-}
-
 var hasSpaceFor = storage.HasSpaceFor
-var downloadClipFile = downloadToFile
 
 const minClipDownloadedBytes = 1024
 
@@ -1678,6 +1479,12 @@ var (
 	// resolved concurrently for different sessions.
 	relayResolveHandlers = make(map[string]chan *pb.RelayResolveResponse)
 	relayResolveMutex    = make(chan struct{}, 1)
+
+	// AuthorizeRelayPull request/response tracking (serving edge asks Foghorn
+	// to authorize an inbound peer-relay pull). Same keyed-by-request_id model
+	// as RelayResolve.
+	authorizeRelayPullHandlers = make(map[string]chan *pb.AuthorizeRelayPullResponse)
+	authorizeRelayPullMutex    = make(chan struct{}, 1)
 )
 
 // SetFreezeRequestHandler sets the callback for proactive freeze requests from Foghorn
@@ -2298,6 +2105,71 @@ func handleRelayResolveResponse(response *pb.RelayResolveResponse) {
 	<-relayResolveMutex
 	if exists {
 		responseChan <- response
+	}
+}
+
+// RequestAuthorizeRelayPull asks Foghorn whether an inbound peer-relay pull
+// (which presented an opaque grant id) is authorized. The serving edge holds
+// no signing key; Foghorn matches the grant it minted at resolve time against
+// the artifact + exact request path. Fail-closed: any error/timeout is the
+// caller's cue to deny.
+func RequestAuthorizeRelayPull(ctx context.Context, req *pb.AuthorizeRelayPullRequest) (*pb.AuthorizeRelayPullResponse, error) {
+	stream := getStream()
+	if stream == nil {
+		return nil, fmt.Errorf("gRPC control stream not connected")
+	}
+	if req == nil || req.GetRequestId() == "" {
+		return nil, fmt.Errorf("authorize relay pull request must have a request_id")
+	}
+
+	responseChan := make(chan *pb.AuthorizeRelayPullResponse, 1)
+
+	authorizeRelayPullMutex <- struct{}{}
+	authorizeRelayPullHandlers[req.GetRequestId()] = responseChan
+	<-authorizeRelayPullMutex
+
+	defer func() {
+		authorizeRelayPullMutex <- struct{}{}
+		delete(authorizeRelayPullHandlers, req.GetRequestId())
+		<-authorizeRelayPullMutex
+	}()
+
+	msg := &pb.ControlMessage{
+		RequestId: req.GetRequestId(),
+		SentAt:    timestamppb.Now(),
+		Payload:   &pb.ControlMessage_AuthorizeRelayPullRequest{AuthorizeRelayPullRequest: req},
+	}
+	if err := stream.Send(msg); err != nil {
+		return nil, fmt.Errorf("failed to send authorize relay pull request: %w", err)
+	}
+
+	select {
+	case resp := <-responseChan:
+		return resp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nil, fmt.Errorf("timeout waiting for authorize relay pull response")
+	}
+}
+
+// handleAuthorizeRelayPullResponse routes inbound responses to the waiting
+// goroutine, keyed by request_id.
+func handleAuthorizeRelayPullResponse(response *pb.AuthorizeRelayPullResponse) {
+	if response == nil || response.GetRequestId() == "" {
+		return
+	}
+	authorizeRelayPullMutex <- struct{}{}
+	responseChan, exists := authorizeRelayPullHandlers[response.GetRequestId()]
+	<-authorizeRelayPullMutex
+	if exists {
+		// Non-blocking: the channel is buffered(1) and the waiter takes
+		// exactly one. A duplicate/late response must not wedge this
+		// goroutine on a full channel.
+		select {
+		case responseChan <- response:
+		default:
+		}
 	}
 }
 

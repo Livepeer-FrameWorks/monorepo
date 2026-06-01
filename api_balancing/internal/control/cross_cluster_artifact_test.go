@@ -57,7 +57,7 @@ func TestResolve_HappyPath_ReturnsURL(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "peer:443"})
 
-	got, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	got, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
@@ -71,21 +71,21 @@ func TestResolve_HappyPath_ReturnsURL(t *testing.T) {
 
 func TestResolve_LocalCluster_Refused(t *testing.T) {
 	d := makeCCDeps(&fakeCrossClusterFedClient{}, nil)
-	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-local"); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
+	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-local", nil); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable, got %v", err)
 	}
 }
 
 func TestResolve_EmptyOrigin_Refused(t *testing.T) {
 	d := makeCCDeps(&fakeCrossClusterFedClient{}, nil)
-	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", ""); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
+	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "", nil); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable, got %v", err)
 	}
 }
 
 func TestResolve_UnknownPeerAddr_Refused(t *testing.T) {
 	d := makeCCDeps(&fakeCrossClusterFedClient{}, map[string]string{})
-	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin"); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
+	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable, got %v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestResolve_PrepareArtifactRPCFailure_Wrapped(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "peer:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err == nil || !strings.Contains(err.Error(), "peer down") {
 		t.Fatalf("expected wrapped peer-down error, got %v", err)
 	}
@@ -110,7 +110,7 @@ func TestResolve_OriginErrorString_Surfaced(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "peer:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err == nil || !strings.Contains(err.Error(), "artifact metadata inconsistent") {
 		t.Fatalf("expected origin error surfaced, got %v", err)
 	}
@@ -124,7 +124,7 @@ func TestResolve_NotReady_Refused(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "peer:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable for not-ready, got %v", err)
 	}
@@ -142,7 +142,7 @@ func TestResolve_StorageRedirect_FollowsToTarget(t *testing.T) {
 		"cluster-storage": "storage:443",
 	})
 
-	got, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	got, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err != nil {
 		t.Fatalf("expected success after redirect, got %v", err)
 	}
@@ -157,6 +157,52 @@ func TestResolve_StorageRedirect_FollowsToTarget(t *testing.T) {
 	}
 }
 
+func TestResolve_StorageRedirect_Unauthorized_AbortsBeforeSecondDial(t *testing.T) {
+	// SSRF gate: a redirect target outside the tenant's allowlist must be
+	// refused BEFORE the second PrepareArtifact dial (which carries tenant_id).
+	fed := &fakeCrossClusterFedClient{
+		responses: []*pb.PrepareArtifactResponse{
+			{RedirectClusterId: "cluster-evil"},
+			{Ready: true, Url: "https://evil/clip.mp4"}, // must never be reached
+		},
+	}
+	d := makeCCDeps(fed, map[string]string{
+		"cluster-origin": "origin:443",
+		"cluster-evil":   "evil:443",
+	})
+
+	denyRedirect := func(c string) bool { return c != "cluster-evil" }
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", denyRedirect)
+	if err == nil || !strings.Contains(err.Error(), "not authorized for tenant") {
+		t.Fatalf("expected redirect-authorization refusal, got %v", err)
+	}
+	if len(fed.calls) != 1 {
+		t.Fatalf("redirect must be refused before the second dial; got %d calls", len(fed.calls))
+	}
+}
+
+func TestResolve_StorageRedirect_Authorized_FollowsToTarget(t *testing.T) {
+	// A redirect the predicate allows proceeds to the second dial.
+	fed := &fakeCrossClusterFedClient{
+		responses: []*pb.PrepareArtifactResponse{
+			{RedirectClusterId: "cluster-storage"},
+			{Ready: true, Url: "https://storage/clip.mp4"},
+		},
+	}
+	d := makeCCDeps(fed, map[string]string{
+		"cluster-origin":  "origin:443",
+		"cluster-storage": "storage:443",
+	})
+
+	got, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if got.URL != "https://storage/clip.mp4" || len(fed.calls) != 2 {
+		t.Fatalf("URL=%q calls=%d", got.URL, len(fed.calls))
+	}
+}
+
 func TestResolve_StorageRedirect_LoopToOrigin_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
 		responses: []*pb.PrepareArtifactResponse{
@@ -165,7 +211,7 @@ func TestResolve_StorageRedirect_LoopToOrigin_Refused(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "origin:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err == nil || !strings.Contains(err.Error(), "redirect loop") {
 		t.Fatalf("expected redirect-loop refusal, got %v", err)
 	}
@@ -179,7 +225,7 @@ func TestResolve_StorageRedirect_LoopToLocal_Refused(t *testing.T) {
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "origin:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err == nil || !strings.Contains(err.Error(), "redirect loop") {
 		t.Fatalf("expected redirect-loop refusal, got %v", err)
 	}
@@ -198,7 +244,7 @@ func TestResolve_StorageRedirect_ChainedRedirect_Refused(t *testing.T) {
 		"cluster-storage-2": "storage2:443",
 	})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if err == nil || !strings.Contains(err.Error(), "chained storage redirect rejected") {
 		t.Fatalf("expected chained-redirect refusal, got %v", err)
 	}
@@ -213,7 +259,7 @@ func TestResolve_StorageRedirect_UnknownTargetAddr_Refused(t *testing.T) {
 	// PeerResolver only knows the origin, not the storage cluster.
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "origin:443"})
 
-	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin")
+	_, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil)
 	if !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable for unknown redirect target, got %v", err)
 	}
@@ -221,7 +267,7 @@ func TestResolve_StorageRedirect_UnknownTargetAddr_Refused(t *testing.T) {
 
 func TestResolve_NilDeps_Refused(t *testing.T) {
 	d := &CrossClusterArtifactDeps{LocalClusterID: "cluster-local"}
-	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin"); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
+	if _, err := d.Resolve(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable with nil deps, got %v", err)
 	}
 }
@@ -239,7 +285,7 @@ func TestResolveCrossClusterArtifactURL_NoGlobalDeps_Refused(t *testing.T) {
 		crossClusterDepsMu.Unlock()
 	})
 
-	if _, err := ResolveCrossClusterArtifactURL(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin"); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
+	if _, err := ResolveCrossClusterArtifactURL(context.Background(), "art-1", "clip", "tenant-1", "cluster-origin", nil); !errors.Is(err, ErrCrossClusterArtifactUnavailable) {
 		t.Fatalf("expected ErrCrossClusterArtifactUnavailable, got %v", err)
 	}
 }

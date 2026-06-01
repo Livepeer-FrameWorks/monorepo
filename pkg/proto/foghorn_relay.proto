@@ -18,10 +18,11 @@ service FoghornRelay {
 message ForwardCommandRequest {
   reserved 17;
   reserved "defrost";
+  reserved 11;          // retired clip_pull — clip creation enqueues a processing job, never forwards a ClipPull
+  reserved "clip_pull";
   string target_node_id = 1;
   oneof command {
     helmsmancontrol.ConfigSeed config_seed = 10;
-    helmsmancontrol.ClipPullRequest clip_pull = 11;
     helmsmancontrol.DVRStartRequest dvr_start = 12;
     helmsmancontrol.DVRStopRequest dvr_stop = 13;
     helmsmancontrol.ClipDeleteRequest clip_delete = 14;

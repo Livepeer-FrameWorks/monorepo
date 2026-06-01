@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -514,11 +514,12 @@ func (s *FederationServer) dvrRecordingTenant(ctx context.Context, token string)
 // PrepareArtifact handles cross-cluster artifact preparation requests.
 // The origin cluster looks up the artifact in its local DB and returns
 // one of: (a) a presigned S3 GET URL when sync_status='synced'; (b) a
-// node-specific peer_relay_url + short-lived artifact_relay JWT when
-// an origin node holds the canonical full file but S3 sync is pending
-// — the requesting cluster forwards the token opaquely and only the
-// origin cluster's Helmsmans validate it; (c) Ready=false when neither
-// applies, so the requesting cluster surfaces 503 (no polling).
+// node-specific peer_relay_url + opaque peer_relay_grant_id when an
+// origin node holds the canonical full file but S3 sync is pending —
+// the requesting cluster forwards the grant id opaquely and only the
+// origin cluster's Foghorn validates it (online, via AuthorizeRelayPull);
+// (c) Ready=false when neither applies, so the requesting cluster
+// surfaces 503 (no polling).
 // S3 credentials never leave the origin cluster in either case.
 func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
@@ -597,27 +598,28 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		case "local", "freezing":
 			// Not yet on S3 — but the canonical file may exist on a
 			// local origin node and be servable via cross-cluster
-			// peer-relay. Mint a node-specific URL + JWT and hand it
-			// back to the requesting cluster, which forwards it
+			// peer-relay. Mint a node-specific URL + opaque grant and
+			// hand it back to the requesting cluster, which forwards it
 			// opaquely into its own RelayResolveResponse. Recursion
 			// invariant: this is local-only; we never return another
 			// peer's peer URL.
-			if peerURL, token, ok := s.maybePeerRelay(ctx, hash, format, artifactType, streamInternalName, req.GetRequestingCluster(), log); ok {
+			if pr, ok := s.maybePeerRelay(ctx, hash, format, artifactType, streamInternalName, req.GetRequestingCluster(), log); ok {
 				log.Info("PrepareArtifact: returning peer-relay URL for hot-but-unsynced artifact")
 				resp := &pb.PrepareArtifactResponse{
 					Ready:              true,
 					Format:             format,
 					InternalName:       internalName,
 					StreamInternalName: streamInternalName,
-					PeerRelayUrl:       peerURL,
-					PeerRelayToken:     token,
+					PeerRelayUrl:       pr.url,
+					PeerRelayDtshUrl:   pr.dtshURL,
+					PeerRelayGrantId:   pr.grantID,
 				}
 				if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 					resp.SizeBytes = uint64(sizeBytes.Int64)
 				}
 				return resp, nil
 			}
-			log.Info("PrepareArtifact: artifact not yet on S3; refusing")
+			log.Info("PrepareArtifact: no hot peer-relay node and not yet on S3; refusing")
 			return &pb.PrepareArtifactResponse{Ready: false}, nil
 		case "s3":
 			log.WithFields(logging.Fields{"storage_location": location, "sync_status": syncSt}).Warn("PrepareArtifact: metadata drift detected")
@@ -674,26 +676,34 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	}
 }
 
-// maybePeerRelay constructs a peer-relay URL + JWT pointing at the
-// local origin node that holds the canonical full file for the named
+// maybePeerRelay constructs a peer-relay URL + capability grant pointing at
+// the local origin node that holds the canonical full file for the named
 // artifact, when one exists. Called from PrepareArtifact to serve
 // cross-cluster requests for hot-but-unsynced artifacts without
 // waiting for S3 sync.
 //
-// Returns ok=false (with empty strings) when:
-//   - the artifact relay signing secret isn't configured;
+// Returns ok=false when:
 //   - no local artifact_nodes row qualifies (role='origin',
 //     is_complete=true, not orphaned);
 //   - the origin node has no base_url to address.
+//
+// The grant is minted + stored on THIS (origin) cluster's Foghorn, which is
+// also the cluster whose edge will later authorize the pull. The requesting
+// cluster forwards the grant id opaquely.
 //
 // Recursion invariant: this only looks up LOCAL origin rows. We never
 // return a peer URL that points at another cluster's relay — the
 // caller would then chain to a peer that points back at us in the
 // pathological case.
-func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, format, artifactType, streamInternalName, requestingCluster string, log logrus.FieldLogger) (string, string, bool) {
-	secret := control.GetArtifactRelaySecret()
-	if len(secret) == 0 || s.db == nil {
-		return "", "", false
+type peerRelayResult struct {
+	url     string
+	dtshURL string
+	grantID string
+}
+
+func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, format, artifactType, streamInternalName, requestingCluster string, log logrus.FieldLogger) (peerRelayResult, bool) {
+	if s.db == nil {
+		return peerRelayResult{}, false
 	}
 	var (
 		originNodeID string
@@ -718,30 +728,34 @@ func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, for
 		LIMIT 1
 	`, artifactHash).Scan(&originNodeID, &baseURL)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", false
+		return peerRelayResult{}, false
 	}
 	if err != nil {
 		log.WithError(err).Warn("PrepareArtifact peer-relay lookup failed")
-		return "", "", false
+		return peerRelayResult{}, false
 	}
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return "", "", false
+	// Peer reads traverse the origin's Caddy (@artifact_relay route on the edge
+	// FQDN), so the peer URL is <scheme>://<host> of the advertised base plus
+	// the relay path. base_url is the playback base (carries /view); using it
+	// verbatim would route to Mist via handle_path /view/* instead of Helmsman.
+	origin, ok := control.RelayPeerOrigin(baseURL)
+	if !ok {
+		return peerRelayResult{}, false
 	}
 	path := peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalName)
 	if path == "" {
-		return "", "", false
+		return peerRelayResult{}, false
 	}
-	peerURL := strings.TrimRight(baseURL, "/") + path
-	if strings.TrimSpace(requestingCluster) == "" {
-		requestingCluster = s.clusterID
+	// One grant authorizes both the media URL and its .dtsh sidecar. Stored on
+	// this origin cluster's Foghorn; its own edge validates it via
+	// AuthorizeRelayPull when the requesting cluster's relay pulls.
+	dtshPath := path + ".dtsh"
+	grantID, grantErr := control.MintRelayGrant(artifactHash, originNodeID, []string{path, dtshPath})
+	if grantErr != nil {
+		log.WithError(grantErr).Warn("PrepareArtifact mint peer-relay grant failed")
+		return peerRelayResult{}, false
 	}
-	token, _, mintErr := auth.GenerateArtifactRelayJWT(originNodeID, artifactHash, path, s.clusterID, requestingCluster, 0, secret)
-	if mintErr != nil {
-		log.WithError(mintErr).Warn("PrepareArtifact mint peer-relay token failed")
-		return "", "", false
-	}
-	return peerURL, token, true
+	return peerRelayResult{url: origin + path, dtshURL: origin + dtshPath, grantID: grantID}, true
 }
 
 // peerRelayArtifactPath mirrors Helmsman's per-kind route layout so the
@@ -751,12 +765,14 @@ func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, for
 //	vod  → /internal/artifact/vod/<hash>.<ext>            (flat)
 //	clip → /internal/artifact/clip/<stream>/<hash>.<ext>  (nested)
 //
-// Returns "" when required inputs are missing (empty format, or empty
-// stream for a clip — the relay route requires both segments).
+// Returns "" on empty format (fail closed, matching the local relay URL
+// builder — minting a grant for a fabricated .mp4 path would serve wrong bytes
+// or 404 when the artifact is mkv/webm), on an empty stream for a clip (the
+// nested route requires it), or on an unsupported artifact type.
 func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalName string) string {
 	ext := strings.TrimPrefix(strings.TrimSpace(format), ".")
 	if ext == "" {
-		ext = "mp4"
+		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(artifactType)) {
 	case "clip":
@@ -764,7 +780,11 @@ func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalNam
 		if stream == "" {
 			return ""
 		}
-		return "/internal/artifact/clip/" + stream + "/" + artifactHash + "." + ext
+		// Escape the stream segment to match the local relay-URL builder
+		// (triggers/relay_url.go) so the minted grant path and the path the
+		// peer actually requests are byte-identical, and an unusual stream
+		// name can't produce a malformed/misrouted URL.
+		return "/internal/artifact/clip/" + url.PathEscape(stream) + "/" + artifactHash + "." + ext
 	case "vod", "":
 		return "/internal/artifact/vod/" + artifactHash + "." + ext
 	default:

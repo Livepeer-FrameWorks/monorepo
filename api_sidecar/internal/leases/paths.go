@@ -45,10 +45,10 @@ func DeterministicPathsForAsset(basePath string, key AssetKey, mediaExt, streamI
 		)
 	case "clip":
 		// Clip layout is stream-nested:
-		// storage/clips/<stream_internal_name>/<hash>.<ext>. Foghorn
-		// requires output_stream_name on ClipPullRequest, so callers
-		// must supply streamInternal — without it there's no
-		// deterministic on-disk path to protect.
+		// storage/clips/<stream_internal_name>/<hash>.<ext>. The clip's
+		// source stream name is required to build the nested path, so callers
+		// must supply streamInternal — without it there's no deterministic
+		// on-disk path to protect.
 		if mediaExt == "" || streamInternal == "" {
 			return nil
 		}

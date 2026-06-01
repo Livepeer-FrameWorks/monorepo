@@ -4,46 +4,49 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 
 	"frameworks/api_sidecar/internal/admission"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
-// mustMintExpiredArtifactRelayJWT signs an artifact_relay JWT with an
-// exp in the past so tests can exercise the validator's expired path
-// without sleeping.
-func mustMintExpiredArtifactRelayJWT(t *testing.T, secret, audNode, artifactHash, path string) string {
-	t.Helper()
-	claims := jwt.MapClaims{
-		"purpose":       auth.ArtifactRelayPurpose,
-		"artifact_hash": artifactHash,
-		"path":          path,
-		"aud":           audNode,
-		"exp":           time.Now().Add(-1 * time.Minute).Unix(),
-		"iat":           time.Now().Add(-2 * time.Minute).Unix(),
-	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
-	if err != nil {
-		t.Fatalf("mint expired: %v", err)
-	}
-	return signed
+const (
+	testPeerNode    = "edge-test-1"
+	testPeerHash    = "abc123"
+	testPeerReqPath = "/internal/artifact/vod/abc123.mp4"
+)
+
+// fakeAuthorizer records calls and returns a canned decision so tests can
+// exercise allow / deny / fail-closed without a Foghorn control stream.
+type fakeAuthorizer struct {
+	allow bool
+	err   error
+
+	mu        sync.Mutex
+	calls     int
+	lastGrant string
+	lastHash  string
+	lastPath  string
 }
 
-const (
-	testPeerNode     = "edge-test-1"
-	testPeerSecret   = "peer-relay-test-secret"
-	testPeerHash     = "abc123"
-	testPeerFile     = "abc123.mp4"
-	testPeerReqPath  = "/internal/artifact/vod/abc123.mp4"
-	testPeerOrigin   = "test-origin-cluster"
-	testPeerCallerCl = "test-peer-cluster"
-)
+func (f *fakeAuthorizer) AuthorizeRelayPull(_ context.Context, grantID, artifactHash, requestPath string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastGrant = grantID
+	f.lastHash = artifactHash
+	f.lastPath = requestPath
+	return f.allow, f.err
+}
+
+func (f *fakeAuthorizer) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
 
 func TestIsLoopbackRemoteAddr(t *testing.T) {
 	cases := []struct {
@@ -67,27 +70,9 @@ func TestIsLoopbackRemoteAddr(t *testing.T) {
 	}
 }
 
-func TestArtifactHashFromPath(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"/internal/artifact/vod/abc123.mp4", "abc123"},
-		{"/internal/artifact/upload/xyz.mkv", "xyz"},
-		{"/internal/artifact/clip/streamX/abc123.mp4", "abc123"},
-		{"/internal/artifact/vod/abc123", "abc123"},
-		{"/", ""},
-		{"", ""},
-	}
-	for _, c := range cases {
-		if got := artifactHashFromPath(c.in); got != c.want {
-			t.Errorf("artifactHashFromPath(%q)=%q want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func newAuthTestServer(t *testing.T, withAuth bool) *Server {
+func newAuthTestServer(t *testing.T, authz RelayPullAuthorizer) *Server {
 	t.Helper()
-	opts := Options{
+	return New(Options{
 		BasePath: t.TempDir(),
 		Admitter: &fakeAdmitter{decision: admission.CacheToDisk},
 		Resolver: &fakeResolver{out: map[string]*ResolveResult{
@@ -96,12 +81,9 @@ func newAuthTestServer(t *testing.T, withAuth bool) *Server {
 				ExpectedSizeBytes: 0,
 			},
 		}},
-	}
-	if withAuth {
-		opts.NodeID = testPeerNode
-		opts.RelayAuthSecret = []byte(testPeerSecret)
-	}
-	return New(opts)
+		NodeID:     testPeerNode,
+		Authorizer: authz,
+	})
 }
 
 func newAuthRouter(s *Server) *gin.Engine {
@@ -125,62 +107,118 @@ func doSynthGet(r *gin.Engine, remoteAddr, path, authHeader string) *httptest.Re
 	return w
 }
 
-func TestPeerAuthMiddleware_LoopbackBypassesEvenWithoutSecret(t *testing.T) {
-	s := newAuthTestServer(t, false)
-	r := newAuthRouter(s)
+func TestPeerAuthMiddleware_LoopbackBypassesWithoutAuthorize(t *testing.T) {
+	// Loopback Mist must never reach the authorizer.
+	authz := &fakeAuthorizer{allow: false}
+	r := newAuthRouter(newAuthTestServer(t, authz))
 	w := doSynthGet(r, "127.0.0.1:9999", testPeerReqPath, "")
-	// Loopback bypass means the middleware doesn't gate; the request
-	// reaches the relay handler, which then 404s for the
-	// SOURCE_MISSING resolve result. Either 404 (resolve miss) or
-	// 200/206 is acceptable — what matters is we don't see 401.
 	if w.Code == http.StatusUnauthorized {
-		t.Fatalf("loopback should bypass auth; got 401")
+		t.Fatalf("loopback should bypass; got 401")
+	}
+	if authz.callCount() != 0 {
+		t.Fatalf("loopback must not consult authorizer; calls=%d", authz.callCount())
 	}
 }
 
-func TestPeerAuthMiddleware_NonLoopbackRejectedWithoutSecret(t *testing.T) {
-	s := newAuthTestServer(t, false)
-	r := newAuthRouter(s)
+func TestPeerAuthMiddleware_NonLoopbackWithoutGrantRejected(t *testing.T) {
+	authz := &fakeAuthorizer{allow: true}
+	r := newAuthRouter(newAuthTestServer(t, authz))
 	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "")
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("non-loopback without secret should 401; got %d", w.Code)
+		t.Fatalf("missing grant should 401; got %d", w.Code)
+	}
+	if authz.callCount() != 0 {
+		t.Fatalf("no grant present → authorizer should not be called; calls=%d", authz.callCount())
 	}
 }
 
-func TestPeerAuthMiddleware_NonLoopbackRejectedWithoutHeader(t *testing.T) {
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
-	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "")
+func TestPeerAuthMiddleware_GrantAllowed(t *testing.T) {
+	authz := &fakeAuthorizer{allow: true}
+	r := newAuthRouter(newAuthTestServer(t, authz))
+	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer GRANT-XYZ")
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("allowed grant should not 401; body=%q", w.Body.String())
+	}
+	if authz.lastGrant != "GRANT-XYZ" || authz.lastHash != testPeerHash || authz.lastPath != testPeerReqPath {
+		t.Fatalf("authorizer got (grant=%q hash=%q path=%q)", authz.lastGrant, authz.lastHash, authz.lastPath)
+	}
+}
+
+// A multi-block pull session reuses one grant+path; the ALLOW must be cached
+// so only the first request hits Foghorn.
+func TestPeerAuthMiddleware_AllowCachedAcrossRequests(t *testing.T) {
+	authz := &fakeAuthorizer{allow: true}
+	r := newAuthRouter(newAuthTestServer(t, authz))
+	for i := 0; i < 3; i++ {
+		w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer GRANT-XYZ")
+		if w.Code == http.StatusUnauthorized {
+			t.Fatalf("request %d should be allowed; got 401", i)
+		}
+	}
+	if authz.callCount() != 1 {
+		t.Fatalf("authorizer should be consulted once (cached after); calls=%d", authz.callCount())
+	}
+}
+
+func TestPeerAuthMiddleware_GrantDenied(t *testing.T) {
+	authz := &fakeAuthorizer{allow: false}
+	r := newAuthRouter(newAuthTestServer(t, authz))
+	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer GRANT-XYZ")
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("missing Authorization should 401; got %d", w.Code)
+		t.Fatalf("denied grant should 401; got %d", w.Code)
+	}
+}
+
+func TestPeerAuthMiddleware_AuthorizerErrorFailsClosed(t *testing.T) {
+	authz := &fakeAuthorizer{allow: true, err: context.DeadlineExceeded}
+	r := newAuthRouter(newAuthTestServer(t, authz))
+	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer GRANT-XYZ")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("authorizer error must fail closed (401); got %d", w.Code)
+	}
+}
+
+// The .dtsh sidecar path must authorize with the BARE artifact hash (the grant
+// is minted with the bare hash), not <hash>.<ext>. Guards the double-extension
+// regression that previously 401'd every peer .dtsh read.
+func TestPeerAuthMiddleware_DtshPathForwardsBareHash(t *testing.T) {
+	authz := &fakeAuthorizer{allow: true}
+	r := newAuthRouter(newAuthTestServer(t, authz))
+	dtshPath := testPeerReqPath + ".dtsh"
+	w := doSynthGet(r, "10.0.0.5:54321", dtshPath, "Bearer GRANT-XYZ")
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("allowed .dtsh grant should not 401; got %d", w.Code)
+	}
+	if authz.lastHash != testPeerHash {
+		t.Fatalf(".dtsh authorize hash=%q want bare %q", authz.lastHash, testPeerHash)
+	}
+	if authz.lastPath != dtshPath {
+		t.Fatalf(".dtsh authorize path=%q want %q", authz.lastPath, dtshPath)
 	}
 }
 
 func TestPeerAuthMiddleware_ForwardedHeaderDoesNotBypass(t *testing.T) {
-	// Memory: project_mistserver_auth_model.md — spoofed X-Forwarded-For
-	// must not unlock the loopback bypass.
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
+	// Memory: project_mistserver_auth_model.md — a loopback RemoteAddr with a
+	// proxy-forward marker (Caddy proxying remote traffic) must NOT bypass; it
+	// goes through the authorizer, which denies here.
+	authz := &fakeAuthorizer{allow: false}
+	r := newAuthRouter(newAuthTestServer(t, authz))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testPeerReqPath, nil)
-	req.RemoteAddr = "10.0.0.5:54321"
-	req.Header.Set("X-Forwarded-For", "127.0.0.1")
-	req.Header.Set("X-Real-IP", "127.0.0.1")
+	req.RemoteAddr = "127.0.0.1:33333"
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("spoofed forwarded header should not bypass loopback gate; got %d", w.Code)
+		t.Fatalf("loopback+XFF without grant should 401; got %d", w.Code)
 	}
 }
 
-// TestPeerAuthMiddleware_CaddyProxiedLoopbackRequiresJWT covers the
-// production deployment shape: Caddy on the per-node FQDN reverse-
-// proxies /internal/artifact/* to Helmsman over localhost:18007.
-// RemoteAddr at Helmsman is loopback, BUT the request carries
-// X-Forwarded-* headers Caddy set. The bypass must NOT trigger; the
-// JWT is the security boundary for external requests.
-func TestPeerAuthMiddleware_CaddyProxiedLoopbackRequiresJWT(t *testing.T) {
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
+// Caddy on the per-node FQDN reverse-proxies /internal/artifact/* to Helmsman
+// over loopback with X-Forwarded-* set. The bypass must NOT trigger; the
+// authorize gate is the boundary for external (peer) requests.
+func TestPeerAuthMiddleware_CaddyProxiedLoopbackRequiresAuthorize(t *testing.T) {
+	authz := &fakeAuthorizer{allow: false}
+	r := newAuthRouter(newAuthTestServer(t, authz))
 	cases := []struct {
 		name, header, value string
 	}{
@@ -195,74 +233,61 @@ func TestPeerAuthMiddleware_CaddyProxiedLoopbackRequiresJWT(t *testing.T) {
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testPeerReqPath, nil)
 			req.RemoteAddr = "127.0.0.1:33333"
 			req.Header.Set(c.header, c.value)
+			req.Header.Set("Authorization", "Bearer GRANT-XYZ")
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 			if w.Code != http.StatusUnauthorized {
-				t.Fatalf("loopback+%s should require JWT; got %d", c.header, w.Code)
+				t.Fatalf("loopback+%s should require authorize (denied); got %d", c.header, w.Code)
 			}
 		})
 	}
 }
 
-func TestPeerAuthMiddleware_ExpiredTokenSurfacesWWWAuthenticate(t *testing.T) {
-	s := newAuthTestServer(t, true)
+// Trusted-CIDR bypass: the local Mist→Helmsman hop where Mist dials a
+// non-loopback service address (docker: helmsman:18007). In the CIDR without
+// proxy markers → bypass (no authorize); with a marker (Caddy proxying peer
+// traffic on the same bridge) → authorize path.
+func TestPeerAuthMiddleware_TrustedCIDRBypass(t *testing.T) {
+	authz := &fakeAuthorizer{allow: false}
+	s := New(Options{
+		BasePath: t.TempDir(),
+		Admitter: &fakeAdmitter{decision: admission.CacheToDisk},
+		Resolver: &fakeResolver{out: map[string]*ResolveResult{
+			"vod/" + testPeerHash: {State: pb.AssetState_ASSET_STATE_SOURCE_MISSING},
+		}},
+		NodeID:           testPeerNode,
+		Authorizer:       authz,
+		RelayTrustedCIDR: "172.16.0.0/12, 10.0.0.0/8",
+	})
 	r := newAuthRouter(s)
-	// Mint with a tiny TTL then wait it out, or forge an expired token
-	// directly. We forge to avoid sleep in the test.
-	token := mustMintExpiredArtifactRelayJWT(t, testPeerSecret, testPeerNode, testPeerHash, testPeerReqPath)
-	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer "+token)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expired token should 401; got %d", w.Code)
-	}
-	got := w.Header().Get("WWW-Authenticate")
-	if got != `Bearer error="token_expired"` {
-		t.Fatalf("WWW-Authenticate=%q want token_expired marker", got)
-	}
-}
 
-func TestPeerAuthMiddleware_ValidTokenAccepted(t *testing.T) {
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
-	token, _, err := auth.GenerateArtifactRelayJWT(testPeerNode, testPeerHash, testPeerReqPath, testPeerOrigin, testPeerCallerCl, 0, []byte(testPeerSecret))
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer "+token)
+	w := doSynthGet(r, "172.20.0.7:40000", testPeerReqPath, "")
 	if w.Code == http.StatusUnauthorized {
-		t.Fatalf("valid token should not 401; got body=%q", w.Body.String())
+		t.Fatalf("trusted-CIDR caller without markers should bypass; got 401")
+	}
+	if authz.callCount() != 0 {
+		t.Fatalf("trusted-CIDR bypass must not consult authorizer; calls=%d", authz.callCount())
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testPeerReqPath, nil)
+	req.RemoteAddr = "172.20.0.7:40000"
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	req.Header.Set("Authorization", "Bearer GRANT-XYZ")
+	wm := httptest.NewRecorder()
+	r.ServeHTTP(wm, req)
+	if wm.Code != http.StatusUnauthorized {
+		t.Fatalf("trusted-CIDR caller WITH proxy marker must authorize (denied); got %d", wm.Code)
+	}
+
+	wo := doSynthGet(r, "192.0.2.9:40000", testPeerReqPath, "")
+	if wo.Code != http.StatusUnauthorized {
+		t.Fatalf("untrusted CIDR without grant should 401; got %d", wo.Code)
 	}
 }
 
-func TestPeerAuthMiddleware_WrongNodeAudienceRejected(t *testing.T) {
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
-	token, _, err := auth.GenerateArtifactRelayJWT("different-node", testPeerHash, testPeerReqPath, testPeerOrigin, testPeerCallerCl, 0, []byte(testPeerSecret))
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer "+token)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong-aud token should 401; got %d", w.Code)
-	}
-}
-
-func TestPeerAuthMiddleware_WrongPathRejected(t *testing.T) {
-	s := newAuthTestServer(t, true)
-	r := newAuthRouter(s)
-	otherPath := "/internal/artifact/vod/other.mp4"
-	token, _, err := auth.GenerateArtifactRelayJWT(testPeerNode, "other", otherPath, testPeerOrigin, testPeerCallerCl, 0, []byte(testPeerSecret))
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-	w := doSynthGet(r, "10.0.0.5:54321", testPeerReqPath, "Bearer "+token)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong-path token should 401; got %d", w.Code)
-	}
-}
-
-func TestBlockServeAuthHeaderAttachedForPeerURL(t *testing.T) {
-	// Verify that when ResolveResult carries PeerRelayAuthToken, the
-	// upstream block fetch sets Authorization: Bearer.
+func TestBlockServeGrantHeaderAttachedForPeerURL(t *testing.T) {
+	// When ResolveResult carries PeerRelayGrantID, the upstream block fetch
+	// sets Authorization: Bearer <grant>.
 	gotAuth := ""
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -275,12 +300,12 @@ func TestBlockServeAuthHeaderAttachedForPeerURL(t *testing.T) {
 	defer up.Close()
 	dir := t.TempDir()
 	res := &ResolveResult{
-		State:              pb.AssetState_ASSET_STATE_PLAYABLE,
-		PeerRelayURL:       up.URL + "/object",
-		PeerRelayAuthToken: "TEST-TOKEN",
-		ExpectedSizeBytes:  16,
-		ContentType:        "video/mp4",
-		URLTTLSeconds:      60,
+		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		PeerRelayURL:      up.URL + "/object",
+		PeerRelayGrantID:  "TEST-GRANT",
+		ExpectedSizeBytes: 16,
+		ContentType:       "video/mp4",
+		URLTTLSeconds:     60,
 	}
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/abc": res}}
 	s := New(Options{
@@ -299,8 +324,8 @@ func TestBlockServeAuthHeaderAttachedForPeerURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
-	if gotAuth != "Bearer TEST-TOKEN" {
-		t.Fatalf("upstream Authorization=%q want Bearer TEST-TOKEN", gotAuth)
+	if gotAuth != "Bearer TEST-GRANT" {
+		t.Fatalf("upstream Authorization=%q want Bearer TEST-GRANT", gotAuth)
 	}
 }
 

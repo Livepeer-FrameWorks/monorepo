@@ -48,6 +48,11 @@ type EdgeVars struct {
 	ChandlerUpstream string // Docker: "chandler:18020", Native: "localhost:18020"
 	TelemetryURL     string
 	TelemetryToken   string
+	// RelayTrustedCIDR is the CIDR whose RemoteAddr bypasses the relay
+	// authorize gate for the local Mist→Helmsman hop. Docker: the compose bridge
+	// range (Mist dials helmsman:18007, non-loopback). Native: empty (Mist
+	// reaches Helmsman on loopback). Never covers peer nodes.
+	RelayTrustedCIDR string
 }
 
 // SetModeDefaults fills Mode-dependent fields if not explicitly set.
@@ -82,6 +87,13 @@ func (v *EdgeVars) SetModeDefaults() {
 		} else {
 			v.ChandlerUpstream = "chandler:18020"
 		}
+	}
+	if v.RelayTrustedCIDR == "" && v.Mode != "native" {
+		// Docker: Mist dials helmsman:18007 over the compose bridge, so the
+		// relay's loopback exemption doesn't apply. Trust the private bridge
+		// range for the local hop only (peer reads go Caddy + Bearer).
+		// Broad RFC1918 fallback — operators on shared hosts should narrow it.
+		v.RelayTrustedCIDR = "172.16.0.0/12"
 	}
 	if v.MistServerImage == "" {
 		v.MistServerImage = "mistserver:latest"
@@ -218,6 +230,7 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{CADDY_ADMIN_ADDR}}", vars.CaddyAdminAddr)
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
+		content = strings.ReplaceAll(content, "{{RELAY_TRUSTED_CIDR}}", vars.RelayTrustedCIDR)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{MISTSERVER_IMAGE}}", vars.MistServerImage)
 		content = strings.ReplaceAll(content, "{{CADDY_IMAGE}}", vars.CaddyImage)

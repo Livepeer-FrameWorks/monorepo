@@ -27,7 +27,6 @@ type ForwardCommandRequest struct {
 	// Types that are valid to be assigned to Command:
 	//
 	//	*ForwardCommandRequest_ConfigSeed
-	//	*ForwardCommandRequest_ClipPull
 	//	*ForwardCommandRequest_DvrStart
 	//	*ForwardCommandRequest_DvrStop
 	//	*ForwardCommandRequest_ClipDelete
@@ -98,15 +97,6 @@ func (x *ForwardCommandRequest) GetConfigSeed() *ConfigSeed {
 	if x != nil {
 		if x, ok := x.Command.(*ForwardCommandRequest_ConfigSeed); ok {
 			return x.ConfigSeed
-		}
-	}
-	return nil
-}
-
-func (x *ForwardCommandRequest) GetClipPull() *ClipPullRequest {
-	if x != nil {
-		if x, ok := x.Command.(*ForwardCommandRequest_ClipPull); ok {
-			return x.ClipPull
 		}
 	}
 	return nil
@@ -273,10 +263,6 @@ type ForwardCommandRequest_ConfigSeed struct {
 	ConfigSeed *ConfigSeed `protobuf:"bytes,10,opt,name=config_seed,json=configSeed,proto3,oneof"`
 }
 
-type ForwardCommandRequest_ClipPull struct {
-	ClipPull *ClipPullRequest `protobuf:"bytes,11,opt,name=clip_pull,json=clipPull,proto3,oneof"`
-}
-
 type ForwardCommandRequest_DvrStart struct {
 	DvrStart *DVRStartRequest `protobuf:"bytes,12,opt,name=dvr_start,json=dvrStart,proto3,oneof"`
 }
@@ -358,8 +344,6 @@ type ForwardCommandRequest_DvrUpdateSource struct {
 }
 
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
-
-func (*ForwardCommandRequest_ClipPull) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DvrStart) isForwardCommandRequest_Command() {}
 
@@ -451,13 +435,12 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\x8d\f\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xdd\v\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
 	" \x01(\v2\x1b.helmsmancontrol.ConfigSeedH\x00R\n" +
 	"configSeed\x12?\n" +
-	"\tclip_pull\x18\v \x01(\v2 .helmsmancontrol.ClipPullRequestH\x00R\bclipPull\x12?\n" +
 	"\tdvr_start\x18\f \x01(\v2 .helmsmancontrol.DVRStartRequestH\x00R\bdvrStart\x12<\n" +
 	"\bdvr_stop\x18\r \x01(\v2\x1f.helmsmancontrol.DVRStopRequestH\x00R\advrStop\x12E\n" +
 	"\vclip_delete\x18\x0e \x01(\v2\".helmsmancontrol.ClipDeleteRequestH\x00R\n" +
@@ -478,7 +461,7 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStream\x12H\n" +
 	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStream\x12U\n" +
 	"\x11dvr_update_source\x18\x1d \x01(\v2'.helmsmancontrol.DVRUpdateSourceRequestH\x00R\x0fdvrUpdateSourceB\t\n" +
-	"\acommandJ\x04\b\x11\x10\x12R\adefrost\"L\n" +
+	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fR\adefrostR\tclip_pull\"L\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error2m\n" +
@@ -502,52 +485,50 @@ var file_foghorn_relay_proto_goTypes = []any{
 	(*ForwardCommandRequest)(nil),     // 0: foghorn_relay.ForwardCommandRequest
 	(*ForwardCommandResponse)(nil),    // 1: foghorn_relay.ForwardCommandResponse
 	(*ConfigSeed)(nil),                // 2: helmsmancontrol.ConfigSeed
-	(*ClipPullRequest)(nil),           // 3: helmsmancontrol.ClipPullRequest
-	(*DVRStartRequest)(nil),           // 4: helmsmancontrol.DVRStartRequest
-	(*DVRStopRequest)(nil),            // 5: helmsmancontrol.DVRStopRequest
-	(*ClipDeleteRequest)(nil),         // 6: helmsmancontrol.ClipDeleteRequest
-	(*DVRDeleteRequest)(nil),          // 7: helmsmancontrol.DVRDeleteRequest
-	(*VodDeleteRequest)(nil),          // 8: helmsmancontrol.VodDeleteRequest
-	(*DtshSyncRequest)(nil),           // 9: helmsmancontrol.DtshSyncRequest
-	(*StopSessionsRequest)(nil),       // 10: helmsmancontrol.StopSessionsRequest
-	(*ActivatePushTargets)(nil),       // 11: helmsmancontrol.ActivatePushTargets
-	(*DeactivatePushTargets)(nil),     // 12: helmsmancontrol.DeactivatePushTargets
-	(*ProcessingJobRequest)(nil),      // 13: helmsmancontrol.ProcessingJobRequest
-	(*FreezeRequest)(nil),             // 14: helmsmancontrol.FreezeRequest
-	(*DesiredStateUpdate)(nil),        // 15: helmsmancontrol.DesiredStateUpdate
-	(*InvalidateSessionsRequest)(nil), // 16: helmsmancontrol.InvalidateSessionsRequest
-	(*ApplyManagedStream)(nil),        // 17: helmsmancontrol.ApplyManagedStream
-	(*RetractManagedStream)(nil),      // 18: helmsmancontrol.RetractManagedStream
-	(*DrainStreamRequest)(nil),        // 19: helmsmancontrol.DrainStreamRequest
-	(*DVRUpdateSourceRequest)(nil),    // 20: helmsmancontrol.DVRUpdateSourceRequest
+	(*DVRStartRequest)(nil),           // 3: helmsmancontrol.DVRStartRequest
+	(*DVRStopRequest)(nil),            // 4: helmsmancontrol.DVRStopRequest
+	(*ClipDeleteRequest)(nil),         // 5: helmsmancontrol.ClipDeleteRequest
+	(*DVRDeleteRequest)(nil),          // 6: helmsmancontrol.DVRDeleteRequest
+	(*VodDeleteRequest)(nil),          // 7: helmsmancontrol.VodDeleteRequest
+	(*DtshSyncRequest)(nil),           // 8: helmsmancontrol.DtshSyncRequest
+	(*StopSessionsRequest)(nil),       // 9: helmsmancontrol.StopSessionsRequest
+	(*ActivatePushTargets)(nil),       // 10: helmsmancontrol.ActivatePushTargets
+	(*DeactivatePushTargets)(nil),     // 11: helmsmancontrol.DeactivatePushTargets
+	(*ProcessingJobRequest)(nil),      // 12: helmsmancontrol.ProcessingJobRequest
+	(*FreezeRequest)(nil),             // 13: helmsmancontrol.FreezeRequest
+	(*DesiredStateUpdate)(nil),        // 14: helmsmancontrol.DesiredStateUpdate
+	(*InvalidateSessionsRequest)(nil), // 15: helmsmancontrol.InvalidateSessionsRequest
+	(*ApplyManagedStream)(nil),        // 16: helmsmancontrol.ApplyManagedStream
+	(*RetractManagedStream)(nil),      // 17: helmsmancontrol.RetractManagedStream
+	(*DrainStreamRequest)(nil),        // 18: helmsmancontrol.DrainStreamRequest
+	(*DVRUpdateSourceRequest)(nil),    // 19: helmsmancontrol.DVRUpdateSourceRequest
 }
 var file_foghorn_relay_proto_depIdxs = []int32{
 	2,  // 0: foghorn_relay.ForwardCommandRequest.config_seed:type_name -> helmsmancontrol.ConfigSeed
-	3,  // 1: foghorn_relay.ForwardCommandRequest.clip_pull:type_name -> helmsmancontrol.ClipPullRequest
-	4,  // 2: foghorn_relay.ForwardCommandRequest.dvr_start:type_name -> helmsmancontrol.DVRStartRequest
-	5,  // 3: foghorn_relay.ForwardCommandRequest.dvr_stop:type_name -> helmsmancontrol.DVRStopRequest
-	6,  // 4: foghorn_relay.ForwardCommandRequest.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
-	7,  // 5: foghorn_relay.ForwardCommandRequest.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
-	8,  // 6: foghorn_relay.ForwardCommandRequest.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
-	9,  // 7: foghorn_relay.ForwardCommandRequest.dtsh_sync:type_name -> helmsmancontrol.DtshSyncRequest
-	10, // 8: foghorn_relay.ForwardCommandRequest.stop_sessions:type_name -> helmsmancontrol.StopSessionsRequest
-	11, // 9: foghorn_relay.ForwardCommandRequest.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
-	12, // 10: foghorn_relay.ForwardCommandRequest.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
-	13, // 11: foghorn_relay.ForwardCommandRequest.processing_job:type_name -> helmsmancontrol.ProcessingJobRequest
-	14, // 12: foghorn_relay.ForwardCommandRequest.freeze:type_name -> helmsmancontrol.FreezeRequest
-	15, // 13: foghorn_relay.ForwardCommandRequest.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
-	16, // 14: foghorn_relay.ForwardCommandRequest.invalidate_sessions:type_name -> helmsmancontrol.InvalidateSessionsRequest
-	17, // 15: foghorn_relay.ForwardCommandRequest.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
-	18, // 16: foghorn_relay.ForwardCommandRequest.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
-	19, // 17: foghorn_relay.ForwardCommandRequest.drain_stream:type_name -> helmsmancontrol.DrainStreamRequest
-	20, // 18: foghorn_relay.ForwardCommandRequest.dvr_update_source:type_name -> helmsmancontrol.DVRUpdateSourceRequest
-	0,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 20: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	20, // [20:21] is the sub-list for method output_type
-	19, // [19:20] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	3,  // 1: foghorn_relay.ForwardCommandRequest.dvr_start:type_name -> helmsmancontrol.DVRStartRequest
+	4,  // 2: foghorn_relay.ForwardCommandRequest.dvr_stop:type_name -> helmsmancontrol.DVRStopRequest
+	5,  // 3: foghorn_relay.ForwardCommandRequest.clip_delete:type_name -> helmsmancontrol.ClipDeleteRequest
+	6,  // 4: foghorn_relay.ForwardCommandRequest.dvr_delete:type_name -> helmsmancontrol.DVRDeleteRequest
+	7,  // 5: foghorn_relay.ForwardCommandRequest.vod_delete:type_name -> helmsmancontrol.VodDeleteRequest
+	8,  // 6: foghorn_relay.ForwardCommandRequest.dtsh_sync:type_name -> helmsmancontrol.DtshSyncRequest
+	9,  // 7: foghorn_relay.ForwardCommandRequest.stop_sessions:type_name -> helmsmancontrol.StopSessionsRequest
+	10, // 8: foghorn_relay.ForwardCommandRequest.activate_push_targets:type_name -> helmsmancontrol.ActivatePushTargets
+	11, // 9: foghorn_relay.ForwardCommandRequest.deactivate_push_targets:type_name -> helmsmancontrol.DeactivatePushTargets
+	12, // 10: foghorn_relay.ForwardCommandRequest.processing_job:type_name -> helmsmancontrol.ProcessingJobRequest
+	13, // 11: foghorn_relay.ForwardCommandRequest.freeze:type_name -> helmsmancontrol.FreezeRequest
+	14, // 12: foghorn_relay.ForwardCommandRequest.desired_state_update:type_name -> helmsmancontrol.DesiredStateUpdate
+	15, // 13: foghorn_relay.ForwardCommandRequest.invalidate_sessions:type_name -> helmsmancontrol.InvalidateSessionsRequest
+	16, // 14: foghorn_relay.ForwardCommandRequest.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
+	17, // 15: foghorn_relay.ForwardCommandRequest.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
+	18, // 16: foghorn_relay.ForwardCommandRequest.drain_stream:type_name -> helmsmancontrol.DrainStreamRequest
+	19, // 17: foghorn_relay.ForwardCommandRequest.dvr_update_source:type_name -> helmsmancontrol.DVRUpdateSourceRequest
+	0,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 19: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	19, // [19:20] is the sub-list for method output_type
+	18, // [18:19] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -558,7 +539,6 @@ func file_foghorn_relay_proto_init() {
 	file_ipc_proto_init()
 	file_foghorn_relay_proto_msgTypes[0].OneofWrappers = []any{
 		(*ForwardCommandRequest_ConfigSeed)(nil),
-		(*ForwardCommandRequest_ClipPull)(nil),
 		(*ForwardCommandRequest_DvrStart)(nil),
 		(*ForwardCommandRequest_DvrStop)(nil),
 		(*ForwardCommandRequest_ClipDelete)(nil),

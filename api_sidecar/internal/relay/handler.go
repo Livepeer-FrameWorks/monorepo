@@ -297,11 +297,11 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	upstream := res.UpstreamURL()
 	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 	if err != nil {
-		s.serverError(c, "build s3 request", err)
+		s.serverError(c, "build upstream request", err)
 		return
 	}
-	if res.PeerRelayAuthToken != "" {
-		req.Header.Set("Authorization", "Bearer "+res.PeerRelayAuthToken)
+	if res.PeerRelayGrantID != "" {
+		req.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
 	}
 	requestRange := ""
 	if c.Request.Method == http.MethodHead {
@@ -313,7 +313,7 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
-		s.serverError(c, "s3 fetch", err)
+		s.serverError(c, "upstream fetch", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -329,15 +329,15 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 
 		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 		if retryErr != nil {
-			s.serverError(c, "build s3 retry request", retryErr)
+			s.serverError(c, "build upstream retry request", retryErr)
 			return
 		}
-		if res.PeerRelayAuthToken != "" {
-			retryReq.Header.Set("Authorization", "Bearer "+res.PeerRelayAuthToken)
+		if res.PeerRelayGrantID != "" {
+			retryReq.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
 		}
 		resp, err = s.httpc.Do(retryReq)
 		if err != nil {
-			s.serverError(c, "s3 retry fetch", err)
+			s.serverError(c, "upstream retry fetch", err)
 			return
 		}
 		defer resp.Body.Close()

@@ -52,4 +52,9 @@ const (
 	// can't serve it right now" cases that don't fit the above (e.g.,
 	// node has no relay base URL advertised). Transient.
 	OfflineUnavailable = "offline:unavailable"
+
+	// OfflineNotAuthorized: the artifact's authoritative cluster is not this
+	// cluster and is no longer in the tenant's cluster-peer envelope (peer
+	// access revoked or never granted). Transient if access is restored.
+	OfflineNotAuthorized = "offline:not_authorized"
 )

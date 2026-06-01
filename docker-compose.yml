@@ -122,7 +122,11 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U frameworks_user -d frameworks"]
+      test:
+        [
+          "CMD-SHELL",
+          "grep -qx postgres /proc/1/comm && pg_isready -U frameworks_user -d frameworks",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -657,6 +661,11 @@ services:
       # Mist runs in a separate container in compose and reaches Helmsman
       # via the service DNS name, not loopback.
       HELMSMAN_RELAY_BASE_URL: http://helmsman:18007
+      # Mist dials helmsman:18007 (non-loopback), so the relay's loopback
+      # exemption doesn't apply. Trust the compose bridge for the local
+      # Mist→Helmsman hop only; peer traffic still goes Caddy + Bearer. Dev
+      # fallback CIDR — not a production posture.
+      HELMSMAN_RELAY_TRUSTED_CIDR: ${HELMSMAN_RELAY_TRUSTED_CIDR:-172.16.0.0/12}
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings

@@ -949,6 +949,7 @@ message ResolveVodHashResponse {
   string playback_id = 7;               // Public playback key
   string internal_name = 8;    // Artifact routing name (internal)
   string origin_cluster_id = 9;         // Cluster where this VOD was uploaded
+  repeated quartermaster.TenantClusterPeer cluster_peers = 10; // Tenant's authorized cluster peers (cross-cluster federation allowlist)
 }
 
 // Resolve VOD relay ID (commodore.vod_assets.id) to VOD hash + tenant context

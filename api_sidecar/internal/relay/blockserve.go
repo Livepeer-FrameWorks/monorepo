@@ -94,7 +94,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 	upstreamURL := res.UpstreamURL()
 	if cacheDecision == admission.CacheToDisk && !hasRange {
-		if err := s.preflightFirstColdSpan(c.Request.Context(), store, spans[0], totalSize, upstreamURL, res.PeerRelayAuthToken); err != nil {
+		if err := s.preflightFirstColdSpan(c.Request.Context(), store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
 			s.cache.Delete(kind, hash)
 			s.respondColdFetchError(c, err)
 			return
@@ -130,7 +130,17 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 
 	for _, span := range spans {
-		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayAuthToken, cacheDecision); err != nil {
+		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision); err != nil {
+			// A peer-relay grant that 401/403s mid-stream is dead (origin
+			// restarted, grant evicted before the resolve TTL lapsed). Drop the
+			// resolve-cache entry so the next request re-resolves and re-mints
+			// instead of replaying the dead grant. Headers are already sent for
+			// this request, so this only heals subsequent ones. The un-ranged
+			// cold preflight above handles the same case before headers; ranged
+			// and memory-only requests skip it and land here.
+			if res.PeerRelayGrantID != "" && isUpstreamAuthError(err) {
+				s.cache.Delete(kind, hash)
+			}
 			if s.logger != nil && !isClientGone(err) {
 				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
 			}
@@ -155,12 +165,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // disk. Without coalescing, N viewers on the same cold block would
 // fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
 // bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, authToken string, decision admission.CacheDecision) error {
+func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
 	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, authToken, decision)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
 	}
 
 	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
@@ -179,11 +189,11 @@ func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockSt
 				return err
 			}
 		}
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, authToken, decision)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
 	}
 
 	// Leader path: run the fetch, then publish disk-write outcome.
-	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, authToken, decision)
+	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
 	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
 	return err
 }
@@ -229,22 +239,22 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // viewers bypass the coalescer and each issue their own S3 range
 // fetch. The first writer to finish wins the rename; later writers
 // see the warm block exists and drop their tmpfile.
-func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, authToken string, decision admission.CacheDecision) error {
+func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
-		return fmt.Errorf("build s3 block request: %w", err)
+		return fmt.Errorf("build upstream block request: %w", err)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", blockStart, blockEnd))
-	// Peer-relay upstream (origin Helmsman) requires a short-lived
-	// artifact_relay JWT. Empty for S3 presigned URLs (auth in the URL
+	// Peer-relay upstream (origin Helmsman) requires the capability grant id
+	// as Authorization: Bearer. Empty for S3 presigned URLs (auth in the URL
 	// query string).
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
+	if grantID != "" {
+		req.Header.Set("Authorization", "Bearer "+grantID)
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
-		return fmt.Errorf("s3 block fetch: %w", err)
+		return fmt.Errorf("upstream block fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
@@ -252,7 +262,7 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 		// whole asset — otherwise the upstream ignored Range and would
 		// pollute block N with bytes from the start of the object.
 		if resp.StatusCode != http.StatusOK || blockStart != 0 || blockEnd != totalSize-1 {
-			return fmt.Errorf("s3 block status %d (Range ignored?)", resp.StatusCode)
+			return upstreamStatusError{StatusCode: resp.StatusCode}
 		}
 	}
 
@@ -344,26 +354,35 @@ func (e upstreamStatusError) Error() string {
 	return fmt.Sprintf("upstream artifact fetch returned status %d", e.StatusCode)
 }
 
-func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, mediaURL, authToken string) error {
+// isUpstreamAuthError reports whether err is an upstream 401/403 — the signature
+// of a dead peer-relay grant whose resolve-cache entry must be dropped so the
+// next request re-mints rather than replaying it until the resolve TTL lapses.
+func isUpstreamAuthError(err error) bool {
+	var se upstreamStatusError
+	return errors.As(err, &se) &&
+		(se.StatusCode == http.StatusUnauthorized || se.StatusCode == http.StatusForbidden)
+}
+
+func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string) error {
 	if store.HasBlock(span.Idx) {
 		return nil
 	}
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
-		return fmt.Errorf("build s3 block preflight request: %w", err)
+		return fmt.Errorf("build upstream block preflight request: %w", err)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", blockStart, blockEnd))
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
+	if grantID != "" {
+		req.Header.Set("Authorization", "Bearer "+grantID)
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
-		return fmt.Errorf("s3 block preflight fetch: %w", err)
+		return fmt.Errorf("upstream block preflight fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024)); err != nil {
-		return fmt.Errorf("drain s3 block preflight response: %w", err)
+		return fmt.Errorf("drain upstream block preflight response: %w", err)
 	}
 	if resp.StatusCode == http.StatusPartialContent {
 		return nil
@@ -390,7 +409,7 @@ func (s *Server) respondColdFetchError(c *gin.Context, err error) {
 		}
 		return
 	}
-	s.serverError(c, "s3 block preflight", err)
+	s.serverError(c, "upstream block preflight", err)
 }
 
 func isClientGone(err error) bool {

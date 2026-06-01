@@ -162,18 +162,25 @@ message PrepareArtifactResponse {
   reserved "dvr_segments";
 
   // Peer-relay fallback for hot-but-unsynced artifacts. When the origin
-  // cluster holds the canonical full file on a specific node but has
-  // not yet synced to S3, peer_relay_url points at that node's
-  // Helmsman and peer_relay_token is a JWT minted by origin Foghorn
-  // (signed with origin's existing service key) bound to (origin node
-  // id, artifact_hash, request path, exp+5min). The requesting cluster
-  // forwards both fields opaquely into its own RelayResolveResponse;
-  // only the origin cluster's Helmsman validates the token. When set,
-  // url/segment_urls are empty. Recursion invariant: this path must
-  // not return another peer URL — origin Foghorn returns empty if its
+  // cluster holds the canonical full file on a specific node but has not
+  // yet synced to S3, peer_relay_url points at that node's Helmsman and
+  // peer_relay_grant_id is an opaque capability the origin Foghorn minted
+  // and stored (bound to origin node id, artifact_hash, and the allowed
+  // media + .dtsh paths). The requesting cluster forwards it opaquely into
+  // its own RelayResolveResponse; the serving edge holds no key and the
+  // origin cluster's Foghorn validates it online via AuthorizeRelayPull.
+  // When set, url/segment_urls are empty. Recursion invariant: this path
+  // must not return another peer URL — origin Foghorn returns empty if its
   // own origin row is also stale.
   string peer_relay_url = 12;
-  string peer_relay_token = 13;
+  string peer_relay_dtsh_url = 14;
+  // Opaque capability handle the origin cluster's Foghorn minted + stored.
+  // Forwarded opaquely into the requesting cluster's RelayResolveResponse;
+  // only the origin cluster's Foghorn (via AuthorizeRelayPull) validates it.
+  // Covers both peer_relay_url and peer_relay_dtsh_url.
+  string peer_relay_grant_id = 16;
+  reserved 13, 15;  // retired self-signed peer_relay_token / peer_relay_dtsh_token
+  reserved "peer_relay_token", "peer_relay_dtsh_token";
 }
 
 message RemoteClipRequest {

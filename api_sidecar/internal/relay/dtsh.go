@@ -71,33 +71,61 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		s.serverError(c, "relay resolve (dtsh)", err)
 		return
 	}
-	if res.DtshPresignedGet == "" {
-		// Foghorn has no sidecar uploaded yet. Returning 404 is the signal
-		// for Mist to generate one and PUT it back.
+	// Source order: S3 (synced) first, else a peer relay holding the hot
+	// sidecar (origin node, not yet S3-synced). Foghorn sets at most one of
+	// these per resolve. peerBearer is non-empty only on the peer path; the
+	// grant authorizes both the media and its .dtsh path, validated online by
+	// the origin edge's Foghorn.
+	fetchURL := res.DtshPresignedGet
+	peerBearer := ""
+	if fetchURL == "" {
+		fetchURL = res.PeerRelayDtshURL
+		peerBearer = res.PeerRelayGrantID
+	}
+	if fetchURL == "" {
+		// No sidecar anywhere yet. 404 is the signal for Mist to generate
+		// one and PUT it back.
 		c.Status(http.StatusNotFound)
 		return
 	}
 
-	// Fetch dtsh from S3 and write it through to disk while streaming
-	// the response. Sidecars are small (typically <10 MiB) and dropping
-	// the local copy would re-fetch on every replay; we always tee for
-	// HEAD-less full GETs. HEAD and ranged requests stream-only so the
-	// disk write happens at most once per cold node (next GET from any
-	// session will hit the warm branch above).
-	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, res.DtshPresignedGet, nil)
+	// Fetch dtsh and write it through to disk while streaming the response.
+	// Sidecars are small (typically <10 MiB) and dropping the local copy
+	// would re-fetch on every replay; we always tee for HEAD-less full GETs.
+	// HEAD and ranged requests stream-only so the disk write happens at most
+	// once per cold node (next GET from any session hits the warm branch).
+	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fetchURL, nil)
 	if err != nil {
-		s.serverError(c, "build s3 dtsh request", err)
+		s.serverError(c, "build dtsh request", err)
 		return
+	}
+	if peerBearer != "" {
+		req.Header.Set("Authorization", "Bearer "+peerBearer)
 	}
 	if rng := c.Request.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
-		s.serverError(c, "s3 dtsh fetch", err)
+		s.serverError(c, "dtsh fetch", err)
 		return
 	}
 	defer resp.Body.Close()
+
+	// A peer that lacks the sidecar (404) or rejects the token (401) is the
+	// regenerate signal — fall back to 404 for Mist rather than relaying the
+	// peer's error status. (S3 statuses pass through unchanged.)
+	if peerBearer != "" && resp.StatusCode >= 400 {
+		// A peer auth rejection (401/403) means the grant is dead; drop the
+		// resolve-cache entry so the next sidecar fetch re-mints instead of
+		// replaying it. Other 4xx (e.g. 404 = sidecar absent on the peer) fall
+		// through to local regeneration.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			s.cache.Delete(kind, hash)
+		}
+		c.Status(http.StatusNotFound)
+		return
+	}
 
 	for _, h := range []string{"Content-Length", "Content-Range", "Content-Type", "Accept-Ranges", "ETag", "Last-Modified"} {
 		if v := resp.Header.Get(h); v != "" {

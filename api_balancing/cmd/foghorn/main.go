@@ -788,6 +788,21 @@ func main() {
 	control.SetStreamRegistry(streamRegistry)
 	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
 
+	// Peer-relay capability grants: Redis-backed when available (any HA
+	// instance can authorize a grant another minted), in-memory otherwise.
+	// Without Redis a grant minted on one instance is invisible to peers, so a
+	// serving edge whose AuthorizeRelayPull lands on a different instance gets a
+	// false deny (401→502). That is fatal under FOGHORN_HA_REQUIRED and a loud
+	// warning otherwise (single-instance deployments are unaffected).
+	if redisClient == nil {
+		if haRequired {
+			logger.Fatal("FOGHORN_HA_REQUIRED is true but Redis is not configured — peer-relay grants cannot be shared across instances")
+		}
+		logger.Warn("Redis not configured — peer-relay capability grants are in-memory only; cross-instance AuthorizeRelayPull will deny. Safe for single-instance Foghorn, broken under HA.")
+	}
+	control.SetRelayGrantRedis(redisClient)
+	control.StartRelayGrantSweeper(context.Background())
+
 	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips, artifacts)
 	state.DefaultManager().ConfigurePolicies(state.PoliciesConfig{
 		WritePolicies: map[state.EntityType]state.WritePolicy{
@@ -909,9 +924,10 @@ func main() {
 	}
 
 	// Wire the cross-cluster artifact resolver so RelayResolve can
-	// federate vod+/processing+ reads to peer S3 when the artifact
-	// isn't local. Without these deps RelayResolve silently 404s on
-	// non-local artifacts (today's behavior).
+	// federate vod+/processing+ reads to the origin cluster when the
+	// artifact isn't local — served from peer S3 (synced) or a peer-relay
+	// grant (hot-but-unsynced). Without these deps RelayResolve silently
+	// 404s on non-local artifacts (today's behavior).
 	if peerManager != nil && fedClient != nil {
 		control.SetCrossClusterArtifactDeps(&control.CrossClusterArtifactDeps{
 			FedClient:      fedClient,
@@ -1033,9 +1049,6 @@ func main() {
 		internalRegistrars = append(internalRegistrars, relayServer.RegisterServices)
 	}
 	jwtSecret := os.Getenv("JWT_SECRET")
-	// Same HMAC key signs cross-cluster peer-relay tokens — only origin
-	// cluster's Helmsmans validate, so the key never leaves the cluster.
-	control.SetArtifactRelaySecret([]byte(jwtSecret))
 	grpcServers, err := control.StartGRPCServers(context.Background(), control.GRPCServerConfig{
 		InternalBindAddr:   internalGRPCBindAddr,
 		ExternalBindAddr:   externalGRPCBindAddr,

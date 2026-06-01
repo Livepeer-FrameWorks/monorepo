@@ -204,6 +204,66 @@ func TestGenerateDtshPresignedGET_ParsesStoredS3URL(t *testing.T) {
 	}
 }
 
+func TestProcessCanDelete_VerifiesDurableObjectBeforeAllowingEviction(t *testing.T) {
+	prevRepo := artifactRepo
+	prevS3 := s3Client
+	artifactRepo = &mockArtifactRepo{
+		getArtifactSyncInfoFn: func(_ context.Context, hash string) (*state.ArtifactSyncInfo, error) {
+			return &state.ArtifactSyncInfo{
+				ArtifactHash: hash,
+				SyncStatus:   "synced",
+				S3URL:        "s3://frameworks/dev/vod/hash/hash.mp4",
+			}, nil
+		},
+	}
+	s3Client = &mockS3Client{
+		listPrefixFn: func(_ context.Context, prefix string) ([]string, error) {
+			return []string{prefix}, nil
+		},
+	}
+	t.Cleanup(func() {
+		artifactRepo = prevRepo
+		s3Client = prevS3
+	})
+
+	stream := &fakeControlStream{}
+	processCanDeleteRequest(&pb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
+	resp := stream.sent[0].GetCanDeleteResponse()
+	if resp == nil || !resp.GetSafeToDelete() || resp.GetReason() != "synced_verified" {
+		t.Fatalf("response=%+v, want safe synced_verified", resp)
+	}
+}
+
+func TestProcessCanDelete_RejectsSyncedMetadataWhenDurableObjectMissing(t *testing.T) {
+	prevRepo := artifactRepo
+	prevS3 := s3Client
+	artifactRepo = &mockArtifactRepo{
+		getArtifactSyncInfoFn: func(_ context.Context, hash string) (*state.ArtifactSyncInfo, error) {
+			return &state.ArtifactSyncInfo{
+				ArtifactHash: hash,
+				SyncStatus:   "synced",
+				S3URL:        "s3://frameworks/dev/vod/hash/hash.mp4",
+			}, nil
+		},
+	}
+	s3Client = &mockS3Client{
+		listPrefixFn: func(context.Context, string) ([]string, error) {
+			return nil, nil
+		},
+	}
+	t.Cleanup(func() {
+		artifactRepo = prevRepo
+		s3Client = prevS3
+	})
+
+	stream := &fakeControlStream{}
+	processCanDeleteRequest(&pb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
+	resp := stream.sent[0].GetCanDeleteResponse()
+	if resp == nil || resp.GetSafeToDelete() || resp.GetReason() != "s3_object_missing" {
+		t.Fatalf("response=%+v, want unsafe s3_object_missing", resp)
+	}
+}
+
 // --- forward() ---
 
 func TestForward_NoOwner(t *testing.T) {
@@ -294,7 +354,7 @@ func TestForward_PeerRejects(t *testing.T) {
 
 	err := r.forward(ctx, &pb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_ClipPull{ClipPull: &pb.ClipPullRequest{}},
+		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}},
 	})
 	if err == nil {
 		t.Fatal("expected error when peer rejects command")
@@ -529,7 +589,7 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 	setCommandRelay(t, r)
 
-	err := SendClipPull("node-1", &pb.ClipPullRequest{})
+	err := SendDVRStart("node-1", &pb.DVRStartRequest{})
 	if err != nil {
 		t.Fatalf("expected nil error after relay success, got %v", err)
 	}
@@ -693,7 +753,6 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 
 	sendByField := map[string]func() error{
 		"config_seed":             func() error { return SendConfigSeed("node-1", &pb.ConfigSeed{NodeId: "node-1"}) },
-		"clip_pull":               func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) },
 		"dvr_start":               func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) },
 		"dvr_stop":                func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) },
 		"clip_delete":             func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
@@ -774,7 +833,6 @@ func TestSendWithRelay_LocalSendErrorDoesNotRelay(t *testing.T) {
 		name string
 		fn   func() error
 	}{
-		{"ClipPull", func() error { return SendClipPull("node-1", &pb.ClipPullRequest{}) }},
 		{"DVRStart", func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) }},
 		{"DVRStop", func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) }},
 		{"ClipDelete", func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) }},
@@ -855,5 +913,29 @@ func TestDeleteConnOwnerIfMatch_PreventsStaleCleanupRace(t *testing.T) {
 	}
 	if !mr.Exists("{test-cluster}:conn_owner:node-race") {
 		t.Fatal("expected conn_owner key to remain for new owner")
+	}
+}
+
+func TestRelayPeerOrigin(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		want string
+		ok   bool
+	}{
+		{"strips playback path", "https://edge-1.example.com/view", "https://edge-1.example.com", true},
+		{"bare host", "https://edge-1.example.com", "https://edge-1.example.com", true},
+		{"with port", "http://helmsman:18007", "http://helmsman:18007", true},
+		{"trailing slash", "https://edge-1.example.com/", "https://edge-1.example.com", true},
+		{"empty", "", "", false},
+		{"no scheme", "edge-1.example.com/view", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := RelayPeerOrigin(tc.base)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("RelayPeerOrigin(%q) = (%q, %v), want (%q, %v)", tc.base, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }

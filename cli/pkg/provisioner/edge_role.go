@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,10 +184,18 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	capEnv, capErr := edgeCapabilityEnv(config.Capabilities)
 	if capErr != nil {
 		return nil, capErr
+	}
+	maps.Copy(vars, capEnv)
+
+	// Trusted CIDR for the local Mist→Helmsman relay hop. Docker: Mist dials
+	// helmsman:18007 over the compose bridge, so the relay's loopback
+	// exemption doesn't apply — trust the private bridge range for that hop
+	// only (peer reads go Caddy + Bearer). Native: empty, Mist reaches
+	// Helmsman on loopback. Broad RFC1918 fallback; narrow on shared hosts.
+	if mode == "native" {
+		vars["edge_relay_trusted_cidr"] = ""
 	} else {
-		for k, v := range capEnv {
-			vars[k] = v
-		}
+		vars["edge_relay_trusted_cidr"] = "172.16.0.0/12"
 	}
 
 	var manifest *gitops.Manifest

@@ -72,12 +72,13 @@ type HelmsmanConfig struct {
 	// Foghorn is authoritative and may override this based on DB-persisted state.
 	RequestedMode string
 
-	// ArtifactRelayJWTSecret is the HMAC secret used to validate inbound
-	// artifact_relay JWTs on /internal/artifact/*. Origin Foghorn signs
-	// with the same secret; only same-cluster Helmsmans validate. Empty
-	// disables non-loopback access to the relay routes (loopback still
-	// works for the normal Mist→Helmsman path).
-	ArtifactRelayJWTSecret string
+	// RelayTrustedCIDR is a comma-separated CIDR list whose RemoteAddr
+	// bypasses the relay authorize gate like loopback (still requiring no
+	// proxy-forward markers). For the local Mist→Helmsman hop when Mist
+	// dials a non-loopback service address (docker: helmsman:18007). Empty
+	// in production/native (Mist reaches Helmsman on 127.0.0.1). NEVER set
+	// to a range that covers peer nodes — peer reads authorize via Foghorn.
+	RelayTrustedCIDR string
 }
 
 // LoadHelmsmanConfig loads configuration from environment variables.
@@ -119,10 +120,9 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
 
-		// Artifact relay JWT secret (shared with Foghorn; same key used
-		// for other service-tier JWTs). Empty disables peer-relay
-		// inbound access.
-		ArtifactRelayJWTSecret: config.GetEnv("JWT_SECRET", ""),
+		// Trusted CIDR for the local Mist→Helmsman hop (docker). Empty in
+		// production/native — loopback only.
+		RelayTrustedCIDR: config.GetEnv("HELMSMAN_RELAY_TRUSTED_CIDR", ""),
 
 		// gRPC TLS / trust
 		GRPCAllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),

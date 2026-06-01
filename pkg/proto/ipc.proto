@@ -15,7 +15,9 @@ message GeoBucket {
 }
 
 // Bidirectional control channel between Helmsman (client) and Foghorn (server)
-// Helmsman dials Foghorn and sends Register/NodeLifecycleUpdate; Foghorn sends ClipPullRequest
+// Helmsman dials Foghorn and sends Register/NodeLifecycleUpdate plus
+// requests/results; Foghorn pushes commands (DVR start/stop, freeze, mode
+// change, drain, processing jobs) and responses back over the same stream.
 
 service HelmsmanControl {
   rpc Connect(stream ControlMessage) returns (stream ControlMessage);
@@ -165,14 +167,15 @@ message ControlMessage {
   reserved "dvr_ready_request", "dvr_ready_response";
   reserved 44, 45, 46;
   reserved "defrost_request", "defrost_progress", "defrost_complete";
+  reserved 12;                  // retired clip_pull_request — clip creation enqueues a processing job; ClipPullRequest message survives for clipSourceDecision
+  reserved "clip_pull_request";
+  reserved 13, 14;              // retired clip_progress / clip_done — clip lifecycle analytics now emitted by the processing pipeline
+  reserved "clip_progress", "clip_done";
 
   string request_id = 1; // Correlates requests/responses
   google.protobuf.Timestamp sent_at = 2;
   oneof payload {
     Register register = 10;
-    ClipPullRequest clip_pull_request = 12;
-    ClipProgress clip_progress = 13;
-    ClipDone clip_done = 14;
     ControlError error = 15;
     Heartbeat heartbeat = 16;
     DVRStartRequest dvr_start_request = 18;
@@ -294,6 +297,12 @@ message ControlMessage {
     // exhausts. Idempotent — missing job is a no-op success.
     DVRUpdateSourceRequest dvr_update_source_request = 164;
     DVRUpdateSourceResponse dvr_update_source_response = 165;
+    // Helmsman (serving edge) -> Foghorn: authorize an inbound peer-relay
+    // pull that presented a peer_relay_grant_id. Foghorn responds on the
+    // same stream. Same sidecar-originated request/response pattern as
+    // RelayResolve.
+    AuthorizeRelayPullRequest authorize_relay_pull_request = 166;
+    AuthorizeRelayPullResponse authorize_relay_pull_response = 167;
   }
 }
 
@@ -600,21 +609,6 @@ message ClipPullRequest {
   // vod+<clip_internal_name> today (clips are frozen VOD), but populated
   // from Foghorn's registry so Helmsman never derives runtime names.
   string artifact_runtime_name = 24;
-}
-
-message ClipProgress {
-  string request_id = 1;
-  uint32 percent = 2;        // 0..100
-  string message = 3;
-}
-
-message ClipDone {
-  string request_id = 1;
-  string file_path = 2;     // local path on storage node (if applicable)
-  string s3_url = 3;        // s3://bucket/key or https URL (if applicable)
-  uint64 size_bytes = 4;
-  string status = 5;        // success|failed
-  string error = 6;         // filled when failed
 }
 
 message ControlError {
@@ -1198,11 +1192,38 @@ message RelayResolveResponse {
   // Peer-relay fallback: when an artifact is hot on its origin node but
   // not yet synced to S3, Foghorn returns a URL pointing at that origin
   // node's Helmsman in place of media_presigned_url. The block-cache
-  // fetcher uses this URL exactly like an S3 URL but attaches the
-  // accompanying token as Authorization: Bearer. When peer_relay_url
-  // is set, media_presigned_url is empty.
+  // fetcher uses this URL exactly like an S3 URL but presents
+  // peer_relay_grant_id as Authorization: Bearer. When peer_relay_url is
+  // set, media_presigned_url is empty. peer_relay_dtsh_url is the sidecar
+  // (.dtsh) URL (Mist derives it as media + ".dtsh"); the same grant
+  // authorizes both, so there is one grant id, not a per-path token.
   string peer_relay_url = 14;
-  string peer_relay_auth_token = 15;
+  string peer_relay_dtsh_url = 16;
+  // Opaque capability handle minted + stored by the origin cluster's
+  // Foghorn. The serving edge authorizes an inbound pull by asking its
+  // Foghorn (AuthorizeRelayPull); the edge holds no signing key. Covers
+  // both peer_relay_url and peer_relay_dtsh_url.
+  string peer_relay_grant_id = 18;
+  reserved 15, 17;  // retired self-signed peer_relay_auth_token / _dtsh_auth_token
+  reserved "peer_relay_auth_token", "peer_relay_dtsh_auth_token";
+}
+
+// AuthorizeRelayPullRequest is sent by a SERVING edge's Helmsman to its
+// Foghorn when an inbound /internal/artifact/* pull presents a
+// peer_relay_grant_id. Foghorn is the authority: it matches the grant it
+// minted at resolve time against (artifact_hash, request_path) and replies
+// allow/deny. The edge holds no key — this replaces self-validating JWTs.
+message AuthorizeRelayPullRequest {
+  string request_id = 1;
+  string grant_id = 2;
+  string artifact_hash = 3;
+  string request_path = 4;  // full /internal/artifact/... path (media or its .dtsh)
+}
+
+message AuthorizeRelayPullResponse {
+  string request_id = 1;
+  bool allowed = 2;
+  string reason = 3;  // diagnostic when allowed=false
 }
 
 // AssetState tells the relay how to dispose of a resolve. Drives the
@@ -1537,6 +1558,12 @@ message RecordingCompleteTrigger {
   // Enrichment fields for analytics (populated by Foghorn)
   optional string node_id = 9;
   optional string stream_id = 10;       // Enriched by Foghorn (UUID)
+
+  // Mist exit reason from the trigger payload. exit_reason is the machine code
+  // (mRExitReason); a CLEAN_* prefix means the output finished cleanly, any
+  // other value is a failure. human_exit_reason is the human-readable detail.
+  optional string exit_reason = 11;
+  optional string human_exit_reason = 12;
 }
 
 // RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
@@ -2179,6 +2206,7 @@ message StreamDef {
   bool stop_sessions = 3;
   repeated string tags = 4;
   repeated StreamProcess processes = 5;
+  bool process_controlled_realtime = 6;
 }
 
 message StreamTemplate {

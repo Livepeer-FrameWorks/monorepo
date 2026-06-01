@@ -12,10 +12,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -65,8 +65,8 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 	}
 	// s3Client is checked at the call sites that need it (presigned URL
 	// minting in the synced branch, cross-cluster fallback). The
-	// peer-relay branch is DB + JWT only — gating that on s3Client
-	// would defeat the no-S3-wait intent.
+	// peer-relay branch is DB + grant only (no S3) — gating that on
+	// s3Client would defeat the no-S3-wait intent.
 	var (
 		s3URL            string
 		sizeBytes        sql.NullInt64
@@ -88,10 +88,14 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 	`, req.GetAssetHash()).Scan(&s3URL, &sizeBytes, &format, &dtshSynced, &streamName, &syncStatus,
 		&originClusterID, &storageClusterID, &tenantID, &artifactType)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Direct-dial case: no prior playback adoption, no local row.
-		// Ask Commodore who owns this artifact, federate to that
-		// cluster's Foghorn for a presigned read URL.
-		fillCrossClusterArtifactFromCommodore(ctx, req, resp, logger)
+		// No local row. For vod/clip the front door (STREAM_SOURCE and /play
+		// both via the shared resolve→authorize→adopt path) writes the
+		// cross-cluster pointer row before any relay GET, so a missing row
+		// here means the artifact is genuinely unknown (or adoption failed) —
+		// 404. We deliberately do NOT federate by hash from here: RelayResolve
+		// has no requesting-tenant context, so it can't enforce the peer
+		// allowlist the adopt path enforces. Resolution belongs at the front
+		// door, not at byte-serve time.
 		return
 	}
 	if err != nil {
@@ -104,7 +108,7 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 		// but the bytes aren't on local S3. Two recovery paths apply in
 		// order:
 		//   1. Local origin node has the canonical file on disk (hot but
-		//      unsynced) — serve via peer-relay JWT pointing at that node.
+		//      unsynced) — serve via a peer-relay grant pointing at that node.
 		//   2. Bytes live on a peer cluster — federate via PrepareArtifact.
 		// Path (1) covers the case where the artifact was finalized here
 		// recently and the S3 sync just hasn't landed; without it the row
@@ -118,7 +122,9 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 			peerCluster = strings.TrimSpace(originClusterID.String)
 		}
 		if peerCluster != "" {
-			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID.String, artifactType.String)
+			// nil authorizeRedirect: already-adopted row, allowlist-checked at
+			// adopt time; RelayResolve has no requesting-tenant peer set here.
+			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID.String, artifactType.String, nil)
 		}
 		return
 	}
@@ -134,9 +140,9 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 	if !syncStatus.Valid || syncStatus.String != "synced" {
 		// Peer-relay fallback: an origin node in this cluster may hold
 		// the canonical full file locally even though S3 sync is
-		// pending. Hand the requester a node-specific peer URL with a
-		// short-lived JWT instead of falling through to 404. When no
-		// local origin row qualifies, return empty — the resolver path
+		// pending. Hand the requester a node-specific peer URL with an
+		// opaque capability grant instead of falling through to 404. When
+		// no local origin row qualifies, return empty — the resolver path
 		// MUST NOT chain to another peer URL (recursion invariant).
 		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
 			return
@@ -233,7 +239,7 @@ func fillUploadResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *p
 // fillPeerRelayFromLocalOrigin attempts to construct a peer-relay URL
 // pointing at a local-cluster origin node that holds the canonical
 // full file for the requested artifact. Returns true and populates
-// resp.PeerRelayUrl + PeerRelayAuthToken on success.
+// resp.PeerRelayUrl + PeerRelayGrantId on success.
 //
 // The query gate is strict: role='origin', is_complete=true,
 // is_orphaned=false, and recently-seen. is_complete is
@@ -252,8 +258,7 @@ func fillPeerRelayFromLocalOrigin(
 	streamName sql.NullString,
 	logger logging.Logger,
 ) bool {
-	secret := GetArtifactRelaySecret()
-	if len(secret) == 0 || db == nil {
+	if db == nil {
 		return false
 	}
 	var (
@@ -313,28 +318,40 @@ func fillPeerRelayFromLocalOrigin(
 		if stream == "" {
 			return false
 		}
-		path = "/internal/artifact/clip/" + stream + "/" + req.GetAssetHash() + "." + ext
+		// Escape the stream segment, matching the federation peer builder and
+		// the local STREAM_SOURCE builder, so the minted grant path and the
+		// path Helmsman actually receives are byte-identical.
+		path = "/internal/artifact/clip/" + url.PathEscape(stream) + "/" + req.GetAssetHash() + "." + ext
 	case "vod", "upload":
 		path = "/internal/artifact/" + req.GetAssetKind() + "/" + req.GetAssetHash() + "." + ext
 	default:
 		return false
 	}
-	peerURL := strings.TrimRight(baseURL, "/") + path
-	token, exp, mintErr := auth.GenerateArtifactRelayJWT(
-		originNodeID, req.GetAssetHash(), path,
-		localClusterID, localClusterID,
-		0, secret,
-	)
-	if mintErr != nil {
-		logger.WithError(mintErr).Warn("RelayResolve mint peer-relay token failed")
+	// Peer reads traverse the origin's Caddy (@artifact_relay route on the
+	// edge FQDN), so the peer URL is <scheme>://<host> of the advertised base
+	// plus the relay path. base_url is the playback base (carries /view); using
+	// it verbatim would route the request to Mist via handle_path /view/*
+	// instead of Helmsman. RelayPeerOrigin drops the path.
+	origin, ok := RelayPeerOrigin(baseURL)
+	if !ok {
+		return false
+	}
+	// One grant authorizes both the media URL and its .dtsh sidecar (Mist
+	// derives the sidecar as media + ".dtsh"). The serving edge validates it
+	// online via AuthorizeRelayPull — no signing key on the edge.
+	dtshPath := path + ".dtsh"
+	grantID, grantErr := MintRelayGrant(req.GetAssetHash(), originNodeID, []string{path, dtshPath})
+	if grantErr != nil {
+		logger.WithError(grantErr).Warn("RelayResolve mint peer-relay grant failed")
 		return false
 	}
 	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
-	resp.PeerRelayUrl = peerURL
-	resp.PeerRelayAuthToken = token
-	// TTL slightly under JWT exp so the relay refreshes before the
-	// token expires mid-fetch.
-	ttl := max(time.Until(exp)-30*time.Second, time.Minute)
+	resp.PeerRelayUrl = origin + path
+	resp.PeerRelayDtshUrl = origin + dtshPath
+	resp.PeerRelayGrantId = grantID
+	// Refresh window stays under the grant TTL so a cached resolve re-resolves
+	// (and re-mints) before the grant expires mid-fetch.
+	ttl := max(relayGrantTTL-30*time.Second, time.Minute)
 	resp.UrlTtlSeconds = int64(ttl.Seconds())
 	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 		resp.ExpectedSizeBytes = uint64(sizeBytes.Int64)
@@ -347,6 +364,20 @@ func fillPeerRelayFromLocalOrigin(
 	}
 	resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
 	return true
+}
+
+// RelayPeerOrigin extracts <scheme>://<host> from a node's advertised
+// base_url, dropping any path. node_outputs.base_url is the playback base
+// (e.g. https://<edge>/view); peer artifact relay is served at
+// <origin>/internal/artifact/... behind Caddy's @artifact_relay route, so the
+// playback path must not leak into the peer URL. Returns ok=false when base
+// has no parseable scheme+host.
+func RelayPeerOrigin(base string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host, true
 }
 
 func sendRelayResolveResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.RelayResolveResponse, logger logging.Logger) {
@@ -395,21 +426,20 @@ func keyFromMediaS3URL(mediaS3URL string) (string, error) {
 	return mediaS3URL, nil
 }
 
-// fillCrossClusterArtifactFromCommodore handles direct-dial reads
-// where no local foghorn.artifacts row exists. Asks Commodore for the
-// artifact's origin cluster, then federates via PrepareArtifact. The
-// peer cluster's Foghorn mints the presigned URL using its own S3
-// credentials; relay's block cache reads from peer S3 transparently.
-//
-// Hash IS the artifact internal name for vod+ and chapter artifacts
-// (the runtime stream name vod+<hash> uses the hash directly). For
-// other shapes ResolveArtifactInternalName returns Found=false; caller
-// falls through to a 404 response.
+// fillCrossClusterArtifactFromCommodore is the processing-input (upload)
+// cross-cluster fallback: a transcode whose source upload lives on a peer
+// cluster. The processing input is an uploaded VOD, so it resolves BY HASH via
+// ResolveVodHash (keyed on vod_hash) — not ResolveArtifactInternalName, which
+// is keyed on internal_name and would never match a hash. Commodore returns
+// the tenant's authorized cluster peers, so unlike vod/clip playback (which
+// adopts at the front door) this path CAN enforce the federation allowlist
+// here, on both the origin and any storage redirect. Returns silently (→ 404)
+// when Commodore has no match or the origin is not an authorized peer.
 func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger) {
 	if CommodoreClient == nil {
 		return
 	}
-	commodoreResp, err := CommodoreClient.ResolveArtifactInternalName(ctx, req.GetAssetHash())
+	commodoreResp, err := CommodoreClient.ResolveVodHash(ctx, req.GetAssetHash())
 	if err != nil || commodoreResp == nil || !commodoreResp.GetFound() {
 		return
 	}
@@ -417,15 +447,27 @@ func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *pb.RelayRes
 	if originCluster == "" {
 		return
 	}
-	fillCrossClusterArtifact(ctx, req, resp, logger, originCluster, commodoreResp.GetTenantId(), commodoreResp.GetContentType())
+	peers := commodoreResp.GetClusterPeers()
+	if !isAuthorizedPeerCluster(originCluster, peers) {
+		logger.WithFields(logging.Fields{
+			"asset_hash":     req.GetAssetHash(),
+			"origin_cluster": originCluster,
+		}).Warn("RelayResolve: cross-cluster processing input origin is not an authorized peer")
+		return
+	}
+	authorizeRedirect := func(c string) bool { return isAuthorizedPeerCluster(c, peers) }
+	fillCrossClusterArtifact(ctx, req, resp, logger, originCluster, commodoreResp.GetTenantId(), "vod", authorizeRedirect)
 }
 
 // fillCrossClusterArtifact federates to a known peer cluster for a
 // presigned read URL. Used both when an adopted row points at a peer
 // (storage_cluster_id set, no local s3_url) and when no local row
 // exists at all (direct-dial via fillCrossClusterArtifactFromCommodore).
-func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string) {
-	result, err := ResolveCrossClusterArtifactURL(ctx, req.GetAssetHash(), artifactType, tenantID, peerClusterID)
+// authorizeRedirect gates the storage-redirect target against the tenant peer
+// allowlist; pass nil only for an already-adopted row (its origin/storage were
+// allowlist-checked at adopt time and RelayResolve has no tenant peer set).
+func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
+	result, err := ResolveCrossClusterArtifactURL(ctx, req.GetAssetHash(), artifactType, tenantID, peerClusterID, authorizeRedirect)
 	if err != nil || result == nil {
 		// Includes ErrCrossClusterArtifactUnavailable (deps unwired,
 		// peer unreachable, peer doesn't know the artifact). Silent —
@@ -434,20 +476,27 @@ func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, 
 	}
 	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
 	// Origin may have returned an S3 presigned URL (synced case) OR a
-	// peer-relay URL + token (hot-but-unsynced case). Forward whichever
-	// the requesting Helmsman should hit. Helmsman's fetcher will set
-	// Authorization: Bearer when the token field is non-empty.
+	// peer-relay URL + grant (hot-but-unsynced case). Forward whichever the
+	// requesting Helmsman should hit; the grant_id is opaque here and is
+	// validated only by the origin cluster's Foghorn at pull time.
 	if result.PeerRelayURL != "" {
 		resp.PeerRelayUrl = result.PeerRelayURL
-		resp.PeerRelayAuthToken = result.PeerRelayToken
+		resp.PeerRelayDtshUrl = result.PeerRelayDtshURL
+		resp.PeerRelayGrantId = result.PeerRelayGrantID
+		// A peer-relay grant dies at relayGrantTTL; the requesting relay
+		// caches this resolve and replays the same grant id, so the cache
+		// MUST expire (at 0.8×TTL, resolver.go) before the grant does or
+		// the origin starts 401ing mid-session with no self-heal. Bound it
+		// under the grant TTL, exactly as the local-origin path does.
+		ttl := max(relayGrantTTL-30*time.Second, time.Minute)
+		resp.UrlTtlSeconds = int64(ttl.Seconds())
 	} else {
 		resp.MediaPresignedUrl = result.URL
+		// Peer's S3 presigned URL has its own expiry we don't know
+		// precisely; use the local TTL so the relay re-resolves (peer mints
+		// a fresh presigned URL) before it expires.
+		resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
 	}
-	// Peer's presigned URL has its own S3 expiry. We don't know it
-	// precisely; use the local TTL so the relay refreshes via
-	// re-resolve before peer's URL expires (peer mints a fresh one
-	// on the next RelayResolve).
-	resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
 	if artifactType == "vod" || artifactType == "clip" {
 		// vod/clip implies a single media file — no special hint.
 		resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_DISK

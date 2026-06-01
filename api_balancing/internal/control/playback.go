@@ -17,7 +17,6 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
@@ -570,6 +569,17 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}
 
+	// Front-door reauthorization: an adopted cross-cluster pointer row persists
+	// in foghorn.artifacts after the tenant's peer set changes, and the serve
+	// paths below (warm nodes, S3/synced, federation) would otherwise trust it.
+	// Re-check the authoritative byte cluster (storage_cluster_id, else
+	// origin_cluster_id) against the cluster_peers Commodore enriches per
+	// request, so a revoked peer stops serving on the next resolve. Local bytes
+	// always pass; the federation branch re-checks the origin/redirect downstream.
+	if !AuthoritativeClusterServable(authoritativeCluster.String, allowedClusters) {
+		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster.String))
+	}
+
 	var artifactNodes []state.ArtifactNodeInfo
 	if manager := state.DefaultManager(); manager != nil {
 		artifactNodes = manager.FindNodesByArtifactHash(artifactResp.ArtifactHash)
@@ -580,38 +590,13 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		}
 	}
 	if len(artifactNodes) == 0 {
-		// Check peer clusters for hot copies before falling through to S3 relay
-		if deps.RemoteArtifacts != nil {
-			remoteHits, _ := deps.RemoteArtifacts.GetRemoteArtifacts(ctx, artifactResp.ArtifactHash)
-			var authorizedHits []*RemoteArtifactInfo
-			for _, h := range remoteHits {
-				if isAuthorizedPeerCluster(h.PeerCluster, allowedClusters) {
-					authorizedHits = append(authorizedHits, h)
-				}
-			}
-			if len(authorizedHits) > 0 {
-				best := pickBestRemoteArtifact(authorizedHits, deps.GeoLat, deps.GeoLon)
-				if best != nil {
-					// Construct the peer cluster's /play URL so the viewer
-					// follows a real redirect. Mirrors the live-cross-cluster
-					// pattern in handlers.go/grpc/server.go confirmRemoteEndpoint
-					// — Protocol="redirect" + populated Url is the contract
-					// consumers expect; the earlier bare NodeId/BaseUrl-only
-					// shape left consumers with nothing to dial.
-					playURL := "https://" + best.BaseURL + "/play/" + playbackID
-					return &pb.ViewerEndpointResponse{
-						Primary: &pb.ViewerEndpoint{
-							NodeId:      best.NodeID,
-							BaseUrl:     best.BaseURL,
-							Protocol:    "redirect",
-							Url:         playURL,
-							GeoDistance: CalculateGeoDistance(deps.GeoLat, deps.GeoLon, best.GeoLat, best.GeoLon),
-							ClusterId:   best.PeerCluster,
-						},
-					}, nil
-				}
-			}
-		}
+		// No client redirect to a peer's hot copy. Cross-cluster artifacts are
+		// adopted as a local pointer row at the front door (resolveRemoteArtifact
+		// below / STREAM_SOURCE) and served through the local
+		// Mist→Helmsman→RelayResolve path, which handles S3 vs peer-relay the
+		// same as intra-cluster. Remote artifact ads may inform scoring, but they
+		// must not produce a client-facing /play redirect — that bypasses the
+		// adopt-then-serve-locally model.
 
 		// No warm nodes. The read-through artifact relay streams from S3
 		// on demand, so we don't gate playback on local copy — pick any
@@ -1620,26 +1605,6 @@ func DeriveMistHTTPBase(base string) string {
 	return u.Scheme + "://" + hostname + ":" + port
 }
 
-// pickBestRemoteArtifact selects the best remote artifact location by geo distance
-// to the viewer. Applies a CrossClusterPenalty in the scoring so local edges
-// (if they existed) would have been preferred — this function is only called
-// when there are zero local nodes with the artifact.
-func pickBestRemoteArtifact(hits []*RemoteArtifactInfo, viewerLat, viewerLon float64) *RemoteArtifactInfo {
-	if len(hits) == 0 {
-		return nil
-	}
-	var best *RemoteArtifactInfo
-	bestDist := math.MaxFloat64
-	for _, h := range hits {
-		dist := CalculateGeoDistance(viewerLat, viewerLon, h.GeoLat, h.GeoLon)
-		if dist < bestDist {
-			bestDist = dist
-			best = h
-		}
-	}
-	return best
-}
-
 func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bool {
 	if clusterID == "" {
 		return false
@@ -1655,6 +1620,44 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 	return false
 }
 
+// AuthoritativeClusterServable reports whether this Foghorn may serve an
+// artifact whose authoritative bytes live on authoritativeCluster, given the
+// tenant's freshly-resolved cluster-peer envelope. True when the bytes are
+// served locally by this Foghorn — its primary cluster, any cluster it also
+// serves (multi-cluster Foghorn, IsServedCluster), or an empty field
+// (intra-cluster rows carry no cross-cluster id) — else the cluster must be
+// present in the current peer set. Front doors (/play, ResolveViewerEndpoint,
+// STREAM_SOURCE) gate on this before returning any viewer/relay URL, so a
+// peer-allowlist change takes effect on the next resolve — no reconciliation
+// and no per-block policy lookups.
+func AuthoritativeClusterServable(authoritativeCluster string, peers []*pb.TenantClusterPeer) bool {
+	auth := strings.TrimSpace(authoritativeCluster)
+	if auth == "" || auth == GetLocalClusterID() || isServedCluster(auth) {
+		return true
+	}
+	return isAuthorizedPeerCluster(auth, peers)
+}
+
+// PlaybackEdgeRedirectURL builds a viewer /play redirect to an edge from the
+// edge's advertised BaseUrl. BaseUrl is the playback base — it may be a bare
+// host ("edge.example") or a full URL with a path ("https://edge.example/view").
+// Both the host and any path/scheme are normalized to "https://<host>/play/<id>",
+// avoiding the "https://https://edge/view/play/..." malformations from naive
+// "https://" + BaseUrl concatenation.
+func PlaybackEdgeRedirectURL(baseURL, playbackID string) string {
+	b := strings.TrimSpace(baseURL)
+	if i := strings.Index(b, "://"); i >= 0 {
+		b = b[i+3:]
+	}
+	if i := strings.IndexByte(b, '/'); i >= 0 {
+		b = b[:i]
+	}
+	if b == "" {
+		return ""
+	}
+	return "https://" + b + "/play/" + playbackID
+}
+
 // resolveRemoteArtifact handles cross-cluster artifact resolution by
 // calling PrepareArtifact on the origin cluster's Foghorn. The peer
 // validates the artifact, adopts the row locally (so future
@@ -1662,8 +1665,9 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 // pointing at a local edge. Bytes are read on demand by the relay's
 // federation path — RelayResolve federates back to the origin cluster
 // and reads block-by-block from either the origin's presigned S3 URL
-// (synced) or the origin node's Helmsman directly via a short-lived
-// artifact_relay JWT (hot-but-unsynced). No local copy is created.
+// (synced) or the origin node's Helmsman directly via an opaque
+// peer-relay grant the origin Foghorn authorizes online
+// (hot-but-unsynced). No local copy is created.
 func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer, artifactResp *pb.ResolveArtifactPlaybackIDResponse) (*pb.ViewerEndpointResponse, error) {
 	if strings.EqualFold(contentType, "dvr") {
 		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
@@ -1727,43 +1731,22 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, play
 	}
 	if !resp.GetReady() {
 		// Fail-fast: same semantics as the STREAM_SOURCE cross-cluster
-		// path (cross_cluster_artifact.go). Origin's freeze pipeline
-		// hasn't put the bytes on S3 yet; caller surfaces an error and
-		// retries at the application layer rather than us hiding the
+		// path (cross_cluster_artifact.go). The origin has neither a durable
+		// S3 copy nor a servable hot peer-relay node yet; caller surfaces an
+		// error and retries at the application layer rather than us hiding the
 		// retry behind a 202 polling loop.
-		return nil, fmt.Errorf("remote artifact not yet on S3: %w", ErrCrossClusterArtifactUnavailable)
+		return nil, fmt.Errorf("remote artifact not yet available at origin: %w", ErrCrossClusterArtifactUnavailable)
 	}
 
-	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING). When the
-	// origin cluster redirected us to a different storage cluster, persist
-	// both: origin_cluster_id stays as the producer, storage_cluster_id
-	// records where the bytes live so future read paths can resolve the
-	// right S3/Chandler without re-walking the redirect.
-	if deps.DB != nil {
-		storageCluster := sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}
-		if _, dbErr := deps.DB.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, origin_cluster_id, storage_cluster_id)
-			VALUES ($1, $2, $3, $4, $5, $6, 'active', 's3', 'synced', $7, $8)
-			ON CONFLICT (artifact_hash) DO UPDATE
-			SET storage_location = 's3',
-			    sync_status = 'synced',
-			    internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
-			    stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
-			    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
-			    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
-			    storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
-		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID, storageCluster); dbErr != nil {
-			// Adoption is best-effort — without the local row, the relay
-			// path still works via re-walked PrepareArtifact on each
-			// playback. Failing the request would be worse than serving
-			// without a persisted lifecycle row.
-			controlLogger().WithError(dbErr).WithFields(logging.Fields{
-				"artifact_hash":      artifactHash,
-				"tenant_id":          tenantID,
-				"origin_cluster_id":  originClusterID,
-				"storage_cluster_id": storageClusterID,
-			}).Warn("resolveRemoteArtifact: adoption upsert failed; subsequent reads will re-walk PrepareArtifact")
-		}
+	// Adopt the artifact locally as a cross-cluster pointer via the shared
+	// helper (same row shape STREAM_SOURCE writes — one adoption path,
+	// RelayResolve reads the row). The row MUST be written: the recursion
+	// below routes on it, and a missing/non-s3 row re-enters
+	// resolveRemoteArtifact and loops. So a failed upsert fails closed here
+	// rather than recursing without the row. origin_cluster_id stays the
+	// producer; storage_cluster_id captures any storage redirect.
+	if adoptErr := adoptRemoteArtifactRow(ctx, deps.DB, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetStreamInternalName(), resp.GetFormat(), originClusterID, storageClusterID, resp.GetUrl() != ""); adoptErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCrossClusterArtifactUnavailable, adoptErr)
 	}
 
 	// Row adopted; recurse into the local resolution path. The recursed

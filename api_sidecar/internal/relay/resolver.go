@@ -35,14 +35,18 @@ type ResolveResult struct {
 	PolicyHint         pb.RelayResolveResponse_CacheDecisionHint
 	Error              string
 	StreamInternalName string // for DVR: top dir in storage/dvr/<stream>/<dvr_hash>/
-	// Peer-relay fallback: when the origin cluster holds the canonical
-	// full file but it isn't synced to S3 yet, Foghorn returns a URL
-	// pointing at the origin node's Helmsman in place of
-	// MediaPresignedURL. PeerRelayAuthToken is a short-lived JWT
-	// validated by the origin Helmsman as Authorization: Bearer.
-	PeerRelayURL       string
-	PeerRelayAuthToken string
-	cachedAt           time.Time
+	// Peer-relay fallback: when the origin cluster holds the canonical full
+	// file but it isn't synced to S3 yet, Foghorn returns peer URLs pointing
+	// at the origin node's Helmsman in place of MediaPresignedURL.
+	// PeerRelayDtshURL is the sidecar URL (serveSidecarGetWithStream uses it
+	// after local disk and DtshPresignedGet, before 404→regenerate).
+	PeerRelayURL     string
+	PeerRelayDtshURL string
+	// PeerRelayGrantID is the opaque capability presented as Authorization:
+	// Bearer on peer fetches; the origin edge authorizes it online with its
+	// Foghorn (no signing key on this edge). Covers media + .dtsh.
+	PeerRelayGrantID string
+	cachedAt         time.Time
 }
 
 // UpstreamURL returns the URL the block-cache fetcher should GET.
@@ -109,7 +113,8 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 		Error:              resp.GetError(),
 		StreamInternalName: resp.GetStreamInternalName(),
 		PeerRelayURL:       resp.GetPeerRelayUrl(),
-		PeerRelayAuthToken: resp.GetPeerRelayAuthToken(),
+		PeerRelayDtshURL:   resp.GetPeerRelayDtshUrl(),
+		PeerRelayGrantID:   resp.GetPeerRelayGrantId(),
 		cachedAt:           time.Now(),
 	}, nil
 }

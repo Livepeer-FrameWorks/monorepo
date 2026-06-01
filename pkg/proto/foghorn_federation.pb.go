@@ -594,20 +594,25 @@ type PrepareArtifactResponse struct {
 	// set. Single hop only — chained redirects fail closed at the consumer.
 	RedirectClusterId string `protobuf:"bytes,10,opt,name=redirect_cluster_id,json=redirectClusterId,proto3" json:"redirect_cluster_id,omitempty"`
 	// Peer-relay fallback for hot-but-unsynced artifacts. When the origin
-	// cluster holds the canonical full file on a specific node but has
-	// not yet synced to S3, peer_relay_url points at that node's
-	// Helmsman and peer_relay_token is a JWT minted by origin Foghorn
-	// (signed with origin's existing service key) bound to (origin node
-	// id, artifact_hash, request path, exp+5min). The requesting cluster
-	// forwards both fields opaquely into its own RelayResolveResponse;
-	// only the origin cluster's Helmsman validates the token. When set,
-	// url/segment_urls are empty. Recursion invariant: this path must
-	// not return another peer URL — origin Foghorn returns empty if its
+	// cluster holds the canonical full file on a specific node but has not
+	// yet synced to S3, peer_relay_url points at that node's Helmsman and
+	// peer_relay_grant_id is an opaque capability the origin Foghorn minted
+	// and stored (bound to origin node id, artifact_hash, and the allowed
+	// media + .dtsh paths). The requesting cluster forwards it opaquely into
+	// its own RelayResolveResponse; the serving edge holds no key and the
+	// origin cluster's Foghorn validates it online via AuthorizeRelayPull.
+	// When set, url/segment_urls are empty. Recursion invariant: this path
+	// must not return another peer URL — origin Foghorn returns empty if its
 	// own origin row is also stale.
-	PeerRelayUrl   string `protobuf:"bytes,12,opt,name=peer_relay_url,json=peerRelayUrl,proto3" json:"peer_relay_url,omitempty"`
-	PeerRelayToken string `protobuf:"bytes,13,opt,name=peer_relay_token,json=peerRelayToken,proto3" json:"peer_relay_token,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	PeerRelayUrl     string `protobuf:"bytes,12,opt,name=peer_relay_url,json=peerRelayUrl,proto3" json:"peer_relay_url,omitempty"`
+	PeerRelayDtshUrl string `protobuf:"bytes,14,opt,name=peer_relay_dtsh_url,json=peerRelayDtshUrl,proto3" json:"peer_relay_dtsh_url,omitempty"`
+	// Opaque capability handle the origin cluster's Foghorn minted + stored.
+	// Forwarded opaquely into the requesting cluster's RelayResolveResponse;
+	// only the origin cluster's Foghorn (via AuthorizeRelayPull) validates it.
+	// Covers both peer_relay_url and peer_relay_dtsh_url.
+	PeerRelayGrantId string `protobuf:"bytes,16,opt,name=peer_relay_grant_id,json=peerRelayGrantId,proto3" json:"peer_relay_grant_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -710,9 +715,16 @@ func (x *PrepareArtifactResponse) GetPeerRelayUrl() string {
 	return ""
 }
 
-func (x *PrepareArtifactResponse) GetPeerRelayToken() string {
+func (x *PrepareArtifactResponse) GetPeerRelayDtshUrl() string {
 	if x != nil {
-		return x.PeerRelayToken
+		return x.PeerRelayDtshUrl
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetPeerRelayGrantId() string {
+	if x != nil {
+		return x.PeerRelayGrantId
 	}
 	return ""
 }
@@ -3316,7 +3328,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
 	"\ttenant_id\x18\x05 \x01(\tR\btenantIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\fdvr_start_msR\n" +
-	"dvr_end_ms\"\xb3\x04\n" +
+	"dvr_end_ms\"\x9c\x05\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -3329,11 +3341,12 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x14stream_internal_name\x18\t \x01(\tR\x12streamInternalName\x12.\n" +
 	"\x13redirect_cluster_id\x18\n" +
 	" \x01(\tR\x11redirectClusterId\x12$\n" +
-	"\x0epeer_relay_url\x18\f \x01(\tR\fpeerRelayUrl\x12(\n" +
-	"\x10peer_relay_token\x18\r \x01(\tR\x0epeerRelayToken\x1a>\n" +
+	"\x0epeer_relay_url\x18\f \x01(\tR\fpeerRelayUrl\x12-\n" +
+	"\x13peer_relay_dtsh_url\x18\x0e \x01(\tR\x10peerRelayDtshUrl\x12-\n" +
+	"\x13peer_relay_grant_id\x18\x10 \x01(\tR\x10peerRelayGrantId\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fR\x11est_ready_secondsR\fdvr_segments\"\xb8\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10R\x11est_ready_secondsR\fdvr_segmentsR\x10peer_relay_tokenR\x15peer_relay_dtsh_token\"\xb8\x03\n" +
 	"\x11RemoteClipRequest\x120\n" +
 	"\x14stream_internal_name\x18\x01 \x01(\tR\x12streamInternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +

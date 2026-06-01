@@ -2836,7 +2836,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveVodHashResponse{
+	resp := &pb.ResolveVodHashResponse{
 		Found:           true,
 		TenantId:        tenantID,
 		UserId:          userID,
@@ -2846,7 +2846,11 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 		PlaybackId:      playbackID,
 		InternalName:    artifactInternalName,
 		OriginClusterId: originClusterID.String,
-	}, nil
+	}
+	// Carry the tenant's cluster peers so a cross-cluster relay resolve can
+	// enforce the federation allowlist on the origin (and any storage redirect).
+	s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+	return resp, nil
 }
 
 // ResolveVodID resolves a VOD relay ID (commodore.vod_assets.id) to vod_hash + tenant context

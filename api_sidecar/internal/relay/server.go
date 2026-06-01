@@ -17,16 +17,16 @@
 package relay
 
 import (
-	"errors"
 	"net"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/admission"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -59,18 +59,28 @@ type HeatToucher interface {
 // shared Gin engine via MountRoutes, and pass it into the rest of the
 // sidecar's wiring.
 type Server struct {
-	basePath        string
-	admitter        admission.Admitter
-	resolver        Resolver
-	freeze          FreezeHandoff
-	heat            HeatToucher
-	logger          logging.Logger
-	httpc           *http.Client
-	cache           *resolveCache
-	blockSize       int64
-	coldFetch       *blockFetchCoalescer
-	nodeID          string
-	relayAuthSecret []byte
+	basePath   string
+	admitter   admission.Admitter
+	resolver   Resolver
+	freeze     FreezeHandoff
+	heat       HeatToucher
+	logger     logging.Logger
+	httpc      *http.Client
+	cache      *resolveCache
+	blockSize  int64
+	coldFetch  *blockFetchCoalescer
+	nodeID     string
+	authorizer RelayPullAuthorizer
+	// trustedCIDRs are RemoteAddr ranges that bypass the authorize gate like
+	// loopback does (still AND-gated by no proxy-forward markers). For the
+	// local Mist→Helmsman hop where Mist dials a non-loopback service address
+	// (docker: helmsman:18007). Empty in production/native — loopback only.
+	trustedCIDRs []*net.IPNet
+	// authzCache memoizes recent ALLOW decisions per (grant_id, path) so a
+	// multi-block pull session makes one authorize round-trip, not one per
+	// block. Denials are not cached (transient Foghorn errors must retry).
+	authzMu    sync.Mutex
+	authzCache map[string]time.Time
 }
 
 // Options configures the relay. basePath is the Helmsman storage root used
@@ -90,17 +100,21 @@ type Options struct {
 	// Zero uses DefaultBlockSize (32 MiB). Tests use a smaller value
 	// so fixture bodies span multiple blocks.
 	BlockSize int64
-	// NodeID is this Helmsman's own node id. The cross-cluster
-	// peer-relay middleware accepts requests only when the inbound
-	// JWT's audience claim matches this value. Required when
-	// RelayAuthSecret is set; otherwise non-localhost requests are
-	// rejected unconditionally.
+	// NodeID is this Helmsman's own node id. Carried for logging/diagnostics.
 	NodeID string
-	// RelayAuthSecret is the shared HMAC secret used to validate
-	// inbound artifact_relay JWTs from peer edges (origin Foghorn
-	// signs with the same key). Empty disables non-localhost access
-	// entirely.
-	RelayAuthSecret []byte
+	// Authorizer validates inbound peer-relay pulls online against Foghorn.
+	// Defaults to a control-stream-backed authorizer when nil; tests inject
+	// a fake. Non-loopback / non-trusted-CIDR requests are denied when the
+	// authorizer denies, errors, or times out (fail closed).
+	Authorizer RelayPullAuthorizer
+	// RelayTrustedCIDR is a comma-separated list of CIDRs whose RemoteAddr
+	// bypasses the authorize gate (like loopback), for the local
+	// Mist→Helmsman hop when Mist dials a non-loopback service address
+	// (docker: helmsman:18007). The bypass is still AND-gated by absence of
+	// proxy-forward markers, so Caddy-forwarded peer traffic on the same
+	// subnet still gets authorized. Empty = loopback-only (the
+	// production/native default). NOT for peer-node traffic.
+	RelayTrustedCIDR string
 }
 
 // New constructs a relay server. nil-tolerant for optional fields:
@@ -115,28 +129,83 @@ func New(opts Options) *Server {
 	if blockSize <= 0 {
 		blockSize = DefaultBlockSize
 	}
-	return &Server{
-		basePath:        opts.BasePath,
-		admitter:        opts.Admitter,
-		resolver:        opts.Resolver,
-		freeze:          opts.Freeze,
-		heat:            opts.Heat,
-		logger:          opts.Logger,
-		httpc:           c,
-		cache:           newResolveCache(),
-		blockSize:       blockSize,
-		coldFetch:       newBlockFetchCoalescer(),
-		nodeID:          strings.TrimSpace(opts.NodeID),
-		relayAuthSecret: append([]byte(nil), opts.RelayAuthSecret...),
+	authorizer := opts.Authorizer
+	if authorizer == nil {
+		authorizer = NewControlAuthorizer()
 	}
+	return &Server{
+		basePath:     opts.BasePath,
+		admitter:     opts.Admitter,
+		resolver:     opts.Resolver,
+		freeze:       opts.Freeze,
+		heat:         opts.Heat,
+		logger:       opts.Logger,
+		httpc:        c,
+		cache:        newResolveCache(),
+		blockSize:    blockSize,
+		coldFetch:    newBlockFetchCoalescer(),
+		nodeID:       strings.TrimSpace(opts.NodeID),
+		authorizer:   authorizer,
+		trustedCIDRs: parseTrustedCIDRs(opts.RelayTrustedCIDR, opts.Logger),
+		authzCache:   make(map[string]time.Time),
+	}
+}
+
+// parseTrustedCIDRs parses a comma-separated CIDR list. Unparseable entries
+// are logged and skipped rather than failing construction — a bad entry must
+// not silently widen trust, but it also must not take the relay down.
+func parseTrustedCIDRs(raw string, logger logging.Logger) []*net.IPNet {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var nets []*net.IPNet
+	for part := range strings.SplitSeq(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(part)
+		if err != nil {
+			if logger != nil {
+				logger.WithError(err).WithField("cidr", part).Warn("relay: ignoring invalid HELMSMAN_RELAY_TRUSTED_CIDR entry")
+			}
+			continue
+		}
+		nets = append(nets, n)
+	}
+	return nets
+}
+
+// inTrustedCIDR reports whether remoteAddr's IP falls in any configured
+// trusted CIDR. Operates on the literal socket peer (RemoteAddr), never a
+// forwarded header.
+func (s *Server) inTrustedCIDR(remoteAddr string) bool {
+	if len(s.trustedCIDRs) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.trustedCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // MountRoutes registers the /internal/artifact/* route group on the given
 // Gin engine. Localhost requests (Mist on the same box) bypass auth so
 // the normal cold-fetch path is unchanged. Non-localhost requests must
-// carry a valid artifact_relay JWT (Authorization: Bearer) signed by
-// the local Foghorn — these come from peer edges (same or other
-// cluster) that need to read hot-but-unsynced bytes from this node.
+// present an opaque peer-relay grant id (Authorization: Bearer) that
+// Foghorn confirms via AuthorizeRelayPull — these come from peer edges
+// (same or other cluster) reading hot-but-unsynced bytes from this node.
 //
 // Bypass uses c.Request.RemoteAddr only, never X-Forwarded-For or any
 // other header — Caddy forwards remote traffic to the same loopback
@@ -153,10 +222,10 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 	g.PUT("/vod/:file/", func(c *gin.Context) { s.putSidecar(c, "vod") })
 
 	// Clip: stream-nested (clip/<stream>/<hash>.<ext>). Foghorn always
-	// emits this shape — output_stream_name is required on
-	// ClipPullRequest, so the wildcard always carries the
-	// stream/hash split. Stream identity in the path (rather than
-	// ?s=) survives Mist's input + ".dtsh" sidecar mutation.
+	// emits this shape — the clip's source stream name is required to
+	// build the path, so the wildcard always carries the stream/hash
+	// split. Stream identity in the path (rather than ?s=) survives
+	// Mist's input + ".dtsh" sidecar mutation.
 	g.HEAD("/clip/*path", func(c *gin.Context) { s.serveClipRoute(c) })
 	g.GET("/clip/*path", func(c *gin.Context) { s.serveClipRoute(c) })
 	g.PUT("/clip/*path", func(c *gin.Context) { s.putClipRoute(c) })
@@ -168,58 +237,126 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 	g.PUT("/upload/:file/", func(c *gin.Context) { s.putSidecar(c, "upload") })
 }
 
-// peerAuthMiddleware returns the JWT gate for /internal/artifact/*.
-// Loopback callers (RemoteAddr 127.0.0.1 / ::1) pass through unchanged
-// ONLY when they carry no proxy-forwarding markers — Mist on the same
-// box never carries those; Caddy reverse-proxying remote traffic to
-// loopback always does. Anything else needs a valid artifact_relay JWT
-// with aud=own-node-id and path=request-path. Missing/invalid → 401.
+// peerAuthMiddleware gates /internal/artifact/*.
 //
-// The proxy-marker check is the critical second leg: Caddy's
-// reverse_proxy hop arrives at this listener over 127.0.0.1, so a
-// pure RemoteAddr check would let any external request through the
-// edge FQDN bypass the JWT. Caddy sets X-Forwarded-For / -Proto /
-// -Host on every proxied request; the presence of ANY of these on a
-// loopback caller means the traffic originated remotely.
+// Loopback callers (RemoteAddr 127.0.0.1 / ::1) and configured trusted-CIDR
+// callers pass through ONLY when they carry no proxy-forwarding markers — Mist
+// on the same box / the local docker hop never carries those; Caddy
+// reverse-proxying remote (peer) traffic always does. The proxy-marker check is
+// the critical second leg: Caddy's hop arrives over loopback/bridge, so a pure
+// RemoteAddr check would let any external request through the edge FQDN bypass
+// the gate.
+//
+// Everything else is a peer pull: it must present an opaque grant id
+// (Authorization: Bearer) that Foghorn — the authority — confirms via
+// AuthorizeRelayPull. The edge holds no signing key. Deny/error/timeout →
+// 401 (fail closed). ALLOW is briefly cached per (grant_id, path) so a
+// multi-block session authorizes once.
 func (s *Server) peerAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if isLoopbackRemoteAddr(c.Request.RemoteAddr) && !hasProxyForwardMarker(c.Request.Header) {
+		if (isLoopbackRemoteAddr(c.Request.RemoteAddr) || s.inTrustedCIDR(c.Request.RemoteAddr)) && !hasProxyForwardMarker(c.Request.Header) {
 			c.Next()
 			return
 		}
-		if len(s.relayAuthSecret) == 0 || s.nodeID == "" {
-			// No secret configured: only loopback is allowed. This is
-			// the safe failure mode — silently deny non-loopback rather
-			// than open the relay because secrets weren't wired.
+		// Peers are read-only. Writes (PUT — Mist's local externalWriter
+		// sidecar/clip write-back) are valid ONLY on the loopback/trusted-CIDR
+		// bypass above; a peer grant authorizes reads, never overwriting the
+		// origin node's canonical bytes or .dtsh.
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.AbortWithStatus(http.StatusMethodNotAllowed)
+			return
+		}
+		grantID := ""
+		if t, ok := strings.CutPrefix(c.Request.Header.Get("Authorization"), "Bearer "); ok {
+			grantID = strings.TrimSpace(t)
+		}
+		if grantID == "" {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		authz := c.Request.Header.Get("Authorization")
-		if !strings.HasPrefix(authz, "Bearer ") {
-			c.AbortWithStatus(http.StatusUnauthorized)
+		// Authorize against the escaped path: producers mint the grant's allowed
+		// paths with url.PathEscape on the stream segment, so the comparison must
+		// use the same encoding. c.Request.URL.Path is percent-decoded by
+		// net/http and would not match a grant path whose stream name contains an
+		// escapable character (the hash/ext segments are escape-free, so hash
+		// extraction below is unaffected).
+		reqPath := c.Request.URL.EscapedPath()
+		if s.authzCached(grantID, reqPath) {
+			c.Next()
 			return
 		}
-		token := strings.TrimPrefix(authz, "Bearer ")
-		artifactHash := artifactHashFromPath(c.Request.URL.Path)
-		if artifactHash == "" {
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		_, err := auth.ValidateArtifactRelayJWT(token, s.relayAuthSecret, s.nodeID, artifactHash, c.Request.URL.Path)
+		// hashFromFile strips .dtsh then the media ext, so media and sidecar
+		// paths both yield the bare artifact hash the grant was minted with.
+		artifactHash := hashFromFile(path.Base(reqPath))
+		allowed, err := s.authorizer.AuthorizeRelayPull(c.Request.Context(), grantID, artifactHash, reqPath)
 		if err != nil {
 			if s.logger != nil {
-				s.logger.WithError(err).WithField("remote_addr", c.Request.RemoteAddr).Debug("artifact relay token rejected")
-			}
-			// Signal expired tokens via WWW-Authenticate so the peer
-			// can re-resolve without parsing a body.
-			if errors.Is(err, auth.ErrExpiredArtifactRelay) {
-				c.Writer.Header().Set("WWW-Authenticate", `Bearer error="token_expired"`)
+				s.logger.WithError(err).WithField("remote_addr", c.Request.RemoteAddr).Debug("relay pull authorize failed; denying")
 			}
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		if !allowed {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		s.authzStore(grantID, reqPath)
 		c.Next()
 	}
+}
+
+// authzCacheTTL bounds how long an ALLOW is trusted without re-asking Foghorn.
+// Short so revocation/topology changes take effect quickly; long enough that a
+// block-range pull session authorizes once.
+const authzCacheTTL = 10 * time.Second
+
+func authzCacheKey(grantID, reqPath string) string { return grantID + "|" + reqPath }
+
+func (s *Server) authzCached(grantID, reqPath string) bool {
+	key := authzCacheKey(grantID, reqPath)
+	s.authzMu.Lock()
+	defer s.authzMu.Unlock()
+	exp, ok := s.authzCache[key]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(s.authzCache, key)
+		return false
+	}
+	return true
+}
+
+// authzCacheSweepAt bounds the cache: each peer-relay session uses a fresh
+// grant id whose ALLOW entry is never re-read after it expires, so without a
+// sweep the map would leak one entry per session. When it crosses this size
+// on insert we drop expired entries inline (no background goroutine needed —
+// the relay Server has no start/stop lifecycle to hang one on).
+const authzCacheSweepAt = 1024
+
+func (s *Server) authzStore(grantID, reqPath string) {
+	now := time.Now()
+	s.authzMu.Lock()
+	if len(s.authzCache) >= authzCacheSweepAt {
+		for k, exp := range s.authzCache {
+			if now.After(exp) {
+				delete(s.authzCache, k)
+			}
+		}
+		// Hard cap: if a burst of >cap distinct grants is still live inside the
+		// TTL window the expired sweep frees nothing, so evict arbitrary entries
+		// until under the bound. An evicted live session just re-authorizes
+		// online on its next block (correctness-safe), keeping this exposed peer
+		// endpoint's memory hard-bounded rather than soft-bounded.
+		for k := range s.authzCache {
+			if len(s.authzCache) < authzCacheSweepAt {
+				break
+			}
+			delete(s.authzCache, k)
+		}
+	}
+	s.authzCache[authzCacheKey(grantID, reqPath)] = now.Add(authzCacheTTL)
+	s.authzMu.Unlock()
 }
 
 // hasProxyForwardMarker returns true when the request carries any of
@@ -257,24 +394,4 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 		return false
 	}
 	return ip.IsLoopback()
-}
-
-// artifactHashFromPath extracts the artifact hash from a request like
-//
-//	/internal/artifact/vod/<hash>.<ext>
-//	/internal/artifact/clip/<stream>/<hash>.<ext>
-//	/internal/artifact/upload/<hash>.<ext>
-//
-// Empty when the path doesn't end in <hash>.<ext>. The hash itself is
-// the basename minus the extension.
-func artifactHashFromPath(path string) string {
-	base := filepath.Base(path)
-	if base == "" || base == "." || base == "/" {
-		return ""
-	}
-	ext := filepath.Ext(base)
-	if ext == "" {
-		return base
-	}
-	return strings.TrimSuffix(base, ext)
 }

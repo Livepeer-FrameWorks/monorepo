@@ -197,14 +197,14 @@ func main() {
 	var relayServer *relay.Server
 	if sm := handlers.GetStorageManager(); sm != nil {
 		relayServer = relay.New(relay.Options{
-			BasePath:        cfg.StorageLocalPath,
-			Admitter:        sm,
-			Resolver:        relay.NewControlResolver(),
-			Freeze:          handlers.NewRelayFreezeHandoff(),
-			Heat:            leases.GlobalHeat(),
-			Logger:          logger,
-			NodeID:          cfg.NodeID,
-			RelayAuthSecret: []byte(cfg.ArtifactRelayJWTSecret),
+			BasePath:         cfg.StorageLocalPath,
+			Admitter:         sm,
+			Resolver:         relay.NewControlResolver(),
+			Freeze:           handlers.NewRelayFreezeHandoff(),
+			Heat:             leases.GlobalHeat(),
+			Logger:           logger,
+			NodeID:           cfg.NodeID,
+			RelayTrustedCIDR: cfg.RelayTrustedCIDR,
 		})
 		relayServer.MountRoutes(r)
 	} else {

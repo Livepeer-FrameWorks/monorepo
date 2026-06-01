@@ -589,14 +589,6 @@ func TestRemoteArtifactFiltering_ExcludesUnauthorizedPeers(t *testing.T) {
 	if authorizedHits[0].PeerCluster != "authorized-1" {
 		t.Fatalf("expected authorized-1, got %s", authorizedHits[0].PeerCluster)
 	}
-
-	best := pickBestRemoteArtifact(authorizedHits, 0, 0)
-	if best == nil {
-		t.Fatal("expected non-nil best artifact")
-	}
-	if best.PeerCluster != "authorized-1" {
-		t.Fatalf("expected authorized-1, got %s", best.PeerCluster)
-	}
 }
 
 func TestRemoteArtifactFiltering_AllUnauthorizedYieldsNoHits(t *testing.T) {
@@ -625,7 +617,7 @@ func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn
 type stubFedClient struct{}
 
 func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
-	return &pb.PrepareArtifactResponse{Ready: true, InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4"}, nil
+	return &pb.PrepareArtifactResponse{Ready: true, Url: "https://s3.example.com/artifact-1.mp4?sig=x", InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4"}, nil
 }
 
 func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
@@ -668,7 +660,7 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	defer mockDB.Close()
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
-		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "cluster-origin", sql.NullString{}).
+		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "synced", "cluster-origin", sql.NullString{}).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	deps := &PlaybackDependencies{
@@ -688,6 +680,53 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	}
 }
 
+// peerRelayFedClient simulates an origin that returns a hot-but-unsynced
+// peer-relay response: Ready=true, a peer_relay_url, and NO S3 url.
+type peerRelayFedClient struct{}
+
+func (peerRelayFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+	return &pb.PrepareArtifactResponse{
+		Ready:            true,
+		PeerRelayUrl:     "https://edge-b.example.com/internal/artifact/vod/artifact-1.mp4",
+		PeerRelayGrantId: "grant-xyz",
+		InternalName:     "stream-a",
+		Format:           "mp4",
+	}, nil
+}
+
+// A hot-but-unsynced peer-relay response must still adopt a local pointer row
+// (so the recursion terminates instead of re-federating forever), but with
+// sync_status='pending' — never a false 'synced'.
+func TestResolveRemoteArtifact_PeerRelayAdoptsPendingNotSynced(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectExec("INSERT INTO foghorn.artifacts").
+		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "", "mp4", "pending", "cluster-origin", sql.NullString{}).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	deps := &PlaybackDependencies{
+		DB:             mockDB,
+		FedClient:      peerRelayFedClient{},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "cluster-local",
+	}
+
+	// artifactResp nil makes the post-adoption recursion return immediately
+	// (content not found) instead of needing a full re-query mock — we're
+	// asserting the adoption shape, and that it does NOT loop.
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+	if err == nil {
+		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations (peer-relay must adopt pending): %v", err)
+	}
+}
+
 // redirectFedClient simulates an origin cluster that redirects PrepareArtifact
 // to a different storage cluster. The first call (to origin) returns a
 // redirect; the second (to the redirect target) returns ready=true.
@@ -704,6 +743,7 @@ func (s *redirectFedClient) PrepareArtifact(ctx context.Context, clusterID, addr
 	}
 	return &pb.PrepareArtifactResponse{
 		Ready:              true,
+		Url:                "https://s3.example.com/artifact-1.mp4?sig=x",
 		InternalName:       "stream-a",
 		StreamInternalName: "source-stream-a",
 		Format:             "mp4",
@@ -726,6 +766,7 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 		WithArgs(
 			"artifact-1", "clip", "tenant-1",
 			"stream-a", "source-stream-a", "mp4",
+			"synced",         // origin returned an S3 URL
 			"cluster-origin", // origin_cluster_id stays original
 			sql.NullString{String: "cluster-storage", Valid: true}, // storage_cluster_id captures redirect
 		).
@@ -879,5 +920,23 @@ func TestArtifactNodesFromDBBuildsWarmNodeFallback(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ResolveAndAdoptRemoteArtifact must reject an origin cluster outside the
+// tenant's peer allowlist before any federation — the direct-edge security gate.
+func TestResolveAndAdoptRemoteArtifact_RejectsUnauthorizedOrigin(t *testing.T) {
+	prev := GetLocalClusterID()
+	SetLocalClusterID("cluster-local")
+	t.Cleanup(func() { SetLocalClusterID(prev) })
+
+	_, err := ResolveAndAdoptRemoteArtifact(
+		context.Background(),
+		"artifact-1", "clip", "internal-1",
+		"cluster-evil", "tenant-1",
+		[]*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("expected not-authorized error for origin outside allowlist, got %v", err)
 	}
 }
