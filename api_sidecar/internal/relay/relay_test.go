@@ -31,10 +31,16 @@ func (f *fakeAdmitter) Decide(_ context.Context, _ string, _ admission.StorageIn
 
 // fakeResolver returns canned results indexed by (kind, hash).
 type fakeResolver struct {
-	out map[string]*ResolveResult
+	out   map[string]*ResolveResult
+	err   error
+	calls int
 }
 
 func (f *fakeResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
 	key := rc.AssetKind + "/" + rc.AssetHash
 	if r, ok := f.out[key]; ok {
 		return r, nil
@@ -621,6 +627,101 @@ func TestDtshGetCold404ForwardsToMistGeneration(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing dtsh; got %d", resp.StatusCode)
+	}
+}
+
+func TestDtshGetLocalMediaStillChecksResolvedSidecar(t *testing.T) {
+	dir := t.TempDir()
+	hash := "localvod"
+	mediaFile := hash + ".mkv"
+	mediaPath := filepath.Join(dir, "vod", mediaFile)
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("local mkv bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("dtsh from s3")
+	up := upstreamServer(t, body)
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
+		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		DtshPresignedGet: up.URL,
+		URLTTLSeconds:    60,
+	}}}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+mediaFile+".dtsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("got=%q want=%q", got, body)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls=%d, want 1", resolver.calls)
+	}
+}
+
+func TestDtshGetResolveErrorReturns404GenerationSignal(t *testing.T) {
+	dir := t.TempDir()
+	hash := "localvod"
+	file := hash + ".mkv.dtsh"
+
+	resolver := &fakeResolver{err: fmt.Errorf("control stream unavailable")}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 generation signal for dtsh resolve failure; got %d", resp.StatusCode)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls=%d, want 1", resolver.calls)
+	}
+}
+
+func TestDtshGetUpstreamErrorReturns404GenerationSignal(t *testing.T) {
+	dir := t.TempDir()
+	hash := "sidecar500"
+	file := hash + ".mkv.dtsh"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "s3 unavailable", http.StatusInternalServerError)
+	}))
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
+		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		DtshPresignedGet: up.URL,
+		URLTTLSeconds:    60,
+	}}}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 generation signal for dtsh upstream failure; got %d", resp.StatusCode)
 	}
 }
 

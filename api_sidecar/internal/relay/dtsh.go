@@ -36,7 +36,10 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		if info, err := os.Stat(nestedPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 			f, err := os.Open(nestedPath)
 			if err != nil {
-				s.serverError(c, "open warm dtsh (nested)", err)
+				if s.logger != nil {
+					s.logger.WithError(err).WithField("local_path", nestedPath).Debug("relay warm dtsh open failed; returning generation signal")
+				}
+				c.Status(http.StatusNotFound)
 				return
 			}
 			defer f.Close()
@@ -49,7 +52,10 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		f, err := os.Open(localPath)
 		if err != nil {
-			s.serverError(c, "open warm dtsh", err)
+			if s.logger != nil {
+				s.logger.WithError(err).WithField("local_path", localPath).Debug("relay warm dtsh open failed; returning generation signal")
+			}
+			c.Status(http.StatusNotFound)
 			return
 		}
 		defer f.Close()
@@ -68,7 +74,10 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
-		s.serverError(c, "relay resolve (dtsh)", err)
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay dtsh resolve failed; returning generation signal")
+		}
+		c.Status(http.StatusNotFound)
 		return
 	}
 	// Source order: S3 (synced) first, else a peer relay holding the hot
@@ -96,7 +105,10 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	// once per cold node (next GET from any session hits the warm branch).
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fetchURL, nil)
 	if err != nil {
-		s.serverError(c, "build dtsh request", err)
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay dtsh request build failed; returning generation signal")
+		}
+		c.Status(http.StatusNotFound)
 		return
 	}
 	if peerBearer != "" {
@@ -107,21 +119,24 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
-		s.serverError(c, "dtsh fetch", err)
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay dtsh fetch failed; returning generation signal")
+		}
+		s.cache.Delete(kind, hash)
+		c.Status(http.StatusNotFound)
 		return
 	}
 	defer resp.Body.Close()
 
-	// A peer that lacks the sidecar (404) or rejects the token (401) is the
-	// regenerate signal — fall back to 404 for Mist rather than relaying the
-	// peer's error status. (S3 statuses pass through unchanged.)
-	if peerBearer != "" && resp.StatusCode >= 400 {
-		// A peer auth rejection (401/403) means the grant is dead; drop the
-		// resolve-cache entry so the next sidecar fetch re-mints instead of
-		// replaying it. Other 4xx (e.g. 404 = sidecar absent on the peer) fall
-		// through to local regeneration.
+	// Any sidecar fetch failure is a regenerate signal. The actual media GET is
+	// the authoritative failure path; source.dtsh must not block Mist from
+	// trying to generate a fresh index from the media source.
+	if resp.StatusCode >= 400 {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			s.cache.Delete(kind, hash)
+		}
+		if s.logger != nil {
+			s.logger.WithField("status", resp.StatusCode).WithField("asset_hash", hash).Debug("relay dtsh fetch returned error; returning generation signal")
 		}
 		c.Status(http.StatusNotFound)
 		return
