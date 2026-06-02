@@ -87,6 +87,33 @@ type processingJob struct {
 	StreamInternal sql.NullString
 }
 
+// updated_at rotates jobs that were claimed but could not be sent, so one
+// unavailable source-pinned clip cannot monopolize the dispatcher batch.
+const processingJobClaimSQL = `
+	WITH claimed AS (
+		UPDATE foghorn.processing_jobs
+		SET status = 'dispatched', updated_at = NOW()
+		WHERE job_id IN (
+			SELECT pj.job_id
+			FROM foghorn.processing_jobs pj
+			LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
+			WHERE pj.status = 'queued'
+			ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
+			LIMIT 20
+			FOR UPDATE OF pj SKIP LOCKED
+		)
+		RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
+		          output_profiles, retry_count, processes_json, source_url,
+		          source_params::text, preferred_node_id
+	)
+	SELECT c.job_id, c.tenant_id, c.artifact_hash, COALESCE(a.artifact_type,''), c.job_type, c.input_codec,
+	       c.output_profiles, 'dispatched'::text, c.retry_count,
+	       a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
+	       c.processes_json, a.internal_name, a.stream_id::text, a.stream_internal_name
+	FROM claimed c
+	LEFT JOIN foghorn.artifacts a ON c.artifact_hash = a.artifact_hash
+`
+
 func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatcher {
 	interval := cfg.Interval
 	if interval == 0 {
@@ -192,30 +219,7 @@ func (d *ProcessingDispatcher) dispatch() {
 	// Atomically claim queued jobs via CTE — prevents double-dispatch when
 	// multiple Foghorn instances poll concurrently. FOR UPDATE SKIP LOCKED
 	// ensures each instance claims a non-overlapping set.
-	rows, err := d.db.QueryContext(ctx, `
-		WITH claimed AS (
-			UPDATE foghorn.processing_jobs
-			SET status = 'dispatched', updated_at = NOW()
-			WHERE job_id IN (
-				SELECT pj.job_id
-				FROM foghorn.processing_jobs pj
-				LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.status = 'queued'
-				ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.created_at
-				LIMIT 20
-				FOR UPDATE OF pj SKIP LOCKED
-			)
-			RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
-			          output_profiles, retry_count, processes_json, source_url,
-			          source_params::text, preferred_node_id
-		)
-		SELECT c.job_id, c.tenant_id, c.artifact_hash, COALESCE(a.artifact_type,''), c.job_type, c.input_codec,
-		       c.output_profiles, 'dispatched'::text, c.retry_count,
-		       a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
-		       c.processes_json, a.internal_name, a.stream_id::text, a.stream_internal_name
-		FROM claimed c
-		LEFT JOIN foghorn.artifacts a ON c.artifact_hash = a.artifact_hash
-	`)
+	rows, err := d.db.QueryContext(ctx, processingJobClaimSQL)
 	if err != nil {
 		d.logger.WithError(err).Error("Failed to claim queued processing jobs")
 		return

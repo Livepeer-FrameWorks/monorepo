@@ -505,6 +505,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.process
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact ON foghorn.processing_jobs(artifact_hash);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_queued ON foghorn.processing_jobs(status, created_at) WHERE status = 'queued';
+CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_queued_attempt ON foghorn.processing_jobs(status, updated_at, created_at) WHERE status = 'queued';
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_node ON foghorn.processing_jobs(processing_node_id) WHERE processing_node_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_parent ON foghorn.processing_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact_status ON foghorn.processing_jobs(artifact_hash, status);

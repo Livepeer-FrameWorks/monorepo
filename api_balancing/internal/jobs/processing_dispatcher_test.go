@@ -3,11 +3,19 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+func TestProcessingDispatcherClaimQueryRotatesRetriedQueuedJobs(t *testing.T) {
+	want := "ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at"
+	if !strings.Contains(processingJobClaimSQL, want) {
+		t.Fatalf("processing job claim query must rotate retried queued jobs with %q", want)
+	}
+}
 
 func TestInsertProcessingJob_InsertsNewActiveJob(t *testing.T) {
 	db, mock, err := sqlmock.New()
