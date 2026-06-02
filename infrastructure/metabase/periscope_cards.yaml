@@ -117,3 +117,117 @@ cards:
       WHERE toDateTime(received_at_ms / 1000) >= now() - INTERVAL 24 HOUR
       GROUP BY trigger_type
       ORDER BY p95_seconds DESC
+
+  - slug: periscope.storage-hot-cold-frozen-by-tenant
+    name: Storage hot/cold/frozen by tenant
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT tenant_id,
+             storage_scope,
+             round(sum(latest_total)  / pow(1024, 3), 3) AS total_gib,
+             round(sum(latest_dvr)    / pow(1024, 3), 3) AS dvr_gib,
+             round(sum(latest_clip)   / pow(1024, 3), 3) AS clip_gib,
+             round(sum(latest_vod)    / pow(1024, 3), 3) AS vod_gib,
+             round(sum(latest_frozen) / pow(1024, 3), 3) AS frozen_gib
+      FROM (
+          SELECT tenant_id,
+                 node_id,
+                 storage_scope,
+                 argMax(total_bytes, timestamp) AS latest_total,
+                 argMax(dvr_bytes,   timestamp) AS latest_dvr,
+                 argMax(clip_bytes,  timestamp) AS latest_clip,
+                 argMax(vod_bytes,   timestamp) AS latest_vod,
+                 argMax(frozen_dvr_bytes + frozen_clip_bytes + frozen_vod_bytes, timestamp) AS latest_frozen
+          FROM periscope.storage_snapshots
+          WHERE timestamp >= now() - INTERVAL 1 DAY
+          GROUP BY tenant_id, node_id, storage_scope
+      )
+      GROUP BY tenant_id, storage_scope
+      ORDER BY total_gib DESC
+      LIMIT 100
+
+  - slug: periscope.storage-capacity-trend
+    name: Storage capacity trend
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT day,
+             storage_scope,
+             round(sum(gb_hours), 2) AS gb_hours
+      FROM periscope.storage_usage_daily
+      WHERE day >= today() - 30
+      GROUP BY day, storage_scope
+      ORDER BY day, storage_scope
+      LIMIT 500
+
+  # Informational only: unit price is the payg list rate (€0.035 / GiB-hour,
+  # storage_gb_seconds_cold in billing_tiers.yaml). Not authoritative billing.
+  - slug: periscope.cold-storage-cost-by-tenant
+    name: Cold-storage cost by tenant (informational)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT tenant_id,
+             round(sum(gb_hours), 2)          AS cold_gib_hours,
+             round(sum(gb_hours) * 0.035, 2)  AS est_cost_eur
+      FROM periscope.storage_usage_daily
+      WHERE storage_scope = 'cold'
+        AND day >= today() - 30
+      GROUP BY tenant_id
+      ORDER BY est_cost_eur DESC
+      LIMIT 100
+
+  - slug: periscope.retention-runway
+    name: Retention runway (artifacts expiring soon)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT toDate(expires_at) AS expires_on,
+             content_type,
+             count() AS artifacts,
+             round(sum(ifNull(size_bytes, 0)) / pow(1024, 3), 3) AS gib
+      FROM periscope.artifact_state_current FINAL
+      WHERE expires_at IS NOT NULL
+        AND expires_at >= now()
+        AND expires_at < now() + INTERVAL 30 DAY
+      GROUP BY expires_on, content_type
+      ORDER BY expires_on
+      LIMIT 200
+
+  # Cold-read amplification: every read-through (action='cached') is by
+  # definition a read of a frozen/cold artifact. Repeated reads or large
+  # byte totals for one asset mean it should have stayed hot — an eviction
+  # (freezeThreshold / LRU) mistake costing cold storage + S3 egress + TTFB.
+  - slug: periscope.cold-read-offenders
+    name: Cold-read offenders (frozen-but-read assets)
+    display: table
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT tenant_id,
+             asset_hash,
+             asset_type,
+             count() AS read_events,
+             round(sum(size_bytes) / pow(1024, 3), 3) AS s3_read_gib,
+             max(timestamp) AS last_read
+      FROM periscope.storage_events
+      WHERE action = 'cached'
+        AND timestamp >= now() - INTERVAL 7 DAY
+      GROUP BY tenant_id, asset_hash, asset_type
+      ORDER BY s3_read_gib DESC
+      LIMIT 100
+
+  - slug: periscope.cold-read-bytes-by-tenant
+    name: Cold-read S3 egress by tenant
+    display: line
+    database: FrameWorks ClickHouse
+    query: |
+      SELECT toDate(timestamp) AS day,
+             tenant_id,
+             round(sum(size_bytes) / pow(1024, 3), 3) AS s3_read_gib
+      FROM periscope.storage_events
+      WHERE action = 'cached'
+        AND timestamp >= now() - INTERVAL 30 DAY
+      GROUP BY day, tenant_id
+      ORDER BY day, s3_read_gib DESC
+      LIMIT 500

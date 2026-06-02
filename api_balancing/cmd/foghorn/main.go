@@ -271,6 +271,11 @@ func main() {
 			"MistTrigger messages received/processed over the HelmsmanControl stream",
 			[]string{"trigger_type", "blocking", "status"},
 		),
+		ArtifactSyncOutcomes: metricsCollector.NewCounter(
+			"artifact_sync_outcomes_total",
+			"Artifact SyncComplete outcomes from Helmsman (success/evicted_remote/failed/lost_local)",
+			[]string{"outcome"},
+		),
 	})
 
 	// Wire state metrics hooks

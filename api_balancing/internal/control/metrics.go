@@ -10,6 +10,11 @@ type ControlMetrics struct {
 	// RelayForwards counts cross-instance relay attempts and outcomes.
 	// Labels: command_type, status
 	RelayForwards *prometheus.CounterVec
+	// ArtifactSyncOutcomes counts SyncComplete outcomes reported by Helmsman.
+	// Labels: outcome ("success"|"evicted_remote"|"failed"|"lost_local").
+	// outcome="lost_local" is terminal data loss (the local source was gone
+	// before the S3 sync succeeded and is never retried) — alert on its rate.
+	ArtifactSyncOutcomes *prometheus.CounterVec
 }
 
 var controlMetrics *ControlMetrics
@@ -35,4 +40,11 @@ func incRelayForward(commandType, status string) {
 		return
 	}
 	controlMetrics.RelayForwards.WithLabelValues(commandType, status).Inc()
+}
+
+func incArtifactSyncOutcome(outcome string) {
+	if controlMetrics == nil || controlMetrics.ArtifactSyncOutcomes == nil {
+		return
+	}
+	controlMetrics.ArtifactSyncOutcomes.WithLabelValues(outcome).Inc()
 }

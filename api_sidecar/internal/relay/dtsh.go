@@ -94,6 +94,7 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	if fetchURL == "" {
 		// No sidecar anywhere yet. 404 is the signal for Mist to generate
 		// one and PUT it back.
+		dtshGeneration.WithLabelValues("lazy_404", "ok").Inc()
 		c.Status(http.StatusNotFound)
 		return
 	}
@@ -332,6 +333,7 @@ func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal strin
 	if s.freeze != nil {
 		s.freeze.OnLocalDtshGenerated(kind, hash, localPath)
 	}
+	dtshGeneration.WithLabelValues("putback", "ok").Inc()
 	c.Writer.Header().Set("Content-Length", "0")
 	c.Status(http.StatusOK)
 }
@@ -370,6 +372,7 @@ func (s *Server) cachedDtshPutURL(kind, hash string) string {
 func (s *Server) uploadDtshToS3(kind, hash, putURL, localPath string) {
 	body, err := os.Open(localPath)
 	if err != nil {
+		dtshUpload.WithLabelValues("error").Inc()
 		if s.logger != nil {
 			s.logger.WithError(err).WithField("local_path", localPath).Debug("relay direct .dtsh upload: open local file failed")
 		}
@@ -378,15 +381,18 @@ func (s *Server) uploadDtshToS3(kind, hash, putURL, localPath string) {
 	defer body.Close()
 	info, err := body.Stat()
 	if err != nil {
+		dtshUpload.WithLabelValues("error").Inc()
 		return
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, putURL, body)
 	if err != nil {
+		dtshUpload.WithLabelValues("error").Inc()
 		return
 	}
 	req.ContentLength = info.Size()
 	resp, err := s.httpc.Do(req)
 	if err != nil {
+		dtshUpload.WithLabelValues("error").Inc()
 		if s.logger != nil {
 			s.logger.WithError(err).Debug("relay direct .dtsh upload: PUT failed")
 		}
@@ -394,11 +400,13 @@ func (s *Server) uploadDtshToS3(kind, hash, putURL, localPath string) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		dtshUpload.WithLabelValues("error").Inc()
 		if s.logger != nil {
 			s.logger.WithField("status", resp.StatusCode).Debug("relay direct .dtsh upload: non-2xx")
 		}
 		return
 	}
+	dtshUpload.WithLabelValues("ok").Inc()
 
 	// Tell Foghorn the sidecar is durable. Synthesizes a request_id so the
 	// SyncComplete is well-formed; assetHash is the artifact (vod/clip)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -128,11 +129,24 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		return
 	}
 
+	// One serve metric per media request. source/status start at their
+	// defaults and are updated as the path resolves; the defer captures the
+	// final values. Labels are bounded — no tenant/asset identity.
+	format := relayFormatLabel(file)
+	source := "local"
+	status := "error"
+	start := time.Now()
+	defer func() {
+		relayRequests.WithLabelValues(format, source, status).Inc()
+		relayServeSeconds.WithLabelValues(format, source).Observe(time.Since(start).Seconds())
+	}()
+
 	// Clip artifacts are stream-scoped; VOD and upload artifacts stay
 	// flat at storage/<kind>/<file>.
 	var localPath string
 	if kind == "clip" {
 		if streamInternal == "" {
+			status = "not_playable"
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
@@ -141,6 +155,7 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		localPath = s.canonicalFilePath(kind, file)
 	}
 	if served := s.serveWarmIfPresent(c, localPath); served {
+		source, status = "local", "served"
 		return
 	}
 
@@ -157,11 +172,13 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		s.serverError(c, "relay resolve", err)
 		return
 	}
+	source = upstreamSourceLabel(res.PeerRelayGrantID)
 	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
+		status = "not_playable"
 		s.notPlayable(c, res)
 		return
 	}
-	s.fetchAndServe(c, kind, hash, ext, localPath, res)
+	status = s.fetchAndServe(c, kind, hash, ext, localPath, res)
 }
 
 // nestedClipPath returns storage/clips/<stream_internal_name>/<file>.
@@ -270,26 +287,25 @@ func forceCloseForMistReader(c *gin.Context) {
 // persistent cache the relay maintains for single-file artifacts; the
 // canonical warm-disk full file written by processing/clip-create
 // always wins above it.
-func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) {
+func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) string {
 	if c.Request.Method == http.MethodHead {
-		s.streamRangeNoCache(c, res)
-		return
+		return s.streamRangeNoCache(c, res)
 	}
-	s.serveViaBlockCache(c, kind, hash, ext, localPath, res)
+	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res)
 }
 
 // streamRangeNoCache forwards Mist's Range to S3, copies the response
 // straight back, and never touches disk. Used for memory-only admission
 // outcomes and for processing-input reads.
-func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) {
-	s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{})
+func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) string {
+	return s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{})
 }
 
 type noCacheOptions struct {
 	RetryFullOn416 bool
 }
 
-func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResult, opts noCacheOptions) {
+func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResult, opts noCacheOptions) string {
 	method := c.Request.Method
 	if method == http.MethodHead {
 		method = http.MethodGet
@@ -298,7 +314,7 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 	if err != nil {
 		s.serverError(c, "build upstream request", err)
-		return
+		return "error"
 	}
 	if res.PeerRelayGrantID != "" {
 		req.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
@@ -314,7 +330,7 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	resp, err := s.httpc.Do(req)
 	if err != nil {
 		s.serverError(c, "upstream fetch", err)
-		return
+		return "error"
 	}
 	defer resp.Body.Close()
 
@@ -330,7 +346,7 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
 		if retryErr != nil {
 			s.serverError(c, "build upstream retry request", retryErr)
-			return
+			return "error"
 		}
 		if res.PeerRelayGrantID != "" {
 			retryReq.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
@@ -338,7 +354,7 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		resp, err = s.httpc.Do(retryReq)
 		if err != nil {
 			s.serverError(c, "upstream retry fetch", err)
-			return
+			return "error"
 		}
 		defer resp.Body.Close()
 	}
@@ -366,7 +382,10 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		} else {
 			c.Writer.WriteHeader(resp.StatusCode)
 		}
-		return
+		if resp.StatusCode >= 400 {
+			return "error"
+		}
+		return "served"
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
 	buf := make([]byte, 256*1024)
@@ -374,7 +393,12 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		if s.logger != nil && !errors.Is(copyErr, context.Canceled) {
 			s.logger.WithError(copyErr).Debug("relay no-cache stream aborted")
 		}
+		return "error"
 	}
+	if resp.StatusCode >= 400 {
+		return "error"
+	}
+	return "served"
 }
 
 func totalFromContentRange(v string) (int64, bool) {

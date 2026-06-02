@@ -863,8 +863,10 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	}
 
 	duration := time.Since(startTime)
+	freezeUploadSeconds.WithLabelValues(string(asset.AssetType)).Observe(duration.Seconds())
 
 	if uploadErr != nil {
+		freezeUploads.WithLabelValues(string(asset.AssetType), "failed").Inc()
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
 		// Distinguish "local source file is gone" (terminal: no S3 copy, no
@@ -908,6 +910,9 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	})
 
 	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded, false) //nolint:errcheck // best-effort report
+
+	freezeUploads.WithLabelValues(string(asset.AssetType), "success").Inc()
+	freezeUploadBytes.WithLabelValues(string(asset.AssetType)).Add(float64(actualSizeBytes))
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash": asset.AssetHash,
@@ -970,6 +975,7 @@ func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modTime.Before(candidates[j].modTime) })
 
+	localEvictionPasses.Inc()
 	var freed uint64
 	for _, c := range candidates {
 		if freed >= bytesTarget {
@@ -980,6 +986,7 @@ func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
 			continue
 		}
 		freed += c.bytes
+		localEvictionBytes.Add(float64(c.bytes))
 		sm.logger.WithFields(logging.Fields{
 			"path":  c.path,
 			"bytes": c.bytes,

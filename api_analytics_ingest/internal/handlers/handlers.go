@@ -3287,6 +3287,11 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 	if sld == nil || sld.GetAssetHash() == "" {
 		return nil
 	}
+	// Relay read-through events measure S3 egress by asset; without a durable
+	// local cache path they are not proof that the whole asset is hot.
+	if sld.GetAction() == pb.StorageLifecycleData_ACTION_CACHED && strings.TrimSpace(sld.GetLocalPath()) == "" {
+		return nil
+	}
 	storageLocation, syncStatus, isHot, isSynced, isFrozen := storageStateFromAction(sld.GetAction())
 	if storageLocation == "" && syncStatus == "" {
 		return nil

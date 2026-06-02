@@ -1872,6 +1872,44 @@ func TestMistTriggerStreamIDFallsBackToLifecyclePayloads(t *testing.T) {
 	}
 }
 
+func TestStorageLifecycleCachedWithoutLocalPathDoesNotUpdateCurrentState(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &pb.StorageLifecycleData{
+				Action:    pb.StorageLifecycleData_ACTION_CACHED,
+				AssetType: "vod",
+				AssetHash: "asset-hash",
+				StreamId:  &streamID,
+				SizeBytes: 512,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "storage_lifecycle",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	eventBatch := conn.batches["storage_events"]
+	if eventBatch == nil || len(eventBatch.rows) != 1 {
+		t.Fatalf("expected storage_events row, got %#v", eventBatch)
+	}
+	if stateBatch := conn.batches["artifact_state_current"]; stateBatch != nil && len(stateBatch.rows) > 0 {
+		t.Fatalf("unexpected artifact_state_current rows for read-through cached event: %#v", stateBatch.rows)
+	}
+}
+
 func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

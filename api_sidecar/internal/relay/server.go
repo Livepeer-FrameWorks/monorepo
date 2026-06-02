@@ -81,6 +81,9 @@ type Server struct {
 	// block. Denials are not cached (transient Foghorn errors must retry).
 	authzMu    sync.Mutex
 	authzCache map[string]time.Time
+	// defrost coalesces cold S3 read-through bytes per asset into
+	// ACTION_CACHED lifecycle events for cold-read amplification analytics.
+	defrost *defrostAggregator
 }
 
 // Options configures the relay. basePath is the Helmsman storage root used
@@ -148,6 +151,7 @@ func New(opts Options) *Server {
 		authorizer:   authorizer,
 		trustedCIDRs: parseTrustedCIDRs(opts.RelayTrustedCIDR, opts.Logger),
 		authzCache:   make(map[string]time.Time),
+		defrost:      newDefrostAggregator(),
 	}
 }
 

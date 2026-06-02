@@ -5579,6 +5579,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 	switch status {
 	case "success":
+		incArtifactSyncOutcome("success")
 		var artifactType, internalName, format, tenantID, streamID, previousS3URL string
 		// If Helmsman didn't provide s3_url (typical), compute it from stored artifact metadata.
 		if db != nil {
@@ -5726,6 +5727,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		}
 
 	case "evicted_remote":
+		incArtifactSyncOutcome("evicted_remote")
 		// Remote-origin artifact: local copy was deleted, original lives on origin S3.
 		// Mark as synced on S3 and remove this node from warm cache.
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", ""); err != nil {
@@ -5775,6 +5777,7 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 		if complete.GetLocalMissing() {
 			newSyncStatus = "lost_local"
 		}
+		incArtifactSyncOutcome(newSyncStatus)
 		if err := artifactRepo.SetSyncStatus(ctx, assetHash, newSyncStatus, ""); err != nil {
 			logger.WithError(err).Error("Failed to update sync status to " + newSyncStatus)
 		}

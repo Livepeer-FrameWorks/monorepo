@@ -24,6 +24,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,14 +36,13 @@ import (
 // (Foghorn always returns it for vod/clip/upload); when zero the path
 // falls back to a single S3 pass-through because block math needs the
 // total size up-front.
-func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) {
+func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) string {
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
 		// Unknown size — block layout needs the upper bound. Fall back to
 		// memory-only pass-through; subsequent reads with a known size
 		// will populate the block cache.
-		s.streamRangeNoCache(c, res)
-		return
+		return s.streamRangeNoCache(c, res)
 	}
 
 	// Build a BlockStore handle but defer disk-touching setup (mkdir,
@@ -65,7 +65,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if cacheDecision == admission.CacheReject {
 		c.Writer.Header().Set("Retry-After", "5")
 		c.AbortWithStatus(http.StatusServiceUnavailable)
-		return
+		return "error"
 	}
 
 	// Distinguish "Range header absent" (full-object 200 OK) from
@@ -76,7 +76,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if rangeHeader != "" && !hasRange {
 		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return
+		return "error"
 	}
 	if !hasRange {
 		start, end = 0, totalSize-1
@@ -84,20 +84,21 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if start > totalSize-1 {
 		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return
+		return "error"
 	}
 
 	spans := spansForRange(start, end, store.BlockSize())
 	if len(spans) == 0 {
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return
+		return "error"
 	}
 	upstreamURL := res.UpstreamURL()
+	recordDefrost := s.defrostRecorderFor(kind, hash)
 	if cacheDecision == admission.CacheToDisk && !hasRange {
 		if err := s.preflightFirstColdSpan(c.Request.Context(), store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
 			s.cache.Delete(kind, hash)
 			s.respondColdFetchError(c, err)
-			return
+			return "error"
 		}
 	}
 	// Disk-touching block-store setup happens only for CacheToDisk and after
@@ -130,7 +131,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 
 	for _, span := range spans {
-		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision); err != nil {
+		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, recordDefrost); err != nil {
 			// A peer-relay grant that 401/403s mid-stream is dead (origin
 			// restarted, grant evicted before the resolve TTL lapsed). Drop the
 			// resolve-cache entry so the next request re-resolves and re-mints
@@ -144,9 +145,10 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			if s.logger != nil && !isClientGone(err) {
 				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
 			}
-			return
+			return "error"
 		}
 	}
+	return "served"
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
@@ -165,17 +167,18 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // disk. Without coalescing, N viewers on the same cold block would
 // fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
 // bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision) error {
+func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, defrost func(int64)) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
 	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
 	}
 
 	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
 	leader, fetch := s.coldFetch.claim(key)
 	if !leader {
+		coldfetchCoalesced.WithLabelValues("follower").Inc()
 		// Late arrival: wait for the leader, then read the warm block.
 		// If the leader's disk write failed, fall through to an own
 		// S3 fetch (no coalescing this time).
@@ -189,11 +192,12 @@ func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockSt
 				return err
 			}
 		}
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
 	}
+	coldfetchCoalesced.WithLabelValues("leader").Inc()
 
 	// Leader path: run the fetch, then publish disk-write outcome.
-	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision)
+	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
 	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
 	return err
 }
@@ -239,7 +243,7 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // viewers bypass the coalescer and each issue their own S3 range
 // fetch. The first writer to finish wins the rename; later writers
 // see the warm block exists and drop their tmpfile.
-func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision) error {
+func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, defrost func(int64)) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
@@ -252,16 +256,21 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 	if grantID != "" {
 		req.Header.Set("Authorization", "Bearer "+grantID)
 	}
+	source := upstreamSourceLabel(grantID)
+	fetchStart := time.Now()
 	resp, err := s.httpc.Do(req)
 	if err != nil {
+		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return fmt.Errorf("upstream block fetch: %w", err)
 	}
+	defrostTTFB.WithLabelValues(source).Observe(time.Since(fetchStart).Seconds())
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
 		// 200 OK is acceptable only when the requested range covers the
 		// whole asset — otherwise the upstream ignored Range and would
 		// pollute block N with bytes from the start of the object.
 		if resp.StatusCode != http.StatusOK || blockStart != 0 || blockEnd != totalSize-1 {
+			defrostBlocks.WithLabelValues(source, "error").Inc()
 			return upstreamStatusError{StatusCode: resp.StatusCode}
 		}
 	}
@@ -338,10 +347,19 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 	}
 
 	if copyErr != nil {
+		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return copyErr
 	}
 	if n != expected {
+		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)
+	}
+	defrostBlocks.WithLabelValues(source, "success").Inc()
+	defrostBytes.WithLabelValues(source).Add(float64(n))
+	// Only cold S3 read-through (not peer relay) feeds the per-asset defrost
+	// aggregator — peer reads are cross-cluster, not a frozen-artifact cost.
+	if grantID == "" && defrost != nil {
+		defrost(n)
 	}
 	return nil
 }

@@ -331,6 +331,13 @@ func TestServeColdFilePropagatesUpstreamNotFoundBeforeMediaHeaders(t *testing.T)
 	if _, err := os.Stat(filepath.Join(dir, "vod", file+".blocks")); !os.IsNotExist(err) {
 		t.Fatalf("missing upstream must not create block cache, stat err=%v", err)
 	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal/artifact/vod/"+file, nil)
+	if got := s.serveViaBlockCache(ctx, "vod", hash, ".mkv", filepath.Join(dir, "vod", file), res); got != "error" {
+		t.Fatalf("serveViaBlockCache status = %q, want error", got)
+	}
 }
 
 func TestServeColdMemoryOnlyDoesNotWriteDisk(t *testing.T) {
