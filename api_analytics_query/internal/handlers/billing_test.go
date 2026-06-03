@@ -117,6 +117,35 @@ func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 	}
 }
 
+func TestQueryClusterStreamRuntimeIncludesLiveCurrentState(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
+	start := time.Unix(1700000000, 0).UTC()
+	end := start.Add(5 * time.Minute)
+	rows := sqlmock.NewRows([]string{"cluster_id", "max_viewers", "total_streams", "stream_hours"}).
+		AddRow("cluster-a", 7, 2, 0.25)
+	mock.ExpectQuery(`(?s)FROM periscope\.stream_runtime_5m_v.*UNION ALL.*FROM periscope\.stream_state_current AS s FINAL`).
+		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", end, start).
+		WillReturnRows(rows)
+
+	got, err := bs.queryClusterStreamRuntime(context.Background(), "tenant-1", start, end)
+	if err != nil {
+		t.Fatalf("queryClusterStreamRuntime error: %v", err)
+	}
+	if got["cluster-a"].MaxViewers != 7 || got["cluster-a"].TotalStreams != 2 || got["cluster-a"].StreamHours != 0.25 {
+		t.Fatalf("unexpected stream runtime metrics: %#v", got["cluster-a"])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestQueryClusterStorageProviderUsageReadsLedgerByProjectionTime(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

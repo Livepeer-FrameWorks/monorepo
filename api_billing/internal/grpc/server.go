@@ -1268,7 +1268,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 			CASE
 				WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users')
 					THEN MAX(usage_value)
-				ELSE SUM(usage_value)
+				ELSE GREATEST(SUM(usage_value), 0)
 			END AS usage_value,
 			$%d::text AS granularity
 		FROM bucketed

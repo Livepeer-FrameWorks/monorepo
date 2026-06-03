@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/google/uuid"
@@ -240,8 +241,16 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 
 	clusterID := trigger.GetClusterId()
 
+	streamName := se.GetStreamName()
+	internalName := mist.ExtractInternalName(streamName)
 	sourceEndedAtMS := edgeReceivedAtMS
-	sourceStartedAtMS := h.lookupStreamStartedAtMS(ctx, tenantID, streamID, sourceEndedAtMS)
+	sourceStartedAtMS := h.lookupStreamStartedAtMS(ctx, streamStartLookup{
+		tenantID:     tenantID,
+		streamID:     streamID,
+		nodeID:       nodeID,
+		clusterID:    clusterID,
+		internalName: internalName,
+	}, sourceEndedAtMS)
 	if sourceStartedAtMS < 0 {
 		sourceStartedAtMS = 0
 	}
@@ -260,7 +269,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		streamID:            streamID,
 		sourceEventID:       sourceEventID,
 		clusterID:           clusterID,
-		streamName:          se.GetStreamName(),
+		streamName:          streamName,
 		downloadedBytes:     se.GetDownloadedBytes(),
 		uploadedBytes:       se.GetUploadedBytes(),
 		totalViewers:        se.GetTotalViewers(),
@@ -872,19 +881,33 @@ func parseTenantID(s string) (uuid.UUID, bool) {
 	return t, true
 }
 
-func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, tenantID uuid.UUID, streamID uuid.UUID, fallbackEndedAtMS int64) int64 {
-	startedFromEvents := h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+type streamStartLookup struct {
+	tenantID     uuid.UUID
+	streamID     uuid.UUID
+	nodeID       string
+	clusterID    string
+	internalName string
+}
+
+func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) int64 {
+	startedFromEvents := h.lookupStreamStartedAtMSFromEventLog(ctx, lookup, fallbackEndedAtMS)
 	if startedFromEvents > 0 && startedFromEvents < fallbackEndedAtMS {
 		return startedFromEvents
 	}
 
+	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT toUnixTimestamp(ifNull(started_at, updated_at)) * 1000
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ? AND stream_id = ?
-		  AND status = 'live'
+		  AND started_at IS NOT NULL
+		  AND updated_at <= ?
+		  AND (? = '' OR node_id = ?)
+		  AND (? = '' OR internal_name = ?)
 		LIMIT 1`,
-		tenantID, streamID)
+		lookup.tenantID, lookup.streamID, endedAt,
+		lookup.nodeID, lookup.nodeID,
+		lookup.internalName, lookup.internalName)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start lookup failed; using STREAM_END time as zero-duration fallback")
 		return fallbackEndedAtMS
@@ -899,24 +922,30 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, tenantID
 		return fallbackEndedAtMS
 	}
 	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
-		return h.lookupStreamStartedAtMSFromEventLog(ctx, tenantID, streamID, fallbackEndedAtMS)
+		return h.lookupStreamStartedAtMSFromEventLog(ctx, lookup, fallbackEndedAtMS)
 	}
 	return startedAtMS
 }
 
-func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Context, tenantID uuid.UUID, streamID uuid.UUID, fallbackEndedAtMS int64) int64 {
+func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) int64 {
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT toUnixTimestamp(min(timestamp)) * 1000
 		FROM periscope.stream_event_log
 		WHERE tenant_id = ?
 		  AND stream_id = ?
+		  AND (? = '' OR node_id = ?)
+		  AND (? = '' OR cluster_id = ?)
+		  AND (? = '' OR internal_name = ?)
 		  AND timestamp <= ?
 		  AND timestamp > ifNull((
 		      SELECT max(timestamp)
 		      FROM periscope.stream_event_log
 		      WHERE tenant_id = ?
 		        AND stream_id = ?
+		        AND (? = '' OR node_id = ?)
+		        AND (? = '' OR cluster_id = ?)
+		        AND (? = '' OR internal_name = ?)
 		        AND event_type = 'stream_end'
 		        AND timestamp < ?
 		  ), toDateTime(0))
@@ -925,8 +954,16 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Conte
 		      OR (event_type IN ('stream_lifecycle', 'stream_buffer', 'track_list_update') AND status = 'live')
 		  )
 		LIMIT 1`,
-		tenantID, streamID, endedAt,
-		tenantID, streamID, endedAt)
+		lookup.tenantID, lookup.streamID,
+		lookup.nodeID, lookup.nodeID,
+		lookup.clusterID, lookup.clusterID,
+		lookup.internalName, lookup.internalName,
+		endedAt,
+		lookup.tenantID, lookup.streamID,
+		lookup.nodeID, lookup.nodeID,
+		lookup.clusterID, lookup.clusterID,
+		lookup.internalName, lookup.internalName,
+		endedAt)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start event-log lookup failed; using STREAM_END time as zero-duration fallback")
 		return fallbackEndedAtMS

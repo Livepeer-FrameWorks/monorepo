@@ -1370,6 +1370,78 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	}
 }
 
+func TestRawStreamEndUsesOfflineCurrentStartedAt(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	clusterID := "cluster-a"
+	startedAt := time.Unix(1710000000, 0).UTC()
+	endedAt := startedAt.Add(10 * time.Minute)
+	conn.addQueryRow("periscope.stream_state_current", startedAt.UnixMilli())
+	trigger := &pb.MistTrigger{
+		NodeId:      "edge-1",
+		ClusterId:   &clusterID,
+		TriggerType: "STREAM_END",
+		RequestId:   "source-event-stream-end",
+		Timestamp:   endedAt.UnixMilli(),
+		TenantId:    &tenantID,
+		TriggerPayload: &pb.MistTrigger_StreamEnd{
+			StreamEnd: &pb.StreamEndTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"source_event_id": "source-event-stream-end",
+			"trigger_type":    "STREAM_END",
+			"node_id":         "edge-1",
+			"received_at_ms":  endedAt.Format(time.RFC3339),
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	var foundCurrentLookup bool
+	for _, q := range conn.queries {
+		if q.table != "periscope.stream_state_current" {
+			continue
+		}
+		foundCurrentLookup = true
+		if strings.Contains(q.query, "status = 'live'") {
+			t.Fatalf("STREAM_END final projection must accept preserved offline started_at, got query %q", q.query)
+		}
+		if !strings.Contains(q.query, "updated_at <= ?") {
+			t.Fatalf("expected STREAM_END lookup to stay within the ended interval, got query %q", q.query)
+		}
+	}
+	if !foundCurrentLookup {
+		t.Fatal("expected stream_state_current fallback lookup")
+	}
+
+	finalBatch := conn.batches["periscope.stream_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
+	}
+	row := finalBatch.rows[0]
+	if row[12] != startedAt.UnixMilli() {
+		t.Fatalf("expected source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[12])
+	}
+	if row[13] != endedAt.UnixMilli() {
+		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	}
+}
+
 func TestRawProcessingFinalUsesPayloadClusterID(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -2302,7 +2374,7 @@ type fakeClickhouseConn struct {
 	batches    map[string]*fakeBatch
 	duplicates map[string]map[uuid.UUID]bool
 	queries    []fakeQuery
-	queryRows  map[string][]any
+	queryRows  map[string][][]any
 }
 
 type fakeQuery struct {
@@ -2315,7 +2387,7 @@ func newFakeClickhouseConn() *fakeClickhouseConn {
 	return &fakeClickhouseConn{
 		batches:    make(map[string]*fakeBatch),
 		duplicates: make(map[string]map[uuid.UUID]bool),
-		queryRows:  make(map[string][]any),
+		queryRows:  make(map[string][][]any),
 	}
 }
 
@@ -2327,7 +2399,7 @@ func (f *fakeClickhouseConn) addDuplicate(table string, eventID uuid.UUID) {
 }
 
 func (f *fakeClickhouseConn) addQueryRow(table string, values ...any) {
-	f.queryRows[table] = values
+	f.queryRows[table] = append(f.queryRows[table], values)
 }
 
 func (f *fakeClickhouseConn) Contributors() []string { return nil }
@@ -2340,8 +2412,8 @@ func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string,
 func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	table := tableFromQuery(query, "from")
 	f.queries = append(f.queries, fakeQuery{table: table, query: query, args: append([]any(nil), args...)})
-	if values, ok := f.queryRows[table]; ok {
-		return &fakeRows{next: true, values: values}, nil
+	if rows, ok := f.queryRows[table]; ok {
+		return &fakeRows{rows: rows}, nil
 	}
 	var eventID uuid.UUID
 	if len(args) > 0 {
@@ -2350,7 +2422,10 @@ func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...an
 		}
 	}
 	dup := f.duplicates[table] != nil && f.duplicates[table][eventID]
-	return &fakeRows{next: dup}, nil
+	if dup {
+		return &fakeRows{rows: [][]any{{}}}, nil
+	}
+	return &fakeRows{}, nil
 }
 func (f *fakeClickhouseConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
 	return &fakeRow{}
@@ -2394,29 +2469,42 @@ func (f *fakeBatchColumn) Append(any) error    { return nil }
 func (f *fakeBatchColumn) AppendRow(any) error { return nil }
 
 type fakeRows struct {
-	next   bool
-	values []any
+	rows  [][]any
+	index int
 }
 
 func (f *fakeRows) Next() bool {
-	if f.next {
-		f.next = false
-		return true
-	}
-	return false
+	return f.index < len(f.rows)
 }
 func (f *fakeRows) Scan(dest ...any) error {
+	if f.index >= len(f.rows) {
+		return nil
+	}
+	values := f.rows[f.index]
+	f.index++
 	for i := range dest {
-		if i >= len(f.values) {
+		if i >= len(values) {
 			continue
 		}
 		switch d := dest[i].(type) {
 		case *time.Time:
-			if v, ok := f.values[i].(time.Time); ok {
+			if v, ok := values[i].(time.Time); ok {
 				*d = v
 			}
 		case *int64:
-			if v, ok := f.values[i].(int64); ok {
+			if v, ok := values[i].(int64); ok {
+				*d = v
+			}
+		case *uint32:
+			if v, ok := values[i].(uint32); ok {
+				*d = v
+			}
+		case *uint64:
+			if v, ok := values[i].(uint64); ok {
+				*d = v
+			}
+		case *string:
+			if v, ok := values[i].(string); ok {
 				*d = v
 			}
 		}
@@ -2429,7 +2517,7 @@ func (f *fakeRows) Totals(dest ...any) error         { return nil }
 func (f *fakeRows) Columns() []string                { return nil }
 func (f *fakeRows) Close() error                     { return nil }
 func (f *fakeRows) Err() error                       { return nil }
-func (f *fakeRows) HasData() bool                    { return f.next }
+func (f *fakeRows) HasData() bool                    { return f.index < len(f.rows) }
 
 type fakeRow struct{}
 

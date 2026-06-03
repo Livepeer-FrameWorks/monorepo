@@ -191,15 +191,20 @@ func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantI
 					) AS started_at
 				FROM periscope.stream_state_current AS s FINAL
 				LEFT JOIN (
-					SELECT stream_id, max(timestamp) AS ended_at
+					SELECT stream_id, node_id, internal_name, max(timestamp) AS ended_at
 					FROM periscope.stream_event_log
 					WHERE tenant_id = ?
 					  AND event_type = 'stream_end'
-					GROUP BY stream_id
-				) AS last_end ON last_end.stream_id = s.stream_id
+					GROUP BY stream_id, node_id, internal_name
+				) AS last_end
+					ON last_end.stream_id = s.stream_id
+				   AND last_end.node_id = s.node_id
+				   AND last_end.internal_name = s.internal_name
 				LEFT JOIN periscope.stream_event_log AS e
 					ON e.tenant_id = s.tenant_id
 				   AND e.stream_id = s.stream_id
+				   AND e.node_id = s.node_id
+				   AND e.internal_name = s.internal_name
 				   AND e.timestamp > ifNull(last_end.ended_at, toDateTime(0))
 				   AND e.status = 'live'
 				   AND e.event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
@@ -1094,12 +1099,12 @@ func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID
 	inClause := joinStrings(placeholders, ", ")
 	query := fmt.Sprintf(`
 		WITH last_end AS (
-			SELECT stream_id, max(timestamp) AS ended_at
+			SELECT stream_id, node_id, internal_name, max(timestamp) AS ended_at
 			FROM periscope.stream_event_log
 			WHERE tenant_id = ?
 			  AND stream_id IN (%s)
 			  AND event_type = 'stream_end'
-			GROUP BY stream_id
+			GROUP BY stream_id, node_id, internal_name
 		)
 		SELECT
 			toString(s.stream_id) AS stream_id,
@@ -1109,10 +1114,15 @@ func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID
 				ifNull(min(e.timestamp), s.updated_at)
 			) AS started_at
 		FROM periscope.stream_state_current AS s FINAL
-		LEFT JOIN last_end ON last_end.stream_id = s.stream_id
+		LEFT JOIN last_end
+			ON last_end.stream_id = s.stream_id
+		   AND last_end.node_id = s.node_id
+		   AND last_end.internal_name = s.internal_name
 		LEFT JOIN periscope.stream_event_log AS e
 			ON e.tenant_id = s.tenant_id
 		   AND e.stream_id = s.stream_id
+		   AND e.node_id = s.node_id
+		   AND e.internal_name = s.internal_name
 		   AND e.timestamp > ifNull(last_end.ended_at, toDateTime(0))
 		   AND e.status = 'live'
 		   AND e.event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
@@ -4340,8 +4350,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 			&dvrBytes, &clipBytes, &vodBytes,
 			&frozenDvrBytes, &frozenClipBytes, &frozenVodBytes)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan storage_snapshots row")
-			continue
+			return nil, status.Errorf(codes.Internal, "scan storage usage: %v", err)
 		}
 
 		idKey := fmt.Sprintf("%s:%s", storageScopeStr, nodeIDStr)
@@ -4360,6 +4369,9 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 			FrozenVodBytes:  frozenVodBytes,
 			StorageScope:    storageScopeStr,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate storage usage: %v", err)
 	}
 
 	resultsLen := len(records)

@@ -196,7 +196,88 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	}
 	defer func() { _ = rows.Close() }()
 
+	type viewerSessionProjection struct {
+		tenantID, nodeID, sessionID        string
+		sourceEventID, clusterID, streamID string
+		startMS, endMS                     int64
+		durationSeconds                    uint32
+		upBytes, downBytes                 uint64
+	}
+	var sessions []viewerSessionProjection
+	for rows.Next() {
+		var s viewerSessionProjection
+		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.sessionID, &s.sourceEventID, &s.clusterID, &s.streamID, &s.startMS, &s.endMS, &s.durationSeconds, &s.upBytes, &s.downBytes); scanErr != nil {
+			return fmt.Errorf("viewer_usage_5m scan: %w", scanErr)
+		}
+		sessions = append(sessions, s)
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		return fmt.Errorf("viewer_usage_5m iterate: %w", iterErr)
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+
 	projectionVersionMS := time.Now().UnixMilli()
+	type viewerUsageEmission struct {
+		windowStartMS                    int64
+		tenantID, clusterID, streamID    string
+		nodeID, sessionID, sourceEventID string
+		secondsObserved                  uint32
+		upObserved, downObserved         uint64
+	}
+	var emissions []viewerUsageEmission
+	for _, s := range sessions {
+		totalSpanMS := s.endMS - s.startMS
+		if totalSpanMS <= 0 {
+			continue
+		}
+		desiredKeys := map[viewerUsageWindowKey]struct{}{}
+		for windowMS, overlapMS := range windowsForSpan(s.startMS, s.endMS) {
+			if overlapMS <= 0 {
+				continue
+			}
+			desiredKeys[viewerUsageWindowKey{
+				windowStartMS: windowMS,
+				clusterID:     s.clusterID,
+				streamID:      s.streamID,
+			}] = struct{}{}
+			fraction := float64(overlapMS) / float64(totalSpanMS)
+			upObserved := uint64(float64(s.upBytes) * fraction)
+			downObserved := uint64(float64(s.downBytes) * fraction)
+			emissions = append(emissions, viewerUsageEmission{
+				windowStartMS:   windowMS,
+				tenantID:        s.tenantID,
+				clusterID:       s.clusterID,
+				streamID:        s.streamID,
+				nodeID:          s.nodeID,
+				sessionID:       s.sessionID,
+				sourceEventID:   s.sourceEventID,
+				secondsObserved: uint32(overlapMS / 1000),
+				upObserved:      upObserved,
+				downObserved:    downObserved,
+			})
+		}
+		tombstones, tombstoneErr := h.viewerUsageTombstones(ctx, s.tenantID, s.nodeID, s.sessionID, desiredKeys)
+		if tombstoneErr != nil {
+			return tombstoneErr
+		}
+		for _, t := range tombstones {
+			emissions = append(emissions, viewerUsageEmission{
+				windowStartMS: t.windowStartMS,
+				tenantID:      s.tenantID,
+				clusterID:     t.clusterID,
+				streamID:      t.streamID,
+				nodeID:        s.nodeID,
+				sessionID:     s.sessionID,
+				sourceEventID: t.sourceEventID,
+			})
+		}
+	}
+	if len(emissions) == 0 {
+		return nil
+	}
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO periscope.viewer_usage_5m (
 			window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
@@ -208,53 +289,83 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	}
 	defer closeClickHouseBatch(batch)
 
-	rowsEmitted := 0
-	for rows.Next() {
-		var (
-			tenantID, sessionID, sourceEventID, clusterID, streamID, nodeID string
-			startMS, endMS                                                  int64
-			durationSeconds                                                 uint32
-			upBytes, downBytes                                              uint64
-		)
-		if err := rows.Scan(&tenantID, &nodeID, &sessionID, &sourceEventID, &clusterID, &streamID, &startMS, &endMS, &durationSeconds, &upBytes, &downBytes); err != nil {
-			return fmt.Errorf("viewer_usage_5m scan: %w", err)
+	for _, e := range emissions {
+		if err := batch.Append(
+			time.UnixMilli(e.windowStartMS).UTC(),
+			e.tenantID, e.clusterID, e.streamID, e.nodeID, e.sessionID,
+			e.secondsObserved, e.upObserved, e.downObserved,
+			e.sourceEventID, projectionVersionMS,
+		); err != nil {
+			return fmt.Errorf("viewer_usage_5m append: %w", err)
 		}
-		totalSpanMS := endMS - startMS
-		if totalSpanMS <= 0 {
-			continue
-		}
-		for windowMS, overlapMS := range windowsForSpan(startMS, endMS) {
-			if overlapMS <= 0 {
-				continue
-			}
-			fraction := float64(overlapMS) / float64(totalSpanMS)
-			secondsObserved := uint32(overlapMS / 1000)
-			upObserved := uint64(float64(upBytes) * fraction)
-			downObserved := uint64(float64(downBytes) * fraction)
-			if err := batch.Append(
-				time.UnixMilli(windowMS).UTC(),
-				tenantID, clusterID, streamID, nodeID, sessionID,
-				secondsObserved, upObserved, downObserved,
-				sourceEventID, projectionVersionMS,
-			); err != nil {
-				return fmt.Errorf("viewer_usage_5m append: %w", err)
-			}
-			rowsEmitted++
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("viewer_usage_5m iterate: %w", err)
-	}
-	if rowsEmitted == 0 {
-		return nil
 	}
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("viewer_usage_5m send: %w", err)
 	}
 	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("viewer_usage_5m", "inserted").Add(float64(rowsEmitted))
+		h.metrics.ClickHouseInserts.WithLabelValues("viewer_usage_5m", "inserted").Add(float64(len(emissions)))
 	}
 	return nil
+}
+
+type viewerUsageWindowKey struct {
+	windowStartMS int64
+	clusterID     string
+	streamID      string
+}
+
+type viewerUsageTombstone struct {
+	viewerUsageWindowKey
+	sourceEventID string
+}
+
+func (h *AnalyticsHandler) viewerUsageTombstones(ctx context.Context, tenantID, nodeID, sessionID string, desired map[viewerUsageWindowKey]struct{}) ([]viewerUsageTombstone, error) {
+	rows, err := h.clickhouse.Query(ctx, `
+		SELECT
+			toInt64(toUnixTimestamp(window_start)) * 1000 AS window_start_ms,
+			cluster_id,
+			toString(stream_id) AS stream_id,
+			argMax(source_event_id, projection_version_ms) AS source_event_id,
+			argMax(seconds_observed, projection_version_ms) AS seconds_observed,
+			argMax(up_bytes_observed, projection_version_ms) AS up_bytes_observed,
+			argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed
+		FROM periscope.viewer_usage_5m
+		WHERE tenant_id = ?
+		  AND node_id = ?
+		  AND session_id = ?
+		GROUP BY window_start, cluster_id, stream_id`,
+		tenantID, nodeID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("viewer_usage_5m tombstone lookup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []viewerUsageTombstone
+	for rows.Next() {
+		var (
+			key                      viewerUsageWindowKey
+			sourceEventID            string
+			secondsObserved          uint32
+			upObserved, downObserved uint64
+		)
+		if err := rows.Scan(&key.windowStartMS, &key.clusterID, &key.streamID, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
+			return nil, fmt.Errorf("viewer_usage_5m tombstone scan: %w", err)
+		}
+		if secondsObserved == 0 && upObserved == 0 && downObserved == 0 {
+			continue
+		}
+		if _, ok := desired[key]; ok {
+			continue
+		}
+		out = append(out, viewerUsageTombstone{
+			viewerUsageWindowKey: key,
+			sourceEventID:        sourceEventID,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("viewer_usage_5m tombstone iterate: %w", err)
+	}
+	return out, nil
 }
 
 // --- stream_runtime_5m ---

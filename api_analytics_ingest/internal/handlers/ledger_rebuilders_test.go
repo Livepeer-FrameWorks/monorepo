@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
 // windowsForSpan is the bucketing primitive every ledger rebuilder uses
@@ -94,5 +97,31 @@ func TestWindowsForSpan_AlignedBoundary(t *testing.T) {
 	// The 12:10 window itself must not appear (half-open).
 	if _, ok := got[end]; ok {
 		t.Fatalf("end boundary should be exclusive, got an entry at %d", end)
+	}
+}
+
+func TestViewerUsageTombstonesOnlyRetractsStaleNonZeroWindows(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	currentWindow := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
+	staleWindow := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC).UnixMilli()
+	alreadyZeroWindow := time.Date(2026, 6, 3, 12, 10, 0, 0, time.UTC).UnixMilli()
+	conn.addQueryRow("periscope.viewer_usage_5m", currentWindow, "cluster-a", "stream-a", "source-current", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", staleWindow, "cluster-a", "stream-a", "source-stale", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", alreadyZeroWindow, "cluster-a", "stream-a", "source-zero", uint32(0), uint64(0), uint64(0))
+
+	tombstones, err := handler.viewerUsageTombstones(context.Background(), "tenant-a", "node-a", "session-a", map[viewerUsageWindowKey]struct{}{
+		{windowStartMS: currentWindow, clusterID: "cluster-a", streamID: "stream-a"}: {},
+	})
+	if err != nil {
+		t.Fatalf("viewerUsageTombstones: %v", err)
+	}
+	if len(tombstones) != 1 {
+		t.Fatalf("expected one tombstone, got %#v", tombstones)
+	}
+	got := tombstones[0]
+	if got.windowStartMS != staleWindow || got.clusterID != "cluster-a" || got.streamID != "stream-a" || got.sourceEventID != "source-stale" {
+		t.Fatalf("unexpected tombstone: %#v", got)
 	}
 }

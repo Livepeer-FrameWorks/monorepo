@@ -111,19 +111,28 @@
     return 0;
   }
 
-  // Aggregate storage data from edges
+  // Aggregate the latest snapshot for each scope/node pair.
   let storageData = $derived.by(() => {
     const edges =
       $storageUsageStore.data?.analytics?.usage?.storage?.storageUsageConnection?.edges ?? [];
     if (edges.length === 0) return null;
-    // Get the most recent snapshot or aggregate
-    const latest = edges[0]?.node;
-    if (!latest) return null;
+    const latestByKey: Record<string, (typeof edges)[number]["node"]> = {};
+    for (const edge of edges) {
+      const node = edge.node;
+      const key = `${node.storageScope ?? ""}:${node.nodeId ?? ""}`;
+      const existing = latestByKey[key];
+      const nodeTime = new Date(node.timestamp ?? 0).getTime();
+      const existingTime = new Date(existing?.timestamp ?? 0).getTime();
+      if (!existing || nodeTime > existingTime) {
+        latestByKey[key] = node;
+      }
+    }
+    const snapshots = Object.values(latestByKey);
     return {
-      dvrBytes: latest.dvrBytes || 0,
-      clipBytes: latest.clipBytes || 0,
-      vodBytes: latest.vodBytes || 0,
-      totalBytes: latest.totalBytes || 0,
+      dvrBytes: snapshots.reduce((sum, node) => sum + (node.dvrBytes || 0), 0),
+      clipBytes: snapshots.reduce((sum, node) => sum + (node.clipBytes || 0), 0),
+      vodBytes: snapshots.reduce((sum, node) => sum + (node.vodBytes || 0), 0),
+      totalBytes: snapshots.reduce((sum, node) => sum + (node.totalBytes || 0), 0),
     };
   });
 
@@ -387,7 +396,7 @@
         }),
         billingStatusStore.fetch(),
         storageUsageStore
-          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 1 } })
+          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 100 } })
           .catch(() => null),
         shouldUseHourly
           ? viewerHoursHourlyStore
@@ -434,10 +443,10 @@
                 acc.stream_hours += entry.usageValue / 3600;
                 break;
               case "ingress_gb":
-                acc.ingress_gb += entry.usageValue;
+                acc.ingress_gb += Math.max(entry.usageValue, 0);
                 break;
               case "egress_gb":
-                acc.egress_gb += entry.usageValue;
+                acc.egress_gb += Math.max(entry.usageValue, 0);
                 break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, entry.usageValue);
@@ -474,10 +483,10 @@
                 acc.stream_hours += record.usageValue / 3600;
                 break;
               case "ingress_gb":
-                acc.ingress_gb += record.usageValue;
+                acc.ingress_gb += Math.max(record.usageValue, 0);
                 break;
               case "egress_gb":
-                acc.egress_gb += record.usageValue;
+                acc.egress_gb += Math.max(record.usageValue, 0);
                 break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, record.usageValue);
@@ -540,6 +549,10 @@
 
   function formatNumber(num: number) {
     return new Intl.NumberFormat().format(Math.round(num));
+  }
+
+  function formatGigabytes(value: number): string {
+    return formatBytes(Math.max(value, 0) * 1024 * 1024 * 1024);
   }
 
   function formatTimestamp(value: string | null | undefined) {
@@ -715,7 +728,7 @@
             <DashboardMetricCard
               icon={RadioIcon}
               iconColor="text-success"
-              value={`${formatNumber(usageData.ingress_gb)} GB`}
+              value={formatGigabytes(usageData.ingress_gb)}
               valueColor="text-success"
               label="Ingress"
             />
@@ -724,7 +737,7 @@
             <DashboardMetricCard
               icon={RadioIcon}
               iconColor="text-success"
-              value={`${formatNumber(usageData.egress_gb)} GB`}
+              value={formatGigabytes(usageData.egress_gb)}
               valueColor="text-success"
               label="Egress"
             />

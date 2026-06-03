@@ -269,76 +269,42 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to resolve tenant primary cluster: %w", err)
 	}
 
-	type clusterStreamRuntimeMetrics struct {
-		MaxViewers   int
-		TotalStreams int
-		StreamHours  float64
-	}
-	clusterStreamRuntime := map[string]clusterStreamRuntimeMetrics{}
-	streamRows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT
-			cluster_id,
-			COALESCE(toInt32(max(peak_viewers)), 0)             AS max_viewers,
-			COALESCE(toInt32(uniqCombined(stream_id)), 0)       AS total_streams,
-			COALESCE(sum(active_seconds) / 3600.0, 0)           AS stream_hours
-		FROM periscope.stream_runtime_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-		GROUP BY cluster_id
-	`, tenantID, startTime, endTime)
-	if err != nil && !errors.Is(err, database.ErrNoRows) {
+	clusterStreamRuntime, err := bs.queryClusterStreamRuntime(ctx, tenantID, startTime, endTime)
+	if err != nil {
 		return nil, fmt.Errorf("failed to query stream runtime metrics from ClickHouse: %w", err)
-	} else if err == nil {
-		defer func() { _ = streamRows.Close() }()
-		for streamRows.Next() {
-			var cid string
-			var m clusterStreamRuntimeMetrics
-			if scanErr := streamRows.Scan(&cid, &m.MaxViewers, &m.TotalStreams, &m.StreamHours); scanErr != nil {
-				return nil, fmt.Errorf("scan stream runtime row: %w", scanErr)
-			}
-			if cid == "" {
-				return nil, fmt.Errorf("stream runtime row missing cluster_id for tenant %s", tenantID)
-			}
-			m.StreamHours = sanitizeFloat(m.StreamHours)
-			clusterStreamRuntime[cid] = m
-		}
-		if iterErr := streamRows.Err(); iterErr != nil {
-			return nil, fmt.Errorf("iterate stream runtime rows: %w", iterErr)
-		}
 	}
 
-	// Derive finalized viewer and bandwidth metrics from USER_END projections,
-	// grouped by cluster_id.
-	// Each cluster that served viewers gets its own UsageSummary.
-	type clusterViewerMetrics struct {
-		IngressGB     float64
-		EgressGB      float64
-		ViewerHours   float64
-		UniqueViewers int
+	tenantMetrics, err := bs.queryTenantViewerMetrics(ctx, tenantID, startTime, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query finalized viewer metrics from ClickHouse: %w", err)
 	}
+
 	clusterMetrics := map[string]*clusterViewerMetrics{}
-	var totalEgressGB, totalViewerHours float64
-	var totalUniqueViewers int
-
-	viewerMetrics, err := bs.queryTenantViewerMetrics(ctx, tenantID, startTime, endTime)
-	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
-	}
-	for _, metric := range viewerMetrics {
-		m := clusterViewerMetrics{IngressGB: metric.IngressGB, EgressGB: metric.EgressGB, ViewerHours: metric.ViewerHours, UniqueViewers: metric.UniqueViewers}
-		cid := strings.TrimSpace(metric.ClusterID)
-		if existing, ok := clusterMetrics[cid]; ok {
-			existing.IngressGB += m.IngressGB
-			existing.EgressGB += m.EgressGB
-			existing.ViewerHours += m.ViewerHours
-			existing.UniqueViewers += m.UniqueViewers
-		} else {
-			clusterMetrics[cid] = &m
+	totalEgressGB := 0.0
+	totalViewerHours := 0.0
+	totalUniqueViewers := 0
+	for _, m := range tenantMetrics {
+		cid := m.BillableClusterID()
+		if cid == "" {
+			return nil, fmt.Errorf("viewer metric row missing billable cluster for tenant %s", tenantID)
 		}
-		totalEgressGB += m.EgressGB
-		totalViewerHours += m.ViewerHours
-		totalUniqueViewers += m.UniqueViewers
+		cm := clusterViewerMetrics{
+			IngressGB:     m.IngressGB,
+			EgressGB:      m.EgressGB,
+			ViewerHours:   m.ViewerHours,
+			UniqueViewers: m.UniqueViewers,
+		}
+		if existing, ok := clusterMetrics[cid]; ok {
+			existing.IngressGB += cm.IngressGB
+			existing.EgressGB += cm.EgressGB
+			existing.ViewerHours += cm.ViewerHours
+			existing.UniqueViewers += cm.UniqueViewers
+		} else {
+			clusterMetrics[cid] = &cm
+		}
+		totalEgressGB += cm.EgressGB
+		totalViewerHours += cm.ViewerHours
+		totalUniqueViewers += cm.UniqueViewers
 	}
 
 	// Derive peak bandwidth from client_qoe_5m (avg_bw_out is in bytes/sec)
@@ -610,6 +576,107 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}).Info("Generated usage summaries for tenant")
 
 	return summaries, nil
+}
+
+type clusterViewerMetrics struct {
+	IngressGB     float64
+	EgressGB      float64
+	ViewerHours   float64
+	UniqueViewers int
+}
+
+type clusterStreamRuntimeMetrics struct {
+	MaxViewers   int
+	TotalStreams int
+	StreamHours  float64
+}
+
+func (bs *BillingSummarizer) queryClusterStreamRuntime(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string]clusterStreamRuntimeMetrics, error) {
+	rows, err := bs.clickhouse.QueryContext(ctx, `
+		SELECT
+			cluster_id,
+			COALESCE(toInt32(max(peak_viewers)), 0)             AS max_viewers,
+			COALESCE(toInt32(uniqCombined(stream_id)), 0)       AS total_streams,
+			COALESCE(sum(active_seconds) / 3600.0, 0)           AS stream_hours
+		FROM (
+			SELECT
+				cluster_id,
+				stream_id,
+				toFloat64(active_seconds) AS active_seconds,
+				toUInt32(peak_viewers) AS peak_viewers
+			FROM periscope.stream_runtime_5m_v
+			WHERE tenant_id = ?
+			  AND window_start >= ?
+			  AND window_start <  ?
+
+			UNION ALL
+
+			SELECT
+				cluster_id,
+				stream_id,
+				toFloat64(greatest(0, dateDiff('second', greatest(started_at, ?), least(now(), ?)))) AS active_seconds,
+				toUInt32(current_viewers) AS peak_viewers
+			FROM (
+				SELECT
+					s.stream_id AS stream_id,
+					s.current_viewers AS current_viewers,
+					ifNull(nullIf(argMaxIf(e.cluster_id, e.timestamp, e.cluster_id != ''), ''), '') AS cluster_id,
+					least(
+						ifNull(min(e.timestamp), if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)),
+						if(ifNull(s.started_at, toDateTime(0)) > ifNull(last_end.ended_at, toDateTime(0)), ifNull(s.started_at, s.updated_at), s.updated_at)
+					) AS started_at
+				FROM periscope.stream_state_current AS s FINAL
+				LEFT JOIN (
+					SELECT stream_id, node_id, internal_name, max(timestamp) AS ended_at
+					FROM periscope.stream_event_log
+					WHERE tenant_id = ?
+					  AND event_type = 'stream_end'
+					GROUP BY stream_id, node_id, internal_name
+				) AS last_end
+					ON last_end.stream_id = s.stream_id
+				   AND last_end.node_id = s.node_id
+				   AND last_end.internal_name = s.internal_name
+				LEFT JOIN periscope.stream_event_log AS e
+					ON e.tenant_id = s.tenant_id
+				   AND e.stream_id = s.stream_id
+				   AND e.node_id = s.node_id
+				   AND e.internal_name = s.internal_name
+				   AND e.timestamp > ifNull(last_end.ended_at, toDateTime(0))
+				   AND e.status = 'live'
+				   AND e.event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
+				WHERE s.tenant_id = ?
+				  AND s.status = 'live'
+				GROUP BY s.stream_id, s.current_viewers, s.started_at, s.updated_at, last_end.ended_at
+			)
+			WHERE started_at < ?
+			  AND now() >= ?
+			  AND cluster_id != ''
+		)
+		WHERE cluster_id != ''
+		GROUP BY cluster_id
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, tenantID, endTime, startTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]clusterStreamRuntimeMetrics{}
+	for rows.Next() {
+		var cid string
+		var m clusterStreamRuntimeMetrics
+		if scanErr := rows.Scan(&cid, &m.MaxViewers, &m.TotalStreams, &m.StreamHours); scanErr != nil {
+			return nil, fmt.Errorf("scan stream runtime row: %w", scanErr)
+		}
+		if cid == "" {
+			return nil, fmt.Errorf("stream runtime row missing cluster_id for tenant %s", tenantID)
+		}
+		m.StreamHours = sanitizeFloat(m.StreamHours)
+		out[cid] = m
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("iterate stream runtime rows: %w", iterErr)
+	}
+	return out, nil
 }
 
 // clusterProcessingMetrics holds the per-codec second totals for one cluster.
@@ -1306,6 +1373,13 @@ type tenantViewerMetricRow struct {
 	EgressGB        float64
 	ViewerHours     float64
 	UniqueViewers   int
+}
+
+func (r tenantViewerMetricRow) BillableClusterID() string {
+	if cid := strings.TrimSpace(r.OriginClusterID); cid != "" {
+		return cid
+	}
+	return strings.TrimSpace(r.ClusterID)
 }
 
 func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantViewerMetricRow, error) {
