@@ -141,22 +141,31 @@ export interface HlsJsConfig {
 }
 
 /** DASH.js configuration subset */
+// A v5-shaped subset of dash.js's MediaPlayerSettingClass (the peer is
+// constrained to ^5.0.0). Only the commonly-tuned keys are typed; live delay
+// lives under streaming.delay, not flat on streaming as in v4. Index signatures
+// let the rest of v5's large settings surface pass through to updateSettings.
 export interface DashJsConfig {
-  debug?: boolean;
-  autoPlay?: boolean;
+  debug?: { logLevel?: number; [key: string]: unknown };
   streaming?: {
-    lowLatencyEnabled?: boolean;
-    liveDelay?: number;
-    liveDelayFragmentCount?: number;
+    delay?: {
+      liveDelay?: number;
+      liveDelayFragmentCount?: number | null;
+      useSuggestedPresentationDelay?: boolean;
+    };
     buffer?: {
-      stableBufferTime?: number;
       fastSwitchEnabled?: boolean;
+      bufferTimeDefault?: number;
+      bufferTimeAtTopQuality?: number;
+      [key: string]: unknown;
     };
     abr?: {
-      autoSwitchBitrate?: { video: boolean; audio: boolean };
+      autoSwitchBitrate?: { video?: boolean; audio?: boolean };
       ABRStrategy?: "abrDynamic" | "abrBola" | "abrL2A" | "abrLoLP" | "abrThroughput";
-      useDefaultABRRules?: boolean;
+      [key: string]: unknown;
     };
+    liveCatchup?: { [key: string]: unknown };
+    [key: string]: unknown;
   };
   [key: string]: unknown;
 }

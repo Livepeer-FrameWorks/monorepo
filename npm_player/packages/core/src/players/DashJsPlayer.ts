@@ -160,7 +160,7 @@ export class DashJsPlayerImpl extends BasePlayer {
 
     const self = this;
     return new Proxy(video, {
-      get(target, key, receiver) {
+      get(target, key) {
         // Override duration for live streams (reference dashjs.js:108-116)
         if (key === "duration" && self.isLiveStream()) {
           const buffered = target.buffered;
@@ -254,18 +254,31 @@ export class DashJsPlayerImpl extends BasePlayer {
   ): (e: PromiseRejectionEvent) => void {
     return (e: PromiseRejectionEvent) => {
       if (this.destroyed) return;
-      const msg = e.reason?.message || String(e.reason);
-      if (
-        msg.includes("getCurrentDVRInfo") ||
-        msg.includes("range") ||
-        msg.includes("Cannot read properties of null") ||
-        msg.includes("can't access property")
-      ) {
-        e.preventDefault();
-        e.stopImmediatePropagation?.();
-        console.warn("[DashJS] Caught internal dash.js rejection:", msg);
-        this.reportDashFailure(`DASH fatal internal error: ${msg}`, options);
-      }
+      const reason = e.reason;
+      const msg = reason?.message || String(reason);
+      const stack = typeof reason?.stack === "string" ? reason.stack : "";
+
+      // Only claim rejections that are actually dash.js's. The generic null /
+      // "range" symptoms below are the known DVR/SIDX crash signature, but on
+      // their own they also match unrelated app rejections fired while this
+      // player is alive — so gate them on a dash.js stack frame. Specific
+      // dash.js API signatures are claimed regardless.
+      const fromDashjs = stack.includes("dashjs") || stack.includes("dash.all");
+      const knownDashSignature =
+        msg.includes("getCurrentDVRInfo") || // dash.js DVR-window race
+        /\bsidx\b|segmentbase/i.test(msg); // SegmentBase SIDX loader crash on live CMAF
+      const genericDashSymptom =
+        fromDashjs &&
+        (msg.includes("range") ||
+          msg.includes("Cannot read properties of null") ||
+          msg.includes("can't access property"));
+
+      if (!knownDashSignature && !genericDashSymptom) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation?.();
+      console.warn("[DashJS] Caught internal dash.js rejection:", msg);
+      this.reportDashFailure(`DASH fatal internal error: ${msg}`, options);
     };
   }
 
@@ -421,6 +434,13 @@ export class DashJsPlayerImpl extends BasePlayer {
           logLevel: 2,
         },
       });
+
+      // Caller overrides on top of the defaults above. dash.js's updateSettings
+      // deep-merges, so a second call lets options.dashConfig win on overlapping
+      // leaf keys while leaving the rest of the defaults intact.
+      if (options.dashConfig) {
+        this.dashPlayer.updateSettings(options.dashConfig as Record<string, unknown>);
+      }
 
       if (this.debugging) {
         this.dashPlayer.on("fragmentLoadingStarted", (e: any) => {

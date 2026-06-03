@@ -2806,56 +2806,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		return
 	}
 
-	// Remove leading slash if present
-	fullPath = strings.TrimPrefix(fullPath, "/")
-
-	// Parse the path to extract view key and protocol
-	var viewKey string
-	var protocol string
-	var manifestPath string
-
-	// Split path by "/" and "."
-	parts := strings.Split(fullPath, "/")
-
-	if len(parts) == 0 {
-		respondPlaybackError(c, http.StatusBadRequest, "INVALID_PATH", "Invalid path format", nil)
-		return
-	}
-
-	// First part might contain viewkey.protocol or just viewkey
-	firstPart := parts[0]
-	dotParts := strings.Split(firstPart, ".")
-
-	viewKey = dotParts[0]
-
-	// Check if protocol specified after dot (e.g., viewkey.hls or viewkey.m3u8)
-	if len(dotParts) > 1 {
-		protocol = dotParts[1]
-	}
-
-	// Check if protocol specified as second path segment (e.g., viewkey/hls)
-	if len(parts) > 1 && protocol == "" {
-		protocol = parts[1]
-		// Remaining parts are manifest path (e.g., index.m3u8)
-		if len(parts) > 2 {
-			manifestPath = strings.Join(parts[2:], "/")
-		}
-	}
-
-	// If no protocol but there's a manifest path, detect from extension
-	if protocol == "" && len(parts) > 1 {
-		lastPart := parts[len(parts)-1]
-		if strings.HasSuffix(lastPart, ".m3u8") {
-			protocol = "hls"
-			manifestPath = strings.Join(parts[1:], "/")
-		} else if strings.HasSuffix(lastPart, ".mpd") {
-			protocol = "dash"
-			manifestPath = strings.Join(parts[1:], "/")
-		} else if strings.HasSuffix(lastPart, ".html") {
-			protocol = "html"
-			// No manifest path for HTML embed - it redirects directly to MistServer's embed page
-		}
-	}
+	viewKey, protocol, manifestPath := parsePlaybackPath(fullPath)
 
 	// Validate view key format (should be non-empty)
 	if viewKey == "" {
@@ -3036,13 +2987,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	// Append manifest path if specified
-	if manifestPath != "" {
-		// Check if redirect URL already has a path
-		if !strings.HasSuffix(redirectURL, "/") && !strings.HasPrefix(manifestPath, "/") {
-			redirectURL += "/"
-		}
-		redirectURL += manifestPath
-	}
+	redirectURL = appendManifestPath(redirectURL, manifestPath)
 	if viewerID != "" {
 		redirectURL = appendCorrelationID(redirectURL, viewerID)
 	}
@@ -3066,6 +3011,70 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 func appendCorrelationID(redirectURL, viewerID string) string {
 	return control.AppendCorrelationID(redirectURL, viewerID)
+}
+
+// appendManifestPath joins a requested manifest path (e.g. "index.m3u8") onto a
+// resolved edge output URL, but only when that URL is a container base rather than
+// an already-complete manifest URL. MistServer reports some outputs as a bare
+// directory (CMAF: ".../cmaf/<stream>/") and others as a full manifest URL
+// (HLS: ".../hls/<stream>/index.m3u8"); appending unconditionally would yield
+// ".../index.m3u8/index.m3u8". Any query string on the resolved URL is preserved
+// (the manifest segment lands on the path, never after the query).
+func appendManifestPath(redirectURL, manifestPath string) string {
+	if manifestPath == "" {
+		return redirectURL
+	}
+	parsed, err := url.Parse(redirectURL)
+	if err != nil {
+		return redirectURL
+	}
+	if isManifestPath(parsed.Path) {
+		return redirectURL
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/" + strings.TrimPrefix(manifestPath, "/")
+	parsed.RawPath = ""
+	return parsed.String()
+}
+
+// isManifestPath reports whether a URL path already ends in a streaming manifest
+// file, in which case it is a complete playback URL needing no manifest suffix.
+func isManifestPath(p string) bool {
+	last := p
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		last = p[i+1:]
+	}
+	if last == "" {
+		return false
+	}
+	return strings.HasSuffix(last, ".m3u8") ||
+		strings.HasSuffix(last, ".mpd") ||
+		strings.HasSuffix(last, ".f4m") ||
+		last == "Manifest"
+}
+
+// parsePlaybackPath splits a /play/ path tail into view key, protocol, and
+// manifest path. It accepts both "<viewkey>.<proto>" (e.g. vk.mp4, vk.html) and
+// "<viewkey>/<proto>/<manifest>" (e.g. vk/cmaf/index.mpd) forms. An empty view
+// key signals an invalid path.
+func parsePlaybackPath(fullPath string) (viewKey, protocol, manifestPath string) {
+	fullPath = strings.TrimPrefix(fullPath, "/")
+	parts := strings.Split(fullPath, "/")
+
+	// First segment may be "viewkey.protocol" (e.g. viewkey.hls / viewkey.m3u8).
+	dotParts := strings.Split(parts[0], ".")
+	viewKey = dotParts[0]
+	if len(dotParts) > 1 {
+		protocol = dotParts[1]
+	}
+
+	// Or protocol as the second path segment (e.g. viewkey/hls/index.m3u8).
+	if len(parts) > 1 && protocol == "" {
+		protocol = parts[1]
+		if len(parts) > 2 {
+			manifestPath = strings.Join(parts[2:], "/")
+		}
+	}
+	return viewKey, protocol, manifestPath
 }
 
 // normalizeProtocol converts protocol hints to standard names
@@ -3161,6 +3170,15 @@ func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) str
 		for outputName, output := range outputs {
 			outputLower := strings.ToLower(outputName)
 			if strings.Contains(outputLower, "dash") {
+				return output.Url
+			}
+		}
+		// MistServer has no separate DASH output by default; the DASH manifest is
+		// served from the CMAF container (.../cmaf/<stream>/index.mpd). Fall back
+		// to a CMAF output so /play/<id>/dash/index.mpd still resolves.
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "cmaf") || strings.Contains(outputLower, "ll-hls") || strings.Contains(outputLower, "llhls") || strings.Contains(outputLower, "low latency") {
 				return output.Url
 			}
 		}

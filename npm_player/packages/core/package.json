@@ -48,7 +48,7 @@
     "tailwind-merge": "^3.5.0"
   },
   "peerDependencies": {
-    "dashjs": "^4.0.0 || ^5.0.0",
+    "dashjs": "^5.0.0",
     "hls.js": "^1.0.0",
     "video.js": "^8.0.0"
   },
@@ -73,6 +73,8 @@
     "@tailwindcss/postcss": "^4.2.2",
     "@vitest/coverage-v8": "^4.1.4",
     "autoprefixer": "^10.5.0",
+    "dashjs": "5.2.0",
+    "hls.js": "1.6.16",
     "postcss": "^8.5.10",
     "postcss-cli": "^11.0.1",
     "postcss-prefix-selector": "^2.1.1",
@@ -80,6 +82,7 @@
     "tailwindcss": "^4.2.2",
     "tslib": "^2.8.1",
     "typescript": "^6.0.2",
+    "video.js": "8.23.7",
     "vitest": "^4.1.4"
   },
   "keywords": [

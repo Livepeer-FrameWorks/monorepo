@@ -68,6 +68,30 @@ describe("VideoJsPlayerImpl", () => {
     expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
   });
 
+  it("classifies MediaError.code === 3 as a deterministic decode failure", () => {
+    const action = VideoJsPlayerImpl.classifyError({ code: 3, message: "media error" });
+    expect(action.kind).toBe("error");
+    // Must carry "decode" + the code so ErrorClassifier maps it to CODEC_DECODE_ERROR.
+    expect(action.kind === "error" && action.message).toContain("decode");
+    expect(action.kind === "error" && action.message).toContain("code=3");
+  });
+
+  it("classifies Firefox NS_ERROR overflow as a reload request", () => {
+    const action = VideoJsPlayerImpl.classifyError({
+      code: 4,
+      message: "NS_ERROR_DOM_MEDIA_OVERFLOW_ERR (0x...)",
+    });
+    expect(action.kind).toBe("reload");
+    expect(action.kind === "reload" && action.reason).toBe("NS_ERROR_DOM_MEDIA_OVERFLOW_ERR");
+  });
+
+  it("passes through generic playback errors unchanged", () => {
+    const action = VideoJsPlayerImpl.classifyError({ code: 2, message: "network glitch" });
+    expect(action).toEqual({ kind: "error", message: "network glitch" });
+    const empty = VideoJsPlayerImpl.classifyError(null);
+    expect(empty).toEqual({ kind: "error", message: "VideoJS playback error" });
+  });
+
   it("does not trust Mist shorthand codecstring values during browser codec probing", () => {
     const source: StreamSource = {
       type: "html5/application/vnd.apple.mpegurl",

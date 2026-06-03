@@ -78,6 +78,49 @@ describe("DashJsPlayerImpl", () => {
     ]);
   });
 
+  it("ignores unrelated app rejections not originating from dash.js", () => {
+    const player = new DashJsPlayerImpl();
+    const errors: string[] = [];
+    let prevented = false;
+
+    const handler = (player as any).createInternalRejectionHandler({
+      onError: (error: string | Error) => errors.push(String(error)),
+    });
+
+    // A generic null-property rejection with no dash.js signature and no
+    // dash.js stack frame must NOT be claimed as a DASH failure — otherwise the
+    // global handler swallows unrelated app errors while this player is alive.
+    handler({
+      reason: new TypeError("Cannot read properties of null (reading 'foo')"),
+      preventDefault: () => {
+        prevented = true;
+      },
+      stopImmediatePropagation: () => {},
+    } as PromiseRejectionEvent);
+
+    expect(prevented).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it("merges caller dashConfig over the hardcoded defaults", async () => {
+    const player = new DashJsPlayerImpl();
+    const container = document.createElement("div");
+    const dashConfig = { streaming: { delay: { liveDelay: 2 } } };
+
+    await player.initialize(
+      container,
+      { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
+      { autoplay: false, muted: true, dashConfig },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    // Defaults are applied first, then the caller override (dash.js deep-merges),
+    // so the final updateSettings call carries the caller's dashConfig.
+    const calls = dashMocks.updateSettings.mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[calls.length - 1][0]).toEqual(dashConfig);
+  });
+
   it("emits ready after dash.js attaches the MPD", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");

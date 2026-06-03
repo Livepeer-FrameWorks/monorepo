@@ -28,6 +28,36 @@ export class VideoJsPlayerImpl extends BasePlayer {
     return this.capability.mimes.includes(mimetype);
   }
 
+  /**
+   * Classify a Video.js MediaError into a recovery action. Pure (no player
+   * state) so it can be unit-tested directly.
+   * - Firefox `NS_ERROR_DOM_MEDIA_OVERFLOW_ERR` → reload (segment glitch).
+   * - `MediaError.code === 3` (MEDIA_ERR_DECODE), e.g. Firefox CMAF → a hard
+   *   decode failure surfaced as a string carrying "decode" + the code, so
+   *   ErrorClassifier maps it to CODEC_DECODE_ERROR and the controller falls back.
+   */
+  static classifyError(
+    err: { code?: number; message?: string } | null | undefined
+  ):
+    | { kind: "reload"; reason: string; log: string }
+    | { kind: "error"; message: string; log?: string } {
+    const errorMsg = err?.message || "";
+    const code = typeof err?.code === "number" ? err.code : undefined;
+
+    if (errorMsg.includes("NS_ERROR_DOM_MEDIA_OVERFLOW_ERR")) {
+      return {
+        kind: "reload",
+        reason: "NS_ERROR_DOM_MEDIA_OVERFLOW_ERR",
+        log: "Firefox segment error, requesting reload",
+      };
+    }
+    if (code === 3) {
+      const message = `VideoJS decode error (MEDIA_ERR_DECODE code=3): ${errorMsg || "media decode failure"}`;
+      return { kind: "error", message, log: message };
+    }
+    return { kind: "error", message: errorMsg || "VideoJS playback error" };
+  }
+
   isBrowserSupported(
     mimetype: string,
     source: StreamSource,
@@ -121,7 +151,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
     container: HTMLElement,
     source: StreamSource,
     options: PlayerOptions,
-    streamInfo?: StreamInfo
+    _streamInfo?: StreamInfo
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
@@ -219,20 +249,16 @@ export class VideoJsPlayerImpl extends BasePlayer {
         }
       }
 
-      // Error handling with Firefox NS_ERROR detection
+      // Error handling (Firefox segment-glitch reload + decode classification).
       this.videojsPlayer.on("error", () => {
         if (this.destroyed) return; // Guard against zombie callbacks
-        const err = this.videojsPlayer?.error();
-        const errorMsg = err?.message || "";
-
-        // Firefox-specific segment error - trigger reload
-        if (errorMsg.includes("NS_ERROR_DOM_MEDIA_OVERFLOW_ERR")) {
-          console.warn("[VideoJS] Firefox segment error, requesting reload");
-          this.emit("reloadrequested", { reason: "NS_ERROR_DOM_MEDIA_OVERFLOW_ERR" });
+        const action = VideoJsPlayerImpl.classifyError(this.videojsPlayer?.error());
+        if (action.log) console.warn("[VideoJS]", action.log);
+        if (action.kind === "reload") {
+          this.emit("reloadrequested", { reason: action.reason });
           return;
         }
-
-        this.emit("error", errorMsg || "VideoJS playback error");
+        this.emit("error", action.message);
       });
 
       // FIX: Explicitly trigger play after VideoJS is ready
