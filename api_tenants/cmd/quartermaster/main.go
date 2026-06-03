@@ -77,8 +77,9 @@ func main() {
 	// on the GRPCRequests / GRPCDuration vectors; separate tenant_/cluster_/
 	// node_/service_operations counters would only rename the same axis.
 	serverMetrics := &qmgrpc.ServerMetrics{
-		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		GRPCRequests:          metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:          metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		SyncMeshPhaseDuration: metricsCollector.NewHistogram("sync_mesh_phase_duration_seconds", "SyncMesh phase duration", []string{"phase"}, nil),
 	}
 
 	// Initialize Navigator client

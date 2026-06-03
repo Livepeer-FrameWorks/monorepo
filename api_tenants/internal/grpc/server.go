@@ -82,6 +82,7 @@ const (
 	foghornExternalGRPCPort        = 18029
 	navigatorDNSSyncTimeout        = 30 * time.Second
 	navigatorDNSSyncConcurrency    = 4
+	syncMeshSlowLogThreshold       = time.Second
 )
 
 func retryQueryContext(ctx context.Context, db *sql.DB, query string, args ...any) (*sql.Rows, error) {
@@ -7786,18 +7787,48 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
 	}
+	var clusterID string
+	var peerCount, requiredPeerCount, serviceEndpointTypeCount int
+	started := time.Now()
+	phaseDurations := logging.Fields{}
+	recordPhase := func(phase string, phaseStarted time.Time) {
+		elapsed := time.Since(phaseStarted)
+		phaseDurations[phase+"_duration_ms"] = elapsed.Milliseconds()
+		if s.metrics != nil && s.metrics.SyncMeshPhaseDuration != nil {
+			s.metrics.SyncMeshPhaseDuration.WithLabelValues(phase).Observe(elapsed.Seconds())
+		}
+	}
+	defer func() {
+		total := time.Since(started)
+		if total < syncMeshSlowLogThreshold {
+			return
+		}
+		fields := logging.Fields{
+			"node_id":                nodeID,
+			"cluster_id":             clusterID,
+			"duration_ms":            total.Milliseconds(),
+			"required_peer_count":    requiredPeerCount,
+			"peer_count":             peerCount,
+			"service_endpoint_types": serviceEndpointTypeCount,
+		}
+		for key, val := range phaseDurations {
+			fields[key] = val
+		}
+		s.logger.WithFields(fields).Warn("Slow SyncMesh")
+	}()
 
 	// 1. Check if node exists and get current GitOps WireGuard identity.
 	var currentWgIP sql.NullString
 	var storedPublicKey sql.NullString
 	var externalIP, internalIP sql.NullString
 	var storedListenPort sql.NullInt32
-	var clusterID string
+	phaseStarted := time.Now()
 	err := s.db.QueryRowContext(ctx, `
 		SELECT host(wireguard_ip), wireguard_public_key, host(external_ip), host(internal_ip), wireguard_listen_port, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID).Scan(&currentWgIP, &storedPublicKey, &externalIP, &internalIP, &storedListenPort, &clusterID)
+	recordPhase("identity_lookup", phaseStarted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")
 	}
@@ -7858,6 +7889,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		snapUptime = sql.NullInt64{Int64: int64(snap.GetUptimeSeconds()), Valid: true}
 		snapAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 	}
+	phaseStarted = time.Now()
 	if snapPresent {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE quartermaster.infrastructure_nodes
@@ -7884,36 +7916,48 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 			WHERE node_id = $1
 		`, nodeID, appliedRev)
 	}
+	recordPhase("heartbeat_update", phaseStarted)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to update node heartbeat")
 	}
 
+	phaseStarted = time.Now()
 	dnsRequired, peerRequired, globalPeerRequired, infraRequired, reqErr := s.meshServiceRequirements(ctx, nodeID)
+	recordPhase("service_requirements", phaseStarted)
 	if reqErr != nil {
 		return nil, status.Errorf(codes.Internal, "mesh service requirements unavailable: %v", reqErr)
 	}
+	phaseStarted = time.Now()
 	serviceEndpoints, requiredPeerNodeIDs, endpointErr := s.collectMeshServiceEndpoints(ctx, clusterID, nodeID, dnsRequired, peerRequired, globalPeerRequired)
+	recordPhase("service_endpoints", phaseStarted)
 	if endpointErr != nil {
 		return nil, status.Errorf(codes.Internal, "mesh service endpoints unavailable: %v", endpointErr)
 	}
+	serviceEndpointTypeCount = len(serviceEndpoints)
+	phaseStarted = time.Now()
 	infraPeers, infraErr := s.collectInfraPeerNodeIDs(ctx, clusterID, nodeID, infraRequired)
+	recordPhase("infra_peers", phaseStarted)
 	if infraErr != nil {
 		return nil, status.Errorf(codes.Internal, "mesh infra peers unavailable: %v", infraErr)
 	}
 	for peerNodeID := range infraPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
+	phaseStarted = time.Now()
 	reciprocalPeers, reciprocalErr := s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, nodeID)
+	recordPhase("reciprocal_peers", phaseStarted)
 	if reciprocalErr != nil {
 		return nil, status.Errorf(codes.Internal, "mesh reciprocal peers unavailable: %v", reciprocalErr)
 	}
 	for peerNodeID := range reciprocalPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
+	requiredPeerCount = len(requiredPeerNodeIDs)
 
 	// 3. Get active peer nodes with WireGuard configured. Nodes always see
 	// same-cluster peers; cross-cluster peers are limited to required service
 	// endpoints and direct federation targets.
+	phaseStarted = time.Now()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
@@ -7924,6 +7968,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		  AND n.status = 'active'
 	`, nodeID, clusterID, pq.Array(sortedStringKeys(requiredPeerNodeIDs)))
 	if err != nil {
+		recordPhase("peer_query", phaseStarted)
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -7979,6 +8024,12 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		peer.KeepAlive = 25
 		peers = append(peers, &peer)
 	}
+	if err := rows.Err(); err != nil {
+		recordPhase("peer_query", phaseStarted)
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	recordPhase("peer_query", phaseStarted)
+	peerCount = len(peers)
 
 	return &pb.InfrastructureSyncResponse{
 		WireguardIp:      wireguardIP,
@@ -11159,8 +11210,9 @@ type GRPCServerConfig struct {
 // ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
 // counts + duration come from GRPCMetricsInterceptor.
 type ServerMetrics struct {
-	GRPCRequests *prometheus.CounterVec
-	GRPCDuration *prometheus.HistogramVec
+	GRPCRequests          *prometheus.CounterVec
+	GRPCDuration          *prometheus.HistogramVec
+	SyncMeshPhaseDuration *prometheus.HistogramVec
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster
