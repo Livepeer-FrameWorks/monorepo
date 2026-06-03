@@ -761,7 +761,7 @@ func main() {
 		adminTenantID := cfg.AdminTenantID
 		if adminTenantID == "" {
 			adminTenantID = "local"
-			logger.Warn("SKIPPER_ADMIN_TENANT_ID not set — WebUI will use tenant 'local' (Gateway tools unavailable)")
+			logger.Info("SKIPPER_ADMIN_TENANT_ID not set; embedded WebUI will use tenant 'local'")
 		}
 		adminAPIKey := cfg.AdminAPIKey
 		enableUI := true

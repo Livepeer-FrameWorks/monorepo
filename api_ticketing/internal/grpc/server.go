@@ -79,6 +79,12 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 		s.metrics.GRPCRequests.WithLabelValues("ListConversations", "error").Inc()
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if s.logger != nil {
+		s.logger.WithField("tenant_id", tenantID).
+			WithField("page", req.GetPage()).
+			WithField("per_page", req.GetPerPage()).
+			Info("Deckhand conversation list started")
+	}
 
 	// Find contact by tenant_id (source_id in Chatwoot)
 	contact, err := s.chatwoot.GetContactBySourceID(ctx, tenantID)
@@ -89,6 +95,7 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 	}
 	if contact == nil {
 		// No contact means no conversations
+		s.logger.WithField("tenant_id", tenantID).Warn("Deckhand conversation list found no Chatwoot contact")
 		s.metrics.GRPCRequests.WithLabelValues("ListConversations", "ok").Inc()
 		return &pb.ListConversationsResponse{
 			Conversations: []*pb.DeckhandConversation{},
@@ -119,6 +126,16 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 		result[i] = s.chatwootConvToProto(&conv)
 	}
 
+	logEntry := s.logger.WithField("tenant_id", tenantID).
+		WithField("contact_id", contact.ID).
+		WithField("result_count", len(result)).
+		WithField("total_count", total).
+		WithField("duration_ms", time.Since(start).Milliseconds())
+	if len(result) == 0 {
+		logEntry.Warn("Deckhand conversation list returned no results")
+	} else {
+		logEntry.Info("Deckhand conversation list completed")
+	}
 	s.metrics.GRPCRequests.WithLabelValues("ListConversations", "ok").Inc()
 	return &pb.ListConversationsResponse{
 		Conversations: result,
@@ -160,9 +177,20 @@ func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversa
 		perPage = 100
 	}
 
+	if s.logger != nil {
+		s.logger.WithField("tenant_id", tenantID).
+			WithField("query", query).
+			WithField("page", page).
+			WithField("per_page", perPage).
+			Info("Deckhand conversation search started")
+	}
+
 	// Offset within matched results to support paging.
 	skip := (page - 1) * perPage
 	results := make([]*pb.DeckhandConversation, 0, perPage)
+	rawMatches := 0
+	filteredMatches := 0
+	pagesScanned := 0
 
 	const maxPages = 20
 	for chatwootPage := 1; chatwootPage <= maxPages; chatwootPage++ {
@@ -175,9 +203,12 @@ func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversa
 		if len(convs) == 0 {
 			break
 		}
+		pagesScanned = chatwootPage
+		rawMatches += len(convs)
 
 		for _, conv := range convs {
 			if err := s.verifyConversationTenant(ctx, &conv); err != nil {
+				filteredMatches++
 				continue
 			}
 			if skip > 0 {
@@ -195,6 +226,20 @@ func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversa
 		}
 	}
 
+	logEntry := s.logger.WithField("tenant_id", tenantID).
+		WithField("query", query).
+		WithField("raw_chatwoot_matches", rawMatches).
+		WithField("tenant_filtered_matches", filteredMatches).
+		WithField("result_count", len(results)).
+		WithField("pages_scanned", pagesScanned).
+		WithField("duration_ms", time.Since(start).Milliseconds())
+	if rawMatches > 0 && len(results) == 0 {
+		logEntry.Warn("Deckhand conversation search returned Chatwoot hits but no tenant-visible results")
+	} else if len(results) == 0 {
+		logEntry.Warn("Deckhand conversation search returned no results")
+	} else {
+		logEntry.Info("Deckhand conversation search completed")
+	}
 	s.metrics.GRPCRequests.WithLabelValues("SearchConversations", "ok").Inc()
 	return &pb.SearchConversationsResponse{
 		Conversations: results,

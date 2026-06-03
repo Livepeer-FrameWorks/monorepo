@@ -161,8 +161,14 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 
 	gc.mu.RLock()
 	session := gc.session
+	endpoint := gc.cfg.GatewayURL
 	gc.mu.RUnlock()
 
+	start := time.Now()
+	if gc.logger != nil {
+		gc.logger.WithFields(mcpCallLogFields(ctx, name, endpoint, arguments)).
+			Info("Gateway MCP client tool call started")
+	}
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
 		Arguments: args,
@@ -178,19 +184,51 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 			})
 		}
 		if err != nil {
+			if gc.logger != nil {
+				gc.logger.WithError(err).
+					WithFields(mcpCallLogFields(ctx, name, endpoint, arguments)).
+					WithField("duration_ms", time.Since(start).Milliseconds()).
+					Warn("Gateway MCP client tool call failed")
+			}
 			return "", fmt.Errorf("mcpclient: call %s: %w", name, err)
 		}
 	}
 
 	if result.IsError {
 		text := extractTextContent(result)
+		if gc.logger != nil {
+			gc.logger.WithFields(mcpCallLogFields(ctx, name, endpoint, arguments)).
+				WithField("duration_ms", time.Since(start).Milliseconds()).
+				WithField("result_bytes", len(text)).
+				Warn("Gateway MCP client tool returned error")
+		}
 		if text != "" {
 			return "", fmt.Errorf("mcpclient: tool %s returned error: %s", name, text)
 		}
 		return "", fmt.Errorf("mcpclient: tool %s returned error", name)
 	}
 
-	return extractTextContent(result), nil
+	text := extractTextContent(result)
+	if gc.logger != nil {
+		gc.logger.WithFields(mcpCallLogFields(ctx, name, endpoint, arguments)).
+			WithField("duration_ms", time.Since(start).Milliseconds()).
+			WithField("result_bytes", len(text)).
+			Info("Gateway MCP client tool call completed")
+	}
+	return text, nil
+}
+
+func mcpCallLogFields(ctx context.Context, name, endpoint string, arguments json.RawMessage) logging.Fields {
+	return logging.Fields{
+		"tool":          name,
+		"endpoint":      endpoint,
+		"auth_type":     ctxkeys.GetAuthType(ctx),
+		"tenant_id":     ctxkeys.GetTenantID(ctx),
+		"user_id":       ctxkeys.GetUserID(ctx),
+		"has_jwt":       ctxkeys.GetJWTToken(ctx) != "",
+		"has_api_token": ctxkeys.GetAPIToken(ctx) != "",
+		"args_bytes":    len(arguments),
+	}
 }
 
 // tryReconnect attempts a single reconnect to the Gateway MCP server.

@@ -15,6 +15,7 @@ import (
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/skipper"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -372,7 +373,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 				}
 				toolStart := time.Now()
 				if o.logger != nil {
-					o.logger.WithField("tool", c.Name).Info("Skipper tool call started")
+					o.logger.WithFields(toolCallLogFields(ctx, c)).Info("Skipper tool call started")
 				}
 				outcome, err := o.executeTool(ctx, c)
 				record := ToolCallRecord{Name: c.Name}
@@ -400,11 +401,12 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 					sseMu.Unlock()
 				}
 				if o.logger != nil {
-					entry := o.logger.WithField("tool", c.Name).
+					entry := o.logger.WithFields(toolCallLogFields(ctx, c)).
 						WithField("duration_ms", time.Since(toolStart).Milliseconds())
 					if err != nil {
 						entry.WithError(err).Warn("Skipper tool call completed with error")
 					} else {
+						entry = entry.WithFields(toolOutcomeLogFields(outcome.Content))
 						entry.Info("Skipper tool call completed")
 					}
 				}
@@ -519,24 +521,25 @@ func sendProgressEnd(streamer TokenStreamer, name string) {
 // Read-only search, introspection, stream reads, and diagnostic tools only;
 // all mutation tools blocked.
 var docsAllowedTools = map[string]bool{
-	"list_mcp_tools":            true,
-	"search_knowledge":          true,
-	"search_web":                true,
-	"introspect_schema":         true,
-	"generate_query":            true,
-	"execute_query":             true,
-	"get_stream":                true,
-	"list_streams":              true,
-	"get_stream_health":         true,
-	"get_stream_metrics":        true,
-	"check_stream_health":       true,
-	"diagnose_rebuffering":      true,
-	"diagnose_buffer_health":    true,
-	"diagnose_packet_loss":      true,
-	"diagnose_routing":          true,
-	"get_stream_health_summary": true,
-	"get_anomaly_report":        true,
-	"search_support_history":    true,
+	"list_mcp_tools":             true,
+	"search_knowledge":           true,
+	"search_web":                 true,
+	"introspect_schema":          true,
+	"generate_query":             true,
+	"execute_query":              true,
+	"get_stream":                 true,
+	"list_streams":               true,
+	"get_stream_health":          true,
+	"get_stream_metrics":         true,
+	"check_stream_health":        true,
+	"diagnose_rebuffering":       true,
+	"diagnose_buffer_health":     true,
+	"diagnose_packet_loss":       true,
+	"diagnose_routing":           true,
+	"get_stream_health_summary":  true,
+	"get_anomaly_report":         true,
+	"search_support_history":     true,
+	"list_support_conversations": true,
 }
 
 // spokeMutationBlocklist lists mutation tools blocked in spoke mode.
@@ -747,7 +750,7 @@ func mcpToolCategory(name string) string {
 		return "Playback"
 	case "diagnose_rebuffering", "diagnose_buffer_health", "diagnose_packet_loss", "diagnose_routing", "get_stream_health_summary", "get_anomaly_report":
 		return "QoE Diagnostics"
-	case "search_support_history":
+	case "search_support_history", "list_support_conversations":
 		return "Support"
 	case "introspect_schema", "generate_query", "execute_query":
 		return "Schema"
@@ -779,9 +782,29 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 		}
 	}
 
+	gatewayStart := time.Now()
+	if o.logger != nil {
+		o.logger.WithFields(toolCallLogFields(ctx, call)).Info("Skipper Gateway MCP tool call started")
+	}
 	content, err := o.gateway.CallTool(ctx, call.Name, json.RawMessage(call.Arguments))
 	if err != nil {
+		if o.logger != nil {
+			o.logger.WithError(err).
+				WithFields(toolCallLogFields(ctx, call)).
+				WithField("duration_ms", time.Since(gatewayStart).Milliseconds()).
+				Warn("Skipper Gateway MCP tool call failed")
+		}
 		return ToolOutcome{}, err
+	}
+	if o.logger != nil {
+		entry := o.logger.WithFields(toolCallLogFields(ctx, call)).
+			WithField("duration_ms", time.Since(gatewayStart).Milliseconds()).
+			WithFields(toolOutcomeLogFields(content))
+		if toolOutcomeLooksEmpty(content) {
+			entry.Warn("Skipper Gateway MCP tool call returned empty result")
+		} else {
+			entry.Info("Skipper Gateway MCP tool call completed")
+		}
 	}
 
 	// Enrich diagnostic tool output with baseline context (read-only).
@@ -803,6 +826,67 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 			Payload: payload,
 		},
 	}, nil
+}
+
+func toolCallLogFields(ctx context.Context, call llm.ToolCall) logging.Fields {
+	return logging.Fields{
+		"tool":          call.Name,
+		"tool_call_id":  call.ID,
+		"tenant_id":     skipper.GetTenantID(ctx),
+		"user_id":       skipper.GetUserID(ctx),
+		"auth_type":     skipper.GetAuthType(ctx),
+		"mode":          skipper.GetMode(ctx),
+		"has_jwt":       ctxkeys.GetJWTToken(ctx) != "" || skipper.GetJWTToken(ctx) != "",
+		"has_api_token": ctxkeys.GetAPIToken(ctx) != "",
+		"args_bytes":    len(call.Arguments),
+	}
+}
+
+func toolOutcomeLogFields(content string) logging.Fields {
+	fields := logging.Fields{"result_bytes": len(content)}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return fields
+	}
+	if mode, ok := payload["mode"].(string); ok {
+		fields["result_mode"] = mode
+	}
+	if total, ok := numericJSONField(payload["total_found"]); ok {
+		fields["total_found"] = total
+	}
+	if results, ok := payload["results"].([]any); ok {
+		fields["result_count"] = len(results)
+	}
+	return fields
+}
+
+func toolOutcomeLooksEmpty(content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return true
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	if total, ok := numericJSONField(payload["total_found"]); ok && total == 0 {
+		return true
+	}
+	if results, ok := payload["results"].([]any); ok && len(results) == 0 {
+		return true
+	}
+	return false
+}
+
+func numericJSONField(value any) (int, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return int(n), err == nil
+	default:
+		return 0, false
+	}
 }
 
 func isMutationRestricted(ctx context.Context) bool {

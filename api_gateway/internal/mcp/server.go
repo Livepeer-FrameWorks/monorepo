@@ -352,12 +352,32 @@ func (s *Server) registerAccessMiddleware() {
 			}, s.rateLimiter, s.tenantCache.GetLimitsFunc(), s.tenantCache, s.serviceClients.Purser, s.serviceClients.Purser, s.serviceClients.Commodore, s.logger)
 
 			if !decision.Allowed {
+				s.logger.WithField("operation", opName).
+					WithField("tenant_id", tenantID).
+					WithField("auth_type", deriveAuthType(ctx)).
+					WithField("status", decision.Status).
+					WithField("duration_ms", time.Since(start).Milliseconds()).
+					Warn("MCP request denied")
 				return nil, accessDecisionError(decision)
 			}
 
 			result, err := next(ctx, method, req)
 			if err == nil && method == "tools/list" {
 				result = filterSkipperTools(ctx, result, s.skipperClient)
+			}
+			if method == "tools/call" {
+				entry := s.logger.WithField("operation", opName).
+					WithField("tenant_id", ctxkeys.GetTenantID(ctx)).
+					WithField("user_id", ctxkeys.GetUserID(ctx)).
+					WithField("auth_type", deriveAuthType(ctx)).
+					WithField("duration_ms", time.Since(start).Milliseconds())
+				if err != nil {
+					entry.WithError(err).Warn("MCP tool call failed")
+				} else if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
+					entry.WithField("result_bytes", len(mcpTextResult(toolResult))).Warn("MCP tool call returned tool error")
+				} else {
+					entry.WithField("result_bytes", mcpResultTextBytes(result)).Info("MCP tool call completed")
+				}
 			}
 			if s.usageTracker != nil {
 				durationMs := uint64(time.Since(start).Milliseconds())
@@ -379,6 +399,26 @@ func (s *Server) registerAccessMiddleware() {
 			return result, err
 		}
 	})
+}
+
+func mcpResultTextBytes(result mcp.Result) int {
+	if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil {
+		return len(mcpTextResult(toolResult))
+	}
+	return 0
+}
+
+func mcpTextResult(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var parts []string
+	for _, content := range result.Content {
+		if text, ok := content.(*mcp.TextContent); ok {
+			parts = append(parts, text.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func filterSkipperTools(ctx context.Context, result mcp.Result, skipper tools.SkipperCaller) mcp.Result {
