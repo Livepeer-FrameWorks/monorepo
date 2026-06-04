@@ -811,7 +811,8 @@
           <div class="p-4 bg-success/10 border border-success/20 rounded-lg">
             <p class="text-sm text-success font-medium mb-2">Enrollment token created.</p>
             <p class="text-xs text-muted-foreground mb-3">
-              Copy the bootstrap token below. This is the only time it will be shown.
+              Save this token value now. Tokens are stored hashed, but you can create another
+              enrollment token later.
             </p>
             <div class="flex items-center gap-2">
               <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">

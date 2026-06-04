@@ -1566,6 +1566,7 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 	var tenantID string
 	var clusterName string
 	var shortDesc string
+	var controlClusterID string
 	cmd := &cobra.Command{Use: "create-edge", Short: "Create an edge cluster with Foghorn assignment and enrollment token", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterName) == "" {
 			return fmt.Errorf("--cluster-name is required")
@@ -1588,8 +1589,9 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 		}
 
 		req := &pb.EnableSelfHostingRequest{
-			TenantId:    tenantID,
-			ClusterName: clusterName,
+			TenantId:         tenantID,
+			ClusterName:      clusterName,
+			ControlClusterId: strings.TrimSpace(controlClusterID),
 		}
 		if shortDesc != "" {
 			req.ShortDescription = &shortDesc
@@ -1621,6 +1623,7 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "display name for the cluster (required)")
 	cmd.Flags().StringVar(&shortDesc, "description", "", "short description (optional)")
+	cmd.Flags().StringVar(&controlClusterID, "control-cluster-id", "", "explicit platform-official cluster/cell to control this edge cluster")
 	return cmd
 }
 

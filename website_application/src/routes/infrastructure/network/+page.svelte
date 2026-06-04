@@ -19,6 +19,7 @@
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
+  import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { GridSeam } from "$lib/components/layout";
   import { toast } from "$lib/stores/toast";
   import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
@@ -95,8 +96,11 @@
 
   let showCreateClusterModal = $state(false);
   let newClusterName = $state("");
+  let selectedControlClusterId = $state("");
   let createdBootstrapToken = $state<string | null>(null);
-  let createdFoghornAddr = $state<string | null>(null);
+  let controlClusterOptions = $derived(
+    mySubscriptions.filter((cluster) => (cluster as any).isPlatformOfficial)
+  );
 
   let mapNodes = $derived(
     ($networkStore.data?.networkStatus?.nodes ?? [])
@@ -225,14 +229,17 @@
       return;
     }
     try {
+      const input: Record<string, string> = { clusterName: newClusterName.trim() };
+      if (selectedControlClusterId) {
+        input.controlClusterId = selectedControlClusterId;
+      }
       const result = await createClusterMutation.mutate({
-        input: { clusterName: newClusterName.trim() },
+        input: input as any,
       });
       const data = result.data?.createEdgeCluster;
       if (data?.__typename === "CreateEdgeClusterResponse") {
         const unmaskedToken = unmaskBootstrapToken(data.bootstrapToken);
         createdBootstrapToken = unmaskedToken?.token ?? null;
-        createdFoghornAddr = data.foghornAddr;
         toast.success(`Created cluster "${newClusterName}"`);
         await Promise.all([accessStore.fetch(), subscriptionsStore.fetch()]);
         await fetchPendingApprovals();
@@ -249,8 +256,8 @@
   function closeModal() {
     showCreateClusterModal = false;
     newClusterName = "";
+    selectedControlClusterId = "";
     createdBootstrapToken = null;
-    createdFoghornAddr = null;
   }
 
   function formatTimeAgo(dateStr: string | null | undefined) {
@@ -655,28 +662,9 @@
           <div class="p-4 bg-success/10 border border-success/20 rounded-lg">
             <p class="text-sm text-success font-medium mb-2">Cluster created successfully!</p>
             <p class="text-xs text-muted-foreground mb-3">
-              Copy the bootstrap token below. This is the only time it will be shown.
+              Save this token value now. Tokens are stored hashed, but you can create another
+              enrollment token later.
             </p>
-            {#if createdFoghornAddr}
-              <div class="mb-3">
-                <p class="text-xs text-muted-foreground mb-1">Foghorn address</p>
-                <div class="flex items-center gap-2">
-                  <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
-                    {createdFoghornAddr}
-                  </code>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onclick={() => {
-                      navigator.clipboard.writeText(createdFoghornAddr!);
-                      toast.success("Foghorn address copied to clipboard");
-                    }}
-                  >
-                    <CopyIcon class="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            {/if}
             <p class="text-xs text-muted-foreground mb-1">Bootstrap token</p>
             <div class="flex items-center gap-2">
               <code class="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
@@ -710,6 +698,37 @@
               class="w-full px-3 py-2 bg-muted border border-border rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
+          {#if controlClusterOptions.length > 0}
+            <div>
+              <label for="controlCluster" class="block text-sm font-medium text-foreground mb-1">
+                Control region
+              </label>
+              <Select
+                value={selectedControlClusterId}
+                onValueChange={(value) => {
+                  selectedControlClusterId = value;
+                }}
+                type="single"
+              >
+                <SelectTrigger id="controlCluster" class="w-full">
+                  {selectedControlClusterId
+                    ? (controlClusterOptions.find((c) => c.clusterId === selectedControlClusterId)
+                        ?.clusterName ?? selectedControlClusterId)
+                    : "Automatic nearest region"}
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Automatic nearest region</SelectItem>
+                  {#each controlClusterOptions as cluster (cluster.clusterId)}
+                    <SelectItem value={cluster.clusterId}>
+                      {cluster.clusterName}{(cluster as any).regionId
+                        ? ` (${(cluster as any).regionId})`
+                        : ""}
+                    </SelectItem>
+                  {/each}
+                </SelectContent>
+              </Select>
+            </div>
+          {/if}
           <div class="flex gap-3">
             <Button variant="outline" class="flex-1" onclick={closeModal}>Cancel</Button>
             <Button

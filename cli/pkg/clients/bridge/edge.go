@@ -82,6 +82,7 @@ mutation BootstrapEdge($input: BootstrapEdgeInput!) {
 type CreateEdgeClusterInput struct {
 	ClusterName      string  `json:"clusterName"`
 	ShortDescription *string `json:"shortDescription,omitempty"`
+	ControlClusterID *string `json:"controlClusterId,omitempty"`
 }
 
 // CreatedEdgeCluster is the subset of CreateEdgeClusterResponse the CLI

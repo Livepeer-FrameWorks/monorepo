@@ -3034,6 +3034,8 @@ input CreateEdgeClusterInput {
   clusterName: String!
   "Short description."
   shortDescription: String
+  "Optional platform-official cluster/cell to control this edge cluster."
+  controlClusterId: ID
 }
 
 """

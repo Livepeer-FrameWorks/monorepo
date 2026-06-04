@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -1418,8 +1419,10 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 	}
 
 	req := &pb.EnableSelfHostingRequest{
-		TenantId:    tenantID,
-		ClusterName: input.ClusterName,
+		TenantId:         tenantID,
+		ClusterName:      input.ClusterName,
+		ClientIp:         requestClientIP(ctx),
+		ControlClusterId: optionalStringField(input, "ControlClusterID"),
 	}
 	if input.ShortDescription != nil {
 		req.ShortDescription = input.ShortDescription
@@ -1460,6 +1463,50 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 		BootstrapToken: resp.BootstrapToken,
 		FoghornAddr:    resp.FoghornAddr,
 	}, nil
+}
+
+type clientIPContext interface {
+	ClientIP() string
+}
+
+func requestClientIP(ctx context.Context) string {
+	if ip := strings.TrimSpace(ctxkeys.GetClientIP(ctx)); ip != "" {
+		return ip
+	}
+	if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
+		if c, ok := ginCtx.(clientIPContext); ok {
+			return strings.TrimSpace(c.ClientIP())
+		}
+	}
+	return ""
+}
+
+func optionalStringField(v any, fieldName string) string {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return ""
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return ""
+	}
+	field := rv.FieldByName(fieldName)
+	if !field.IsValid() {
+		return ""
+	}
+	switch field.Kind() {
+	case reflect.String:
+		return strings.TrimSpace(field.String())
+	case reflect.Pointer:
+		if field.IsNil() || field.Elem().Kind() != reflect.String {
+			return ""
+		}
+		return strings.TrimSpace(field.Elem().String())
+	default:
+		return ""
+	}
 }
 
 // DoCreateEnrollmentToken creates an enrollment token for a cluster

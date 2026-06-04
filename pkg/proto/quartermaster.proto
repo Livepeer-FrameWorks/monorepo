@@ -1979,6 +1979,13 @@ message EnableSelfHostingRequest {
   // (avoids transatlantic reconcile latency). Empty = legacy behaviour: pick
   // the least-loaded Foghorn in any region.
   string region = 4;
+  // Best-effort caller IP supplied by Bridge/Gateway from the trusted request
+  // context. Quartermaster GeoIP-ranks healthy Foghorn control cells from this
+  // address when no explicit control_cluster_id is provided.
+  string client_ip = 5;
+  // Explicit platform-official cluster/cell to control this self-hosted edge
+  // cluster. Used when the operator chooses a regional cluster directly.
+  string control_cluster_id = 6;
 }
 
 message EnableSelfHostingResponse {

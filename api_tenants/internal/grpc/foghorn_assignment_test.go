@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -12,6 +13,40 @@ import (
 
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
+
+func TestPickFoghornControlCellCandidatePrefersNearestGeo(t *testing.T) {
+	got := pickFoghornControlCellCandidate([]foghornControlCellCandidate{
+		{
+			instanceID:    "us-foghorn",
+			controlCellID: "media-us-1",
+			load:          0,
+			latitude:      sql.NullFloat64{Float64: 37.7749, Valid: true},
+			longitude:     sql.NullFloat64{Float64: -122.4194, Valid: true},
+		},
+		{
+			instanceID:    "eu-foghorn",
+			controlCellID: "media-eu-1",
+			load:          9,
+			latitude:      sql.NullFloat64{Float64: 52.3676, Valid: true},
+			longitude:     sql.NullFloat64{Float64: 4.9041, Valid: true},
+		},
+	}, 52.37, 4.89, true)
+
+	if got.controlCellID != "media-eu-1" {
+		t.Fatalf("controlCellID = %q, want nearest EU control cell", got.controlCellID)
+	}
+}
+
+func TestPickFoghornControlCellCandidateFallsBackToLoad(t *testing.T) {
+	got := pickFoghornControlCellCandidate([]foghornControlCellCandidate{
+		{instanceID: "loaded-foghorn", controlCellID: "media-eu-1", load: 10},
+		{instanceID: "idle-foghorn", controlCellID: "media-us-1", load: 1},
+	}, 0, 0, false)
+
+	if got.controlCellID != "media-us-1" {
+		t.Fatalf("controlCellID = %q, want least-loaded fallback", got.controlCellID)
+	}
+}
 
 func TestAssignServiceToClusterCountFailsWhenNoRunningFoghornAvailable(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -133,13 +168,15 @@ func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
 	mock.ExpectQuery("SELECT max_owned_clusters, is_provider,").
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider", "count"}).AddRow(10, true, 0))
-	mock.ExpectQuery("WITH ranked AS").
-		WithArgs("").
-		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "addr", "control_cell", "control_region"}).
-			AddRow("11111111-1111-1111-1111-111111111111", "foghorn:18008", "media-eu-1", "eu"))
+	mock.ExpectQuery("SELECT pc.region_id").
+		WithArgs("tenant-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT si.id::text AS instance_id").
+		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
+			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
 	mock.ExpectBegin()
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.tenant_cluster_access.*VALUES").
 		WithArgs("tenant-1", sqlmock.AnyArg()).
@@ -174,13 +211,12 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 	mock.ExpectQuery("SELECT max_owned_clusters, is_provider,").
 		WithArgs("tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"max_owned_clusters", "is_provider", "count"}).AddRow(10, true, 0))
-	mock.ExpectQuery("WITH ranked AS").
-		WithArgs("").
-		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region"}).
-			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu"))
+	mock.ExpectQuery("SELECT si.id::text AS instance_id").
+		WillReturnRows(sqlmock.NewRows([]string{"instance_id", "control_cell", "control_region", "control_base_url", "load", "latitude", "longitude", "started_at"}).
+			AddRow("11111111-1111-1111-1111-111111111111", "media-eu-1", "eu", "frameworks.network", int64(0), nil, nil, nil))
 	mock.ExpectBegin()
 	mock.ExpectExec("(?s)INSERT INTO quartermaster\\.infrastructure_clusters.*max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps.*VALUES.*0, 0, 0.*NULLIF\\(\\$8::text, ''\\), \\$2, 'tenant_private'").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "Tenant Edge", "tenant-1", nil, sqlmock.AnyArg(), "media-eu-1", "eu", "frameworks.network").
 		WillReturnError(errors.New("stop after cluster insert"))
 	mock.ExpectRollback()
 

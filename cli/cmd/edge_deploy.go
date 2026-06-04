@@ -22,24 +22,25 @@ import (
 
 func newEdgeDeployCmd() *cobra.Command {
 	var (
-		clusterID       string
-		clusterName     string
-		nodeName        string
-		enrollmentToken string
-		foghornAddr     string
-		sshTarget       string
-		sshKey          string
-		mode            string
-		email           string
-		applyTuning     bool
-		skipPreflight   bool
-		version         string
-		timeout         time.Duration
-		tokenTTL        string
-		capabilities    []string
-		bandwidthMbps   int
-		maxTranscodes   int
-		storageBytes    uint64
+		clusterID        string
+		clusterName      string
+		controlClusterID string
+		nodeName         string
+		enrollmentToken  string
+		foghornAddr      string
+		sshTarget        string
+		sshKey           string
+		mode             string
+		email            string
+		applyTuning      bool
+		skipPreflight    bool
+		version          string
+		timeout          time.Duration
+		tokenTTL         string
+		capabilities     []string
+		bandwidthMbps    int
+		maxTranscodes    int
+		storageBytes     uint64
 	)
 
 	cmd := &cobra.Command{
@@ -95,6 +96,7 @@ Mode B — Pre-existing token (no login needed):
 			deployCfg := deployConfig{
 				clusterID:          clusterID,
 				clusterName:        clusterName,
+				controlClusterID:   controlClusterID,
 				nodeName:           nodeName,
 				enrollmentToken:    enrollmentToken,
 				foghornAddr:        foghornAddr,
@@ -144,6 +146,7 @@ Mode B — Pre-existing token (no login needed):
 
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to deploy to (auto-detected if omitted)")
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "name for new edge cluster if one needs to be created")
+	cmd.Flags().StringVar(&controlClusterID, "control-cluster-id", "", "explicit platform-official cluster/cell to control a newly-created edge cluster")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "preferred node name/id for enrollment and DNS")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "pre-existing enrollment token (skips login and cluster setup)")
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "explicit Foghorn gRPC override (debug only; normally Bridge resolves it)")
@@ -166,6 +169,7 @@ Mode B — Pre-existing token (no login needed):
 type deployConfig struct {
 	clusterID          string
 	clusterName        string
+	controlClusterID   string
 	nodeName           string
 	enrollmentToken    string
 	foghornAddr        string
@@ -249,6 +253,9 @@ func resolveEnrollmentToken(ctx context.Context, cmd *cobra.Command, bc *bridge.
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Creating edge cluster %q via Bridge...\n", name)
 	in := bridge.CreateEdgeClusterInput{ClusterName: name}
+	if cfg.controlClusterID != "" {
+		in.ControlClusterID = &cfg.controlClusterID
+	}
 	created, err := bc.CreateEdgeCluster(ctx, jwt, in)
 	if err != nil {
 		return "", false, err

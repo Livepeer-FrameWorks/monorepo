@@ -12805,9 +12805,16 @@ type EnableSelfHostingRequest struct {
 	// selection so a US self-hosted cluster is controlled from a US Foghorn
 	// (avoids transatlantic reconcile latency). Empty = legacy behaviour: pick
 	// the least-loaded Foghorn in any region.
-	Region        string `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Region string `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`
+	// Best-effort caller IP supplied by Bridge/Gateway from the trusted request
+	// context. Quartermaster GeoIP-ranks healthy Foghorn control cells from this
+	// address when no explicit control_cluster_id is provided.
+	ClientIp string `protobuf:"bytes,5,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	// Explicit platform-official cluster/cell to control this self-hosted edge
+	// cluster. Used when the operator chooses a regional cluster directly.
+	ControlClusterId string `protobuf:"bytes,6,opt,name=control_cluster_id,json=controlClusterId,proto3" json:"control_cluster_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *EnableSelfHostingRequest) Reset() {
@@ -12864,6 +12871,20 @@ func (x *EnableSelfHostingRequest) GetShortDescription() string {
 func (x *EnableSelfHostingRequest) GetRegion() string {
 	if x != nil {
 		return x.Region
+	}
+	return ""
+}
+
+func (x *EnableSelfHostingRequest) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
+	}
+	return ""
+}
+
+func (x *EnableSelfHostingRequest) GetControlClusterId() string {
+	if x != nil {
+		return x.ControlClusterId
 	}
 	return ""
 }
@@ -14456,12 +14477,14 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
 	"\finstance_ids\x18\x02 \x03(\tR\vinstanceIds\x12!\n" +
-	"\fservice_type\x18\x03 \x01(\tR\vserviceType\"\xba\x01\n" +
+	"\fservice_type\x18\x03 \x01(\tR\vserviceType\"\x85\x02\n" +
 	"\x18EnableSelfHostingRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12!\n" +
 	"\fcluster_name\x18\x02 \x01(\tR\vclusterName\x120\n" +
 	"\x11short_description\x18\x03 \x01(\tH\x00R\x10shortDescription\x88\x01\x01\x12\x16\n" +
-	"\x06region\x18\x04 \x01(\tR\x06regionB\x14\n" +
+	"\x06region\x18\x04 \x01(\tR\x06region\x12\x1b\n" +
+	"\tclient_ip\x18\x05 \x01(\tR\bclientIp\x12,\n" +
+	"\x12control_cluster_id\x18\x06 \x01(\tR\x10controlClusterIdB\x14\n" +
 	"\x12_short_description\"\xc6\x01\n" +
 	"\x19EnableSelfHostingResponse\x12>\n" +
 	"\acluster\x18\x01 \x01(\v2$.quartermaster.InfrastructureClusterR\acluster\x12F\n" +

@@ -176,7 +176,7 @@ Unlike get_node_info (static registration data from Quartermaster), this returns
 			Name: "create_edge_cluster",
 			Description: `Create a self-hosted edge cluster.
 
-Returns the assigned Foghorn address and a bootstrap token for edge enrollment. Use them with the CLI:
+Returns a bootstrap token for edge enrollment. Use it with the CLI:
   frameworks edge provision --enrollment-token <token> --ssh user@host
 
 The token is shown once — save it securely. Each edge you provision joins this cluster and is automatically assigned a domain and TLS certificate.`,
@@ -293,7 +293,6 @@ type EdgeClusterResult struct {
 	ClusterID      string `json:"cluster_id"`
 	ClusterName    string `json:"cluster_name"`
 	BootstrapToken string `json:"bootstrap_token"`
-	FoghornAddr    string `json:"foghorn_addr"`
 	Message        string `json:"message"`
 }
 
@@ -569,8 +568,7 @@ func handleCreateEdgeCluster(ctx context.Context, args CreateEdgeClusterInput, r
 			ClusterID:      clusterID,
 			ClusterName:    clusterName,
 			BootstrapToken: token,
-			FoghornAddr:    v.FoghornAddr,
-			Message:        fmt.Sprintf("Edge cluster '%s' created. Save the bootstrap token — it is shown once. Foghorn address: %s. Provision edges with: frameworks edge provision --enrollment-token %s --ssh user@host", clusterName, v.FoghornAddr, token),
+			Message:        fmt.Sprintf("Edge cluster '%s' created. Save this token value now; tokens are stored hashed, but another enrollment token can be created later. Provision edges with: frameworks edge provision --enrollment-token %s --ssh user@host", clusterName, token),
 		})
 	case *model.ValidationError:
 		return toolError(v.Message)

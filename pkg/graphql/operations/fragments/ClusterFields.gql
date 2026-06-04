@@ -15,6 +15,8 @@ fragment ClusterFields on Cluster {
   healthStatus
   isActive
   isDefaultCluster
+  isPlatformOfficial
+  regionId
   isSubscribed
   createdAt
   updatedAt

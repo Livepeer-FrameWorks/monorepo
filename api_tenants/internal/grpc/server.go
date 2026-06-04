@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"slices"
@@ -1860,60 +1861,31 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 
 	id := uuid.New().String()
 	now := time.Now()
-
-	// Pick the least-loaded running Foghorn instance whose primary serving
-	// cluster is in the requested region (when supplied) and read that
-	// platform-official cluster as the control cell for this new tenant-
-	// private cluster. Tenant-private clusters don't run their own Foghorn;
-	// ConfigSeed delivery + tenant-alias bundle + edge apply-state ACK
-	// ownership all live on the assigned cell. requested_region empty falls
-	// back to least-loaded across regions; supplied region with no match is
-	// a hard Unavailable so we don't silently put a Mumbai self-hosted edge
-	// under EU control.
 	requestedRegion := strings.TrimSpace(req.GetRegion())
-	var (
-		foghornInstanceID string
-		foghornAddr       string
-		controlCellID     sql.NullString
-		controlCellRegion sql.NullString
-	)
-	err = s.db.QueryRowContext(ctx, `
-		WITH ranked AS (
-			SELECT si.id::text AS instance_id,
-			       si.advertise_host || ':' || si.port AS addr,
-			       ic.cluster_id  AS control_cell,
-			       ic.region_id   AS control_region,
-			       COUNT(sca.id)  AS load
-			FROM quartermaster.service_instances si
-			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			JOIN quartermaster.service_cluster_assignments primary_sca
-			  ON primary_sca.service_instance_id = si.id AND primary_sca.is_active = true
-			JOIN quartermaster.infrastructure_clusters ic
-			  ON ic.cluster_id = primary_sca.cluster_id
-			  AND ic.cluster_class = 'platform_official'
-			  AND ic.is_active = true
-			LEFT JOIN quartermaster.service_cluster_assignments sca
-			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
-			GROUP BY si.id, si.advertise_host, si.port, ic.cluster_id, ic.region_id, si.started_at
-			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
-			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
-		)
-		SELECT instance_id, addr, control_cell, control_region FROM ranked LIMIT 1
-	`, requestedRegion).Scan(&foghornInstanceID, &foghornAddr, &controlCellID, &controlCellRegion)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.Unavailable, "no running Foghorn instances available")
+	clientIPForSelection := strings.TrimSpace(req.GetClientIp())
+	if requestedRegion != "" {
+		clientIPForSelection = ""
 	}
+	if requestedRegion == "" {
+		var preferredRegion sql.NullString
+		if regionErr := s.db.QueryRowContext(ctx, `
+			SELECT pc.region_id
+			FROM quartermaster.tenants t
+			JOIN quartermaster.infrastructure_clusters pc
+			  ON pc.cluster_id = t.primary_cluster_id
+			 AND pc.is_active = true
+			WHERE t.id = $1
+		`, tenantID).Scan(&preferredRegion); regionErr != nil && !errors.Is(regionErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Internal, "failed to resolve tenant preferred cluster region: %v", regionErr)
+		}
+		requestedRegion = strings.TrimSpace(preferredRegion.String)
+	}
+
+	controlCell, err := s.selectFoghornControlCell(ctx, req.GetControlClusterId(), requestedRegion, clientIPForSelection)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to find Foghorn: %v", err)
+		return nil, err
 	}
-	if !controlCellID.Valid || strings.TrimSpace(controlCellID.String) == "" {
-		return nil, status.Error(codes.Unavailable, "no platform-official cluster carries the assigned Foghorn; cannot assign control cell")
-	}
-	regionForRow := strings.TrimSpace(controlCellRegion.String)
-	if requestedRegion != "" && regionForRow != requestedRegion {
-		return nil, status.Errorf(codes.Unavailable, "no running Foghorn in region %q; refusing cross-region control assignment", requestedRegion)
-	}
+	regionForRow := strings.TrimSpace(controlCell.regionID)
 
 	// One transaction wraps every write that makes up a self-hosted cluster:
 	// the cluster row, the owner's tenant_cluster_access grant, the Foghorn
@@ -1937,13 +1909,13 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 			health_status, is_active, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
-			$4, '',
+			$4, $9,
 			0, 0, 0,
 			'private', 'free_unmetered', $5,
 			NULLIF($8::text, ''), $2, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
 			'unknown', true, $6, $6
 		)
-	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCell.controlCellID, regionForRow, strings.TrimSpace(controlCell.baseURL)); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
 	}
 
@@ -1965,7 +1937,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		JOIN quartermaster.services svc ON svc.service_id = si.service_id
 		WHERE si.id = $1::uuid AND svc.type = 'foghorn'
 		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
-	`, foghornInstanceID, clusterID); err != nil {
+	`, controlCell.instanceID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
 	}
 
@@ -2016,7 +1988,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 			ExpiresAt: timestamppb.New(expiresAt),
 			CreatedAt: timestamppb.New(now),
 		},
-		FoghornAddr: foghornAddr,
+		FoghornAddr: publicFoghornGRPCAddr(clusterID, controlCell.baseURL),
 	}, nil
 }
 
@@ -6210,6 +6182,146 @@ func (s *QuartermasterServer) geoForExternalIP(externalIP *string) (any, any) {
 	return geo.Latitude, geo.Longitude
 }
 
+type foghornControlCellCandidate struct {
+	instanceID    string
+	controlCellID string
+	regionID      string
+	baseURL       string
+	load          int
+	latitude      sql.NullFloat64
+	longitude     sql.NullFloat64
+	startedAt     sql.NullTime
+}
+
+func (s *QuartermasterServer) geoCoordinatesForIP(ip string) (float64, float64, bool) {
+	if strings.TrimSpace(ip) == "" || s.geoipReader == nil {
+		return 0, 0, false
+	}
+	geo := s.geoipReader.Lookup(ip)
+	if geo == nil || !geoip.IsValidLatLon(geo.Latitude, geo.Longitude) {
+		return 0, 0, false
+	}
+	geobucket.BucketGeoData(geo)
+	return geo.Latitude, geo.Longitude, true
+}
+
+func (s *QuartermasterServer) selectFoghornControlCell(ctx context.Context, explicitControlClusterID, requestedRegion, clientIP string) (foghornControlCellCandidate, error) {
+	explicitControlClusterID = strings.TrimSpace(explicitControlClusterID)
+	requestedRegion = strings.TrimSpace(requestedRegion)
+	clientLat, clientLon, hasClientGeo := s.geoCoordinatesForIP(clientIP)
+
+	args := []any{}
+	where := `
+			WHERE svc.type = 'foghorn'
+			  AND si.status = 'running'
+			  AND si.health_status = 'healthy'
+			  AND si.protocol = 'grpc'
+			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND ic.cluster_class = 'platform_official'
+			  AND ic.is_active = true`
+	if explicitControlClusterID != "" {
+		args = append(args, explicitControlClusterID)
+		where += fmt.Sprintf("\n			  AND ic.cluster_id = $%d", len(args))
+	} else if requestedRegion != "" && !hasClientGeo {
+		args = append(args, requestedRegion)
+		where += fmt.Sprintf("\n			  AND ic.region_id = $%d", len(args))
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT si.id::text AS instance_id,
+		       ic.cluster_id AS control_cell,
+		       COALESCE(ic.region_id, '') AS control_region,
+		       COALESCE(ic.base_url, '') AS control_base_url,
+		       COUNT(sca.id) AS load,
+		       n.latitude,
+		       n.longitude,
+		       si.started_at
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		JOIN quartermaster.service_cluster_assignments primary_sca
+		  ON primary_sca.service_instance_id = si.id AND primary_sca.is_active = true
+		JOIN quartermaster.infrastructure_clusters ic
+		  ON ic.cluster_id = primary_sca.cluster_id
+		LEFT JOIN quartermaster.service_cluster_assignments sca
+		  ON sca.service_instance_id = si.id AND sca.is_active = true
+		LEFT JOIN quartermaster.infrastructure_nodes n
+		  ON n.node_id = si.node_id
+		%s
+		GROUP BY si.id, ic.cluster_id, ic.region_id, ic.base_url, n.latitude, n.longitude, si.started_at
+	`, where), args...)
+	if err != nil {
+		return foghornControlCellCandidate{}, status.Errorf(codes.Internal, "failed to find Foghorn control cell: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var candidates []foghornControlCellCandidate
+	for rows.Next() {
+		var c foghornControlCellCandidate
+		if err := rows.Scan(&c.instanceID, &c.controlCellID, &c.regionID, &c.baseURL, &c.load, &c.latitude, &c.longitude, &c.startedAt); err != nil {
+			return foghornControlCellCandidate{}, status.Errorf(codes.Internal, "failed to scan Foghorn control cell: %v", err)
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return foghornControlCellCandidate{}, status.Errorf(codes.Internal, "failed to iterate Foghorn control cells: %v", err)
+	}
+	if len(candidates) == 0 {
+		if explicitControlClusterID != "" {
+			return foghornControlCellCandidate{}, status.Errorf(codes.Unavailable, "no healthy Foghorn in control cluster %q", explicitControlClusterID)
+		}
+		if requestedRegion != "" && !hasClientGeo {
+			return foghornControlCellCandidate{}, status.Errorf(codes.Unavailable, "no healthy Foghorn in region %q", requestedRegion)
+		}
+		return foghornControlCellCandidate{}, status.Error(codes.Unavailable, "no healthy platform-official Foghorn control cells available")
+	}
+
+	return pickFoghornControlCellCandidate(candidates, clientLat, clientLon, hasClientGeo), nil
+}
+
+func pickFoghornControlCellCandidate(candidates []foghornControlCellCandidate, clientLat, clientLon float64, hasClientGeo bool) foghornControlCellCandidate {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if hasClientGeo {
+			ad := geoDistanceKm(clientLat, clientLon, a.latitude, a.longitude)
+			bd := geoDistanceKm(clientLat, clientLon, b.latitude, b.longitude)
+			if ad != bd {
+				return ad < bd
+			}
+		}
+		if a.load != b.load {
+			return a.load < b.load
+		}
+		if a.startedAt.Valid != b.startedAt.Valid {
+			return a.startedAt.Valid
+		}
+		if a.startedAt.Valid && !a.startedAt.Time.Equal(b.startedAt.Time) {
+			return a.startedAt.Time.Before(b.startedAt.Time)
+		}
+		if a.controlCellID != b.controlCellID {
+			return a.controlCellID < b.controlCellID
+		}
+		return a.instanceID < b.instanceID
+	})
+	return candidates[0]
+}
+
+func geoDistanceKm(lat, lon float64, candidateLat, candidateLon sql.NullFloat64) float64 {
+	if !candidateLat.Valid || !candidateLon.Valid || !geoip.IsValidLatLon(candidateLat.Float64, candidateLon.Float64) {
+		return math.Inf(1)
+	}
+	const earthRadiusKm = 6371.0
+	lat1 := lat * math.Pi / 180
+	lat2 := candidateLat.Float64 * math.Pi / 180
+	dLat := (candidateLat.Float64 - lat) * math.Pi / 180
+	dLon := (candidateLon.Float64 - lon) * math.Pi / 180
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1)*math.Cos(lat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	if a > 1 {
+		a = 1
+	}
+	return 2 * earthRadiusKm * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
 // ResolveNodeFingerprint resolves a node identity from fingerprint data.
 // Lookup priority:
 // 1. Exact match by machine_id_sha256
@@ -8072,13 +8184,15 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 }
 
 func (s *QuartermasterServer) lookupClusterPublicFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
-	var baseURL sql.NullString
+	var rootDomain string
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		return s.db.QueryRowContext(ctx, `
-			SELECT base_url
-			FROM quartermaster.infrastructure_clusters
-			WHERE cluster_id = $1 AND is_active = true
-		`, clusterID).Scan(&baseURL)
+			SELECT COALESCE(NULLIF(c.base_url, ''), NULLIF(control.base_url, ''), '')
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.infrastructure_clusters control
+			  ON control.cluster_id = c.control_cell_id AND control.is_active = true
+			WHERE c.cluster_id = $1 AND c.is_active = true
+		`, clusterID).Scan(&rootDomain)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -8086,10 +8200,7 @@ func (s *QuartermasterServer) lookupClusterPublicFoghornGRPC(ctx context.Context
 	if err != nil {
 		return "", err
 	}
-	if !baseURL.Valid {
-		return "", nil
-	}
-	return publicFoghornGRPCAddr(clusterID, baseURL.String), nil
+	return publicFoghornGRPCAddr(clusterID, rootDomain), nil
 }
 
 func publicFoghornGRPCAddr(clusterID, baseURL string) string {
@@ -10378,55 +10489,11 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 	now := time.Now()
 	requestedRegion := strings.TrimSpace(req.GetRegion())
 
-	// Resolve the control cell from the least-loaded running Foghorn whose
-	// primary serving cluster is in the requested region (when provided);
-	// fall back to any region when no region is requested or no Foghorn
-	// matches. Returns the Foghorn's service_instance_id alongside so the
-	// junction row + bootstrap token can be created consistently with
-	// EnableSelfHosting.
-	var (
-		foghornInstanceID string
-		controlCellID     sql.NullString
-		controlCellRegion sql.NullString
-	)
-	err = s.db.QueryRowContext(ctx, `
-		WITH ranked AS (
-			SELECT si.id::text AS instance_id,
-			       ic.cluster_id  AS control_cell,
-			       ic.region_id   AS control_region,
-			       COUNT(sca.id)  AS load
-			FROM quartermaster.service_instances si
-			JOIN quartermaster.services svc ON svc.service_id = si.service_id
-			JOIN quartermaster.service_cluster_assignments primary_sca
-			  ON primary_sca.service_instance_id = si.id AND primary_sca.is_active = true
-			JOIN quartermaster.infrastructure_clusters ic
-			  ON ic.cluster_id = primary_sca.cluster_id
-			  AND ic.cluster_class = 'platform_official'
-			  AND ic.is_active = true
-			LEFT JOIN quartermaster.service_cluster_assignments sca
-			  ON sca.service_instance_id = si.id AND sca.is_active = true
-			WHERE svc.type = 'foghorn' AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
-			GROUP BY si.id, ic.cluster_id, ic.region_id, si.started_at
-			ORDER BY (CASE WHEN NULLIF($1, '') IS NOT NULL AND ic.region_id = $1 THEN 0 ELSE 1 END),
-			         COUNT(sca.id) ASC, si.started_at ASC, si.id ASC
-		)
-		SELECT instance_id, control_cell, control_region FROM ranked LIMIT 1
-	`, requestedRegion).Scan(&foghornInstanceID, &controlCellID, &controlCellRegion)
-	if errors.Is(err, sql.ErrNoRows) || !controlCellID.Valid || strings.TrimSpace(controlCellID.String) == "" {
-		return nil, status.Error(codes.Unavailable, "no platform-official Foghorn cell available to control this private cluster")
-	}
+	controlCell, err := s.selectFoghornControlCell(ctx, "", requestedRegion, "")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to find control cell: %v", err)
+		return nil, err
 	}
-	// region_id on the new cluster mirrors the control cell's region. When the
-	// caller named a region we refuse a cross-region fallback — the CTE will
-	// return a Foghorn from another region as the second-rank candidate, but
-	// silently controlling a US-private cluster from EU Foghorn breaks the
-	// reconcile-latency invariants tenant-private clusters depend on.
-	regionForRow := strings.TrimSpace(controlCellRegion.String)
-	if requestedRegion != "" && regionForRow != requestedRegion {
-		return nil, status.Errorf(codes.Unavailable, "no platform-official Foghorn cell in region %q to control this private cluster", requestedRegion)
-	}
+	regionForRow := strings.TrimSpace(controlCell.regionID)
 
 	// Atomicity contract: every row that makes a private cluster usable —
 	// the cluster row itself, the owner's tenant_cluster_access grant, the
@@ -10451,13 +10518,13 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 			health_status, is_active, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, 'edge', 'self-hosted',
-			$4, '',
+			$4, $9,
 			0, 0, 0,
 			'private', 'free_unmetered', $5,
 			NULLIF($8::text, ''), $2, 'tenant_private', $7::text, ARRAY[$7::text]::TEXT[],
 			'unknown', true, $6, $6
 		)
-	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCellID.String, regionForRow); err != nil {
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now, controlCell.controlCellID, regionForRow, strings.TrimSpace(controlCell.baseURL)); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
 	}
 
@@ -10475,7 +10542,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 		VALUES ($1::uuid, $2)
 		ON CONFLICT (service_instance_id, cluster_id) DO UPDATE SET is_active = true, updated_at = NOW()
-	`, foghornInstanceID, clusterID); err != nil {
+	`, controlCell.instanceID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
 	}
 
@@ -11738,6 +11805,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
 	// lease let this run safely on every Quartermaster replica.
 	go qmServer.runServiceEventOutboxWorker(context.Background())
+	go qmServer.runTenantPrivateBaseURLRepair(context.Background())
 	// Drain the Navigator custom-domain outbox so a Navigator outage at the
 	// moment UpdateTenant lands can't leave QM saying the tenant has a
 	// custom_domain while Navigator never spun up the verification + cert
