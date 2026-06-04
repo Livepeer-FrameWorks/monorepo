@@ -801,6 +801,8 @@ type CreateEdgeClusterInput struct {
 	ClusterName string `json:"clusterName"`
 	// Short description.
 	ShortDescription *string `json:"shortDescription,omitempty"`
+	// Optional platform-official cluster/cell to control this edge cluster.
+	ControlClusterID *string `json:"controlClusterId,omitempty"`
 }
 
 type CreateEdgeClusterResponse struct {
@@ -2168,7 +2170,7 @@ type UpdateSubscriptionCustomTermsInput struct {
 type UpdateTenantInput struct {
 	// New tenant name.
 	Name *string `json:"name,omitempty"`
-	// Custom settings JSON.
+	// Custom settings JSON. Supports primaryClusterId, subdomain, customDomain, and deploymentModel.
 	Settings *string `json:"settings,omitempty"`
 	// BYO domain. Empty string clears it; null leaves it unchanged. Navigator
 	// picks up the change on the next reconciler tick and starts/teardowns the

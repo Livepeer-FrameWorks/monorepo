@@ -4549,15 +4549,18 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 
 	// NOTE: Column order must match scanCluster() exactly!
 	query := fmt.Sprintf(`
-		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
-		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
-		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
-		       c.health_status, c.is_active, c.is_default_cluster, c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
-		FROM quartermaster.infrastructure_clusters c
-		%s
-		%s
-		LIMIT $%d
-	`, where, builder.OrderBy(params), len(args)+1)
+			SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
+			       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
+			       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
+			       c.health_status, c.is_active,
+			       (c.cluster_id = COALESCE(t.primary_cluster_id, '') OR (t.primary_cluster_id IS NULL AND c.is_default_cluster)) AS is_default_cluster,
+			       c.is_platform_official, c.public_topology, c.allow_private_pull_sources, c.created_at, c.updated_at
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenants t ON t.id = $1
+			%s
+			%s
+			LIMIT $%d
+		`, where, builder.OrderBy(params), len(args)+1)
 
 	args = append(args, params.Limit+1)
 
@@ -4571,9 +4574,12 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	for rows.Next() {
 		cluster, err := scanCluster(rows)
 		if err != nil {
-			continue
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
 		}
 		clusters = append(clusters, cluster)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	// Determine pagination info

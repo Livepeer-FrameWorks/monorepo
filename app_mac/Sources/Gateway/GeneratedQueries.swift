@@ -124,6 +124,8 @@ enum GQL {
     healthStatus
     isActive
     isDefaultCluster
+    isPlatformOfficial
+    regionId
     isSubscribed
     createdAt
     updatedAt
@@ -4770,7 +4772,7 @@ enum GQL {
   """
 
   static let SetPreferredCluster = """
-  # Set the tenant's preferred cluster for DNS steering and primary URIs
+  # Set the tenant's preferred cluster for routing decisions
   mutation SetPreferredCluster($clusterId: ID!) {
     setPreferredCluster(clusterId: $clusterId) {
       ... on Cluster {

@@ -490,8 +490,8 @@
                         </span>
                       </p>
                       <p class="text-sm text-muted-foreground">
-                        DNS steers viewers here. Ingest and playback URIs for this cluster appear
-                        first.
+                        Tenant routing prefers this cluster. Cluster-specific ingest and playback
+                        endpoints use it; tenant-domain URLs keep their domain.
                       </p>
                     </div>
                   </div>

@@ -147,7 +147,11 @@
       const result = await acceptInviteMutation.mutate({ inviteToken: invite.inviteToken });
       if (result.data?.acceptClusterInvite?.__typename === "ClusterSubscription") {
         toast.success(`Joined ${invite.clusterName}`);
-        await Promise.all([invitesStore.fetch(), subscriptionsStore.fetch(), accessStore.fetch()]);
+        await Promise.all([
+          invitesStore.fetch({ policy: "NetworkOnly" }),
+          subscriptionsStore.fetch({ policy: "NetworkOnly" }),
+          accessStore.fetch({ policy: "NetworkOnly" }),
+        ]);
       } else {
         toast.error("Failed to accept invite");
       }
@@ -160,7 +164,10 @@
     try {
       await unsubscribeMutation.mutate({ clusterId });
       toast.success(`Disconnected from ${clusterName}`);
-      await Promise.all([subscriptionsStore.fetch(), accessStore.fetch()]);
+      await Promise.all([
+        subscriptionsStore.fetch({ policy: "NetworkOnly" }),
+        accessStore.fetch({ policy: "NetworkOnly" }),
+      ]);
     } catch {
       toast.error("Failed to disconnect");
     }
@@ -172,7 +179,7 @@
       const data = result.data?.setPreferredCluster;
       if (data?.__typename === "Cluster") {
         toast.success(`${clusterName} is now your preferred cluster`);
-        await subscriptionsStore.fetch();
+        await subscriptionsStore.fetch({ policy: "NetworkOnly" });
       } else if (
         data?.__typename === "ValidationError" ||
         data?.__typename === "NotFoundError" ||
@@ -357,8 +364,8 @@
                       </span>
                     </p>
                     <p class="text-sm text-muted-foreground">
-                      DNS steers viewers here. Ingest and playback URIs for this cluster appear
-                      first.
+                      Tenant routing prefers this cluster. Cluster-specific ingest and playback
+                      endpoints use it; tenant-domain URLs keep their domain.
                     </p>
                   </div>
                 </div>

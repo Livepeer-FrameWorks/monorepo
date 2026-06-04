@@ -650,6 +650,17 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 			}
 		}
 
+		if v, present := raw["subdomain"]; present {
+			val, ok := v.(string)
+			if !ok {
+				val = ""
+			}
+			subdomain := strings.ToLower(strings.TrimSpace(val))
+			updateReq.Subdomain = &subdomain
+			updates++
+			changedFields = append(changedFields, "subdomain")
+		}
+
 		if v, present := raw["customDomain"]; present {
 			val, ok := v.(string)
 			if !ok {

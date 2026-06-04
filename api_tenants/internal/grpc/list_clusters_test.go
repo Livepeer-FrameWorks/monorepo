@@ -85,3 +85,43 @@ func TestListClusters_PlatformOfficialFilterIgnoresTenantVisibility(t *testing.T
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func TestListMySubscriptionsMarksPrimaryClusterPreferred(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	const tenantID = "tenant-1"
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, tenantID)
+
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\) FROM quartermaster\.infrastructure_clusters c\s+WHERE c\.cluster_id IN`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	mock.ExpectQuery(`(?s)AS is_default_cluster.*LEFT JOIN quartermaster\.tenants t ON t\.id = \$1`).
+		WithArgs(tenantID, 51).
+		WillReturnRows(sqlmock.NewRows(clusterColumns).
+			AddRow(newClusterRow("uuid-1", "cluster-default", "Platform Default", "edge", false, true)...).
+			AddRow(newClusterRow("uuid-2", "cluster-preferred", "Tenant Preferred", "edge", true, true)...))
+
+	resp, err := server.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{TenantId: tenantID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := len(resp.GetClusters()); got != 2 {
+		t.Fatalf("expected 2 subscriptions, got %d", got)
+	}
+	if resp.GetClusters()[0].GetIsDefaultCluster() {
+		t.Fatalf("expected platform default row to be false when tenant primary differs")
+	}
+	if !resp.GetClusters()[1].GetIsDefaultCluster() {
+		t.Fatalf("expected tenant primary row to be marked preferred")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

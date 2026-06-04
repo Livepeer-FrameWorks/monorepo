@@ -1561,7 +1561,7 @@ type Mutation {
 
   """
   Set the tenant's preferred cluster. Must be a subscribed cluster.
-  Changes DNS steering and which ingest/edge URIs appear first.
+  Used by routing services when choosing tenant-preferred infrastructure.
   """
   setPreferredCluster(
     """
@@ -2901,7 +2901,7 @@ Input for updating tenant settings.
 input UpdateTenantInput {
   "New tenant name."
   name: String
-  "Custom settings JSON."
+  "Custom settings JSON. Supports primaryClusterId, subdomain, customDomain, and deploymentModel."
   settings: JSON
   """
   BYO domain. Empty string clears it; null leaves it unchanged. Navigator
@@ -3581,6 +3581,12 @@ type WalletIdentity {
 type Tenant {
   id: ID!
   name: String!
+  """
+  Platform-managed tenant DNS label. When set and the tenant alias has issued
+  TLS, playback uses foghorn.<subdomain>.cdn.<root> instead of the global
+  Foghorn host.
+  """
+  subdomain: String
   cluster: String
   createdAt: Time!
   "BYO domain configured for this tenant. Null when the tenant has not opted in."
@@ -5368,6 +5374,10 @@ type Cluster implements Node {
   isActive: Boolean!
   "Whether this is the tenant's default cluster."
   isDefaultCluster: Boolean!
+  "Whether this cluster is a platform-official regional/control cell."
+  isPlatformOfficial: Boolean!
+  "Operational region identifier for this cluster."
+  regionId: String
   "Whether the current tenant is subscribed."
   isSubscribed: Boolean!
   "When the cluster was created."
