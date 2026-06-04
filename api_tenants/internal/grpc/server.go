@@ -2666,7 +2666,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	// retired so its Bunny records are cleared (Navigator overwrites the alias
 	// label in place and keeps no memory of the old one).
 	if req.Subdomain != nil {
-		if enqErr := s.enqueueTenantAliasForSubdomainChange(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
+		if enqErr := s.enqueueTenantAliasForSubdomainUpdate(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
 		}
 	} else if req.DeploymentTier != nil || req.IsActive != nil {
@@ -2840,6 +2840,21 @@ func (s *QuartermasterServer) enqueueTenantAliasForSubdomainChange(ctx context.C
 		}
 	}
 	return s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, false)
+}
+
+// enqueueTenantAliasForSubdomainUpdate handles a subdomain-field update after
+// the tenant row mutation has landed in the caller's tx. If that same update
+// made the tenant ineligible for aliases, enqueue a full remove instead of a
+// rename; otherwise Navigator would keep its active alias row.
+func (s *QuartermasterServer) enqueueTenantAliasForSubdomainUpdate(ctx context.Context, tx *sql.Tx, tenantID, prevSubdomain, newSubdomain string) error {
+	hasPaid, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	if err != nil {
+		return fmt.Errorf("check paid cluster access: %w", err)
+	}
+	if !hasPaid {
+		return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, prevSubdomain)
+	}
+	return s.enqueueTenantAliasForSubdomainChange(ctx, tx, tenantID, prevSubdomain, newSubdomain)
 }
 
 // enqueueTenantAliasForTierChange enqueues alias intent for a tier/active

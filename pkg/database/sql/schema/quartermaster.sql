@@ -799,6 +799,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.navigator_tenant_alias_outbox (
     action     TEXT NOT NULL CHECK (action IN ('ensure', 'retire', 'remove', 'remove_cluster')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at   TIMESTAMPTZ,
+    next_retry_at TIMESTAMPTZ,
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
     completed_at TIMESTAMPTZ,

@@ -53,6 +53,29 @@ func TestEnqueueNavigatorTenantAliasTxValidation(t *testing.T) {
 	_ = server
 }
 
+func TestClaimAliasOutboxBatchHonorsNextRetryAt(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)FROM quartermaster\.navigator_tenant_alias_outbox o.*\(o\.next_retry_at IS NULL OR o\.next_retry_at <= NOW\(\)\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "subdomain", "cluster_id", "reason", "action", "attempts"}))
+	mock.ExpectCommit()
+
+	if rows, claimErr := server.claimAliasOutboxBatch(context.Background()); claimErr != nil {
+		t.Fatalf("claimAliasOutboxBatch: %v", claimErr)
+	} else if len(rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(rows))
+	}
+	if mErr := mock.ExpectationsWereMet(); mErr != nil {
+		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
 func TestEnqueueTenantAliasEnsureTxSkipsFreeTenant(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

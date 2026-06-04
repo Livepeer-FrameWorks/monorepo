@@ -115,8 +115,8 @@ func (st *aliasOutboxStore) MarkCompleted(ctx context.Context, id string) error 
 	return nil
 }
 
-func (st *aliasOutboxStore) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, _ time.Duration) error {
-	st.server.recordAliasOutboxFailure(ctx, id, attempts, cause)
+func (st *aliasOutboxStore) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, backoff time.Duration) error {
+	st.server.recordAliasOutboxFailure(ctx, id, attempts, cause, backoff)
 	return nil
 }
 
@@ -164,8 +164,9 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 			       COALESCE(o.reason, ''), o.action, o.attempts
 			FROM quartermaster.navigator_tenant_alias_outbox o
 			WHERE o.completed_at IS NULL
-			  AND (o.claimed_at IS NULL OR o.claimed_at < NOW() - $1::interval)
-			  AND NOT EXISTS (
+				  AND (o.claimed_at IS NULL OR o.claimed_at < NOW() - $1::interval)
+				  AND (o.next_retry_at IS NULL OR o.next_retry_at <= NOW())
+				  AND NOT EXISTS (
 			      SELECT 1
 			      FROM quartermaster.navigator_tenant_alias_outbox o2
 			      WHERE o2.tenant_id = o.tenant_id
@@ -214,7 +215,7 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id string) {
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE quartermaster.navigator_tenant_alias_outbox
-		SET completed_at = NOW(), last_error = NULL
+		SET completed_at = NOW(), last_error = NULL, next_retry_at = NULL
 		WHERE id = $1::uuid
 	`, id); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
@@ -232,16 +233,22 @@ func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id s
 // advances, alert thresholds fire, and backoff visibility works. Failing rows
 // are never auto-completed: that would silently drop the intent. A poison row
 // blocks its tenant's queue on purpose; the alert surfaces it for operators.
-func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id string, attempts int, cause error) {
+func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id string, attempts int, cause error, backoff time.Duration) {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
+	if backoff <= 0 {
+		backoff = aliasOutboxBaseBackoff
+	}
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE quartermaster.navigator_tenant_alias_outbox
-		SET attempts = attempts + 1, last_error = $2, claimed_at = NULL
+		SET attempts = attempts + 1,
+		    last_error = $2,
+		    claimed_at = NULL,
+		    next_retry_at = NOW() + $3::interval
 		WHERE id = $1::uuid
-	`, id, msg); err != nil {
+	`, id, msg, fmt.Sprintf("%d milliseconds", backoff.Milliseconds())); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to record navigator tenant-alias outbox failure")
 	}

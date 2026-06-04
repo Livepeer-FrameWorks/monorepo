@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -70,6 +71,35 @@ func TestEnqueueTenantAliasForSubdomainChangeClearRemoves(t *testing.T) {
 	}
 	if enqErr := server.enqueueTenantAliasForSubdomainChange(ctx, tx, "tenant-1", "old", ""); enqErr != nil {
 		t.Fatalf("enqueueTenantAliasForSubdomainChange: %v", enqErr)
+	}
+	if mErr := mock.ExpectationsWereMet(); mErr != nil {
+		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
+func TestEnqueueTenantAliasForSubdomainUpdateRemovesWhenIneligible(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT EXISTS`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
+		WithArgs("tenant-1", "old", "", "", "remove").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("remove-1"))
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if enqErr := server.enqueueTenantAliasForSubdomainUpdate(ctx, tx, "tenant-1", "old", "new"); enqErr != nil {
+		t.Fatalf("enqueueTenantAliasForSubdomainUpdate: %v", enqErr)
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)
@@ -242,11 +272,11 @@ func TestRecordAliasOutboxFailureIncrementsAttempts(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	mock.ExpectExec(`UPDATE quartermaster\.navigator_tenant_alias_outbox\s+SET attempts = attempts \+ 1`).
-		WithArgs("outbox-1", "boom").
+	mock.ExpectExec(`UPDATE quartermaster\.navigator_tenant_alias_outbox\s+SET attempts = attempts \+ 1,.*next_retry_at = NOW\(\) \+ \$3::interval`).
+		WithArgs("outbox-1", "boom", "16000 milliseconds").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	server.recordAliasOutboxFailure(context.Background(), "outbox-1", 3, errors.New("boom"))
+	server.recordAliasOutboxFailure(context.Background(), "outbox-1", 3, errors.New("boom"), 16*time.Second)
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)
 	}
