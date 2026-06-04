@@ -2,7 +2,9 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -70,6 +72,48 @@ func TestClaimAliasOutboxBatchHonorsNextRetryAt(t *testing.T) {
 		t.Fatalf("claimAliasOutboxBatch: %v", claimErr)
 	} else if len(rows) != 0 {
 		t.Fatalf("rows = %d, want 0", len(rows))
+	}
+	if mErr := mock.ExpectationsWereMet(); mErr != nil {
+		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
+func TestAliasOutboxStoreReturnsMarkCompletedError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	store := &aliasOutboxStore{server: server}
+
+	mock.ExpectExec(`UPDATE quartermaster\.navigator_tenant_alias_outbox\s+SET completed_at = NOW\(\)`).
+		WithArgs("outbox-1").
+		WillReturnError(errors.New("db down"))
+
+	if err := store.MarkCompleted(context.Background(), "outbox-1"); err == nil {
+		t.Fatal("MarkCompleted returned nil for failed persistence")
+	}
+	if mErr := mock.ExpectationsWereMet(); mErr != nil {
+		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
+func TestAliasOutboxStoreReturnsRecordFailureError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	store := &aliasOutboxStore{server: server}
+
+	mock.ExpectExec(`UPDATE quartermaster\.navigator_tenant_alias_outbox\s+SET attempts = attempts \+ 1`).
+		WithArgs("outbox-1", "boom", "1000 milliseconds").
+		WillReturnError(errors.New("db down"))
+
+	if err := store.RecordFailure(context.Background(), "outbox-1", 0, nil, errors.New("boom"), time.Second); err == nil {
+		t.Fatal("RecordFailure returned nil for failed persistence")
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)

@@ -111,13 +111,11 @@ func (st *aliasOutboxStore) ClaimBatch(ctx context.Context, _ int, _ time.Durati
 }
 
 func (st *aliasOutboxStore) MarkCompleted(ctx context.Context, id string) error {
-	st.server.markAliasOutboxCompleted(ctx, id)
-	return nil
+	return st.server.markAliasOutboxCompleted(ctx, id)
 }
 
 func (st *aliasOutboxStore) RecordFailure(ctx context.Context, id string, attempts int, _ []string, cause error, backoff time.Duration) error {
-	st.server.recordAliasOutboxFailure(ctx, id, attempts, cause, backoff)
-	return nil
+	return st.server.recordAliasOutboxFailure(ctx, id, attempts, cause, backoff)
 }
 
 type aliasOutboxDispatcher struct {
@@ -212,28 +210,24 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 	return out, err
 }
 
-func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id string) {
+func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id string) error {
 	if _, err := s.db.ExecContext(ctx, `
 		UPDATE quartermaster.navigator_tenant_alias_outbox
 		SET completed_at = NOW(), last_error = NULL, next_retry_at = NULL
 		WHERE id = $1::uuid
 	`, id); err != nil {
-		s.logger.WithError(err).WithField("outbox_id", id).
-			Warn("Failed to mark navigator tenant-alias outbox row completed")
+		return fmt.Errorf("mark navigator tenant-alias outbox row completed: %w", err)
 	}
+	return nil
 }
 
-// recordAliasOutboxFailure records the failure and clears the claim so the
-// row is retried. Failing rows are never auto-completed: that would silently
-// drop the intent (e.g. an ensure that never lands). A poison row blocks its
-// tenant's queue on purpose; the alert below surfaces it for operators.
-// recordAliasOutboxFailure persists the failure and clears the claim so the
-// row is retried. attempts is the count BEFORE this failure (the value carried
-// from the claim); the row is incremented in-place so the counter actually
-// advances, alert thresholds fire, and backoff visibility works. Failing rows
-// are never auto-completed: that would silently drop the intent. A poison row
-// blocks its tenant's queue on purpose; the alert surfaces it for operators.
-func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id string, attempts int, cause error, backoff time.Duration) {
+// recordAliasOutboxFailure persists the failure and clears the claim so the row
+// retries after its backoff. attempts is the count before this failure; the row
+// increments in-place so the counter advances and the alert threshold fires, and
+// next_retry_at gates the next claim. Failing rows are never auto-completed —
+// that would silently drop the intent (e.g. an ensure that never lands); a poison
+// row deliberately blocks its tenant's queue, and the alert surfaces it.
+func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id string, attempts int, cause error, backoff time.Duration) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
@@ -246,11 +240,10 @@ func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id s
 		SET attempts = attempts + 1,
 		    last_error = $2,
 		    claimed_at = NULL,
-		    next_retry_at = NOW() + $3::interval
+			next_retry_at = NOW() + $3::interval
 		WHERE id = $1::uuid
 	`, id, msg, fmt.Sprintf("%d milliseconds", backoff.Milliseconds())); err != nil {
-		s.logger.WithError(err).WithField("outbox_id", id).
-			Warn("Failed to record navigator tenant-alias outbox failure")
+		return fmt.Errorf("record navigator tenant-alias outbox failure: %w", err)
 	}
 	if newAttempts := attempts + 1; newAttempts >= aliasOutboxAlertAfterAttempts {
 		s.logger.WithFields(logging.Fields{
@@ -259,6 +252,7 @@ func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id s
 			"cause":     msg,
 		}).Error("Navigator tenant-alias hand-off failing repeatedly — Navigator reachability degraded; tenant queue blocked until it lands")
 	}
+	return nil
 }
 
 func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row aliasOutboxRow) ([]string, error) {

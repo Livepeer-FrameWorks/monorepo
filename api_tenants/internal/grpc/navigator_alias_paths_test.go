@@ -261,9 +261,8 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 	}
 }
 
-// recordAliasOutboxFailure must INCREMENT attempts (attempts + 1), not write
-// the carried value back — otherwise the counter sticks at 0 and alert
-// thresholds never fire.
+// recordAliasOutboxFailure increments the stored counter instead of writing the
+// carried claim value back, so retries and alert thresholds advance.
 func TestRecordAliasOutboxFailureIncrementsAttempts(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -276,7 +275,9 @@ func TestRecordAliasOutboxFailureIncrementsAttempts(t *testing.T) {
 		WithArgs("outbox-1", "boom", "16000 milliseconds").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	server.recordAliasOutboxFailure(context.Background(), "outbox-1", 3, errors.New("boom"), 16*time.Second)
+	if err := server.recordAliasOutboxFailure(context.Background(), "outbox-1", 3, errors.New("boom"), 16*time.Second); err != nil {
+		t.Fatalf("recordAliasOutboxFailure: %v", err)
+	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)
 	}
