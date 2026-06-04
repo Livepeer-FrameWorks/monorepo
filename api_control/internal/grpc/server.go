@@ -4181,10 +4181,15 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 			"user_id":   userID,
 			"tenant_id": tenantID,
 		}).Warn("Refresh token reuse detected, revoking all user sessions")
-		_, _ = s.db.ExecContext(ctx, `
+		if _, revokeErr := s.db.ExecContext(ctx, `
 			UPDATE commodore.refresh_tokens SET revoked = true
 			WHERE user_id = $1 AND tenant_id = $2
-		`, userID, tenantID)
+		`, userID, tenantID); revokeErr != nil {
+			s.logger.WithError(revokeErr).WithFields(logging.Fields{
+				"user_id":   userID,
+				"tenant_id": tenantID,
+			}).Error("Failed to revoke sessions after refresh token reuse detection")
+		}
 		return nil, status.Error(codes.Unauthenticated, "session invalidated")
 	}
 
