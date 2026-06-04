@@ -2,6 +2,14 @@
 
 > Sovereign SaaS for live video. MCP-native with wallet auth and x402 payments.
 
+## Product
+
+- [FrameWorks](https://frameworks.network/): No-cloud live streaming platform for sovereign video infrastructure across SaaS, hybrid edge, and fully self-hosted deployments.
+- [Pricing](https://frameworks.network/pricing): Beta pricing for free, supporter, production, pay-as-you-go, and enterprise streaming workloads.
+- [About](https://frameworks.network/about): Mission, architecture direction, and operating principles behind FrameWorks sovereign streaming infrastructure.
+- [Contact](https://frameworks.network/contact): Sales, deployment, community, and support entry points for operators evaluating FrameWorks.
+- [Documentation](https://logbook.frameworks.network/): Operator and builder docs for streams, self-hosting, routing, billing, agent access, and migration workflows.
+
 ## Docs
 
 - [MCP Integration](https://logbook.frameworks.network/agents/mcp): Resources, tools, prompts, x402 payments
