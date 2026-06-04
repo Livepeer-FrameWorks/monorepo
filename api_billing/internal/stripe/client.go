@@ -412,6 +412,7 @@ type SubscriptionInfo struct {
 	StripeCustomerID     string
 	StripeSubscriptionID string
 	Status               string // active, past_due, canceled, trialing, etc.
+	CurrentPeriodStart   time.Time
 	CurrentPeriodEnd     time.Time
 	CancelAtPeriodEnd    bool
 	TenantID             string // From metadata
@@ -429,7 +430,12 @@ func (c *Client) ExtractSubscriptionInfo(sub *stripe.Subscription) SubscriptionI
 
 	// CurrentPeriodEnd is on SubscriptionItem in v82
 	if sub.Items != nil && len(sub.Items.Data) > 0 {
-		info.CurrentPeriodEnd = time.Unix(sub.Items.Data[0].CurrentPeriodEnd, 0)
+		if sub.Items.Data[0].CurrentPeriodStart > 0 {
+			info.CurrentPeriodStart = time.Unix(sub.Items.Data[0].CurrentPeriodStart, 0)
+		}
+		if sub.Items.Data[0].CurrentPeriodEnd > 0 {
+			info.CurrentPeriodEnd = time.Unix(sub.Items.Data[0].CurrentPeriodEnd, 0)
+		}
 	}
 
 	if sub.Metadata != nil {

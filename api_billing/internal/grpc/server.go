@@ -6903,14 +6903,26 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *pb.SyncStripeS
 
 	info := s.stripeClient.ExtractSubscriptionInfo(sub)
 
+	var currentPeriodStart any
+	if !info.CurrentPeriodStart.IsZero() {
+		currentPeriodStart = info.CurrentPeriodStart
+	}
+	var currentPeriodEnd any
+	if !info.CurrentPeriodEnd.IsZero() {
+		currentPeriodEnd = info.CurrentPeriodEnd
+	}
+
 	// Update local database
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET stripe_subscription_status = $1,
 		    stripe_current_period_end = $2,
+		    billing_period_start = COALESCE($4, billing_period_start),
+		    billing_period_end = COALESCE($2, billing_period_end),
+		    next_billing_date = COALESCE($2, next_billing_date),
 		    updated_at = NOW()
 		WHERE tenant_id = $3
-	`, info.Status, info.CurrentPeriodEnd, tenantID)
+	`, info.Status, currentPeriodEnd, tenantID, currentPeriodStart)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to update subscription from Stripe")
 		return nil, status.Error(codes.Internal, "failed to update subscription")

@@ -83,8 +83,9 @@ type StripeSubscriptionObject struct {
 	CancelAtPeriodEnd bool   `json:"cancel_at_period_end"`
 	Items             struct {
 		Data []struct {
-			ID               string `json:"id"`
-			CurrentPeriodEnd int64  `json:"current_period_end"`
+			ID                 string `json:"id"`
+			CurrentPeriodStart int64  `json:"current_period_start"`
+			CurrentPeriodEnd   int64  `json:"current_period_end"`
 		} `json:"data"`
 	} `json:"items"`
 	Metadata struct {
@@ -643,10 +644,17 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 	ourStatus := MapStripeSubscriptionStatus(obj.Status, obj.CancelAtPeriodEnd)
 
 	// Get period end from subscription items
+	var periodStart *time.Time
 	var periodEnd *time.Time
-	if len(obj.Items.Data) > 0 && obj.Items.Data[0].CurrentPeriodEnd > 0 {
-		t := time.Unix(obj.Items.Data[0].CurrentPeriodEnd, 0)
-		periodEnd = &t
+	if len(obj.Items.Data) > 0 {
+		if obj.Items.Data[0].CurrentPeriodStart > 0 {
+			t := time.Unix(obj.Items.Data[0].CurrentPeriodStart, 0)
+			periodStart = &t
+		}
+		if obj.Items.Data[0].CurrentPeriodEnd > 0 {
+			t := time.Unix(obj.Items.Data[0].CurrentPeriodEnd, 0)
+			periodEnd = &t
+		}
 	}
 
 	if obj.Metadata.ClusterID != "" || obj.Metadata.Purpose == "cluster_subscription" {
@@ -683,9 +691,12 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 		SET stripe_subscription_status = $1,
 		    status = $2,
 		    stripe_current_period_end = $3,
+		    billing_period_start = COALESCE($5, billing_period_start),
+		    billing_period_end = COALESCE($3, billing_period_end),
+		    next_billing_date = COALESCE($3, next_billing_date),
 		    updated_at = NOW()
 		WHERE tenant_id = $4
-	`, obj.Status, ourStatus, periodEnd, tenantID)
+	`, obj.Status, ourStatus, periodEnd, tenantID, periodStart)
 	if err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}

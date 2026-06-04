@@ -74,6 +74,60 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 	}
 }
 
+func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() {
+		db = nil
+	})
+
+	tenantID := "11111111-1111-1111-1111-111111111111"
+	subscriptionID := "sub_test_123"
+	periodStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := periodStart.AddDate(0, 1, 0)
+	payload := StripeWebhookPayload{
+		ID:   "evt_sub_123",
+		Type: "customer.subscription.updated",
+		Data: struct {
+			Object json.RawMessage `json:"object"`
+		}{
+			Object: json.RawMessage(fmt.Sprintf(`{
+				"id":"%s",
+				"customer":"cus_test",
+				"status":"active",
+				"cancel_at_period_end":false,
+				"items":{"data":[{"id":"si_test","current_period_start":%d,"current_period_end":%d}]}
+			}`, subscriptionID, periodStart.Unix(), periodEnd.Unix())),
+		},
+	}
+
+	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_subscription_id = \$1`).
+		WithArgs(subscriptionID).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET stripe_subscription_status = \$1,\s+status = \$2,\s+stripe_current_period_end = \$3,\s+billing_period_start = COALESCE\(\$5, billing_period_start\),\s+billing_period_end = COALESCE\(\$3, billing_period_end\),\s+next_billing_date = COALESCE\(\$3, next_billing_date\)`).
+		WithArgs("active", "active", sqlmock.AnyArg(), tenantID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-local-1"))
+	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
+		WithArgs(eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleStripeSubscriptionEvent(payload); err != nil {
+		t.Fatalf("handleStripeSubscriptionEvent: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestMollieEventIDForPaymentIncludesCumulativeReversalAmounts(t *testing.T) {
 	payment := &mollie.Payment{
 		ID:     "tr_123",
