@@ -99,6 +99,7 @@ const processingJobClaimSQL = `
 			FROM foghorn.processing_jobs pj
 			LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
 			WHERE pj.status = 'queued'
+			  AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted'))
 			ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
 			LIMIT 20
 			FOR UPDATE OF pj SKIP LOCKED

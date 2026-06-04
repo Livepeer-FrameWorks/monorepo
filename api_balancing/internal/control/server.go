@@ -4843,17 +4843,29 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 			s := string(b)
 			outputMeta = &s
 		}
-		_, err := db.ExecContext(ctx, `
+		// Only an active job completes. If the job was already terminated
+		// (e.g. the clip was deleted while processing, which marks the job
+		// failed), a late result must not resurrect it or its artifact.
+		res, err := db.ExecContext(ctx, `
 			UPDATE foghorn.processing_jobs
 			SET status = 'completed',
 			    progress = 100,
 			    output_metadata = $2,
 			    completed_at = NOW(),
 			    updated_at = NOW()
-			WHERE job_id = $1
+			WHERE job_id = $1 AND status IN ('dispatched', 'processing')
 		`, result.GetJobId(), outputMeta)
 		if err != nil {
 			logger.WithError(err).WithFields(fields).Error("Failed to update processing job to completed")
+			return
+		}
+		n, raErr := res.RowsAffected()
+		if raErr != nil {
+			logger.WithError(raErr).WithFields(fields).Error("Failed to read rows affected for processing job completion")
+			return
+		}
+		if n == 0 {
+			logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled or its clip was deleted)")
 			return
 		}
 		logger.WithFields(fields).Info("Processing job completed")
@@ -4877,11 +4889,43 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 				sizeBytes := result.GetOutputSizeBytes()
 				newFormat := strings.TrimPrefix(filepath.Ext(outputPath), ".")
 
+				// Claim the artifact as ready BEFORE any side effect. If it was
+				// deleted/failed in the window after the job-completed update
+				// (e.g. the clip was deleted mid-processing), this matches 0 rows
+				// and we skip all registration, projection, and the DONE event,
+				// so a late completion never resurrects or surfaces a deleted
+				// clip. Keep the original upload URL in s3_url until the
+				// replacement upload is durably synced (sync completion updates
+				// s3_url + vod_metadata.s3_key together).
+				artRes, dbErr := db.ExecContext(ctx, `
+						UPDATE foghorn.artifacts
+						SET format = $1,
+						    size_bytes = $3,
+						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
+						    sync_status = 'pending',
+						    storage_location = 'local',
+						    updated_at = NOW()
+						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes)
+				if dbErr != nil {
+					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
+					return
+				}
+				affected, raErr := artRes.RowsAffected()
+				if raErr != nil {
+					logger.WithError(raErr).WithField("artifact_hash", artifactHash).Error("failed to read rows affected for processed artifact update")
+					return
+				}
+				if affected == 0 {
+					logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); skipping registration and DONE")
+					return
+				}
+
+				// Register processed output in the warm cache + in-memory state so
+				// vod+ STREAM_SOURCE resolves immediately. This node wrote the
+				// canonical file; register as origin with is_complete=true so the
+				// row is immediately eligible to serve cross-cluster peer-relay
+				// reads while the file uploads to S3.
 				if artifactRepo != nil {
-					// Processing finalize — this node wrote the canonical file.
-					// Register as origin with is_complete=true so the row is
-					// immediately eligible to serve cross-cluster peer-relay
-					// reads while the file uploads to S3.
 					if err := artifactRepo.RegisterOriginArtifact(ctx, artifactHash, nodeID, outputPath, sizeBytes, true); err != nil {
 						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact as origin")
 					}
@@ -4895,30 +4939,10 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					Role:       pb.StoredArtifact_ROLE_ORIGIN,
 					IsComplete: true,
 				})
-
-				// Update artifact format, size, and sync status so the processed
-				// file gets synced to S3. Keep the original upload URL in
-				// s3_url until the replacement upload is durably synced (sync
-				// completion updates s3_url + vod_metadata.s3_key together).
-				if _, dbErr := db.ExecContext(ctx, `
-						UPDATE foghorn.artifacts
-						SET format = $1,
-						    size_bytes = $3,
-						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
-						    sync_status = 'pending',
-						    storage_location = 'local',
-						    updated_at = NOW()
-						WHERE artifact_hash = $2`, newFormat, artifactHash, sizeBytes); dbErr != nil {
-					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("failed to update artifact format/size after processing")
-				} else {
-					projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
-					// Kick the artifact reconciler so the freeze-to-S3 push starts
-					// in seconds instead of waiting for the next poll interval.
-					// Cross-cluster PrepareArtifact serves hot-but-unsynced
-					// artifacts via peer-relay (no S3 wait), so this is for
-					// long-term durability and S3-path latency, not playability.
-					NotifyArtifactMapUpdated(nodeID)
-				}
+				projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
+				// Kick the artifact reconciler so the freeze-to-S3 push starts in
+				// seconds instead of waiting for the next poll interval.
+				NotifyArtifactMapUpdated(nodeID)
 				if artifactType == "clip" && decklogClient != nil {
 					if streamID == "" && streamInternalName != "" && CommodoreClient != nil {
 						resolveCtx, cancel := context.WithTimeout(ctx, time.Second)

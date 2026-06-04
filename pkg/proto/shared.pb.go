@@ -408,16 +408,26 @@ func (x *CreateClipRequest) GetProcessesJson() string {
 // CreateClipResponse - response from clip creation
 // Source: pkg/api/foghorn/types.go:CreateClipResponse
 type CreateClipResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	IngestHost    string                 `protobuf:"bytes,2,opt,name=ingest_host,json=ingestHost,proto3" json:"ingest_host,omitempty"`
-	StorageHost   string                 `protobuf:"bytes,3,opt,name=storage_host,json=storageHost,proto3" json:"storage_host,omitempty"`
-	NodeId        string                 `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	RequestId     string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	ClipHash      string                 `protobuf:"bytes,6,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
-	PlaybackId    string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"` // Public playback key (artifact playback ID)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Status      string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	IngestHost  string                 `protobuf:"bytes,2,opt,name=ingest_host,json=ingestHost,proto3" json:"ingest_host,omitempty"`
+	StorageHost string                 `protobuf:"bytes,3,opt,name=storage_host,json=storageHost,proto3" json:"storage_host,omitempty"`
+	NodeId      string                 `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RequestId   string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ClipHash    string                 `protobuf:"bytes,6,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
+	PlaybackId  string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"` // Public playback key (artifact playback ID)
+	// Fulfilled clip range after best-effort source selection. When a single
+	// source cannot cover the requested range, Foghorn clips the largest
+	// contiguous covered sub-range and reports it here. It is authoritative for
+	// every clip mode (only Foghorn resolves relative/media-time anchors), so
+	// Commodore stores it as the clip's start_time/duration. For a fully covered
+	// request it is the request snapped to whole-second harvest boundaries (so a
+	// now-anchored clip may lose its sub-second tail without being marked partial).
+	EffectiveStartMs    int64 `protobuf:"varint,8,opt,name=effective_start_ms,json=effectiveStartMs,proto3" json:"effective_start_ms,omitempty"`          // fulfilled clip start (absolute Unix ms)
+	EffectiveDurationMs int64 `protobuf:"varint,9,opt,name=effective_duration_ms,json=effectiveDurationMs,proto3" json:"effective_duration_ms,omitempty"` // fulfilled duration (ms)
+	Partial             bool  `protobuf:"varint,10,opt,name=partial,proto3" json:"partial,omitempty"`                                                     // true when fulfilled range < requested
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CreateClipResponse) Reset() {
@@ -497,6 +507,27 @@ func (x *CreateClipResponse) GetPlaybackId() string {
 		return x.PlaybackId
 	}
 	return ""
+}
+
+func (x *CreateClipResponse) GetEffectiveStartMs() int64 {
+	if x != nil {
+		return x.EffectiveStartMs
+	}
+	return 0
+}
+
+func (x *CreateClipResponse) GetEffectiveDurationMs() int64 {
+	if x != nil {
+		return x.EffectiveDurationMs
+	}
+	return 0
+}
+
+func (x *CreateClipResponse) GetPartial() bool {
+	if x != nil {
+		return x.Partial
+	}
+	return false
 }
 
 // ClipInfo - full clip details
@@ -4856,7 +4887,7 @@ const file_shared_proto_rawDesc = "" +
 	"_stream_idB\x0e\n" +
 	"\f_playback_idB\x10\n" +
 	"\x0e_internal_nameB\x11\n" +
-	"\x0f_retention_days\"\xe6\x01\n" +
+	"\x0f_retention_days\"\xe2\x02\n" +
 	"\x12CreateClipResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vingest_host\x18\x02 \x01(\tR\n" +
@@ -4867,7 +4898,11 @@ const file_shared_proto_rawDesc = "" +
 	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1b\n" +
 	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
-	"playbackId\"\xde\t\n" +
+	"playbackId\x12,\n" +
+	"\x12effective_start_ms\x18\b \x01(\x03R\x10effectiveStartMs\x122\n" +
+	"\x15effective_duration_ms\x18\t \x01(\x03R\x13effectiveDurationMs\x12\x18\n" +
+	"\apartial\x18\n" +
+	" \x01(\bR\apartial\"\xde\t\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1b\n" +

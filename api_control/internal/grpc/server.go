@@ -7987,17 +7987,6 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
 	}
 
-	// Resolve timing for storage
-	var startTime, duration int64
-	if req.StartUnix != nil {
-		startTime = *req.StartUnix * 1000 // Convert to ms
-	}
-	if req.DurationSec != nil {
-		duration = *req.DurationSec * 1000 // Convert to ms
-	} else if req.StartUnix != nil && req.StopUnix != nil {
-		duration = (*req.StopUnix - *req.StartUnix) * 1000
-	}
-
 	// Resolve retention via the per-class cascade (per-stream override →
 	// tenant per-class default → system default), clamped by the tier cap.
 	// User-supplied expires_at is treated as a per-asset override and
@@ -8027,46 +8016,28 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	}
 	// resolvedDays == 0 + no expires_at → infinite (retentionUntil stays nil).
 
-	// Store requested params as JSON for audit
-	requestedParams := map[string]any{}
+	// Store the original request as JSON for audit. Includes the media-time
+	// fields (start_ms/stop_ms) so relative-mode requests are fully captured.
+	// The clip's stored start_time/duration hold the fulfilled range Foghorn
+	// harvested (written once, after the call); requested_params preserves what
+	// was asked for.
+	requestedParams := map[string]any{"mode": req.Mode.String()}
 	if req.StartUnix != nil {
 		requestedParams["start_unix"] = *req.StartUnix
 	}
 	if req.StopUnix != nil {
 		requestedParams["stop_unix"] = *req.StopUnix
 	}
+	if req.StartMs != nil {
+		requestedParams["start_ms"] = *req.StartMs
+	}
+	if req.StopMs != nil {
+		requestedParams["stop_ms"] = *req.StopMs
+	}
 	if req.DurationSec != nil {
 		requestedParams["duration_sec"] = *req.DurationSec
 	}
 	paramsJSON, _ := json.Marshal(requestedParams)
-
-	// Register in commodore.clips (business registry)
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
-			title, description, start_time, duration, clip_mode, requested_params,
-			origin_cluster_id, retention_until, requires_auth, playback_policy,
-			playback_webhook_secret_enc, created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
-	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
-		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
-		clipClusterID, retentionUntil, sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
-
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id":     tenantID,
-			"internal_name": internalName,
-			"error":         err,
-		}).Error("Failed to register clip in business registry")
-		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"tenant_id":     tenantID,
-		"clip_hash":     clipHash,
-		"clip_id":       clipID,
-		"internal_name": internalName,
-	}).Info("Registered clip in business registry")
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateClipRequest{
@@ -8100,20 +8071,81 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		foghornReq.RetentionDays = &days
 	}
 
-	// Call Foghorn for artifact lifecycle management
+	// Call Foghorn for artifact lifecycle management. Nothing is written to
+	// commodore.clips until Foghorn succeeds, so a rejection needs no cleanup.
 	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
-		if _, cleanupErr := s.db.ExecContext(context.Background(), `
-			DELETE FROM commodore.clips
-			WHERE id = $1 AND tenant_id = $2
-		`, clipID, tenantID); cleanupErr != nil {
-			s.logger.WithError(cleanupErr).WithField("clip_hash", clipHash).Error("Failed to remove clip registry row after Foghorn rejection")
-		}
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
+	// Foghorn has now created the artifact and queued its processing job. If we
+	// cannot complete the registry write, compensate by deleting the Foghorn
+	// artifact (and its job) so an invisible clip never lingers or processes,
+	// then surface the failure rather than returning an unseeable success.
+	cleanupOrphanedClip := func(reason string) {
+		// Detached context: the registry write may have failed because the
+		// request context was canceled/expired, and reusing it would skip the
+		// cleanup too. A short independent deadline lets compensation run.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, _, delErr := foghornClient.DeleteClip(cleanupCtx, clipHash, &tenantID); delErr != nil {
+			s.logger.WithError(delErr).WithField("clip_hash", clipHash).Error("Failed to delete orphaned Foghorn clip; artifact is retention-bounded")
+		}
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"clip_hash":     clipHash,
+			"internal_name": internalName,
+			"reason":        reason,
+		}).Error("Clip created in Foghorn but registry not written; compensated")
+	}
+
+	// Register in commodore.clips (business registry) with the fulfilled range
+	// Foghorn harvested. Foghorn is the only place that resolves relative /
+	// media-time and best-effort timing into a wall-clock range, so it is the
+	// single authoritative source of start_time/duration; a successful clip
+	// that reports none is a contract violation we fail closed on.
+	startTime, duration, haveTiming := fulfilledClipTiming(resp)
+	if !haveTiming {
+		cleanupOrphanedClip("foghorn returned no fulfilled timing range")
+		return nil, status.Error(codes.Internal, "clip source returned no fulfilled timing range")
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.clips (
+			id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
+			title, description, start_time, duration, clip_mode, requested_params,
+			origin_cluster_id, retention_until, requires_auth, playback_policy,
+			playback_webhook_secret_enc, created_at, updated_at
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
+	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
+		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
+		clipClusterID, retentionUntil, sourceRequiresAuth, sourcePolicyJSON, sourceSecretEnc)
+	if err != nil {
+		cleanupOrphanedClip("registry write failed")
+		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":     tenantID,
+		"clip_hash":     clipHash,
+		"clip_id":       clipID,
+		"internal_name": internalName,
+		"start_time":    startTime,
+		"duration":      duration,
+		"partial":       resp.GetPartial(),
+	}).Info("Registered clip in business registry")
+
 	return resp, nil
+}
+
+// fulfilledClipTiming returns the authoritative start_time/duration (ms) Foghorn
+// harvested for the clip. Foghorn always reports a fulfilled range for a
+// successful clip (it alone resolves relative/media-time anchors and best-effort
+// coverage), so ok=false means the fields are absent — a contract violation the
+// caller fails closed on rather than persisting request-derived timing.
+func fulfilledClipTiming(resp *pb.CreateClipResponse) (startTimeMs, durationMs int64, ok bool) {
+	startTimeMs, durationMs = resp.GetEffectiveStartMs(), resp.GetEffectiveDurationMs()
+	return startTimeMs, durationMs, startTimeMs > 0 && durationMs > 0
 }
 
 func mediaListSortDirection(raw string) string {

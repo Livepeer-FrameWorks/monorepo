@@ -822,37 +822,18 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 	}
 
-	// Build requested_params JSON for audit
-	requestedParams := map[string]any{
-		"mode": req.Mode.String(),
-	}
-	if req.StartUnix != nil {
-		requestedParams["start_unix"] = *req.StartUnix
-	}
-	if req.StopUnix != nil {
-		requestedParams["stop_unix"] = *req.StopUnix
-	}
-	if req.StartMs != nil {
-		requestedParams["start_ms"] = *req.StartMs
-	}
-	if req.StopMs != nil {
-		requestedParams["stop_ms"] = *req.StopMs
-	}
-	if req.DurationSec != nil {
-		requestedParams["duration_sec"] = *req.DurationSec
-	}
-	// requestedParams is stored in Commodore business registry, not in Foghorn
-	// Retention policy (ExpiresAt) is also managed in Commodore
-
-	// Source dispatch first — pick LIVE / DVR_ROLLING / CHAPTER based
-	// on where the requested range falls relative to the live shm
-	// window, the rolling DVR window, and any finalized chapter
-	// artifacts. Cross-source ranges, invalid ranges, and "no
-	// covering chapter or active DVR" all reject HERE, before any
-	// foghorn.artifacts / artifact_nodes inserts, so a rejected
-	// request never leaves an orphan clip row behind.
+	// Source dispatch first — coverage-aware best-effort selection of
+	// LIVE / DVR_ROLLING / CHAPTER (see pickClipSource). Invalid ranges,
+	// genuine assessment errors, and ranges that overlap no source all
+	// reject HERE, before any foghorn.artifacts / artifact_nodes inserts,
+	// so a rejected request never leaves an orphan clip row behind.
+	// (requested_params for audit are stored by Commodore, not Foghorn.)
 	clipEndMs := startMs + durationMs
-	dispatch, dispatchErr := s.pickClipSource(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
+	liveCov, dvrCov, chapCov, dispatchErr := s.computeClipCoverages(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
+	var dispatch clipSourceDecision
+	if dispatchErr == nil {
+		dispatch, dispatchErr = chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
+	}
 	if dispatchErr != nil {
 		if s.decklogClient != nil {
 			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
@@ -875,6 +856,90 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		}).Warn("Rejected clip source dispatch")
 		return nil, status.Errorf(codes.FailedPrecondition, "clip source dispatch: %v", dispatchErr)
 	}
+	// Live-style sources are harvested from their recording node when
+	// that differs from the clip output node. Same-node pulls use the
+	// local Mist configured beside Helmsman; remote pulls use the source
+	// node's public /view surface.
+	var sourceHost string
+	var sourceNodeID string
+	var ingestHost string
+resolve:
+	for {
+		switch dispatch.kind {
+		case pb.ClipPullRequest_SOURCE_KIND_LIVE:
+			ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
+			host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
+			liveNodeID := ""
+			if ingestErr == nil {
+				liveNodeID = s.lb.GetNodeIDByHost(host)
+			}
+			if ingestErr != nil || liveNodeID == "" {
+				// Live was the best coverage but its source node is
+				// unroutable (no ingest node, or the host is not a
+				// connected node). Drop the live candidate and re-rank
+				// among the recorded sources rather than failing the clip.
+				// A live-fully-covered request short-circuits recorded
+				// assessment, so the DVR/chapter candidates may be empty —
+				// assess them now that a recorded fallback is needed.
+				liveCov = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_LIVE}
+				recordedDVR, recordedChap, recErr := s.computeRecordedCoverages(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
+				if recErr != nil {
+					return nil, status.Errorf(codes.Unavailable, "live clip source unroutable and recorded source assessment failed: %v", recErr)
+				}
+				dvrCov, chapCov = recordedDVR, recordedChap
+				fallback, reErr := chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
+				if reErr != nil {
+					return nil, status.Errorf(codes.Unavailable, "live clip source unroutable and no recorded source covers the range: %v", ingestErr)
+				}
+				s.logger.WithError(ingestErr).WithFields(logging.Fields{
+					"clip_hash":     clipHash,
+					"internal_name": req.StreamInternalName,
+					"fallback_kind": fallback.kind.String(),
+				}).Warn("Live clip source unroutable; falling back to recorded source")
+				dispatch = fallback
+				ingestHost = ""
+				continue resolve
+			}
+			ingestHost = host
+			sourceHost = host
+			sourceNodeID = liveNodeID
+		case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
+			dvrNodeID := dispatch.sourceNodeID
+			var dvrHost string
+			var hostErr error
+			if dvrNodeID != "" {
+				dvrHost, hostErr = s.lb.GetNodeByID(dvrNodeID)
+			}
+			if dvrNodeID == "" || hostErr != nil {
+				// The winning DVR's recording node is not in current state
+				// (absent/disconnected). Drop the DVR candidate and re-rank
+				// among the remaining sources rather than failing the clip.
+				dvrCov = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
+				fallback, reErr := chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
+				if reErr != nil {
+					return nil, status.Errorf(codes.Unavailable, "active DVR recording node unavailable and no other source covers the range: %v", hostErr)
+				}
+				s.logger.WithError(hostErr).WithFields(logging.Fields{
+					"clip_hash":     clipHash,
+					"internal_name": req.StreamInternalName,
+					"dvr_node_id":   dvrNodeID,
+					"fallback_kind": fallback.kind.String(),
+				}).Warn("DVR recording node unroutable; falling back to another source")
+				dispatch = fallback
+				continue resolve
+			}
+			sourceNodeID = dvrNodeID
+			sourceHost = dvrHost
+		}
+		break resolve
+	}
+	if sourceNodeID != "" {
+		if sourceNode := state.DefaultManager().GetNodeState(sourceNodeID); sourceNode != nil && sourceNode.CapStorage {
+			storageNodeID = sourceNodeID
+			storageHost = sourceHost
+		}
+	}
+
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":              req.GetTenantId(),
 		"stream_id":              req.GetStreamId(),
@@ -887,47 +952,14 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		"source_node_id":         dispatch.sourceNodeID,
 		"source_dvr_hash":        dispatch.dvrHash,
 		"source_chapter_hash":    dispatch.chapterArtifactHash,
+		"effective_start_ms":     dispatch.effectiveStartMs,
+		"effective_end_ms":       dispatch.effectiveEndMs,
+		"partial":                dispatch.partial,
+		"coverage_ms":            dispatch.coverageMs,
+		"reason":                 dispatch.reason,
 		"requested_clip_mode":    req.GetMode().String(),
 		"requested_duration_sec": req.GetDurationSec(),
 	}).Info("Selected clip source dispatch")
-
-	// Live-style sources are harvested from their recording node when
-	// that differs from the clip output node. Same-node pulls use the
-	// local Mist configured beside Helmsman; remote pulls use the source
-	// node's public /view surface.
-	var sourceHost string
-	var sourceNodeID string
-	var ingestHost string
-	switch dispatch.kind {
-	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
-		ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
-		host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
-		if ingestErr != nil {
-			return nil, status.Errorf(codes.Unavailable, "no ingest node available for live clip: %v", ingestErr)
-		}
-		ingestHost = host
-		sourceHost = host
-		sourceNodeID = s.lb.GetNodeIDByHost(host)
-		if sourceNodeID == "" {
-			return nil, status.Error(codes.Unavailable, "ingest node is not connected")
-		}
-	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
-		sourceNodeID = dispatch.sourceNodeID
-		if sourceNodeID == "" {
-			return nil, status.Error(codes.Unavailable, "active DVR recording node is not known")
-		}
-		host, hostErr := s.lb.GetNodeByID(sourceNodeID)
-		if hostErr != nil {
-			return nil, status.Errorf(codes.Unavailable, "active DVR recording node unavailable: %v", hostErr)
-		}
-		sourceHost = host
-	}
-	if sourceNodeID != "" {
-		if sourceNode := state.DefaultManager().GetNodeState(sourceNodeID); sourceNode != nil && sourceNode.CapStorage {
-			storageNodeID = sourceNodeID
-			storageHost = sourceHost
-		}
-	}
 
 	storagePath := clips.BuildClipStoragePath(req.StreamInternalName, clipHash, format)
 	clipRetentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, req.TenantId, req.RetentionDays, 30 /* clip system default */, s.logger)
@@ -969,8 +1001,13 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		}
 	}
 
-	startUnix := clipStartMsAbs / 1000
-	stopUnix := clipEndMsAbs / 1000
+	// The fulfilled range is already whole-second aligned by source selection
+	// (chooseClipSource ranks and clamps on harvestable seconds, rejecting a
+	// sub-second collapse before any artifact insert). source_start_unix /
+	// source_stop_unix are exact divisions, and the same range is reported back
+	// to Commodore as start_time/duration.
+	startUnix := dispatch.effectiveStartMs / 1000
+	stopUnix := dispatch.effectiveEndMs / 1000
 	sourceKind := clipProcessingSourceKind(dispatch.kind)
 	if sourceKind == "" {
 		return nil, status.Errorf(codes.Internal, "unsupported clip source kind: %s", dispatch.kind.String())
@@ -1044,13 +1081,16 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	})
 
 	return &pb.CreateClipResponse{
-		Status:      "queued",
-		IngestHost:  ingestHost,
-		StorageHost: storageHost,
-		NodeId:      storageNodeID,
-		RequestId:   reqID,
-		ClipHash:    clipHash,
-		PlaybackId:  req.GetPlaybackId(),
+		Status:              "queued",
+		IngestHost:          ingestHost,
+		StorageHost:         storageHost,
+		NodeId:              storageNodeID,
+		RequestId:           reqID,
+		ClipHash:            clipHash,
+		PlaybackId:          req.GetPlaybackId(),
+		EffectiveStartMs:    dispatch.effectiveStartMs,
+		EffectiveDurationMs: dispatch.effectiveEndMs - dispatch.effectiveStartMs,
+		Partial:             dispatch.partial,
 	}, nil
 }
 
@@ -1163,6 +1203,18 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip")
 		return nil, status.Error(codes.Internal, "failed to delete clip")
+	}
+
+	// Terminate any not-yet-finished processing job so a deleted clip never
+	// processes (e.g. delete races a freshly-queued job, or registry-write
+	// compensation). The dispatcher also skips deleted artifacts, but failing
+	// the job here keeps queued rows from lingering.
+	if _, jobErr := s.db.ExecContext(ctx, `
+		UPDATE foghorn.processing_jobs
+		SET status = 'failed', error_message = 'clip deleted', updated_at = NOW()
+		WHERE artifact_hash = $1 AND status IN ('queued', 'dispatched', 'processing')
+	`, req.ClipHash); jobErr != nil {
+		s.logger.WithError(jobErr).WithField("clip_hash", req.ClipHash).Warn("Failed to cancel processing jobs for deleted clip")
 	}
 
 	s.logger.WithField("clip_hash", req.ClipHash).Info("Clip soft-deleted successfully")

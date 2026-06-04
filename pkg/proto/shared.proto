@@ -58,6 +58,16 @@ message CreateClipResponse {
   string request_id = 5;
   string clip_hash = 6;
   string playback_id = 7;      // Public playback key (artifact playback ID)
+  // Fulfilled clip range after best-effort source selection. When a single
+  // source cannot cover the requested range, Foghorn clips the largest
+  // contiguous covered sub-range and reports it here. It is authoritative for
+  // every clip mode (only Foghorn resolves relative/media-time anchors), so
+  // Commodore stores it as the clip's start_time/duration. For a fully covered
+  // request it is the request snapped to whole-second harvest boundaries (so a
+  // now-anchored clip may lose its sub-second tail without being marked partial).
+  int64 effective_start_ms = 8;    // fulfilled clip start (absolute Unix ms)
+  int64 effective_duration_ms = 9; // fulfilled duration (ms)
+  bool partial = 10;               // true when fulfilled range < requested
 }
 
 // ClipInfo - full clip details

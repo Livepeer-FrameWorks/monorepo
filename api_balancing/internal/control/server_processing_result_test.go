@@ -146,6 +146,60 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 	}
 }
 
+// A result that arrives after the clip was deleted (the ready-claim matches 0
+// rows because the artifact is in a terminal state) must skip output
+// registration and in-memory state, so a deleted clip is never resurrected.
+func TestProcessProcessingJobResult_Completed_SkipsRegistrationWhenArtifactTerminal(t *testing.T) {
+	mock, _, repo := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectExec("(?s)UPDATE foghorn.processing_jobs.*SET status = 'completed'.*progress = 100").
+		WithArgs("job-del", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectQuery("SELECT a\\.artifact_hash.*FROM foghorn.processing_jobs").
+		WithArgs("job-del").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format"}).
+			AddRow("art-deleted", "clip", "tenant-1", "", "", "", "avi"))
+
+	// Guarded ready-claim matches no row (artifact deleted/failed/etc): 0 rows
+	// affected. The handler must return here without any side effects.
+	mock.ExpectExec("(?s)UPDATE foghorn.artifacts.*SET format.*size_bytes.*sync_status = 'pending'.*storage_location = 'local'").
+		WithArgs("mp4", "art-deleted", int64(5000)).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+
+	processProcessingJobResult(&pb.ProcessingJobResult{
+		JobId:           "job-del",
+		Status:          "completed",
+		OutputPath:      "/data/processed/output.mp4",
+		OutputSizeBytes: 5000,
+	}, "node-del", logger)
+
+	// No further DB calls (no projection/lifecycle); exactly the three above.
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	// No origin registration for a terminal artifact.
+	repo.mu.Lock()
+	if len(repo.originArtifactCalls) != 0 {
+		t.Fatalf("expected no RegisterOriginArtifact for terminal artifact, got %d", len(repo.originArtifactCalls))
+	}
+	repo.mu.Unlock()
+
+	// Not added to in-memory node state either.
+	for _, n := range state.DefaultManager().GetAllNodesSnapshot().Nodes {
+		if n.NodeID != "node-del" {
+			continue
+		}
+		for _, a := range n.Artifacts {
+			if a.ClipHash == "art-deleted" {
+				t.Fatal("terminal artifact should not be added to in-memory state")
+			}
+		}
+	}
+}
+
 func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeReplacementSync(t *testing.T) {
 	mock, s3Mock, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
