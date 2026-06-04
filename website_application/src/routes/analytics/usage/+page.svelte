@@ -603,7 +603,6 @@
   const ClockIcon = getIconComponent("Clock");
   const RadioIcon = getIconComponent("Radio");
   const UsersIcon = getIconComponent("Users");
-  const VideoIcon = getIconComponent("Video");
   const HardDriveIcon = getIconComponent("HardDrive");
   const TrendingUpIcon = getIconComponent("TrendingUp");
   const LightbulbIcon = getIconComponent("Lightbulb");
@@ -749,15 +748,6 @@
               value={formatNumber(usageData.max_viewers)}
               valueColor="text-accent-purple"
               label="Peak Viewers"
-            />
-          </div>
-          <div>
-            <DashboardMetricCard
-              icon={VideoIcon}
-              iconColor="text-info"
-              value={formatNumber(usageData.total_streams)}
-              valueColor="text-info"
-              label="Total Streams"
             />
           </div>
         </GridSeam>
