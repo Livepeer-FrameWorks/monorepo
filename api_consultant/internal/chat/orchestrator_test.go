@@ -280,6 +280,7 @@ func TestModeAllowsTool(t *testing.T) {
 		{"docs", "search_web", true},
 		{"docs", "execute_query", true},
 		{"docs", "search_support_history", true},
+		{"docs", "list_support_conversations", true},
 		{"docs", "diagnose_rebuffering", true},
 		{"docs", "create_stream", false},
 		{"docs", "delete_stream", false},
