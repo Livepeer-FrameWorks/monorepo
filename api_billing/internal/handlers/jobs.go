@@ -3105,7 +3105,26 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		if txErr != nil {
 			return fmt.Errorf("upsert invoice draft: %w", txErr)
 		}
-		return persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
+		if txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult); txErr != nil {
+			return txErr
+		}
+		_, txErr = tx.ExecContext(ctx, `
+				UPDATE purser.tenant_subscriptions
+				SET billing_period_start = COALESCE(billing_period_start, $2),
+				    billing_period_end = COALESCE(billing_period_end, $3),
+				    next_billing_date = COALESCE(next_billing_date, $3),
+				    updated_at = CASE
+				        WHEN billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL
+				        THEN NOW()
+				        ELSE updated_at
+				    END
+				WHERE tenant_id = $1
+				  AND status = 'active'
+			`, tenantID, periodStart, periodEnd)
+		if txErr != nil {
+			return fmt.Errorf("backfill subscription period from draft: %w", txErr)
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("invoice draft transaction: %w", err)

@@ -753,10 +753,10 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, providerPaym
 	}
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE purser.payment_provider_intents ppi
-		SET provider_payment_id = COALESCE(provider_payment_id, NULLIF($1, '')),
-		    provider_session_id = COALESCE(provider_session_id, NULLIF($2, '')),
+		SET provider_payment_id = COALESCE(ppi.provider_payment_id, NULLIF($1, '')),
+		    provider_session_id = COALESCE(ppi.provider_session_id, NULLIF($2, '')),
 		    status = 'succeeded',
-		    succeeded_at = COALESCE(succeeded_at, $3),
+		    succeeded_at = COALESCE(ppi.succeeded_at, $3),
 		    updated_at = NOW()
 		FROM purser.pending_topups pt
 		WHERE pt.intent_id = ppi.id

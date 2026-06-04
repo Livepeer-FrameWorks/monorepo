@@ -6342,18 +6342,20 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 	}
 
 	var (
-		currentTierID    string
-		currentTierLevel int32
-		billingModel     string
-		billingPeriodEnd sql.NullTime
-		stripePeriodEnd  sql.NullTime
+		currentTierID      string
+		currentTierLevel   int32
+		billingModel       string
+		billingPeriodStart sql.NullTime
+		billingPeriodEnd   sql.NullTime
+		stripePeriodEnd    sql.NullTime
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT ts.tier_id, bt.tier_level, ts.billing_model, ts.billing_period_end, ts.stripe_current_period_end
+		SELECT ts.tier_id, bt.tier_level, ts.billing_model,
+		       ts.billing_period_start, ts.billing_period_end, ts.stripe_current_period_end
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 		WHERE ts.tenant_id = $1
-	`, tenantID).Scan(&currentTierID, &currentTierLevel, &billingModel, &billingPeriodEnd, &stripePeriodEnd)
+	`, tenantID).Scan(&currentTierID, &currentTierLevel, &billingModel, &billingPeriodStart, &billingPeriodEnd, &stripePeriodEnd)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
 	}
@@ -6384,11 +6386,31 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 		return nil, status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
 	}
 
+	now := time.Now()
+	resolvedPeriodStart, resolvedPeriodEnd, periodErr := s.resolveBillingPeriod(ctx, tenantID, billingPeriodStart, billingPeriodEnd, now)
+	if periodErr != nil {
+		return nil, status.Errorf(codes.Internal, "resolve billing period: %v", periodErr)
+	}
+
 	if targetTierID == currentTierID {
 		eligibleClusters, primaryCluster, clusterErr := s.reconcileTierClusterAccess(ctx, tenantID, targetTierLevel)
 		if clusterErr != nil {
 			s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access for unchanged tier")
 			return nil, status.Errorf(codes.Internal, "failed to reconcile cluster access for current tier: %v", clusterErr)
+		}
+		if _, periodUpdateErr := s.db.ExecContext(ctx, `
+			UPDATE purser.tenant_subscriptions
+			SET billing_period_start = COALESCE(billing_period_start, $2),
+			    billing_period_end = COALESCE(billing_period_end, $3),
+			    next_billing_date = COALESCE(next_billing_date, $3),
+			    updated_at = CASE
+			        WHEN billing_period_start IS NULL OR billing_period_end IS NULL OR next_billing_date IS NULL
+			        THEN NOW()
+			        ELSE updated_at
+			    END
+			WHERE tenant_id = $1
+		`, tenantID, resolvedPeriodStart, resolvedPeriodEnd); periodUpdateErr != nil {
+			return nil, status.Errorf(codes.Internal, "backfill billing period: %v", periodUpdateErr)
 		}
 		if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
 			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache for unchanged tier")
@@ -6412,9 +6434,12 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 			    pending_tier_id = NULL,
 			    pending_effective_at = NULL,
 			    pending_reason = NULL,
+			    billing_period_start = COALESCE(billing_period_start, $3),
+			    billing_period_end = COALESCE(billing_period_end, $4),
+			    next_billing_date = COALESCE(next_billing_date, $4),
 			    updated_at = NOW()
 			WHERE tenant_id = $2
-		`, targetTierID, tenantID); err != nil {
+		`, targetTierID, tenantID, resolvedPeriodStart, resolvedPeriodEnd); err != nil {
 			return nil, status.Errorf(codes.Internal, "update subscription tier: %v", err)
 		}
 
@@ -6451,9 +6476,14 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 		effective = stripePeriodEnd.Time
 	} else if billingPeriodEnd.Valid {
 		effective = billingPeriodEnd.Time
+	} else {
+		effective = resolvedPeriodEnd
 	}
 	if effective.IsZero() {
 		return nil, status.Error(codes.FailedPrecondition, "subscription has no billing_period_end; cannot schedule downgrade")
+	}
+	if !resolvedPeriodStart.Before(effective) {
+		resolvedPeriodStart = effective.AddDate(0, -1, 0)
 	}
 
 	if _, err := s.db.ExecContext(ctx, `
@@ -6461,9 +6491,12 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 		SET pending_tier_id = $1,
 		    pending_effective_at = $2,
 		    pending_reason = 'downgrade',
+		    billing_period_start = COALESCE(billing_period_start, $4),
+		    billing_period_end = COALESCE(billing_period_end, $5),
+		    next_billing_date = COALESCE(next_billing_date, $5),
 		    updated_at = NOW()
 		WHERE tenant_id = $3
-	`, targetTierID, effective, tenantID); err != nil {
+	`, targetTierID, effective, tenantID, resolvedPeriodStart, effective); err != nil {
 		return nil, status.Errorf(codes.Internal, "schedule downgrade: %v", err)
 	}
 
@@ -6495,6 +6528,39 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func currentBillingPeriod(now time.Time) (time.Time, time.Time) {
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	return start, start.AddDate(0, 1, 0)
+}
+
+func (s *PurserServer) resolveBillingPeriod(ctx context.Context, tenantID string, start, end sql.NullTime, now time.Time) (time.Time, time.Time, error) {
+	if start.Valid && end.Valid && end.Time.After(start.Time) {
+		return start.Time, end.Time, nil
+	}
+
+	var invoiceStart, invoiceEnd sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT period_start, period_end
+		FROM purser.billing_invoices
+		WHERE tenant_id = $1
+		  AND period_start IS NOT NULL
+		  AND period_end IS NOT NULL
+		  AND status IN ('draft', 'manual_review')
+		  AND period_end > $2
+		ORDER BY period_end ASC
+		LIMIT 1
+	`, tenantID, now).Scan(&invoiceStart, &invoiceEnd)
+	if err == nil && invoiceStart.Valid && invoiceEnd.Valid && invoiceEnd.Time.After(invoiceStart.Time) {
+		return invoiceStart.Time, invoiceEnd.Time, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, time.Time{}, fmt.Errorf("load open invoice period: %w", err)
+	}
+
+	periodStart, periodEnd := currentBillingPeriod(now)
+	return periodStart, periodEnd, nil
 }
 
 // Ensure unused imports don't cause errors

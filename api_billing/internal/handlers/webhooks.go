@@ -508,11 +508,11 @@ func markWebhookFailed(ctx context.Context, provider, eventID, errMsg string, bl
 	}
 	_, err := db.ExecContext(ctx, `
 		UPDATE purser.webhook_events
-		SET status = $3,
+		SET status = $3::varchar,
 		    last_error = $4,
-		    processed_at = CASE WHEN $3 IN ('failed_terminal') THEN NOW() ELSE processed_at END
+		    processed_at = CASE WHEN $5::boolean THEN NOW() ELSE processed_at END
 		WHERE provider = $1 AND event_id = $2
-	`, provider, eventID, target, errMsg)
+	`, provider, eventID, target, errMsg, terminal)
 	if err != nil {
 		return fmt.Errorf("mark webhook failed: %w", err)
 	}

@@ -378,6 +378,9 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
 			AddRow("meter:storage_gb_seconds_hot"))
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
+		WithArgs(tenantID, periodStart, periodEnd).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := jm.updateInvoiceDraft(context.Background(), tenantID); err != nil {
@@ -457,6 +460,9 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"line_key"}).
 			AddRow("base_subscription").
 			AddRow("meter:storage_gb_seconds_hot"))
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
+		WithArgs(tenantID, periodStart, periodEnd).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	if err := jm.updateInvoiceDraft(context.Background(), tenantID); err != nil {
