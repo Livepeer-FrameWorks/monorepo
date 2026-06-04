@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
@@ -68,6 +69,8 @@ type peerState struct {
 	fromRedis   bool
 	cancel      context.CancelFunc
 	stream      pb.FoghornFederation_PeerChannelClient
+	sendCh      chan *pb.PeerMessage // owned by the per-peer writer goroutine; producers enqueue, never Send directly
+	dropped     atomic.Uint64        // frames evicted (drop-oldest) because the mailbox was full (backpressured peer)
 	lastRefresh time.Time
 	connected   bool
 	s3Config    *ClusterS3Config
@@ -495,6 +498,11 @@ const (
 	leaderAcquireInterval = 5 * time.Second
 	leaderRole            = "peer_manager"
 	protocolVersion       = uint32(1)
+	// peerSendQueueSize bounds the per-peer writer mailbox. Every federation frame
+	// is best-effort with its own backstop (periodic re-push, or a TTL on the
+	// receiver's cache), so on overflow the oldest frame is evicted (latest-wins)
+	// rather than stalling a producer that may hold pm.mu.
+	peerSendQueueSize = 256
 )
 
 // run is the main goroutine. It loops trying to acquire the leader lease;
@@ -808,8 +816,17 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 
 		pm.mu.Lock()
 		ps.stream = stream
+		ps.sendCh = make(chan *pb.PeerMessage, peerSendQueueSize)
 		ps.connected = true
+		sendCh := ps.sendCh
 		pm.mu.Unlock()
+
+		// One writer goroutine per connection. Every producer — the leader push
+		// loops and the trigger-path BroadcastStreamLifecycle — enqueues onto
+		// sendCh; only this goroutine calls stream.Send. That keeps gRPC Sends
+		// non-concurrent and stops a wedged peer from stalling a producer that
+		// holds pm.mu.
+		go pm.peerWriteLoop(ctx, clusterID, sendCh, stream, cancel)
 
 		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel connected")
 		pm.emitFederationEvent(&pb.FederationEventData{
@@ -823,9 +840,10 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 		pm.mu.Lock()
 		ps.connected = false
 		ps.stream = nil
+		ps.sendCh = nil
 		pm.mu.Unlock()
 
-		cancel()
+		cancel() // also unblocks peerWriteLoop via ctx
 
 		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel disconnected, will reconnect")
 		pm.emitFederationEvent(&pb.FederationEventData{
@@ -839,6 +857,70 @@ func (pm *PeerManager) connectPeer(clusterID string, ps *peerState) {
 func (pm *PeerManager) touchPool(clusterID string) {
 	if pm.pool != nil {
 		pm.pool.Touch(clusterID)
+	}
+}
+
+// enqueue offers a frame to a peer's writer goroutine without blocking. Callers
+// may hold pm.mu (R or W): the channel op never blocks. Producers must never call
+// stream.Send directly — the single-writer invariant is what keeps gRPC Sends
+// non-concurrent and keeps a backpressured peer from stalling the leader loop.
+//
+// Backpressure policy is latest-wins (drop-oldest). Every federation frame is
+// best-effort with its own backstop, so evicting one under load is safe and
+// dropping the newest (letting a stale frame drain later) would be worse:
+//   - telemetry/summary/heartbeat/ads, live StreamAds, and live-lifecycle events
+//     re-push every periodic tick;
+//   - an offline-lifecycle event is backstopped by the receiver's RemoteLiveStream
+//     30s TTL, which expires on its own once the live re-push stops;
+//   - a ReplicationEvent is an ephemeral loop-prevention hint (RemoteReplication
+//     5min TTL, never refreshed) — losing it only risks a redundant origin pull.
+//
+// No frame needs guaranteed delivery, so there is deliberately one mailbox.
+func (pm *PeerManager) enqueue(peerID string, ps *peerState, msg *pb.PeerMessage) {
+	if !ps.connected || ps.sendCh == nil {
+		return
+	}
+	// Fast path: room in the mailbox.
+	select {
+	case ps.sendCh <- msg:
+		return
+	default:
+	}
+	// Full: evict the oldest queued frame to make room for the fresher one.
+	select {
+	case <-ps.sendCh:
+		if n := ps.dropped.Add(1); n%peerSendQueueSize == 1 {
+			pm.logger.WithFields(logging.Fields{"peer_cluster": peerID, "dropped_total": n}).Debug("peer send queue full; evicting oldest frame (latest-wins)")
+		}
+	default:
+	}
+	// Enqueue the fresh frame; if a concurrent producer refilled the slot, drop
+	// this one rather than block.
+	select {
+	case ps.sendCh <- msg:
+	default:
+		ps.dropped.Add(1)
+	}
+}
+
+// peerWriteLoop is the sole sender on a peer's stream. It drains the mailbox
+// until the connection context is cancelled or a Send fails; a Send failure
+// cancels the context so recvLoop unwinds and connectPeer reconnects.
+func (pm *PeerManager) peerWriteLoop(ctx context.Context, peerID string, sendCh <-chan *pb.PeerMessage, stream pb.FoghornFederation_PeerChannelClient, cancel context.CancelFunc) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-sendCh:
+			if !ok {
+				return
+			}
+			if err := stream.Send(msg); err != nil {
+				pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("peer writer Send failed; tearing down connection")
+				cancel()
+				return
+			}
+		}
 	}
 }
 
@@ -1109,10 +1191,7 @@ func (pm *PeerManager) pushTelemetry() {
 			if !pm.shouldSendStreamToPeer(peerID, ps, tel.EdgeTelemetry.StreamName, tenantID) {
 				continue
 			}
-			if err := ps.stream.Send(msg); err != nil {
-				pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send telemetry to peer")
-				break
-			}
+			pm.enqueue(peerID, ps, msg)
 		}
 	}
 
@@ -1145,10 +1224,7 @@ func (pm *PeerManager) pushTelemetry() {
 			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
 				continue
 			}
-			if err := ps.stream.Send(lifecycleMsg); err != nil {
-				pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send lifecycle heartbeat to peer")
-				break
-			}
+			pm.enqueue(peerID, ps, lifecycleMsg)
 		}
 	}
 }
@@ -1242,9 +1318,7 @@ func (pm *PeerManager) pushSummary() {
 			continue
 		}
 		pm.touchPool(peerID)
-		if err := ps.stream.Send(msg); err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send cluster summary to peer")
-		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -1356,9 +1430,7 @@ func (pm *PeerManager) pushArtifacts() {
 			},
 		}
 		pm.touchPool(peerID)
-		if err := ps.stream.Send(msg); err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send artifact advertisement to peer")
-		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -1533,10 +1605,7 @@ func (pm *PeerManager) pushStreamAds() {
 			if !pm.shouldSendStreamToPeer(peerID, ps, ad.StreamAd.InternalName, ad.StreamAd.TenantId) {
 				continue
 			}
-			if err := ps.stream.Send(msg); err != nil {
-				pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send stream ad to peer")
-				break
-			}
+			pm.enqueue(peerID, ps, msg)
 		}
 	}
 }
@@ -1596,9 +1665,7 @@ func (pm *PeerManager) pushHeartbeat() {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		if err := ps.stream.Send(msg); err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send heartbeat to peer")
-		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -1667,7 +1734,10 @@ func (pm *PeerManager) checkReplicationCompletion() {
 	}
 }
 
-// broadcastToPeers sends a message to all connected peer channels.
+// broadcastToPeers sends a message to all connected peer channels. Used for
+// replication-complete events — a best-effort loop-prevention hint (the
+// receiver's RemoteReplication entry is a 5min TTL, never refreshed), so it
+// rides the same best-effort mailbox as everything else.
 func (pm *PeerManager) broadcastToPeers(msg *pb.PeerMessage) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -1675,9 +1745,7 @@ func (pm *PeerManager) broadcastToPeers(msg *pb.PeerMessage) {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		if err := ps.stream.Send(msg); err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to broadcast to peer")
-		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -1713,6 +1781,9 @@ func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, i
 		},
 	}
 
+	// Best-effort like all federation frames: a live event is re-pushed every
+	// periodic tick, and an offline event is backstopped by the receiver's
+	// RemoteLiveStream 30s TTL expiring once the live re-push stops.
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	for peerID, ps := range pm.peers {
@@ -1722,9 +1793,7 @@ func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, i
 		if !pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
 			continue
 		}
-		if err := ps.stream.Send(msg); err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to broadcast lifecycle to peer")
-		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 

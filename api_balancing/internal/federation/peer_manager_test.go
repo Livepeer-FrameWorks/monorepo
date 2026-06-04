@@ -713,7 +713,9 @@ func TestBroadcastStreamLifecycle_FiltersUnauthorizedPeers(t *testing.T) {
 	}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.BroadcastStreamLifecycle("live+alpha", "tenant-a", true)
+	flush()
 
 	if len(allowedStream.sent) != 1 {
 		t.Fatalf("expected allowed peer to receive 1 message, got %d", len(allowedStream.sent))
@@ -1373,7 +1375,9 @@ func TestPushTelemetry_SendsTelemetryAndLifecycleToEligiblePeers(t *testing.T) {
 	}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.pushTelemetry()
+	flush()
 
 	if len(allowed.sent) != 2 {
 		t.Fatalf("expected allowed peer to receive telemetry+lifecycle (2 msgs), got %d", len(allowed.sent))
@@ -1396,7 +1400,9 @@ func TestPushSummary_SendsClusterSummary(t *testing.T) {
 	pm.peers["peer-1"] = &peerState{connected: true, stream: out, lifecycle: peerAlwaysOn}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.pushSummary()
+	flush()
 
 	if len(out.sent) != 1 {
 		t.Fatalf("expected 1 summary message, got %d", len(out.sent))
@@ -1433,7 +1439,9 @@ func TestPushArtifacts_SendsArtifactAdvertisement(t *testing.T) {
 	pm.peers["peer-1"] = &peerState{connected: true, stream: out, lifecycle: peerAlwaysOn}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.pushArtifacts()
+	flush()
 
 	if len(out.sent) != 1 {
 		t.Fatalf("expected 1 artifact advertisement, got %d", len(out.sent))
@@ -1474,7 +1482,9 @@ func TestPushStreamAds_SendsAndFiltersByPeerAuthorization(t *testing.T) {
 	}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.pushStreamAds()
+	flush()
 
 	if len(allowed.sent) != 1 {
 		t.Fatalf("expected allowed peer to receive one stream ad, got %d", len(allowed.sent))
@@ -1507,7 +1517,9 @@ func TestPushHeartbeat_SendsClusterHeartbeat(t *testing.T) {
 	pm.peers["peer-1"] = &peerState{connected: true, stream: out, lifecycle: peerAlwaysOn}
 	pm.mu.Unlock()
 
+	flush := pm.wireTestWriters()
 	pm.pushHeartbeat()
+	flush()
 
 	if len(out.sent) != 1 {
 		t.Fatalf("expected 1 heartbeat message, got %d", len(out.sent))

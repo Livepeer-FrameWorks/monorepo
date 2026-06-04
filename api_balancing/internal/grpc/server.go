@@ -2204,6 +2204,12 @@ func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.
 		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
 			continue
 		}
+		// Liveness gate: a peer's EdgeSummary (60s TTL) outlives its heartbeat (30s TTL),
+		// so a peer dead 30–60s still has a cached summary. Skip it once the heartbeat key
+		// has expired, so stale telemetry can't attract cross-cluster routing.
+		if hb, hbErr := s.remoteEdgeCache.GetPeerHeartbeat(ctx, peer.GetClusterId()); hbErr != nil || hb == nil {
+			continue
+		}
 		record, err := s.remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
 		if err != nil || record == nil {
 			continue
