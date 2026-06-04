@@ -545,6 +545,34 @@ func TestDeriveLivepeerGatewayPhysicalRegistryAndLogicalTLSBundles(t *testing.T)
 	if site.TLSBundleID != "wildcard-media-free-eu-frameworks-network" {
 		t.Fatalf("ingress site tls_bundle_id = %q, want logical media-cluster bundle", site.TLSBundleID)
 	}
+
+	// Physical per-instance endpoint: a SEPARATE site + exact-SAN bundle keyed
+	// on the node, independent of media-cluster assignment.
+	const physFQDN = "livepeer-gateway.core-eu-1.infra.frameworks.network"
+	const physBundleID = "physical-livepeer-gateway-core-eu-1-infra-frameworks-network"
+	phys, ok := sites["livepeer-gateway-core-eu-1-physical"]
+	if !ok {
+		t.Fatalf("missing physical ingress site; got %+v", sites)
+	}
+	if phys.Kind != "physical" {
+		t.Fatalf("physical site kind = %q, want physical", phys.Kind)
+	}
+	if phys.ClusterID != "core-eu" || phys.NodeID != "core-eu-1" {
+		t.Fatalf("physical site cluster/node = %q/%q, want core-eu/core-eu-1", phys.ClusterID, phys.NodeID)
+	}
+	if !slices.Equal(phys.Domains, []string{physFQDN}) {
+		t.Fatalf("physical site domains = %v, want [%s]", phys.Domains, physFQDN)
+	}
+	if phys.TLSBundleID != physBundleID {
+		t.Fatalf("physical site tls_bundle_id = %q, want %q", phys.TLSBundleID, physBundleID)
+	}
+	pb, ok := bundles[physBundleID]
+	if !ok {
+		t.Fatalf("missing physical TLS bundle %s; got %+v", physBundleID, bundles)
+	}
+	if !slices.Equal(pb.Domains, []string{physFQDN}) {
+		t.Fatalf("physical bundle domains = %v, want exact SAN [%s]", pb.Domains, physFQDN)
+	}
 }
 
 func TestDeriveVMAUTHDefaultsIngressToAllMediaClusters(t *testing.T) {

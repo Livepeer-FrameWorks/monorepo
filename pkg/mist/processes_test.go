@@ -7,6 +7,95 @@ import (
 	"testing"
 )
 
+func TestSetLivepeerBroadcastersFillsEveryLivepeerEntry(t *testing.T) {
+	input := `[
+		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},
+		{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}]}
+	]`
+
+	out := SetLivepeerBroadcasters(input, []string{"https://gw1.example.com", "https://gw2.example.com"})
+
+	var got []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var livepeer map[string]json.RawMessage
+	for _, p := range got {
+		var name string
+		_ = json.Unmarshal(p["process"], &name)
+		if name == "Livepeer" {
+			livepeer = p
+		}
+	}
+	if livepeer == nil {
+		t.Fatal("expected a Livepeer entry to remain")
+	}
+	var encoded string
+	if err := json.Unmarshal(livepeer["hardcoded_broadcasters"], &encoded); err != nil {
+		t.Fatalf("hardcoded_broadcasters not a string: %v", err)
+	}
+	var entries []struct {
+		Address string `json:"address"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &entries); err != nil {
+		t.Fatalf("parse broadcasters %q: %v", encoded, err)
+	}
+	if len(entries) != 2 || entries[0].Address != "https://gw1.example.com" || entries[1].Address != "https://gw2.example.com" {
+		t.Fatalf("broadcasters = %+v, want gw1 then gw2 in order", entries)
+	}
+}
+
+func TestSetLivepeerBroadcastersEmptyFallsBackToLocalAV(t *testing.T) {
+	input := `[{"process":"Livepeer","source_track":"maxbps","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264High"}]}]`
+
+	out := SetLivepeerBroadcasters(input, nil)
+
+	if HasLivepeerProcesses(out) {
+		t.Fatalf("expected Livepeer to be replaced with local AV, got %q", out)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 1 || got[0]["process"] != "AV" {
+		t.Fatalf("expected single local AV process, got %#v", got)
+	}
+}
+
+func TestAllLivepeerProfilesFromProcessesJSON_FailClosedVsLegitimatelyEmpty(t *testing.T) {
+	src := SourceMediaInfo{Width: 1280, Height: 720, FPS: 30}
+
+	// Valid: two renditions, no error.
+	profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360},{"name":"720p","height":720}]}]`, src)
+	if err != nil || len(profs) != 2 {
+		t.Fatalf("valid config: got %d profiles, err %v; want 2, nil", len(profs), err)
+	}
+
+	// No Livepeer process: empty + nil (legitimately nothing to prove).
+	if profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"AV","codec":"AAC"}]`, src); err != nil || len(profs) != 0 {
+		t.Fatalf("no-Livepeer: got %d profiles, err %v; want 0, nil", len(profs), err)
+	}
+
+	// Livepeer present but every profile inhibited by a small source: empty + nil.
+	small := SourceMediaInfo{Width: 320, Height: 240}
+	if profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"track_inhibit":"video=<640x360"}]}]`, small); err != nil || len(profs) != 0 {
+		t.Fatalf("all-inhibited: got %d profiles, err %v; want 0, nil", len(profs), err)
+	}
+
+	// Fail-closed cases: a Livepeer process we cannot turn into a known rendition
+	// set must error, not look like "nothing to prove".
+	for name, cfg := range map[string]string{
+		"missing target_profiles":   `[{"process":"Livepeer","source_track":"maxbps"}]`,
+		"empty target_profiles":     `[{"process":"Livepeer","target_profiles":[]}]`,
+		"malformed target_profiles": `[{"process":"Livepeer","target_profiles":"notarray"}]`,
+		"malformed config json":     `{not json`,
+	} {
+		if _, err := AllLivepeerProfilesFromProcessesJSON(cfg, src); err == nil {
+			t.Fatalf("%s: expected error (fail closed), got nil", name)
+		}
+	}
+}
+
 func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	input := `[
 		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},
@@ -138,6 +227,18 @@ func TestValidateProcessConfigShapeRejectsLivepeerFieldsOnExplicitAV(t *testing.
 	localAVConfig := `[{"process":"AV","codec":"H264","bitrate":900000,"resolution":"640x360","framerate":30,"profile":"high","track_select":"video=maxbps"}]`
 	if err := ValidateProcessConfigShape(localAVConfig); err != nil {
 		t.Fatalf("local AV config should be valid: %v", err)
+	}
+
+	// A Livepeer process must request at least one rendition (the invariant
+	// enforced for both the billing catalog and Commodore override policies).
+	for _, bad := range []string{
+		`[{"process":"Livepeer","source_track":"maxbps"}]`,      // missing
+		`[{"process":"Livepeer","target_profiles":[]}]`,         // empty
+		`[{"process":"Livepeer","target_profiles":"notarray"}]`, // wrong type
+	} {
+		if err := ValidateProcessConfigShape(bad); err == nil {
+			t.Fatalf("expected ValidateProcessConfigShape to reject no-rendition Livepeer config: %s", bad)
+		}
 	}
 }
 

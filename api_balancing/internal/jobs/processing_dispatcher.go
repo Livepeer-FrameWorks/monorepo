@@ -60,11 +60,12 @@ type ProcessConfigCacher interface {
 	CacheProcessConfig(internalName, processesJSON string)
 }
 
-// GatewayResolver substitutes {{gateway_url}} placeholders in process config JSON.
-// Implemented by triggers.Processor. Candidates is an ordered list of cluster IDs
-// to try; empty candidates falls back to the resolver's local cluster.
+// GatewayResolver fills the Livepeer hardcoded_broadcasters list in process
+// config JSON with the registered gateway instances. Implemented by
+// triggers.Processor. Candidates is an ordered list of cluster IDs to try;
+// empty candidates falls back to the resolver's local cluster.
 type GatewayResolver interface {
-	SubstituteGatewayURL(processesJSON string, candidates []string) string
+	ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string
 }
 
 type processingJob struct {
@@ -338,7 +339,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		if d.gatewayResolver != nil {
 			// Queue jobs do not carry origin/official cluster IDs; nil candidates
 			// resolves against the resolver's local cluster.
-			resolved = d.gatewayResolver.SubstituteGatewayURL(resolved, nil)
+			resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
 		}
 		req.ProcessesJson = resolved
 

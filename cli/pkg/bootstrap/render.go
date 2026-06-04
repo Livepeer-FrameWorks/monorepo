@@ -367,6 +367,43 @@ func deriveIngressAndRegistry(d *Derived, m *inventory.Manifest, opts DeriveOpti
 					d.Quartermaster.ServiceRegistry = append(d.Quartermaster.ServiceRegistry, entry)
 				}
 
+				// Physical per-instance endpoint: a SEPARATE ingress site +
+				// exact-SAN bundle so this node's nginx answers
+				// <service>.<node>.infra.<root> (the failover address Foghorn
+				// hands MistProcLivepeer) on the same local upstream as the
+				// pooled name. Node-scoped, so it does not depend on ingress
+				// cluster membership.
+				if pkgdns.IsPhysicalEndpointServiceType(serviceType) && port != 0 {
+					if fqdn, ok := pkgdns.InfraInstanceFQDN(serviceType, hostKey, m.RootDomain); ok {
+						if host, hasHost := m.GetHost(hostKey); hasHost {
+							upstreamHost := host.WireguardIP
+							if upstreamHost == "" {
+								upstreamHost = host.ExternalIP
+							}
+							if upstreamHost != "" {
+								bundleID := clusterderive.TLSBundleID("physical", fqdn)
+								upsertAutoTLSBundle(autoBundles, TLSBundle{
+									ID:        bundleID,
+									ClusterID: clusterID,
+									Domains:   []string{fqdn},
+									Issuer:    "navigator",
+									Email:     resolveTLSBundleEmail(opts),
+								})
+								siteID := serviceName + "-" + hostKey + "-physical"
+								autoSites[siteID] = IngressSite{
+									ID:          siteID,
+									ClusterID:   clusterID,
+									NodeID:      hostKey,
+									Domains:     []string{fqdn},
+									TLSBundleID: bundleID,
+									Kind:        "physical",
+									Upstream:    IngressUpstream{Host: upstreamHost, Port: port},
+								}
+							}
+						}
+					}
+				}
+
 				for _, ingressClusterID := range serviceIngressClusterIDs(serviceName, m, svc, hostKey, clusterID) {
 					domains, bundleID := clusterderive.AutoIngressDomainsForService(serviceName, svc, m, ingressClusterID)
 					if bundleID == "" || len(domains) == 0 {

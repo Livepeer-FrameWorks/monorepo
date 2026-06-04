@@ -223,7 +223,9 @@ func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
 	publicType := "telemetry"
 	lookupType := "vmauth"
 
-	queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1`
+	// Pin n.status='active' too: pool-assigned DNS must drop operator-offlined nodes,
+	// matching the non-pool/physical paths.
+	queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1.*n\.status = 'active'`
 	mock.ExpectQuery(`SELECT COUNT\(DISTINCT \(n\.id, sca\.cluster_id\)\) ` + queryShape).
 		WithArgs(lookupType).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -673,7 +675,9 @@ func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testin
 
 			server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 			ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
-			queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1`
+			// Pin n.status='active' too: pool-assigned DNS must drop operator-offlined nodes,
+			// matching the non-pool/physical paths.
+			queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1.*n\.status = 'active'`
 
 			mock.ExpectQuery(queryShape).
 				WithArgs(svcType).

@@ -122,6 +122,57 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 	return string(out)
 }
 
+// SetLivepeerBroadcasters fills the hardcoded_broadcasters list on every
+// Livepeer process entry with the supplied gateway addresses, in order — the
+// failover set MistProcLivepeer consumes. The field is a stringified JSON array
+// of {"address":...} objects. When addrs is empty there is no gateway to reach,
+// so Livepeer entries fall back to local MistProcAV (same as
+// ReplaceLivepeerWithLocal) so processing still runs.
+func SetLivepeerBroadcasters(processesJSON string, addrs []string) string {
+	if len(addrs) == 0 {
+		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+
+	// If we can't parse/encode to inject the broadcaster list, do NOT dispatch a
+	// Livepeer config with no broadcasters (MistProcLivepeer would have no
+	// gateway). Fall back to local MistProcAV deliberately.
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+
+	broadcasters := make([]map[string]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			broadcasters = append(broadcasters, map[string]string{"address": addr})
+		}
+	}
+	if len(broadcasters) == 0 {
+		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+	encoded, err := json.Marshal(broadcasters)
+	if err != nil {
+		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+
+	changed := false
+	for _, proc := range processes {
+		if procType, ok := proc["process"].(string); ok && procType == "Livepeer" {
+			proc["hardcoded_broadcasters"] = string(encoded)
+			changed = true
+		}
+	}
+	if !changed {
+		// No Livepeer process to inject into; pass the config through unchanged.
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+	return string(out)
+}
+
 // HasLivepeerProcesses returns true if the config contains a Livepeer process entry.
 func HasLivepeerProcesses(processesJSON string) bool {
 	return strings.Contains(processesJSON, `"Livepeer"`)
@@ -174,7 +225,8 @@ func NormalizeProcessConfigSelectors(processesJSON string) string {
 }
 
 // LivepeerProfilesFromProcessesJSON extracts the first Livepeer target_profiles
-// entry and normalizes it to match MistProcLivepeer's request header.
+// entry and normalizes it to match MistProcLivepeer's request header. Used per
+// Livepeer process (e.g. building one process's transcode request).
 func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaInfo) []LivepeerJSONProfile {
 	var processes []map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
@@ -192,6 +244,49 @@ func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaI
 		return NormalizeLivepeerProfiles(profiles, source)
 	}
 	return nil
+}
+
+// AllLivepeerProfilesFromProcessesJSON aggregates the normalized target_profiles
+// across EVERY Livepeer process in the config. Completeness validation must see
+// the full requested rendition set, so a config with more than one Livepeer
+// process can't pass by checking only the first.
+//
+// It returns an error on a MALFORMED config (unparseable JSON, or a Livepeer
+// process with a present-but-invalid target_profiles block) so the caller can
+// fail closed, rather than silently treating it as "no renditions requested".
+// An empty result with a nil error means there is legitimately nothing to
+// produce (no Livepeer process, or every profile inhibited by source dims).
+func AllLivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaInfo) ([]LivepeerJSONProfile, error) {
+	var processes []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return nil, fmt.Errorf("parse process config: %w", err)
+	}
+	var out []LivepeerJSONProfile
+	for _, proc := range processes {
+		var processName string
+		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
+			continue
+		}
+		raw, ok := proc["target_profiles"]
+		if !ok {
+			// A Livepeer process with no target_profiles requests no transcode —
+			// not a meaningful config. Treat it as malformed so the validator
+			// fails closed rather than concluding "nothing to prove".
+			return nil, fmt.Errorf("missing target_profiles on Livepeer process")
+		}
+		var profiles []LivepeerJSONProfile
+		if err := json.Unmarshal(raw, &profiles); err != nil {
+			return nil, fmt.Errorf("malformed target_profiles in Livepeer process: %w", err)
+		}
+		if len(profiles) == 0 {
+			// An explicitly empty target_profiles requests no transcode — as
+			// meaningless as a missing field. Fail closed; this is distinct from
+			// a non-empty set that all gets inhibited by source dims below.
+			return nil, fmt.Errorf("empty target_profiles on Livepeer process")
+		}
+		out = append(out, NormalizeLivepeerProfiles(profiles, source)...)
+	}
+	return out, nil
 }
 
 // NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles mutation
@@ -256,9 +351,11 @@ func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMedi
 }
 
 // ValidateProcessConfigShape checks that explicit MistServer process configs use
-// option names consumed by the target process binary. Livepeer target_profiles are
-// intentionally exempt: those use go-livepeer's profile schema and are converted
-// separately only when local MistProcAV fallback is needed.
+// option names consumed by the target process binary. Livepeer profile *content*
+// stays go-livepeer's schema (validated separately), but a Livepeer process must
+// request at least one rendition — a missing/empty target_profiles is a no-op
+// transcode that would otherwise become a silent source-only job, so it is
+// rejected here as the single config-shape invariant rather than only downstream.
 func ValidateProcessConfigShape(processesJSON string) error {
 	var processes []map[string]interface{}
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
@@ -266,7 +363,24 @@ func ValidateProcessConfigShape(processesJSON string) error {
 	}
 	for idx, proc := range processes {
 		processName, ok := proc["process"].(string)
-		if !ok || processName != "AV" {
+		if !ok {
+			continue
+		}
+		if processName == "Livepeer" {
+			raw, ok := proc["target_profiles"]
+			if !ok {
+				return fmt.Errorf("process[%d] Livepeer has no target_profiles", idx)
+			}
+			profiles, ok := raw.([]interface{})
+			if !ok {
+				return fmt.Errorf("process[%d] Livepeer target_profiles is not an array", idx)
+			}
+			if len(profiles) == 0 {
+				return fmt.Errorf("process[%d] Livepeer has empty target_profiles", idx)
+			}
+			continue
+		}
+		if processName != "AV" {
 			continue
 		}
 		for _, badKey := range []string{"height", "width", "fps"} {

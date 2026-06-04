@@ -117,7 +117,7 @@ type Processor struct {
 	peerNotifier      PeerNotifier // demand-driven peer discovery (nil when federation disabled)
 
 	gatewayMu         sync.RWMutex
-	gatewayURLs       map[string]gatewayCacheEntry // cluster_id -> resolved URL ("" = no gateway), 5min TTL each
+	gatewayURLs       map[string]gatewayCacheEntry // cluster_id -> resolved gateway URLs (empty = no gateway), gatewayCacheTTL each
 	gatewayDiscoverer livepeerGatewayDiscoverer    // override for tests; falls back to quartermasterClient when nil
 
 	// Hold-down so an in-flight ResolveIdentifier cannot repopulate stale
@@ -159,10 +159,11 @@ func (p *Processor) SetDrainStreamDispatcher(fn func(nodeID, runtimeName, reason
 // gRPC call to Commodore (typical p99 ~200ms) without retaining stale state.
 const streamCacheHoldDuration = 2 * time.Second
 
-// gatewayCacheEntry caches a per-cluster Livepeer gateway URL with its resolution time.
-// Empty URL is a valid cached negative result.
+// gatewayCacheEntry caches the per-cluster Livepeer gateway URLs (one per
+// healthy instance, for broadcaster failover) with their resolution time. An
+// empty slice is a valid cached negative result.
 type gatewayCacheEntry struct {
-	url        string
+	urls       []string
 	resolvedAt time.Time
 }
 
@@ -228,24 +229,42 @@ func (p *Processor) CacheProcessConfig(internalName, processesJSON string) {
 	}
 }
 
-// gatewayCacheTTL is how long a per-cluster Livepeer gateway URL stays cached
-// (positive or negative result) before re-resolving via Quartermaster.
-const gatewayCacheTTL = 5 * time.Minute
+// gatewayCacheTTL is how long a NON-EMPTY per-cluster Livepeer gateway URL set
+// stays cached before re-resolving via Quartermaster — bounds discovery load when
+// gateways exist; a stale-but-present URL is failover-tolerant in the broadcaster
+// list. gatewayEmptyCacheTTL is much shorter because an empty set means
+// "no gateway → fall back to local AV", and a newly-provisioned gateway must be
+// picked up in seconds (DNS is now event-driven), not held off for a full minute;
+// the short window still avoids a per-trigger hot-loop for clusters that genuinely
+// have no gateway. (Discovery errors are never cached — see below.)
+const (
+	gatewayCacheTTL      = 60 * time.Second
+	gatewayEmptyCacheTTL = 5 * time.Second
+)
 
-// getLivepeerGatewayURLForCluster returns the cached Livepeer gateway URL for the
-// given cluster. Refreshes from Quartermaster every 5 minutes per cluster. Returns
-// "" when no gateway is registered for that cluster. Negative results are cached
-// to avoid hot-loop discovery against clusters that legitimately have no gateway.
-func (p *Processor) getLivepeerGatewayURLForCluster(clusterID string) string {
+// getLivepeerGatewayURLsForCluster returns the cached Livepeer gateway URLs for
+// the given cluster — one per healthy assigned instance, in discovery order, so
+// they can form the MistProcLivepeer broadcaster failover set. Refreshes from
+// Quartermaster once per TTL per cluster. Returns an empty slice when no
+// gateway is registered for that cluster; negative results are cached only
+// briefly (gatewayEmptyCacheTTL) so a (re)appearing gateway converges in seconds
+// while still avoiding a per-trigger hot-loop.
+func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
-		return ""
+		return nil
 	}
 
 	p.gatewayMu.RLock()
-	if entry, ok := p.gatewayURLs[clusterID]; ok && time.Since(entry.resolvedAt) < gatewayCacheTTL {
-		p.gatewayMu.RUnlock()
-		return entry.url
+	if entry, ok := p.gatewayURLs[clusterID]; ok {
+		ttl := gatewayCacheTTL
+		if len(entry.urls) == 0 {
+			ttl = gatewayEmptyCacheTTL // converge fast when a gateway (re)appears
+		}
+		if time.Since(entry.resolvedAt) < ttl {
+			p.gatewayMu.RUnlock()
+			return entry.urls
+		}
 	}
 	p.gatewayMu.RUnlock()
 
@@ -254,77 +273,86 @@ func (p *Processor) getLivepeerGatewayURLForCluster(clusterID string) string {
 		disc = p.quartermasterClient
 	}
 	if disc == nil {
-		return ""
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	resp, err := disc.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
+	if err != nil {
+		// A discovery error is not evidence that the cluster has no gateway.
+		// Caching nil here would force local-AV fallback for the whole TTL; let
+		// the next stream re-resolve instead.
+		p.logger.WithError(err).WithField("cluster_id", clusterID).Debug("Livepeer gateway discovery failed; not caching result")
+		return nil
+	}
 
-	resolved := ""
-	if err == nil && len(resp.GetInstances()) > 0 {
-		resolved = livepeerGatewayURLFromInstance(resp.GetInstances()[0])
+	seen := map[string]struct{}{}
+	var resolved []string
+	for _, inst := range resp.GetInstances() {
+		// DiscoverServices scopes to the gateways assigned to this media cluster
+		// but returns starting/unhealthy instances too; only a healthy gateway
+		// belongs in the broadcaster failover set.
+		if inst.GetHealthStatus() != "healthy" {
+			continue
+		}
+		// Physical-only: livepeerGatewayURLFromInstance returns "" for instances
+		// without a concrete physical endpoint (a pooled name can't pin an
+		// instance for failover), so they are skipped; an empty list falls back
+		// to local MistProcAV.
+		url := livepeerGatewayURLFromInstance(inst)
+		if url == "" {
+			continue
+		}
+		if _, dup := seen[url]; dup {
+			continue
+		}
+		seen[url] = struct{}{}
+		resolved = append(resolved, url)
 	}
 
 	p.gatewayMu.Lock()
 	if p.gatewayURLs == nil {
 		p.gatewayURLs = map[string]gatewayCacheEntry{}
 	}
-	p.gatewayURLs[clusterID] = gatewayCacheEntry{url: resolved, resolvedAt: time.Now()}
+	p.gatewayURLs[clusterID] = gatewayCacheEntry{urls: resolved, resolvedAt: time.Now()}
 	p.gatewayMu.Unlock()
 
 	return resolved
 }
 
+// livepeerGatewayURLFromInstance returns the broadcaster URL for a gateway
+// instance. It is PHYSICAL-ONLY by contract: the broadcaster fanout is a
+// per-instance failover list, so an instance is addressed solely by its
+// physical endpoint (public_instance_host, nginx-terminated on 443). Instances
+// without a physical endpoint return "" and are skipped — a pooled name cannot
+// pin an instance for failover, and falling back to it would silently defeat
+// the contract.
 func livepeerGatewayURLFromInstance(inst *pb.ServiceInstance) string {
 	if inst == nil {
 		return ""
 	}
-
-	metadata := inst.GetMetadata()
-	publicHost := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicHost])
-	host := publicHost
-	if host == "" {
-		host = strings.TrimSpace(inst.GetHost())
-	}
+	host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataPublicInstanceHost])
 	if host == "" {
 		return ""
 	}
-
-	scheme := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicScheme])
-	if scheme == "" {
-		scheme = strings.TrimSpace(inst.GetProtocol())
-	}
-	if scheme == "" || publicHost != "" {
-		scheme = "https"
-	}
-
-	port := inst.GetPort()
-	if publicHost != "" {
-		port = 443
-	} else if rawPort := strings.TrimSpace(metadata[servicedefs.LivepeerGatewayMetadataPublicPort]); rawPort != "" {
-		if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
-			port = int32(parsed)
-		}
-	}
-
-	if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) || port == 0 {
-		return fmt.Sprintf("%s://%s", scheme, host)
-	}
-	return fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	return "https://" + host
 }
 
-// SubstituteGatewayURL replaces {{gateway_url}} in process config JSON with the
-// first registered Livepeer gateway URL across the candidate clusters, in order.
-// Trigger callers pass [origin, official, p.clusterID] so a self-host operator
-// who runs their own gateway wins over the platform fallback. Nil/empty
-// candidates falls back to p.clusterID.
+// ApplyLivepeerBroadcasters fills the hardcoded_broadcasters list on every
+// Livepeer process entry with the registered gateway instances across the
+// candidate clusters, in order — the per-instance failover set MistProcLivepeer
+// consumes. Trigger callers pass [origin, official, p.clusterID] so a self-host
+// operator who runs their own gateway wins over the platform fallback. Nil/empty
+// candidates falls back to p.clusterID. The first candidate cluster that has any
+// gateway wins (its full instance set is used), matching the per-cluster
+// failover precedence the resolver already encodes.
 //
 // If no candidate has a gateway, Livepeer process entries fall back to local
 // MistProcAV so video processing still runs in dev/self-hosted clusters without
 // a Livepeer gateway.
-func (p *Processor) SubstituteGatewayURL(processesJSON string, candidates []string) string {
-	if !strings.Contains(processesJSON, "{{gateway_url}}") {
+func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string {
+	if !mist.HasLivepeerProcesses(processesJSON) {
 		return processesJSON
 	}
 
@@ -345,8 +373,8 @@ func (p *Processor) SubstituteGatewayURL(processesJSON string, candidates []stri
 		seen[candidate] = struct{}{}
 		tried = append(tried, candidate)
 
-		if url := p.getLivepeerGatewayURLForCluster(candidate); url != "" {
-			return strings.ReplaceAll(processesJSON, "{{gateway_url}}", url)
+		if urls := p.getLivepeerGatewayURLsForCluster(candidate); len(urls) > 0 {
+			return mist.SetLivepeerBroadcasters(processesJSON, urls)
 		}
 	}
 
@@ -1345,15 +1373,15 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			p.streamCache.Set(cacheKey, info, cacheTTL)
 		}
 		// Secondary index for STREAM_PROCESS lookup (keyed by internal name only).
-		// Substitute {{gateway_url}} with origin-first cluster resolution so a
-		// self-host operator's own gateway wins over the platform fallback.
+		// Fill the Livepeer broadcaster list with origin-first cluster resolution
+		// so a self-host operator's own gateway wins over the platform fallback.
 		if info.ProcessesJSON != "" {
 			candidates := []string{
 				streamValidation.GetOriginClusterId(),
 				streamValidation.GetOfficialClusterId(),
 				p.clusterID,
 			}
-			info.ProcessesJSON = p.SubstituteGatewayURL(info.ProcessesJSON, candidates)
+			info.ProcessesJSON = p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
 			p.streamCache.Set("process:"+streamValidation.InternalName, info.ProcessesJSON, cacheTTL)
 		}
 		p.streamCacheMetaMu.Lock()
@@ -2544,7 +2572,7 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 	if cfg == "" {
 		return ""
 	}
-	cfg = p.SubstituteGatewayURL(cfg, nil)
+	cfg = p.ApplyLivepeerBroadcasters(cfg, nil)
 	p.CacheProcessConfig(artifactHash, cfg)
 	return cfg
 }

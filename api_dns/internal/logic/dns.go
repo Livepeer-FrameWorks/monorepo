@@ -384,8 +384,8 @@ func hasGlobalRootLabel(serviceType string) bool {
 	return ok && strings.TrimSpace(label) != ""
 }
 
-// syncOneCluster reconciles DNS for a single cluster's edge service type.
-// authoritative controls empty-set handling:
+// syncOneCluster reconciles DNS for a single cluster's service type (edge or
+// pool-assigned). authoritative controls empty-set handling:
 //
 //   - false (polling caller): preserve the cluster service record on empty
 //     healthy set. Transient QM unavailability or first-deploy races would
@@ -597,6 +597,103 @@ func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain st
 		return nil
 	}
 	return partialErrors
+}
+
+// PhysicalInstanceEndpoint is one running service instance addressed under the
+// infra namespace (<service>.<node>.infra.<root>) by its node external IP.
+type PhysicalInstanceEndpoint struct {
+	NodeID     string
+	ExternalIP string
+	FQDN       string // public_instance_host synthesized by Quartermaster
+}
+
+// SyncPhysicalInstanceEndpoints publishes and prunes the per-instance infra A
+// records for one service type into the infra.<root> Bunny zone. Endpoints must
+// be pre-gated by the caller on a DESIRED physical ingress site existing for the
+// FQDN (desired-state, not proof nginx is serving the cert yet). When
+// allowPrune is false (e.g. the caller could not confirm the full desired set
+// because an upstream lookup errored) the stale-record sweep is skipped so a
+// transient error never deletes a healthy record.
+func (m *DNSManager) SyncPhysicalInstanceEndpoints(ctx context.Context, serviceType string, endpoints []PhysicalInstanceEndpoint, allowPrune bool) (map[string]string, error) {
+	if m.bunnyClient == nil {
+		return nil, nil
+	}
+	zoneDomain := pkgdns.InfraZoneFQDN(m.domain)
+	if zoneDomain == "" {
+		return nil, fmt.Errorf("infra zone domain unresolved for root %q", m.domain)
+	}
+	if err := m.EnsureBunnyZone(ctx, pkgdns.InfraZoneLabel); err != nil {
+		return nil, fmt.Errorf("ensure infra zone: %w", err)
+	}
+	zone, ok, err := m.bunnyClient.FindZone(ctx, zoneDomain)
+	if err != nil {
+		return nil, fmt.Errorf("find infra zone %s: %w", zoneDomain, err)
+	}
+	if !ok || zone == nil {
+		return map[string]string{zoneDomain: "Bunny infra zone not found"}, nil
+	}
+
+	zoneSuffix := "." + zoneDomain
+	servicePrefix := pkgdns.SanitizeLabel(serviceType) + "."
+	partialErrors := map[string]string{}
+	desired := map[string]struct{}{}
+
+	for _, ep := range endpoints {
+		fqdn := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(ep.FQDN)), ".")
+		if fqdn == "" || ep.ExternalIP == "" || !strings.HasSuffix(fqdn, zoneSuffix) {
+			continue
+		}
+		recordName := strings.TrimSuffix(fqdn, zoneSuffix)
+		if recordName == "" {
+			continue
+		}
+		desired[recordName] = struct{}{}
+		records := []bunny.Record{{
+			Type:             bunny.RecordTypeA,
+			Name:             recordName,
+			Value:            ep.ExternalIP,
+			TTL:              m.recordTTL,
+			Weight:           100,
+			MonitorType:      bunny.MonitorTypeNone,
+			SmartRoutingType: bunny.SmartRoutingNone,
+			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
+		}}
+		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, records); reconcileErr != nil {
+			partialErrors[fqdn] = reconcileErr.Error()
+		}
+	}
+
+	// Prune this service type's stale infra A records (records whose name
+	// starts with "<service>." but are no longer desired). Scoped to the
+	// service prefix so it never touches another service's endpoints. Skipped
+	// when the caller could not confirm the full desired set this cycle.
+	if allowPrune {
+		current, listErr := m.bunnyClient.ListRecords(ctx, zone.ID)
+		if listErr != nil {
+			partialErrors[zoneDomain] = listErr.Error()
+			return partialErrors, fmt.Errorf("list infra zone records: %w", listErr)
+		}
+		for _, record := range current {
+			if record.Type != bunny.RecordTypeA {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(record.Name))
+			if !strings.HasPrefix(name, servicePrefix) {
+				continue
+			}
+			if _, keep := desired[name]; keep {
+				continue
+			}
+			if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, nil); reconcileErr != nil {
+				partialErrors[bunnyRecordFQDN(name, zoneDomain)] = reconcileErr.Error()
+			}
+		}
+	}
+
+	if len(partialErrors) == 0 {
+		return nil, nil
+	}
+	return partialErrors, nil
 }
 
 func (m *DNSManager) clearEdgeNodeRecords(rootDomain string) map[string]string {

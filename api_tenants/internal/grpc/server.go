@@ -74,6 +74,18 @@ type QuartermasterServer struct {
 	// BootstrapInfrastructureNodeResponse so enrolling nodes can persist it
 	// alongside their private key.
 	quartermasterGRPCAddr string
+
+	// platformRootDomain is the physical/platform DNS root (BRAND_DOMAIN),
+	// used to synthesize per-instance physical endpoints
+	// (<service>.<node>.infra.<root>). It is independent of any media-cluster
+	// base_url so physical identity does not vary per logical assignment.
+	platformRootDomain string
+
+	// physicalEndpointStaleSeconds is the health-freshness window DiscoverServices
+	// uses to gate public_instance_host, sourced from the SAME config Navigator uses
+	// for physical DNS publication (NAVIGATOR_DNS_HEALTH_STALE_SECONDS) so the two
+	// can't drift and hand Foghorn a hostname Navigator has already pruned.
+	physicalEndpointStaleSeconds int
 }
 
 const (
@@ -83,6 +95,10 @@ const (
 	navigatorDNSSyncTimeout        = 30 * time.Second
 	navigatorDNSSyncConcurrency    = 4
 	syncMeshSlowLogThreshold       = time.Second
+	// defaultPhysicalEndpointStaleSeconds matches Navigator's code default for
+	// NAVIGATOR_DNS_HEALTH_STALE_SECONDS; the configured value (e.g. base.env's 90)
+	// overrides it via SetPhysicalEndpointStaleSeconds.
+	defaultPhysicalEndpointStaleSeconds = 300
 )
 
 func retryQueryContext(ctx context.Context, db *sql.DB, query string, args ...any) (*sql.Rows, error) {
@@ -102,16 +118,33 @@ func (s *QuartermasterServer) SetQuartermasterGRPCAddr(addr string) {
 	s.quartermasterGRPCAddr = addr
 }
 
+// SetPlatformRootDomain configures the physical/platform DNS root used to
+// synthesize per-instance physical endpoints. The value is normalized to a bare
+// hostname (scheme/path stripped).
+func (s *QuartermasterServer) SetPlatformRootDomain(rootDomain string) {
+	s.platformRootDomain = dns.NormalizeDomainScope(rootDomain)
+}
+
+// SetPhysicalEndpointStaleSeconds configures the health-freshness window used to
+// gate public_instance_host, sourced from Navigator's NAVIGATOR_DNS_HEALTH_STALE_SECONDS
+// so the two stay in lockstep. Non-positive values keep the default.
+func (s *QuartermasterServer) SetPhysicalEndpointStaleSeconds(seconds int) {
+	if seconds > 0 {
+		s.physicalEndpointStaleSeconds = seconds
+	}
+}
+
 // NewQuartermasterServer creates a new Quartermaster gRPC server
 func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, geoipReader *geoip.Reader, metrics *ServerMetrics) *QuartermasterServer {
 	return &QuartermasterServer{
-		db:              db,
-		logger:          logger,
-		navigatorClient: navigatorClient,
-		decklogClient:   decklogClient,
-		purserClient:    purserClient,
-		geoipReader:     geoipReader,
-		metrics:         metrics,
+		db:                           db,
+		logger:                       logger,
+		navigatorClient:              navigatorClient,
+		decklogClient:                decklogClient,
+		purserClient:                 purserClient,
+		geoipReader:                  geoipReader,
+		metrics:                      metrics,
+		physicalEndpointStaleSeconds: defaultPhysicalEndpointStaleSeconds,
 	}
 }
 
@@ -180,6 +213,28 @@ func unmarshalStringSliceJSON(raw []byte) []string {
 		return nil
 	}
 	return values
+}
+
+// decodeIngressDomainsStrict unmarshals a JSONB domains column, failing closed on
+// a malformed value. A literal JSON `null` unmarshals into a nil slice with no
+// error, so it would read as "no domains" and silently suppress a physical
+// endpoint's public_instance_host synthesis or mislead Navigator's prune — the
+// same fail-open an object-shaped value already avoids (it errors). A
+// desired-state ingress row must carry a domains array; absent/empty (SQL NULL or
+// `[]`) is legitimately no domains, but a non-array value is rejected.
+func decodeIngressDomainsStrict(raw []byte) ([]string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	if trimmed == "null" {
+		return nil, fmt.Errorf("domains is JSON null, expected an array")
+	}
+	var domains []string
+	if err := json.Unmarshal([]byte(trimmed), &domains); err != nil {
+		return nil, err
+	}
+	return domains, nil
 }
 
 func normalizeStringSlice(values []string) []string {
@@ -1091,6 +1146,14 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		addr := net.JoinHostPort(advHost, strconv.Itoa(int(port)))
 		resp.AdvertiseAddr = &addr
 	}
+
+	// A (re)registered pool/physical instance changes DNS membership: the node-keyed
+	// infra record and the pooled record of every media cluster it is assigned to
+	// serve. Wake by served cluster (with a physical-only fallback for a brand-new
+	// gateway that has no assignment yet) instead of waiting for the reconcile tick.
+	if dns.IsPhysicalEndpointServiceType(serviceType) || dns.IsPoolAssignedServiceType(serviceType) {
+		s.fireNavigatorSyncForPoolClusters(serviceType, s.servedClustersForInstanceName(ctx, instanceID, serviceType))
+	}
 	return resp, nil
 }
 
@@ -1201,7 +1264,15 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		whereClause += " AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')"
 	}
 
-	if tenantID != "" {
+	switch {
+	case ctxkeys.GetAuthType(ctx) == "service":
+		// Trusted service-to-service caller (e.g. Foghorn discovering the
+		// gateways assigned to a media cluster). Service tokens carry no
+		// tenant_id, so without this branch the empty-tenant path below would
+		// restrict to the default cluster and return nothing for every other
+		// media cluster — silently defeating per-cluster discovery. The explicit
+		// cluster_id filter below scopes the result.
+	case tenantID != "":
 		// Authenticated: Filter by subscription OR ownership
 		whereClause += fmt.Sprintf(` AND (%s IN (
 			SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca
@@ -1212,7 +1283,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		))`, clusterCol, argIdx, clusterCol, argIdx)
 		args = append(args, tenantID)
 		argIdx++
-	} else {
+	default:
 		// Unauthenticated: Filter by default cluster only
 		whereClause += fmt.Sprintf(` AND %s IN (
 			SELECT ic.cluster_id FROM quartermaster.infrastructure_clusters ic
@@ -1244,6 +1315,13 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		orderDir = "ASC"
 	}
 
+	// public_instance_host is per-node physical infrastructure identity, surfaced
+	// only to service callers (e.g. Foghorn's broadcaster fanout) — the same
+	// boundary ListServiceInstancesByType enforces. Tenant/user discovery gets only
+	// the pooled public_host.
+	isServiceCaller := ctxkeys.GetAuthType(ctx) == "service"
+	physicalSynthesis := isServiceCaller && isPool && dns.IsPhysicalEndpointServiceType(serviceType)
+
 	selectClause := `si.id, si.instance_id, si.service_id, si.cluster_id, si.node_id,
 		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at`
@@ -1253,6 +1331,15 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		selectClause = `si.id, si.instance_id, si.service_id, sca.cluster_id, si.node_id,
 		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status, si.health_status, COALESCE(si.metadata, '{}'::jsonb),
 		       si.last_health_check, si.created_at, si.updated_at, c.cluster_name, c.base_url`
+	}
+	if physicalSynthesis {
+		// Compute health freshness against the DB clock (NOW()), the SAME predicate
+		// Navigator's ListServiceInstancesByType uses, so app/DB clock skew can't make
+		// discovery and publication disagree at the freshness boundary. The seconds
+		// value is a server-config int (not user input), so direct interpolation is
+		// injection-safe. Only added when public_instance_host can actually be
+		// synthesized, so other discovery paths keep their column shape.
+		selectClause += fmt.Sprintf(",\n\t\t       (si.last_health_check IS NOT NULL AND si.last_health_check > NOW() - INTERVAL '%d seconds') AS health_fresh", s.physicalEndpointStaleSeconds)
 	}
 
 	query := fmt.Sprintf(`
@@ -1264,6 +1351,25 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		LIMIT $%d
 	`, selectClause, extraJoin, whereClause, orderDir, orderDir, argIdx)
 	args = append(args, params.Limit+1)
+
+	// For physical-endpoint service types, gate public_instance_host
+	// advertisement on a DESIRED physical ingress site existing for the exact
+	// FQDN — so a consumer (Foghorn) is not handed a per-instance hostname before
+	// the node is even provisioned for it (this is desired ingress state, not
+	// proof the cert is applied). Loaded before the main query so it doesn't run
+	// on an open rows handle. A gate-read failure propagates as a discovery error
+	// (below) so the caller retries rather than caching an empty fanout.
+	var provisionedPhysical map[string]struct{}
+	if physicalSynthesis {
+		var pErr error
+		if provisionedPhysical, pErr = s.provisionedPhysicalEndpointFQDNs(ctx); pErr != nil {
+			// Don't quietly suppress public_instance_host on a transient gate
+			// read failure — that looks like "no physical gateway" to Foghorn,
+			// which would cache the empty set and force local AV for the TTL.
+			// Surface the error so the caller retries instead of caching.
+			return nil, status.Errorf(codes.Internal, "physical endpoint gate lookup failed: %v", pErr)
+		}
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1279,6 +1385,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		var metadataJSON []byte
 		var createdAt, updatedAt time.Time
 		var clusterName, clusterBaseURL sql.NullString
+		var healthFresh bool
 
 		scanTargets := []any{
 			&inst.Id, &inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &nodeID,
@@ -1288,8 +1395,14 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		if isPool {
 			scanTargets = append(scanTargets, &clusterName, &clusterBaseURL)
 		}
+		if physicalSynthesis {
+			scanTargets = append(scanTargets, &healthFresh) // last column: health_fresh
+		}
 		if err := rows.Scan(scanTargets...); err != nil {
-			continue
+			// Fail closed: a scan/conversion error skipped here would yield a
+			// truncated-but-"successful" set that Foghorn caches as the gateway
+			// fanout. rows.Err() does not cover an already-swallowed Scan error.
+			return nil, status.Errorf(codes.Internal, "service discovery scan error: %v", err)
 		}
 
 		if nodeID.Valid {
@@ -1318,9 +1431,41 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 				}
 				inst.Metadata[servicedefs.LivepeerGatewayMetadataPublicHost] = publicHost
 			}
+			// Synthesize the physical endpoint <service>.<node>.infra.<root>.
+			// Unlike public_host, this is anchored on the physical node, not the
+			// logical assignment, so a consumer (e.g. Foghorn broadcaster fanout)
+			// can address this specific instance for failover. Only emitted for
+			// service types that actually provision an infra DNS/ingress/TLS
+			// contract — otherwise the metadata would advertise a non-routable
+			// name.
+			// Advertise public_instance_host only for an instance Navigator will
+			// actually publish a physical A record for, mirroring
+			// ListServiceInstancesByType's eligibility contract: running/active +
+			// healthy + fresh (window from the same config Navigator uses) and
+			// node-active + external_ip + desired ingress (the
+			// provisionedPhysical gate). Without this, Foghorn could fan out to a
+			// hostname with no DNS record (a non-routable broadcaster).
+			physicallyEligible := (inst.Status == "running" || inst.Status == "active") &&
+				inst.HealthStatus == "healthy" && healthFresh
+			if isServiceCaller && physicallyEligible && nodeID.Valid && dns.IsPhysicalEndpointServiceType(serviceType) {
+				if instanceHost, ok := dns.InfraInstanceFQDN(serviceType, nodeID.String, s.platformRootDomain); ok {
+					if _, provisioned := provisionedPhysical[strings.ToLower(instanceHost)]; provisioned {
+						if inst.Metadata == nil {
+							inst.Metadata = map[string]string{}
+						}
+						inst.Metadata[servicedefs.LivepeerGatewayMetadataPublicInstanceHost] = instanceHost
+					}
+				}
+			}
 		}
 
 		instances = append(instances, &inst)
+	}
+	// Fail closed on a partial read: a truncated-but-"successful" gateway set
+	// would be cached by Foghorn and skew the broadcaster fanout. Same class as
+	// the inventory/list reads.
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "service discovery iteration error: %v", err)
 	}
 
 	// Determine pagination info
@@ -1388,7 +1533,10 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 		var port int32
 		var createdAt time.Time
 		if err := rows.Scan(&id, &instanceID, &host, &port, &instStatus, &createdAt, &assignedCluster); err != nil {
-			continue
+			// Fail closed: a skipped row yields a truncated-but-"successful" pool
+			// status (wrong counts/assignments), consistent with the discovery and
+			// DNS readers.
+			return nil, status.Errorf(codes.Internal, "service pool status scan error: %v", err)
 		}
 
 		// Count unique instances
@@ -1433,6 +1581,10 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "service pool status iteration error: %v", err)
+	}
+
 	clusters := make([]*pb.ServicePoolClusterEntry, 0, len(clusterMap))
 	for _, entry := range clusterMap {
 		clusters = append(clusters, entry)
@@ -1458,26 +1610,36 @@ func resolveAssignmentServiceType(svcType string) (string, error) {
 }
 
 func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *pb.AddToServicePoolRequest) (*pb.AddToServicePoolResponse, error) {
-	var res sql.Result
-	var err error
 	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
 	if err != nil {
 		return nil, err
 	}
 
+	var affectedClusters []string
+	var released int64
 	if ids := req.GetInstanceIds(); len(ids) > 0 {
-		// Remove all cluster assignments for specific instances of service_type.
-		res, err = s.db.ExecContext(ctx, `
+		// DELETE ... RETURNING captures the affected clusters atomically with the
+		// mutation, so a failed read can't commit the change without a wake.
+		rows, qErr := s.db.QueryContext(ctx, `
 			DELETE FROM quartermaster.service_cluster_assignments
 			WHERE service_instance_id IN (
 				SELECT si.id FROM quartermaster.service_instances si
 				JOIN quartermaster.services svc ON svc.service_id = si.service_id
 				WHERE si.id = ANY($1) AND svc.type = $2
 			)
+			RETURNING cluster_id
 		`, pq.Array(ids), serviceType)
+		if qErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", qErr)
+		}
+		affectedClusters, released, err = scanDeletedClusters(rows)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read released clusters: %v", err)
+		}
 	} else if req.GetCount() > 0 && req.GetFromClusterId() != "" {
+		affectedClusters = []string{req.GetFromClusterId()}
 		// Remove N oldest assignments from a specific cluster.
-		res, err = s.db.ExecContext(ctx, `
+		res, eErr := s.db.ExecContext(ctx, `
 			DELETE FROM quartermaster.service_cluster_assignments
 			WHERE id IN (
 				SELECT sca.id
@@ -1492,15 +1654,18 @@ func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *pb.AddT
 				LIMIT $2
 			)
 		`, req.GetFromClusterId(), req.GetCount(), serviceType)
+		if eErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", eErr)
+		}
+		if released, err = res.RowsAffected(); err != nil {
+			return nil, status.Errorf(codes.Internal, "released count: %v", err)
+		}
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "provide instance_ids or (count + from_cluster_id)")
 	}
 
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	released, _ := res.RowsAffected()
+	// Pool membership shrank for these clusters; wake Navigator to drop them now.
+	s.fireNavigatorSyncForPoolClusters(serviceType, affectedClusters)
 	return &pb.AddToServicePoolResponse{Released: int32(released)}, nil
 }
 
@@ -1514,39 +1679,31 @@ func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	// Get one of the previous cluster assignments before removing.
-	var previousClusterID sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT sca.cluster_id
-		FROM quartermaster.service_cluster_assignments sca
-		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.id = $1 AND svc.type = $2 AND sca.is_active = true
-		LIMIT 1
-	`, instanceID, serviceType).Scan(&previousClusterID)
-
-	res, err := s.db.ExecContext(ctx, `
+	// DELETE ... RETURNING captures the served clusters atomically with the mutation,
+	// so a failed read can never commit the drain without waking those clusters.
+	rows, err := s.db.QueryContext(ctx, `
 		DELETE FROM quartermaster.service_cluster_assignments
 		WHERE service_instance_id = (
 			SELECT si.id FROM quartermaster.service_instances si
 			JOIN quartermaster.services svc ON svc.service_id = si.service_id
 			WHERE si.id = $1 AND svc.type = $2
 		)
+		RETURNING cluster_id
 	`, instanceID, serviceType)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if affected, _ := res.RowsAffected(); affected == 0 {
-		if !previousClusterID.Valid {
-			return nil, status.Errorf(codes.NotFound, "instance not found or not a %s instance", serviceType)
-		}
+	drainedClusters, _, err := scanDeletedClusters(rows)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read drained clusters: %v", err)
+	}
+	if len(drainedClusters) == 0 {
+		return nil, status.Errorf(codes.NotFound, "instance not found or not a %s instance", serviceType)
 	}
 
-	prev := ""
-	if previousClusterID.Valid {
-		prev = previousClusterID.String
-	}
-	return &pb.DrainServiceInstanceResponse{PreviousClusterId: prev}, nil
+	// Wake every cluster this instance served so their pooled records drop it now.
+	s.fireNavigatorSyncForPoolClusters(serviceType, drainedClusters)
+	return &pb.DrainServiceInstanceResponse{PreviousClusterId: drainedClusters[0]}, nil
 }
 
 func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) (*emptypb.Empty, error) {
@@ -1617,6 +1774,10 @@ func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *p
 		return nil, status.Error(codes.InvalidArgument, "provide instance_ids or count")
 	}
 
+	// SCA is the pooled-DNS membership for this media cluster; wake Navigator so
+	// livepeer.<cluster>/foghorn.<cluster>/… (and the node-keyed physical records)
+	// converge on the assignment immediately, not on the next reconcile tick.
+	s.fireNavigatorSyncForPoolClusters(serviceType, []string{clusterID})
 	return &emptypb.Empty{}, nil
 }
 
@@ -1648,6 +1809,8 @@ func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, re
 		return nil, status.Errorf(codes.Internal, "failed to unassign: %v", err)
 	}
 
+	// The cluster lost pooled-DNS members; wake Navigator to drop them now.
+	s.fireNavigatorSyncForPoolClusters(serviceType, []string{clusterID})
 	return &emptypb.Empty{}, nil
 }
 
@@ -1832,6 +1995,9 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit self-hosting enable: %v", commitErr)
 	}
+
+	// The cluster now has a pooled foghorn assignment; wake foghorn.<cluster> now.
+	s.fireNavigatorSyncForPoolClusters("foghorn", []string{clusterID})
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
@@ -3325,6 +3491,8 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 				"claimed":    claimed,
 			}).Info("Assigned Foghorn instances to cluster")
 		}
+		// New cluster gained pooled foghorn members; wake foghorn.<cluster> now.
+		s.fireNavigatorSyncForPoolClusters("foghorn", []string{clusterID})
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
@@ -4305,6 +4473,16 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 		}
 	}
 
+	// A node status transition changes DNS eligibility for every pool-assigned service
+	// it hosts (foghorn, chandler, livepeer-gateway, vmauth/telemetry), gated on
+	// n.status='active': the pooled record of each media cluster those instances serve
+	// AND, for physical types, the node-keyed infra record. Wake by served cluster so
+	// both prune on leaving active and republish on returning, not at the reconcile
+	// tick.
+	for _, poolType := range dns.PoolAssignedServiceTypes() {
+		s.fireNavigatorSyncForPoolClusters(poolType, s.servedClustersForNodeType(ctx, canonicalNodeID, poolType))
+	}
+
 	node, err := s.queryNode(ctx, canonicalNodeID)
 	if err != nil {
 		return nil, err
@@ -4919,8 +5097,9 @@ var edgeServiceTypeDerivations = []struct {
 	{"edge-processing", func(c *pb.EdgeCapabilities) bool { return c.GetProcessing() }},
 }
 
-// dnsPairKey identifies the (cluster, edge-service_type) tuple that scopes a
-// Navigator.SyncDNS wakeup.
+// dnsPairKey identifies the (cluster, service_type) tuple that scopes a
+// Navigator.SyncDNS wakeup — for edge, pool-assigned, and physical services alike
+// (cluster may be empty for a physical-only refresh).
 type dnsPairKey struct {
 	clusterID   string
 	serviceType string
@@ -5248,6 +5427,14 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.Repo
 		for _, mapping := range edgeServiceTypeDerivations {
 			dirty[dnsPairKey{prior.clusterID, mapping.serviceType}] = struct{}{}
 		}
+		// A node IP change moves the A record value of every pool-assigned service it
+		// hosts: the node-keyed physical record (<service>.<node>.infra.<root>) and the
+		// pooled record of each SERVED media cluster (livepeer.<cluster>, …). These are
+		// node-keyed/SCA-keyed, not edge caps, so the loops above never wake them — wake
+		// by served cluster (physical-only fallback) per pool type.
+		for _, poolType := range dns.PoolAssignedServiceTypes() {
+			s.fireNavigatorSyncForPoolClusters(poolType, s.servedClustersForNodeType(ctx, u.nodeID, poolType))
+		}
 	}
 	if len(dirty) > 0 {
 		s.fireNavigatorSyncForPairs(dirty)
@@ -5320,6 +5507,107 @@ func (s *QuartermasterServer) fireNavigatorSyncForPairs(pairs map[dnsPairKey]str
 		}
 		wg.Wait()
 	}(ordered)
+}
+
+// fireNavigatorSyncForPoolClusters wakes Navigator for a pool-assigned/physical
+// service across the SERVED media clusters — pooled DNS (livepeer.<media-cluster>,
+// …) is keyed by service_cluster_assignments.cluster_id, not the instance's physical
+// host cluster, so waking by served cluster is what keeps pooled DNS event-driven.
+// Each cluster-scoped SyncDNS also refreshes the node-keyed physical records; with
+// no served clusters (e.g. an unassigned gateway) it falls back to a physical-only
+// refresh so the infra records still update. No-op for non-pool/physical types.
+func (s *QuartermasterServer) fireNavigatorSyncForPoolClusters(serviceType string, clusters []string) {
+	if !dns.IsPoolAssignedServiceType(serviceType) && !dns.IsPhysicalEndpointServiceType(serviceType) {
+		return
+	}
+	// serviceType is the INSTANCE type (svc.type); Navigator.SyncDNS keys its pooled
+	// record by the DNS-facing name (vmauth -> telemetry, others identity).
+	wakeType := dns.PoolDNSWakeServiceType(serviceType)
+	pairs := map[dnsPairKey]struct{}{}
+	for _, c := range clusters {
+		if strings.TrimSpace(c) != "" {
+			pairs[dnsPairKey{c, wakeType}] = struct{}{}
+		}
+	}
+	if len(pairs) == 0 {
+		if !dns.IsPhysicalEndpointServiceType(serviceType) {
+			return
+		}
+		pairs[dnsPairKey{"", wakeType}] = struct{}{} // physical-only
+	}
+	s.fireNavigatorSyncForPairs(pairs)
+}
+
+// servedClusters runs a SCA-resolution query for a read-side wake (node status,
+// register, health poll). It is best-effort — the reconcile loop is the backstop —
+// but it must not SILENTLY drop a partial read: any query/scan/iteration error is
+// logged at Warn so a recurring resolution failure is visible, not invisible. The
+// mutation paths that change membership (AddToServicePool, DrainServiceInstance) do
+// NOT use this; they capture the affected clusters atomically via DELETE ...
+// RETURNING so a failed read can never commit a mutation without a wake.
+func (s *QuartermasterServer) servedClusters(ctx context.Context, query string, args ...any) []string {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to resolve served clusters for DNS wake; reconcile loop will converge")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var c string
+		if scanErr := rows.Scan(&c); scanErr != nil {
+			s.logger.WithError(scanErr).Warn("Scan error resolving served clusters for DNS wake; reconcile loop will converge")
+			return out
+		}
+		if strings.TrimSpace(c) != "" {
+			out = append(out, c)
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		s.logger.WithError(rowsErr).Warn("Iteration error resolving served clusters for DNS wake; reconcile loop will converge")
+	}
+	return out
+}
+
+// scanDeletedClusters drains a DELETE ... RETURNING cluster_id result into the
+// distinct non-empty clusters plus the total deleted row count.
+func scanDeletedClusters(rows *sql.Rows) ([]string, int64, error) {
+	defer func() { _ = rows.Close() }()
+	var clusters []string
+	var count int64
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, 0, err
+		}
+		count++
+		if _, ok := seen[c]; !ok && strings.TrimSpace(c) != "" {
+			seen[c] = struct{}{}
+			clusters = append(clusters, c)
+		}
+	}
+	return clusters, count, rows.Err()
+}
+
+func (s *QuartermasterServer) servedClustersForInstanceName(ctx context.Context, instanceName, serviceType string) []string {
+	return s.servedClusters(ctx, `
+		SELECT DISTINCT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.instance_id = $1 AND svc.type = $2 AND sca.is_active = true
+	`, instanceName, serviceType)
+}
+
+func (s *QuartermasterServer) servedClustersForNodeType(ctx context.Context, nodeID, serviceType string) []string {
+	return s.servedClusters(ctx, `
+		SELECT DISTINCT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.node_id = $1 AND svc.type = $2 AND sca.is_active = true
+	`, nodeID, serviceType)
 }
 
 // ListNodes returns nodes with optional filters
@@ -5437,10 +5725,16 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan node")
-			continue
+			// Fail closed: a swallowed scan error returns a truncated node list that
+			// a caller treats as complete — for the DNS readers Navigator would prune
+			// healthy records against it. Same class as the DiscoverServices and
+			// ListServiceInstancesByType inventory reads.
+			return nil, status.Errorf(codes.Internal, "scan node: %v", err)
 		}
 		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
 	}
 
 	// Detect hasMore and trim results
@@ -5569,6 +5863,54 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	return s.listHealthyServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 }
 
+// provisionedPhysicalEndpointFQDNs returns the set of physical-endpoint FQDNs that
+// have a desired physical ingress site (kind='physical') on an ACTIVE node.
+// DiscoverServices gates public_instance_host advertisement on this so a consumer
+// (Foghorn) is not handed a per-instance hostname before the node is provisioned
+// for it, nor for a node the operator has taken non-active (whose infra A record
+// Navigator prunes — the node-active predicate mirrors ListServiceInstancesByType).
+// It is a DESIRED-state signal: it does not prove DNS is published or that the real
+// TLS bundle has been synced (Navigator's reconcile and Privateer's cert sync still
+// lag). Match is by exact FQDN, so it stays correct if other services gain physical
+// endpoints.
+func (s *QuartermasterServer) provisionedPhysicalEndpointFQDNs(ctx context.Context) (map[string]struct{}, error) {
+	// Require the node be active, matching Navigator's physical inventory contract
+	// (ListServiceInstancesByType gates on n.status='active'). Without this an
+	// operator-offlined node would still hand Foghorn a public_instance_host whose
+	// infra A record Navigator has already pruned — a non-routable broadcaster.
+	// Health/freshness stays the consumer's filter; node status is the operator-
+	// controlled, stable gate.
+	rows, err := retryQueryContext(ctx, s.db, `
+		SELECT si.domains
+		FROM quartermaster.ingress_sites si
+		JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
+		WHERE si.kind = 'physical' AND n.status = 'active' AND n.external_ip IS NOT NULL
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var domainsJSON []byte
+		if err := rows.Scan(&domainsJSON); err != nil {
+			// Fail closed: a skipped/unreadable gate row would yield a truncated
+			// "provisioned" set, suppressing public_instance_host for a node that
+			// is actually provisioned. The caller turns this into a discovery
+			// error so Foghorn retries rather than caching an empty fanout.
+			return nil, fmt.Errorf("scan physical ingress row: %w", err)
+		}
+		domains, err := decodeIngressDomainsStrict(domainsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode physical ingress domains: %w", err)
+		}
+		for _, d := range domains {
+			out[strings.ToLower(strings.TrimSpace(d))] = struct{}{}
+		}
+	}
+	return out, rows.Err()
+}
+
 // synthesizePublicHost builds the per-assignment FQDN for a pool-assigned
 // service from DB cluster metadata. The same physical instance assigned to
 // multiple media clusters returns a different public_host per requested
@@ -5666,10 +6008,16 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan node")
-			continue
+			// Fail closed: a swallowed scan error returns a truncated node list that
+			// a caller treats as complete — for the DNS readers Navigator would prune
+			// healthy records against it. Same class as the DiscoverServices and
+			// ListServiceInstancesByType inventory reads.
+			return nil, status.Errorf(codes.Internal, "scan node: %v", err)
 		}
 		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
 	}
 
 	return &pb.ListHealthyNodesForDNSResponse{
@@ -5692,7 +6040,13 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 	if where == "" {
 		where = "WHERE TRUE"
 	}
-	where += fmt.Sprintf(" AND sca.is_active = TRUE AND s.type = $%d AND n.external_ip IS NOT NULL", argIdx)
+	// n.status='active' mirrors the non-pool path (listHealthyServiceNodes) and the
+	// physical inventory: a pool-assigned service (livepeer-gateway, foghorn,
+	// chandler) on an operator-offlined node must drop out of the pooled cluster
+	// record (livepeer.<media-cluster>, …). Without it, planned maintenance can keep
+	// routing public clients to a non-active node, since UpdateNodeStatus only flips
+	// EDGE instance health — pool instances stay healthy until the poller catches up.
+	where += fmt.Sprintf(" AND sca.is_active = TRUE AND s.type = $%d AND n.external_ip IS NOT NULL AND n.status = 'active'", argIdx)
 	args = append(args, serviceTypeFilter)
 	argIdx++
 
@@ -5744,10 +6098,16 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan node")
-			continue
+			// Fail closed: a swallowed scan error returns a truncated node list that
+			// a caller treats as complete — for the DNS readers Navigator would prune
+			// healthy records against it. Same class as the DiscoverServices and
+			// ListServiceInstancesByType inventory reads.
+			return nil, status.Errorf(codes.Internal, "scan node: %v", err)
 		}
 		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
 	}
 
 	return &pb.ListHealthyNodesForDNSResponse{
@@ -8437,6 +8797,90 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	return resp, nil
 }
 
+// ListServiceInstancesByType returns the concrete physical instances of a
+// service type, each joined to its node for the external IP and stamped with
+// the physical endpoint <service>.<node>.infra.<root>. It deliberately does NOT
+// route through service_cluster_assignments: cluster_id stays the physical host
+// cluster so Navigator can publish one infra A record per running instance/node.
+func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, req *pb.ListServiceInstancesByTypeRequest) (*pb.ListServiceInstancesByTypeResponse, error) {
+	// Physical inventory (node IDs + external IPs) is infrastructure-internal:
+	// only SERVICE_TOKEN callers (Navigator) may read it, never tenant/user JWTs.
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ListServiceInstancesByType requires service token auth")
+	}
+	serviceType := strings.TrimSpace(req.GetServiceType())
+	if serviceType == "" {
+		return nil, status.Error(codes.InvalidArgument, "service_type required")
+	}
+	// This RPC exists solely to publish per-instance infra endpoints; reject
+	// service types that have no physical-endpoint contract.
+	if !dns.IsPhysicalEndpointServiceType(serviceType) {
+		return nil, status.Errorf(codes.InvalidArgument, "service_type %q has no physical endpoints", serviceType)
+	}
+
+	args := []any{serviceType}
+	argIdx := 2
+	// Only healthy, operator-active instances are eligible for a public infra
+	// A record: a starting/unhealthy gateway must never receive routable DNS.
+	// Mirrors listHealthyServiceNodes' health gate.
+	where := "WHERE s.type = $1 AND si.status IN ('running','active') AND si.health_status = 'healthy' AND si.node_id IS NOT NULL AND n.external_ip IS NOT NULL AND n.status = 'active'"
+
+	if clusterID := strings.TrimSpace(req.GetClusterId()); clusterID != "" {
+		where += fmt.Sprintf(" AND si.cluster_id = $%d", argIdx)
+		args = append(args, clusterID)
+		argIdx++
+	}
+	if stale := req.GetStaleThresholdSeconds(); stale > 0 {
+		where += fmt.Sprintf(" AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
+		args = append(args, stale)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT si.instance_id, si.service_id, si.cluster_id, si.node_id,
+		       host(n.external_ip), si.status, si.health_status, si.port, si.protocol
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services s ON s.service_id = si.service_id
+		JOIN quartermaster.infrastructure_nodes n
+			ON si.node_id = n.node_id AND si.cluster_id = n.cluster_id
+		%s
+		ORDER BY si.node_id
+	`, where)
+
+	rows, err := retryQueryContext(ctx, s.db, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var instances []*pb.PhysicalServiceInstance
+	for rows.Next() {
+		var inst pb.PhysicalServiceInstance
+		var externalIP sql.NullString
+		if err := rows.Scan(&inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &inst.NodeId,
+			&externalIP, &inst.Status, &inst.HealthStatus, &inst.Port, &inst.Protocol); err != nil {
+			// Fail closed: a skipped row would shrink the physical inventory and
+			// Navigator could prune a valid record (allowPrune=true).
+			return nil, status.Errorf(codes.Internal, "physical instance scan error: %v", err)
+		}
+		inst.ExternalIp = externalIP.String
+		if host, ok := dns.InfraInstanceFQDN(serviceType, inst.NodeId, s.platformRootDomain); ok {
+			inst.PublicInstanceHost = host
+		}
+		instances = append(instances, &inst)
+	}
+	// A partial read (iteration aborted by a row error) would otherwise look
+	// like a smaller-but-complete inventory, and Navigator would prune the
+	// "missing" records. Fail closed so the caller suppresses pruning instead.
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "physical instance iteration error: %v", err)
+	}
+
+	return &pb.ListServiceInstancesByTypeResponse{
+		Instances:   instances,
+		ServiceType: serviceType,
+	}, nil
+}
+
 // ListServicesHealth returns health of all service instances
 func (s *QuartermasterServer) ListServicesHealth(ctx context.Context, req *pb.ListServicesHealthRequest) (*pb.ListServicesHealthResponse, error) {
 	return s.getServicesHealth(ctx, "")
@@ -8755,7 +9199,16 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 		); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
 		}
-		site.Domains = unmarshalStringSliceJSON(domainsJSON)
+		// Fail closed on a malformed domains row: silently nil-ing it would make
+		// Navigator's physical-endpoint gate read a provisioned site as having no
+		// matching domain, and prune a valid infra A record.
+		if len(domainsJSON) > 0 {
+			domains, err := decodeIngressDomainsStrict(domainsJSON)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "decode ingress site domains: %v", err)
+			}
+			site.Domains = domains
+		}
 		if len(metadataJSON) > 0 {
 			var metadataMap map[string]any
 			if json.Unmarshal(metadataJSON, &metadataMap) == nil {
@@ -8765,6 +9218,12 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 		site.CreatedAt = timestamppb.New(createdAt)
 		site.UpdatedAt = timestamppb.New(updatedAt)
 		sites = append(sites, &site)
+	}
+	// Fail closed on a partial read: Navigator's physical-endpoint gate must not
+	// mistake a truncated ingress-site list for "this node has no physical site"
+	// and prune a valid record.
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "ingress site iteration error: %v", err)
 	}
 
 	hasMore := len(sites) > params.Limit
@@ -10047,6 +10506,10 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "commit private cluster create: %v", commitErr)
 	}
 
+	// The private cluster now has its controlling foghorn assigned; wake
+	// foghorn.<cluster> so the pooled record publishes immediately.
+	s.fireNavigatorSyncForPoolClusters("foghorn", []string{clusterID})
+
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
 		return nil, err
@@ -11205,6 +11668,13 @@ type GRPCServerConfig struct {
 	// to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse. Empty
 	// means enrollment will tell the node to rediscover via DNS aliases.
 	AdvertiseGRPCAddr string
+	// PlatformRootDomain is the physical/platform DNS root (BRAND_DOMAIN) used
+	// to synthesize per-instance physical endpoints.
+	PlatformRootDomain string
+	// PhysicalEndpointStaleSeconds is Navigator's NAVIGATOR_DNS_HEALTH_STALE_SECONDS,
+	// reused so DiscoverServices' public_instance_host freshness gate stays in
+	// lockstep with Navigator's physical-DNS publish freshness.
+	PhysicalEndpointStaleSeconds int
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
@@ -11262,6 +11732,8 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
 	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
+	qmServer.SetPlatformRootDomain(cfg.PlatformRootDomain)
+	qmServer.SetPhysicalEndpointStaleSeconds(cfg.PhysicalEndpointStaleSeconds)
 
 	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
 	// lease let this run safely on every Quartermaster replica.

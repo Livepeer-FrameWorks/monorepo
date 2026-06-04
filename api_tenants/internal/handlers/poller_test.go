@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -189,5 +190,71 @@ func TestGrpcHealthTLSConfigUsesInternalNameForFoghornInternalPort(t *testing.T)
 	}
 	if caFile != "/etc/frameworks/pki/ca.crt" {
 		t.Fatalf("ca file = %q", caFile)
+	}
+}
+
+// A health transition on a pool-assigned/physical instance must wake Navigator
+// (passing the instance so served clusters can be resolved); an unchanged status or
+// a non-pool service must not.
+func TestPersistHealthStatusWakesPoolServiceOnTransition(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	Init(mockDB, logging.NewLogger())
+
+	var wakes []string
+	SetPoolDNSWake(func(instanceID, serviceType string) {
+		wakes = append(wakes, instanceID+"/"+serviceType)
+	})
+	defer SetPoolDNSWake(nil)
+
+	expectQuery := func(oldStatus, serviceType, newStatus, instanceID string) {
+		mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).
+			WithArgs(newStatus, instanceID).
+			WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).
+				AddRow(oldStatus, serviceType))
+	}
+
+	// Transition on a physical-endpoint service: wake fires with the instance.
+	expectQuery("healthy", "livepeer-gateway", "unhealthy", "inst-gw-1")
+	if err := persistHealthStatus(context.Background(), "inst-gw-1", "unhealthy"); err != nil {
+		t.Fatalf("persistHealthStatus: %v", err)
+	}
+	if len(wakes) != 1 || wakes[0] != "inst-gw-1/livepeer-gateway" {
+		t.Fatalf("expected one wake for inst-gw-1/livepeer-gateway, got %v", wakes)
+	}
+
+	// Unchanged status: no additional wake (avoids spamming Navigator every poll).
+	expectQuery("healthy", "livepeer-gateway", "healthy", "inst-gw-1")
+	if err := persistHealthStatus(context.Background(), "inst-gw-1", "healthy"); err != nil {
+		t.Fatalf("persistHealthStatus: %v", err)
+	}
+	if len(wakes) != 1 {
+		t.Fatalf("expected no wake on unchanged status, got %v", wakes)
+	}
+
+	// foghorn is pool-assigned too (pooled DNS keyed by served cluster), so its
+	// transition also wakes.
+	expectQuery("healthy", "foghorn", "unhealthy", "inst-fh-1")
+	if err := persistHealthStatus(context.Background(), "inst-fh-1", "unhealthy"); err != nil {
+		t.Fatalf("persistHealthStatus: %v", err)
+	}
+	if len(wakes) != 2 || wakes[1] != "inst-fh-1/foghorn" {
+		t.Fatalf("expected a wake for inst-fh-1/foghorn, got %v", wakes)
+	}
+
+	// A non-pool, non-physical service (bridge) must not wake.
+	expectQuery("healthy", "bridge", "unhealthy", "inst-br-1")
+	if err := persistHealthStatus(context.Background(), "inst-br-1", "unhealthy"); err != nil {
+		t.Fatalf("persistHealthStatus: %v", err)
+	}
+	if len(wakes) != 2 {
+		t.Fatalf("expected no wake for a non-pool service, got %v", wakes)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }

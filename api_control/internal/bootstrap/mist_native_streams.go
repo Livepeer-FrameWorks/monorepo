@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/lib/pq"
 )
 
@@ -479,6 +480,15 @@ func encodeProcessPolicy(policy any) (string, error) {
 	// the policy by emitting an empty value rather than dropping the field.
 	if out == "" || out == "null" || out == "{}" || out == "[]" {
 		return "", nil
+	}
+	// Enforce the Mist process-config shape invariants (AV option names, and a
+	// Livepeer process must request at least one rendition) on override policies
+	// too — not only the billing catalog. This is the single runtime gate before
+	// the policy is stamped into stream_processing_config and served verbatim to
+	// MistServer, so an operator override can't slip a no-rendition Livepeer
+	// config past the validators downstream.
+	if err := mist.ValidateProcessConfigShape(out); err != nil {
+		return "", err
 	}
 	return out, nil
 }

@@ -174,13 +174,17 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		if errors.As(readinessErr, &livepeerBootErr) && !fallbackAttempted {
 			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Chapter finalize: Livepeer unrecoverable during readiness, falling back to local MistProcAV")
 			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
-			h.stopProcessingPush(log, mistClient, streamName)
-			os.Remove(outputPath)
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 			setProcessingProcessOverride(streamName, localConfig)
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-			if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
-				log.WithError(nukeErr).Warn("Chapter finalize: failed to nuke stream for readiness fallback")
+			// Stop + nuke + drain the retired generation, then clear its artifact,
+			// before rebooting (mirrors the main fallback) so the old Livepeer boot
+			// can't race the restart or keep writing the cleared output.
+			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed",
+					fmt.Sprintf("chapter finalize livepeer fallback teardown: %v", teardownErr), nil, "", 0)
+				return
 			}
 			doneCh = make(chan ProcessingPushEndEvent, 1)
 			pendingJobsMu.Lock()
@@ -204,6 +208,12 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		}
 	}
 
+	// Unix-seconds start of the current push attempt. RECORDING_END is keyed only
+	// by stream name and carries no push/generation id; re-registering the channel
+	// on restart narrows but does not close the window where a late event from the
+	// retired push lands in the fresh channel, so it is rejected by comparing its
+	// TimeStarted against this.
+	currentPushStartedAt := time.Now().Unix()
 	if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
 		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)
@@ -219,13 +229,14 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 
 	restartWithLocalMistProc := func(reason string) error {
 		ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
-		h.stopProcessingPush(log, mistClient, streamName)
-		os.Remove(outputPath)
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 		setProcessingProcessOverride(streamName, localConfig)
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-		if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
-			log.WithError(nukeErr).Warn("Chapter finalize: failed to nuke stream for fallback")
+		// Stop + nuke + DRAIN the retired generation, then clear its artifact, before
+		// rebooting, so the old Livepeer generation can't race the restarted local-AV
+		// push or keep writing the cleared output.
+		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+			return fmt.Errorf("%s fallback teardown: %w", reason, teardownErr)
 		}
 		doneCh = make(chan ProcessingPushEndEvent, 1)
 		pendingJobsMu.Lock()
@@ -241,6 +252,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		if waitErr != nil {
 			return fmt.Errorf("%s fallback readiness: %w", reason, waitErr)
 		}
+		currentPushStartedAt = time.Now().Unix()
 		if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
 			return fmt.Errorf("%s fallback restart: %w", reason, pushErr)
 		}
@@ -249,6 +261,10 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		fallbackAttempted = true
 		hasLivepeer = false
 		return nil
+	}
+
+	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
+		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
 
 loop:
@@ -268,8 +284,31 @@ loop:
 				return
 			}
 			log.Info("Chapter finalize: PUSH_END received")
+			// A clean PUSH_END is not proof of a complete rendition set: a
+			// Livepeer gateway can return fewer renditions than requested
+			// without stalling or exiting unrecoverably. Validate the finished
+			// stream's video tracks before publishing and fall back to local
+			// MistProcAV when renditions are short.
+			srcInfo, srcSpan := sourceFromReadinessOutputs(streamOutputs)
+			if hasLivepeer && !fallbackAttempted && !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, srcSpan) {
+				log.Warn("Chapter finalize: Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
+				if restartErr := restartWithLocalMistProc("rendition_incomplete"); restartErr != nil {
+					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+					h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
+					return
+				}
+				continue loop
+			}
 			break loop
 		case recEnd := <-recordingEndCh:
+			if recordingEndIsStale(recEnd) {
+				log.WithFields(logging.Fields{
+					"time_started":    recEnd.TimeStarted,
+					"push_started_at": currentPushStartedAt,
+					"file_path":       recEnd.FilePath,
+				}).Warn("Chapter finalize: ignoring stale RECORDING_END from a retired push")
+				continue loop
+			}
 			recordingEnd = &recEnd
 			log.WithFields(logging.Fields{
 				"bytes":             recEnd.BytesWritten,
@@ -346,20 +385,31 @@ loop:
 		// it never comes, fail loudly rather than declaring success from file
 		// size alone. Matches processing.go (do not weaken to a file-size
 		// fallback here).
-		select {
-		case recEnd := <-recordingEndCh:
-			recordingEnd = &recEnd
-			log.WithFields(logging.Fields{
-				"bytes":             recEnd.BytesWritten,
-				"media_duration_ms": recEnd.MediaDurationMs,
-				"file_path":         recEnd.FilePath,
-				"exit_reason":       recEnd.ExitReason,
-			}).Info("Chapter finalize: RECORDING_END received after PUSH_END")
-		case <-time.After(5 * time.Second):
-			log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
-			return
+		deadline := time.After(5 * time.Second)
+		for recordingEnd == nil {
+			select {
+			case recEnd := <-recordingEndCh:
+				if recordingEndIsStale(recEnd) {
+					log.WithFields(logging.Fields{
+						"time_started":    recEnd.TimeStarted,
+						"push_started_at": currentPushStartedAt,
+						"file_path":       recEnd.FilePath,
+					}).Warn("Chapter finalize: ignoring stale RECORDING_END from a retired push after PUSH_END")
+					continue
+				}
+				recordingEnd = &recEnd
+				log.WithFields(logging.Fields{
+					"bytes":             recEnd.BytesWritten,
+					"media_duration_ms": recEnd.MediaDurationMs,
+					"file_path":         recEnd.FilePath,
+					"exit_reason":       recEnd.ExitReason,
+				}).Info("Chapter finalize: RECORDING_END received after PUSH_END")
+			case <-deadline:
+				log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
+				return
+			}
 		}
 	}
 	if recordingEnd != nil {
@@ -384,6 +434,43 @@ loop:
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed",
 			fmt.Sprintf("output validation failed: %v", err), nil, "", 0)
+		return
+	}
+
+	// Final whole-output completeness gate. The chapter's authoritative span is its
+	// media bounds (mediaEndMs-mediaStartMs), always known for a valid chapter — so
+	// this does not fail open when readiness lacked duration_ms; the readiness span
+	// is only a fallback. After a Livepeer→local fallback the per-rendition check no
+	// longer runs and the accepted RECORDING_END may be a stale event from the
+	// retired push (keyed only by stream name), so validate the produced rendition
+	// tracks directly (the local AV output mirrors the original target_profiles 1:1;
+	// livepeerRenditionsComplete excludes one source-height track so a full-length
+	// source passthrough cannot vouch for a short transcode). Pre-fallback there is a
+	// single generation, so the validated RECORDING_END duration is authoritative.
+	chapterSpanMs := float64(0)
+	if mediaEndMs > mediaStartMs {
+		chapterSpanMs = float64(mediaEndMs - mediaStartMs)
+	}
+	if chapterSpanMs <= 0 {
+		_, chapterSpanMs = sourceFromReadinessOutputs(streamOutputs)
+	}
+	if fallbackAttempted {
+		srcInfo, _ := sourceFromReadinessOutputs(streamOutputs)
+		if !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, chapterSpanMs) {
+			log.Error("Chapter finalize: post-fallback local output is missing or has truncated renditions; refusing to publish")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)
+			return
+		}
+	} else if recordingEnd != nil && chapterSpanMs > 0 &&
+		chapterSpanMs-float64(recordingEnd.MediaDurationMs) > maxRenditionSpanShortfallMs {
+		log.WithFields(logging.Fields{
+			"media_duration_ms":  recordingEnd.MediaDurationMs,
+			"source_duration_ms": int64(chapterSpanMs),
+		}).Error("Chapter finalize: output materially shorter than source; refusing to publish")
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed",
+			fmt.Sprintf("output duration %dms short of source %dms", recordingEnd.MediaDurationMs, int64(chapterSpanMs)), nil, "", 0)
 		return
 	}
 	// Merge stream-info outputs (duration_ms, resolution, video_codec,

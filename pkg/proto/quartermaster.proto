@@ -1527,6 +1527,13 @@ service ServiceRegistryService {
   // Get running service instances
   rpc ListServiceInstances(ListServiceInstancesRequest) returns (ListServiceInstancesResponse);
 
+  // List the concrete PHYSICAL instances of a service type, each carrying its
+  // physical node identity, external IP, and synthesized physical endpoint
+  // (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
+  // group through service_cluster_assignments — it returns one row per
+  // running instance/node so Navigator can publish per-node infra DNS records.
+  rpc ListServiceInstancesByType(ListServiceInstancesByTypeRequest) returns (ListServiceInstancesByTypeResponse);
+
   // Get health of all service instances
   rpc ListServicesHealth(ListServicesHealthRequest) returns (ListServicesHealthResponse);
 
@@ -1705,6 +1712,33 @@ message ListServiceInstancesResponse {
   string service_id = 3;                // applied filter
   string node_id = 4;                   // applied filter
   common.CursorPaginationResponse pagination = 5;
+}
+
+// PhysicalServiceInstance is one running instance addressed by its physical
+// node identity, for infra-namespace DNS publication. cluster_id is the
+// instance's physical host cluster (NOT a logical media-cluster assignment).
+message PhysicalServiceInstance {
+  string instance_id = 1;
+  string service_id = 2;
+  string cluster_id = 3;             // physical host cluster
+  string node_id = 4;
+  string external_ip = 5;            // node external IP (A record target)
+  string status = 6;
+  string health_status = 7;
+  string public_instance_host = 8;   // <service>.<node>.infra.<root>
+  int32 port = 9;
+  string protocol = 10;
+}
+
+message ListServiceInstancesByTypeRequest {
+  string service_type = 1;
+  string cluster_id = 2;                  // optional physical cluster filter
+  int32 stale_threshold_seconds = 3;      // optional staleness gate on si.last_health_check (0 = no gate)
+}
+
+message ListServiceInstancesByTypeResponse {
+  repeated PhysicalServiceInstance instances = 1;
+  string service_type = 2;
 }
 
 message ListServicesHealthRequest {

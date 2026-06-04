@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
@@ -438,11 +440,59 @@ func applyServiceDefinitionFallback(i *serviceInstance) {
 	}
 }
 
+// poolDNSWake, when set before StartHealthPoller, is invoked whenever a
+// pool-assigned/physical service instance crosses its health state, so Navigator
+// refreshes that instance's DNS — the pooled record of every media cluster it
+// serves (livepeer.<cluster>, …) and its node-keyed infra record — immediately
+// instead of waiting for the periodic reconcile. It is passed the INSTANCE name so
+// the wake can resolve served clusters (pooled DNS is keyed by the served cluster,
+// not the physical host cluster). Set once at startup before the poll goroutines
+// launch, so the plain package var is race-free.
+var poolDNSWake func(instanceID, serviceType string)
+
+// SetPoolDNSWake registers the Navigator wake hook. Must be called before
+// StartHealthPoller.
+func SetPoolDNSWake(fn func(instanceID, serviceType string)) {
+	poolDNSWake = fn
+}
+
 func persistHealthStatus(ctx context.Context, instanceID, status string) error {
-	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		_, err := db.ExecContext(ctx, `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, instanceID)
-		return err
+	var oldStatus, serviceType string
+	var scanErr error
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		// One statement: always bump last_health_check (the freshness gate
+		// ListServiceInstancesByType depends on) AND return the prior status, so a
+		// health transition can wake DNS without an extra read.
+		scanErr = db.QueryRowContext(ctx, `
+			WITH prev AS (
+				SELECT instance_id, health_status AS old_status, service_id
+				FROM quartermaster.service_instances WHERE instance_id = $2
+			)
+			UPDATE quartermaster.service_instances si
+			SET health_status = $1, last_health_check = NOW(), updated_at = NOW()
+			FROM prev
+			WHERE si.instance_id = prev.instance_id
+			RETURNING prev.old_status, prev.service_id
+		`, status, instanceID).Scan(&oldStatus, &serviceType)
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			// Instance vanished between poll and write; nothing to persist or wake.
+			return nil
+		}
+		return scanErr
 	})
+	if err != nil {
+		return err
+	}
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return nil
+	}
+	// service_id is the service type (ensureServiceExists sets them equal). Wake only
+	// on an actual transition so an unchanged poll doesn't spam Navigator.
+	if oldStatus != status && poolDNSWake != nil &&
+		(dns.IsPhysicalEndpointServiceType(serviceType) || dns.IsPoolAssignedServiceType(serviceType)) {
+		poolDNSWake(instanceID, serviceType)
+	}
+	return nil
 }
 
 func recordSkippedHealthCheck(instanceID string) {
@@ -645,7 +695,9 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 			return
 		}
 		statusStr := mapGrpcHealthStatus(resp.GetStatus())
-		if _, dbErr := db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, statusStr, inst.id); dbErr != nil {
+		// Route through persistHealthStatus so a gRPC-watch health transition also
+		// wakes physical-endpoint DNS, same as the HTTP poll path.
+		if dbErr := persistHealthStatus(context.Background(), inst.id, statusStr); dbErr != nil {
 			logger.WithError(dbErr).WithField("instance_id", inst.id).Warn("Failed to persist health status")
 		}
 	}

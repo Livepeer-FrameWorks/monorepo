@@ -165,6 +165,25 @@ func IsPoolAssignedServiceType(serviceType string) bool {
 	return ok
 }
 
+// poolDNSWakeServiceType maps a pool-assigned INSTANCE type (svc.type) to the
+// service type Navigator.SyncDNS expects for its pooled record (the DNS-facing
+// name). Only vmauth differs: its public record is telemetry.<cluster>, and
+// Navigator only remaps telemetry->vmauth for lookup, not the reverse — so a wake
+// passing "vmauth" would produce no record. The rest are identity (Navigator maps
+// livepeer-gateway->"livepeer" subdomain itself).
+var poolDNSWakeServiceType = map[string]string{
+	"vmauth": "telemetry",
+}
+
+// PoolDNSWakeServiceType returns the SyncDNS service type to wake for a
+// pool-assigned instance type (vmauth -> telemetry; identity otherwise).
+func PoolDNSWakeServiceType(instanceType string) string {
+	if t, ok := poolDNSWakeServiceType[instanceType]; ok {
+		return t
+	}
+	return instanceType
+}
+
 // UsesBunnyClusterDNS reports whether a cluster type owns Bunny-managed media
 // DNS zones.
 func UsesBunnyClusterDNS(clusterType string) bool {

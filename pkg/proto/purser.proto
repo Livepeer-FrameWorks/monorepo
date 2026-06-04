@@ -260,7 +260,7 @@ message BillingTier {
   bool is_default_prepaid = 24;
   bool is_default_postpaid = 25;
 
-  // MistServer process definitions per lifecycle (raw JSON arrays with {{gateway_url}} placeholder)
+  // MistServer process definitions per lifecycle (raw JSON arrays; Livepeer entries omit hardcoded_broadcasters — Foghorn fills it)
   string processes_live = 26;         // Live STREAM_PROCESS config
   string processes_vod = 27;          // Uploaded VOD processing config
 

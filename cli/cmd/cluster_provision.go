@@ -4343,6 +4343,28 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			applyProxySiteTLSBundleMetadata(globalSite, manifest, globalBundleID)
 			appendSite(globalSite)
 		}
+
+		// Physical per-instance endpoint: a separate server block answering
+		// <service>.<node>.infra.<root> on the same local upstream as the
+		// pooled name, with its own exact-SAN bundle. Mirrors the
+		// Quartermaster ingress row derived in bootstrap.render so the gate in
+		// Navigator (Kind=="physical") sees a provisioned site here.
+		if pkgdns.IsPhysicalEndpointServiceType(profileService) {
+			if fqdn, ok := pkgdns.InfraInstanceFQDN(profileService, hostName, manifest.RootDomain); ok {
+				bundleID := clusterderive.TLSBundleID("physical", fqdn)
+				site := map[string]any{
+					"name":          name + "-physical",
+					"domains":       []string{fqdn},
+					"upstream":      fmt.Sprintf("127.0.0.1:%d", port),
+					"profile":       proxyRouteProfileForService(profileService),
+					"kind":          "physical",
+					"tls_bundle_id": bundleID,
+				}
+				applyProxySiteIngressTLSDefaults(site, bundleID)
+				applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
+				appendSite(site)
+			}
+		}
 	}
 	for _, route := range proxyRouteSliceFromAny(extraRoutes) {
 		domains := stringSliceFromAny(route["server_names"])

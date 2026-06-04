@@ -96,7 +96,7 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 1. Read parent DVR (tenant, stream, origin cluster, recording node).
 2. Range-query `foghorn.dvr_segments`; abort with `failed_source_missing` if the range is empty.
 3. Build per-segment refs. Uploaded / deleted_local rows carry a presigned recovery URL minted by Foghorn; lost_local rows carry one too when an S3 object survives the local-loss. A presign error is fail-retryable — the chapter rolls back to `closed`.
-4. Resolve the tenant's `dvr_finalize` `processes_json` via Commodore, then apply `{{gateway_url}}` substitution + cache for the STREAM_PROCESS trigger. A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's configured pipeline.
+4. Resolve the tenant's `dvr_finalize` `processes_json` via Commodore, then fill the Livepeer `hardcoded_broadcasters` list from the cluster's gateway instances (`ApplyLivepeerBroadcasters`) + cache for the STREAM_PROCESS trigger. A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's configured pipeline.
 5. `MarkChapterFinalizing` — transitions `closed → finalizing` with the chapter's playback artifact hash.
 6. Pick the dispatch target: recording origin if alive, otherwise an alternate processing-capable node selected via `routeProcessingJob` (works whenever every ref has a recovery URL — the alternate Mist reads from S3).
 7. Dispatch `ProcessingJobRequest{job_type='dvr_chapter_finalize'}` with the resolved processes_json. On send error, `RetryChapterFinalize` rolls back to `closed`.

@@ -621,7 +621,7 @@ type BillingTier struct {
 	StripePriceIdYearly  *string `protobuf:"bytes,23,opt,name=stripe_price_id_yearly,json=stripePriceIdYearly,proto3,oneof" json:"stripe_price_id_yearly,omitempty"`    // Stripe Price ID for yearly billing
 	IsDefaultPrepaid     bool    `protobuf:"varint,24,opt,name=is_default_prepaid,json=isDefaultPrepaid,proto3" json:"is_default_prepaid,omitempty"`
 	IsDefaultPostpaid    bool    `protobuf:"varint,25,opt,name=is_default_postpaid,json=isDefaultPostpaid,proto3" json:"is_default_postpaid,omitempty"`
-	// MistServer process definitions per lifecycle (raw JSON arrays with {{gateway_url}} placeholder)
+	// MistServer process definitions per lifecycle (raw JSON arrays; Livepeer entries omit hardcoded_broadcasters — Foghorn fills it)
 	ProcessesLive string `protobuf:"bytes,26,opt,name=processes_live,json=processesLive,proto3" json:"processes_live,omitempty"` // Live STREAM_PROCESS config
 	ProcessesVod  string `protobuf:"bytes,27,opt,name=processes_vod,json=processesVod,proto3" json:"processes_vod,omitempty"`    // Uploaded VOD processing config
 	// Rating engine inputs.

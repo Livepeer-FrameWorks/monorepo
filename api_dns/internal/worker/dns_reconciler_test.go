@@ -37,6 +37,14 @@ func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *proto.
 	return &proto.ListTLSBundlesResponse{}, nil
 }
 
+func (t *trackingQMClient) ListServiceInstancesByType(_ context.Context, _ string, _ string, _ int32) (*proto.ListServiceInstancesByTypeResponse, error) {
+	return &proto.ListServiceInstancesByTypeResponse{}, nil
+}
+
+func (t *trackingQMClient) ListIngressSites(_ context.Context, _ string, _ string, _ *proto.CursorPaginationRequest) (*proto.ListIngressSitesResponse, error) {
+	return &proto.ListIngressSitesResponse{}, nil
+}
+
 func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T) {
 	qm := &trackingQMClient{}
 	logger := logrus.New()
@@ -53,7 +61,7 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 		"livepeer-gateway",
 		"bridge",
 		"chartroom",
-	})
+	}, 300)
 
 	reconciler.reconcile(context.Background())
 

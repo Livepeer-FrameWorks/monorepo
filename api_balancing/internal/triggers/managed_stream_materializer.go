@@ -118,7 +118,7 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *pb.ResolveS
 			streamCtx.GetOfficialClusterId(),
 			m.p.clusterID,
 		}
-		processes := m.p.SubstituteGatewayURL(info.ProcessesJSON, candidates)
+		processes := m.p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
 		m.p.streamCache.Set("process:"+internalName, processes, cacheTTL)
 	}
 }

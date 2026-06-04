@@ -20,6 +20,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	dns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
@@ -29,6 +30,42 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 )
+
+// servedClustersForInstanceName resolves the active service_cluster_assignments
+// clusters for a service instance (by instance_id), so the health-poll wake can
+// refresh the pooled record of every media cluster it serves. Best-effort (reconcile
+// is the backstop), but query/scan/iteration failures are logged at Warn so a
+// recurring resolution failure is visible — matching the server-side servedClusters
+// helper, not silently dropped.
+func servedClustersForInstanceName(ctx context.Context, db database.PostgresConn, log logging.Logger, instanceName, serviceType string) []string {
+	rows, err := db.QueryContext(ctx, `
+		SELECT DISTINCT sca.cluster_id
+		FROM quartermaster.service_cluster_assignments sca
+		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.instance_id = $1 AND svc.type = $2 AND sca.is_active = true
+	`, instanceName, serviceType)
+	if err != nil {
+		log.WithError(err).Warn("Failed to resolve served clusters for health-poll DNS wake; reconcile loop will converge")
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var c string
+		if scanErr := rows.Scan(&c); scanErr != nil {
+			log.WithError(scanErr).Warn("Scan error resolving served clusters for health-poll DNS wake; reconcile loop will converge")
+			return out
+		}
+		if strings.TrimSpace(c) != "" {
+			out = append(out, c)
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		log.WithError(rowsErr).Warn("Iteration error resolving served clusters for health-poll DNS wake; reconcile loop will converge")
+	}
+	return out
+}
 
 func main() {
 	if version.HandleCLI() {
@@ -210,6 +247,46 @@ func main() {
 		c.JSON(http.StatusOK, map[string]interface{}{"sites": sites})
 	})
 
+	// Wake Navigator the moment a pool-assigned/physical instance (livepeer-gateway,
+	// foghorn, chandler, vmauth/telemetry) crosses its health state, so its DNS refreshes immediately
+	// rather than waiting for the reconcile interval. Pool DNS is keyed by the SERVED
+	// media cluster (service_cluster_assignments), so resolve those and fire one
+	// SyncDNS per served cluster; with none (e.g. an unassigned gateway) fall back to
+	// a physical-only refresh. Registered before StartHealthPoller so the poll
+	// goroutines see it without a data race.
+	if navigatorClient != nil {
+		handlers.SetPoolDNSWake(func(instanceID, serviceType string) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				clusters := servedClustersForInstanceName(ctx, db, logger, instanceID, serviceType)
+				if len(clusters) == 0 {
+					if !dns.IsPhysicalEndpointServiceType(serviceType) {
+						return // non-physical pool with no served clusters: nothing to wake
+					}
+					clusters = []string{""} // physical-only refresh
+				}
+				// Resolve by INSTANCE type (svc.type) above; wake by the DNS-facing name
+				// (vmauth -> telemetry, others identity).
+				wakeType := dns.PoolDNSWakeServiceType(serviceType)
+				for _, c := range clusters {
+					cid := c
+					log := logger.WithField("service_type", wakeType).WithField("cluster_id", c).WithField("instance_id", instanceID)
+					resp, err := navigatorClient.SyncDNS(ctx, &pb.SyncDNSRequest{ServiceType: wakeType, ClusterId: &cid})
+					if err != nil {
+						log.WithError(err).Warn("Navigator pool DNS wake failed; reconcile loop will converge")
+						continue
+					}
+					// Navigator folds physical-sync failures into Success=false/Errors,
+					// so the gRPC error alone is not enough — surface a reported failure.
+					if !resp.GetSuccess() {
+						log.WithField("errors", resp.GetErrors()).Warn("Navigator pool DNS wake reported failure; reconcile loop will converge")
+					}
+				}
+			}()
+		})
+	}
+
 	// Start health poller before serving
 	handlers.StartHealthPoller()
 
@@ -228,19 +305,23 @@ func main() {
 		}
 
 		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
-			DB:                db,
-			Logger:            logger,
-			ServiceToken:      serviceToken,
-			JWTSecret:         []byte(jwtSecret),
-			NavigatorClient:   navigatorClient,
-			DecklogClient:     decklogClient,
-			PurserClient:      purserClient,
-			GeoIPReader:       geoipReader,
-			Metrics:           serverMetrics,
-			CertFile:          config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:           config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:     config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			AdvertiseGRPCAddr: quartermasterGRPCAddr,
+			DB:                 db,
+			Logger:             logger,
+			ServiceToken:       serviceToken,
+			JWTSecret:          []byte(jwtSecret),
+			NavigatorClient:    navigatorClient,
+			DecklogClient:      decklogClient,
+			PurserClient:       purserClient,
+			GeoIPReader:        geoipReader,
+			Metrics:            serverMetrics,
+			CertFile:           config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:            config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			AdvertiseGRPCAddr:  quartermasterGRPCAddr,
+			PlatformRootDomain: config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
+			// Same var Navigator reads, so the public_instance_host freshness gate and
+			// Navigator's physical-DNS publish freshness can't drift.
+			PhysicalEndpointStaleSeconds: config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/sirupsen/logrus"
 )
@@ -241,6 +243,148 @@ func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	}
 	if got := presence.outputs["resolution"]; got != "640x360" {
 		t.Fatalf("resolution = %q, want 640x360", got)
+	}
+}
+
+func TestParseProcessingMetaVideoTracksExcludesThumbnailsAndCarriesSpan(t *testing.T) {
+	meta := map[string]interface{}{
+		"meta": map[string]interface{}{
+			"tracks": map[string]interface{}{
+				"video_H264_1280x720_0": map[string]interface{}{
+					"codec": "H264", "type": "video",
+					"width": float64(1280), "height": float64(720),
+					"firstms": float64(0), "lastms": float64(9000),
+				},
+				"video_H264_640x360_1": map[string]interface{}{
+					"codec": "H264", "type": "video",
+					"width": float64(640), "height": float64(360),
+					"firstms": float64(0), "lastms": float64(1700), // truncated
+				},
+				"video_JPEG_160x90_2":   map[string]interface{}{"codec": "JPEG", "type": "video"}, // thumbnail, excluded
+				"audio_AAC_2ch_48000_3": map[string]interface{}{"codec": "AAC", "type": "audio"},
+				"meta_thumbvtt_4":       map[string]interface{}{"codec": "thumbvtt", "type": "meta"},
+			},
+		},
+	}
+	tracks := parseProcessingMetaVideoTracks(meta)
+	if len(tracks) != 2 {
+		t.Fatalf("parseProcessingMetaVideoTracks = %d tracks, want 2 (JPEG/audio/meta excluded)", len(tracks))
+	}
+	var maxSpan, minSpan float64 = 0, 1 << 30
+	for _, tr := range tracks {
+		if s := tr.spanMs(); s > maxSpan {
+			maxSpan = s
+		}
+		if s := tr.spanMs(); s < minSpan {
+			minSpan = s
+		}
+	}
+	if maxSpan != 9000 || minSpan != 1700 {
+		t.Fatalf("spans = max %v min %v, want max 9000 (source) min 1700 (truncated rendition)", maxSpan, minSpan)
+	}
+	if got := parseProcessingMetaVideoTracks(map[string]interface{}{}); len(got) != 0 {
+		t.Fatalf("parseProcessingMetaVideoTracks(empty) = %d, want 0", len(got))
+	}
+}
+
+func TestRenditionsCompleteFromTracks(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	source := mist.SourceMediaInfo{Width: 1280, Height: 720}
+	const srcSpan = 9000.0
+	expected := []mist.LivepeerJSONProfile{
+		{"width": 1280, "height": 720},
+		{"width": 640, "height": 360},
+	}
+	track := func(w, h int, span float64) processingMetaVideoTrack {
+		return processingMetaVideoTrack{codec: "H264", width: w, height: h, firstms: 0, lastms: span}
+	}
+
+	// Complete: source (720p) + full-length 720p and 360p renditions.
+	full := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, full, source, srcSpan) {
+		t.Fatal("expected complete rendition set to pass")
+	}
+
+	// Missing 720p rendition: only the source 720p track exists, so the 720p
+	// profile must NOT be satisfied by the excluded source track.
+	missing720 := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, missing720, source, srcSpan) {
+		t.Fatal("expected missing 720p rendition (only source at 720p) to fail")
+	}
+
+	// Truncated rendition: 360p ends far short of the source span.
+	truncated := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
+	if renditionsCompleteFromTracks(entry, expected, truncated, source, srcSpan) {
+		t.Fatal("expected truncated 360p rendition to fail")
+	}
+
+	// No tracks at all: incomplete (fail toward fallback), not complete.
+	if renditionsCompleteFromTracks(entry, expected, nil, source, srcSpan) {
+		t.Fatal("expected empty track set to be treated as incomplete")
+	}
+
+	// Within absolute tolerance: a rendition a few hundred ms short still passes.
+	nearFull := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan-500), track(640, 360, srcSpan-1500)}
+	if !renditionsCompleteFromTracks(entry, expected, nearFull, source, srcSpan) {
+		t.Fatal("expected renditions within the absolute span tolerance to pass")
+	}
+
+	// No independent source span: even a "complete-looking" set must fail closed,
+	// because uniform truncation cannot be ruled out without a pre-transcode span.
+	if renditionsCompleteFromTracks(entry, expected, full, source, 0) {
+		t.Fatal("expected missing source span to be treated as incomplete (fail closed)")
+	}
+
+	// A height that cannot be determined for a requested profile fails closed.
+	undetermined := []mist.LivepeerJSONProfile{{"width": 640}} // no height
+	if renditionsCompleteFromTracks(entry, undetermined, full, source, srcSpan) {
+		t.Fatal("expected an undeterminable requested rendition height to fail closed")
+	}
+
+	// Partial readiness span must not bless a truncated rendition: readiness fired
+	// early (1700ms snapshot), but the source passthrough track ran to its full 9s,
+	// so the baseline is raised to the source track span and a short 360p still fails.
+	partialReadiness := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
+	if renditionsCompleteFromTracks(entry, expected, partialReadiness, source, 1700) {
+		t.Fatal("expected a truncated rendition to fail even when readiness captured only a partial span")
+	}
+
+	// Same partial readiness span, but full-length renditions: the source track span
+	// proves the true length, so the complete set passes.
+	partialReadinessFull := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, partialReadinessFull, source, 1700) {
+		t.Fatal("expected full renditions to pass when the source track proves the full span despite a partial readiness span")
+	}
+
+	// Nondeterministic map order must not let a short same-height rendition be
+	// excluded as the source. The truncated 720p rendition is listed BEFORE the full
+	// 720p source passthrough; the longest-track rule still excludes the source, so
+	// the short 720p stays in the pool and fails coverage. (First-match exclusion
+	// would wrongly drop the short rendition and let the full source satisfy 720p.)
+	shortSameHeightFirst := []processingMetaVideoTrack{track(1280, 720, 1700), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, shortSameHeightFirst, source, srcSpan) {
+		t.Fatal("expected a truncated same-height rendition listed before the source passthrough to fail")
+	}
+}
+
+func TestLivepeerProfileDimHandlesNumericEncodings(t *testing.T) {
+	cases := []struct {
+		name string
+		prof mist.LivepeerJSONProfile
+		want int
+	}{
+		{"int", mist.LivepeerJSONProfile{"width": 1280}, 1280},
+		{"float64", mist.LivepeerJSONProfile{"width": float64(640)}, 640},
+		{"json.Number", mist.LivepeerJSONProfile{"width": json.Number("854")}, 854},
+		{"missing", mist.LivepeerJSONProfile{}, 0},
+		{"non-numeric", mist.LivepeerJSONProfile{"width": "720"}, 0},
+	}
+	for _, c := range cases {
+		if got := livepeerProfileDim(c.prof, "width"); got != c.want {
+			t.Errorf("%s: livepeerProfileDim = %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 
@@ -683,5 +827,74 @@ func TestWaitForProcessingOutput_FailsForEmptyFile(t *testing.T) {
 
 	if _, err := waitForProcessingOutput(outputPath, 150*time.Millisecond); err == nil {
 		t.Fatal("expected validation error for empty file")
+	}
+}
+
+// recordingEndPredatesPush must reject only events from a push that started
+// before the current attempt. The current push's recording starts at or after
+// the captured push-start on the same host clock, so the boundary is strict:
+// TimeStarted == pushStartedAt is the live event, not a stale one.
+func TestRecordingEndPredatesPush(t *testing.T) {
+	const pushStartedAt int64 = 1000
+	cases := []struct {
+		name        string
+		timeStarted int64
+		pushStarted int64
+		wantStale   bool
+	}{
+		{"one second earlier is stale", pushStartedAt - 1, pushStartedAt, true},
+		{"same second is live", pushStartedAt, pushStartedAt, false},
+		{"later is live", pushStartedAt + 1, pushStartedAt, false},
+		{"zero timestamp is never stale", 0, pushStartedAt, false},
+		{"no push baseline is never stale", 500, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recordingEndPredatesPush(tc.timeStarted, tc.pushStarted); got != tc.wantStale {
+				t.Fatalf("recordingEndPredatesPush(%d, %d) = %v, want %v",
+					tc.timeStarted, tc.pushStarted, got, tc.wantStale)
+			}
+		})
+	}
+}
+
+// A stale RECORDING_END from a retired push must not starve the restarted push's
+// authoritative event. With a single-slot listener the stale event fills the
+// channel and the non-blocking send drops the real one; the buffered listener
+// plus the predicate filter must surface the live event instead of timing out.
+func TestProcessingRecordingEnd_StaleThenCurrentDelivery(t *testing.T) {
+	const streamName = "processing+stale-then-current"
+	ch := registerProcessingRecordingEndListener(streamName)
+	defer unregisterProcessingRecordingEndListener(streamName)
+
+	const pushStartedAt int64 = 2000
+	// Retired push (started before the current attempt) lands first.
+	SignalProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		StreamName:   streamName,
+		TimeStarted:  pushStartedAt - 1,
+		BytesWritten: 1,
+	})
+	// The restarted push's authoritative completion event.
+	SignalProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		StreamName:   streamName,
+		TimeStarted:  pushStartedAt,
+		BytesWritten: 999,
+	})
+
+	var got *ProcessingRecordingEndEvent
+	for got == nil {
+		select {
+		case evt := <-ch:
+			if recordingEndPredatesPush(evt.TimeStarted, pushStartedAt) {
+				continue
+			}
+			e := evt
+			got = &e
+		case <-time.After(time.Second):
+			t.Fatal("live RECORDING_END was dropped (channel starvation)")
+		}
+	}
+	if got.BytesWritten != 999 {
+		t.Fatalf("expected live event (bytes=999), got bytes=%d", got.BytesWritten)
 	}
 }

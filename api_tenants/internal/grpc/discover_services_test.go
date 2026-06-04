@@ -2,6 +2,9 @@ package grpc
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +139,9 @@ func TestDiscoverServices_PoolServiceMNPublicHostSynthesis(t *testing.T) {
 				"cluster_name", "base_url",
 			}
 
+			// This is a non-service caller (context.Background()), so the physical
+			// ingress gate query does not run — public_instance_host is service-only.
+			// Only pooled public_host synthesis is exercised here.
 			// Pool path: query joins service_cluster_assignments + infrastructure_clusters,
 			// so the args include the requested cluster_id and the SELECT pulls
 			// cluster_name + base_url for public_host synthesis.
@@ -174,6 +180,250 @@ func TestDiscoverServices_PoolServiceMNPublicHostSynthesis(t *testing.T) {
 
 // TestSynthesizePublicHostStripsSchemeAndPicksSlug isolates the FQDN derivation
 // helper from the DB plumbing.
+// TestDiscoverServices_ServiceAuthNonDefaultClusterAndIngressGate pins two
+// fixes at once: (1) a service-token caller is NOT restricted to the default
+// cluster (the regression that silently disabled per-media-cluster gateway
+// discovery), and (2) public_instance_host is only synthesized when a physical
+// ingress site already covers that exact FQDN. The query matcher fails loudly
+// if the default-cluster predicate ever reappears on the service-auth path.
+func TestDiscoverServices_ServiceAuthNonDefaultClusterAndIngressGate(t *testing.T) {
+	matcher := sqlmock.QueryMatcherFunc(func(expected, actual string) error {
+		if strings.Contains(actual, "is_default_cluster") {
+			return fmt.Errorf("service-auth discovery must not restrict to default cluster: %s", actual)
+		}
+		re, err := regexp.Compile(expected)
+		if err != nil {
+			return err
+		}
+		if !re.MatchString(actual) {
+			return fmt.Errorf("query does not match %q: %s", expected, actual)
+		}
+		return nil
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	const fqdn = "livepeer-gateway.core-eu-1.infra.frameworks.network"
+	// Ingress gate: the physical site exists, so public_instance_host is allowed.
+	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"domains"}).AddRow([]byte(`["` + fqdn + `"]`)))
+
+	now := time.Now()
+	instanceCols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url", "health_fresh",
+	}
+	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments sca`).
+		WithArgs("livepeer-gateway", "media-eu-1", int32(51)).
+		WillReturnRows(sqlmock.NewRows(instanceCols).
+			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
+				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
+				now, now, now, "Media EU 1", "frameworks.network", true))
+
+	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1", // NOT the default cluster
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetInstances()) != 1 {
+		t.Fatalf("expected 1 instance for non-default cluster, got %d", len(resp.GetInstances()))
+	}
+	if got := resp.GetInstances()[0].GetMetadata()["public_instance_host"]; got != fqdn {
+		t.Fatalf("public_instance_host = %q, want %q (ingress-gated, synthesized from node + platform root)", got, fqdn)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// When no physical ingress site exists for the instance, public_instance_host
+// must NOT be advertised (don't hand out a non-routable name).
+func TestDiscoverServices_IngressGateSuppressesUnprovisionedEndpoint(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	// No physical ingress sites provisioned yet.
+	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"domains"}))
+
+	now := time.Now()
+	instanceCols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url", "health_fresh",
+	}
+	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments sca`).
+		WithArgs("livepeer-gateway", "media-eu-1", int32(51)).
+		WillReturnRows(sqlmock.NewRows(instanceCols).
+			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
+				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
+				now, now, now, "Media EU 1", "frameworks.network", true))
+
+	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.GetInstances()[0].GetMetadata()["public_instance_host"]; got != "" {
+		t.Fatalf("public_instance_host = %q, want empty (no physical ingress provisioned)", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// Even with a provisioned physical ingress site, an instance Navigator would NOT
+// publish a physical A record for (here: stale last_health_check) must not get a
+// public_instance_host — discovery matches Navigator's publish predicate so Foghorn
+// can't fan out to a non-routable hostname.
+func TestDiscoverServices_IngressGateSuppressesIneligibleInstance(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	const fqdn = "livepeer-gateway.core-eu-1.infra.frameworks.network"
+	// Physical ingress IS provisioned for this exact FQDN.
+	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"domains"}).AddRow([]byte(`["` + fqdn + `"]`)))
+
+	now := time.Now()
+	stale := now.Add(-10 * time.Minute) // realistic last_health_check; the health_fresh=false column (DB-evaluated) is what drives ineligibility
+	instanceCols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url", "health_fresh",
+	}
+	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments sca`).
+		WithArgs("livepeer-gateway", "media-eu-1", int32(51)).
+		WillReturnRows(sqlmock.NewRows(instanceCols).
+			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
+				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
+				stale, now, now, "Media EU 1", "frameworks.network", false))
+
+	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.GetInstances()[0].GetMetadata()["public_instance_host"]; got != "" {
+		t.Fatalf("public_instance_host = %q, want empty (instance stale, not publish-eligible)", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// Malformed gate domains must fail the whole discovery (fail closed), not be
+// silently skipped into a truncated provisioned set.
+func TestDiscoverServices_FailsClosedOnMalformedGateDomains(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"domains"}).AddRow([]byte(`{"not":"an array"}`)))
+
+	_, err = server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal on malformed gate domains, got %v", err)
+	}
+}
+
+// A per-row scan/conversion error must fail closed, not skip the row into a
+// truncated-but-"successful" gateway set Foghorn would cache.
+func TestDiscoverServices_FailsClosedOnScanError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"domains"}))
+
+	now := time.Now()
+	instanceCols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url", "health_fresh",
+	}
+	// Non-numeric port → rows.Scan into int32 fails (column count matches, so the
+	// failure is the port scan, not a width mismatch).
+	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments sca`).
+		WithArgs("livepeer-gateway", "media-eu-1", int32(51)).
+		WillReturnRows(sqlmock.NewRows(instanceCols).
+			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
+				"http", "203.0.113.10", "NOT_AN_INT", nil, "running", "healthy", []byte(`{}`),
+				now, now, now, "Media EU 1", "frameworks.network", true))
+
+	_, err = server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal on scan error, got %v", err)
+	}
+}
+
+// A malformed domains row in ListIngressSites must fail closed, not nil the
+// domains — otherwise Navigator's gate reads a provisioned site as "no matching
+// domain" and could prune a valid infra A record.
+func TestListIngressSites_FailsClosedOnMalformedDomains(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	s := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM quartermaster\.ingress_sites`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	now := time.Now()
+	cols := []string{"id", "site_id", "cluster_id", "node_id", "domains", "tls_bundle_id", "kind", "upstream", "metadata", "created_at", "updated_at"}
+	mock.ExpectQuery(`SELECT id, site_id, cluster_id, node_id, domains`).
+		WillReturnRows(sqlmock.NewRows(cols).
+			AddRow("id1", "site1", "cl1", "node1", []byte(`{"not":"an array"}`), "bundle1", "physical", "127.0.0.1:8935", []byte(`{}`), now, now))
+
+	_, err = s.ListIngressSites(context.Background(), &pb.ListIngressSitesRequest{NodeId: "node1"})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal on malformed ingress domains, got %v", err)
+	}
+}
+
 func TestSynthesizePublicHostStripsSchemeAndPicksSlug(t *testing.T) {
 	cases := []struct {
 		serviceType string
@@ -227,6 +477,102 @@ func TestDiscoverServices_EmptyResult(t *testing.T) {
 		t.Fatalf("expected 0 instances, got %d", len(resp.GetInstances()))
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// A JSONB domains column carrying a literal `null` (a non-array value) must fail
+// closed: it unmarshals into a nil slice without error, which would read as "no
+// domains" and silently suppress physical-endpoint synthesis or mislead a prune.
+// Empty/absent (SQL NULL or []) is legitimately no domains and must not error.
+func TestDecodeIngressDomainsStrict(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
+	}{
+		{"array decodes", `["a.example","b.example"]`, []string{"a.example", "b.example"}, false},
+		{"empty array is no domains", `[]`, nil, false},
+		{"empty bytes is no domains", ``, nil, false},
+		{"json null fails closed", `null`, nil, true},
+		{"whitespace-padded null fails closed", "  null\n", nil, true},
+		{"object fails closed", `{"not":"an array"}`, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeIngressDomainsStrict([]byte(tc.raw))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got domains %v", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.raw, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("decode %q = %v, want %v", tc.raw, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("decode %q = %v, want %v", tc.raw, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// A non-service caller (tenant/user/unauthenticated) must receive only the pooled
+// public_host, never the per-node physical public_instance_host — the same
+// service-only boundary ListServiceInstancesByType enforces. The physical ingress
+// gate query must not run for them either: no expectation is set for it, so sqlmock
+// fails the test if it executes.
+func TestDiscoverServices_NonServiceCallerGetsNoPhysicalHost(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	server.SetPlatformRootDomain("frameworks.network")
+
+	now := time.Now()
+	instanceCols := []string{
+		"id", "instance_id", "service_id", "cluster_id", "node_id",
+		"protocol", "advertise_host", "port", "health_endpoint_override", "status", "health_status", "metadata",
+		"last_health_check", "created_at", "updated_at", "cluster_name", "base_url",
+	}
+	// Only the instance query is expected. No ingress_sites gate query is set up;
+	// if the code ran it for this non-service caller, sqlmock would fail on the
+	// unexpected query.
+	mock.ExpectQuery(`FROM quartermaster\.service_instances si`).
+		WillReturnRows(sqlmock.NewRows(instanceCols).
+			AddRow("uuid-1", "inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1",
+				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
+				now, now, now, "Media EU 1", "frameworks.network"))
+
+	// context.Background() carries no auth_type and no tenant → not a service caller.
+	// Pool-assigned discovery requires an explicit cluster_id.
+	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+		ServiceType: "livepeer-gateway",
+		ClusterId:   "media-eu-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetInstances()) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(resp.GetInstances()))
+	}
+	md := resp.GetInstances()[0].GetMetadata()
+	if got := md["public_instance_host"]; got != "" {
+		t.Fatalf("public_instance_host = %q, want empty for a non-service caller", got)
+	}
+	if md["public_host"] == "" {
+		t.Fatalf("expected pooled public_host to remain present for a non-service caller")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}

@@ -12,31 +12,35 @@ import (
 )
 
 type DNSReconciler struct {
-	dnsManager   *logic.DNSManager
-	certManager  *logic.CertManager
-	qmClient     quartermasterClient
-	logger       logging.Logger
-	interval     time.Duration
-	rootDomain   string
-	acmeEmail    string
-	serviceTypes []string
+	dnsManager         *logic.DNSManager
+	certManager        *logic.CertManager
+	qmClient           quartermasterClient
+	logger             logging.Logger
+	interval           time.Duration
+	rootDomain         string
+	acmeEmail          string
+	serviceTypes       []string
+	healthStaleSeconds int
 }
 
 type quartermasterClient interface {
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 	ListTLSBundles(ctx context.Context, clusterID string, pagination *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error)
+	ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*proto.ListServiceInstancesByTypeResponse, error)
+	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *proto.CursorPaginationRequest) (*proto.ListIngressSitesResponse, error)
 }
 
-func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManager, qmClient quartermasterClient, logger logging.Logger, interval time.Duration, rootDomain, acmeEmail string, serviceTypes []string) *DNSReconciler {
+func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManager, qmClient quartermasterClient, logger logging.Logger, interval time.Duration, rootDomain, acmeEmail string, serviceTypes []string, healthStaleSeconds int) *DNSReconciler {
 	return &DNSReconciler{
-		dnsManager:   dnsManager,
-		certManager:  certManager,
-		qmClient:     qmClient,
-		logger:       logger,
-		interval:     interval,
-		rootDomain:   rootDomain,
-		acmeEmail:    acmeEmail,
-		serviceTypes: serviceTypes,
+		dnsManager:         dnsManager,
+		certManager:        certManager,
+		qmClient:           qmClient,
+		logger:             logger,
+		interval:           interval,
+		rootDomain:         rootDomain,
+		acmeEmail:          acmeEmail,
+		serviceTypes:       serviceTypes,
+		healthStaleSeconds: healthStaleSeconds,
 	}
 }
 
@@ -94,9 +98,152 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 
 	r.ensureClusterWildcardCerts(ctx)
 	r.ensureGlobalPlatformCerts(ctx)
+	r.ensureInfraZone(ctx)
 	r.ensureTLSBundles(ctx)
+	r.syncPhysicalInstanceEndpoints(ctx)
 	r.processPendingTenantAliases(ctx)
 	r.processPendingCustomDomains(ctx)
+}
+
+// ensureInfraZone delegates the infra Bunny zone before ensureTLSBundles issues
+// the physical endpoint certs, so first-run DNS-01 for
+// <service>.<node>.infra.<root> has a zone to place challenge records in instead
+// of failing until the next tick.
+func (r *DNSReconciler) ensureInfraZone(ctx context.Context) {
+	if r.dnsManager == nil || len(pkgdns.PhysicalEndpointServiceTypes()) == 0 {
+		return
+	}
+	if err := r.dnsManager.EnsureBunnyZone(ctx, pkgdns.InfraZoneLabel); err != nil {
+		r.logger.WithError(err).Warn("Failed to ensure infra Bunny zone")
+	}
+}
+
+// syncPhysicalInstanceEndpoints publishes per-instance infra A records
+// (<service>.<node>.infra.<root>) for the services that need explicit instance
+// addressing. Each endpoint is gated on a DESIRED physical ingress site existing
+// (kind='physical'). That is the provisioning-complete signal, not proof the
+// record is published or that the real cert has been synced to the node, so a
+// residual DNS+cert-apply window remains. For VOD/chapter that window is covered
+// by the fail-closed rendition validator → local-AV fallback; live STREAM_PROCESS
+// has no such backstop and transiently degrades to source-only within it.
+func (r *DNSReconciler) syncPhysicalInstanceEndpoints(ctx context.Context) {
+	if r.dnsManager == nil || r.qmClient == nil {
+		return
+	}
+	for _, serviceType := range pkgdns.PhysicalEndpointServiceTypes() {
+		// Periodic backstop: operational details are logged inside; the next tick
+		// retries, so just note it and move on.
+		if _, err := r.syncPhysicalInstanceEndpointsForType(ctx, serviceType); err != nil {
+			r.logger.WithError(err).WithField("service_type", serviceType).Debug("Periodic infra DNS sync had errors; will retry next tick")
+		}
+	}
+}
+
+// SyncPhysicalInstanceEndpointsForType refreshes the per-instance infra A records
+// for one physical-endpoint service type, on demand. It is the event-driven entry
+// (Navigator.SyncDNS) so a node/service change refreshes infra DNS immediately
+// instead of waiting for the next reconcile tick — every box runs several services,
+// so node-keyed records must not lag a poll interval. Ensuring the infra zone first
+// keeps a fresh node's first publish from failing before the periodic loop runs.
+// No-op (nil, nil) for non-physical types. Returns partial errors and a hard error
+// so the event-driven SyncDNS caller can report failure instead of silently
+// succeeding while infra records did not refresh.
+func (r *DNSReconciler) SyncPhysicalInstanceEndpointsForType(ctx context.Context, serviceType string) (map[string]string, error) {
+	if r.dnsManager == nil || r.qmClient == nil || !pkgdns.IsPhysicalEndpointServiceType(serviceType) {
+		return nil, nil
+	}
+	r.ensureInfraZone(ctx)
+	return r.syncPhysicalInstanceEndpointsForType(ctx, serviceType)
+}
+
+func (r *DNSReconciler) syncPhysicalInstanceEndpointsForType(ctx context.Context, serviceType string) (map[string]string, error) {
+	resp, err := r.qmClient.ListServiceInstancesByType(ctx, serviceType, "", int32(r.healthStaleSeconds))
+	if err != nil {
+		r.logger.WithError(err).WithField("service_type", serviceType).Warn("Failed to list physical service instances for infra DNS")
+		return nil, err
+	}
+	endpoints := make([]logic.PhysicalInstanceEndpoint, 0, len(resp.GetInstances()))
+	// A transient ingress-gate lookup error must not let a healthy record be
+	// pruned as "no longer desired": suppress pruning for this whole cycle
+	// so a QM blip cannot delete valid physical A records.
+	gateErrored := false
+	for _, inst := range resp.GetInstances() {
+		fqdn := strings.TrimSpace(inst.GetPublicInstanceHost())
+		ip := strings.TrimSpace(inst.GetExternalIp())
+		if fqdn == "" || ip == "" {
+			continue
+		}
+		provisioned, gateErr := r.hasPhysicalIngress(ctx, inst.GetClusterId(), inst.GetNodeId(), fqdn)
+		if gateErr != nil {
+			gateErrored = true
+			r.logger.WithError(gateErr).WithFields(logging.Fields{
+				"service_type": serviceType,
+				"node_id":      inst.GetNodeId(),
+			}).Warn("Ingress gate lookup failed; preserving existing infra records this cycle")
+			continue
+		}
+		if !provisioned {
+			r.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"node_id":      inst.GetNodeId(),
+				"fqdn":         fqdn,
+			}).Debug("Skipping infra DNS for node without provisioned physical ingress")
+			continue
+		}
+		endpoints = append(endpoints, logic.PhysicalInstanceEndpoint{
+			NodeID:     inst.GetNodeId(),
+			ExternalIP: ip,
+			FQDN:       fqdn,
+		})
+	}
+	partialErrors, syncErr := r.dnsManager.SyncPhysicalInstanceEndpoints(ctx, serviceType, endpoints, !gateErrored)
+	if syncErr != nil {
+		r.logger.WithError(syncErr).WithField("service_type", serviceType).Warn("Infra DNS reconciliation failed")
+	}
+	if len(partialErrors) > 0 {
+		r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("Infra DNS reconciliation completed with partial errors")
+	}
+	return partialErrors, syncErr
+}
+
+// hasPhysicalIngress reports whether the node already has a DESIRED physical
+// ingress site whose domains include fqdn — the gate that keeps Navigator from
+// publishing a physical A record before the node is even provisioned for it
+// (it does not prove nginx is serving the real cert yet). The error return is
+// distinct from a clean "not provisioned" so the caller can tell a transient
+// lookup failure (preserve records) from a real absence (prune).
+func (r *DNSReconciler) hasPhysicalIngress(ctx context.Context, clusterID, nodeID, fqdn string) (bool, error) {
+	if strings.TrimSpace(nodeID) == "" {
+		return false, nil
+	}
+	want := strings.ToLower(strings.TrimSpace(fqdn))
+	// Walk every page: ListIngressSites is cursor-paginated, and a node with
+	// enough sites would otherwise hide the physical site past page one and look
+	// unprovisioned — which would prune a valid physical A record.
+	var after *string
+	for {
+		page := &proto.CursorPaginationRequest{First: 100, After: after}
+		resp, err := r.qmClient.ListIngressSites(ctx, clusterID, nodeID, page)
+		if err != nil {
+			return false, err
+		}
+		for _, site := range resp.GetSites() {
+			if site.GetKind() != "physical" {
+				continue
+			}
+			for _, d := range site.GetDomains() {
+				if strings.ToLower(strings.TrimSpace(d)) == want {
+					return true, nil
+				}
+			}
+		}
+		pg := resp.GetPagination()
+		if pg == nil || !pg.GetHasNextPage() || pg.GetEndCursor() == "" {
+			return false, nil
+		}
+		cursor := pg.GetEndCursor()
+		after = &cursor
+	}
 }
 
 // processPendingCustomDomains drives the customer-owned (BYO) domain

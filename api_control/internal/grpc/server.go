@@ -801,16 +801,32 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 	// customizable. Tenant-wide override (tenant_processing_config) stays
 	// gated on tier.processing_customizable so paid-tier features cannot be
 	// opted into by tenants on a locked tier.
+	// Overrides are validated at the read boundary too, not only on write: a
+	// stale/manually-edited/migrated row could hold a config that bypasses
+	// encodeProcessPolicy (e.g. a Livepeer process with no usable
+	// target_profiles). An invalid override is skipped so the next source (tenant
+	// override, then the catalog tier default) applies, rather than serving a bad
+	// config straight to MistServer.
+	validOverride := func(override string) bool {
+		if override == "" {
+			return false
+		}
+		if err := mist.ValidateProcessConfigShape(override); err != nil {
+			s.logger.WithError(err).Warn("Ignoring invalid persisted process override; falling back to next source")
+			return false
+		}
+		return true
+	}
 	if streamID != "" {
-		if override := s.getStreamProcessingOverride(ctx, streamID, lifecycle); override != "" {
+		if override := s.getStreamProcessingOverride(ctx, streamID, lifecycle); validOverride(override) {
 			processesJSON = override
 		} else if tier.GetFeatures().GetProcessingCustomizable() {
-			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); tenantOverride != "" {
+			if tenantOverride := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(tenantOverride) {
 				processesJSON = tenantOverride
 			}
 		}
 	} else if tier.GetFeatures().GetProcessingCustomizable() {
-		if override := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); override != "" {
+		if override := s.getTenantProcessingOverride(ctx, tenantID, lifecycle); validOverride(override) {
 			processesJSON = override
 		}
 	}
@@ -819,8 +835,9 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 		return "[]"
 	}
 
-	// {{gateway_url}} placeholder is left intact — Foghorn substitutes it
-	// with its local cluster's Livepeer gateway at cache/dispatch time.
+	// Livepeer entries carry no hardcoded_broadcasters — Foghorn fills the
+	// broadcaster list from its cluster's Livepeer gateway instances at
+	// cache/dispatch time.
 	return mist.NormalizeProcessConfigSelectors(processesJSON)
 }
 

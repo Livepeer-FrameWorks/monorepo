@@ -61,8 +61,12 @@ type NavigatorServer struct {
 	InternalCAManager *logic.InternalCAManager
 	AliasPublisher    *worker.AliasApplyStateWorker
 	Quartermaster     *quartermaster.GRPCClient
-	Logger            logging.Logger
-	Metrics           *ServerMetrics
+	// Reconciler also owns the per-instance physical infra DNS sync; SyncDNS calls
+	// it so a node/service change refreshes <service>.<node>.infra.<root> at once
+	// instead of waiting for the periodic reconcile tick.
+	Reconciler *worker.DNSReconciler
+	Logger     logging.Logger
+	Metrics    *ServerMetrics
 	// RootDomain is the operator base domain (e.g. "frameworks.network").
 	// Custom-domain RPCs use it to build the canonical CNAME instructions
 	// returned to the dashboard.
@@ -159,7 +163,7 @@ func main() {
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger, acmeEmail)
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
-	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes())
+	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
 	go reconciler.Start(context.Background())
 
 	// Tenant alias worker reconciles DNS from Navigator's durable
@@ -194,6 +198,7 @@ func main() {
 		InternalCAManager: internalCAManager,
 		AliasPublisher:    aliasWorker,
 		Quartermaster:     qmClient,
+		Reconciler:        reconciler,
 		Logger:            logger,
 		Metrics:           serverMetrics,
 		RootDomain:        rootDomain,
@@ -428,12 +433,39 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (
 		partialErrors map[string]string
 		err           error
 	)
-	if req.ClusterId != nil && req.GetClusterId() != "" {
+	isPhysical := s.Reconciler != nil && pkgdns.IsPhysicalEndpointServiceType(req.GetServiceType())
+	switch {
+	case req.ClusterId != nil && req.GetClusterId() != "":
+		// Cluster-scoped: pooled record for the served media cluster. For a physical
+		// type this is the right pooled half (livepeer.<media-cluster>); the physical
+		// block below adds the node-keyed records.
 		partialErrors, err = s.DNSManager.SyncServiceForCluster(ctx, req.GetServiceType(), req.GetClusterId())
-	} else if pkgdns.ProviderForServiceType(req.GetServiceType()) == pkgdns.ProviderBunny {
+	case isPhysical:
+		// Physical-only wake (no served cluster — e.g. an unassigned gateway, or a
+		// node lifecycle event): refresh ONLY the node-keyed infra records below, with
+		// no unrelated pooled/root logical DNS work or its failure/timeout surface.
+	case pkgdns.ProviderForServiceType(req.GetServiceType()) == pkgdns.ProviderBunny:
 		partialErrors, err = s.DNSManager.SyncBunnyRootService(ctx, req.GetServiceType())
-	} else {
+	default:
 		partialErrors, err = s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain())
+	}
+
+	// A physical-endpoint service (e.g. livepeer-gateway) also has per-node infra A
+	// records keyed on the node, not the cluster pool. Refresh them on the same event
+	// so a node/service change publishes immediately rather than lagging the reconcile
+	// interval. Merge its errors so the caller cannot read success while the infra
+	// records actually failed to refresh.
+	if isPhysical {
+		physErrors, physErr := s.Reconciler.SyncPhysicalInstanceEndpointsForType(ctx, req.GetServiceType())
+		if physErr != nil && err == nil {
+			err = physErr
+		}
+		for k, v := range physErrors {
+			if partialErrors == nil {
+				partialErrors = map[string]string{}
+			}
+			partialErrors[k] = v
+		}
 	}
 	if err != nil {
 		log.WithError(err).Error("DNS sync failed")

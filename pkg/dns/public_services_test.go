@@ -265,3 +265,27 @@ func TestReservedTenantSlugsIncludesEverything(t *testing.T) {
 		}
 	}
 }
+
+// The pooled DNS wake must use the DNS-facing name: vmauth's public record is
+// telemetry.<cluster> (Navigator only remaps telemetry->vmauth for lookup), so a
+// wake passing "vmauth" would produce no record. The rest are identity.
+func TestPoolDNSWakeServiceType(t *testing.T) {
+	cases := map[string]string{
+		"vmauth":           "telemetry",
+		"foghorn":          "foghorn",
+		"chandler":         "chandler",
+		"livepeer-gateway": "livepeer-gateway",
+	}
+	for in, want := range cases {
+		if got := PoolDNSWakeServiceType(in); got != want {
+			t.Fatalf("PoolDNSWakeServiceType(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Every pool-assigned instance type maps to a managed (DNS-reconciled) type.
+	for _, instType := range PoolAssignedServiceTypes() {
+		wake := PoolDNSWakeServiceType(instType)
+		if !slices.Contains(ManagedServiceTypes(), wake) {
+			t.Fatalf("wake type %q (from %q) is not in ManagedServiceTypes()", wake, instType)
+		}
+	}
+}

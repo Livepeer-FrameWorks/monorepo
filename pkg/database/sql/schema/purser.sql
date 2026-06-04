@@ -257,7 +257,8 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
 
     -- ===== MISTSERVER PROCESS DEFINITIONS =====
     -- Raw JSON arrays of MistServer process objects per lifecycle.
-    -- Use {{gateway_url}} placeholder for Livepeer broadcaster address.
+    -- Livepeer entries omit hardcoded_broadcasters; Foghorn fills the
+    -- broadcaster list from its cluster's gateway instances at dispatch time.
     processes_live JSONB DEFAULT '[]',
     processes_dvr JSONB DEFAULT '[]',
     processes_clip JSONB DEFAULT '[]',

@@ -744,6 +744,17 @@ func (c *GRPCClient) ListServiceInstances(ctx context.Context, clusterID, servic
 	})
 }
 
+// ListServiceInstancesByType lists the physical instances of a service type,
+// each carrying its node external IP and synthesized infra endpoint. Used by
+// Navigator to publish per-node infra DNS records (no SCA grouping).
+func (c *GRPCClient) ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*pb.ListServiceInstancesByTypeResponse, error) {
+	return c.serviceRegistry.ListServiceInstancesByType(ctx, &pb.ListServiceInstancesByTypeRequest{
+		ServiceType:           serviceType,
+		ClusterId:             clusterID,
+		StaleThresholdSeconds: staleThresholdSeconds,
+	})
+}
+
 // ListServicesHealth lists health status for all services
 func (c *GRPCClient) ListServicesHealth(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListServicesHealthResponse, error) {
 	return c.serviceRegistry.ListServicesHealth(ctx, &pb.ListServicesHealthRequest{

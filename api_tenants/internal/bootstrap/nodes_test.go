@@ -143,6 +143,9 @@ func TestReconcileNodesMovesGitOpsOwnedCluster(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.ingress_sites")).
 		WithArgs(node.ID, node.ClusterID, "core-central-primary").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.tls_bundles")).
+		WithArgs(node.ID, node.ClusterID, "core-central-primary").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.infrastructure_nodes")).
 		WithArgs(node.ID, node.ClusterID, "core-central-primary").
 		WillReturnResult(sqlmock.NewResult(0, 1))

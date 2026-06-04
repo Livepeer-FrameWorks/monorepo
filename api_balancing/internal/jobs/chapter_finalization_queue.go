@@ -327,12 +327,12 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		}
 		processesJSON = resp.GetProcessesJson()
 	}
-	// Substitute {{gateway_url}} so Helmsman sees a concrete URL.
-	// Commodore returns the raw placeholder by design (the resolver
-	// runs in the local cluster's context); mirror the dispatcher's
-	// behavior so chapter jobs match the VOD upload flow exactly.
+	// Fill the Livepeer broadcaster list so Helmsman sees concrete gateway
+	// addresses. Commodore returns the config without broadcasters by design
+	// (the resolver runs in the local cluster's context); mirror the
+	// dispatcher's behavior so chapter jobs match the VOD upload flow exactly.
 	if q.gatewayResolver != nil && processesJSON != "" {
-		processesJSON = q.gatewayResolver.SubstituteGatewayURL(processesJSON, nil)
+		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
 	}
 	// Cache the resolved config for the STREAM_PROCESS trigger that
 	// fires when Mist boots the processing+<hash> stream. Mirrors the

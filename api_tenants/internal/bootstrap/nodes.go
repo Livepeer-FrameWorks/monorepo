@@ -221,6 +221,24 @@ func moveBootstrapOwnedNodeCluster(ctx context.Context, exec DBTX, nodeID, fromC
 		return fmt.Errorf("move ingress_sites cluster_id: %w", err)
 	}
 
+	// Physical TLS bundles are node/FQDN-stable (bundle_id = physical-<fqdn>) but
+	// their cluster_id owner moves with the node, mirroring ingress_sites. Without
+	// this, the bundle keeps the old cluster while the re-rendered desired state
+	// derives the new one under the same stable bundle_id, and ingress reconcile
+	// hard-fails on bundle stable-key drift. Match by the node's physical ingress
+	// sites (already moved above; the join is by tls_bundle_id, not cluster_id).
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE quartermaster.tls_bundles
+		SET cluster_id = $2,
+		    updated_at = NOW()
+		WHERE cluster_id = $3
+		  AND bundle_id IN (
+			SELECT tls_bundle_id FROM quartermaster.ingress_sites
+			WHERE node_id = $1 AND kind = 'physical'
+		  )`, nodeID, toClusterID, fromClusterID); err != nil {
+		return fmt.Errorf("move physical tls_bundles cluster_id: %w", err)
+	}
+
 	if _, err := exec.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
 		SET cluster_id = $2,

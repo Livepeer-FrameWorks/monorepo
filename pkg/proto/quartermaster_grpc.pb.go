@@ -3418,12 +3418,13 @@ var MeshService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ServiceRegistryService_ListServices_FullMethodName         = "/quartermaster.ServiceRegistryService/ListServices"
-	ServiceRegistryService_ListClusterServices_FullMethodName  = "/quartermaster.ServiceRegistryService/ListClusterServices"
-	ServiceRegistryService_ListServiceInstances_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceInstances"
-	ServiceRegistryService_ListServicesHealth_FullMethodName   = "/quartermaster.ServiceRegistryService/ListServicesHealth"
-	ServiceRegistryService_GetServiceHealth_FullMethodName     = "/quartermaster.ServiceRegistryService/GetServiceHealth"
-	ServiceRegistryService_EnqueueServiceEvent_FullMethodName  = "/quartermaster.ServiceRegistryService/EnqueueServiceEvent"
+	ServiceRegistryService_ListServices_FullMethodName               = "/quartermaster.ServiceRegistryService/ListServices"
+	ServiceRegistryService_ListClusterServices_FullMethodName        = "/quartermaster.ServiceRegistryService/ListClusterServices"
+	ServiceRegistryService_ListServiceInstances_FullMethodName       = "/quartermaster.ServiceRegistryService/ListServiceInstances"
+	ServiceRegistryService_ListServiceInstancesByType_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceInstancesByType"
+	ServiceRegistryService_ListServicesHealth_FullMethodName         = "/quartermaster.ServiceRegistryService/ListServicesHealth"
+	ServiceRegistryService_GetServiceHealth_FullMethodName           = "/quartermaster.ServiceRegistryService/GetServiceHealth"
+	ServiceRegistryService_EnqueueServiceEvent_FullMethodName        = "/quartermaster.ServiceRegistryService/EnqueueServiceEvent"
 )
 
 // ServiceRegistryServiceClient is the client API for ServiceRegistryService service.
@@ -3436,6 +3437,12 @@ type ServiceRegistryServiceClient interface {
 	ListClusterServices(ctx context.Context, in *ListClusterServicesRequest, opts ...grpc.CallOption) (*ListClusterServicesResponse, error)
 	// Get running service instances
 	ListServiceInstances(ctx context.Context, in *ListServiceInstancesRequest, opts ...grpc.CallOption) (*ListServiceInstancesResponse, error)
+	// List the concrete PHYSICAL instances of a service type, each carrying its
+	// physical node identity, external IP, and synthesized physical endpoint
+	// (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
+	// group through service_cluster_assignments — it returns one row per
+	// running instance/node so Navigator can publish per-node infra DNS records.
+	ListServiceInstancesByType(ctx context.Context, in *ListServiceInstancesByTypeRequest, opts ...grpc.CallOption) (*ListServiceInstancesByTypeResponse, error)
 	// Get health of all service instances
 	ListServicesHealth(ctx context.Context, in *ListServicesHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
@@ -3487,6 +3494,16 @@ func (c *serviceRegistryServiceClient) ListServiceInstances(ctx context.Context,
 	return out, nil
 }
 
+func (c *serviceRegistryServiceClient) ListServiceInstancesByType(ctx context.Context, in *ListServiceInstancesByTypeRequest, opts ...grpc.CallOption) (*ListServiceInstancesByTypeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListServiceInstancesByTypeResponse)
+	err := c.cc.Invoke(ctx, ServiceRegistryService_ListServiceInstancesByType_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *serviceRegistryServiceClient) ListServicesHealth(ctx context.Context, in *ListServicesHealthRequest, opts ...grpc.CallOption) (*ListServicesHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListServicesHealthResponse)
@@ -3527,6 +3544,12 @@ type ServiceRegistryServiceServer interface {
 	ListClusterServices(context.Context, *ListClusterServicesRequest) (*ListClusterServicesResponse, error)
 	// Get running service instances
 	ListServiceInstances(context.Context, *ListServiceInstancesRequest) (*ListServiceInstancesResponse, error)
+	// List the concrete PHYSICAL instances of a service type, each carrying its
+	// physical node identity, external IP, and synthesized physical endpoint
+	// (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
+	// group through service_cluster_assignments — it returns one row per
+	// running instance/node so Navigator can publish per-node infra DNS records.
+	ListServiceInstancesByType(context.Context, *ListServiceInstancesByTypeRequest) (*ListServiceInstancesByTypeResponse, error)
 	// Get health of all service instances
 	ListServicesHealth(context.Context, *ListServicesHealthRequest) (*ListServicesHealthResponse, error)
 	// Get health of specific service instances
@@ -3556,6 +3579,9 @@ func (UnimplementedServiceRegistryServiceServer) ListClusterServices(context.Con
 }
 func (UnimplementedServiceRegistryServiceServer) ListServiceInstances(context.Context, *ListServiceInstancesRequest) (*ListServiceInstancesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServiceInstances not implemented")
+}
+func (UnimplementedServiceRegistryServiceServer) ListServiceInstancesByType(context.Context, *ListServiceInstancesByTypeRequest) (*ListServiceInstancesByTypeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServiceInstancesByType not implemented")
 }
 func (UnimplementedServiceRegistryServiceServer) ListServicesHealth(context.Context, *ListServicesHealthRequest) (*ListServicesHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServicesHealth not implemented")
@@ -3642,6 +3668,24 @@ func _ServiceRegistryService_ListServiceInstances_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServiceRegistryService_ListServiceInstancesByType_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServiceInstancesByTypeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceRegistryServiceServer).ListServiceInstancesByType(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceRegistryService_ListServiceInstancesByType_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceRegistryServiceServer).ListServiceInstancesByType(ctx, req.(*ListServiceInstancesByTypeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ServiceRegistryService_ListServicesHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListServicesHealthRequest)
 	if err := dec(in); err != nil {
@@ -3714,6 +3758,10 @@ var ServiceRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListServiceInstances",
 			Handler:    _ServiceRegistryService_ListServiceInstances_Handler,
+		},
+		{
+			MethodName: "ListServiceInstancesByType",
+			Handler:    _ServiceRegistryService_ListServiceInstancesByType_Handler,
 		},
 		{
 			MethodName: "ListServicesHealth",

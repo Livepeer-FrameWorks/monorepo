@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -1470,6 +1471,75 @@ func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 		bunnyZoneCache:           map[string]*bunny.Zone{},
 		bunnyDelegationCheckedAt: map[string]time.Time{},
 		cloudflareCleanupAt:      map[string]time.Time{},
+	}
+}
+
+// primeInfraZone short-circuits EnsureBunnyZone's delegation path so a
+// SyncPhysicalInstanceEndpoints test exercises only record publish/prune.
+func primeInfraZone(m *DNSManager) {
+	zoneDomain := pkgdns.InfraZoneFQDN(m.domain)
+	key := bunnyZoneCacheKey(zoneDomain)
+	m.bunnyZoneCache[key] = &bunny.Zone{ID: 1, Domain: zoneDomain}
+	m.bunnyDelegationCheckedAt[key] = time.Now()
+}
+
+func TestSyncPhysicalInstanceEndpoints_PublishesPrunesAndScopes(t *testing.T) {
+	reconciled := map[string][]bunny.Record{}
+	bc := &fakeBunnyClient{
+		listRecords: func(_ context.Context, _ int64) ([]bunny.Record, error) {
+			return []bunny.Record{
+				{Type: bunny.RecordTypeA, Name: "livepeer-gateway.old-node"}, // stale, same service → prune
+				{Type: bunny.RecordTypeA, Name: "chandler.node-a"},           // other service → must NOT touch
+			}, nil
+		},
+		reconcileRecordSet: func(_ context.Context, _ int64, name string, _ int, desired []bunny.Record) error {
+			reconciled[name] = desired
+			return nil
+		},
+	}
+	m := newTestManager(&fakeCloudflareClient{})
+	m.SetBunnyClient(bc)
+	primeInfraZone(m)
+
+	endpoints := []PhysicalInstanceEndpoint{
+		{NodeID: "node-a", ExternalIP: "203.0.113.10", FQDN: "livepeer-gateway.node-a." + pkgdns.InfraZoneFQDN(m.domain)},
+	}
+	partial, err := m.SyncPhysicalInstanceEndpoints(context.Background(), "livepeer-gateway", endpoints, true)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(partial) != 0 {
+		t.Fatalf("unexpected partial errors: %v", partial)
+	}
+
+	if got := reconciled["livepeer-gateway.node-a"]; len(got) != 1 || got[0].Value != "203.0.113.10" {
+		t.Fatalf("expected node-a A record -> 203.0.113.10, got %v", got)
+	}
+	if pruned, ok := reconciled["livepeer-gateway.old-node"]; !ok || len(pruned) != 0 {
+		t.Fatalf("expected stale livepeer-gateway.old-node pruned (empty desired), got %v present=%v", pruned, ok)
+	}
+	if _, touched := reconciled["chandler.node-a"]; touched {
+		t.Fatal("must not touch another service's records")
+	}
+}
+
+func TestSyncPhysicalInstanceEndpoints_SkipsPruneWhenNotAllowed(t *testing.T) {
+	listed := false
+	bc := &fakeBunnyClient{
+		listRecords: func(_ context.Context, _ int64) ([]bunny.Record, error) {
+			listed = true
+			return []bunny.Record{{Type: bunny.RecordTypeA, Name: "livepeer-gateway.old-node"}}, nil
+		},
+	}
+	m := newTestManager(&fakeCloudflareClient{})
+	m.SetBunnyClient(bc)
+	primeInfraZone(m)
+
+	if _, err := m.SyncPhysicalInstanceEndpoints(context.Background(), "livepeer-gateway", nil, false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if listed {
+		t.Fatal("must not list/prune records when allowPrune=false (a gate-error cycle must not delete valid records)")
 	}
 }
 

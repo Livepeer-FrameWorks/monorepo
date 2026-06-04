@@ -2,6 +2,7 @@ package triggers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -2018,15 +2020,16 @@ func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
 
 // fakeGatewayDiscoverer satisfies livepeerGatewayDiscoverer in tests by returning
 // a configured ServiceDiscoveryResponse per-cluster and counting calls per cluster
-// so cache-hit/miss assertions are possible.
+// so cache-hit/miss assertions are possible. Each cluster maps to zero or more
+// instance hosts so broadcaster-fanout can be exercised.
 type fakeGatewayDiscoverer struct {
 	mu      sync.Mutex
-	hosts   map[string]string // cluster_id -> public host (empty string => not registered)
-	calls   map[string]int    // cluster_id -> DiscoverServices call count
-	errOnce map[string]error  // cluster_id -> error to return ONCE then clear
+	hosts   map[string][]string // cluster_id -> instance hosts (empty/absent => not registered)
+	calls   map[string]int      // cluster_id -> DiscoverServices call count
+	errOnce map[string]error    // cluster_id -> error to return ONCE then clear
 }
 
-func newFakeGatewayDiscoverer(hosts map[string]string) *fakeGatewayDiscoverer {
+func newFakeGatewayDiscoverer(hosts map[string][]string) *fakeGatewayDiscoverer {
 	return &fakeGatewayDiscoverer{
 		hosts:   hosts,
 		calls:   map[string]int{},
@@ -2048,18 +2051,25 @@ func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType,
 		return &pb.ServiceDiscoveryResponse{}, nil
 	}
 
-	host, registered := f.hosts[clusterID]
-	if !registered || host == "" {
-		return &pb.ServiceDiscoveryResponse{}, nil
-	}
+	resp := &pb.ServiceDiscoveryResponse{}
 	port := int32(443)
-	return &pb.ServiceDiscoveryResponse{
-		Instances: []*pb.ServiceInstance{{
-			Host:     &host,
-			Port:     &port,
-			Protocol: "https",
-		}},
-	}, nil
+	for _, host := range f.hosts[clusterID] {
+		if host == "" {
+			continue
+		}
+		// public_instance_host carries the physical per-instance endpoint that
+		// the broadcaster fanout prefers; mirror Quartermaster's metadata.
+		resp.Instances = append(resp.Instances, &pb.ServiceInstance{
+			Host:         &host,
+			Port:         &port,
+			Protocol:     "https",
+			HealthStatus: "healthy",
+			Metadata: map[string]string{
+				servicedefs.LivepeerGatewayMetadataPublicInstanceHost: host,
+			},
+		})
+	}
+	return resp, nil
 }
 
 func (f *fakeGatewayDiscoverer) callCount(clusterID string) int {
@@ -2076,17 +2086,52 @@ func newGatewayProcessor(t *testing.T, disc livepeerGatewayDiscoverer, localClus
 	return p
 }
 
-const gatewayTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]"}]`
-const gatewayProfileTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","hardcoded_broadcasters":"[{\"address\":\"{{gateway_url}}\"}]","target_profiles":[{"name":"360p","bitrate":900000,"fps":30,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"}]}]`
+// Livepeer process configs no longer carry a {{gateway_url}} placeholder:
+// Foghorn fills hardcoded_broadcasters structurally from discovery.
+const gatewayTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","height":360}]}]`
+const gatewayProfileTemplate = `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":30,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"}]}]`
 
-func TestSubstituteGatewayURL_OriginWins(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"selfhost-cluster": "gw.selfhost.example.com",
-		"platform-cluster": "gw.platform.example.com",
+// broadcasterAddresses extracts the address list from the (stringified) JSON
+// hardcoded_broadcasters field of the first Livepeer process entry.
+func broadcasterAddresses(t *testing.T, processesJSON string) []string {
+	t.Helper()
+	var processes []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		t.Fatalf("parse processes JSON %q: %v", processesJSON, err)
+	}
+	for _, proc := range processes {
+		var name string
+		if err := json.Unmarshal(proc["process"], &name); err != nil || name != "Livepeer" {
+			continue
+		}
+		var encoded string
+		if err := json.Unmarshal(proc["hardcoded_broadcasters"], &encoded); err != nil {
+			t.Fatalf("hardcoded_broadcasters not a string in %q: %v", processesJSON, err)
+		}
+		var entries []struct {
+			Address string `json:"address"`
+		}
+		if err := json.Unmarshal([]byte(encoded), &entries); err != nil {
+			t.Fatalf("parse hardcoded_broadcasters %q: %v", encoded, err)
+		}
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Address)
+		}
+		return out
+	}
+	t.Fatalf("no Livepeer process entry in %q", processesJSON)
+	return nil
+}
+
+func TestApplyLivepeerBroadcasters_OriginWins(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"selfhost-cluster": {"gw.selfhost.example.com"},
+		"platform-cluster": {"gw.platform.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	got := p.SubstituteGatewayURL(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
 
 	if !strings.Contains(got, "gw.selfhost.example.com") {
 		t.Fatalf("expected origin (selfhost) gateway URL, got %q", got)
@@ -2099,14 +2144,114 @@ func TestSubstituteGatewayURL_OriginWins(t *testing.T) {
 	}
 }
 
-func TestSubstituteGatewayURL_OfficialFallbackWhenOriginLacksGateway(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"selfhost-cluster": "", // origin advertises no gateway
-		"platform-cluster": "gw.platform.example.com",
+func TestApplyLivepeerBroadcasters_FansOutAllInstances(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"platform-cluster": {"gw1.platform.example.com", "gw2.platform.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	got := p.SubstituteGatewayURL(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"platform-cluster"})
+
+	addrs := broadcasterAddresses(t, got)
+	if len(addrs) != 2 {
+		t.Fatalf("expected 2 broadcaster addresses, got %d: %v", len(addrs), addrs)
+	}
+	want := map[string]bool{
+		"https://gw1.platform.example.com": false,
+		"https://gw2.platform.example.com": false,
+	}
+	for _, a := range addrs {
+		if _, ok := want[a]; !ok {
+			t.Fatalf("unexpected broadcaster address %q in %v", a, addrs)
+		}
+		want[a] = true
+	}
+	for addr, seen := range want {
+		if !seen {
+			t.Fatalf("expected broadcaster %q in fanout, got %v", addr, addrs)
+		}
+	}
+}
+
+// staticDiscoverer returns a fixed instance set so a test can mix health states.
+type staticDiscoverer struct{ instances []*pb.ServiceInstance }
+
+func (d *staticDiscoverer) DiscoverServices(_ context.Context, serviceType, _ string, _ *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error) {
+	if serviceType != "livepeer-gateway" {
+		return &pb.ServiceDiscoveryResponse{}, nil
+	}
+	return &pb.ServiceDiscoveryResponse{Instances: d.instances}, nil
+}
+
+func TestApplyLivepeerBroadcasters_ExcludesUnhealthyInstances(t *testing.T) {
+	healthy := "gw-healthy.example.com"
+	unhealthy := "gw-unhealthy.example.com"
+	port := int32(443)
+	disc := &staticDiscoverer{instances: []*pb.ServiceInstance{
+		{Host: &healthy, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: healthy}},
+		{Host: &unhealthy, Port: &port, Protocol: "https", HealthStatus: "unhealthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: unhealthy}},
+	}}
+	p := newGatewayProcessor(t, disc, "cluster-x")
+
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"})
+
+	addrs := broadcasterAddresses(t, got)
+	if len(addrs) != 1 || !strings.Contains(addrs[0], "gw-healthy") {
+		t.Fatalf("expected only the healthy gateway in broadcasters, got %v", addrs)
+	}
+}
+
+func TestApplyLivepeerBroadcasters_PooledOnlyInstanceFallsBackToLocalAV(t *testing.T) {
+	// A healthy instance that advertises only a pooled public_host (no physical
+	// public_instance_host) must not appear in the broadcaster list; with no
+	// physical endpoints, processing falls back to local MistProcAV.
+	pooled := "10.0.0.5"
+	port := int32(443)
+	disc := &staticDiscoverer{instances: []*pb.ServiceInstance{
+		{Host: &pooled, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{
+			servicedefs.LivepeerGatewayMetadataPublicHost: "livepeer.media-eu.frameworks.network",
+		}},
+	}}
+	p := newGatewayProcessor(t, disc, "cluster-x")
+
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x"})
+
+	if strings.Contains(got, "Livepeer") {
+		t.Fatalf("expected pooled-only instance to be excluded and Livepeer replaced with local AV, got %q", got)
+	}
+	if !strings.Contains(got, `"process":"AV"`) {
+		t.Fatalf("expected local AV fallback, got %q", got)
+	}
+}
+
+func TestApplyLivepeerBroadcasters_DoesNotCacheDiscoveryErrors(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"cluster-x": {"gw.x.example.com"},
+	})
+	disc.errOnce["cluster-x"] = errors.New("transient discovery failure")
+	p := newGatewayProcessor(t, disc, "cluster-x")
+
+	// First call hits the transient error → empty result, which must NOT cache.
+	_ = p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x"})
+	// Second call must re-resolve (error not cached) and now succeed.
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-x"})
+
+	if !strings.Contains(got, "gw.x.example.com") {
+		t.Fatalf("expected re-query to resolve after a transient error, got %q", got)
+	}
+	if disc.callCount("cluster-x") != 2 {
+		t.Fatalf("expected 2 discovery calls (error not cached for the TTL), got %d", disc.callCount("cluster-x"))
+	}
+}
+
+func TestApplyLivepeerBroadcasters_OfficialFallbackWhenOriginLacksGateway(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"selfhost-cluster": nil, // origin advertises no gateway
+		"platform-cluster": {"gw.platform.example.com"},
+	})
+	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
+
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
 
 	if !strings.Contains(got, "gw.platform.example.com") {
 		t.Fatalf("expected official gateway URL after origin miss, got %q", got)
@@ -2116,19 +2261,16 @@ func TestSubstituteGatewayURL_OfficialFallbackWhenOriginLacksGateway(t *testing.
 	}
 }
 
-func TestSubstituteGatewayURL_FallsBackToLocalAVWhenNoCandidateHasGateway(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"selfhost-cluster": "",
-		"platform-cluster": "",
-		"foghorn-pool-1":   "",
+func TestApplyLivepeerBroadcasters_FallsBackToLocalAVWhenNoCandidateHasGateway(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"selfhost-cluster": nil,
+		"platform-cluster": nil,
+		"foghorn-pool-1":   nil,
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	got := p.SubstituteGatewayURL(gatewayProfileTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"selfhost-cluster", "platform-cluster", p.clusterID})
 
-	if strings.Contains(got, "{{gateway_url}}") {
-		t.Fatalf("expected gateway template to be removed, template still present: %q", got)
-	}
 	if strings.Contains(got, "Livepeer") {
 		t.Fatalf("expected Livepeer process to be converted to local AV, still present: %q", got)
 	}
@@ -2146,21 +2288,21 @@ func TestSubstituteGatewayURL_FallsBackToLocalAVWhenNoCandidateHasGateway(t *tes
 	}
 }
 
-func TestSubstituteGatewayURL_PerClusterCacheSeparation(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"cluster-a": "gw.a.example.com",
-		"cluster-b": "gw.b.example.com",
+func TestApplyLivepeerBroadcasters_PerClusterCacheSeparation(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"cluster-a": {"gw.a.example.com"},
+		"cluster-b": {"gw.b.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
-	// First substitution against cluster-a populates that cache entry.
-	gotA := p.SubstituteGatewayURL(gatewayTemplate, []string{"cluster-a"})
+	// First injection against cluster-a populates that cache entry.
+	gotA := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-a"})
 	if !strings.Contains(gotA, "gw.a.example.com") {
 		t.Fatalf("expected cluster-a gateway, got %q", gotA)
 	}
 
-	// Substitution against cluster-b must NOT be served from cluster-a's cache.
-	gotB := p.SubstituteGatewayURL(gatewayTemplate, []string{"cluster-b"})
+	// Injection against cluster-b must NOT be served from cluster-a's cache.
+	gotB := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-b"})
 	if !strings.Contains(gotB, "gw.b.example.com") {
 		t.Fatalf("expected cluster-b gateway (separate cache), got %q", gotB)
 	}
@@ -2168,8 +2310,8 @@ func TestSubstituteGatewayURL_PerClusterCacheSeparation(t *testing.T) {
 		t.Fatalf("cluster-b lookup leaked cluster-a's cached URL: %q", gotB)
 	}
 
-	// Repeated substitution against cluster-a within TTL must hit the cache.
-	gotA2 := p.SubstituteGatewayURL(gatewayTemplate, []string{"cluster-a"})
+	// Repeated injection against cluster-a within TTL must hit the cache.
+	gotA2 := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"cluster-a"})
 	if !strings.Contains(gotA2, "gw.a.example.com") {
 		t.Fatalf("expected cluster-a gateway on repeat, got %q", gotA2)
 	}
@@ -2182,18 +2324,15 @@ func TestSubstituteGatewayURL_PerClusterCacheSeparation(t *testing.T) {
 	}
 }
 
-func TestSubstituteGatewayURL_DeduplicatesRepeatedCandidates(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"cluster-x": "", // no gateway
+func TestApplyLivepeerBroadcasters_DeduplicatesRepeatedCandidates(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"cluster-x": nil, // no gateway
 	})
 	p := newGatewayProcessor(t, disc, "cluster-x")
 
 	// origin == official == p.clusterID; resolver should de-duplicate.
-	got := p.SubstituteGatewayURL(gatewayProfileTemplate, []string{"cluster-x", "cluster-x", "cluster-x"})
+	got := p.ApplyLivepeerBroadcasters(gatewayProfileTemplate, []string{"cluster-x", "cluster-x", "cluster-x"})
 
-	if strings.Contains(got, "{{gateway_url}}") {
-		t.Fatalf("expected gateway template to be removed on full miss, got %q", got)
-	}
 	if !strings.Contains(got, `"process":"AV"`) {
 		t.Fatalf("expected local AV fallback on full miss, got %q", got)
 	}
@@ -2202,25 +2341,25 @@ func TestSubstituteGatewayURL_DeduplicatesRepeatedCandidates(t *testing.T) {
 	}
 }
 
-func TestSubstituteGatewayURL_NilCandidatesFallsBackToLocalCluster(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"foghorn-pool-1": "gw.local.example.com",
+func TestApplyLivepeerBroadcasters_NilCandidatesFallsBackToLocalCluster(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"foghorn-pool-1": {"gw.local.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
 	// Nil candidates path is the queue-driven dispatcher's contract; preserves
 	// today's single-cluster behavior using p.clusterID.
-	got := p.SubstituteGatewayURL(gatewayTemplate, nil)
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, nil)
 
 	if !strings.Contains(got, "gw.local.example.com") {
 		t.Fatalf("expected local-cluster gateway via p.clusterID fallback, got %q", got)
 	}
 }
 
-func TestSubstituteGatewayURL_LocalFallbackIncrementsServiceUnavailableCounter(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"selfhost-cluster": "",
-		"platform-cluster": "",
+func TestApplyLivepeerBroadcasters_LocalFallbackIncrementsServiceUnavailableCounter(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"selfhost-cluster": nil,
+		"platform-cluster": nil,
 	})
 	p := newGatewayProcessor(t, disc, "foghorn-pool-1")
 
@@ -2231,39 +2370,39 @@ func TestSubstituteGatewayURL_LocalFallbackIncrementsServiceUnavailableCounter(t
 	p.SetMetrics(&ProcessorMetrics{ServiceResolutionRejected: counter})
 
 	// Hit path: official has gateway; counter must NOT increment.
-	discHit := newFakeGatewayDiscoverer(map[string]string{
-		"selfhost-cluster": "",
-		"platform-cluster": "gw.platform.example.com",
+	discHit := newFakeGatewayDiscoverer(map[string][]string{
+		"selfhost-cluster": nil,
+		"platform-cluster": {"gw.platform.example.com"},
 	})
 	pHit := newGatewayProcessor(t, discHit, "foghorn-pool-1")
 	pHit.SetMetrics(&ProcessorMetrics{ServiceResolutionRejected: counter})
-	_ = pHit.SubstituteGatewayURL(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
+	_ = pHit.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
 
 	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "livepeer-gateway")); got != 0 {
 		t.Fatalf("hit path should not increment service_unavailable counter, got %v", got)
 	}
 
 	// Miss path: every candidate empty; counter must increment exactly once.
-	_ = p.SubstituteGatewayURL(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
+	_ = p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"selfhost-cluster", "platform-cluster"})
 
 	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "livepeer-gateway")); got != 1 {
 		t.Fatalf("miss path should increment service_unavailable counter exactly once, got %v", got)
 	}
 }
 
-func TestSubstituteGatewayURL_NoTemplateIsNoop(t *testing.T) {
-	disc := newFakeGatewayDiscoverer(map[string]string{
-		"any-cluster": "gw.example.com",
+func TestApplyLivepeerBroadcasters_NoLivepeerProcessIsNoop(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"any-cluster": {"gw.example.com"},
 	})
 	p := newGatewayProcessor(t, disc, "any-cluster")
 
-	const noTemplate = `[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"}]`
-	got := p.SubstituteGatewayURL(noTemplate, []string{"any-cluster"})
+	const noLivepeer = `[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"}]`
+	got := p.ApplyLivepeerBroadcasters(noLivepeer, []string{"any-cluster"})
 
-	if got != noTemplate {
-		t.Fatalf("expected template-free JSON to pass through unchanged, got %q", got)
+	if got != noLivepeer {
+		t.Fatalf("expected Livepeer-free JSON to pass through unchanged, got %q", got)
 	}
 	if disc.callCount("any-cluster") != 0 {
-		t.Fatalf("expected zero discovery calls when no template present, got %d", disc.callCount("any-cluster"))
+		t.Fatalf("expected zero discovery calls when no Livepeer process present, got %d", disc.callCount("any-cluster"))
 	}
 }
