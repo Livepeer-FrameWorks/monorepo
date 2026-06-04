@@ -41,6 +41,11 @@ service NavigatorService {
   // alias DNS pool before Foghorn drops that tenant's cert from future
   // ConfigSeeds.
   rpc RemoveTenantAliasCluster(RemoveTenantAliasClusterRequest) returns (RemoveTenantAliasClusterResponse);
+  // RemoveTenantAliasSubdomain retires one specific subdomain label without
+  // touching the tenant's active alias intent row. Quartermaster calls this
+  // for the old label on a subdomain rename so its Bunny records are cleared
+  // independently. Idempotent on (tenant_id, subdomain).
+  rpc RemoveTenantAliasSubdomain(RemoveTenantAliasSubdomainRequest) returns (RemoveTenantAliasSubdomainResponse);
 
   // EnsureCustomDomain signals Navigator that a paying tenant is bringing
   // their own domain (e.g. media.acme-inc.com). Navigator persists the row
@@ -89,11 +94,15 @@ message GetTenantAliasStatusRequest {
 message GetTenantAliasStatusResponse {
   bool found = 1;
   string tenant_id = 2;
-  string subdomain = 3;
+  string subdomain = 3;  // current active alias label
   string status = 4;
   int64 cert_issued_at = 5;
   string last_error = 6;
   bool dns_ready = 7;
+  // Labels with a pending retirement (rename old-labels not yet cleared from
+  // Bunny). The Quartermaster backstop consults this to avoid re-enqueuing a
+  // retire that is already in flight.
+  repeated string pending_retirements = 8;
 }
 
 message ReportConfigSeedApplyResultRequest {
@@ -119,6 +128,16 @@ message RemoveTenantAliasClusterRequest {
 
 message RemoveTenantAliasClusterResponse {
   bool accepted = 1;
+}
+
+message RemoveTenantAliasSubdomainRequest {
+  string tenant_id = 1;
+  string subdomain = 2;  // the specific label to retire (the old label on a rename)
+}
+
+message RemoveTenantAliasSubdomainResponse {
+  bool accepted = 1;
+  string error = 2;
 }
 
 message EnsureCustomDomainRequest {

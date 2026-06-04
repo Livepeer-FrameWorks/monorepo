@@ -50,6 +50,9 @@ type certStore interface {
 	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
 	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
 	DeleteTenantEdgeApplyStateForCluster(ctx context.Context, tenantID, clusterID string) error
+	// Retired alias labels awaiting Bunny cleanup after a subdomain rename.
+	InsertTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error
+	ListTenantAliasRetirementLabels(ctx context.Context, tenantID string) ([]string, error)
 	// Tenant custom domain (BYO domain) lifecycle.
 	EnsureTenantCustomDomain(ctx context.Context, tenantID, domain, acmeDNSSubdomain string) (*store.TenantCustomDomain, error)
 	GetTenantCustomDomain(ctx context.Context, tenantID, domain string) (*store.TenantCustomDomain, error)

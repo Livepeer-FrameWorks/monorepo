@@ -57,6 +57,31 @@ func (m *CertManager) RemoveTenantAlias(ctx context.Context, tenantID string) er
 	return nil
 }
 
+// RemoveTenantAliasSubdomain retires one specific label without touching
+// the tenant's active alias intent row. Quartermaster calls this for the
+// old label on a subdomain rename; the alias worker clears that label's
+// Bunny records and deletes the retirement. Idempotent on (tenantID,
+// subdomain): a duplicate keeps the original requested_at.
+func (m *CertManager) RemoveTenantAliasSubdomain(ctx context.Context, tenantID, subdomain string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	subdomain = strings.TrimSpace(strings.ToLower(subdomain))
+	if tenantID == "" || subdomain == "" {
+		return fmt.Errorf("tenantID and subdomain are required")
+	}
+	return m.store.InsertTenantAliasRetirement(ctx, tenantID, subdomain)
+}
+
+// ListTenantAliasRetirementLabels returns the pending retirement labels for
+// a tenant. The Quartermaster backstop reads this to avoid re-enqueuing a
+// retire already in flight.
+func (m *CertManager) ListTenantAliasRetirementLabels(ctx context.Context, tenantID string) ([]string, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenantID is required")
+	}
+	return m.store.ListTenantAliasRetirementLabels(ctx, tenantID)
+}
+
 // RemoveTenantAliasCluster removes DNS eligibility for a tenant's edges
 // in one cluster. Quartermaster calls this when cluster access is removed;
 // DNS reconciliation publishes the remaining edge set before Foghorn drops

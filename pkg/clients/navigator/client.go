@@ -244,6 +244,16 @@ func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTen
 	return resp, nil
 }
 
+// RemoveTenantAliasSubdomain retires one specific alias label (the old
+// label on a subdomain rename) without touching the active alias. Idempotent.
+func (c *Client) RemoveTenantAliasSubdomain(ctx context.Context, req *pb.RemoveTenantAliasSubdomainRequest) (*pb.RemoveTenantAliasSubdomainResponse, error) {
+	resp, err := c.service.RemoveTenantAliasSubdomain(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove tenant alias subdomain: %w", err)
+	}
+	return resp, nil
+}
+
 func (c *Client) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
 	resp, err := c.service.IssueInternalCert(ctx, req)
 	if err != nil {

@@ -1963,6 +1963,9 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit self-hosting enable: %v", commitErr)
@@ -2316,13 +2319,17 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		return nil, status.Error(codes.InvalidArgument, "name required")
 	}
 
-	// Reject reserved subdomain slugs before write. Same deny-list source
-	// of truth as Navigator (pkg/dns.IsReservedTenantSlug) so the cert
-	// and DNS layers agree on what's allowed.
-	if sub := req.GetSubdomain(); sub != "" {
-		if dns.IsReservedTenantSlug(sub, s.activeClusterSlugs(ctx)) {
-			return nil, status.Errorf(codes.InvalidArgument, "subdomain %q is reserved or invalid", sub)
+	subdomain := strings.ToLower(strings.TrimSpace(req.GetSubdomain()))
+	if subdomain != "" {
+		if dns.IsReservedTenantSlug(subdomain, s.activeClusterSlugs(ctx)) {
+			return nil, status.Errorf(codes.InvalidArgument, "subdomain %q is reserved or invalid", subdomain)
 		}
+	} else {
+		generatedSubdomain, genErr := s.generateAvailableTenantSubdomain(ctx, name)
+		if genErr != nil {
+			return nil, status.Errorf(codes.Internal, "generate tenant subdomain: %v", genErr)
+		}
+		subdomain = generatedSubdomain
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -2343,7 +2350,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		                                   deployment_tier, deployment_model,
 		                                   is_active, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $10)
-	`, tenantID, name, req.Subdomain, req.CustomDomain, req.LogoUrl,
+	`, tenantID, name, subdomain, req.CustomDomain, req.LogoUrl,
 		req.GetPrimaryColor(), req.GetSecondaryColor(),
 		req.GetDeploymentTier(), req.GetDeploymentModel(), now)
 
@@ -2433,6 +2440,13 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		}
 	}
 
+	// Durable subdomain-alias ensure for paid+active tenants (no-op for free).
+	// The subdomain was generated/validated above; generate-if-missing covers
+	// the case a paid tenant was created without one.
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
+
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to commit transaction for tenant creation and auto-subscription")
@@ -2440,7 +2454,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 	}
 
 	changedFields := []string{"name"}
-	if req.GetSubdomain() != "" {
+	if subdomain != "" {
 		changedFields = append(changedFields, "subdomain")
 	}
 	if req.GetCustomDomain() != "" {
@@ -2470,7 +2484,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 	tenant := &pb.Tenant{
 		Id:                    tenantID,
 		Name:                  name,
-		Subdomain:             req.Subdomain,
+		Subdomain:             &subdomain,
 		CustomDomain:          req.CustomDomain,
 		LogoUrl:               req.LogoUrl,
 		PrimaryColor:          req.GetPrimaryColor(),
@@ -2500,15 +2514,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	changedFields := []string{}
 	var previousClusterID sql.NullString
 	var previousCustomDomain sql.NullString
-	if req.PrimaryClusterId != nil || req.CustomDomain != nil {
-		if scanErr := s.db.QueryRowContext(ctx, `
-			SELECT primary_cluster_id, custom_domain
-			FROM quartermaster.tenants
-			WHERE id = $1
-		`, tenantID).Scan(&previousClusterID, &previousCustomDomain); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-			s.logger.WithError(scanErr).WithField("tenant_id", tenantID).Warn("UpdateTenant: previous-value lookup failed")
-		}
-	}
+	var previousSubdomain sql.NullString
 
 	if req.Name != nil {
 		updates = append(updates, fmt.Sprintf("name = $%d", argIdx))
@@ -2517,11 +2523,16 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		changedFields = append(changedFields, "name")
 	}
 	if req.Subdomain != nil {
-		if *req.Subdomain != "" && dns.IsReservedTenantSlug(*req.Subdomain, s.activeClusterSlugs(ctx)) {
-			return nil, status.Errorf(codes.InvalidArgument, "subdomain %q is reserved or invalid", *req.Subdomain)
+		subdomain := strings.ToLower(strings.TrimSpace(*req.Subdomain))
+		if subdomain != "" && dns.IsReservedTenantSlug(subdomain, s.activeClusterSlugs(ctx)) {
+			return nil, status.Errorf(codes.InvalidArgument, "subdomain %q is reserved or invalid", subdomain)
 		}
 		updates = append(updates, fmt.Sprintf("subdomain = $%d", argIdx))
-		args = append(args, *req.Subdomain)
+		if subdomain == "" {
+			args = append(args, nil)
+		} else {
+			args = append(args, subdomain)
+		}
 		argIdx++
 		changedFields = append(changedFields, "subdomain")
 	}
@@ -2548,6 +2559,18 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		args = append(args, *req.SecondaryColor)
 		argIdx++
 		changedFields = append(changedFields, "secondary_color")
+	}
+	if req.DeploymentTier != nil {
+		updates = append(updates, fmt.Sprintf("deployment_tier = $%d", argIdx))
+		args = append(args, strings.TrimSpace(*req.DeploymentTier))
+		argIdx++
+		changedFields = append(changedFields, "deployment_tier")
+	}
+	if req.DeploymentModel != nil {
+		updates = append(updates, fmt.Sprintf("deployment_model = $%d", argIdx))
+		args = append(args, strings.TrimSpace(*req.DeploymentModel))
+		argIdx++
+		changedFields = append(changedFields, "deployment_model")
 	}
 	if req.PrimaryClusterId != nil {
 		updates = append(updates, fmt.Sprintf("primary_cluster_id = $%d", argIdx))
@@ -2578,6 +2601,22 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
+
+	// Read previous values FOR UPDATE inside the tx so concurrent updates to
+	// the same tenant serialize. Reading the previous subdomain before the
+	// transaction (and without a lock) would let a concurrent a->b and a->c
+	// race both observe "a", enqueuing a retire only for "a" and orphaning
+	// the intermediate label.
+	if req.PrimaryClusterId != nil || req.CustomDomain != nil || req.Subdomain != nil {
+		if scanErr := tx.QueryRowContext(ctx, `
+			SELECT primary_cluster_id, custom_domain, subdomain
+			FROM quartermaster.tenants
+			WHERE id = $1
+			FOR UPDATE
+		`, tenantID).Scan(&previousClusterID, &previousCustomDomain, &previousSubdomain); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Internal, "previous-value lookup: %v", scanErr)
+		}
+	}
 
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -2619,6 +2658,22 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	if req.CustomDomain != nil {
 		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, previousCustomDomain.String, strings.TrimSpace(*req.CustomDomain)); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
+		}
+	}
+
+	// Enqueue the desired Navigator alias action(s) in the same tx so a
+	// Navigator outage can't lose the intent. On a rename the old label is
+	// retired so its Bunny records are cleared (Navigator overwrites the alias
+	// label in place and keeps no memory of the old one).
+	if req.Subdomain != nil {
+		if enqErr := s.enqueueTenantAliasForSubdomainChange(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
+		}
+	} else if req.DeploymentTier != nil || req.IsActive != nil {
+		downgrade := (req.DeploymentTier != nil && strings.TrimSpace(*req.DeploymentTier) == "free") ||
+			(req.IsActive != nil && !*req.IsActive)
+		if enqErr := s.enqueueTenantAliasForTierChange(ctx, tx, tenantID, downgrade); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias tier change: %v", enqErr)
 		}
 	}
 
@@ -2671,6 +2726,139 @@ func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context,
 	return nil
 }
 
+// enqueueTenantAliasEnsureTx enqueues a durable Navigator ensure for the
+// tenant's subdomain alias inside the caller's tx — but only when the tenant
+// warrants one: active, paid tier, and holding at least one active cluster
+// subscription. This is the same condition the backstop reconciler uses, so
+// ensure never creates an alias the backstop would then reap. The resolved
+// decision rides the row, so the drain worker never re-derives it. When
+// eligible but missing a subdomain and generateIfMissing is set, a DNS-safe
+// label is generated and persisted first. The tenant row is locked FOR UPDATE
+// so concurrent generators serialize.
+func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx *sql.Tx, tenantID string, generateIfMissing bool) error {
+	var name string
+	var subdomain sql.NullString
+	var tier string
+	var isActive, hasCluster bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT t.name, t.subdomain, t.deployment_tier, t.is_active,
+		       EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
+		               WHERE tca.tenant_id = t.id AND tca.is_active = TRUE) AS has_cluster
+		FROM quartermaster.tenants t
+		WHERE t.id = $1::uuid
+		FOR UPDATE
+	`, tenantID).Scan(&name, &subdomain, &tier, &isActive, &hasCluster); err != nil {
+		return fmt.Errorf("lookup tenant for alias ensure: %w", err)
+	}
+	if !isActive || tier == "" || tier == "free" || !hasCluster {
+		return nil // not eligible for an alias (matches the backstop's "want")
+	}
+	label := strings.TrimSpace(subdomain.String)
+	if label == "" {
+		if !generateIfMissing {
+			return nil
+		}
+		generated, genErr := s.generateAvailableTenantSubdomain(ctx, name)
+		if genErr != nil {
+			return fmt.Errorf("generate subdomain: %w", genErr)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE quartermaster.tenants
+			SET subdomain = $1, updated_at = NOW()
+			WHERE id = $2::uuid
+		`, generated, tenantID); err != nil {
+			return fmt.Errorf("persist generated subdomain: %w", err)
+		}
+		label = generated
+	}
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, label, "ensure", "", ""); err != nil {
+		return fmt.Errorf("enqueue ensure: %w", err)
+	}
+	return nil
+}
+
+// enqueueTenantAliasRemoveTx enqueues a durable full alias teardown (current
+// label + intent row). auditSubdomain is recorded for traceability only;
+// Navigator tears down whatever active label it holds.
+func (s *QuartermasterServer) enqueueTenantAliasRemoveTx(ctx context.Context, tx *sql.Tx, tenantID, auditSubdomain string) error {
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, auditSubdomain, "remove", "", ""); err != nil {
+		return fmt.Errorf("enqueue remove: %w", err)
+	}
+	return nil
+}
+
+// enqueueTenantAliasRetireTx enqueues a durable retirement of one old label
+// (the rename source). Navigator clears that label's records without touching
+// the active alias.
+func (s *QuartermasterServer) enqueueTenantAliasRetireTx(ctx context.Context, tx *sql.Tx, tenantID, label string) error {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return nil
+	}
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, label, "retire", "", ""); err != nil {
+		return fmt.Errorf("enqueue retire: %w", err)
+	}
+	return nil
+}
+
+// tenantHasPaidClusterAccessTx reports whether the tenant still warrants an
+// alias: it is active, on a paid tier, and holds at least one active cluster
+// subscription. A downgrade/deactivation only tears the alias down when this
+// is false — a tenant can keep the alias via another paid cluster. The
+// tenant's own is_active is part of the gate so deactivating a tenant tears
+// the alias down even while paid cluster-access rows linger.
+func (s *QuartermasterServer) tenantHasPaidClusterAccessTx(ctx context.Context, tx *sql.Tx, tenantID string) (bool, error) {
+	var has bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM quartermaster.tenant_cluster_access tca
+			JOIN quartermaster.tenants t ON t.id = tca.tenant_id
+			WHERE tca.tenant_id = $1::uuid
+			  AND tca.is_active = TRUE
+			  AND t.is_active = TRUE
+			  AND t.deployment_tier <> 'free'
+		)
+	`, tenantID).Scan(&has)
+	return has, err
+}
+
+// enqueueTenantAliasForSubdomainChange enqueues the durable Navigator alias
+// actions for a subdomain field change. Clearing the label tears the alias
+// down; a rename retires the old label (so its records are cleared) and
+// ensures the new one. retire is enqueued before ensure so it gets the lower
+// BIGSERIAL seq and the worker dispatches it first.
+func (s *QuartermasterServer) enqueueTenantAliasForSubdomainChange(ctx context.Context, tx *sql.Tx, tenantID, prevSubdomain, newSubdomain string) error {
+	prevSubdomain = strings.TrimSpace(prevSubdomain)
+	newSubdomain = strings.ToLower(strings.TrimSpace(newSubdomain))
+	if newSubdomain == "" {
+		// Subdomain cleared → tear the alias down entirely.
+		return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, prevSubdomain)
+	}
+	if prevSubdomain != "" && prevSubdomain != newSubdomain {
+		if err := s.enqueueTenantAliasRetireTx(ctx, tx, tenantID, prevSubdomain); err != nil {
+			return err
+		}
+	}
+	return s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, false)
+}
+
+// enqueueTenantAliasForTierChange enqueues alias intent for a tier/active
+// change with no subdomain change. A downgrade tears the alias down only when
+// no paid cluster access remains; otherwise it (re-)ensures the current label.
+func (s *QuartermasterServer) enqueueTenantAliasForTierChange(ctx context.Context, tx *sql.Tx, tenantID string, downgrade bool) error {
+	if downgrade {
+		hasPaid, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		if err != nil {
+			return fmt.Errorf("check paid cluster access: %w", err)
+		}
+		if !hasPaid {
+			return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, "")
+		}
+		return nil
+	}
+	return s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true)
+}
+
 // DeleteTenant soft deletes a tenant
 func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTenantRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
@@ -2687,15 +2875,20 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 	defer tx.Rollback() //nolint:errcheck
 
 	var previousCustomDomain sql.NullString
+	var previousSubdomain sql.NullString
+	// FOR UPDATE locks the tenant row so a concurrent UpdateTenant cannot
+	// commit a new custom_domain/ensure between this read and the teardown
+	// enqueue below — otherwise delete would tear down the stale domain only.
 	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT custom_domain
+		SELECT custom_domain, subdomain
 		FROM quartermaster.tenants
 		WHERE id = $1 AND is_active = TRUE
-	`, tenantID).Scan(&previousCustomDomain); scanErr != nil {
+		FOR UPDATE
+	`, tenantID).Scan(&previousCustomDomain, &previousSubdomain); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "tenant not found")
 		}
-		return nil, status.Errorf(codes.Internal, "lookup tenant custom domain: %v", scanErr)
+		return nil, status.Errorf(codes.Internal, "lookup tenant domains: %v", scanErr)
 	}
 
 	result, err := tx.ExecContext(ctx, `
@@ -2719,6 +2912,10 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 		if _, enqErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, previousCustomDomain.String, "remove"); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain removal: %v", enqErr)
 		}
+	}
+	// Tear the platform alias down too — the tenant is gone.
+	if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, strings.TrimSpace(previousSubdomain.String)); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue navigator tenant-alias removal: %v", enqErr)
 	}
 	if enqErr := s.emitTenantEventTx(ctx, tx, eventTenantDeleted, tenantID, userID, nil, nil); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant_deleted: %v", enqErr)
@@ -3063,6 +3260,80 @@ func (s *QuartermasterServer) activeClusterSlugs(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+const tenantSubdomainLabelMaxLen = 63
+
+func (s *QuartermasterServer) generateAvailableTenantSubdomain(ctx context.Context, name string) (string, error) {
+	extraReserved := s.activeClusterSlugs(ctx)
+	base := dns.SanitizeLabel(name)
+	if base == "default" || dns.IsReservedTenantSlug(base, extraReserved) {
+		base = "tenant-" + base
+	}
+	if dns.IsReservedTenantSlug(base, extraReserved) {
+		base = "tenant"
+	}
+
+	for i := 0; i < 100; i++ {
+		suffix := ""
+		if i > 0 {
+			suffix = fmt.Sprintf("-%d", i+1)
+		}
+		candidate := tenantSubdomainCandidate(base, suffix)
+		if dns.IsReservedTenantSlug(candidate, extraReserved) {
+			continue
+		}
+		available, err := s.tenantSubdomainAvailable(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			return candidate, nil
+		}
+	}
+
+	for i := 0; i < 10; i++ {
+		candidate := tenantSubdomainCandidate(base, "-"+uuid.NewString()[:8])
+		if dns.IsReservedTenantSlug(candidate, extraReserved) {
+			continue
+		}
+		available, err := s.tenantSubdomainAvailable(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		if available {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no available tenant subdomain for %q", name)
+}
+
+func tenantSubdomainCandidate(base, suffix string) string {
+	maxBaseLen := tenantSubdomainLabelMaxLen - len(suffix)
+	if maxBaseLen < 1 {
+		maxBaseLen = 1
+	}
+	if len(base) > maxBaseLen {
+		base = base[:maxBaseLen]
+	}
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "tenant"
+	}
+	return base + suffix
+}
+
+func (s *QuartermasterServer) tenantSubdomainAvailable(ctx context.Context, candidate string) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM quartermaster.tenants
+			WHERE subdomain = $1
+		)
+	`, candidate).Scan(&exists); err != nil {
+		return false, err
+	}
+	return !exists, nil
 }
 
 // ListAliasedTenantsForCluster returns tenants on a paid tier with
@@ -3856,17 +4127,31 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *pb.Gr
 		accessLevel = "read"
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	// Grant + durable alias ensure in one tx (ensure is gated, so it no-ops
+	// unless the tenant now warrants an alias).
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access (tenant_id, cluster_id, access_level, expires_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, NOW(), NOW())
 		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 			access_level = EXCLUDED.access_level,
 			expires_at = EXCLUDED.expires_at,
 			updated_at = NOW()
-	`, tenantID, clusterID, accessLevel, req.GetExpiresAt())
-
-	if err != nil {
+	`, tenantID, clusterID, accessLevel, req.GetExpiresAt()); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to grant access: %v", err)
+	}
+
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit grant access: %v", commitErr)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -3935,15 +4220,23 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *p
 			if v := lim.GetMaxViewers(); v > 0 {
 				payload["max_viewers"] = v
 			}
-			b, err := json.Marshal(payload)
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, "marshal resource_limits: %v", err)
+			b, marshalErr := json.Marshal(payload)
+			if marshalErr != nil {
+				return nil, status.Errorf(codes.Internal, "marshal resource_limits: %v", marshalErr)
 			}
 			resourceLimitsJSON = b
 		}
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
+	// Wrap the access upsert and the durable alias ensure in one tx so a
+	// crash can't leave the tenant subscribed without an alias hand-off.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access
 			(tenant_id, cluster_id, access_level, subscription_status, resource_limits, is_active, granted_at, created_at, updated_at)
 		VALUES ($1::uuid, $2, 'shared', 'active', COALESCE($3::jsonb, '{}'::jsonb), true, NOW(), NOW(), NOW())
@@ -3956,100 +4249,17 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *p
 		return nil, status.Errorf(codes.Internal, "upsert tenant_cluster_access: %v", err)
 	}
 
-	// Trigger Navigator alias provisioning. Best-effort: a Navigator
-	// outage MUST NOT block billing/tier mutations. Navigator owns the
-	// async ACME flow; we just signal intent here.
-	s.maybeEnsureTenantAlias(ctx, tenantID)
+	// Trigger Navigator alias provisioning durably. A Navigator outage MUST
+	// NOT block billing/tier mutations — the outbox replays until it lands.
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit bootstrap cluster access: %v", commitErr)
+	}
 
 	return &emptypb.Empty{}, nil
-}
-
-// maybeEnsureTenantAlias signals Navigator to start/refresh the
-// tenant's alias intent if the tenant is on a paid tier and has a
-// subdomain. Idempotent on the Navigator side. Errors are logged at
-// warn and swallowed.
-func (s *QuartermasterServer) maybeEnsureTenantAlias(ctx context.Context, tenantID string) {
-	if s.navigatorClient == nil {
-		return
-	}
-	var subdomain sql.NullString
-	var tier string
-	var isActive bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT subdomain, deployment_tier, is_active
-		FROM quartermaster.tenants
-		WHERE id = $1::uuid
-	`, tenantID).Scan(&subdomain, &tier, &isActive)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Debug("maybeEnsureTenantAlias: lookup failed")
-		return
-	}
-	if !isActive || !subdomain.Valid || subdomain.String == "" || tier == "" || tier == "free" {
-		return
-	}
-	// Use a short timeout. Navigator returns immediately, but we don't
-	// want to wedge the BootstrapClusterAccess RPC on network hiccups.
-	hookCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if _, err := s.navigatorClient.EnsureTenantAlias(hookCtx, &pb.EnsureTenantAliasRequest{
-		TenantId:  tenantID,
-		Subdomain: subdomain.String,
-	}); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Navigator.EnsureTenantAlias failed")
-	}
-}
-
-// maybeRemoveTenantAlias signals Navigator to tear down the tenant's
-// alias when the tenant no longer has any active paid cluster access.
-// Best-effort.
-func (s *QuartermasterServer) maybeRemoveTenantAlias(ctx context.Context, tenantID string) {
-	if s.navigatorClient == nil {
-		return
-	}
-	var hasPaidAccess bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM quartermaster.tenant_cluster_access tca
-			JOIN quartermaster.tenants t ON t.id = tca.tenant_id
-			WHERE tca.tenant_id = $1::uuid
-			  AND tca.is_active = TRUE
-			  AND t.deployment_tier <> 'free'
-		)
-	`, tenantID).Scan(&hasPaidAccess)
-	if err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Debug("maybeRemoveTenantAlias: lookup failed")
-		return
-	}
-	if hasPaidAccess {
-		return // tenant still has at least one paid cluster; keep alias.
-	}
-	hookCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if _, err := s.navigatorClient.RemoveTenantAlias(hookCtx, &pb.RemoveTenantAliasRequest{TenantId: tenantID}); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Navigator.RemoveTenantAlias failed")
-	}
-}
-
-// removeTenantAliasCluster removes one cluster's edges from the tenant
-// alias DNS pool. Call this before deactivating cluster access so DNS
-// membership is removed before Foghorn stops distributing the cert.
-func (s *QuartermasterServer) removeTenantAliasCluster(ctx context.Context, tenantID, clusterID string) error {
-	if s.navigatorClient == nil {
-		return nil
-	}
-	hookCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if _, err := s.navigatorClient.RemoveTenantAliasCluster(hookCtx, &pb.RemoveTenantAliasClusterRequest{
-		TenantId:  tenantID,
-		ClusterId: clusterID,
-	}); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"tenant_id":  tenantID,
-			"cluster_id": clusterID,
-		}).Warn("Navigator.RemoveTenantAliasCluster failed")
-		return err
-	}
-	return nil
 }
 
 // DeactivateClusterAccess soft-suspends a tenant_cluster_access row.
@@ -4066,11 +4276,23 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 	if tenantID == "" || clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
 	}
-	if err := s.removeTenantAliasCluster(ctx, tenantID, clusterID); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "remove tenant alias cluster DNS: %v", err)
+	// All Navigator hand-offs are durable and ride one tx with the access
+	// flip. remove_cluster is enqueued first so it gets the lower seq and is
+	// dispatched before any full teardown below. The removal is durable, not
+	// synchronous: Navigator drops the cluster's DNS membership when the
+	// worker drains, which may land after the access row flips inactive — we
+	// accept async durable removal here.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_access_deactivated"); err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE quartermaster.tenant_cluster_access
 		SET is_active = false,
 		    subscription_status = 'suspended',
@@ -4080,9 +4302,21 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "deactivate tenant_cluster_access: %v", err)
 	}
 
-	// If the tenant now has zero active paid cluster access rows, signal
-	// Navigator to tear down the full alias. Best-effort.
-	s.maybeRemoveTenantAlias(ctx, tenantID)
+	// If the tenant now has zero active paid cluster access rows, tear the
+	// full alias down too (enqueued after remove_cluster, so higher seq).
+	hasPaid, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	if accErr != nil {
+		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
+	}
+	if !hasPaid {
+		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit deactivate cluster access: %v", commitErr)
+	}
 
 	return &emptypb.Empty{}, nil
 }
@@ -4160,18 +4394,31 @@ func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.Su
 		return nil, status.Error(codes.PermissionDenied, "cannot subscribe to non-shared cluster")
 	}
 
-	// Create subscription
-	_, err = s.db.ExecContext(ctx, `
+	// Create subscription + durable alias ensure in one tx so a Navigator
+	// outage can't leave the tenant subscribed without an alias hand-off.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.tenant_cluster_access
 		(tenant_id, cluster_id, access_level, is_active, created_at, updated_at)
 		VALUES ($1, $2, 'subscriber', true, NOW(), NOW())
 		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 			is_active = true,
 			updated_at = NOW()
-	`, tenantID, clusterID)
-
-	if err != nil {
+	`, tenantID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to subscribe: %v", err)
+	}
+
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit subscribe: %v", commitErr)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -4199,14 +4446,39 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *p
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	// Deactivation + durable alias hand-off in one tx. remove_cluster is
+	// enqueued first (lower seq, dispatched first); a full teardown follows
+	// only when no paid cluster access remains.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_unsubscribed"); err != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE quartermaster.tenant_cluster_access
 		SET is_active = false, updated_at = NOW()
 		WHERE tenant_id = $1 AND cluster_id = $2
-	`, tenantID, clusterID)
-
-	if err != nil {
+	`, tenantID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unsubscribe: %v", err)
+	}
+
+	hasPaid, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	if accErr != nil {
+		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
+	}
+	if !hasPaid {
+		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
+		}
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit unsubscribe: %v", commitErr)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -10568,6 +10840,9 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 	if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", ""); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit private cluster create: %v", commitErr)
@@ -11256,6 +11531,9 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, inviteID, subscriptionID, ""); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
 
 	if err = tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "commit invite acceptance: %v", err)
@@ -11436,6 +11714,9 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 
 	if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, ""); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue cluster subscription event: %v", enqErr)
+	}
+	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -11811,6 +12092,14 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// custom_domain while Navigator never spun up the verification + cert
 	// lifecycle row.
 	go qmServer.runNavigatorCustomDomainOutboxWorker(context.Background())
+	// Drain the Navigator tenant-alias outbox. Every subdomain-alias hand-off
+	// (create/rename/tier change/cluster add-remove) is durable here, so a
+	// Navigator outage can't lose the intent; per-tenant seq ordering keeps a
+	// newer remove from overtaking an older ensure.
+	go qmServer.runNavigatorTenantAliasOutboxWorker(context.Background())
+	// Backstop: periodically reconcile tenant intent against Navigator's
+	// applied alias state and enqueue any missing/drifted transitions.
+	go qmServer.runTenantAliasBackstop(context.Background())
 
 	// Register all services
 	pb.RegisterTenantServiceServer(server, qmServer)

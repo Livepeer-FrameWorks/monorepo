@@ -105,6 +105,14 @@ func (f *fakeStore) DeleteTenantEdgeApplyStateForCluster(_ context.Context, _, _
 	return nil
 }
 
+func (f *fakeStore) InsertTenantAliasRetirement(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) ListTenantAliasRetirementLabels(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) EnsureTenantCustomDomain(_ context.Context, tenantID, domain, acmeDNSSubdomain string) (*store.TenantCustomDomain, error) {
 	return &store.TenantCustomDomain{TenantID: tenantID, Domain: domain, AcmeDNSSubdomain: acmeDNSSubdomain, Status: "pending_verification"}, nil
 }

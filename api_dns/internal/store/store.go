@@ -92,6 +92,18 @@ type TenantAlias struct {
 	UpdatedAt    time.Time
 }
 
+// TenantAliasRetirement is a retired alias label awaiting Bunny record
+// cleanup after a subdomain rename. The active alias lives in
+// tenant_aliases (keyed by tenant_id); this row carries the old label so
+// the worker can clear its records independently of the active intent.
+type TenantAliasRetirement struct {
+	TenantID    string
+	Subdomain   string
+	RequestedAt time.Time
+	Attempts    int
+	LastError   sql.NullString
+}
+
 // TenantCustomDomain persists per-tenant custom domain state. Driven by
 // Quartermaster.EnsureCustomDomain when tenants.custom_domain changes for
 // a paid tenant. Navigator runs verification + ACME-DNS-01 delegation +

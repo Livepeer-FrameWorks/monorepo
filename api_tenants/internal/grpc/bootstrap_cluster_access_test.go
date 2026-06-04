@@ -138,9 +138,17 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT is_platform_official, is_active")).
 		WithArgs("core-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_platform_official", "is_active"}).AddRow(true, true))
+	// Access upsert + durable alias ensure ride one tx.
+	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO quartermaster.tenant_cluster_access")).
 		WithArgs("00000000-0000-0000-0000-000000000001", "core-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Alias ensure helper: a free-tier tenant gets no alias, so no outbox insert.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT t.name, t.subdomain, t.deployment_tier, t.is_active")).
+		WithArgs("00000000-0000-0000-0000-000000000001").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
+			AddRow("Acme", nil, "free", true, false))
+	mock.ExpectCommit()
 
 	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "core-1",

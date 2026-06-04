@@ -663,7 +663,26 @@ func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *pb.GetT
 	if alias.LastError.Valid {
 		resp.LastError = alias.LastError.String
 	}
+	retirements, retErr := s.CertManager.ListTenantAliasRetirementLabels(ctx, req.GetTenantId())
+	if retErr != nil {
+		s.Logger.WithError(retErr).WithField("tenant_id", req.GetTenantId()).Debug("Tenant alias retirement lookup failed")
+	}
+	resp.PendingRetirements = retirements
 	return resp, nil
+}
+
+// RemoveTenantAliasSubdomain retires one specific label's Bunny records
+// without disturbing the tenant's active alias. Idempotent; the alias
+// worker performs the actual cleanup asynchronously.
+func (s *NavigatorServer) RemoveTenantAliasSubdomain(ctx context.Context, req *pb.RemoveTenantAliasSubdomainRequest) (*pb.RemoveTenantAliasSubdomainResponse, error) {
+	if err := s.CertManager.RemoveTenantAliasSubdomain(ctx, req.GetTenantId(), req.GetSubdomain()); err != nil {
+		s.Logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": req.GetTenantId(),
+			"subdomain": req.GetSubdomain(),
+		}).Warn("Failed to enqueue tenant alias subdomain retirement")
+		return &pb.RemoveTenantAliasSubdomainResponse{Error: err.Error()}, nil
+	}
+	return &pb.RemoveTenantAliasSubdomainResponse{Accepted: true}, nil
 }
 
 // ReportConfigSeedApplyResult persists edge cert readiness ACKs observed

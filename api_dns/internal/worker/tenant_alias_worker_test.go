@@ -129,6 +129,103 @@ func TestTeardownDeletesLocalStateAfterDNSClearSucceeds(t *testing.T) {
 	}
 }
 
+func TestRetirementPassClearsRetiredLabel(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	// Active alias is the NEW label; the OLD label is retired.
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "newlabel", Status: "cert_issued", UpdatedAt: time.Now()}
+	st.retirements = []store.TenantAliasRetirement{
+		{TenantID: "tenant-1", Subdomain: "oldlabel", RequestedAt: time.Now()},
+	}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+	worker.processRetirements(ctx)
+
+	if dns.reconcileCalls == 0 {
+		t.Fatal("expected old-label records to be cleared")
+	}
+	for name := range dns.records {
+		if name == "newlabel" || name == "foghorn.newlabel" {
+			t.Fatalf("active label %q must not be touched", name)
+		}
+	}
+	if len(st.deletedRetirements) != 1 || st.deletedRetirements[0] != "oldlabel" {
+		t.Fatalf("deletedRetirements = %v, want [oldlabel]", st.deletedRetirements)
+	}
+	if len(st.retirementFailures) != 0 {
+		t.Fatalf("retirementFailures = %v, want none", st.retirementFailures)
+	}
+}
+
+func TestRetirementPassDropsStaleRepointedLabel(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	// a -> b -> a: the label is active again, re-pointed AFTER the retirement
+	// was requested. The retirement is stale: drop it without clearing live
+	// records.
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued", UpdatedAt: time.Now()}
+	st.retirements = []store.TenantAliasRetirement{
+		{TenantID: "tenant-1", Subdomain: "acme", RequestedAt: time.Now().Add(-time.Hour)},
+	}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+	worker.processRetirements(ctx)
+
+	if dns.reconcileCalls != 0 {
+		t.Fatalf("reconcile calls = %d, want 0 (live label must not be cleared)", dns.reconcileCalls)
+	}
+	if len(st.deletedRetirements) != 1 || st.deletedRetirements[0] != "acme" {
+		t.Fatalf("deletedRetirements = %v, want [acme] (stale retirement dropped)", st.deletedRetirements)
+	}
+}
+
+func TestRetirementPassKeepsUnsupersededActiveLabel(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	// R == active but NOT superseded (alias updated before the retirement was
+	// requested): an upstream bug. Keep pending, never clear the live label.
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued", UpdatedAt: time.Now().Add(-time.Hour)}
+	st.retirements = []store.TenantAliasRetirement{
+		{TenantID: "tenant-1", Subdomain: "acme", RequestedAt: time.Now()},
+	}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+	worker.processRetirements(ctx)
+
+	if dns.reconcileCalls != 0 {
+		t.Fatalf("reconcile calls = %d, want 0", dns.reconcileCalls)
+	}
+	if len(st.deletedRetirements) != 0 {
+		t.Fatalf("deletedRetirements = %v, want none (kept pending)", st.deletedRetirements)
+	}
+	if len(st.retirements) != 1 {
+		t.Fatalf("retirements length = %d, want 1 (still pending)", len(st.retirements))
+	}
+}
+
+func TestRetirementPassRecordsFailureOnBunnyError(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "newlabel", Status: "cert_issued", UpdatedAt: time.Now()}
+	st.retirements = []store.TenantAliasRetirement{
+		{TenantID: "tenant-1", Subdomain: "oldlabel", RequestedAt: time.Now()},
+	}
+	dns := &fakeTenantAliasDNS{zoneFound: true, failName: "foghorn.oldlabel"}
+	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+	worker.processRetirements(ctx)
+
+	if len(st.retirementFailures) != 1 || st.retirementFailures[0] != "oldlabel" {
+		t.Fatalf("retirementFailures = %v, want [oldlabel]", st.retirementFailures)
+	}
+	if len(st.deletedRetirements) != 0 {
+		t.Fatalf("deletedRetirements = %v, want none (failed clear stays pending)", st.deletedRetirements)
+	}
+}
+
 func newTestAliasWorker(st *fakeTenantAliasStore, dns *fakeTenantAliasDNS, resolver *fakeTenantEdgeResolver) *AliasApplyStateWorker {
 	logger := logging.NewLogger()
 	logger.SetOutput(io.Discard)
@@ -154,10 +251,13 @@ func tenantEdge(tenantID, clusterID, nodeID, state string) store.TenantEdgeApply
 }
 
 type fakeTenantAliasStore struct {
-	alias        *store.TenantAlias
-	rows         []store.TenantEdgeApplyState
-	deletedEdges bool
-	deletedAlias bool
+	alias              *store.TenantAlias
+	rows               []store.TenantEdgeApplyState
+	deletedEdges       bool
+	deletedAlias       bool
+	retirements        []store.TenantAliasRetirement
+	deletedRetirements []string
+	retirementFailures []string
 }
 
 func newFakeTenantAliasStore() *fakeTenantAliasStore {
@@ -210,6 +310,26 @@ func (s *fakeTenantAliasStore) DeleteTenantEdgeApplyState(context.Context, strin
 
 func (s *fakeTenantAliasStore) DeleteTenantAlias(context.Context, string) error {
 	s.deletedAlias = true
+	return nil
+}
+
+func (s *fakeTenantAliasStore) ListTenantAliasRetirements(context.Context) ([]store.TenantAliasRetirement, error) {
+	return s.retirements, nil
+}
+
+func (s *fakeTenantAliasStore) DeleteTenantAliasRetirement(_ context.Context, _, subdomain string) error {
+	s.deletedRetirements = append(s.deletedRetirements, subdomain)
+	for i := range s.retirements {
+		if s.retirements[i].Subdomain == subdomain {
+			s.retirements = append(s.retirements[:i], s.retirements[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (s *fakeTenantAliasStore) RecordTenantAliasRetirementFailure(_ context.Context, _, subdomain, _ string) error {
+	s.retirementFailures = append(s.retirementFailures, subdomain)
 	return nil
 }
 

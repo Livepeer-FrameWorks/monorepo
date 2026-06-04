@@ -30,6 +30,7 @@ const (
 	NavigatorService_GetTenantAliasStatus_FullMethodName        = "/navigator.NavigatorService/GetTenantAliasStatus"
 	NavigatorService_ReportConfigSeedApplyResult_FullMethodName = "/navigator.NavigatorService/ReportConfigSeedApplyResult"
 	NavigatorService_RemoveTenantAliasCluster_FullMethodName    = "/navigator.NavigatorService/RemoveTenantAliasCluster"
+	NavigatorService_RemoveTenantAliasSubdomain_FullMethodName  = "/navigator.NavigatorService/RemoveTenantAliasSubdomain"
 	NavigatorService_EnsureCustomDomain_FullMethodName          = "/navigator.NavigatorService/EnsureCustomDomain"
 	NavigatorService_RemoveCustomDomain_FullMethodName          = "/navigator.NavigatorService/RemoveCustomDomain"
 	NavigatorService_GetCustomDomainStatus_FullMethodName       = "/navigator.NavigatorService/GetCustomDomainStatus"
@@ -76,6 +77,11 @@ type NavigatorServiceClient interface {
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
 	RemoveTenantAliasCluster(ctx context.Context, in *RemoveTenantAliasClusterRequest, opts ...grpc.CallOption) (*RemoveTenantAliasClusterResponse, error)
+	// RemoveTenantAliasSubdomain retires one specific subdomain label without
+	// touching the tenant's active alias intent row. Quartermaster calls this
+	// for the old label on a subdomain rename so its Bunny records are cleared
+	// independently. Idempotent on (tenant_id, subdomain).
+	RemoveTenantAliasSubdomain(ctx context.Context, in *RemoveTenantAliasSubdomainRequest, opts ...grpc.CallOption) (*RemoveTenantAliasSubdomainResponse, error)
 	// EnsureCustomDomain signals Navigator that a paying tenant is bringing
 	// their own domain (e.g. media.acme-inc.com). Navigator persists the row
 	// and asynchronously verifies the customer's CNAMEs + runs ACME issuance
@@ -210,6 +216,16 @@ func (c *navigatorServiceClient) RemoveTenantAliasCluster(ctx context.Context, i
 	return out, nil
 }
 
+func (c *navigatorServiceClient) RemoveTenantAliasSubdomain(ctx context.Context, in *RemoveTenantAliasSubdomainRequest, opts ...grpc.CallOption) (*RemoveTenantAliasSubdomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveTenantAliasSubdomainResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_RemoveTenantAliasSubdomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *navigatorServiceClient) EnsureCustomDomain(ctx context.Context, in *EnsureCustomDomainRequest, opts ...grpc.CallOption) (*EnsureCustomDomainResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnsureCustomDomainResponse)
@@ -281,6 +297,11 @@ type NavigatorServiceServer interface {
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
 	RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error)
+	// RemoveTenantAliasSubdomain retires one specific subdomain label without
+	// touching the tenant's active alias intent row. Quartermaster calls this
+	// for the old label on a subdomain rename so its Bunny records are cleared
+	// independently. Idempotent on (tenant_id, subdomain).
+	RemoveTenantAliasSubdomain(context.Context, *RemoveTenantAliasSubdomainRequest) (*RemoveTenantAliasSubdomainResponse, error)
 	// EnsureCustomDomain signals Navigator that a paying tenant is bringing
 	// their own domain (e.g. media.acme-inc.com). Navigator persists the row
 	// and asynchronously verifies the customer's CNAMEs + runs ACME issuance
@@ -337,6 +358,9 @@ func (UnimplementedNavigatorServiceServer) ReportConfigSeedApplyResult(context.C
 }
 func (UnimplementedNavigatorServiceServer) RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAliasCluster not implemented")
+}
+func (UnimplementedNavigatorServiceServer) RemoveTenantAliasSubdomain(context.Context, *RemoveTenantAliasSubdomainRequest) (*RemoveTenantAliasSubdomainResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAliasSubdomain not implemented")
 }
 func (UnimplementedNavigatorServiceServer) EnsureCustomDomain(context.Context, *EnsureCustomDomainRequest) (*EnsureCustomDomainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnsureCustomDomain not implemented")
@@ -566,6 +590,24 @@ func _NavigatorService_RemoveTenantAliasCluster_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_RemoveTenantAliasSubdomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveTenantAliasSubdomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).RemoveTenantAliasSubdomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_RemoveTenantAliasSubdomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).RemoveTenantAliasSubdomain(ctx, req.(*RemoveTenantAliasSubdomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NavigatorService_EnsureCustomDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EnsureCustomDomainRequest)
 	if err := dec(in); err != nil {
@@ -670,6 +712,10 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveTenantAliasCluster",
 			Handler:    _NavigatorService_RemoveTenantAliasCluster_Handler,
+		},
+		{
+			MethodName: "RemoveTenantAliasSubdomain",
+			Handler:    _NavigatorService_RemoveTenantAliasSubdomain_Handler,
 		},
 		{
 			MethodName: "EnsureCustomDomain",

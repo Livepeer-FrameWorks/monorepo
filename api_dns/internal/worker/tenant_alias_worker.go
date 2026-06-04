@@ -59,6 +59,9 @@ type tenantAliasStore interface {
 	ListTenantEdgeApplyState(ctx context.Context, tenantID, stateFilter string) ([]store.TenantEdgeApplyState, error)
 	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
 	DeleteTenantAlias(ctx context.Context, tenantID string) error
+	ListTenantAliasRetirements(ctx context.Context) ([]store.TenantAliasRetirement, error)
+	DeleteTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error
+	RecordTenantAliasRetirementFailure(ctx context.Context, tenantID, subdomain, errMsg string) error
 }
 
 func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edges EdgeAddressResolver, logger logging.Logger, interval time.Duration, rootDomain, tenantZoneLabel string) *AliasApplyStateWorker {
@@ -99,6 +102,8 @@ func (w *AliasApplyStateWorker) runOnce(ctx context.Context) {
 	for _, alias := range aliases {
 		w.reconcileTenantAlias(ctx, alias)
 	}
+
+	w.processRetirements(ctx)
 }
 
 // listAllAliasesForReconcile returns aliases the DNS worker needs to act
@@ -191,38 +196,106 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 
 func (w *AliasApplyStateWorker) teardown(ctx context.Context, alias store.TenantAlias) {
 	log := w.logger.WithField("tenant_id", alias.TenantID)
-	// Clear every per-service record set, then the apex. Local state is
-	// deleted only after Bunny accepts the DNS removal.
-	if w.bunny != nil {
-		zoneFQDN := w.tenantZoneLabel + "." + w.rootDomain
-		zone, found, err := w.bunny.FindZone(ctx, zoneFQDN)
-		if err != nil {
-			log.WithError(err).Warn("Failed to find tenant alias zone during teardown")
-			return
-		}
-		if found {
-			names := make([]string, 0, 1+len(pkgdns.TenantAliasableServiceTypes()))
-			for _, serviceType := range pkgdns.TenantAliasableServiceTypes() {
-				label, ok := pkgdns.PublicSubdomain(serviceType)
-				if !ok || label == "" {
-					continue
-				}
-				names = append(names, label+"."+alias.Subdomain)
-			}
-			names = append(names, alias.Subdomain) // apex last
-			for _, name := range names {
-				if reconcileErr := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, nil); reconcileErr != nil {
-					log.WithError(reconcileErr).WithField("record_name", name).Warn("Failed to clear tenant record set during teardown")
-					return
-				}
-			}
-		}
+	// Clear the label's records first; local state is deleted only after
+	// Bunny accepts the DNS removal.
+	if err := w.clearTenantAliasRecords(ctx, alias.Subdomain); err != nil {
+		log.WithError(err).Warn("Failed to clear tenant alias records during teardown")
+		return
 	}
 	if err := w.store.DeleteTenantEdgeApplyState(ctx, alias.TenantID); err != nil {
 		log.WithError(err).Warn("Failed to delete tenant edge apply state during teardown")
 	}
 	if err := w.store.DeleteTenantAlias(ctx, alias.TenantID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		log.WithError(err).Warn("Failed to delete tenant alias during teardown")
+	}
+}
+
+// clearTenantAliasRecords removes the apex + per-service Bunny records for
+// one alias label. Shared by teardown (the active label) and the retirement
+// pass (a retired label after a rename). No-op when no Bunny client or the
+// tenant zone is absent.
+func (w *AliasApplyStateWorker) clearTenantAliasRecords(ctx context.Context, subdomain string) error {
+	if w.bunny == nil {
+		return nil
+	}
+	zoneFQDN := w.tenantZoneLabel + "." + w.rootDomain
+	zone, found, err := w.bunny.FindZone(ctx, zoneFQDN)
+	if err != nil {
+		return fmt.Errorf("find tenant alias zone: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	names := make([]string, 0, 1+len(pkgdns.TenantAliasableServiceTypes()))
+	for _, serviceType := range pkgdns.TenantAliasableServiceTypes() {
+		label, ok := pkgdns.PublicSubdomain(serviceType)
+		if !ok || label == "" {
+			continue
+		}
+		names = append(names, label+"."+subdomain)
+	}
+	names = append(names, subdomain) // apex last
+	for _, name := range names {
+		if reconcileErr := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, nil); reconcileErr != nil {
+			return fmt.Errorf("clear record set %s: %w", name, reconcileErr)
+		}
+	}
+	return nil
+}
+
+// processRetirements clears Bunny records for retired alias labels — the old
+// label after a subdomain rename. tenant_aliases overwrites subdomain in
+// place, so each retirement row is Navigator's only memory of an old label.
+func (w *AliasApplyStateWorker) processRetirements(ctx context.Context) {
+	retirements, err := w.store.ListTenantAliasRetirements(ctx)
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to list tenant alias retirements")
+		return
+	}
+	for _, r := range retirements {
+		w.processRetirement(ctx, r)
+	}
+}
+
+func (w *AliasApplyStateWorker) processRetirement(ctx context.Context, r store.TenantAliasRetirement) {
+	log := w.logger.WithFields(logging.Fields{"tenant_id": r.TenantID, "subdomain": r.Subdomain})
+
+	active, err := w.store.GetTenantAlias(ctx, r.TenantID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		log.WithError(err).Warn("Failed to look up active alias for retirement")
+		return
+	}
+
+	// When the retired label equals the tenant's current active alias, the
+	// label is live again — never clear its records.
+	if active != nil && active.Subdomain == r.Subdomain {
+		if active.UpdatedAt.After(r.RequestedAt) {
+			// Re-pointed back AFTER the retirement was requested (a -> b -> a):
+			// the retirement is stale. Drop it without touching live records.
+			if delErr := w.store.DeleteTenantAliasRetirement(ctx, r.TenantID, r.Subdomain); delErr != nil {
+				log.WithError(delErr).Warn("Failed to delete stale tenant alias retirement")
+			}
+			return
+		}
+		// active == retired label but not superseded: a retire was requested
+		// for an already-active label, which the QM transition helper never
+		// does (it only retires old != new). Surface it and keep pending.
+		log.WithFields(logging.Fields{
+			"requested_at": r.RequestedAt,
+			"updated_at":   active.UpdatedAt,
+		}).Error("Tenant alias retirement targets the active label but was not superseded; leaving pending (upstream logic bug)")
+		return
+	}
+
+	if clearErr := w.clearTenantAliasRecords(ctx, r.Subdomain); clearErr != nil {
+		log.WithError(clearErr).Warn("Failed to clear retired tenant alias records")
+		if recErr := w.store.RecordTenantAliasRetirementFailure(ctx, r.TenantID, r.Subdomain, clearErr.Error()); recErr != nil {
+			log.WithError(recErr).Warn("Failed to record tenant alias retirement failure")
+		}
+		return
+	}
+	if delErr := w.store.DeleteTenantAliasRetirement(ctx, r.TenantID, r.Subdomain); delErr != nil {
+		log.WithError(delErr).Warn("Failed to delete completed tenant alias retirement")
 	}
 }
 

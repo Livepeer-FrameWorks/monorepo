@@ -12,14 +12,23 @@ import (
 
 // EnsureTenantAlias inserts or updates the alias intent row for a
 // tenant. On conflict (same tenant_id), updates subdomain + bumps
-// updated_at. Status defaults to cert_issuing for new rows; existing
-// rows keep their current status (the worker drives status).
+// updated_at. A new row, or one whose label actually changed, resets the
+// cert lifecycle (status=cert_issuing, cert_issued_at/last_error cleared):
+// the new label has no cert yet, so preserving cert_issued across a rename
+// would falsely report readiness. Re-ensuring the same label leaves the
+// worker-driven status untouched.
 func (s *Store) EnsureTenantAlias(ctx context.Context, tenantID, subdomain string) (*TenantAlias, error) {
 	const q = `
 		INSERT INTO navigator.tenant_aliases (tenant_id, subdomain, status, created_at, updated_at)
 		VALUES ($1::uuid, $2, 'cert_issuing', NOW(), NOW())
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			subdomain = EXCLUDED.subdomain,
+			status = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+			              THEN 'cert_issuing' ELSE navigator.tenant_aliases.status END,
+			cert_issued_at = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+			                      THEN NULL ELSE navigator.tenant_aliases.cert_issued_at END,
+			last_error = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+			                  THEN NULL ELSE navigator.tenant_aliases.last_error END,
 			updated_at = NOW()
 		RETURNING tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
 	`
@@ -81,7 +90,7 @@ func (s *Store) ListTenantAliasesByStatus(ctx context.Context, statuses []string
 		}
 		out = append(out, a)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // ListPendingTenantAliases returns rows with status cert_issuing or
@@ -106,7 +115,7 @@ func (s *Store) ListPendingTenantAliases(ctx context.Context) ([]TenantAlias, er
 		}
 		out = append(out, a)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // SetTenantAliasStatus transitions alias lifecycle. Successful cert
@@ -183,7 +192,7 @@ func (s *Store) ListTenantEdgeApplyState(ctx context.Context, tenantID, stateFil
 		FROM navigator.tenant_edge_apply_state
 		WHERE tenant_id = $1::uuid
 	`
-	args := []interface{}{tenantID}
+	args := []any{tenantID}
 	if stateFilter != "" {
 		q += " AND state = $2"
 		args = append(args, stateFilter)
@@ -224,5 +233,86 @@ func (s *Store) DeleteTenantEdgeApplyStateForCluster(ctx context.Context, tenant
 		DELETE FROM navigator.tenant_edge_apply_state
 		WHERE tenant_id = $1::uuid AND cluster_id = $2
 	`, tenantID, clusterID)
+	return err
+}
+
+// InsertTenantAliasRetirement records intent to clear one retired label's
+// Bunny records. Idempotent on (tenant_id, subdomain): a duplicate keeps the
+// original requested_at so the staleness comparison stays stable.
+func (s *Store) InsertTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO navigator.tenant_alias_retirements (tenant_id, subdomain)
+		VALUES ($1::uuid, $2)
+		ON CONFLICT (tenant_id, subdomain) DO NOTHING
+	`, tenantID, subdomain)
+	return err
+}
+
+// ListTenantAliasRetirements returns all pending retirement rows, oldest
+// first. The alias worker drains these each tick.
+func (s *Store) ListTenantAliasRetirements(ctx context.Context) ([]TenantAliasRetirement, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tenant_id, subdomain, requested_at, attempts, last_error
+		FROM navigator.tenant_alias_retirements
+		ORDER BY requested_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TenantAliasRetirement
+	for rows.Next() {
+		var r TenantAliasRetirement
+		if err := rows.Scan(&r.TenantID, &r.Subdomain, &r.RequestedAt, &r.Attempts, &r.LastError); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListTenantAliasRetirementLabels returns the pending retirement labels for
+// one tenant. The Quartermaster backstop reads this (via GetTenantAliasStatus) to
+// avoid re-enqueuing a retire that is already in flight.
+func (s *Store) ListTenantAliasRetirementLabels(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT subdomain
+		FROM navigator.tenant_alias_retirements
+		WHERE tenant_id = $1::uuid
+		ORDER BY requested_at ASC
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		out = append(out, label)
+	}
+	return out, rows.Err()
+}
+
+// DeleteTenantAliasRetirement removes a retirement row after its records
+// are cleared (or when it is dropped as stale).
+func (s *Store) DeleteTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM navigator.tenant_alias_retirements
+		WHERE tenant_id = $1::uuid AND subdomain = $2
+	`, tenantID, subdomain)
+	return err
+}
+
+// RecordTenantAliasRetirementFailure bumps attempts and records the error
+// when a Bunny clear fails, leaving the row pending for the next tick.
+func (s *Store) RecordTenantAliasRetirementFailure(ctx context.Context, tenantID, subdomain, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE navigator.tenant_alias_retirements
+		SET attempts = attempts + 1, last_error = NULLIF($3, '')
+		WHERE tenant_id = $1::uuid AND subdomain = $2
+	`, tenantID, subdomain, errMsg)
 	return err
 }

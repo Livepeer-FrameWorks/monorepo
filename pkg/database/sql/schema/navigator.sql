@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_aliases (
 
 CREATE INDEX IF NOT EXISTS idx_tenant_aliases_status ON navigator.tenant_aliases(status);
 
+-- Retired alias labels awaiting Bunny record cleanup. tenant_aliases is
+-- keyed by tenant_id and overwrites subdomain in place on a rename, so it
+-- has no memory of the old label. Quartermaster enqueues a retirement via
+-- Navigator.RemoveTenantAliasSubdomain for the old label; the alias worker
+-- clears that label's apex + per-service records and deletes the row.
+-- requested_at lets the worker drop a stale retirement when the label was
+-- re-pointed back to the tenant (the a -> b -> a case).
+CREATE TABLE IF NOT EXISTS navigator.tenant_alias_retirements (
+    tenant_id    UUID NOT NULL,
+    subdomain    TEXT NOT NULL,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    PRIMARY KEY (tenant_id, subdomain)
+);
+
 -- Per-edge bundle apply state. Drives DNS membership decisions: only
 -- edges with acknowledged tenant TLS bundles are added to a tenant's
 -- Bunny smart record set in cdn.{root}. Populated from Foghorn's
