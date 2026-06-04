@@ -31,7 +31,7 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     path: "/",
     title: "FrameWorks - Sovereign Video Infrastructure",
     description:
-      "FrameWorks is a no-cloud live streaming platform for sovereign video infrastructure, combining MistServer delivery, Livepeer-backed processing, analytics, and self-hosted operations.",
+      "FrameWorks is a live streaming platform for sovereign video operations, combining MistServer delivery, Livepeer-backed processing, analytics, and self-hostable control-plane workflows.",
     changefreq: "weekly",
     priority: "1.0",
   },

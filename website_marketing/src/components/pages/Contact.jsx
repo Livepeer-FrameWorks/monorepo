@@ -131,9 +131,9 @@ const Contact = () => {
 
   const faqs = [
     {
-      question: 'What is "Sovereign SaaS"?',
+      question: "What does sovereign mean in FrameWorks?",
       answer:
-        "Sovereign SaaS means you can run FrameWorks on your own infrastructure, our infrastructure, or both—without vendor lock-in. Unlike cloud-only platforms or self-hosted-only products, FrameWorks gives you deployment flexibility with native multi-tenancy.",
+        "It means you can run the FrameWorks video and control-plane stack on your own infrastructure, our infrastructure, or both without video-cloud vendor lock-in. Storage and DNS are external integrations today; native storage and DNS are on the roadmap.",
     },
     {
       question: "How do I get started with FrameWorks?",
@@ -148,7 +148,7 @@ const Contact = () => {
     {
       question: "Can I run FrameWorks entirely on my own infrastructure?",
       answer:
-        "Yes. Every component—control plane, analytics (ClickHouse), event streaming (Kafka), edge nodes (MistServer), and mesh networking (WireGuard)—can run on your servers. No external cloud dependencies required.",
+        "Yes for the video platform and control plane: analytics (ClickHouse), event streaming (Kafka), edge nodes (MistServer), and mesh networking (WireGuard) can run on your servers. Current production deployments still need S3-compatible storage and managed DNS integrations while native Ceph-backed storage and self-hosted/Anycast DNS mature.",
     },
     {
       question: "Can I contribute to FrameWorks?",

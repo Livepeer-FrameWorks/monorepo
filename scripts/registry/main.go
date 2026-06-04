@@ -221,7 +221,7 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("---\n\n")
 	b.WriteString("FrameWorks is built as a platform, not only a dashboard. The matrix shows which capabilities are available today and where you can use them: GraphQL API, MCP tools for agents, dashboard workflows, and developer/operator docs.\n\n")
 	b.WriteString("## Why teams pick FrameWorks\n\n")
-	b.WriteString("- **Sovereign deployment options** — run FrameWorks as SaaS, add your own edge clusters, or self-host the full stack without changing platforms.\n")
+	b.WriteString("- **Sovereign deployment options** — run FrameWorks as SaaS, add your own edge clusters, or self-host the video and control-plane stack without changing platforms.\n")
 	b.WriteString("- **Complete live-video workflow** — ingest, playback, multistreaming, playback access control, 24/7 DVR, chapters, clips, VOD, thumbnails, and analytics in one control plane.\n")
 	b.WriteString("- **Deep routing and QoE visibility** — see viewer routing, stream health, geography, quality, and node performance instead of treating delivery as a black box.\n")
 	b.WriteString("- **Agent-native operations** — the dashboard, GraphQL API, and MCP tools expose the same platform controls for humans, automation, and AI agents.\n\n")

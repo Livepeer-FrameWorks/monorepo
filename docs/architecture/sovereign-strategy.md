@@ -1,6 +1,8 @@
 # Sovereign Architecture Strategy
 
-FrameWorks is designed to run entirely on customer infrastructure without vendor lock-in. This document explains why Navigator and Privateer exist.
+FrameWorks is designed so the video workload and control plane can run on customer infrastructure without video-cloud vendor lock-in. This document explains why Navigator and Privateer exist.
+
+Current production deployments still rely on external primitives for S3-compatible object storage and public DNS. Native Ceph-backed storage and self-hosted/Anycast DNS are roadmap items; until then, "sovereign" refers to control of the video, routing, analytics, mesh, and platform services rather than a claim that every infrastructure primitive is first-party.
 
 **Deployment Models**:
 
@@ -72,7 +74,7 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 
 ### Why Not Tailscale/Headscale?
 
-**Sovereignty requirement**: We cannot depend on external SaaS for critical infrastructure.
+**Sovereignty requirement**: Mesh coordination cannot depend on external SaaS for critical infrastructure.
 
 - Tailscale coordination server is SaaS
 - Network topology visible to Tailscale Inc.

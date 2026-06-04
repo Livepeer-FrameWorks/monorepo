@@ -280,7 +280,7 @@ For hybrid edge nodes, the practical shape is MistServer plus Helmsman on your h
 
 Use this path when you want the full FrameWorks experience on your own hardware, not just an attached edge. This is closer to operating a SaaS platform than operating MistServer: you run the control plane, media plane, data plane, dashboard, databases, Kafka, ClickHouse, and the backend Privateer mesh yourself.
 
-Sovereign does not mean every subsystem is swappable today. The current stack is opinionated: crypto rails, wallet/x402 surfaces, Purser billing, and the Livepeer integration are part of the platform shape even when you run it yourself. If you want FrameWorks without crypto, want to bring your own invoicing/billing system, or want to disable whole product areas instead of leaving them unused, talk to us first. Those are valid sovereign requirements, but the knobs are not all first-class yet.
+Sovereign does not mean every subsystem is swappable today. The current stack is opinionated: crypto rails, wallet/x402 surfaces, Purser billing, and the Livepeer integration are part of the platform shape even when you run it yourself. Production deployments also still use S3-compatible object storage and managed DNS integrations; native Ceph-backed storage and self-hosted/Anycast DNS are on the roadmap. If you want FrameWorks without crypto, want to bring your own invoicing/billing system, or want to disable whole product areas instead of leaving them unused, talk to us first. Those are valid sovereign requirements, but the knobs are not all first-class yet.
 
 The maintained workflow is GitOps plus the FrameWorks CLI:
 
@@ -378,7 +378,7 @@ Use this path when you want to stop running the media engine and accept the mana
   firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
   traffic.
 - **Full self-hosting is materially heavier than one Mist binary.** If you want sovereignty plus FrameWorks, budget for the platform services and operational footprint.
-- **Sovereign installs are still opinionated.** Purser does not yet act as a generic adapter for external billing/invoicing, and crypto-oriented surfaces such as wallet auth and x402 are not fully removable product modules today.
+- **Sovereign installs are still opinionated.** Purser does not yet act as a generic adapter for external billing/invoicing, crypto-oriented surfaces such as wallet auth and x402 are not fully removable product modules today, and native storage/DNS primitives are still roadmap work.
 - **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.

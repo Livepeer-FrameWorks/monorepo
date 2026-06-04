@@ -1,13 +1,13 @@
 ---
 title: "External Services"
-description: "Configuration guide for external services: Cloudflare, SSL, SMTP, and Payments."
+description: "Configuration guide for external services: DNS, object storage, SSL, SMTP, and payments."
 sidebar:
   order: 9
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-External service credentials required by the platform.
+External service credentials required by the platform today. The sovereignty roadmap is to reduce this surface for core infrastructure, especially native Ceph-backed storage and self-hosted/Anycast DNS.
 
 ## Credential Delivery
 
@@ -456,13 +456,13 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 
 ## Summary
 
-| Service        | Provider                                                  | Required                        | Automated by                                             |
-| -------------- | --------------------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
-| Database       | Postgres or YugabyteDB                                    | Yes                             | CLI (user creation + grants)                             |
-| ClickHouse     | ClickHouse                                                | Yes                             | CLI (users.xml deployment)                               |
-| DNS            | Cloudflare (required) + Bunny DNS (optional, recommended) | Yes                             | Navigator (api_dns)                                      |
-| SSL/TLS        | Let's Encrypt + Google Trust Services (multi-CA)          | Yes                             | Navigator (api_dns)                                      |
-| Object Storage | Cloudflare R2 / Hetzner / any S3-compat                   | Yes                             | Operator (bucket + CORS); Chandler reads per-cluster row |
-| GeoIP          | MaxMind / DB-IP / IP2Location                             | Recommended                     | CLI (`cluster sync-geoip`)                               |
-| SMTP           | Any provider (Fastmail, SendGrid, AWS SES, ...)           | Yes                             | Platform (email delivery)                                |
-| Payments       | Stripe, Mollie                                            | Optional (required for billing) | Purser (webhook handling)                                |
+| Service        | Provider                                           | Required                        | Automated by                                             |
+| -------------- | -------------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
+| Database       | Postgres or YugabyteDB                             | Yes                             | CLI (user creation + grants)                             |
+| ClickHouse     | ClickHouse                                         | Yes                             | CLI (users.xml deployment)                               |
+| DNS            | Cloudflare (required today) + Bunny DNS (optional) | Yes                             | Navigator (api_dns)                                      |
+| SSL/TLS        | Let's Encrypt + Google Trust Services (multi-CA)   | Yes                             | Navigator (api_dns)                                      |
+| Object Storage | Cloudflare R2 / Hetzner / any S3-compat            | Yes today                       | Operator (bucket + CORS); Chandler reads per-cluster row |
+| GeoIP          | MaxMind / DB-IP / IP2Location                      | Recommended                     | CLI (`cluster sync-geoip`)                               |
+| SMTP           | Any provider (Fastmail, SendGrid, AWS SES, ...)    | Yes                             | Platform (email delivery)                                |
+| Payments       | Stripe, Mollie                                     | Optional (required for billing) | Purser (webhook handling)                                |

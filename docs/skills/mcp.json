@@ -1,7 +1,7 @@
 {
   "name": "frameworks",
   "title": "FrameWorks",
-  "description": "Sovereign SaaS for live video",
+  "description": "Sovereign live video platform",
   "mcp_endpoint": "https://bridge.frameworks.network/mcp",
   "transports": ["streamable-http"],
   "auth": {

@@ -314,7 +314,7 @@ const About = () => {
         seed="/about"
         className="about-hero"
         title="About FrameWorks"
-        description="The streaming platform that combines full self-hosting with hosted processing — own your stack, burst into ours."
+        description="The streaming platform that combines self-hosted video operations with hosted processing - own your video stack, burst into ours."
         align="center"
         surface="gradient"
         surfaceTone="accent"

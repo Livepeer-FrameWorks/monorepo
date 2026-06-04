@@ -48,9 +48,9 @@ const freeTier = {
   price: "Free",
   period: "",
   description:
-    "Run the full stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
+    "Run the video and control-plane stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
   features: [
-    "Full self-hosted stack, 10K delivered min/mo, 10 GB storage, 3 streams / 200 viewers, 7-day DVR",
+    "Self-hosted video stack, 10K delivered min/mo, 10 GB storage, 3 streams / 200 viewers, 7-day DVR",
   ],
   limitations: [
     "No SLA during beta, no advanced processing (AI workloads), fair-use admission caps burst above quota",
@@ -248,7 +248,7 @@ const deploymentOptions = [
       "Run control plane, databases, and edge on your infrastructure — with or without our support.",
     modal: {
       description:
-        "Keep everything sovereign by running Mist ingest, delivery, and the FrameWorks control plane inside your footprint. We provide automation, observability, and guardrails.",
+        "Keep the video workload and control plane under your control by running Mist ingest, delivery, and FrameWorks services inside your footprint. S3-compatible storage and DNS remain external integrations today.",
       bullets: [
         "Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.",
         "Joint dashboards, runbooks, and on-call assistance without surrendering shell access.",
@@ -532,7 +532,7 @@ const Pricing = () => {
             <HeadlineStack
               eyebrow="Free tier"
               title="Start free with full self-hosting (control plane included)"
-              subtitle="Deploy FrameWorks on your own infrastructure and keep sovereignty over your workloads."
+              subtitle="Deploy FrameWorks on your own infrastructure and keep sovereignty over your video workloads."
               align="left"
               underlineAlign="start"
             />
@@ -761,7 +761,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Operating models"
                 title="SaaS → Hybrid → Fully self-hosted"
-                subtitle="Choose the level of control you want: fully hosted, self-hosted edge, or the entire stack."
+                subtitle="Choose the level of control you want: fully hosted, self-hosted edge, or the video and control-plane stack."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

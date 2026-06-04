@@ -71,7 +71,7 @@ export const HOME_FAQS = [
   {
     question: "What is FrameWorks?",
     answer:
-      "FrameWorks is sovereign live video infrastructure for teams that need hosted, hybrid, or fully self-hosted streaming without giving up operational control. It combines MistServer delivery, Livepeer-backed processing, GraphQL APIs, QoE analytics, and agent-accessible operations in one platform.",
+      "FrameWorks is sovereign live video infrastructure for teams that need hosted, hybrid, or self-hosted streaming without giving up operational control. It combines MistServer delivery, Livepeer-backed processing, GraphQL APIs, QoE analytics, and agent-accessible operations in one platform.",
   },
   {
     question: "How is FrameWorks different from cloud video platforms?",
@@ -81,7 +81,7 @@ export const HOME_FAQS = [
   {
     question: "Can FrameWorks run fully self-hosted?",
     answer:
-      "Yes. FrameWorks can run on bare metal, VMs, or Kubernetes with self-hosted ingest, playback, routing, analytics, and storage workflows. Hosted services are optional, so teams can start with SaaS, move to hybrid edge, or operate the full stack themselves.",
+      "Yes. FrameWorks can run on bare metal, VMs, or Kubernetes with self-hosted ingest, playback, routing, analytics, and control-plane workflows. Current production deployments still use S3-compatible object storage and managed DNS integrations; native Ceph-backed storage and self-hosted/Anycast DNS are on the roadmap.",
   },
   {
     question: "What do MistServer and Livepeer do in FrameWorks?",
@@ -197,7 +197,7 @@ const LandingPage = () => {
     "Shared bandwidth pool",
     "Livepeer-backed compute",
     "Open source & permissive licenses",
-    "No cloud dependencies - runs anywhere",
+    "No proprietary video-cloud dependency",
     "Web dashboard with analytics included",
   ];
 
@@ -307,7 +307,7 @@ const LandingPage = () => {
         surface="gradient"
         accents={landingHeroAccents}
         title="Sovereign Video Infrastructure"
-        description="FrameWorks is a no-cloud live streaming platform for sovereign video infrastructure. Most streaming platforms lock you into their ecosystem; we give you the keys."
+        description="FrameWorks is live streaming infrastructure for sovereign video operations. Most streaming platforms lock you into their ecosystem; we give you the keys."
         support="SaaS → Hybrid (self-hosted edge) → Fully self-hosted • One platform, three modes • Public domain licensed."
         primaryAction={{
           label: "Start Free",
@@ -531,7 +531,7 @@ const LandingPage = () => {
               <HeadlineStack
                 eyebrow="Platform"
                 title="Built Different"
-                subtitle="Great DX. Deep analytics. Total sovereignty."
+                subtitle="Great DX. Deep analytics. Operational sovereignty."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
