@@ -30,8 +30,13 @@ export const AccordionTrigger = React.forwardRef(({ className, children, ...prop
 AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName;
 
 export const AccordionContent = React.forwardRef(({ className, children, ...props }, ref) => (
+  // forceMount keeps the answer text in the rendered/prerendered DOM even while the
+  // panel is collapsed, so it is present in raw HTML for crawlers and AI answer
+  // engines. Radix sets `data-state` on the panel; the CSS grid-template-rows
+  // transition drives the visible expand/collapse.
   <AccordionPrimitive.Content
     ref={ref}
+    forceMount
     className={cn("marketing-accordion__content", className)}
     {...props}
   >

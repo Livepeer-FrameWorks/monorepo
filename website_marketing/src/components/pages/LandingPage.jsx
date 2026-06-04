@@ -7,6 +7,8 @@ import {
   MarketingFinalCTA,
   MarketingScrollProgress,
   MarketingBand,
+  MarketingSlab,
+  MarketingSlabHeader,
   HeadlineStack,
   CTACluster,
   MarketingCTAButton,
@@ -22,6 +24,12 @@ import {
   NetworkMap,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { useState, useEffect, useMemo } from "react";
 import config from "../../config";
 import {
@@ -33,22 +41,64 @@ import {
   BoltIcon,
 } from "@heroicons/react/24/outline";
 
+const createSeededRandom = (seed) => {
+  let state = seed;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+};
+
 const generateGlitchStrips = () => {
+  const random = createSeededRandom(421337);
   const strips = [];
   for (let i = 0; i < 15; i++) {
     strips.push({
-      stripHeight: 20 + Math.random() * 40,
-      rawGlitchX1: (Math.random() - 0.5) * 40,
-      rawGlitchX2: (Math.random() - 0.5) * 40,
-      glitchHue1: (Math.random() - 0.5) * 90,
-      glitchHue2: (Math.random() - 0.5) * 90,
-      animationDelayFactor: Math.random(),
-      animationDuration: 2000 + Math.random() * 3000,
+      stripHeight: 20 + random() * 40,
+      rawGlitchX1: (random() - 0.5) * 40,
+      rawGlitchX2: (random() - 0.5) * 40,
+      glitchHue1: (random() - 0.5) * 90,
+      glitchHue2: (random() - 0.5) * 90,
+      animationDelayFactor: random(),
+      animationDuration: 2000 + random() * 3000,
       animationName: `glitch-${(i % 6) + 5}`,
     });
   }
   return strips;
 };
+
+export const HOME_FAQS = [
+  {
+    question: "What is FrameWorks?",
+    answer:
+      "FrameWorks is sovereign live video infrastructure for teams that need hosted, hybrid, or fully self-hosted streaming without giving up operational control. It combines MistServer delivery, Livepeer-backed processing, GraphQL APIs, QoE analytics, and agent-accessible operations in one platform.",
+  },
+  {
+    question: "How is FrameWorks different from cloud video platforms?",
+    answer:
+      "FrameWorks lets you keep the streaming control plane and edge infrastructure in your own footprint while still using hosted load balancing, shared processing, or managed support when you want it. Cloud-only platforms abstract operations away; FrameWorks exposes the machinery so operators can inspect, route, automate, and self-host it.",
+  },
+  {
+    question: "Can FrameWorks run fully self-hosted?",
+    answer:
+      "Yes. FrameWorks can run on bare metal, VMs, or Kubernetes with self-hosted ingest, playback, routing, analytics, and storage workflows. Hosted services are optional, so teams can start with SaaS, move to hybrid edge, or operate the full stack themselves.",
+  },
+  {
+    question: "What do MistServer and Livepeer do in FrameWorks?",
+    answer:
+      "MistServer powers low-latency ingest, protocol handling, and delivery at the edge, while Livepeer provides decentralized video processing capacity for workloads such as transcoding. FrameWorks adds tenancy, routing, analytics, billing, automation, and a developer API around those video primitives.",
+  },
+  {
+    question: "Who should use sovereign streaming infrastructure?",
+    answer:
+      "Sovereign streaming infrastructure is useful for broadcasters, community platforms, agencies, events, regulated teams, and builders who need predictable video operations, data control, or deployment freedom. It is especially valuable when a team cannot rely on a single third-party cloud video vendor for every audience, region, or compliance requirement.",
+  },
+  {
+    question: "How do AI agents interact with FrameWorks?",
+    answer:
+      "AI agents can discover FrameWorks through llms.txt, skill.json, and .well-known MCP metadata, then use wallet authentication, x402 payments, MCP tools, or GraphQL to operate streams and inspect diagnostics. The same platform APIs are available to human operators and autonomous tooling.",
+  },
+];
 
 const LandingPage = () => {
   const [showPlayer, setShowPlayer] = useState(false);
@@ -257,7 +307,7 @@ const LandingPage = () => {
         surface="gradient"
         accents={landingHeroAccents}
         title="Sovereign Video Infrastructure"
-        description="Most streaming platforms lock you into their ecosystem. We give you the keys."
+        description="FrameWorks is a no-cloud live streaming platform for sovereign video infrastructure. Most streaming platforms lock you into their ecosystem; we give you the keys."
         support="SaaS → Hybrid (self-hosted edge) → Fully self-hosted • One platform, three modes • Public domain licensed."
         primaryAction={{
           label: "Start Free",
@@ -494,6 +544,32 @@ const LandingPage = () => {
               <MarketingFeatureWall items={pillarCards} columns={3} />
               <NetworkMap />
             </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section className="bg-brand-surface landing-section--faq">
+          <SectionContainer>
+            <MarketingSlab variant="feature-panel">
+              <MarketingSlabHeader
+                eyebrow="FAQ"
+                title="Sovereign streaming, plainly answered"
+                subtitle="Short answers for operators, builders, and AI search engines trying to understand what FrameWorks does."
+              />
+              <Accordion type="single" collapsible>
+                {HOME_FAQS.map((faq, index) => (
+                  <AccordionItem key={faq.question} value={`home-faq-${index}`}>
+                    <AccordionTrigger>{faq.question}</AccordionTrigger>
+                    <AccordionContent>
+                      <div className="marketing-accordion__answer">
+                        <p>{faq.answer}</p>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            </MarketingSlab>
           </SectionContainer>
         </Section>
 

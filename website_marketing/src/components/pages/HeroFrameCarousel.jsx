@@ -113,11 +113,8 @@ const buildFrameStyles = (seed) => {
   });
 };
 
-// Seed once at module load — fresh per page load, stable across re-renders
-const loadSeed = Math.floor(performance.now());
-
 const HeroFrameCarousel = () => {
-  const frames = useMemo(() => buildFrameStyles(loadSeed), []);
+  const frames = useMemo(() => buildFrameStyles(1729), []);
 
   return (
     <div className="hero-frame-scene" aria-hidden="true">

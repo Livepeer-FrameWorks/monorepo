@@ -974,7 +974,12 @@
     color: hsl(var(--foreground));
   }
 
+  /* forceMount keeps collapsed answers in the DOM (crawlable). Animate via
+     grid-template-rows so the resting collapsed state needs no measured height and
+     does not flash open on first paint / before hydration. */
   .marketing-accordion__content {
+    display: grid;
+    grid-template-rows: 0fr;
     overflow: hidden;
     color: hsl(var(--muted-foreground));
     background: linear-gradient(
@@ -982,18 +987,16 @@
       rgba(var(--fx-rgb-18-22-34) / 0.9),
       rgba(var(--fx-rgb-12-14-24) / 0.96)
     );
-    will-change: height, opacity;
+    transition: grid-template-rows 0.34s cubic-bezier(0.32, 0.84, 0, 1);
   }
 
   .marketing-accordion__content[data-state="open"] {
-    animation: marketing-accordion-slide-down 0.34s cubic-bezier(0.32, 0.84, 0, 1) forwards;
-  }
-
-  .marketing-accordion__content[data-state="closed"] {
-    animation: marketing-accordion-slide-up 0.34s cubic-bezier(0.32, 0.84, 0, 1) forwards;
+    grid-template-rows: 1fr;
   }
 
   .marketing-accordion__panel {
+    min-height: 0;
+    overflow: hidden;
     padding: 0;
     line-height: 1.65;
   }
@@ -1014,30 +1017,6 @@
     );
     line-height: 1.65;
     font-size: 0.95rem;
-  }
-
-  @keyframes marketing-accordion-slide-down {
-    from {
-      height: 0;
-      opacity: 0;
-    }
-
-    to {
-      height: var(--radix-accordion-content-height);
-      opacity: 1;
-    }
-  }
-
-  @keyframes marketing-accordion-slide-up {
-    from {
-      height: var(--radix-accordion-content-height);
-      opacity: 1;
-    }
-
-    to {
-      height: 0;
-      opacity: 0;
-    }
   }
 
   @keyframes marketing-accordion-body-fade-in {

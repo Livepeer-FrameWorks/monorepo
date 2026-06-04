@@ -20,11 +20,24 @@
   .comparison-table {
     --comparison-divider: rgba(var(--accent-rgb) / 0.16);
     --comparison-divider-strong: rgba(var(--accent-rgb) / 0.24);
-    display: grid;
-    gap: 0;
+    display: block;
+    width: 100%;
     border: none;
     border-radius: 0;
+    border-collapse: collapse;
     background: none;
+  }
+
+  /* Real <table> markup, grid appearance: neutralize default table layout so the
+     row <tr>s drive the column grid below. */
+  .comparison-table thead,
+  .comparison-table tbody {
+    display: block;
+  }
+
+  .comparison-table th {
+    font-weight: inherit;
+    text-align: inherit;
   }
 
   .comparison-table__head,

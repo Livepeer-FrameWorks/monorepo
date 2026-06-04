@@ -36,6 +36,21 @@ cp "$SKILLS_DIR/heartbeat.md"  "$TARGET/heartbeat.md"
 cp "$SKILLS_DIR/llms.txt"      "$TARGET/llms.txt"
 cp "$SKILLS_DIR/robots.txt"    "$TARGET/robots.txt"
 
+# Append the per-site sitemap, derived from the resolved $TARGET path (already made
+# absolute above) so this is correct whether invoked from a package prebuild hook
+# (cwd = the site dir) or from the repo root with an explicit target path.
+case "$TARGET" in
+  */website_marketing/*)
+    printf '\nSitemap: https://frameworks.network/sitemap.xml\n' >> "$TARGET/robots.txt"
+    ;;
+  */website_docs/*)
+    printf '\nSitemap: https://logbook.frameworks.network/sitemap-index.xml\n' >> "$TARGET/robots.txt"
+    ;;
+  */website_application/*)
+    printf '\nSitemap: https://app.frameworks.network/sitemap.xml\n' >> "$TARGET/robots.txt"
+    ;;
+esac
+
 # .well-known discovery files
 cp "$SKILLS_DIR/mcp.json"                       "$TARGET/.well-known/mcp.json"
 cp "$SKILLS_DIR/security.txt"                   "$TARGET/.well-known/security.txt"

@@ -1,6 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import path from "path";
-import react from "@vitejs/plugin-react";
+import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { codecovVitePlugin } from "@codecov/vite-plugin";
 
@@ -40,7 +40,7 @@ export default defineConfig(({ mode, command }) => {
 
   return {
     plugins: [
-      react(),
+      reactRouter(),
       tailwindcss(),
       codecovVitePlugin({
         enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
@@ -56,7 +56,6 @@ export default defineConfig(({ mode, command }) => {
     },
     server: devServer,
     build: {
-      outDir: "dist",
       sourcemap: false,
     },
   };

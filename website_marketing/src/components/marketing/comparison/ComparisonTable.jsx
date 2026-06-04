@@ -24,30 +24,41 @@ const ComparisonTable = forwardRef(
       {...props}
     >
       {caption ? <div className="comparison-table__caption">{caption}</div> : null}
-      <div className={cn("comparison-table", condensed && "comparison-table--condensed")}>
-        <div className="comparison-table__head">
-          <div className="comparison-table__cell comparison-table__cell--label" />
-          {columns.map((column) => (
-            <div key={column.key ?? column.label} className="comparison-table__cell">
-              {column.label}
-            </div>
+      {/* Real <table> markup so the canonical data is machine-extractable (search +
+          AI answer engines). The grid appearance is preserved via CSS; the mobile
+          card view below adapts the same data responsively. */}
+      <table className={cn("comparison-table", condensed && "comparison-table--condensed")}>
+        <thead>
+          <tr className="comparison-table__head">
+            <th scope="col" className="comparison-table__cell comparison-table__cell--label">
+              <span className="sr-only">Feature</span>
+            </th>
+            {columns.map((column) => (
+              <th scope="col" key={column.key ?? column.label} className="comparison-table__cell">
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key ?? row.label} className="comparison-table__row">
+              <th scope="row" className="comparison-table__cell comparison-table__cell--label">
+                {row.label}
+              </th>
+              {columns.map((column) => {
+                const cellKey = column.key ?? column.label;
+                const value = row[cellKey] ?? row.cells?.[cellKey];
+                return (
+                  <td key={`${row.key ?? row.label}-${cellKey}`} className="comparison-table__cell">
+                    {renderSlot(value ?? "—")}
+                  </td>
+                );
+              })}
+            </tr>
           ))}
-        </div>
-        {rows.map((row) => (
-          <div key={row.key ?? row.label} className="comparison-table__row">
-            <div className="comparison-table__cell comparison-table__cell--label">{row.label}</div>
-            {columns.map((column) => {
-              const cellKey = column.key ?? column.label;
-              const value = row[cellKey] ?? row.cells?.[cellKey];
-              return (
-                <div key={`${row.key ?? row.label}-${cellKey}`} className="comparison-table__cell">
-                  {renderSlot(value ?? "—")}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
+        </tbody>
+      </table>
       {columns.length ? (
         <div className="comparison-table__mobile">
           {columns.map((column, columnIndex) => (

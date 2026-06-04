@@ -1,6 +1,6 @@
 # FrameWorks Marketing Website
 
-React/Vite marketing site for FrameWorks product pages, pricing, contact forms, and docs/app entry points.
+React Router/Vite marketing site for FrameWorks product pages, pricing, contact forms, and docs/app entry points.
 
 ## Development
 
@@ -27,3 +27,5 @@ Key browser variables live in `env.example`:
 ```bash
 pnpm --dir website_marketing build
 ```
+
+The production build prerenders public routes into `build/client` so crawlers and AI search bots receive real HTML instead of a client-side shell.

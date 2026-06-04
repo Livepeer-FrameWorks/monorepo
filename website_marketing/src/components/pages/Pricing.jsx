@@ -275,7 +275,7 @@ const deploymentOptions = [
   },
 ];
 
-const faqs = [
+export const PRICING_FAQS = [
   {
     question: "What does beta pricing include?",
     answer:
@@ -839,7 +839,7 @@ const Pricing = () => {
                 subtitle="Everything you need to know about FrameWorks pricing before you launch."
               />
               <Accordion type="single" collapsible>
-                {faqs.map((faq, index) => (
+                {PRICING_FAQS.map((faq, index) => (
                   <AccordionItem key={faq.question} value={`faq-${index}`}>
                     <AccordionTrigger>{faq.question}</AccordionTrigger>
                     <AccordionContent>

@@ -1,6 +1,6 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 import { renderSlot } from "../utils";
 import MarketingBand from "../layout/MarketingBand";

@@ -140,7 +140,7 @@
       "name": "foredeck",
       "context": "website_marketing",
       "env_prefix": "VITE",
-      "build_dir": "dist"
+      "build_dir": "build/client"
     },
     { "name": "logbook", "context": "website_docs", "env_prefix": "VITE", "build_dir": "dist" }
   ]
