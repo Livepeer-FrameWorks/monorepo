@@ -58,15 +58,17 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 				Pagination: &pb.CursorPaginationRequest{First: 500},
 			})
 			if accessErr != nil {
-				return nil, fmt.Errorf("load tenant cluster access for orchestrator scope: %w", accessErr)
+				r.Logger.WithError(accessErr).Warn("orchestrator scope: failed to load tenant cluster access")
+			} else {
+				addClusters(accessResp.GetClusters(), false)
 			}
-			addClusters(accessResp.GetClusters(), false)
 
 			ownedResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
 			if ownedErr != nil {
-				return nil, fmt.Errorf("load owned clusters for orchestrator scope: %w", ownedErr)
+				r.Logger.WithError(ownedErr).Warn("orchestrator scope: failed to load owned clusters")
+			} else {
+				addClusters(ownedResp.GetClusters(), false)
 			}
-			addClusters(ownedResp.GetClusters(), false)
 		}
 
 		seen := make(map[string]struct{})
@@ -77,7 +79,8 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 			}
 			instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
 			if instanceErr != nil {
-				return nil, fmt.Errorf("load orchestrator gateway instances for cluster %q: %w", clusterID, instanceErr)
+				r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("orchestrator scope: failed to load cluster service instances")
+				continue
 			}
 			for _, instance := range instancesResp.GetInstances() {
 				if instance == nil || !isLivepeerGatewayService(instance.GetServiceId()) {

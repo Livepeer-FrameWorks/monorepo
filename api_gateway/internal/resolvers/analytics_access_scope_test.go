@@ -127,6 +127,12 @@ func TestAnalyticsAccessScopeContracts(t *testing.T) {
 		assertContains(t, src, "delete(publicClusterIDs, clusterID)")
 		assertContains(t, src, "readCtx = publicCtx")
 		assertContains(t, src, "ListServiceInstances(readCtx, clusterID")
+		assertContains(t, src, "orchestrator scope: failed to load tenant cluster access")
+		assertContains(t, src, "orchestrator scope: failed to load owned clusters")
+		assertContains(t, src, "orchestrator scope: failed to load cluster service instances")
+		assertNotContains(t, src, "load tenant cluster access for orchestrator scope")
+		assertNotContains(t, src, "load owned clusters for orchestrator scope")
+		assertNotContains(t, src, "load orchestrator gateway instances for cluster")
 	})
 }
 

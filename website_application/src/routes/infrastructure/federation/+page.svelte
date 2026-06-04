@@ -295,24 +295,30 @@
         ]);
       }
 
+      if ($networkStore.errors?.length) {
+        console.error("Failed to load federation topology:", $networkStore.errors);
+        toast.error("Failed to load federation data");
+      }
+
+      if ($orchVantagesStore.errors?.length) {
+        console.error(
+          "Failed to load Livepeer orchestrator observations:",
+          $orchVantagesStore.errors
+        );
+      }
+
       if (
-        $networkStore.errors?.length ||
-        $orchVantagesStore.errors?.length ||
-        $trafficStore.errors?.length ||
-        $summaryStore.errors?.length
+        authenticated &&
+        (($trafficStore.errors?.length ?? 0) > 0 || ($summaryStore.errors?.length ?? 0) > 0)
       ) {
-        console.error("Failed to load federation data:", [
-          ...($networkStore.errors ?? []),
-          ...($orchVantagesStore.errors ?? []),
+        console.error("Failed to load federation analytics:", [
           ...($trafficStore.errors ?? []),
           ...($summaryStore.errors ?? []),
         ]);
-        toast.error("Failed to load federation data");
       }
 
       if (authenticated && $eventsStore.errors?.length) {
         console.error("Failed to load federation events:", $eventsStore.errors);
-        toast.error("Failed to load federation events");
       }
     } catch (error) {
       console.error("Failed to load federation data:", error);
