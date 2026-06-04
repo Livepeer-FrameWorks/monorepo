@@ -401,9 +401,21 @@ func parseClickHouseDDL(content string, schema tableSchema) {
 			schema[tableName][add[1]] = true
 		}
 	}
+	for _, stmt := range splitSQLStatements(content) {
+		match := createViewRe.FindStringSubmatch(stmt)
+		if match == nil {
+			continue
+		}
+		tableName := normalizeTableName(match[1])
+		ensureTable(schema, tableName)
+		for _, column := range parseSelectColumns(stmt) {
+			schema[tableName][column] = true
+		}
+	}
 }
 
 var createTableRe = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*\(`)
+var createViewRe = regexp.MustCompile(`(?i)\bCREATE\s+(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s+`)
 var alterTableRe = regexp.MustCompile(`(?i)ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.]*)\b`)
 var addColumnRe = regexp.MustCompile(`(?i)ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)\b`)
 
@@ -431,6 +443,69 @@ func parseColumns(body string) []string {
 		columns = append(columns, column)
 	}
 	return columns
+}
+
+func parseSelectColumns(stmt string) []string {
+	selectIdx := indexSQLKeyword(stmt, "select")
+	fromIdx := indexSQLKeyword(stmt, "from")
+	if selectIdx < 0 || fromIdx <= selectIdx {
+		return nil
+	}
+	var columns []string
+	for _, expr := range splitTopLevelComma(stmt[selectIdx+len("select") : fromIdx]) {
+		expr = strings.TrimSpace(expr)
+		if expr == "" {
+			continue
+		}
+		if match := sqlAliasRe.FindStringSubmatch(expr); match != nil {
+			columns = append(columns, match[1])
+			continue
+		}
+		if column := trailingIdentifier(expr); column != "" && !sqlKeywordOrFunction(column) {
+			columns = append(columns, column)
+		}
+	}
+	return dedupe(columns)
+}
+
+func indexSQLKeyword(stmt, keyword string) int {
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(keyword) + `\b`)
+	loc := re.FindStringIndex(stmt)
+	if loc == nil {
+		return -1
+	}
+	return loc[0]
+}
+
+func splitTopLevelComma(input string) []string {
+	var parts []string
+	start := 0
+	depth := 0
+	for i, r := range input {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, input[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, input[start:])
+	return parts
+}
+
+func trailingIdentifier(expr string) string {
+	matches := sqlTokenRe.FindAllString(expr, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1]
 }
 
 func ddlNonColumnToken(token string) bool {
@@ -515,8 +590,8 @@ var sqlIgnoredTokens = lowerSet(
 	"select", "from", "where", "group", "by", "order", "limit", "as", "and", "or",
 	"is", "not", "null", "interval", "hour", "day", "final", "desc", "asc",
 	"count", "countif", "round", "avgif", "quantileif", "nullif", "coalesce",
-	"max", "min", "sum", "ifnull", "pow", "tostartofhour", "now", "todatetime",
-	"uniqexact", "quantile",
+	"max", "min", "sum", "ifnull", "pow", "argmax", "tostartofhour", "now",
+	"today", "todate", "todatetime", "uniqexact", "quantile",
 )
 
 func stripSQLComments(content string) string {
