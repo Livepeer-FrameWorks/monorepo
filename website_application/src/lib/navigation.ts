@@ -178,6 +178,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Geographic distribution, viewer sessions, and routing",
       },
+      playerExperience: {
+        name: "Player Experience",
+        href: "/analytics/player-experience",
+        icon: "Rocket",
+        active: true,
+        description: "Startup time-to-first-frame and boot waterfall diagnostics",
+      },
       usage: {
         name: "Usage & Costs",
         href: "/analytics/usage",

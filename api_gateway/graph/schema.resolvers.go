@@ -202,6 +202,11 @@ func (r *analyticsHealthResolver) ClientQoeSummary(ctx context.Context, obj *mar
 	return r.DoGetClientQoeSummary(ctx, streamID, timeRange, noCache)
 }
 
+// PlayerBootSummary is the resolver for the playerBootSummary field.
+func (r *analyticsHealthResolver) PlayerBootSummary(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*proto.PlayerBootSummary, error) {
+	return r.DoGetPlayerBootSummary(ctx, streamID, artifactHash, timeRange, noCache)
+}
+
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -263,6 +268,11 @@ func (r *analyticsInfraResolver) RoutingEfficiency(ctx context.Context, obj *mar
 // ClusterTrafficMatrix is the resolver for the clusterTrafficMatrix field.
 func (r *analyticsInfraResolver) ClusterTrafficMatrix(ctx context.Context, obj *markers.AnalyticsInfra, timeRange *model.TimeRangeInput, noCache *bool) ([]*proto.ClusterPairTraffic, error) {
 	return r.DoGetClusterTrafficMatrix(ctx, timeRange, noCache)
+}
+
+// ClusterBootOps is the resolver for the clusterBootOps field.
+func (r *analyticsInfraResolver) ClusterBootOps(ctx context.Context, obj *markers.AnalyticsInfra, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*proto.ClusterBootOps, error) {
+	return r.DoGetClusterBootOps(ctx, clusterID, timeRange, noCache)
 }
 
 // FederationEventsConnection is the resolver for the federationEventsConnection field.
@@ -1658,6 +1668,7 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 			ActiveStreams:  3,
 			IsHealthy:      true,
 			Location:       obj.GetRegion(),
+			UpdatedAt:      timestamppb.Now(),
 		}, nil
 	}
 
@@ -4762,6 +4773,7 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 			DurationSeconds: int64(obj.Duration),
 			StartedAt:       obj.StartedAt,
 			EndedAt:         obj.EndedAt,
+			UpdatedAt:       obj.UpdatedAt,
 		}
 		// Add quality metrics for live/recording streams
 		switch obj.Status {

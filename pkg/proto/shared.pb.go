@@ -2580,8 +2580,12 @@ type PlaybackMetadata struct {
 	CreatedAt          *timestamppb.Timestamp `protobuf:"bytes,19,opt,name=created_at,json=createdAt,proto3,oneof" json:"created_at,omitempty"`
 	Format             *string                `protobuf:"bytes,20,opt,name=format,proto3,oneof" json:"format,omitempty"` // Native container format: mp4, m3u8, webm, etc.
 	ThumbnailAssets    *ThumbnailAssets       `protobuf:"bytes,24,opt,name=thumbnail_assets,json=thumbnailAssets,proto3,oneof" json:"thumbnail_assets,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Short-lived signed token binding this resolution's serving endpoint
+	// (node/cluster). The player echoes it on the boot telemetry beacon so Bridge
+	// can trust cluster attribution. Empty when telemetry signing is unconfigured.
+	TelemetryToken *string `protobuf:"bytes,25,opt,name=telemetry_token,json=telemetryToken,proto3,oneof" json:"telemetry_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PlaybackMetadata) Reset() {
@@ -2759,6 +2763,13 @@ func (x *PlaybackMetadata) GetThumbnailAssets() *ThumbnailAssets {
 		return x.ThumbnailAssets
 	}
 	return nil
+}
+
+func (x *PlaybackMetadata) GetTelemetryToken() string {
+	if x != nil && x.TelemetryToken != nil {
+		return *x.TelemetryToken
+	}
+	return ""
 }
 
 // ThumbnailAssets - Chandler-served thumbnail asset URLs (poster, sprite, VTT cues)
@@ -5172,7 +5183,7 @@ const file_shared_proto_rawDesc = "" +
 	"\x11total_connections\x18\x06 \x01(\x05R\x10totalConnections\x12\x16\n" +
 	"\x06inputs\x18\a \x01(\x05R\x06inputs\x12;\n" +
 	"\vlast_update\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastUpdate\"\xea\a\n" +
+	"lastUpdate\"\xac\b\n" +
 	"\x10PlaybackMetadata\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x17\n" +
 	"\ais_live\x18\x02 \x01(\bR\x06isLive\x12\x18\n" +
@@ -5199,7 +5210,8 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x13 \x01(\v2\x1a.google.protobuf.TimestampH\x06R\tcreatedAt\x88\x01\x01\x12\x1b\n" +
 	"\x06format\x18\x14 \x01(\tH\aR\x06format\x88\x01\x01\x12G\n" +
-	"\x10thumbnail_assets\x18\x18 \x01(\v2\x17.shared.ThumbnailAssetsH\bR\x0fthumbnailAssets\x88\x01\x01B\f\n" +
+	"\x10thumbnail_assets\x18\x18 \x01(\v2\x17.shared.ThumbnailAssetsH\bR\x0fthumbnailAssets\x88\x01\x01\x12,\n" +
+	"\x0ftelemetry_token\x18\x19 \x01(\tH\tR\x0etelemetryToken\x88\x01\x01B\f\n" +
 	"\n" +
 	"_stream_idB\b\n" +
 	"\x06_titleB\x0e\n" +
@@ -5209,7 +5221,8 @@ const file_shared_proto_rawDesc = "" +
 	"\f_clip_sourceB\r\n" +
 	"\v_created_atB\t\n" +
 	"\a_formatB\x13\n" +
-	"\x11_thumbnail_assetsJ\x04\b\x16\x10\x17J\x04\b\x17\x10\x18\"\x99\x01\n" +
+	"\x11_thumbnail_assetsB\x12\n" +
+	"\x10_telemetry_tokenJ\x04\b\x16\x10\x17J\x04\b\x17\x10\x18\"\x99\x01\n" +
 	"\x0fThumbnailAssets\x12\x1d\n" +
 	"\n" +
 	"poster_url\x18\x01 \x01(\tR\tposterUrl\x12$\n" +

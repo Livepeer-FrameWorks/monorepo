@@ -388,6 +388,10 @@ message PlaybackMetadata {
   optional string format = 20;  // Native container format: mp4, m3u8, webm, etc.
   reserved 22, 23;
   optional ThumbnailAssets thumbnail_assets = 24;
+  // Short-lived signed token binding this resolution's serving endpoint
+  // (node/cluster). The player echoes it on the boot telemetry beacon so Bridge
+  // can trust cluster attribution. Empty when telemetry signing is unconfigured.
+  optional string telemetry_token = 25;
 }
 
 // ThumbnailAssets - Chandler-served thumbnail asset URLs (poster, sprite, VTT cues)

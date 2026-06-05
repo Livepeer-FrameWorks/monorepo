@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetrytoken"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -41,6 +42,13 @@ type Resolver struct {
 	SubManager *SubscriptionManager
 	Metrics    *GraphQLMetrics
 	Fetcher    *datafetcher.DataFetcher
+	// TelemetrySecret signs player-telemetry attribution tokens. Empty disables
+	// minting (cluster attribution then stays unproven downstream). Platform key,
+	// never a customer playback-auth secret.
+	TelemetrySecret []byte
+	// LocalClusterID is this deployment's cluster, used as the serving cluster for
+	// locally-resolved edges where the endpoint carries no explicit cluster_id.
+	LocalClusterID string
 }
 
 // NewResolver creates a new GraphQL resolver
@@ -95,11 +103,13 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 	})
 
 	return &Resolver{
-		Clients:    serviceClients,
-		Logger:     logger,
-		SubManager: subManager,
-		Metrics:    metrics,
-		Fetcher:    fetcher,
+		Clients:         serviceClients,
+		Logger:          logger,
+		SubManager:      subManager,
+		Metrics:         metrics,
+		Fetcher:         fetcher,
+		TelemetrySecret: []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", "")),
+		LocalClusterID:  config.GetEnv("CLUSTER_ID", ""),
 	}
 }
 
@@ -113,6 +123,10 @@ func (r *Resolver) Shutdown() error {
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
 func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateViewerEndpointResponse(contentID), nil
+	}
+
 	// Diagnostic checks for panic root cause
 	if r == nil {
 		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
@@ -122,10 +136,6 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	}
 	if r.Clients.Commodore == nil {
 		return nil, fmt.Errorf("CRITICAL: Resolver.Clients.Commodore is nil - ServiceClients initialization failed silently?")
-	}
-
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateViewerEndpointResponse(contentID), nil
 	}
 
 	// Resource-based x402 topup (viewer pays for stream owner balance)
@@ -163,7 +173,43 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %w", err)
 	}
+	r.stampTelemetryToken(contentID, resp)
 	return resp, nil
+}
+
+// stampTelemetryToken mints a short-lived signed token binding this resolution's
+// serving endpoint (node + cluster) and attaches it to the response metadata, so
+// the player can echo it on its boot telemetry beacon and Bridge can trust
+// cluster attribution. No-op when no signing secret is configured or no primary
+// endpoint was resolved.
+func (r *Resolver) stampTelemetryToken(contentID string, resp *pb.ViewerEndpointResponse) {
+	if len(r.TelemetrySecret) == 0 || resp == nil || resp.GetMetadata() == nil {
+		return
+	}
+	primary := resp.GetPrimary()
+	if primary == nil {
+		return
+	}
+	servingClusterID := primary.GetClusterId()
+	if servingClusterID == "" {
+		// Local edges carry no explicit cluster_id; the resolving deployment's
+		// cluster is the serving cluster.
+		servingClusterID = r.LocalClusterID
+	}
+	cid := resp.GetMetadata().GetContentId()
+	if cid == "" {
+		cid = contentID
+	}
+	token, err := telemetrytoken.Sign(r.TelemetrySecret, telemetrytoken.Claims{
+		ContentID:        cid,
+		NodeID:           primary.GetNodeId(),
+		ServingClusterID: servingClusterID,
+	}, 10*time.Minute, time.Now())
+	if err != nil {
+		r.Logger.WithError(err).Warn("failed to mint telemetry token")
+		return
+	}
+	resp.Metadata.TelemetryToken = &token
 }
 
 func playbackViewerTokenFromRequest(req *http.Request) string {

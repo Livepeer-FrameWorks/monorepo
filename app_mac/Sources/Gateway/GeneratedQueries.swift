@@ -1128,6 +1128,25 @@ enum GQL {
   }
   """
 
+  static let GetClusterBootOps = """
+  # Cluster-ops boot aggregate (operator view, token-attributed rows only)
+  query GetClusterBootOps($clusterId: ID, $timeRange: TimeRangeInput) {
+    analytics {
+      infra {
+        clusterBootOps(clusterId: $clusterId, timeRange: $timeRange) {
+          servingClusterId
+          nodeId
+          protocol
+          bootCount
+          errorCount
+          p95TtfMs
+          cacheHitRatio
+        }
+      }
+    }
+  }
+  """
+
   static let GetClusterInvites = """
   # Fetch invites for a cluster you own
   query GetClusterInvites($clusterId: ID!) {
@@ -2150,6 +2169,29 @@ enum GQL {
           uniqueViewers
           totalSessions
           totalViews
+        }
+      }
+    }
+  }
+  """
+
+  static let GetPlayerBootSummary = """
+  # Player startup (boot) summary for the player-experience dashboard
+  query GetPlayerBootSummary($streamId: ID, $artifactHash: String, $timeRange: TimeRangeInput) {
+    analytics {
+      health {
+        playerBootSummary(streamId: $streamId, artifactHash: $artifactHash, timeRange: $timeRange) {
+          bootCount
+          errorCount
+          p50TtfMs
+          p95TtfMs
+          p99TtfMs
+          avgGatewayResolveMs
+          avgMistHydrateMs
+          avgPlayerSelectMs
+          avgConnectMs
+          avgPrebufferMs
+          cacheHitRatio
         }
       }
     }

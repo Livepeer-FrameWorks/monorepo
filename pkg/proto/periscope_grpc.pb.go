@@ -1539,6 +1539,8 @@ const (
 	AggregatedAnalyticsService_GetAPIUsage_FullMethodName                 = "/periscope.AggregatedAnalyticsService/GetAPIUsage"
 	AggregatedAnalyticsService_GetStreamHealthSummary_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetStreamHealthSummary"
 	AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetClientQoeSummary"
+	AggregatedAnalyticsService_GetPlayerBootSummary_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetPlayerBootSummary"
+	AggregatedAnalyticsService_GetClusterBootOps_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetClusterBootOps"
 	AggregatedAnalyticsService_GetNetworkUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetNetworkUsage"
 	AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetAcquisitionFunnel"
 	AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetAcquisitionCohortUsage"
@@ -1571,6 +1573,11 @@ type AggregatedAnalyticsServiceClient interface {
 	GetAPIUsage(ctx context.Context, in *GetAPIUsageRequest, opts ...grpc.CallOption) (*GetAPIUsageResponse, error)
 	GetStreamHealthSummary(ctx context.Context, in *GetStreamHealthSummaryRequest, opts ...grpc.CallOption) (*GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(ctx context.Context, in *GetClientQoeSummaryRequest, opts ...grpc.CallOption) (*GetClientQoeSummaryResponse, error)
+	// Player boot telemetry: tenant-scoped startup summary (read-time percentiles
+	// over player_boot_samples) and cluster-ops aggregate (token-attributed rows
+	// only) for operators of the serving cluster.
+	GetPlayerBootSummary(ctx context.Context, in *GetPlayerBootSummaryRequest, opts ...grpc.CallOption) (*GetPlayerBootSummaryResponse, error)
+	GetClusterBootOps(ctx context.Context, in *GetClusterBootOpsRequest, opts ...grpc.CallOption) (*GetClusterBootOpsResponse, error)
 	GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error)
@@ -1784,6 +1791,26 @@ func (c *aggregatedAnalyticsServiceClient) GetClientQoeSummary(ctx context.Conte
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetPlayerBootSummary(ctx context.Context, in *GetPlayerBootSummaryRequest, opts ...grpc.CallOption) (*GetPlayerBootSummaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPlayerBootSummaryResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetPlayerBootSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetClusterBootOps(ctx context.Context, in *GetClusterBootOpsRequest, opts ...grpc.CallOption) (*GetClusterBootOpsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClusterBootOpsResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetClusterBootOps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *aggregatedAnalyticsServiceClient) GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNetworkUsageResponse)
@@ -1841,6 +1868,11 @@ type AggregatedAnalyticsServiceServer interface {
 	GetAPIUsage(context.Context, *GetAPIUsageRequest) (*GetAPIUsageResponse, error)
 	GetStreamHealthSummary(context.Context, *GetStreamHealthSummaryRequest) (*GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error)
+	// Player boot telemetry: tenant-scoped startup summary (read-time percentiles
+	// over player_boot_samples) and cluster-ops aggregate (token-attributed rows
+	// only) for operators of the serving cluster.
+	GetPlayerBootSummary(context.Context, *GetPlayerBootSummaryRequest) (*GetPlayerBootSummaryResponse, error)
+	GetClusterBootOps(context.Context, *GetClusterBootOpsRequest) (*GetClusterBootOpsResponse, error)
 	GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error)
@@ -1913,6 +1945,12 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamHealthSummary(cont
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClientQoeSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetPlayerBootSummary(context.Context, *GetPlayerBootSummaryRequest) (*GetPlayerBootSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlayerBootSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterBootOps(context.Context, *GetClusterBootOpsRequest) (*GetClusterBootOpsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterBootOps not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNetworkUsage not implemented")
@@ -2305,6 +2343,42 @@ func _AggregatedAnalyticsService_GetClientQoeSummary_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetPlayerBootSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlayerBootSummaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetPlayerBootSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetPlayerBootSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetPlayerBootSummary(ctx, req.(*GetPlayerBootSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetClusterBootOps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterBootOpsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterBootOps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetClusterBootOps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterBootOps(ctx, req.(*GetClusterBootOpsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AggregatedAnalyticsService_GetNetworkUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNetworkUsageRequest)
 	if err := dec(in); err != nil {
@@ -2445,6 +2519,14 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClientQoeSummary",
 			Handler:    _AggregatedAnalyticsService_GetClientQoeSummary_Handler,
+		},
+		{
+			MethodName: "GetPlayerBootSummary",
+			Handler:    _AggregatedAnalyticsService_GetPlayerBootSummary_Handler,
+		},
+		{
+			MethodName: "GetClusterBootOps",
+			Handler:    _AggregatedAnalyticsService_GetClusterBootOps_Handler,
 		},
 		{
 			MethodName: "GetNetworkUsage",

@@ -4768,6 +4768,152 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 	}, nil
 }
 
+// GetPlayerBootSummary returns the tenant-scoped player startup summary. TTF
+// percentiles are computed at read time over the raw player_boot_samples table
+// (no rollup MV — quantile() is not mergeable in a plain MergeTree). Percentiles
+// consider only boots that reached first frame (total_ttf_ms > 0); error/abandon
+// counts cover all rows. Diagnostic only.
+func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *pb.GetPlayerBootSummaryRequest) (*pb.GetPlayerBootSummaryResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			count() AS boot_count,
+			countIf(outcome = 'error') AS error_count,
+			quantileIf(0.5)(total_ttf_ms, total_ttf_ms > 0) AS p50,
+			quantileIf(0.95)(total_ttf_ms, total_ttf_ms > 0) AS p95,
+			quantileIf(0.99)(total_ttf_ms, total_ttf_ms > 0) AS p99,
+			avgIf(gateway_resolve_ms, gateway_resolve_ms > 0) AS avg_gw,
+			avgIf(mist_hydrate_ms, mist_hydrate_ms > 0) AS avg_mist,
+			avgIf(player_select_ms, player_select_ms > 0) AS avg_sel,
+			avgIf(connect_ms, connect_ms > 0) AS avg_conn,
+			avgIf(prebuffer_ms, prebuffer_ms > 0) AS avg_pre,
+			countIf(positionCaseInsensitive(cdn_cache_status, 'hit') > 0) / nullIf(countIf(cdn_cache_status != ''), 0) AS cache_hit_ratio
+		FROM player_boot_samples
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+	`
+	args := []any{tenantID, startTime, endTime}
+
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+	if artifactHash := req.GetArtifactHash(); artifactHash != "" {
+		query += " AND artifact_hash = ?"
+		args = append(args, artifactHash)
+	}
+
+	var bootCount, errorCount int64
+	var p50, p95, p99 sql.NullFloat64
+	var avgGw, avgMist, avgSel, avgConn, avgPre float64
+	var cacheHitRatio sql.NullFloat64
+	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+		&bootCount, &errorCount, &p50, &p95, &p99,
+		&avgGw, &avgMist, &avgSel, &avgConn, &avgPre, &cacheHitRatio,
+	); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+
+	return &pb.GetPlayerBootSummaryResponse{
+		Summary: &pb.PlayerBootSummary{
+			BootCount:           bootCount,
+			ErrorCount:          errorCount,
+			P50TtfMs:            sanitizeFloat64(p50.Float64),
+			P95TtfMs:            sanitizeFloat64(p95.Float64),
+			P99TtfMs:            sanitizeFloat64(p99.Float64),
+			AvgGatewayResolveMs: sanitizeFloat64(avgGw),
+			AvgMistHydrateMs:    sanitizeFloat64(avgMist),
+			AvgPlayerSelectMs:   sanitizeFloat64(avgSel),
+			AvgConnectMs:        sanitizeFloat64(avgConn),
+			AvgPrebufferMs:      sanitizeFloat64(avgPre),
+			CacheHitRatio:       sanitizeFloat64(cacheHitRatio.Float64),
+		},
+	}, nil
+}
+
+// GetClusterBootOps returns the operator-facing boot aggregate for clusters the
+// caller owns. It reads ONLY token-attributed rows (cluster_attributed = 1) and
+// projects no content/stream/session/url/tenant identifiers — it is intentionally
+// redacted. Cluster ownership is authorized at the API layer; this method trusts
+// the cluster_ids it is given.
+func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClusterBootOpsRequest) (*pb.GetClusterBootOpsResponse, error) {
+	if _, err := requireTenantID(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	clusterIDs := req.GetClusterIds()
+	if len(clusterIDs) == 0 {
+		// No owned clusters → nothing to aggregate.
+		return &pb.GetClusterBootOpsResponse{}, nil
+	}
+
+	placeholders := make([]string, len(clusterIDs))
+	args := []any{startTime, endTime}
+	for i, id := range clusterIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			serving_cluster_id,
+			node_id,
+			protocol,
+			count() AS boot_count,
+			countIf(outcome = 'error') AS error_count,
+			quantileIf(0.95)(total_ttf_ms, total_ttf_ms > 0) AS p95,
+			countIf(positionCaseInsensitive(cdn_cache_status, 'hit') > 0) / nullIf(countIf(cdn_cache_status != ''), 0) AS cache_hit_ratio
+		FROM player_boot_samples
+		WHERE cluster_attributed = 1
+		  AND timestamp >= ? AND timestamp <= ?
+		  AND serving_cluster_id IN (%s)
+		GROUP BY serving_cluster_id, node_id, protocol
+		ORDER BY serving_cluster_id, node_id, protocol
+		LIMIT 1000
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*pb.ClusterBootOps
+	for rows.Next() {
+		var servingClusterID, nodeID, protocol string
+		var bootCount, errorCount int64
+		var p95, cacheHitRatio sql.NullFloat64
+		if err := rows.Scan(&servingClusterID, &nodeID, &protocol, &bootCount, &errorCount, &p95, &cacheHitRatio); err != nil {
+			s.logger.WithError(err).Error("Failed to scan player_boot_samples cluster-ops row")
+			continue
+		}
+		out = append(out, &pb.ClusterBootOps{
+			ServingClusterId: servingClusterID,
+			NodeId:           nodeID,
+			Protocol:         protocol,
+			BootCount:        bootCount,
+			ErrorCount:       errorCount,
+			P95TtfMs:         sanitizeFloat64(p95.Float64),
+			CacheHitRatio:    sanitizeFloat64(cacheHitRatio.Float64),
+		})
+	}
+
+	return &pb.GetClusterBootOpsResponse{Rows: out}, nil
+}
+
 // ============================================================================
 // Node Performance 5-Minute Aggregates
 // ============================================================================

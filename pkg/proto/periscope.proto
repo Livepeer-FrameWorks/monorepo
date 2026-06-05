@@ -1197,6 +1197,11 @@ service AggregatedAnalyticsService {
   rpc GetAPIUsage(GetAPIUsageRequest) returns (GetAPIUsageResponse);
   rpc GetStreamHealthSummary(GetStreamHealthSummaryRequest) returns (GetStreamHealthSummaryResponse);
   rpc GetClientQoeSummary(GetClientQoeSummaryRequest) returns (GetClientQoeSummaryResponse);
+  // Player boot telemetry: tenant-scoped startup summary (read-time percentiles
+  // over player_boot_samples) and cluster-ops aggregate (token-attributed rows
+  // only) for operators of the serving cluster.
+  rpc GetPlayerBootSummary(GetPlayerBootSummaryRequest) returns (GetPlayerBootSummaryResponse);
+  rpc GetClusterBootOps(GetClusterBootOpsRequest) returns (GetClusterBootOpsResponse);
   rpc GetNetworkUsage(GetNetworkUsageRequest) returns (GetNetworkUsageResponse);
   rpc GetAcquisitionFunnel(GetAcquisitionFunnelRequest) returns (GetAcquisitionFunnelResponse);
   rpc GetAcquisitionCohortUsage(GetAcquisitionCohortUsageRequest) returns (GetAcquisitionCohortUsageResponse);
@@ -1846,6 +1851,59 @@ message GetClientQoeSummaryRequest {
 
 message GetClientQoeSummaryResponse {
   ClientQoeSummary summary = 1;
+}
+
+// Player boot startup summary — read-time percentiles + span averages over
+// player_boot_samples for the tenant that owns the content. Diagnostic only.
+message PlayerBootSummary {
+  int64 boot_count = 1;
+  int64 error_count = 2;
+  // TTF percentiles (ms).
+  double p50_ttf_ms = 3;
+  double p95_ttf_ms = 4;
+  double p99_ttf_ms = 5;
+  // Average span breakdown (ms).
+  double avg_gateway_resolve_ms = 6;
+  double avg_mist_hydrate_ms = 7;
+  double avg_player_select_ms = 8;
+  double avg_connect_ms = 9;
+  double avg_prebuffer_ms = 10;
+  // Cache disposition on player-owned (Mist JSON) fetches, where present.
+  double cache_hit_ratio = 11;
+}
+
+message GetPlayerBootSummaryRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  optional string artifact_hash = 3;
+  common.TimeRange time_range = 4;
+}
+
+message GetPlayerBootSummaryResponse {
+  PlayerBootSummary summary = 1;
+}
+
+// Cluster-ops boot aggregate — operator view keyed by serving node/protocol.
+// Aggregate/redacted only: never carries content/stream/session/url/tenant
+// identifiers. Populated only from token-attributed rows (cluster_attributed=1).
+message ClusterBootOps {
+  string serving_cluster_id = 1;
+  string node_id = 2;
+  string protocol = 3;
+  int64 boot_count = 4;
+  int64 error_count = 5;
+  double p95_ttf_ms = 6;
+  double cache_hit_ratio = 7;
+}
+
+message GetClusterBootOpsRequest {
+  string tenant_id = 1;            // caller; authorized to clusters they own at the API layer
+  repeated string cluster_ids = 2; // clusters the caller owns
+  common.TimeRange time_range = 3;
+}
+
+message GetClusterBootOpsResponse {
+  repeated ClusterBootOps rows = 1;
 }
 
 // ============================================================================

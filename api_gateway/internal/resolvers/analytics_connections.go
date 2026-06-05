@@ -3347,6 +3347,105 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	}, nil
 }
 
+// DoGetPlayerBootSummary returns the tenant-scoped player startup summary. The
+// GraphQL PlayerBootSummary type is autobound to the proto message, so this
+// returns the proto summary directly.
+func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*pb.PlayerBootSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GeneratePlayerBootSummary(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// streamId is a Relay global ID at the API boundary; ClickHouse stores raw UUIDs.
+	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if normalizedStreamID != nil {
+		streamKey = *normalizedStreamID
+	}
+	artifactKey := ""
+	if artifactHash != nil {
+		artifactKey = *artifactHash
+	}
+	keyParts := []string{tenantID, streamKey, artifactKey, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "player_boot_summary", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetPlayerBootSummary(ctx, tenantID, normalizedStreamID, artifactHash, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetPlayerBootSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for player boot summary: %T", val)
+	}
+	if resp.GetSummary() == nil {
+		return &pb.PlayerBootSummary{}, nil
+	}
+	return resp.GetSummary(), nil
+}
+
+// DoGetClusterBootOps returns the redacted operator boot aggregate for clusters
+// the caller owns. Requires cluster-operator access; an optional clusterId
+// narrows the result to a single owned cluster.
+func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*pb.ClusterBootOps, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateClusterBootOps(), nil
+	}
+
+	tenantID, owned, err := r.requireClusterOperatorTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	clusterIDs := make([]string, 0, len(owned))
+	if clusterID != nil && *clusterID != "" {
+		if _, ok := owned[*clusterID]; !ok {
+			return nil, fmt.Errorf("cluster not owned by caller")
+		}
+		clusterIDs = append(clusterIDs, *clusterID)
+	} else {
+		for id := range owned {
+			clusterIDs = append(clusterIDs, id)
+		}
+	}
+	// Deterministic order: owned is a map, so sort before keying/querying to
+	// avoid cache misses across requests for the same cluster set.
+	sort.Strings(clusterIDs)
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+	keyParts := append([]string{tenantID, timeKey(startTime), timeKey(endTime)}, clusterIDs...)
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "cluster_boot_ops", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetClusterBootOps(ctx, tenantID, clusterIDs, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetClusterBootOpsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for cluster boot ops: %T", val)
+	}
+	return resp.GetRows(), nil
+}
+
 // DoGetClusterTrafficMatrix returns cross-cluster routing traffic.
 func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) ([]*pb.ClusterPairTraffic, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {

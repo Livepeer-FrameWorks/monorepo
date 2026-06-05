@@ -1,0 +1,20 @@
+# Player startup (boot) summary for the player-experience dashboard
+query GetPlayerBootSummary($streamId: ID, $artifactHash: String, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      playerBootSummary(streamId: $streamId, artifactHash: $artifactHash, timeRange: $timeRange) {
+        bootCount
+        errorCount
+        p50TtfMs
+        p95TtfMs
+        p99TtfMs
+        avgGatewayResolveMs
+        avgMistHydrateMs
+        avgPlayerSelectMs
+        avgConnectMs
+        avgPrebufferMs
+        cacheHitRatio
+      }
+    }
+  }
+}

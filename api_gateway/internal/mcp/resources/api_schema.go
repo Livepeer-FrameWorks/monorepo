@@ -294,6 +294,7 @@ func curatedCatalogSections() []CatalogSection {
 			Description: "Stream health, QoE metrics, and rebuffering.",
 			Examples: []CatalogExample{
 				{ID: "stream-health", Title: "Stream Health", Description: "Detailed health + client QoE for a stream", OperationType: "query", FieldPath: "analytics.health.streamHealthConnection", Tags: []string{"core", "health"}},
+				{ID: "player-boot-summary", Title: "Player Boot Summary", Description: "Player startup TTFF percentiles + boot-span waterfall", OperationType: "query", FieldPath: "analytics.health.playerBootSummary", Tags: []string{"health", "qoe"}},
 				{ID: "rebuffering-events", Title: "Rebuffering Events", Description: "Rebuffering transitions for a stream", OperationType: "query", FieldPath: "analytics.health.rebufferingEventsConnection", Tags: []string{"health"}},
 				{ID: "stream-overview", Title: "Stream Overview Analytics", Description: "Stream metrics + hourly connections", OperationType: "query", FieldPath: "analytics.usage.streaming.streamAnalyticsSummary", Tags: []string{"core", "analytics"}},
 			},

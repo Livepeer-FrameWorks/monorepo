@@ -988,6 +988,15 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): ClientQoeSummary!
+  """
+  Player startup (boot) summary for the tenant that owns the content. Diagnostic.
+  """
+  playerBootSummary(
+    streamId: ID
+    artifactHash: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): PlayerBootSummary!
 }
 
 """
@@ -1104,6 +1113,15 @@ type AnalyticsInfra {
   Cross-cluster routing traffic matrix from hourly rollups.
   """
   clusterTrafficMatrix(timeRange: TimeRangeInput, noCache: Boolean = false): [ClusterPairTraffic!]!
+  """
+  Player startup (boot) operations aggregate for clusters the caller owns.
+  Aggregate/redacted; only token-attributed boot rows are included.
+  """
+  clusterBootOps(
+    clusterId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): [ClusterBootOps!]!
   """
   Federation events: origin pulls, peer connections, leader elections, etc.
   """
@@ -6281,6 +6299,40 @@ type ClientQoeSummary {
   totalActiveSessions: Int!
 }
 
+"""
+Player startup (boot) summary from player_boot_samples. Diagnostic only — never
+a viewer-count or billing source. TTF percentiles are computed at read time over
+boots that reached first frame; counts cover all rows.
+"""
+type PlayerBootSummary {
+  bootCount: Int!
+  errorCount: Int!
+  p50TtfMs: Float!
+  p95TtfMs: Float!
+  p99TtfMs: Float!
+  avgGatewayResolveMs: Float!
+  avgMistHydrateMs: Float!
+  avgPlayerSelectMs: Float!
+  avgConnectMs: Float!
+  avgPrebufferMs: Float!
+  cacheHitRatio: Float!
+}
+
+"""
+Cluster-ops boot aggregate for operators of the serving cluster. Aggregate and
+redacted: never exposes content/stream/session/URL/tenant identifiers. Populated
+only from token-attributed rows.
+"""
+type ClusterBootOps {
+  servingClusterId: String!
+  nodeId: String!
+  protocol: String!
+  bootCount: Int!
+  errorCount: Int!
+  p95TtfMs: Float!
+  cacheHitRatio: Float!
+}
+
 # Real-time node state from node_state_current (ReplacingMergeTree - current state snapshot)
 # Bound to proto.LiveNode
 type LiveNode {
@@ -6507,6 +6559,12 @@ type PlaybackMetadata {
   clipSource: String
   createdAt: Time
   thumbnailAssets: ThumbnailAssets
+  """
+  Short-lived signed token binding the resolved serving endpoint. The player
+  echoes it on its boot-telemetry beacon so Bridge can trust cluster attribution.
+  Infrastructure attribution only — carries no viewer identity.
+  """
+  telemetryToken: String
 }
 
 """

@@ -969,6 +969,39 @@ func (c *GRPCClient) GetClientQoeSummary(ctx context.Context, tenantID string, s
 	return c.aggregated.GetClientQoeSummary(ctx, req)
 }
 
+// GetPlayerBootSummary returns the tenant-scoped player startup summary
+// (read-time TTF percentiles + span averages over player_boot_samples).
+func (c *GRPCClient) GetPlayerBootSummary(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts) (*pb.GetPlayerBootSummaryResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetPlayerBootSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	if artifactHash != nil {
+		req.ArtifactHash = artifactHash
+	}
+	return c.aggregated.GetPlayerBootSummary(ctx, req)
+}
+
+// GetClusterBootOps returns the redacted operator boot aggregate for the given
+// owned clusters (token-attributed rows only).
+func (c *GRPCClient) GetClusterBootOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*pb.GetClusterBootOpsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetClusterBootOpsRequest{
+		TenantId:   tenantID,
+		ClusterIds: clusterIDs,
+		TimeRange:  buildTimeRange(timeRange),
+	}
+	return c.aggregated.GetClusterBootOps(ctx, req)
+}
+
 // ListOrchestrators lists vantage-independent orchestrator state for a tenant.
 // orchAddr empty = full list; non-empty = single-row filter.
 func (c *GRPCClient) ListOrchestrators(ctx context.Context, tenantID string, orchAddr *string, opts *CursorPaginationOpts) (*pb.ListOrchestratorsResponse, error) {
