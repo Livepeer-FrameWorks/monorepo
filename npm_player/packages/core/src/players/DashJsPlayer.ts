@@ -243,6 +243,31 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.emit("error", message);
   }
 
+  private waitForDashStartup(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.dashPlayer) {
+        resolve();
+        return;
+      }
+
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        this.dashPlayer?.off?.("streamInitialized", finish);
+        this.dashPlayer?.off?.("canPlay", finish);
+        resolve();
+      };
+
+      this.dashPlayer.on("streamInitialized", finish);
+      this.dashPlayer.on("canPlay", finish);
+      timeoutId = setTimeout(finish, 3000);
+    });
+  }
+
   private debugLog(...args: unknown[]): void {
     if (this.debugging) {
       console.debug(...args);
@@ -425,9 +450,9 @@ export class DashJsPlayerImpl extends BasePlayer {
           abandonLoadTimeout: 5000,
           text: { defaultEnabled: false },
           delay: {
-            liveDelay: 5,
+            liveDelay: 8,
             liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: true,
+            useSuggestedPresentationDelay: false,
           },
         },
         debug: {
@@ -459,10 +484,17 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       // dashjs v5: Initialize with URL
       this.debugLog("[DashJS v5] Initializing with URL:", source.url);
-      this.dashPlayer.initialize(video, source.url, options.autoplay ?? false);
+      const dashStartup = this.waitForDashStartup();
+      this.dashPlayer.initialize(video, source.url, false);
       this.debugLog("[DashJS v5] Initialize called");
+      await dashStartup;
+      if (this.destroyed) {
+        throw new Error("DASH player destroyed during initialization");
+      }
 
-      // Emit ready only after dash.js has attached the MPD to the media element.
+      // Emit ready only after dash.js has initialized the dynamic stream.
+      // PlayerController owns autoplay; dash.js autoplay races with MSE attachment
+      // and can leave the video element paused=false but still buffering.
       this.setupVideoEventListeners(video, options);
       this.setupStalledHandling();
 

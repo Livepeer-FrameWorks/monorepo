@@ -4,12 +4,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashJsPlayerImpl } from "../src/players/DashJsPlayer";
 
-const dashMocks = vi.hoisted(() => ({
-  initialize: vi.fn(),
-  updateSettings: vi.fn(),
-  on: vi.fn(),
-  reset: vi.fn(),
-}));
+const dashMocks = vi.hoisted(() => {
+  const handlers = new Map<string, Array<(event?: unknown) => void>>();
+
+  return {
+    handlers,
+    initialize: vi.fn(() => {
+      handlers
+        .get("streamInitialized")
+        ?.forEach((handler) => handler({ type: "streamInitialized" }));
+    }),
+    updateSettings: vi.fn(),
+    on: vi.fn((event: string, handler: (event?: unknown) => void) => {
+      const eventHandlers = handlers.get(event) ?? [];
+      eventHandlers.push(handler);
+      handlers.set(event, eventHandlers);
+    }),
+    off: vi.fn((event: string, handler: (event?: unknown) => void) => {
+      const eventHandlers = handlers.get(event) ?? [];
+      handlers.set(
+        event,
+        eventHandlers.filter((candidate) => candidate !== handler)
+      );
+    }),
+    reset: vi.fn(),
+  };
+});
 
 vi.mock("dashjs", () => ({
   default: {
@@ -18,6 +38,7 @@ vi.mock("dashjs", () => ({
         initialize: dashMocks.initialize,
         updateSettings: dashMocks.updateSettings,
         on: dashMocks.on,
+        off: dashMocks.off,
         reset: dashMocks.reset,
       }),
     }),
@@ -27,8 +48,10 @@ vi.mock("dashjs", () => ({
 describe("DashJsPlayerImpl", () => {
   beforeEach(() => {
     dashMocks.initialize.mockReset();
+    dashMocks.handlers.clear();
     dashMocks.updateSettings.mockReset();
     dashMocks.on.mockReset();
+    dashMocks.off.mockReset();
     dashMocks.reset.mockReset();
   });
 
@@ -121,7 +144,7 @@ describe("DashJsPlayerImpl", () => {
     expect(calls[calls.length - 1][0]).toEqual(dashConfig);
   });
 
-  it("emits ready after dash.js attaches the MPD", async () => {
+  it("emits ready after dash.js initializes the stream", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
     const onReady = vi.fn();
@@ -136,7 +159,7 @@ describe("DashJsPlayerImpl", () => {
     expect(dashMocks.initialize).toHaveBeenCalledWith(
       expect.any(HTMLVideoElement),
       "https://edge.example/live/index.mpd",
-      true
+      false
     );
     expect(onReady).toHaveBeenCalledWith(expect.any(HTMLVideoElement));
     expect(dashMocks.initialize.mock.invocationCallOrder[0]).toBeLessThan(
@@ -144,7 +167,7 @@ describe("DashJsPlayerImpl", () => {
     );
   });
 
-  it("uses the manifest live delay hint for live DASH startup", async () => {
+  it("uses a conservative live delay for live DASH startup", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
 
@@ -159,9 +182,9 @@ describe("DashJsPlayerImpl", () => {
       expect.objectContaining({
         streaming: expect.objectContaining({
           delay: {
-            liveDelay: 5,
+            liveDelay: 8,
             liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: true,
+            useSuggestedPresentationDelay: false,
           },
         }),
       })
