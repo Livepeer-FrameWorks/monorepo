@@ -36,6 +36,9 @@ type EmailData struct {
 	DaysPastDue   int
 	Balance       float64
 	LoginURL      string
+	// ActionURL is the hosted or in-app page where the customer completes a
+	// required payment action.
+	ActionURL string
 	// LineItems is the cluster-attributed presentation source of truth for
 	// the invoice. Email renders only from this — usage_details is raw/debug
 	// JSON kept for audit, never read here.
@@ -233,6 +236,35 @@ func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceI
 	body, err := es.renderTemplate("payment_failed", data)
 	if err != nil {
 		return fmt.Errorf("failed to render payment failed template: %w", err)
+	}
+
+	return es.sendEmail(tenantEmail, subject, body)
+}
+
+// SendPaymentActionRequiredEmail notifies the customer that a payment needs
+// their authentication and links the relevant hosted or in-app resolution page.
+func (es *EmailService) SendPaymentActionRequiredEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency, actionURL string) error {
+	if !es.IsConfigured() {
+		es.logger.Warn("Email service not configured, skipping payment action-required email")
+		return nil
+	}
+
+	subject := fmt.Sprintf("Action Required - Confirm Payment for Invoice %s", invoiceID)
+
+	if actionURL == "" {
+		actionURL = os.Getenv("WEBAPP_PUBLIC_URL") + "/login"
+	}
+	data := EmailData{
+		TenantName: tenantName,
+		InvoiceID:  invoiceID,
+		Amount:     amount,
+		Currency:   currency,
+		ActionURL:  actionURL,
+	}
+
+	body, err := es.renderTemplate("payment_action_required", data)
+	if err != nil {
+		return fmt.Errorf("failed to render payment action-required template: %w", err)
 	}
 
 	return es.sendEmail(tenantEmail, subject, body)
@@ -451,6 +483,39 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
         
         <p>If you continue to experience issues, please contact our support team.</p>
         
+        <p>Best regards,<br>The FrameWorks Team</p>
+    </div>
+</body>
+</html>`,
+
+		"payment_action_required": `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Action Required</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #f39c12;">Confirm Your Payment</h2>
+
+        <p>Hello {{.TenantName}},</p>
+
+        <p>Your bank requires extra confirmation before we can complete the payment for the following invoice:</p>
+
+        <div style="background-color: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #f39c12;">
+            <p><strong>Invoice ID:</strong> {{.InvoiceID}}</p>
+            <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
+        </div>
+
+        <p>Please confirm the payment to keep your services active:</p>
+
+        <p style="text-align: center; margin: 30px 0;">
+            <a href="{{.ActionURL}}" style="background-color: #f39c12; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Confirm Payment</a>
+        </p>
+
+        <p>If you did not initiate this payment, please contact our support team.</p>
+
         <p>Best regards,<br>The FrameWorks Team</p>
     </div>
 </body>

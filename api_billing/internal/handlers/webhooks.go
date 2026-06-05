@@ -257,6 +257,32 @@ func sendPaymentStatusEmail(invoiceID, provider, status string) {
 	}
 }
 
+// sendTenantActionRequiredEmail notifies the tenant that a payment needs their
+// authentication and links the relevant hosted or in-app resolution page.
+func sendTenantActionRequiredEmail(tenantID, invoiceRef string, amount float64, currency, actionURL string) {
+	if tenantID == "" {
+		return
+	}
+	var billingEmail string
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT billing_email FROM purser.tenant_subscriptions WHERE tenant_id = $1
+	`, tenantID).Scan(&billingEmail); err != nil {
+		logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get billing email for SCA notification")
+		return
+	}
+	if billingEmail == "" {
+		logger.WithField("tenant_id", tenantID).Warn("No tenant email found for SCA notification")
+		return
+	}
+	tenantName := ""
+	if info, infoErr := getTenantInfo(tenantID); infoErr == nil && info != nil {
+		tenantName = info.Name
+	}
+	if err := emailService.SendPaymentActionRequiredEmail(billingEmail, tenantName, invoiceRef, amount, strings.ToUpper(currency), actionURL); err != nil {
+		logger.WithError(err).WithField("invoice_id", invoiceRef).Error("Failed to send payment action-required email")
+	}
+}
+
 func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string, amount float64, currency string) {
 	if tenantID == "" {
 		return
