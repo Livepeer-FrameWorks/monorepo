@@ -15,9 +15,7 @@ trap 'rm -f "$closure_file" "$changed_file"' EXIT
 module_path="$(cd pkg && go list -m)"
 roots=(
 	./clients/decklog
-	./proto
 	./geoip
-	./logging
 )
 
 {
