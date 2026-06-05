@@ -137,7 +137,8 @@ func prepareSnapshotOutputDir(requested, pattern string) (string, error) {
 		}
 	} else {
 		outDir = requested
-		if err := os.MkdirAll(outDir, 0o755); err != nil {
+		err = os.MkdirAll(outDir, 0o755)
+		if err != nil {
 			return "", fmt.Errorf("create snapshot directory: %w", err)
 		}
 	}

@@ -45,13 +45,13 @@ func expectMeshEndpoints(mock sqlmock.Sqlmock, clusterID, nodeID string, rows *s
 		WillReturnRows(rows)
 }
 
-func expectInfraPeerIDs(mock sqlmock.Sqlmock, clusterID, nodeID, kind, provider, name string, nodeIDs ...string) {
+func expectInfraPeerIDs(mock sqlmock.Sqlmock, clusterID, nodeID string, nodeIDs ...string) {
 	rows := sqlmock.NewRows([]string{"node_id"})
 	for _, id := range nodeIDs {
 		rows.AddRow(id)
 	}
-	mock.ExpectQuery(`(?s)WITH request_contexts.*SELECT DISTINCT e\.node_id`).
-		WithArgs(clusterID, nodeID, kind, provider, name).
+	mock.ExpectQuery(`(?s)WITH dependency_input AS .*SELECT DISTINCT e\.node_id`).
+		WithArgs(clusterID, nodeID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(rows)
 }
 
@@ -79,6 +79,32 @@ func expectMeshPeers(mock sqlmock.Sqlmock, nodeID, clusterID string, rows *sqlmo
 	mock.ExpectQuery(`(?s)SELECT n\.node_name, n\.wireguard_public_key.*AND \(n\.cluster_id = \$2 OR n\.node_id = ANY\(\$3\)\)`).
 		WithArgs(nodeID, clusterID, sqlmock.AnyArg()).
 		WillReturnRows(rows)
+}
+
+func expectMeshConfigCacheMiss(mock sqlmock.Sqlmock, nodeID string) {
+	mock.ExpectQuery(`(?s)SELECT c\.cluster_id,\s+c\.mesh_revision,\s+c\.topology_source_hash.*FROM quartermaster\.mesh_node_configs c\s+WHERE c\.node_id = \$1`).
+		WithArgs(nodeID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"cluster_id",
+			"mesh_revision",
+			"topology_source_hash",
+			"wireguard_ip",
+			"wireguard_port",
+			"peers",
+			"service_endpoints",
+			"current_topology_source_hash",
+		}))
+}
+
+func expectCurrentMeshTopologySourceHash(mock sqlmock.Sqlmock, revision int64) {
+	mock.ExpectQuery(`SELECT COALESCE\(\(SELECT revision FROM quartermaster\.mesh_topology_state WHERE id = TRUE\), 0\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(revision))
+}
+
+func expectMeshConfigStore(mock sqlmock.Sqlmock, nodeID, clusterID, wireguardIP string, wireguardPort int32, topologySourceHash string) {
+	mock.ExpectExec(`(?s)INSERT INTO quartermaster\.mesh_node_configs`).
+		WithArgs(nodeID, clusterID, sqlmock.AnyArg(), topologySourceHash, wireguardIP, wireguardPort, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
 func TestMeshServiceRequirementsMarksSkipperBridgeGlobal(t *testing.T) {
@@ -199,6 +225,8 @@ func TestSyncMeshFailsClosedWhenTopologyQueryFails(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	mock.ExpectQuery(`(?s)SELECT DISTINCT service_type\s+FROM \(`).
 		WithArgs("node-1").
 		WillReturnError(errors.New("db unavailable"))
@@ -235,6 +263,8 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 
 	expectMeshRequirements(mock, "node-1", "skipper")
 
@@ -242,10 +272,10 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}).
 		AddRow("bridge", "node-1", "10.200.0.5").
 		AddRow("commodore", "node-1", "10.200.0.5"))
-	expectInfraPeerIDs(mock, "cluster-1", "node-1", "database", "primary", "")
-	expectInfraPeerIDs(mock, "cluster-1", "node-1", "kafka", "aggregator", "")
+	expectInfraPeerIDs(mock, "cluster-1", "node-1")
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
@@ -288,11 +318,14 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 
 	expectMeshRequirements(mock, "node-1")
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51900, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51900})
 	if err != nil {
@@ -300,6 +333,100 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 	}
 	if resp.GetWireguardPort() != 51900 {
 		t.Fatalf("WireguardPort = %d, want stored value 51900 (not request echo 51820)", resp.GetWireguardPort())
+	}
+	if resp.GetMeshRevision() == "" {
+		t.Fatal("MeshRevision should be populated")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshCacheHitSkipsTopologyQueries(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT c\.cluster_id,\s+c\.mesh_revision,\s+c\.topology_source_hash.*FROM quartermaster\.mesh_node_configs c\s+WHERE c\.node_id = \$1`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"cluster_id",
+			"mesh_revision",
+			"topology_source_hash",
+			"wireguard_ip",
+			"wireguard_port",
+			"peers",
+			"service_endpoints",
+			"current_topology_source_hash",
+		}).AddRow(
+			"cluster-1",
+			"cached-rev",
+			meshTopologySourceHash(7),
+			"10.200.0.5",
+			int32(51820),
+			[]byte(`[{"node_name":"peer-1","public_key":"peer-pub","endpoint":"203.0.113.10:51820","allowed_ips":["10.200.0.6/32"],"keep_alive":25}]`),
+			[]byte(`{"quartermaster":{"ips":["10.200.0.1"]}}`),
+			int64(7),
+		))
+
+	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	if err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if got := resp.GetMeshRevision(); got != "cached-rev" {
+		t.Fatalf("MeshRevision = %q, want cached-rev", got)
+	}
+	if len(resp.GetPeers()) != 1 || resp.GetPeers()[0].GetNodeName() != "peer-1" {
+		t.Fatalf("cached peers = %#v", resp.GetPeers())
+	}
+	if got := resp.GetServiceEndpoints()["quartermaster"].GetIps(); len(got) != 1 || got[0] != "10.200.0.1" {
+		t.Fatalf("cached quartermaster endpoint = %v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshReturnsComputedConfigWhenCacheWriteFails(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
+	expectMeshRequirements(mock, "node-1")
+	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
+	expectReciprocalProvidedServices(mock, "node-1")
+	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	mock.ExpectExec(`(?s)INSERT INTO quartermaster\.mesh_node_configs`).
+		WithArgs("node-1", "cluster-1", sqlmock.AnyArg(), meshTopologySourceHash(1), "10.200.0.5", int32(51820), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnError(errors.New("cache write unavailable"))
+
+	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	if err != nil {
+		t.Fatalf("sync mesh should return computed config despite cache write failure: %v", err)
 	}
 	if resp.GetMeshRevision() == "" {
 		t.Fatal("MeshRevision should be populated")
@@ -325,6 +452,8 @@ func TestSyncMeshReturnsCrossClusterPeersAndQuartermasterEndpoint(t *testing.T) 
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("regional-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "regional-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "regional-1", "bridge")
 	expectMeshEndpoints(mock, "regional", "regional-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}).
 		AddRow("quartermaster", "central-1", "10.88.0.10").
@@ -332,6 +461,7 @@ func TestSyncMeshReturnsCrossClusterPeersAndQuartermasterEndpoint(t *testing.T) 
 	expectReciprocalProvidedServices(mock, "regional-1")
 	expectMeshPeers(mock, "regional-1", "regional", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
 		AddRow("central-1", "central-pub", "203.0.113.10", nil, "10.88.0.10", int32(51820)))
+	expectMeshConfigStore(mock, "regional-1", "regional", "10.88.1.20", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "regional-1",
@@ -371,16 +501,18 @@ func TestSyncMeshIncludesInfraDependencyPeersWithoutDNSAliases(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("regional-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "regional-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "regional-1", "purser")
 	expectMeshEndpoints(mock, "regional", "regional-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}).
 		AddRow("quartermaster", "qm-1", "10.88.0.10"))
-	expectInfraPeerIDs(mock, "regional", "regional-1", "database", "primary", "", "db-1")
-	expectInfraPeerIDs(mock, "regional", "regional-1", "kafka", "aggregator", "", "kafka-1")
+	expectInfraPeerIDs(mock, "regional", "regional-1", "db-1", "kafka-1")
 	expectReciprocalProvidedServices(mock, "regional-1")
 	expectMeshPeers(mock, "regional-1", "regional", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
 		AddRow("db-1", "db-pub", "203.0.113.20", nil, "10.88.0.20", int32(51820)).
 		AddRow("kafka-1", "kafka-pub", "203.0.113.30", nil, "10.88.0.30", int32(51820)).
 		AddRow("qm-1", "qm-pub", "203.0.113.10", nil, "10.88.0.10", int32(51820)))
+	expectMeshConfigStore(mock, "regional-1", "regional", "10.88.1.20", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "regional-1",
@@ -450,13 +582,16 @@ func TestSyncMeshIncludesReciprocalServiceConsumers(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("central-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "central-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "central-1", "quartermaster")
 	expectMeshEndpoints(mock, "core", "central-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
-	expectInfraPeerIDs(mock, "core", "central-1", "database", "primary", "")
+	expectInfraPeerIDs(mock, "core", "central-1")
 	expectReciprocalProvidedServices(mock, "central-1", "quartermaster")
 	expectReciprocalDependentNodes(mock, "core", "central-1", "quartermaster", "regional-1")
 	expectMeshPeers(mock, "central-1", "core", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
 		AddRow("regional-1", "regional-pub", "203.0.113.20", nil, "10.88.1.20", int32(51820)))
+	expectMeshConfigStore(mock, "central-1", "core", "10.88.0.10", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "central-1",
@@ -516,10 +651,13 @@ func TestSyncMeshMarksNodeActive(t *testing.T) {
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*status = 'active'`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "node-1")
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	if _, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820}); err != nil {
 		t.Fatalf("sync mesh: %v", err)
@@ -545,10 +683,13 @@ func TestSyncMeshIgnoresIncompleteResourceSnapshot(t *testing.T) {
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*SET last_heartbeat = NOW\(\),.*updated_at = NOW\(\).*WHERE node_id = \$1`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "node-1")
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
@@ -595,10 +736,13 @@ func TestSyncMeshStoresSnapshotAtReceiptTime(t *testing.T) {
 			recentTimeArg{earliest: before, latest: before.Add(5 * time.Second)},
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	expectMeshRequirements(mock, "node-1")
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
@@ -674,6 +818,8 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	// Peer row has both external_ip and internal_ip NULL — must be excluded
 	// with a "missing_endpoint" warning, not silently skipped.
 	expectMeshRequirements(mock, "node-1")
@@ -681,6 +827,7 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}).
 		AddRow("peer-orphan", "peer-pub", nil, nil, "10.200.0.6", int32(51820)))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
@@ -726,12 +873,15 @@ func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
 		WithArgs("node-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMeshConfigCacheMiss(mock, "node-1")
+	expectCurrentMeshTopologySourceHash(mock, 1)
 	// Wrong column count triggers a Scan error — sqlmock reports too few
 	// destinations vs source rows.
 	expectMeshRequirements(mock, "node-1")
 	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectReciprocalProvidedServices(mock, "node-1")
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name"}).AddRow("peer-broken"))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
 	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",

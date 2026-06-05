@@ -99,6 +99,8 @@ const (
 	navigatorDNSSyncTimeout        = 30 * time.Second
 	navigatorDNSSyncConcurrency    = 4
 	syncMeshSlowLogThreshold       = time.Second
+	meshTopologyWarmInterval       = 15 * time.Second
+	meshTopologyPlannerVersion     = "mesh-v1"
 	// defaultPhysicalEndpointStaleSeconds matches Navigator's code default for
 	// NAVIGATOR_DNS_HEALTH_STALE_SECONDS; the configured value (e.g. base.env's 90)
 	// overrides it via SetPhysicalEndpointStaleSeconds.
@@ -7863,11 +7865,27 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 
 func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clusterID, nodeID string, infraRequired []topology.InfraDependency) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
-	for _, dep := range dedupeInfraDependencies(infraRequired) {
-		var depPeerNodeIDs []string
-		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			rows, err := s.db.QueryContext(ctx, `
-				WITH request_contexts AS (
+	deps := dedupeInfraDependencies(infraRequired)
+	if len(deps) == 0 {
+		return out, nil
+	}
+	kinds := make([]string, 0, len(deps))
+	providers := make([]string, 0, len(deps))
+	names := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		kinds = append(kinds, dep.Kind)
+		providers = append(providers, dep.Provider)
+		names = append(names, dep.Name)
+	}
+
+	var peerNodeIDs []string
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, err := s.db.QueryContext(ctx, `
+				WITH dependency_input AS (
+					SELECT kind, provider, name
+					FROM unnest($3::text[], $4::text[], $5::text[]) AS t(kind, provider, name)
+				),
+				request_contexts AS (
 					SELECT $1::text AS cluster_id WHERE $1 <> ''
 					UNION
 					SELECT si.cluster_id
@@ -7914,11 +7932,15 @@ func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clust
 						WHERE n.node_id = $2
 					),
 				eligible AS (
-					SELECT si.node_id,
+					SELECT di.kind,
+					       di.provider,
+					       di.name,
+					       si.node_id,
 					       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id) AS provider_cluster,
 					       COALESCE(si.metadata->>'infra_role', '') AS infra_role,
 					       COALESCE(si.metadata->>'infra_name', '') AS infra_name
-					FROM quartermaster.services svc
+					FROM dependency_input di
+					JOIN quartermaster.services svc ON svc.type = di.kind AND svc.plane = 'infra'
 					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
 					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
 					LEFT JOIN quartermaster.service_cluster_assignments sca
@@ -7926,60 +7948,58 @@ func (s *QuartermasterServer) collectInfraPeerNodeIDs(ctx context.Context, clust
 					WHERE si.status IN ('running', 'active')
 					  AND n.wireguard_ip IS NOT NULL
 					  AND n.status = 'active'
-					  AND svc.type = $3
-					  AND svc.plane = 'infra'
 				),
 				service_scope AS (
-					SELECT COUNT(DISTINCT provider_cluster) AS provider_cluster_count
+					SELECT kind, COUNT(DISTINCT provider_cluster) AS provider_cluster_count
 					FROM eligible
 					WHERE provider_cluster IS NOT NULL AND provider_cluster <> ''
+					GROUP BY kind
 				)
 				SELECT DISTINCT e.node_id
 				FROM eligible e
-				CROSS JOIN service_scope ss
+				JOIN service_scope ss ON ss.kind = e.kind
 				WHERE (
-					$4 = 'primary' AND e.infra_role = 'primary'
+					e.provider = 'primary' AND e.infra_role = 'primary'
 				) OR (
-					$4 = 'aggregator' AND e.infra_role = 'aggregator'
+					e.provider = 'aggregator' AND e.infra_role = 'aggregator'
 				) OR (
-					$4 = 'named' AND e.infra_name = $5 AND (
+					e.provider = 'named' AND e.infra_name = e.name AND (
 						e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
 						OR ss.provider_cluster_count = 1
 					)
 				) OR (
-					$4 = 'regional' AND e.infra_role = 'regional' AND (
+					e.provider = 'regional' AND e.infra_role = 'regional' AND (
 						e.provider_cluster IN (SELECT cluster_id FROM request_contexts)
 						OR ss.provider_cluster_count = 1
 					)
 				)
-			`, clusterID, nodeID, dep.Kind, dep.Provider, dep.Name)
-			if err != nil {
-				return fmt.Errorf("infra provider query kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
-			}
-			defer func() { _ = rows.Close() }()
-
-			var nextPeerNodeIDs []string
-			for rows.Next() {
-				var peerNodeID string
-				if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
-					return fmt.Errorf("scan infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, scanErr)
-				}
-				if peerNodeID != "" {
-					nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
-				}
-			}
-			if err := rows.Err(); err != nil {
-				return fmt.Errorf("iterate infra provider kind=%s provider=%s name=%s: %w", dep.Kind, dep.Provider, dep.Name, err)
-			}
-			depPeerNodeIDs = nextPeerNodeIDs
-			return nil
-		})
+			`, clusterID, nodeID, pq.Array(kinds), pq.Array(providers), pq.Array(names))
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("infra provider query: %w", err)
 		}
-		for _, peerNodeID := range depPeerNodeIDs {
-			out[peerNodeID] = struct{}{}
+		defer func() { _ = rows.Close() }()
+
+		var nextPeerNodeIDs []string
+		for rows.Next() {
+			var peerNodeID string
+			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+				return fmt.Errorf("scan infra provider: %w", scanErr)
+			}
+			if peerNodeID != "" {
+				nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
+			}
 		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate infra provider: %w", err)
+		}
+		peerNodeIDs = nextPeerNodeIDs
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, peerNodeID := range peerNodeIDs {
+		out[peerNodeID] = struct{}{}
 	}
 	return out, nil
 }
@@ -8679,6 +8699,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 	}
 	var clusterID string
 	var peerCount, requiredPeerCount, serviceEndpointTypeCount int
+	cacheResult := "not_checked"
 	started := time.Now()
 	phaseDurations := logging.Fields{}
 	recordPhase := func(phase string, phaseStarted time.Time) {
@@ -8700,6 +8721,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 			"required_peer_count":    requiredPeerCount,
 			"peer_count":             peerCount,
 			"service_endpoint_types": serviceEndpointTypeCount,
+			"cache_result":           cacheResult,
 		}
 		for key, val := range phaseDurations {
 			fields[key] = val
@@ -8757,10 +8779,9 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 	if rev := strings.TrimSpace(req.GetAppliedMeshRevision()); rev != "" {
 		appliedRev = sql.NullString{String: rev, Valid: true}
 	}
-	// Snapshot is conditionally written: old Privateer clients send no
-	// snapshot, and a single failed collection on a new client should not
-	// blank a previously-good row. Freshness is based on Quartermaster receipt
-	// time so node clock skew cannot make a stale node look healthy.
+	// Snapshot is conditionally written so a failed collection does not blank
+	// a previously-good row. Freshness is based on Quartermaster receipt time
+	// so node clock skew cannot make a stale node look healthy.
 	snap := req.GetResourceSnapshot()
 	var (
 		snapCPU                                 sql.NullFloat64
@@ -8812,41 +8833,357 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 	}
 
 	phaseStarted = time.Now()
+	cfg, currentTopologySourceHash, cacheOK, cacheErr := s.loadMeshNodeConfig(ctx, nodeID)
+	recordPhase("mesh_config_cache", phaseStarted)
+	if cacheErr != nil {
+		cacheResult = "unavailable"
+		s.logger.WithError(cacheErr).WithField("node_id", nodeID).Warn("Mesh config cache unavailable; recomputing")
+		cacheOK = false
+	}
+	if cacheOK && cfg.TopologySourceHash == currentTopologySourceHash {
+		cacheResult = "hit"
+	} else {
+		if cacheOK {
+			cacheResult = "stale"
+		} else if cacheResult != "unavailable" {
+			cacheResult = "miss"
+		}
+		if !cacheOK {
+			currentHash, hashErr := s.currentMeshTopologySourceHash(ctx)
+			if hashErr != nil {
+				return nil, status.Errorf(codes.Internal, "mesh topology revision unavailable: %v", hashErr)
+			}
+			currentTopologySourceHash = currentHash
+		}
+
+		phaseStarted = time.Now()
+		var buildErr error
+		cfg, requiredPeerCount, buildErr = s.buildMeshNodeConfig(ctx, nodeID, clusterID, wireguardIP, wireguardPort, currentTopologySourceHash, recordPhase)
+		recordPhase("mesh_config_recompute", phaseStarted)
+		if buildErr != nil {
+			return nil, status.Errorf(codes.Internal, "mesh config rebuild failed: %v", buildErr)
+		}
+		phaseStarted = time.Now()
+		if storeErr := s.storeMeshNodeConfig(ctx, cfg); storeErr != nil {
+			recordPhase("mesh_config_store", phaseStarted)
+			cacheResult += "_store_failed"
+			s.logger.WithError(storeErr).WithField("node_id", nodeID).Warn("Mesh config cache write failed")
+		} else {
+			recordPhase("mesh_config_store", phaseStarted)
+		}
+	}
+	if requiredPeerCount == 0 {
+		requiredPeerCount = len(cfg.Peers)
+	}
+	peerCount = len(cfg.Peers)
+	serviceEndpointTypeCount = len(cfg.ServiceEndpoints)
+
+	return &quartermasterpb.InfrastructureSyncResponse{
+		WireguardIp:      wireguardIP,
+		WireguardPort:    wireguardPort,
+		Peers:            cfg.Peers,
+		ServiceEndpoints: cfg.ServiceEndpoints,
+		MeshRevision:     cfg.MeshRevision,
+	}, nil
+}
+
+type meshPhaseRecorder func(phase string, started time.Time)
+
+type meshNodeConfig struct {
+	NodeID             string
+	ClusterID          string
+	MeshRevision       string
+	TopologySourceHash string
+	WireguardIP        string
+	WireguardPort      int32
+	Peers              []*quartermasterpb.InfrastructurePeer
+	ServiceEndpoints   map[string]*quartermasterpb.ServiceEndpoints
+}
+
+type storedMeshPeer struct {
+	NodeName   string   `json:"node_name"`
+	PublicKey  string   `json:"public_key"`
+	Endpoint   string   `json:"endpoint"`
+	AllowedIPs []string `json:"allowed_ips"`
+	KeepAlive  int32    `json:"keep_alive"`
+}
+
+type storedMeshServiceEndpoints struct {
+	IPs []string `json:"ips"`
+}
+
+func recordMeshPhase(record meshPhaseRecorder, phase string, started time.Time) {
+	if record != nil {
+		record(phase, started)
+	}
+}
+
+func meshTopologySourceHash(revision int64) string {
+	return fmt.Sprintf("%s:%d", meshTopologyPlannerVersion, revision)
+}
+
+func (s *QuartermasterServer) currentMeshTopologySourceHash(ctx context.Context) (string, error) {
+	var revision int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE((SELECT revision FROM quartermaster.mesh_topology_state WHERE id = TRUE), 0)
+	`).Scan(&revision)
+	if err != nil {
+		return "", err
+	}
+	return meshTopologySourceHash(revision), nil
+}
+
+func (s *QuartermasterServer) loadMeshNodeConfig(ctx context.Context, nodeID string) (meshNodeConfig, string, bool, error) {
+	var cfg meshNodeConfig
+	var peersRaw, endpointsRaw []byte
+	var wireguardPort int32
+	var currentTopologyRevision int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.cluster_id,
+		       c.mesh_revision,
+		       c.topology_source_hash,
+		       host(c.wireguard_ip),
+		       c.wireguard_port,
+		       c.peers,
+		       c.service_endpoints,
+		       COALESCE((SELECT revision FROM quartermaster.mesh_topology_state WHERE id = TRUE), 0)
+		FROM quartermaster.mesh_node_configs c
+		WHERE c.node_id = $1
+	`, nodeID).Scan(
+		&cfg.ClusterID,
+		&cfg.MeshRevision,
+		&cfg.TopologySourceHash,
+		&cfg.WireguardIP,
+		&wireguardPort,
+		&peersRaw,
+		&endpointsRaw,
+		&currentTopologyRevision,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return meshNodeConfig{}, "", false, nil
+	}
+	if err != nil {
+		return meshNodeConfig{}, "", false, err
+	}
+	peers, err := decodeStoredMeshPeers(peersRaw)
+	if err != nil {
+		return meshNodeConfig{}, "", false, fmt.Errorf("decode mesh peers: %w", err)
+	}
+	endpoints, err := decodeStoredMeshServiceEndpoints(endpointsRaw)
+	if err != nil {
+		return meshNodeConfig{}, "", false, fmt.Errorf("decode mesh service endpoints: %w", err)
+	}
+	cfg.NodeID = nodeID
+	cfg.WireguardPort = wireguardPort
+	cfg.Peers = peers
+	cfg.ServiceEndpoints = endpoints
+	return cfg, meshTopologySourceHash(currentTopologyRevision), true, nil
+}
+
+func (s *QuartermasterServer) storeMeshNodeConfig(ctx context.Context, cfg meshNodeConfig) error {
+	peersJSON, err := encodeStoredMeshPeers(cfg.Peers)
+	if err != nil {
+		return fmt.Errorf("encode mesh peers: %w", err)
+	}
+	endpointsJSON, err := encodeStoredMeshServiceEndpoints(cfg.ServiceEndpoints)
+	if err != nil {
+		return fmt.Errorf("encode mesh service endpoints: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.mesh_node_configs (
+			node_id, cluster_id, mesh_revision, topology_source_hash,
+			wireguard_ip, wireguard_port, peers, service_endpoints,
+			computed_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5::inet, $6, $7::jsonb, $8::jsonb, NOW(), NOW())
+		ON CONFLICT (node_id) DO UPDATE SET
+			cluster_id = EXCLUDED.cluster_id,
+			mesh_revision = EXCLUDED.mesh_revision,
+			topology_source_hash = EXCLUDED.topology_source_hash,
+			wireguard_ip = EXCLUDED.wireguard_ip,
+			wireguard_port = EXCLUDED.wireguard_port,
+			peers = EXCLUDED.peers,
+			service_endpoints = EXCLUDED.service_endpoints,
+			computed_at = EXCLUDED.computed_at,
+			updated_at = NOW()
+	`, cfg.NodeID, cfg.ClusterID, cfg.MeshRevision, cfg.TopologySourceHash, cfg.WireguardIP, cfg.WireguardPort, string(peersJSON), string(endpointsJSON))
+	return err
+}
+
+func (s *QuartermasterServer) runMeshTopologyConfigWarmer(ctx context.Context) {
+	s.warmMeshTopologyConfigs(ctx)
+	ticker := time.NewTicker(meshTopologyWarmInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.warmMeshTopologyConfigs(ctx)
+		}
+	}
+}
+
+func (s *QuartermasterServer) warmMeshTopologyConfigs(ctx context.Context) {
+	revision, claimed, err := s.claimMeshTopologyWarm(ctx)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to claim mesh topology warm")
+		return
+	}
+	if !claimed {
+		return
+	}
+	topologySourceHash := meshTopologySourceHash(revision)
+	count, warmErr := s.refreshActiveMeshNodeConfigs(ctx, topologySourceHash)
+	if warmErr != nil {
+		if finishErr := s.finishMeshTopologyWarm(ctx, revision, false); finishErr != nil {
+			s.logger.WithError(finishErr).WithField("topology_source_hash", topologySourceHash).Warn("Failed to release mesh topology warm claim")
+		}
+		s.logger.WithError(warmErr).WithFields(logging.Fields{
+			"topology_source_hash": topologySourceHash,
+			"refreshed_nodes":      count,
+		}).Warn("Mesh topology warm failed")
+		return
+	}
+	if err := s.finishMeshTopologyWarm(ctx, revision, true); err != nil {
+		s.logger.WithError(err).WithField("topology_source_hash", topologySourceHash).Warn("Failed to mark mesh topology warm complete")
+		return
+	}
+	s.logger.WithFields(logging.Fields{
+		"topology_source_hash": topologySourceHash,
+		"refreshed_nodes":      count,
+	}).Debug("Mesh topology warm complete")
+}
+
+func (s *QuartermasterServer) claimMeshTopologyWarm(ctx context.Context) (int64, bool, error) {
+	var revision int64
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE quartermaster.mesh_topology_state
+		SET warming_started_at = NOW()
+		WHERE id = TRUE
+		  AND (
+		    revision > warmed_revision
+		    OR warmed_planner_version IS DISTINCT FROM $1
+		  )
+		  AND (warming_started_at IS NULL OR warming_started_at < NOW() - INTERVAL '2 minutes')
+		RETURNING revision
+	`, meshTopologyPlannerVersion).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return revision, true, nil
+}
+
+func (s *QuartermasterServer) finishMeshTopologyWarm(ctx context.Context, revision int64, success bool) error {
+	if success {
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE quartermaster.mesh_topology_state
+			SET warmed_revision = GREATEST(warmed_revision, $1),
+			    warmed_planner_version = $2,
+			    warming_started_at = NULL,
+			    updated_at = NOW()
+			WHERE id = TRUE
+		`, revision, meshTopologyPlannerVersion)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE quartermaster.mesh_topology_state
+		SET warming_started_at = NULL,
+		    updated_at = NOW()
+		WHERE id = TRUE
+	`)
+	return err
+}
+
+func (s *QuartermasterServer) refreshActiveMeshNodeConfigs(ctx context.Context, topologySourceHash string) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT node_id, cluster_id, host(wireguard_ip), wireguard_listen_port
+		FROM quartermaster.infrastructure_nodes
+		WHERE status = 'active'
+		  AND wireguard_ip IS NOT NULL
+		  AND wireguard_public_key IS NOT NULL
+		  AND wireguard_listen_port IS NOT NULL
+		ORDER BY node_id
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type activeMeshNode struct {
+		nodeID        string
+		clusterID     string
+		wireguardIP   string
+		wireguardPort int32
+	}
+	var nodes []activeMeshNode
+	for rows.Next() {
+		var node activeMeshNode
+		if scanErr := rows.Scan(&node.nodeID, &node.clusterID, &node.wireguardIP, &node.wireguardPort); scanErr != nil {
+			return 0, scanErr
+		}
+		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var failures []string
+	refreshed := 0
+	for _, node := range nodes {
+		cfg, _, buildErr := s.buildMeshNodeConfig(ctx, node.nodeID, node.clusterID, node.wireguardIP, node.wireguardPort, topologySourceHash, nil)
+		if buildErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", node.nodeID, buildErr))
+			continue
+		}
+		if storeErr := s.storeMeshNodeConfig(ctx, cfg); storeErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", node.nodeID, storeErr))
+			continue
+		}
+		refreshed++
+	}
+	if len(failures) > 0 {
+		return refreshed, fmt.Errorf("refresh mesh configs: %s", strings.Join(failures, "; "))
+	}
+	return refreshed, nil
+}
+
+func (s *QuartermasterServer) buildMeshNodeConfig(ctx context.Context, nodeID, clusterID, wireguardIP string, wireguardPort int32, topologySourceHash string, record meshPhaseRecorder) (meshNodeConfig, int, error) {
+	phaseStarted := time.Now()
 	dnsRequired, peerRequired, globalPeerRequired, infraRequired, reqErr := s.meshServiceRequirements(ctx, nodeID)
-	recordPhase("service_requirements", phaseStarted)
+	recordMeshPhase(record, "service_requirements", phaseStarted)
 	if reqErr != nil {
-		return nil, status.Errorf(codes.Internal, "mesh service requirements unavailable: %v", reqErr)
+		return meshNodeConfig{}, 0, fmt.Errorf("mesh service requirements unavailable: %w", reqErr)
 	}
 	phaseStarted = time.Now()
 	serviceEndpoints, requiredPeerNodeIDs, endpointErr := s.collectMeshServiceEndpoints(ctx, clusterID, nodeID, dnsRequired, peerRequired, globalPeerRequired)
-	recordPhase("service_endpoints", phaseStarted)
+	recordMeshPhase(record, "service_endpoints", phaseStarted)
 	if endpointErr != nil {
-		return nil, status.Errorf(codes.Internal, "mesh service endpoints unavailable: %v", endpointErr)
+		return meshNodeConfig{}, 0, fmt.Errorf("mesh service endpoints unavailable: %w", endpointErr)
 	}
-	serviceEndpointTypeCount = len(serviceEndpoints)
 	phaseStarted = time.Now()
 	infraPeers, infraErr := s.collectInfraPeerNodeIDs(ctx, clusterID, nodeID, infraRequired)
-	recordPhase("infra_peers", phaseStarted)
+	recordMeshPhase(record, "infra_peers", phaseStarted)
 	if infraErr != nil {
-		return nil, status.Errorf(codes.Internal, "mesh infra peers unavailable: %v", infraErr)
+		return meshNodeConfig{}, 0, fmt.Errorf("mesh infra peers unavailable: %w", infraErr)
 	}
 	for peerNodeID := range infraPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
 	phaseStarted = time.Now()
 	reciprocalPeers, reciprocalErr := s.collectReciprocalServicePeerNodeIDs(ctx, clusterID, nodeID)
-	recordPhase("reciprocal_peers", phaseStarted)
+	recordMeshPhase(record, "reciprocal_peers", phaseStarted)
 	if reciprocalErr != nil {
-		return nil, status.Errorf(codes.Internal, "mesh reciprocal peers unavailable: %v", reciprocalErr)
+		return meshNodeConfig{}, 0, fmt.Errorf("mesh reciprocal peers unavailable: %w", reciprocalErr)
 	}
 	for peerNodeID := range reciprocalPeers {
 		requiredPeerNodeIDs[peerNodeID] = struct{}{}
 	}
-	requiredPeerCount = len(requiredPeerNodeIDs)
+	requiredPeerCount := len(requiredPeerNodeIDs)
 
-	// 3. Get active peer nodes with WireGuard configured. Nodes always see
-	// same-cluster peers; cross-cluster peers are limited to required service
-	// endpoints and direct federation targets.
 	phaseStarted = time.Now()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.node_name, n.wireguard_public_key, host(n.external_ip), host(n.internal_ip), host(n.wireguard_ip), n.wireguard_listen_port
@@ -8858,8 +9195,8 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 		  AND n.status = 'active'
 	`, nodeID, clusterID, pq.Array(sortedStringKeys(requiredPeerNodeIDs)))
 	if err != nil {
-		recordPhase("peer_query", phaseStarted)
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		recordMeshPhase(record, "peer_query", phaseStarted)
+		return meshNodeConfig{}, 0, fmt.Errorf("database error: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -8882,12 +9219,9 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 		var peerExtIP, peerIntIP, peerWgIP sql.NullString
 		var peerListenPort sql.NullInt32
 		if scanErr := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); scanErr != nil {
-			// peer.NodeName is unset because Scan failed; log it as empty so
-			// the field is still present and queryable.
 			excludePeer(peer.NodeName, "scan_error", scanErr)
 			continue
 		}
-		// Prefer external IP, fall back to internal IP.
 		endpoint := ""
 		if peerExtIP.Valid && peerExtIP.String != "" {
 			endpoint = peerExtIP.String
@@ -8899,9 +9233,6 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 			continue
 		}
 		if !peerWgIP.Valid {
-			// Defense-in-depth: the SQL filter guarantees wireguard_ip IS NOT
-			// NULL. Reaching this branch means the schema or filter changed
-			// without updating the read path.
 			excludePeer(peer.NodeName, "missing_wireguard_ip", nil)
 			continue
 		}
@@ -8915,19 +9246,86 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 		peers = append(peers, &peer)
 	}
 	if err := rows.Err(); err != nil {
-		recordPhase("peer_query", phaseStarted)
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		recordMeshPhase(record, "peer_query", phaseStarted)
+		return meshNodeConfig{}, 0, fmt.Errorf("database error: %w", err)
 	}
-	recordPhase("peer_query", phaseStarted)
-	peerCount = len(peers)
+	recordMeshPhase(record, "peer_query", phaseStarted)
 
-	return &quartermasterpb.InfrastructureSyncResponse{
-		WireguardIp:      wireguardIP,
-		WireguardPort:    wireguardPort,
-		Peers:            peers,
-		ServiceEndpoints: serviceEndpoints,
-		MeshRevision:     computeMeshRevision(peers, serviceEndpoints, wireguardIP, wireguardPort),
-	}, nil
+	cfg := meshNodeConfig{
+		NodeID:             nodeID,
+		ClusterID:          clusterID,
+		TopologySourceHash: topologySourceHash,
+		WireguardIP:        wireguardIP,
+		WireguardPort:      wireguardPort,
+		Peers:              peers,
+		ServiceEndpoints:   serviceEndpoints,
+	}
+	cfg.MeshRevision = computeMeshRevision(cfg.Peers, cfg.ServiceEndpoints, cfg.WireguardIP, cfg.WireguardPort)
+	return cfg, requiredPeerCount, nil
+}
+
+func encodeStoredMeshPeers(peers []*quartermasterpb.InfrastructurePeer) ([]byte, error) {
+	stored := make([]storedMeshPeer, 0, len(peers))
+	for _, peer := range peers {
+		if peer == nil {
+			continue
+		}
+		stored = append(stored, storedMeshPeer{
+			NodeName:   peer.GetNodeName(),
+			PublicKey:  peer.GetPublicKey(),
+			Endpoint:   peer.GetEndpoint(),
+			AllowedIPs: append([]string(nil), peer.GetAllowedIps()...),
+			KeepAlive:  peer.GetKeepAlive(),
+		})
+	}
+	return json.Marshal(stored)
+}
+
+func decodeStoredMeshPeers(raw []byte) ([]*quartermasterpb.InfrastructurePeer, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var stored []storedMeshPeer
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, err
+	}
+	peers := make([]*quartermasterpb.InfrastructurePeer, 0, len(stored))
+	for _, peer := range stored {
+		peers = append(peers, &quartermasterpb.InfrastructurePeer{
+			NodeName:   peer.NodeName,
+			PublicKey:  peer.PublicKey,
+			Endpoint:   peer.Endpoint,
+			AllowedIps: append([]string(nil), peer.AllowedIPs...),
+			KeepAlive:  peer.KeepAlive,
+		})
+	}
+	return peers, nil
+}
+
+func encodeStoredMeshServiceEndpoints(endpoints map[string]*quartermasterpb.ServiceEndpoints) ([]byte, error) {
+	stored := make(map[string]storedMeshServiceEndpoints, len(endpoints))
+	for serviceType, endpoint := range endpoints {
+		if endpoint == nil {
+			continue
+		}
+		stored[serviceType] = storedMeshServiceEndpoints{IPs: append([]string(nil), endpoint.GetIps()...)}
+	}
+	return json.Marshal(stored)
+}
+
+func decodeStoredMeshServiceEndpoints(raw []byte) (map[string]*quartermasterpb.ServiceEndpoints, error) {
+	if len(raw) == 0 {
+		return map[string]*quartermasterpb.ServiceEndpoints{}, nil
+	}
+	var stored map[string]storedMeshServiceEndpoints
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, err
+	}
+	endpoints := make(map[string]*quartermasterpb.ServiceEndpoints, len(stored))
+	for serviceType, endpoint := range stored {
+		endpoints[serviceType] = &quartermasterpb.ServiceEndpoints{Ips: append([]string(nil), endpoint.IPs...)}
+	}
+	return endpoints, nil
 }
 
 // computeMeshRevision is a stable hex-sha256 fingerprint of the peer set plus
@@ -12233,6 +12631,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 
 	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
 	// lease let this run safely on every Quartermaster replica.
+	go qmServer.runMeshTopologyConfigWarmer(context.Background())
 	go qmServer.runServiceEventOutboxWorker(context.Background())
 	go qmServer.runTenantPrivateBaseURLRepair(context.Background())
 	// Drain the Navigator custom-domain outbox so a Navigator outage at the
