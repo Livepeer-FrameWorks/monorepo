@@ -29,6 +29,14 @@ roots=(
 			"$module_path"/*)
 				rel="${import_path#"$module_path"/}"
 				printf 'pkg/%s\n' "$rel"
+				case "$rel" in
+					proto/*)
+						proto_name="${rel#proto/}"
+						if [[ "$proto_name" != */* ]]; then
+							printf 'pkg/proto/%s.proto\n' "$proto_name"
+						fi
+						;;
+				esac
 				;;
 		esac
 	done
