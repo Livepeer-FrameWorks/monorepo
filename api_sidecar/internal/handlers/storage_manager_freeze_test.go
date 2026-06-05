@@ -468,7 +468,7 @@ func TestUploadAsset_ClipWithDtsh(t *testing.T) {
 	if err := os.WriteFile(clipPath, []byte("clip data"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dtshPath, []byte("dtsh data"), 0644); err != nil {
+	if err := os.WriteFile(dtshPath, validDTSHBytes(), 0644); err != nil {
 		t.Fatal(err)
 	}
 

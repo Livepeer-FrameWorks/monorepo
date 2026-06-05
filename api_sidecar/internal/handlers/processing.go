@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/dtsh"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
@@ -1989,6 +1990,10 @@ func waitForDTSHFile(dtshPath string, timeout time.Duration) error {
 		info, err := os.Stat(dtshPath)
 		switch {
 		case err == nil && info.Mode().IsRegular() && info.Size() > 0:
+			if validateErr := dtsh.ValidateFile(dtshPath); validateErr != nil {
+				lastErr = fmt.Errorf("dtsh file invalid: %s: %w", dtshPath, validateErr)
+				break
+			}
 			return nil
 		case err == nil:
 			lastErr = fmt.Errorf("dtsh file is empty: %s", dtshPath)

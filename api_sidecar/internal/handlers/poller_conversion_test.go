@@ -849,7 +849,7 @@ func TestMarkLocalDtshPresentVODUpdatesArtifactIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	dtshPath := mediaPath + ".dtsh"
-	if err := os.WriteFile(dtshPath, make([]byte, 128), 0o644); err != nil {
+	if err := os.WriteFile(dtshPath, validDTSHBytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -886,7 +886,7 @@ func TestMarkLocalDtshPresentClipInfersStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	dtshPath := mediaPath + ".dtsh"
-	if err := os.WriteFile(dtshPath, make([]byte, 64), 0o644); err != nil {
+	if err := os.WriteFile(dtshPath, validDTSHBytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -989,7 +989,7 @@ func TestScanClipsDirectory_WithDtsh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(streamDir, hash+".mp4"), make([]byte, 1024), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(streamDir, hash+".mp4.dtsh"), make([]byte, 256), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(streamDir, hash+".mp4.dtsh"), validDTSHBytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1089,7 +1089,7 @@ func TestScanDVRDirectory_WithDtsh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(recordingDir, dvrHash+".m3u8"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(recordingDir, dvrHash+".dtsh"), make([]byte, 100), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(recordingDir, dvrHash+".dtsh"), validDTSHBytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

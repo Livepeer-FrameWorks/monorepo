@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -383,7 +384,7 @@ func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
 	file := hash + ".mkv.dtsh"
-	body := []byte("generated dtsh bytes")
+	body := validDtshBytes()
 
 	fz := &fakeFreeze{}
 	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
@@ -416,7 +417,7 @@ func TestDtshPutUsesCachedPresignedUpload(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
 	file := hash + ".mkv.dtsh"
-	body := []byte("generated dtsh bytes")
+	body := validDtshBytes()
 	uploaded := make(chan []byte, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
@@ -464,7 +465,7 @@ func TestUploadDtshPutWithTrailingSlashLandsLocally(t *testing.T) {
 	dir := t.TempDir()
 	hash := "uploadabc"
 	file := hash + ".mov.dtsh"
-	body := []byte("generated upload dtsh bytes")
+	body := validDtshBytes()
 
 	fz := &fakeFreeze{}
 	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
@@ -500,7 +501,7 @@ func TestUploadDtshGetServesWarmSidecarAfterMistGeneratesIt(t *testing.T) {
 	dir := t.TempDir()
 	hash := "uploadwarm"
 	file := hash + ".mov.dtsh"
-	body := []byte("warm upload sidecar")
+	body := validDtshBytes()
 	target := filepath.Join(dir, "upload", file)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
@@ -534,7 +535,7 @@ func TestUploadDtshGetUsesGenericSidecarResolve(t *testing.T) {
 	dir := t.TempDir()
 	hash := "uploadcold"
 	file := hash + ".mov.dtsh"
-	body := []byte("cold upload sidecar")
+	body := validDtshBytes()
 	up := upstreamServer(t, body)
 	defer up.Close()
 
@@ -571,7 +572,7 @@ func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
 	file := hash + ".mkv.dtsh"
-	body := []byte("nested generated dtsh bytes")
+	body := validDtshBytes()
 
 	fz := &fakeFreeze{}
 	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
@@ -660,6 +661,61 @@ func TestDtshPutEmptyBodyDoesNotReportSuccess(t *testing.T) {
 	}
 }
 
+func TestDtshPutEmptyTracksDoesNotReportSuccess(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/internal/artifact/vod/"+file, bytes.NewReader(emptyTrackDtshBytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file)); !os.IsNotExist(err) {
+		t.Fatalf("empty-track sidecar must not be durable, stat err=%v", err)
+	}
+}
+
+func TestDtshGetWarmInvalidSidecarReturnsGenerationSignal(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+	target := filepath.Join(dir, "vod", file)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, emptyTrackDtshBytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("invalid warm sidecar should be removed, stat err=%v", err)
+	}
+}
+
 func TestDtshGetCold404ForwardsToMistGeneration(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
@@ -696,7 +752,7 @@ func TestDtshGetLocalMediaStillChecksResolvedSidecar(t *testing.T) {
 	if err := os.WriteFile(mediaPath, []byte("local mkv bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte("dtsh from s3")
+	body := validDtshBytes()
 	up := upstreamServer(t, body)
 	defer up.Close()
 
@@ -726,6 +782,35 @@ func TestDtshGetLocalMediaStillChecksResolvedSidecar(t *testing.T) {
 	}
 	if resolver.calls != 1 {
 		t.Fatalf("resolver calls=%d, want 1", resolver.calls)
+	}
+}
+
+func TestDtshGetRejectsInvalidResolvedSidecar(t *testing.T) {
+	dir := t.TempDir()
+	hash := "localvod"
+	file := hash + ".mkv.dtsh"
+	up := upstreamServer(t, emptyTrackDtshBytes())
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
+		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		DtshPresignedGet: up.URL,
+		URLTTLSeconds:    60,
+	}}}
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/vod/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file)); !os.IsNotExist(err) {
+		t.Fatalf("invalid resolved sidecar should not be cached, stat err=%v", err)
 	}
 }
 
@@ -1354,4 +1439,58 @@ func TestBlockCacheInvalidatesOnAssetHashMismatch(t *testing.T) {
 	if m.AssetHash != newHash {
 		t.Fatalf("meta.AssetHash=%q want %q (stale meta not replaced)", m.AssetHash, newHash)
 	}
+}
+
+func validDtshBytes() []byte {
+	return dtscHeaderPacket(packedObject(
+		packedMember("version", packedInt(1)),
+		packedMember("tracks", packedObject(
+			packedMember("1", packedObject(
+				packedMember("type", packedString("video")),
+			)),
+		)),
+	))
+}
+
+func emptyTrackDtshBytes() []byte {
+	return dtscHeaderPacket(packedObject(
+		packedMember("version", packedInt(1)),
+		packedMember("tracks", packedObject()),
+	))
+}
+
+func dtscHeaderPacket(payload []byte) []byte {
+	out := make([]byte, 8, len(payload)+8)
+	copy(out, "DTSC")
+	binary.BigEndian.PutUint32(out[4:8], uint32(len(payload)))
+	return append(out, payload...)
+}
+
+func packedObject(members ...[]byte) []byte {
+	out := []byte{0xe0}
+	for _, member := range members {
+		out = append(out, member...)
+	}
+	return append(out, 0x00, 0x00, 0xee)
+}
+
+func packedMember(name string, value []byte) []byte {
+	out := make([]byte, 2, len(name)+len(value)+2)
+	binary.BigEndian.PutUint16(out, uint16(len(name)))
+	out = append(out, []byte(name)...)
+	return append(out, value...)
+}
+
+func packedInt(v uint64) []byte {
+	out := make([]byte, 9)
+	out[0] = 0x01
+	binary.BigEndian.PutUint64(out[1:], v)
+	return out
+}
+
+func packedString(v string) []byte {
+	out := make([]byte, 5, len(v)+5)
+	out[0] = 0x02
+	binary.BigEndian.PutUint32(out[1:], uint32(len(v)))
+	return append(out, []byte(v)...)
 }

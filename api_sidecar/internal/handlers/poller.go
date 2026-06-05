@@ -16,6 +16,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/updater"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
@@ -1365,6 +1366,9 @@ func markLocalDtshPresent(kind, hash, localPath string) {
 	if prometheusMonitor == nil || hash == "" || localPath == "" || !strings.HasSuffix(localPath, ".dtsh") {
 		return
 	}
+	if !validLocalDtsh(localPath) {
+		return
+	}
 	var artifactType pb.ArtifactEvent_ArtifactType
 	switch kind {
 	case "vod":
@@ -1471,10 +1475,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 		}
 
 		filePath := fmt.Sprintf("%s/%s", vodDir, name)
-		hasDtsh := false
-		if _, err := os.Stat(filePath + ".dtsh"); err == nil {
-			hasDtsh = true
-		}
+		hasDtsh := validLocalDtsh(filePath + ".dtsh")
 		vodInfo := &ClipInfo{
 			FilePath:     filePath,
 			StreamName:   "", // VOD assets are not tied to a live stream name
@@ -1558,11 +1559,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 							}
 						}
 
-						// Check if .dtsh index file exists
-						hasDtsh := false
-						if _, err := os.Stat(filePath + ".dtsh"); err == nil {
-							hasDtsh = true
-						}
+						hasDtsh := validLocalDtsh(filePath + ".dtsh")
 
 						clipInfo := &ClipInfo{
 							FilePath:     filePath,
@@ -1616,11 +1613,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 				if time.Since(fileInfo.ModTime()) < fileStabilityThreshold {
 					continue
 				}
-				// Check if .dtsh index file exists
-				hasDtsh := false
-				if _, err := os.Stat(filePath + ".dtsh"); err == nil {
-					hasDtsh = true
-				}
+				hasDtsh := validLocalDtsh(filePath + ".dtsh")
 
 				clipInfo := &ClipInfo{
 					FilePath:     filePath,
@@ -1734,11 +1727,11 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 			segmentSize, segmentCount := calculateDVRSegmentSize(manifestPath, dvrPath)
 			dvrTotalSize := manifestSize + segmentSize
 
-			// Check if any .dtsh index files exist in the DVR directory
+			// Check if any valid .dtsh index files exist in the DVR directory
 			hasDtsh := false
 			if dirEntries, err := os.ReadDir(dvrPath); err == nil {
 				for _, de := range dirEntries {
-					if !de.IsDir() && strings.HasSuffix(de.Name(), ".dtsh") {
+					if !de.IsDir() && strings.HasSuffix(de.Name(), ".dtsh") && validLocalDtsh(filepath.Join(dvrPath, de.Name())) {
 						hasDtsh = true
 						break
 					}
@@ -2101,6 +2094,16 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			NodeLifecycleUpdate: nodeUpdate,
 		},
 	}
+}
+
+func validLocalDtsh(path string) bool {
+	if err := dtsh.ValidateFile(path); err != nil {
+		if !os.IsNotExist(err) && monitorLogger != nil {
+			monitorLogger.WithError(err).WithField("local_path", path).Warn("Ignoring invalid local .dtsh")
+		}
+		return false
+	}
+	return true
 }
 
 func normalizeMistCPUPercent(rawCPU float64) float64 {

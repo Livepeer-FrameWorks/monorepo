@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/dtsh"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -34,6 +36,14 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	nestedPath := s.nestedSidecarPathFor(kind, file, streamInternal)
 	if nestedPath != "" {
 		if info, err := os.Stat(nestedPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			if err := dtsh.ValidateFile(nestedPath); err != nil {
+				if s.logger != nil {
+					s.logger.WithError(err).WithField("local_path", nestedPath).Warn("relay warm dtsh invalid; removing and returning generation signal")
+				}
+				_ = os.Remove(nestedPath)
+				c.Status(http.StatusNotFound)
+				return
+			}
 			f, err := os.Open(nestedPath)
 			if err != nil {
 				if s.logger != nil {
@@ -50,6 +60,14 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 
 	localPath := s.canonicalFilePath(kind, file)
 	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		if err := dtsh.ValidateFile(localPath); err != nil {
+			if s.logger != nil {
+				s.logger.WithError(err).WithField("local_path", localPath).Warn("relay warm dtsh invalid; removing and returning generation signal")
+			}
+			_ = os.Remove(localPath)
+			c.Status(http.StatusNotFound)
+			return
+		}
 		f, err := os.Open(localPath)
 		if err != nil {
 			if s.logger != nil {
@@ -99,12 +117,9 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		return
 	}
 
-	// Fetch dtsh and write it through to disk while streaming the response.
-	// Sidecars are small (typically <10 MiB) and dropping the local copy
-	// would re-fetch on every replay; we always tee for HEAD-less full GETs.
-	// HEAD and ranged requests stream-only so the disk write happens at most
-	// once per cold node (next GET from any session hits the warm branch).
-	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fetchURL, nil)
+	// Fetch the full sidecar so we can validate its track metadata before
+	// handing it to Mist or caching it locally.
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, fetchURL, nil)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay dtsh request build failed; returning generation signal")
@@ -114,9 +129,6 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	}
 	if peerBearer != "" {
 		req.Header.Set("Authorization", "Bearer "+peerBearer)
-	}
-	if rng := c.Request.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
 	}
 	resp, err := s.httpc.Do(req)
 	if err != nil {
@@ -143,7 +155,23 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		return
 	}
 
-	for _, h := range []string{"Content-Length", "Content-Range", "Content-Type", "Accept-Ranges", "ETag", "Last-Modified"} {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("asset_hash", hash).Debug("relay dtsh fetch body failed; returning generation signal")
+		}
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if validateErr := dtsh.Validate(body); validateErr != nil {
+		if s.logger != nil {
+			s.logger.WithError(validateErr).WithField("asset_hash", hash).Warn("relay fetched invalid dtsh; returning generation signal")
+		}
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
 		if v := resp.Header.Get(h); v != "" {
 			c.Writer.Header().Set(h, v)
 		}
@@ -151,59 +179,26 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	if c.Writer.Header().Get("Accept-Ranges") == "" {
 		c.Writer.Header().Set("Accept-Ranges", "bytes")
 	}
-	c.Writer.WriteHeader(resp.StatusCode)
+	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	c.Writer.WriteHeader(http.StatusOK)
 	if c.Request.Method == http.MethodHead {
 		return
 	}
-
-	rangedRequest := c.Request.Header.Get("Range") != ""
-	cacheLocally := !rangedRequest && resp.StatusCode == http.StatusOK
-	if !cacheLocally {
-		if _, copyErr := io.Copy(c.Writer, resp.Body); copyErr != nil && s.logger != nil {
-			s.logger.WithError(copyErr).Debug("relay dtsh stream aborted")
-		}
-		return
+	if _, writeErr := c.Writer.Write(body); writeErr != nil && s.logger != nil {
+		s.logger.WithError(writeErr).Debug("relay dtsh stream aborted")
 	}
 
-	// Tee to disk: tmpfile → atomic rename, so a half-written file
-	// never ends up at the canonical path.
+	// Cache the validated sidecar locally: tmpfile → atomic rename, so a
+	// half-written file never ends up at the canonical path.
 	if mkErr := os.MkdirAll(filepath.Dir(localPath), 0o755); mkErr != nil {
-		// Disk write failed before it began; fall back to stream-only
-		// so playback still works.
-		if _, copyErr := io.Copy(c.Writer, resp.Body); copyErr != nil && s.logger != nil {
-			s.logger.WithError(copyErr).Debug("relay dtsh stream aborted (mkdir failed)")
-		}
 		return
 	}
 	tmp := localPath + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		if _, err := io.Copy(c.Writer, resp.Body); err != nil && s.logger != nil {
-			s.logger.WithError(err).Debug("relay dtsh stream aborted (open tmp failed)")
-		}
 		return
 	}
-	// Client first, disk on a separate goroutine behind a bounded
-	// channel. Mist always receives the sidecar from S3 at network
-	// speed; the cache fill is opportunistic and abandoned silently if
-	// disk fails or falls behind.
-	tee := newTolerantTee(c.Writer, f, func(diskErr error) {
-		if s.logger != nil {
-			s.logger.WithError(diskErr).WithField("local_path", localPath).Debug("relay dtsh disk write failed or fell behind; abandoning cache")
-		}
-	})
-	_, copyErr := io.Copy(tee, resp.Body)
-	tee.Close() // drain the disk worker so SecondaryAlive reflects final state
-	if copyErr != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		if s.logger != nil {
-			s.logger.WithError(copyErr).Debug("relay dtsh stream aborted (client gone)")
-		}
-		return
-	}
-	// Rename only when the disk side actually captured the full sidecar.
-	if !tee.SecondaryAlive() {
+	if _, err := f.Write(body); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 		return
@@ -315,6 +310,14 @@ func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal strin
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
 		s.serverError(c, "close sidecar", err)
+		return
+	}
+	if err := dtsh.ValidateFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("local_path", localPath).Warn("relay sidecar PUT contained invalid dtsh")
+		}
+		c.String(http.StatusBadRequest, "invalid sidecar body")
 		return
 	}
 	if err := os.Rename(tmp, localPath); err != nil {

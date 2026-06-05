@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -500,7 +501,7 @@ func TestGenerateDTSHForPathWaitsForSidecarFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = os.WriteFile(dtshPath, []byte("dtsh"), 0o644)
+			_ = os.WriteFile(dtshPath, validDTSHBytes(), 0o644)
 		}()
 		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
 	}))
@@ -508,6 +509,27 @@ func TestGenerateDTSHForPathWaitsForSidecarFile(t *testing.T) {
 
 	if err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(logrus.New())); err != nil {
 		t.Fatalf("GenerateDTSHForPath failed: %v", err)
+	}
+}
+
+func TestGenerateDTSHForPathRejectsEmptyTrackSidecar(t *testing.T) {
+	dir := t.TempDir()
+	dtshPath := filepath.Join(dir, "artifact.mkv.dtsh")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_ = os.WriteFile(dtshPath, emptyTrackDTSHBytes(), 0o644)
+		}()
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(logrus.New()))
+	if err == nil {
+		t.Fatal("expected invalid sidecar to fail")
+	}
+	if !strings.Contains(err.Error(), "dtsh file invalid") {
+		t.Fatalf("error = %v, want invalid dtsh error", err)
 	}
 }
 
@@ -941,4 +963,58 @@ func TestProcessingRecordingEnd_StaleThenCurrentDelivery(t *testing.T) {
 	if got.BytesWritten != 999 {
 		t.Fatalf("expected live event (bytes=999), got bytes=%d", got.BytesWritten)
 	}
+}
+
+func validDTSHBytes() []byte {
+	return dtscHeaderPacket(packedObject(
+		packedMember("version", packedInt(1)),
+		packedMember("tracks", packedObject(
+			packedMember("1", packedObject(
+				packedMember("type", packedString("video")),
+			)),
+		)),
+	))
+}
+
+func emptyTrackDTSHBytes() []byte {
+	return dtscHeaderPacket(packedObject(
+		packedMember("version", packedInt(1)),
+		packedMember("tracks", packedObject()),
+	))
+}
+
+func dtscHeaderPacket(payload []byte) []byte {
+	out := make([]byte, 8, len(payload)+8)
+	copy(out, "DTSC")
+	binary.BigEndian.PutUint32(out[4:8], uint32(len(payload)))
+	return append(out, payload...)
+}
+
+func packedObject(members ...[]byte) []byte {
+	out := []byte{0xe0}
+	for _, member := range members {
+		out = append(out, member...)
+	}
+	return append(out, 0x00, 0x00, 0xee)
+}
+
+func packedMember(name string, value []byte) []byte {
+	out := make([]byte, 2, len(name)+len(value)+2)
+	binary.BigEndian.PutUint16(out, uint16(len(name)))
+	out = append(out, []byte(name)...)
+	return append(out, value...)
+}
+
+func packedInt(v uint64) []byte {
+	out := make([]byte, 9)
+	out[0] = 0x01
+	binary.BigEndian.PutUint64(out[1:], v)
+	return out
+}
+
+func packedString(v string) []byte {
+	out := make([]byte, 5, len(v)+5)
+	out[0] = 0x02
+	binary.BigEndian.PutUint32(out[1:], uint32(len(v)))
+	return append(out, []byte(v)...)
 }

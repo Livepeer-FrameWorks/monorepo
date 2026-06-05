@@ -17,6 +17,7 @@ import (
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -752,9 +753,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	case AssetTypeClip, AssetTypeVOD:
 		// Clip and VOD are single-file uploads
 		filenames = append(filenames, filepath.Base(asset.FilePath))
-		// Include .dtsh if it exists
-		if _, err := os.Stat(asset.FilePath + ".dtsh"); err == nil {
+		if err := dtsh.ValidateFile(asset.FilePath + ".dtsh"); err == nil {
 			filenames = append(filenames, filepath.Base(asset.FilePath)+".dtsh")
+		} else if !os.IsNotExist(err) {
+			sm.logger.WithError(err).WithField("asset_hash", asset.AssetHash).Warn("Skipping invalid .dtsh during freeze permission request")
 		}
 	}
 
@@ -841,7 +843,9 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			dtshName := baseName + ".dtsh"
 			if url, ok := permResp.SegmentUrls[dtshName]; ok && uploadErr == nil {
 				dtshPath := asset.FilePath + ".dtsh"
-				if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
+				if err := dtsh.ValidateFile(dtshPath); err != nil {
+					sm.logger.WithError(err).Warn("Skipping invalid .dtsh file")
+				} else if err := sm.presignedClient.UploadFileToPresignedURL(ctx, url, dtshPath, nil); err != nil {
 					sm.logger.WithError(err).Warn("Failed to upload .dtsh file")
 				} else {
 					dtshIncluded = true
@@ -1333,9 +1337,8 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 			return fmt.Errorf("no presigned URL provided for clip .dtsh")
 		}
 
-		// Check if .dtsh file exists locally
-		if _, err := os.Stat(dtshPath); err != nil {
-			return fmt.Errorf(".dtsh file not found at %s: %w", dtshPath, err)
+		if err := dtsh.ValidateFile(dtshPath); err != nil {
+			return fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
 		}
 
 		// Upload the .dtsh file
@@ -1381,6 +1384,9 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 				return fmt.Errorf(".dtsh still missing after generation at %s: %w", dtshPath, err)
 			}
 		}
+		if err := dtsh.ValidateFile(dtshPath); err != nil {
+			return fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
+		}
 		if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
 			uploadErr = fmt.Errorf("failed to upload vod .dtsh: %w", err)
 		} else {
@@ -1400,8 +1406,10 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 		// Check what .dtsh files exist locally and upload them
 		for dtshName, presignedURL := range dtshURLs {
 			dtshPath := filepath.Join(localPath, dtshName)
-			if _, err := os.Stat(dtshPath); err != nil {
-				// This particular .dtsh file doesn't exist, skip
+			if err := dtsh.ValidateFile(dtshPath); err != nil {
+				if !os.IsNotExist(err) {
+					sm.logger.WithError(err).WithField("dtsh_name", dtshName).Warn("Skipping invalid DVR .dtsh file")
+				}
 				continue
 			}
 
