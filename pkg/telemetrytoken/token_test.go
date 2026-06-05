@@ -1,6 +1,7 @@
 package telemetrytoken
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func TestVerifyRejectsTamper(t *testing.T) {
 		t.Fatal("expected tampered token to fail verification")
 	}
 	// Wrong secret.
-	if _, err := Verify([]byte("other"), tok, now); err != ErrBadSignature {
+	if _, err := Verify([]byte("other"), tok, now); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("expected ErrBadSignature, got %v", err)
 	}
 }
@@ -48,16 +49,16 @@ func TestVerifyRejectsExpired(t *testing.T) {
 	secret := []byte("s")
 	now := time.Unix(1_700_000_000, 0)
 	tok, _ := Sign(secret, Claims{ContentID: "demo"}, time.Minute, now)
-	if _, err := Verify(secret, tok, now.Add(2*time.Minute)); err != ErrExpired {
+	if _, err := Verify(secret, tok, now.Add(2*time.Minute)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected ErrExpired, got %v", err)
 	}
 }
 
 func TestEmptySecret(t *testing.T) {
-	if _, err := Sign(nil, Claims{}, time.Minute, time.Unix(0, 0)); err != ErrEmptySecret {
+	if _, err := Sign(nil, Claims{}, time.Minute, time.Unix(0, 0)); !errors.Is(err, ErrEmptySecret) {
 		t.Fatalf("expected ErrEmptySecret on sign, got %v", err)
 	}
-	if _, err := Verify(nil, "v1.a.b", time.Unix(0, 0)); err != ErrEmptySecret {
+	if _, err := Verify(nil, "v1.a.b", time.Unix(0, 0)); !errors.Is(err, ErrEmptySecret) {
 		t.Fatalf("expected ErrEmptySecret on verify, got %v", err)
 	}
 }
