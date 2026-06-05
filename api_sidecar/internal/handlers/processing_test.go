@@ -1016,6 +1016,125 @@ func TestProcessingRecordingEnd_StaleThenCurrentDelivery(t *testing.T) {
 	}
 }
 
+func TestDrainProcessingGenerationWaitsUntilStreamDisappears(t *testing.T) {
+	const streamName = "processing+drain"
+	calls := 0
+	err := drainProcessingGenerationFromActiveStreams(logrus.NewEntry(logrus.New()), streamName, func() (map[string]interface{}, error) {
+		calls++
+		switch calls {
+		case 1:
+			return nil, errors.New("mist api temporarily unavailable")
+		case 2:
+			return map[string]interface{}{
+				"active_streams": map[string]interface{}{
+					streamName: map[string]interface{}{"outputs": float64(1)},
+				},
+			}, nil
+		default:
+			return map[string]interface{}{
+				"active_streams": map[string]interface{}{},
+			}, nil
+		}
+	}, 100*time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatalf("drain returned error: %v", err)
+	}
+	if calls < 3 {
+		t.Fatalf("drain stopped after %d calls, want at least 3", calls)
+	}
+}
+
+func TestDrainProcessingGenerationFailsWhenStreamStaysActive(t *testing.T) {
+	const streamName = "processing+stuck"
+	err := drainProcessingGenerationFromActiveStreams(logrus.NewEntry(logrus.New()), streamName, func() (map[string]interface{}, error) {
+		return map[string]interface{}{
+			"active_streams": map[string]interface{}{
+				streamName: map[string]interface{}{"outputs": float64(1)},
+			},
+		}, nil
+	}, 5*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("expected stuck stream to fail drain")
+	}
+	if !strings.Contains(err.Error(), "still active after drain deadline") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDrainProcessingSessionsWaitsUntilClientsDisappear(t *testing.T) {
+	const streamName = "processing+clip"
+	calls := 0
+	err := drainProcessingSessionsFromClients(logrus.NewEntry(logrus.New()), streamName, func() (map[string]interface{}, error) {
+		calls++
+		switch calls {
+		case 1:
+			return nil, errors.New("mist clients temporarily unavailable")
+		case 2:
+			return mistClientsResponse([]string{"stream", "protocol"}, [][]interface{}{
+				{streamName, "INPUT:EBML"},
+				{"live+other", "OUTPUT:HLS"},
+			}), nil
+		default:
+			return mistClientsResponse([]string{"stream", "protocol"}, [][]interface{}{
+				{"live+other", "OUTPUT:HLS"},
+			}), nil
+		}
+	}, 100*time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatalf("drain returned error: %v", err)
+	}
+	if calls < 3 {
+		t.Fatalf("drain stopped after %d calls, want at least 3", calls)
+	}
+}
+
+func TestDrainProcessingSessionsFailsWhenClientsRemain(t *testing.T) {
+	const streamName = "processing+stuck"
+	err := drainProcessingSessionsFromClients(logrus.NewEntry(logrus.New()), streamName, func() (map[string]interface{}, error) {
+		return mistClientsResponse([]string{"stream", "protocol"}, [][]interface{}{
+			{streamName, "OUTPUT:EBML"},
+		}), nil
+	}, 5*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("expected stuck sessions to fail drain")
+	}
+	if !strings.Contains(err.Error(), "still has active sessions after drain deadline") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProcessingClientCountParsesMistClients(t *testing.T) {
+	const streamName = "processing+clip"
+	got, err := processingClientCount(mistClientsResponse([]string{"protocol", "stream", "sessid"}, [][]interface{}{
+		{"INPUT:EBML", streamName, "I1"},
+		{"OUTPUT:EBML", streamName, "O1"},
+		{"OUTPUT:HLS", "vod+clip", "V1"},
+	}), streamName)
+	if err != nil {
+		t.Fatalf("processingClientCount returned error: %v", err)
+	}
+	if got != 2 {
+		t.Fatalf("processingClientCount = %d, want 2", got)
+	}
+}
+
+func mistClientsResponse(fields []string, rows [][]interface{}) map[string]interface{} {
+	fieldVals := make([]interface{}, 0, len(fields))
+	for _, f := range fields {
+		fieldVals = append(fieldVals, f)
+	}
+	rowVals := make([]interface{}, 0, len(rows))
+	for _, row := range rows {
+		rowVals = append(rowVals, row)
+	}
+	return map[string]interface{}{
+		"clients": map[string]interface{}{
+			"fields": fieldVals,
+			"data":   rowVals,
+		},
+	}
+}
+
 func validDTSHBytes() []byte {
 	return dtscHeaderPacket(packedObject(
 		packedMember("version", packedInt(1)),

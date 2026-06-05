@@ -918,6 +918,15 @@ func HandleStreamSource(c *gin.Context) {
 			c.String(http.StatusOK, sourceURL)
 			return
 		}
+		if sourceURL, ok := getProcessingSourceOverride(ss.GetStreamName()); ok {
+			logger.WithFields(logging.Fields{
+				"stream_name": ss.GetStreamName(),
+				"source_url":  sourceURL,
+			}).Info("STREAM_SOURCE resolved to local source override")
+			incMistWebhook("STREAM_SOURCE", "local_source_override")
+			c.String(http.StatusOK, sourceURL)
+			return
+		}
 	}
 
 	// Resolve processing+ sources locally when an active job has staged
@@ -935,15 +944,6 @@ func HandleStreamSource(c *gin.Context) {
 	if ss := mistTrigger.GetStreamSource(); ss != nil && strings.HasPrefix(ss.GetStreamName(), "processing+") {
 		hash := strings.TrimPrefix(ss.GetStreamName(), "processing+")
 		if HasPendingJob(ss.GetStreamName()) {
-			if sourceURL, ok := getProcessingSourceOverride(ss.GetStreamName()); ok {
-				logger.WithFields(logging.Fields{
-					"stream_name": ss.GetStreamName(),
-					"source_url":  sourceURL,
-				}).Info("STREAM_SOURCE resolved to processing source override")
-				incMistWebhook("STREAM_SOURCE", "local_processing_source")
-				c.String(http.StatusOK, sourceURL)
-				return
-			}
 			procDir := filepath.Join(config.GetStoragePath(), "processing")
 			if local := findStagedProcessingSource(procDir, hash); local != "" {
 				logger.WithFields(logging.Fields{

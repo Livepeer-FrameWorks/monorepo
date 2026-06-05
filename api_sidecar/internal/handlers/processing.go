@@ -269,6 +269,15 @@ func getProcessingSourceOverride(streamName string) (string, bool) {
 	return sourceURL, ok
 }
 
+func clearProcessingSourceOverride(streamName string) {
+	if streamName == "" {
+		return
+	}
+	processingSourceOverridesMu.Lock()
+	delete(processingSourceOverrides, streamName)
+	processingSourceOverridesMu.Unlock()
+}
+
 // restartProcessingStreamForLocalFallback tears down the retired generation and
 // clears its broken artifact, in order: stop the push, nuke the stream, confirm
 // the generation has drained, and only THEN remove the output file — so the
@@ -292,18 +301,30 @@ func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logr
 	return nil
 }
 
+const (
+	processingGenerationDrainTimeout      = 30 * time.Second
+	processingGenerationDrainPollInterval = 200 * time.Millisecond
+)
+
+type processingActiveStreamsFunc func() (map[string]interface{}, error)
+type processingClientsFunc func() (map[string]interface{}, error)
+
 // drainProcessingGeneration blocks until the stream is no longer active, so a
 // restarted push cannot race the retired generation. A transient stream-status
 // read is retried within the window; failing to confirm teardown by the deadline
 // returns an error so the caller aborts rather than restarting over a live
 // generation.
 func drainProcessingGeneration(log *logrus.Entry, mistClient *mist.Client, streamName string) error {
-	deadline := time.Now().Add(5 * time.Second)
+	return drainProcessingGenerationFromActiveStreams(log, streamName, mistClient.GetActiveStreams, processingGenerationDrainTimeout, processingGenerationDrainPollInterval)
+}
+
+func drainProcessingGenerationFromActiveStreams(log *logrus.Entry, streamName string, getActiveStreams processingActiveStreamsFunc, timeout, pollInterval time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := mistClient.GetActiveStreams()
+		resp, err := getActiveStreams()
 		if err != nil {
 			log.WithError(err).Warn("Failed to check processing stream shutdown; retrying")
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(pollInterval)
 			continue
 		}
 		active, ok := resp["active_streams"].(map[string]interface{})
@@ -313,9 +334,72 @@ func drainProcessingGeneration(log *logrus.Entry, mistClient *mist.Client, strea
 		if _, ok := active[streamName]; !ok {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	return fmt.Errorf("processing stream %s still active after drain deadline", streamName)
+}
+
+func drainProcessingSessions(log *logrus.Entry, mistClient *mist.Client, streamName string) error {
+	return drainProcessingSessionsFromClients(log, streamName, mistClient.GetClients, processingGenerationDrainTimeout, processingGenerationDrainPollInterval)
+}
+
+func drainProcessingSessionsFromClients(log *logrus.Entry, streamName string, getClients processingClientsFunc, timeout, pollInterval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := getClients()
+		if err != nil {
+			log.WithError(err).Warn("Failed to check processing session shutdown; retrying")
+			time.Sleep(pollInterval)
+			continue
+		}
+		active, err := processingClientCount(resp, streamName)
+		if err != nil {
+			log.WithError(err).Warn("Failed to parse processing sessions; retrying")
+			time.Sleep(pollInterval)
+			continue
+		}
+		if active == 0 {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	return fmt.Errorf("processing stream %s still has active sessions after drain deadline", streamName)
+}
+
+func processingClientCount(resp map[string]interface{}, streamName string) (int, error) {
+	clients, ok := resp["clients"].(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("clients missing from Mist response")
+	}
+	fieldsRaw, ok := clients["fields"].([]interface{})
+	if !ok {
+		return 0, fmt.Errorf("client fields missing from Mist response")
+	}
+	streamIdx := -1
+	for i, f := range fieldsRaw {
+		if name, isString := f.(string); isString && name == "stream" {
+			streamIdx = i
+			break
+		}
+	}
+	if streamIdx < 0 {
+		return 0, fmt.Errorf("stream field missing from Mist clients response")
+	}
+	data, ok := clients["data"].([]interface{})
+	if !ok {
+		return 0, fmt.Errorf("client data missing from Mist response")
+	}
+	count := 0
+	for _, rowRaw := range data {
+		row, ok := rowRaw.([]interface{})
+		if !ok || streamIdx >= len(row) {
+			continue
+		}
+		if name, ok := row[streamIdx].(string); ok && name == streamName {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
@@ -779,25 +863,40 @@ loop:
 			return
 		}
 	}
+	if clipSource {
+		if err := drainProcessingSessions(log, mistClient, streamName); err != nil {
+			log.WithError(err).Error("Processing session drain failed before clip publication")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip publication drain failed: %v", err), nil, "", 0)
+			return
+		}
+	}
 	h.sendProgress(send, req.GetJobId(), 100, sourceDurationMs, sourceDurationMs)
 
-	// Send result with output path so Foghorn can register the artifact
-	// in the warm cache immediately. This must happen BEFORE DTSH
-	// generation because vod+ STREAM_SOURCE resolves via Foghorn's
-	// in-memory state.
-	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
-	log.Info("Processing job result sent, artifact registered with Foghorn")
-
-	// Generate DTSH by booting the output as vod+ (no MistProc* re-trigger).
-	// Foghorn now has the artifact registered, so vod+ STREAM_SOURCE resolves.
-	// Foghorn is the sole authority for the output runtime name; Helmsman
-	// uses it verbatim and skips generation when missing.
 	vodStreamName := strings.TrimSpace(req.GetOutputRuntimeName())
 	if vodStreamName == "" {
 		log.Warn("ProcessingJobRequest missing output_runtime_name; skipping DTSH generation (will be generated on first playback)")
-	} else if err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log); err != nil {
-		log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
+	} else {
+		setProcessingSourceOverride(vodStreamName, outputPath)
+		err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
+		clearProcessingSourceOverride(vodStreamName)
+		if err != nil {
+			if clipSource {
+				log.WithError(err).Error("Clip DTSH generation failed before publication")
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip dtsh generation failed: %v", err), nil, "", 0)
+				return
+			}
+			log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
+		}
 	}
+
+	// Send result with output path so Foghorn can register the artifact
+	// in the warm cache immediately. DTSH generation above uses a temporary
+	// local source override, so playback cannot win the publish-vs-sidecar
+	// race for freshly-created clips.
+	h.sendResult(send, req.GetJobId(), "completed", "", outputs, outputPath, outputSizeBytes)
+	log.Info("Processing job result sent, artifact registered with Foghorn")
 
 	// Trigger storage check so the .mkv + .dtsh freeze to S3 promptly
 	TriggerStorageCheck()
