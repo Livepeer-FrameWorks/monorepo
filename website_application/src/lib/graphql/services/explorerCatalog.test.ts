@@ -18,7 +18,13 @@ import { describe, expect, it } from "vitest";
 
 import { EXPLORER_CATALOG, type ExplorerExample } from "./explorerCatalog";
 import { explorerService } from "./explorer";
-import { stripClientDirectives } from "./gqlParser";
+import {
+  DEMO_CLUSTER_RAW_ID,
+  DEMO_PLAYBACK_ID,
+  DEMO_STREAM_GLOBAL_ID,
+  DEMO_STREAM_RAW_ID,
+} from "./demoDefaults";
+import { formatOperationForTemplate, parseGqlFile, stripClientDirectives } from "./gqlParser";
 import type { IntrospectedSchema, SchemaField } from "./schemaUtils";
 
 const repoRoot = existsSync(path.resolve(process.cwd(), "pkg/graphql"))
@@ -125,6 +131,16 @@ function readTemplate(templatePath: string): string {
   return readFileSync(path.join(graphqlRoot, templatePath), "utf8");
 }
 
+function readGatewayDemoConst(name: string): string {
+  const source = readFileSync(
+    path.join(repoRoot, "api_gateway/internal/demo/generators.go"),
+    "utf8"
+  );
+  const match = source.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]+)"`));
+  expect(match, `missing gateway demo const ${name}`).toBeTruthy();
+  return match?.[1] ?? "";
+}
+
 function getRequiredVariableNames(document: DocumentNode): string[] {
   const operation = getOperation(document);
   if (!operation) return [];
@@ -140,7 +156,35 @@ function getDefinitionPath(definition: DefinitionNode): string {
   return definition.kind;
 }
 
+const placeholderValues = [
+  "stream_global_id",
+  "playback_or_asset_id",
+  "playback_id",
+  "your-id-here",
+  "cluster_id",
+  "node_id",
+  "upload_id",
+  "key_id",
+  "session_id",
+];
+
+function expectNoPlaceholderValues(value: unknown, label: string): void {
+  const serialized = JSON.stringify(value ?? {});
+  for (const placeholder of placeholderValues) {
+    expect(serialized, `${label} contains ${placeholder}`).not.toContain(placeholder);
+  }
+}
+
 describe("EXPLORER_CATALOG", () => {
+  it("keeps demo stream defaults aligned with gateway demo fixtures", () => {
+    expect(DEMO_STREAM_RAW_ID).toBe(readGatewayDemoConst("DemoStreamID"));
+    expect(DEMO_PLAYBACK_ID).toBe(readGatewayDemoConst("DemoPlaybackID"));
+    expect(DEMO_CLUSTER_RAW_ID).toBe(readGatewayDemoConst("DemoMediaClusterID"));
+    expect(DEMO_STREAM_GLOBAL_ID).toBe(
+      Buffer.from(`Stream:${DEMO_STREAM_RAW_ID}`).toString("base64")
+    );
+  });
+
   it("uses existing templates with matching operation types", () => {
     const seenSectionIds = new Set<string>();
     const seenExampleIds = new Set<string>();
@@ -175,6 +219,31 @@ describe("EXPLORER_CATALOG", () => {
             ).toBe(true);
           }
         }
+      }
+    }
+  });
+
+  it("does not expose placeholder IDs in catalog or generated template variables", () => {
+    for (const section of EXPLORER_CATALOG) {
+      for (const example of section.examples) {
+        expectNoPlaceholderValues(example.variables, example.id);
+      }
+    }
+
+    const operationFiles = walkGqlFiles(operationsRoot).filter(
+      (file) => !file.includes(`${path.sep}fragments${path.sep}`)
+    );
+
+    for (const file of operationFiles) {
+      const relativePath = path.relative(graphqlRoot, file);
+      const formatted = formatOperationForTemplate(parseGqlFile(readFileSync(file, "utf8"), file));
+      expectNoPlaceholderValues(formatted.variables, relativePath);
+
+      if (relativePath === "operations/queries/GetStream.gql") {
+        expect(formatted.variables).toMatchObject({
+          id: DEMO_STREAM_GLOBAL_ID,
+          streamId: DEMO_STREAM_GLOBAL_ID,
+        });
       }
     }
   });
@@ -258,15 +327,17 @@ describe("playground query normalization and generation", () => {
 
     for (const { operationType, fields } of rootFields) {
       for (const field of fields) {
-        const { query } = explorerService.generateQueryFromField(
+        const generated = explorerService.generateQueryFromField(
           field,
           operationType,
           introspectedSchema
         );
+        const { query } = generated;
         const document = parse(stripClientDirectives(query));
         const errors = validate(schema, document, specifiedRules);
 
         expect(errors, `${operationType}.${field.name}\n${query}`).toEqual([]);
+        expectNoPlaceholderValues(generated.variables, `${operationType}.${field.name}`);
       }
     }
   });

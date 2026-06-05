@@ -1,0 +1,9 @@
+export const DEMO_STREAM_RAW_ID = "5eedfeed-11fe-ca57-feed-11feca570001";
+export const DEMO_STREAM_GLOBAL_ID = "U3RyZWFtOjVlZWRmZWVkLTExZmUtY2E1Ny1mZWVkLTExZmVjYTU3MDAwMQ==";
+export const DEMO_PLAYBACK_ID = "pb_demo_live_001";
+export const DEMO_CLUSTER_RAW_ID = "demo-media";
+export const DEMO_CLUSTER_GLOBAL_ID = "Q2x1c3RlcjpkZW1vLW1lZGlh";
+export const DEMO_NODE_RAW_ID = "node_demo_us_west_01";
+export const DEMO_NODE_GLOBAL_ID = "SW5mcmFzdHJ1Y3R1cmVOb2RlOm5vZGVfZGVtb191c193ZXN0XzAx";
+export const DEMO_UPLOAD_ID = "upload_demo_001";
+export const DEMO_SESSION_ID = "session_demo_001";

@@ -26,6 +26,9 @@ func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRete
 	if err := middleware.RequirePermission(ctx, "billing:read"); err != nil {
 		return nil, err
 	}
+	if middleware.IsDemoMode(ctx) {
+		return demoMediaRetentionPolicy(), nil
+	}
 	resp, err := r.Clients.Commodore.GetMediaRetentionPolicy(ctx, &pb.GetMediaRetentionPolicyRequest{})
 	if err != nil {
 		r.Logger.WithError(err).Error("MediaRetentionPolicy: Commodore.GetMediaRetentionPolicy failed")
@@ -72,6 +75,9 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 				Field:   strPtr("days"),
 			}, nil
 		}
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demoMediaRetentionPolicy(), nil
 	}
 
 	resp, err := r.Clients.Commodore.SetMediaRetentionPolicy(ctx, &pb.SetMediaRetentionPolicyRequest{
@@ -126,6 +132,16 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 		return &model.ValidationError{
 			Message: "at least one override or clear flag must be set",
 		}, nil
+	}
+	if middleware.IsDemoMode(ctx) {
+		out := &model.StreamRetentionOverrides{StreamID: input.StreamID}
+		if v := input.DvrRetentionDaysOverride; v != nil {
+			out.DvrRetentionDaysOverride = v
+		}
+		if v := input.ClipRetentionDaysOverride; v != nil {
+			out.ClipRetentionDaysOverride = v
+		}
+		return out, nil
 	}
 
 	resp, err := r.Clients.Commodore.SetStreamRetentionOverrides(ctx, req)
@@ -184,6 +200,9 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 			Field:   strPtr("retentionDays"),
 		}, nil
 	}
+	if middleware.IsDemoMode(ctx) {
+		return demoEffectiveRetention(input.RetentionDays), nil
+	}
 	req := &pb.UpdateAssetRetentionRequest{
 		TargetType: protoTargetType(input.TargetType),
 		TargetId:   input.TargetID,
@@ -227,6 +246,9 @@ func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input mode
 			Message: "targetId is required",
 			Field:   strPtr("targetId"),
 		}, nil
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demoEffectiveRetention(nil), nil
 	}
 	resp, err := r.Clients.Commodore.ResetAssetRetention(ctx, &pb.ResetAssetRetentionRequest{
 		TargetType: protoTargetType(input.TargetType),
@@ -303,6 +325,19 @@ func mediaRetentionPolicyFromProto(p *pb.GetMediaRetentionPolicyResponse) *model
 	return out
 }
 
+func demoMediaRetentionPolicy() *model.MediaRetentionPolicy {
+	now := time.Now()
+	updatedBy := "demo"
+	return &model.MediaRetentionPolicy{
+		Bounds:                     &pb.MediaRetentionBounds{MaxRecordingRetentionDays: 90},
+		UpdatedBy:                  &updatedBy,
+		UpdatedAt:                  &now,
+		EffectiveVodRetentionDays:  0,
+		EffectiveDvrRetentionDays:  30,
+		EffectiveClipRetentionDays: 30,
+	}
+}
+
 func effectiveRetentionFromProto(p *pb.UpdateAssetRetentionResponse) *model.EffectiveRetention {
 	if p == nil {
 		return nil
@@ -314,6 +349,22 @@ func effectiveRetentionFromProto(p *pb.UpdateAssetRetentionResponse) *model.Effe
 	if ts := p.GetRetentionUntil(); ts != nil {
 		t := ts.AsTime()
 		out.RetentionUntil = &t
+	}
+	return out
+}
+
+func demoEffectiveRetention(retentionDays *int) *model.EffectiveRetention {
+	days := 30
+	if retentionDays != nil {
+		days = *retentionDays
+	}
+	until := time.Now().Add(time.Duration(days) * 24 * time.Hour)
+	out := &model.EffectiveRetention{
+		RetentionDays: days,
+		Source:        model.RetentionSourcePerAssetOverride,
+	}
+	if days > 0 {
+		out.RetentionUntil = &until
 	}
 	return out
 }

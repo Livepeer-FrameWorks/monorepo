@@ -4,6 +4,14 @@
  * without requiring a full GraphQL AST parser
  */
 
+import {
+  DEMO_CLUSTER_GLOBAL_ID,
+  DEMO_CLUSTER_RAW_ID,
+  DEMO_NODE_RAW_ID,
+  DEMO_STREAM_GLOBAL_ID,
+  DEMO_UPLOAD_ID,
+} from "./demoDefaults";
+
 export type OperationType = "query" | "mutation" | "subscription" | "fragment";
 
 export interface VariableDefinition {
@@ -231,9 +239,10 @@ export function generateDefaultVariables(variables: VariableDefinition[]): Recor
 }
 
 function getDefaultForVariableName(name: string, type: string): unknown | null {
-  if (name === "streamId") return "stream_global_id";
-  if (name === "nodeId") return "node_id";
-  if (name === "clusterId") return "cluster_id";
+  if (name === "streamId") return DEMO_STREAM_GLOBAL_ID;
+  if (name === "nodeId") return DEMO_NODE_RAW_ID;
+  if (name === "clusterId")
+    return type.includes("ID") ? DEMO_CLUSTER_GLOBAL_ID : DEMO_CLUSTER_RAW_ID;
   if (name === "id" && type.includes("ID")) return "id";
   if (name === "page") return { first: 50 };
   if (name === "timeRange") {
@@ -259,7 +268,7 @@ function getDefaultForType(type: string): unknown {
   // Handle known scalar types
   switch (baseType) {
     case "ID":
-      return "your-id-here";
+      return DEMO_STREAM_GLOBAL_ID;
     case "String":
       return "";
     case "Int":
@@ -325,7 +334,7 @@ function getDefaultForInputType(typeName: string): unknown {
 
     case "CreateClipInput":
       return {
-        streamId: "stream_global_id",
+        streamId: DEMO_STREAM_GLOBAL_ID,
         title: "Example Clip",
         description: "Example clip description",
         mode: "ABSOLUTE",
@@ -344,7 +353,7 @@ function getDefaultForInputType(typeName: string): unknown {
 
     case "CompleteVodUploadInput":
       return {
-        uploadId: "upload_id",
+        uploadId: DEMO_UPLOAD_ID,
         parts: [{ partNumber: 1, etag: "etag-value" }],
       };
 
@@ -369,12 +378,12 @@ function getDefaultForInputType(typeName: string): unknown {
 
     case "StartDvrInput":
       return {
-        streamId: "stream_global_id",
+        streamId: DEMO_STREAM_GLOBAL_ID,
       };
 
     case "StopDvrInput":
       return {
-        streamId: "stream_global_id",
+        streamId: DEMO_STREAM_GLOBAL_ID,
       };
 
     case "CreatePaymentInput":
@@ -526,7 +535,7 @@ export function getVariableHint(name: string, type: string): string | undefined 
     return `${name.replace(/Id$/, "")} identifier`;
   }
   if (name === "streamId") {
-    return "Public stream identifier (safe to expose)";
+    return "Stream.id Relay global ID";
   }
   if (name === "nodeId") {
     return "Infrastructure node identifier";
@@ -560,12 +569,24 @@ export function formatOperationForTemplate(op: ParsedOperation): {
   query: string;
   variables: Record<string, unknown>;
 } {
+  const variables = generateDefaultVariables(op.variables);
+  if (usesStreamIDVariable(op) && typeof variables.id === "string") {
+    variables.id = DEMO_STREAM_GLOBAL_ID;
+  }
+
   return {
     name: formatOperationName(op.name),
     description: op.description || `${capitalizeFirst(op.type)} operation`,
     query: stripClientDirectives(op.query),
-    variables: generateDefaultVariables(op.variables),
+    variables,
   };
+}
+
+function usesStreamIDVariable(op: ParsedOperation): boolean {
+  return (
+    op.variables.some((variable) => variable.name === "streamId") ||
+    ["GetStream", "UpdateStream", "DeleteStream", "RefreshStreamKey"].includes(op.name)
+  );
 }
 
 /**

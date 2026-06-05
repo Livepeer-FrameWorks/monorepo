@@ -34,6 +34,13 @@ func (r *Resolver) DoTestPlaybackAccess(ctx context.Context, input model.TestPla
 			Field:   strPtr("internalName"),
 		}, nil
 	}
+	if middleware.IsDemoMode(ctx) {
+		return &model.PlaybackAccessDecision{
+			Allowed:    true,
+			PolicyType: "PUBLIC",
+			Reason:     strPtr("demo playback access allowed"),
+		}, nil
+	}
 
 	resp, err := r.Clients.Commodore.TestPlaybackAccess(ctx, &pb.TestPlaybackAccessRequest{
 		PlaybackId:   playback,

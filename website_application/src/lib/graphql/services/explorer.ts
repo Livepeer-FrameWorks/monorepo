@@ -30,6 +30,13 @@ import {
   type ResolvedExplorerSection,
   type ResolvedExplorerExample,
 } from "./explorerCatalog";
+import {
+  DEMO_CLUSTER_GLOBAL_ID,
+  DEMO_CLUSTER_RAW_ID,
+  DEMO_NODE_RAW_ID,
+  DEMO_STREAM_GLOBAL_ID,
+  DEMO_UPLOAD_ID,
+} from "./demoDefaults";
 
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
@@ -790,9 +797,14 @@ ${Object.entries(variables)
     const variables: Record<string, unknown> = {};
     for (const arg of args) {
       let value = this.getDefaultValueForType(arg.type);
-      if (arg.name === "streamId") value = "stream_global_id";
-      if (arg.name === "nodeId") value = "node_id";
-      if (arg.name === "clusterId") value = "cluster_id";
+      if (arg.name === "streamId") value = DEMO_STREAM_GLOBAL_ID;
+      if (field.name === "stream" && arg.name === "id") value = DEMO_STREAM_GLOBAL_ID;
+      if (arg.name === "nodeId") value = DEMO_NODE_RAW_ID;
+      if (arg.name === "clusterId") {
+        value = this.getGraphQLTypeName(arg.type).includes("ID")
+          ? DEMO_CLUSTER_GLOBAL_ID
+          : DEMO_CLUSTER_RAW_ID;
+      }
       if (arg.name === "page") value = { first: 50 };
       if (arg.name === "timeRange") value = this.getDefaultForInputType("TimeRangeInput");
       variables[arg.name] = value;
@@ -839,7 +851,7 @@ ${Object.entries(variables)
 
     switch (typeName) {
       case "ID":
-        return "your-id-here";
+        return DEMO_STREAM_GLOBAL_ID;
       case "String":
         return "";
       case "Int":
@@ -903,7 +915,7 @@ ${Object.entries(variables)
 
       case "CreateClipInput":
         return {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           title: "Example Clip",
           description: "Example clip description",
           mode: "ABSOLUTE",
@@ -922,7 +934,7 @@ ${Object.entries(variables)
 
       case "CompleteVodUploadInput":
         return {
-          uploadId: "upload_id",
+          uploadId: DEMO_UPLOAD_ID,
           parts: [{ partNumber: 1, etag: "etag-value" }],
         };
 
@@ -947,12 +959,12 @@ ${Object.entries(variables)
 
       case "StartDvrInput":
         return {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         };
 
       case "StopDvrInput":
         return {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         };
 
       case "CreatePaymentInput":

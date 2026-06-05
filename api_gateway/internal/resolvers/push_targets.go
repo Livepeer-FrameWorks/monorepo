@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoGetStreamPushTargets returns push targets for a stream (Stream.pushTargets field resolver).
@@ -34,7 +36,22 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 	}
 
 	if middleware.IsDemoMode(ctx) {
-		return nil, fmt.Errorf("push target creation not available in demo mode")
+		now := timestamppb.New(time.Now())
+		platform := "custom"
+		if input.Platform != nil && strings.TrimSpace(*input.Platform) != "" {
+			platform = *input.Platform
+		}
+		return &pb.PushTarget{
+			Id:        "push_target_demo_created",
+			StreamId:  streamID,
+			Platform:  platform,
+			Name:      input.Name,
+			TargetUri: input.TargetURI,
+			IsEnabled: true,
+			Status:    "idle",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, nil
 	}
 
 	req := &pb.CreatePushTargetRequest{
@@ -74,7 +91,30 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 	}
 
 	if middleware.IsDemoMode(ctx) {
-		return nil, fmt.Errorf("push target update not available in demo mode")
+		now := timestamppb.New(time.Now())
+		name := "Backup CDN"
+		if input.Name != nil && strings.TrimSpace(*input.Name) != "" {
+			name = *input.Name
+		}
+		targetURI := "rtmp://rtmp.example.test/live/stream-key"
+		if input.TargetURI != nil && strings.TrimSpace(*input.TargetURI) != "" {
+			targetURI = *input.TargetURI
+		}
+		enabled := true
+		if input.IsEnabled != nil {
+			enabled = *input.IsEnabled
+		}
+		return &pb.PushTarget{
+			Id:        id,
+			StreamId:  demo.DemoStreamID,
+			Platform:  "custom",
+			Name:      name,
+			TargetUri: targetURI,
+			IsEnabled: enabled,
+			Status:    "idle",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, nil
 	}
 
 	rawID, err := globalid.DecodeExpected(id, globalid.TypePushTarget)

@@ -36,6 +36,12 @@ func (r *Resolver) DoCreateSigningKey(ctx context.Context, input model.CreateSig
 	if name == "" {
 		return &model.ValidationError{Message: "name is required"}, nil
 	}
+	if middleware.IsDemoMode(ctx) {
+		return &model.CreateSigningKeySuccess{
+			SigningKey:    demoSigningKey(name, "active"),
+			PrivateKeyPem: "-----BEGIN PRIVATE KEY-----\nDEMO\n-----END PRIVATE KEY-----",
+		}, nil
+	}
 
 	resp, err := r.Clients.Commodore.CreateSigningKey(ctx, name)
 	if err != nil {
@@ -63,6 +69,9 @@ func (r *Resolver) DoRevokeSigningKey(ctx context.Context, id string) (model.Rev
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return &model.NotFoundError{Message: "id is required"}, nil
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demoSigningKey("demo-player", "revoked"), nil
 	}
 
 	sk, err := r.Clients.Commodore.RevokeSigningKey(ctx, id)
@@ -143,6 +152,16 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 			Url:       input.Policy.Webhook.URL,
 			TimeoutMs: timeout,
 			SecretPt:  secret,
+		}
+	}
+	if middleware.IsDemoMode(ctx) {
+		switch target.kind {
+		case "stream":
+			return r.DoGetStream(ctx, target.id)
+		case "vod_asset":
+			return r.DoGetVodAsset(ctx, target.id)
+		case "clip":
+			return r.DoGetClip(ctx, target.id)
 		}
 	}
 
@@ -229,6 +248,17 @@ func (r *Resolver) DoListSigningKeys(ctx context.Context, statusFilter *string, 
 	if statusFilter != nil {
 		sf = *statusFilter
 	}
+	if middleware.IsDemoMode(ctx) {
+		key := demoSigningKey("demo-player", "active")
+		return &model.SigningKeysConnection{
+			Edges: []*model.SigningKeyEdge{
+				{Cursor: key.GetId(), Node: key},
+			},
+			Nodes:      []*pb.SigningKey{key},
+			PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+			TotalCount: 1,
+		}, nil
+	}
 	resp, err := r.Clients.Commodore.ListSigningKeys(ctx, sf, int32(limit), after)
 	if err != nil {
 		return nil, fmt.Errorf("list signing keys: %w", err)
@@ -267,6 +297,9 @@ func (r *Resolver) DoGetPlaybackPolicyByPlaybackID(ctx context.Context, playback
 	if playbackID == "" {
 		return nil, nil
 	}
+	if middleware.IsDemoMode(ctx) {
+		return nil, nil
+	}
 	resp, err := r.Clients.Commodore.ResolvePlaybackPolicy(ctx, playbackID)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -284,6 +317,19 @@ func (r *Resolver) DoGetPlaybackPolicyByPlaybackID(ctx context.Context, playback
 type playbackPolicyTarget struct {
 	kind string // "stream" | "vod_asset" | "clip"
 	id   string
+}
+
+func demoSigningKey(name string, status string) *pb.SigningKey {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return &pb.SigningKey{
+		Id:           "signing_key_demo_001",
+		Kid:          "kid_demo_001",
+		Name:         name,
+		Algorithm:    "ES256",
+		PublicKeyPem: "-----BEGIN PUBLIC KEY-----\nDEMO\n-----END PUBLIC KEY-----",
+		Status:       status,
+		CreatedAt:    now,
+	}
 }
 
 // pickPlaybackPolicyTarget enforces the "exactly one of" rule from the schema.

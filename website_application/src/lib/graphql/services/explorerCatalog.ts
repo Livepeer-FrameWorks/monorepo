@@ -1,4 +1,10 @@
 import type { Template } from "./explorer";
+import {
+  DEMO_CLUSTER_GLOBAL_ID,
+  DEMO_PLAYBACK_ID,
+  DEMO_SESSION_ID,
+  DEMO_STREAM_GLOBAL_ID,
+} from "./demoDefaults";
 
 export type ExplorerExample = {
   id: string;
@@ -51,8 +57,8 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStream.gql",
         variables: {
-          id: "stream_global_id",
-          streamId: "stream_global_id",
+          id: DEMO_STREAM_GLOBAL_ID,
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "stream"],
       },
@@ -63,7 +69,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/ResolveViewerEndpoint.gql",
         variables: {
-          contentId: "playback_or_asset_id",
+          contentId: DEMO_PLAYBACK_ID,
         },
         tags: ["core", "developer", "playback"],
       },
@@ -74,7 +80,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamKeys.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "stream", "auth"],
       },
@@ -85,7 +91,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetPushTargets.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "stream", "multistream"],
       },
@@ -127,8 +133,8 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamAnalyticsSummary.gql",
         variables: {
-          id: "stream_global_id",
-          streamId: "stream_global_id",
+          id: DEMO_STREAM_GLOBAL_ID,
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "analytics", "stream"],
       },
@@ -147,7 +153,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetGeographicDistribution.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "analytics", "audience"],
       },
@@ -181,7 +187,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamHealthSummary.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "health"],
       },
@@ -192,7 +198,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetClientQoeSummary.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "health", "qoe"],
       },
@@ -203,8 +209,8 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamHealthCore.gql",
         variables: {
-          id: "stream_global_id",
-          streamId: "stream_global_id",
+          id: DEMO_STREAM_GLOBAL_ID,
+          streamId: DEMO_STREAM_GLOBAL_ID,
           metricsFirst: 25,
         },
         tags: ["advanced", "health"],
@@ -216,7 +222,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamHealth5mTimeSeries.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           first: 48,
         },
         tags: ["advanced", "health"],
@@ -228,7 +234,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamHealthLifecycle.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           bufferFirst: 25,
         },
         tags: ["advanced", "health", "lifecycle"],
@@ -240,7 +246,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetRebufferingEventsConnection.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "health"],
       },
@@ -251,8 +257,8 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamOverviewCore.gql",
         variables: {
-          id: "stream_global_id",
-          streamId: "stream_global_id",
+          id: DEMO_STREAM_GLOBAL_ID,
+          streamId: DEMO_STREAM_GLOBAL_ID,
           viewerFirst: 48,
         },
         tags: ["advanced", "analytics", "health"],
@@ -264,7 +270,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamOverviewCharts.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           healthFirst: 24,
         },
         tags: ["advanced", "analytics", "health"],
@@ -283,7 +289,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetConnectionEvents.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           first: 25,
         },
         tags: ["core", "lifecycle"],
@@ -295,7 +301,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetViewerSessionsConnection.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           first: 25,
         },
         tags: ["advanced", "lifecycle"],
@@ -307,7 +313,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetStreamEvents.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           first: 25,
         },
         tags: ["advanced", "lifecycle"],
@@ -388,7 +394,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "query",
         templatePath: "operations/queries/GetRoutingEfficiency.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "infra", "routing"],
       },
@@ -581,7 +587,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/StreamEvents.gql",
         expectedPayload: "Live stream status transitions, buffer updates, and lifecycle events.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "subscription"],
       },
@@ -593,7 +599,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/ViewerMetricsStream.gql",
         expectedPayload: "Connect/disconnect events with protocol and node metadata.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["core", "subscription"],
       },
@@ -605,7 +611,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/ConnectionEventsLive.gql",
         expectedPayload: "Connection events with geo, node, and session metadata.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "subscription"],
       },
@@ -617,7 +623,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/TrackListUpdates.gql",
         expectedPayload: "Track count + track metadata for audio/video tracks.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "subscription"],
       },
@@ -629,7 +635,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/ProcessingEventsLive.gql",
         expectedPayload: "Processing job events and usage records.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "subscription"],
       },
@@ -641,7 +647,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/StorageEventsLive.gql",
         expectedPayload: "Storage freeze, relay cache fill, upload, and retention events.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "subscription"],
       },
@@ -662,7 +668,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/subscriptions/DvrLifecycle.gql",
         expectedPayload: "DVR status changes and segment counts.",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
         },
         tags: ["advanced", "subscription"],
       },
@@ -760,7 +766,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "mutation",
         templatePath: "operations/mutations/CreateEnrollmentToken.gql",
         variables: {
-          clusterId: "cluster_id",
+          clusterId: DEMO_CLUSTER_GLOBAL_ID,
           name: "Amsterdam edge 02",
           ttl: "30d",
         },
@@ -773,7 +779,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "mutation",
         templatePath: "operations/mutations/CreateStreamKey.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           input: {
             name: "primary-key",
           },
@@ -787,7 +793,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "mutation",
         templatePath: "operations/mutations/CreatePushTarget.gql",
         variables: {
-          streamId: "stream_global_id",
+          streamId: DEMO_STREAM_GLOBAL_ID,
           input: {
             platform: "custom",
             name: "Backup CDN",
@@ -817,12 +823,12 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/mutations/TestPlaybackAccess.gql",
         variables: {
           input: {
-            playbackId: "playback_id",
+            playbackId: DEMO_PLAYBACK_ID,
             viewerToken: "",
             viewerIp: "203.0.113.10",
             requestUrl: "https://viewer.example.net/watch",
             connector: "hls",
-            sessionId: "session_id",
+            sessionId: DEMO_SESSION_ID,
             fireWebhook: false,
           },
         },
@@ -836,7 +842,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         templatePath: "operations/mutations/SetPlaybackPolicy.gql",
         variables: {
           input: {
-            streamId: "stream_global_id",
+            streamId: DEMO_STREAM_GLOBAL_ID,
             policy: {
               type: "JWT",
               jwt: {

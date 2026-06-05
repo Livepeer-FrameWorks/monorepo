@@ -973,7 +973,7 @@ func GenerateStorageEventSubscriptionEvents() []*pb.StorageEvent {
 			Id:             "storage_demo_002",
 			Timestamp:      timestamppb.New(now),
 			TenantId:       "00000000-0000-0000-0000-000000000001",
-			StreamId:       "demo_live_stream_001",
+			StreamId:       DemoStreamID,
 			AssetHash:      "a1b2c3d4e5f6789012345678901234ab",
 			Action:         "synced",
 			AssetType:      "clip",
@@ -1291,7 +1291,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:        "evt_demo_1",
 			Timestamp:      timestamppb.New(now.Add(-30 * time.Minute)),
 			TenantId:       "00000000-0000-0000-0000-000000000001",
-			StreamId:       "demo_live_stream_001",
+			StreamId:       DemoStreamID,
 			SessionId:      "sess_demo_1",
 			ConnectionAddr: "192.168.1.100",
 			Connector:      "HLS",
@@ -1307,7 +1307,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:                "evt_demo_1_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-5 * time.Minute)),
 			TenantId:               "00000000-0000-0000-0000-000000000001",
-			StreamId:               "demo_live_stream_001",
+			StreamId:               DemoStreamID,
 			SessionId:              "sess_demo_1",
 			ConnectionAddr:         "192.168.1.100",
 			Connector:              "HLS",
@@ -1325,7 +1325,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:        "evt_demo_2",
 			Timestamp:      timestamppb.New(now.Add(-25 * time.Minute)),
 			TenantId:       "00000000-0000-0000-0000-000000000001",
-			StreamId:       "demo_live_stream_001",
+			StreamId:       DemoStreamID,
 			SessionId:      "sess_demo_2",
 			ConnectionAddr: "203.0.113.45",
 			Connector:      "DASH",
@@ -1341,7 +1341,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:                "evt_demo_2_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-2 * time.Minute)),
 			TenantId:               "00000000-0000-0000-0000-000000000001",
-			StreamId:               "demo_live_stream_001",
+			StreamId:               DemoStreamID,
 			SessionId:              "sess_demo_2",
 			ConnectionAddr:         "203.0.113.45",
 			Connector:              "DASH",
@@ -1359,7 +1359,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:        "evt_demo_3",
 			Timestamp:      timestamppb.New(now.Add(-20 * time.Minute)),
 			TenantId:       "00000000-0000-0000-0000-000000000001",
-			StreamId:       "demo_live_stream_001",
+			StreamId:       DemoStreamID,
 			SessionId:      "sess_demo_3",
 			ConnectionAddr: "198.51.100.78",
 			Connector:      "WebRTC",
@@ -1375,7 +1375,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			EventId:                "evt_demo_4_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-10 * time.Minute)),
 			TenantId:               "00000000-0000-0000-0000-000000000001",
-			StreamId:               "demo_live_stream_001",
+			StreamId:               DemoStreamID,
 			SessionId:              "sess_demo_4",
 			ConnectionAddr:         "45.33.32.156",
 			Connector:              "HLS",
@@ -4511,6 +4511,47 @@ func GenerateClientQoeSummary() *model.ClientQoeSummary {
 		AvgBandwidthOut:     850000,
 		AvgConnectionTime:   1.2,
 		TotalActiveSessions: 42,
+	}
+}
+
+// GeneratePlayerBootSummary returns demo player startup summary data.
+func GeneratePlayerBootSummary() *pb.PlayerBootSummary {
+	return &pb.PlayerBootSummary{
+		BootCount:           1280,
+		ErrorCount:          12,
+		P50TtfMs:            820,
+		P95TtfMs:            1950,
+		P99TtfMs:            3400,
+		AvgGatewayResolveMs: 110,
+		AvgMistHydrateMs:    140,
+		AvgPlayerSelectMs:   35,
+		AvgConnectMs:        260,
+		AvgPrebufferMs:      300,
+		CacheHitRatio:       0.78,
+	}
+}
+
+// GenerateClusterBootOps returns demo cluster-ops boot aggregate data.
+func GenerateClusterBootOps() []*pb.ClusterBootOps {
+	return []*pb.ClusterBootOps{
+		{
+			ServingClusterId: "cluster-us-east",
+			NodeId:           "edge-nyc-1",
+			Protocol:         "hls",
+			BootCount:        640,
+			ErrorCount:       6,
+			P95TtfMs:         1880,
+			CacheHitRatio:    0.81,
+		},
+		{
+			ServingClusterId: "cluster-us-east",
+			NodeId:           "edge-nyc-2",
+			Protocol:         "webrtc",
+			BootCount:        210,
+			ErrorCount:       2,
+			P95TtfMs:         640,
+			CacheHitRatio:    0.0,
+		},
 	}
 }
 

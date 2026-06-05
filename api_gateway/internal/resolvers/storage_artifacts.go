@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -20,6 +21,45 @@ import (
 func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *model.StorageArtifactsInput) (*model.StorageArtifactsConnection, error) {
 	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		now := time.Now()
+		size := float64(1048576)
+		playbackID := demo.DemoVodPlaybackID
+		streamID := demo.DemoStreamID
+		isTrue := true
+		location := "cold"
+		syncStatus := "synced"
+		artifact := &model.StorageArtifact{
+			Key:             "vod:" + demo.DemoVodHash,
+			Kind:            model.StorageArtifactKindVod,
+			ID:              demo.DemoVodHash,
+			Hash:            demo.DemoVodHash,
+			PlaybackID:      &playbackID,
+			StreamID:        &streamID,
+			StreamTitle:     "Live: FrameWorks Demo Stream",
+			Title:           "Example VOD",
+			SecondaryLabel:  "video/mp4",
+			SizeBytes:       &size,
+			Status:          "ready",
+			StorageLocation: &location,
+			SyncStatus:      &syncStatus,
+			IsHot:           &isTrue,
+			IsSynced:        &isTrue,
+			IsFinalized:     &isTrue,
+			IsFrozen:        &isTrue,
+			CreatedAt:       now.Add(-24 * time.Hour),
+			UpdatedAt:       now.Add(-1 * time.Hour),
+			DeleteID:        demo.DemoVodHash,
+			RetentionID:     demo.DemoVodHash,
+		}
+		return &model.StorageArtifactsConnection{
+			Nodes:       []*model.StorageArtifact{artifact},
+			TotalCount:  1,
+			HasNextPage: false,
+			Limit:       25,
+			Offset:      0,
+		}, nil
 	}
 
 	limit := int32(25)
