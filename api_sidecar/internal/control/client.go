@@ -2740,7 +2740,7 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 	logger.WithFields(logging.Fields{
 		"thumbnail_key": thumbnailKey,
 		"upload_count":  len(uploads),
-	}).Info("Received thumbnail presigned URLs from Foghorn")
+	}).Debug("Received thumbnail presigned URLs from Foghorn")
 
 	presignedClient := storage.NewPresignedClient(logger)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -2798,7 +2798,7 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		logger.WithFields(logging.Fields{
 			"file_name": upload.GetFileName(),
 			"s3_key":    upload.GetS3Key(),
-		}).Info("Thumbnail uploaded to S3")
+		}).Debug("Thumbnail uploaded to S3")
 	}
 
 	if failedUploads > 0 || len(uploadedKeys) != len(uploads) {

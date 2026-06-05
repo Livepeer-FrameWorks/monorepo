@@ -6973,7 +6973,7 @@ func processThumbnailUploaded(req *ipcpb.ThumbnailUploaded, nodeID string, logge
 		"thumbnail_key": thumbnailKey,
 		"s3_keys":       s3Keys,
 		"node_id":       nodeID,
-	}).Info("Thumbnail upload confirmed")
+	}).Debug("Thumbnail upload confirmed")
 
 	markArtifactHasThumbnails(thumbnailKey, logger)
 	invalidateChandlerThumbnailCache(thumbnailKey, s3Keys, logger)

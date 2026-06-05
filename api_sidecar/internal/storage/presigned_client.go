@@ -128,7 +128,7 @@ func (c *PresignedClient) uploadOnce(ctx context.Context, presignedURL string, b
 	c.logger.WithFields(logging.Fields{
 		"size":   size,
 		"status": resp.StatusCode,
-	}).Info("Uploaded to presigned URL")
+	}).Debug("Uploaded to presigned URL")
 
 	return nil
 }
@@ -240,7 +240,7 @@ func (c *PresignedClient) DownloadFromPresignedURL(ctx context.Context, presigne
 	c.logger.WithFields(logging.Fields{
 		"size":   downloaded,
 		"status": resp.StatusCode,
-	}).Info("Downloaded from presigned URL")
+	}).Debug("Downloaded from presigned URL")
 
 	return downloaded, nil
 }

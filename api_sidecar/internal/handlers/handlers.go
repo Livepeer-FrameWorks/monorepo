@@ -2579,7 +2579,7 @@ func HandleThumbnailUpdated(c *gin.Context) {
 	logger.WithFields(logging.Fields{
 		"stream_name": streamName,
 		"file_count":  len(filePaths),
-	}).Info("Thumbnail updated, requesting upload URLs from Foghorn")
+	}).Debug("Thumbnail updated, requesting upload URLs from Foghorn")
 
 	if err := control.SendThumbnailUploadRequest(streamName, filePaths); err != nil {
 		incMistWebhook("THUMBNAIL_UPDATED", "send_error")
