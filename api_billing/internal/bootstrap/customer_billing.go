@@ -3,8 +3,10 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -103,6 +105,9 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 
 		subAction, err := upsertTenantSubscription(ctx, exec, tenantID, tierID, e)
 		if err != nil {
+			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+		}
+		if err := reconcileEntitlementOverrides(ctx, exec, tenantID, e.EntitlementOverrides); err != nil {
 			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
 		}
 		switch subAction {
@@ -262,6 +267,46 @@ func upsertTenantSubscription(ctx context.Context, exec DBTX, tenantID, tierID s
 		return "", fmt.Errorf("update tenant_subscriptions: %w", err)
 	}
 	return "updated", nil
+}
+
+func reconcileEntitlementOverrides(ctx context.Context, exec DBTX, tenantID string, desired map[string]any) error {
+	if desired == nil {
+		return nil
+	}
+	const subscriptionSQL = `SELECT id::text FROM purser.tenant_subscriptions WHERE tenant_id = $1::uuid`
+	var subscriptionID string
+	if err := exec.QueryRowContext(ctx, subscriptionSQL, tenantID).Scan(&subscriptionID); err != nil {
+		return fmt.Errorf("lookup tenant subscription for entitlement overrides: %w", err)
+	}
+	if len(desired) == 0 {
+		_, err := exec.ExecContext(ctx, `DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1::uuid`, subscriptionID)
+		if err != nil {
+			return fmt.Errorf("clear subscription entitlement overrides: %w", err)
+		}
+		return nil
+	}
+	if _, err := exec.ExecContext(ctx, `DELETE FROM purser.subscription_entitlement_overrides WHERE subscription_id = $1::uuid`, subscriptionID); err != nil {
+		return fmt.Errorf("replace subscription entitlement overrides: %w", err)
+	}
+	keys := make([]string, 0, len(desired))
+	for key := range desired {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := desired[key]
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("encode entitlement override %q: %w", key, err)
+		}
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)
+			VALUES ($1::uuid, $2, $3::jsonb)
+		`, subscriptionID, key, string(encoded)); err != nil {
+			return fmt.Errorf("insert entitlement override %q: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // ensurePrepaidBalance mirrors InitializePrepaidAccount's balance step: a

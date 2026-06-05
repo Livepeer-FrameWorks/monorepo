@@ -352,6 +352,7 @@ customer_billing:
   - tenant: { ref: quartermaster.tenants[northwind] }
     model: prepaid # prepaid | postpaid
     tier: developer # ref into Purser catalog (built-in or overlay-added)
+    entitlement_overrides: {} # optional per-subscription JSON entitlement values
     cluster_access: derived # derived from tier eligibility + is_platform_official
 ```
 
@@ -359,7 +360,8 @@ Operators declare explicit rows here when a tenant needs billing tier membership
 and media-cluster entitlement, including `quartermaster.system_tenant`. Account
 entries create users; tenant-to-tier links belong in Purser desired state.
 
-Stable: `tenant.ref`. Update-on-drift for `model` and `tier`.
+Stable: `tenant.ref`. Update-on-drift for `model`, `tier`, and declared
+`entitlement_overrides`.
 
 When this reconciles, Purser resolves the tenant alias to a UUID, writes the
 tenant's billing/subscription state, and emits post-commit access grants for the

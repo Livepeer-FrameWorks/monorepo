@@ -77,10 +77,11 @@ type ClusterPricing struct {
 // the QM tenant by alias; ReconcileCustomerBilling resolves alias → UUID via
 // Quartermaster's ResolveTenantAliases gRPC.
 type CustomerBilling struct {
-	Tenant        TenantRef `yaml:"tenant"`
-	Model         string    `yaml:"model"`
-	Tier          string    `yaml:"tier"`
-	ClusterAccess string    `yaml:"cluster_access,omitempty"`
+	Tenant               TenantRef      `yaml:"tenant"`
+	Model                string         `yaml:"model"`
+	Tier                 string         `yaml:"tier"`
+	ClusterAccess        string         `yaml:"cluster_access,omitempty"`
+	EntitlementOverrides map[string]any `yaml:"entitlement_overrides,omitempty"`
 }
 
 // TenantRef mirrors cli/pkg/bootstrap.TenantRef's wire format.

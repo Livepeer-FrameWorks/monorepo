@@ -259,10 +259,11 @@ type OverlayPricingRule struct {
 // Tenant references the QM tenant by alias; Purser bootstrap resolves the alias to a
 // UUID via QM's persisted alias mapping at apply time. Stable key: Tenant ref.
 type CustomerBilling struct {
-	Tenant        TenantRef `yaml:"tenant"`
-	Model         string    `yaml:"model"` // "prepaid" | "postpaid"
-	Tier          string    `yaml:"tier"`
-	ClusterAccess string    `yaml:"cluster_access,omitempty"` // "derived"
+	Tenant               TenantRef      `yaml:"tenant"`
+	Model                string         `yaml:"model"` // "prepaid" | "postpaid"
+	Tier                 string         `yaml:"tier"`
+	ClusterAccess        string         `yaml:"cluster_access,omitempty"` // "derived"
+	EntitlementOverrides map[string]any `yaml:"entitlement_overrides,omitempty"`
 }
 
 // PurserSection is the shape of the purser: top-level key. Identical across layers —
