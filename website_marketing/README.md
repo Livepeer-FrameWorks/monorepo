@@ -29,3 +29,4 @@ pnpm --dir website_marketing build
 ```
 
 The production build prerenders public routes into `build/client` so crawlers and AI search bots receive real HTML instead of a client-side shell.
+Serve `build/client` as static files without single-page fallback mode. The route-specific `*/index.html` files are the crawler contract; rewriting deep routes to the root document breaks metadata and raw HTML for `/pricing`, `/about`, `/contact`, and the legal/status pages.

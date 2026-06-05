@@ -88,4 +88,4 @@ EXPOSE ${APP_PORT}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-18031}/health || exit 1
 
-CMD ["sh", "-c", "serve -s build/client -l ${PORT:-18031}"]
+CMD ["sh", "-c", "serve build/client -l ${PORT:-18031}"]

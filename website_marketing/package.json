@@ -8,7 +8,7 @@
     "predev": "../scripts/copy-agent-files.sh public",
     "dev": "react-router dev",
     "prebuild": "../scripts/copy-agent-files.sh public",
-    "build": "react-router build",
+    "build": "react-router build && node scripts/check-prerender-output.mjs",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview --outDir build/client"
   },
