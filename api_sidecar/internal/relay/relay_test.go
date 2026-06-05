@@ -336,7 +336,7 @@ func TestServeColdFilePropagatesUpstreamNotFoundBeforeMediaHeaders(t *testing.T)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal/artifact/vod/"+file, nil)
-	if got := s.serveViaBlockCache(ctx, "vod", hash, ".mkv", filepath.Join(dir, "vod", file), res); got != "error" {
+	if got := s.serveViaBlockCache(ctx, "vod", hash, ".mkv", filepath.Join(dir, "vod", file), res, admission.IntentPlaybackCache); got != "error" {
 		t.Fatalf("serveViaBlockCache status = %q, want error", got)
 	}
 }
@@ -1005,31 +1005,24 @@ func TestColdHEADUsesRangeGetWhenUpstreamRejectsHEAD(t *testing.T) {
 	}
 }
 
-func TestUploadRangedGETRetriesFullOn416(t *testing.T) {
+func TestUploadInvalidRangeDoesNotRetryFullGET(t *testing.T) {
 	dir := t.TempDir()
 	hash := "uploadretry"
 	file := hash + ".mov"
 	body := []byte("full upload body")
-	var rangedGets int32
-	var fullGets int32
+	var upstreamCalls int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Accept-Ranges", "bytes")
-		if r.Header.Get("Range") != "" {
-			atomic.AddInt32(&rangedGets, 1)
-			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-			return
-		}
-		atomic.AddInt32(&fullGets, 1)
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		_, _ = w.Write(body)
+		atomic.AddInt32(&upstreamCalls, 1)
+		t.Fatalf("invalid upload range should be rejected by relay before upstream fetch; method=%s range=%q", r.Method, r.Header.Get("Range"))
 	}))
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
 		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL,
+		ExpectedSizeBytes: uint64(len(body)),
 	}}}
-	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
 	ts := mount(t, s)
 	defer ts.Close()
 
@@ -1043,18 +1036,56 @@ func TestUploadRangedGETRetriesFullOn416(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("status=%d want 416", resp.StatusCode)
 	}
-	got, err := io.ReadAll(resp.Body)
+	if got := resp.Header.Get("Content-Range"); got != fmt.Sprintf("bytes */%d", len(body)) {
+		t.Fatalf("Content-Range=%q", got)
+	}
+	if atomic.LoadInt32(&upstreamCalls) != 0 {
+		t.Fatalf("upstream calls=%d want 0", upstreamCalls)
+	}
+}
+
+func TestUploadProcessingInputRejectsMemoryOnlyAdmission(t *testing.T) {
+	dir := t.TempDir()
+	hash := "uploadnocache"
+	file := hash + ".mov"
+	body := []byte("remote upload body")
+	var upstreamCalls int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&upstreamCalls, 1)
+		t.Fatalf("processing input must fail before upstream when block cache is unavailable")
+	}))
+	defer up.Close()
+
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL,
+		ExpectedSizeBytes: uint64(len(body)),
+	}}}
+	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/internal/artifact/upload/"+file, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(body) {
-		t.Fatalf("body=%q want %q", got, body)
+	req.Header.Set("Range", "bytes=0-5")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if atomic.LoadInt32(&rangedGets) != 1 || atomic.LoadInt32(&fullGets) != 1 {
-		t.Fatalf("upstream ranged/full GETs = %d/%d, want 1/1", rangedGets, fullGets)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After=%q want 5", got)
+	}
+	if atomic.LoadInt32(&upstreamCalls) != 0 {
+		t.Fatalf("upstream calls=%d want 0", upstreamCalls)
 	}
 }
 
@@ -1069,14 +1100,42 @@ func TestUploadIgnoresZeroByteLocalPlaceholder(t *testing.T) {
 	if err := os.WriteFile(localPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	up := upstreamServer(t, []byte("remote upload body"))
+	body := []byte("remote upload body")
+	var upstreamCalls int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&upstreamCalls, 1)
+		size := int64(len(body))
+		w.Header().Set("Accept-Ranges", "bytes")
+		if rng := r.Header.Get("Range"); strings.HasPrefix(rng, "bytes=") {
+			spec := strings.TrimPrefix(rng, "bytes=")
+			parts := strings.SplitN(spec, "-", 2)
+			start, _ := strconv.ParseInt(parts[0], 10, 64)
+			end := size - 1
+			if len(parts) == 2 && parts[1] != "" {
+				if e, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+					end = e
+				}
+			}
+			if start < 0 || start >= size || end < start || end >= size {
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(body[start : end+1])
+			return
+		}
+		t.Fatalf("upload processing read should use ranged block fetch, got full GET")
+	}))
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
 		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL,
+		ExpectedSizeBytes: uint64(len(body)),
 	}}}
-	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
+	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
 	ts := mount(t, s)
 	defer ts.Close()
 
@@ -1099,6 +1158,33 @@ func TestUploadIgnoresZeroByteLocalPlaceholder(t *testing.T) {
 	}
 	if string(got) != "remote" {
 		t.Fatalf("body=%q want remote", got)
+	}
+	if atomic.LoadInt32(&upstreamCalls) != 1 {
+		t.Fatalf("first upload range should fetch one block, upstream calls=%d", upstreamCalls)
+	}
+
+	req2, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/internal/artifact/upload/"+file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req2.Header.Set("Range", "bytes=0-5")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusPartialContent {
+		t.Fatalf("warm status=%d want 206", resp2.StatusCode)
+	}
+	got, err = io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "remote" {
+		t.Fatalf("warm body=%q want remote", got)
+	}
+	if atomic.LoadInt32(&upstreamCalls) != 1 {
+		t.Fatalf("warm upload range should hit block cache, upstream calls=%d", upstreamCalls)
 	}
 }
 

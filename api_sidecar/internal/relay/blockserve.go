@@ -31,30 +31,32 @@ import (
 	"frameworks/api_sidecar/internal/admission"
 )
 
-// serveViaBlockCache is the relay's cold-playback entrypoint for
-// single-file artifacts. It assumes res.ExpectedSizeBytes is set
-// (Foghorn always returns it for vod/clip/upload); when zero the path
-// falls back to a single S3 pass-through because block math needs the
-// total size up-front.
-func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) string {
+// serveViaBlockCache is the relay's random-access entrypoint for single-file
+// artifacts. The block cache needs a total size; when Foghorn did not provide
+// one, the relay probes byte 0 and uses Content-Range as the source of truth.
+func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
-		// Unknown size — block layout needs the upper bound. Fall back to
-		// memory-only pass-through; subsequent reads with a known size
-		// will populate the block cache.
-		return s.streamRangeNoCache(c, res)
+		probedSize, err := s.probeTotalSize(c.Request.Context(), res.UpstreamURL(), res.PeerRelayGrantID)
+		if err != nil {
+			s.respondColdFetchError(c, err)
+			return "error"
+		}
+		totalSize = probedSize
 	}
+	strictCache := intent == admission.IntentProcessingInput
 
 	// Build a BlockStore handle but defer disk-touching setup (mkdir,
-	// EnsureMeta) until after admission. Under pressure admission
-	// returns CacheMemoryOnly and we must avoid creating .blocks/ +
-	// meta.json — pure S3 → memory passthrough is the contract.
+	// EnsureMeta) until after admission.
 	store := NewBlockStore(localPath, s.blockSize)
 	cacheDecision := admission.CacheMemoryOnly
+	if strictCache {
+		cacheDecision = admission.CacheToDisk
+	}
 	if s.admitter != nil {
-		dec, admitErr := s.admitter.Decide(c.Request.Context(), store.Dir(), admission.IntentPlaybackCache, uint64(store.BlockSize()))
+		dec, admitErr := s.admitter.Decide(c.Request.Context(), store.Dir(), intent, uint64(store.BlockSize()))
 		if admitErr != nil && s.logger != nil {
-			s.logger.WithError(admitErr).WithField("local_path", localPath).Debug("blockcache: admission errored; degrading to memory-only")
+			s.logger.WithError(admitErr).WithField("local_path", localPath).Debug("blockcache: admission errored")
 		}
 		cacheDecision = dec
 	}
@@ -65,6 +67,11 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if cacheDecision == admission.CacheReject {
 		c.Writer.Header().Set("Retry-After", "5")
 		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return "error"
+	}
+	if strictCache && cacheDecision != admission.CacheToDisk {
+		c.Writer.Header().Set("Retry-After", "5")
+		c.String(http.StatusServiceUnavailable, "processing input block cache unavailable")
 		return "error"
 	}
 
@@ -107,6 +114,11 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if cacheDecision == admission.CacheToDisk {
 		store.CleanTmps()
 		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
+			if strictCache {
+				c.Writer.Header().Set("Retry-After", "5")
+				s.serverError(c, "blockcache init", err)
+				return "error"
+			}
 			if s.logger != nil {
 				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
 			}
@@ -131,7 +143,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 
 	for _, span := range spans {
-		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, recordDefrost); err != nil {
+		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost); err != nil {
 			// A peer-relay grant that 401/403s mid-stream is dead (origin
 			// restarted, grant evicted before the resolve TTL lapsed). Drop the
 			// resolve-cache entry so the next request re-resolves and re-mints
@@ -167,12 +179,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // disk. Without coalescing, N viewers on the same cold block would
 // fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
 // bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, defrost func(int64)) error {
+func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
 	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	}
 
 	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
@@ -192,12 +204,12 @@ func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockSt
 				return err
 			}
 		}
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
+		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	}
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 
 	// Leader path: run the fetch, then publish disk-write outcome.
-	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, defrost)
+	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
 	return err
 }
@@ -233,9 +245,10 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // streamBlockFromS3 issues a block-aligned S3 Range GET and streams
 // bytes to the client (range-clamped to the requested span) and,
 // opportunistically, to a tmp cache file. The tmp file is fsync+rename
-// to the canonical block path only on full successful download. Any
-// disk-side failure mid-stream is silently swallowed (the cache simply
-// doesn't land this time); the client keeps receiving bytes.
+// to the canonical block path only on full successful download. Playback
+// callers tolerate disk-side failure and keep serving the client; processing
+// input callers use strictCache so a cache failure aborts and Mist retries
+// instead of silently losing random-access locality.
 //
 // Same-block fan-out: callers of streamBlockFromS3 with CacheToDisk
 // have already gone through the blockFetchCoalescer in serveBlockSpan,
@@ -243,7 +256,7 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // viewers bypass the coalescer and each issue their own S3 range
 // fetch. The first writer to finish wins the rename; later writers
 // see the warm block exists and drop their tmpfile.
-func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, defrost func(int64)) error {
+func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
@@ -281,8 +294,8 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 	clientSide := newClampedWriter(w, span.From, span.To)
 
 	// Disk side: tmp file we'll rename into the canonical block path
-	// on success. May be nil if admission disabled caching or if we
-	// can't open the tmpfile (degrade silently to client-only stream).
+	// on success. Playback can degrade to client-only stream; processing
+	// input cannot, because Mist will seek these bytes again.
 	var (
 		tmpFile *os.File
 		tmpPath string
@@ -292,9 +305,13 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 			tmpPath = store.BlockPath(span.Idx) + ".tmp"
 			if f, openErr := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); openErr == nil {
 				tmpFile = f
+			} else if strictCache {
+				return fmt.Errorf("open strict block tmp %d: %w", span.Idx, openErr)
 			} else if s.logger != nil {
 				s.logger.WithError(openErr).WithField("block_idx", span.Idx).Debug("blockcache: open tmp failed; streaming without cache")
 			}
+		} else if strictCache {
+			return fmt.Errorf("mkdir strict block cache: %w", mkErr)
 		}
 	}
 
@@ -303,12 +320,16 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 		teeTol *tolerantTee
 	)
 	if tmpFile != nil {
-		teeTol = newTolerantTee(clientSide, tmpFile, func(diskErr error) {
-			if s.logger != nil {
-				s.logger.WithError(diskErr).WithField("block_idx", span.Idx).Debug("blockcache: disk write failed or fell behind mid-stream; abandoning cache for this block")
-			}
-		})
-		tee = teeTol
+		if strictCache {
+			tee = io.MultiWriter(clientSide, tmpFile)
+		} else {
+			teeTol = newTolerantTee(clientSide, tmpFile, func(diskErr error) {
+				if s.logger != nil {
+					s.logger.WithError(diskErr).WithField("block_idx", span.Idx).Debug("blockcache: disk write failed or fell behind mid-stream; abandoning cache for this block")
+				}
+			})
+			tee = teeTol
+		}
 	}
 
 	// 256 KiB copy buffer — sized for syscall economy without holding
@@ -327,7 +348,8 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 	// else — short read, copy error, client gone, disk fell behind —
 	// means the tmpfile is incomplete and gets removed.
 	if tmpFile != nil {
-		if copyErr == nil && n == expected && teeTol != nil && teeTol.SecondaryAlive() {
+		diskComplete := strictCache || (teeTol != nil && teeTol.SecondaryAlive())
+		if copyErr == nil && n == expected && diskComplete {
 			syncErr := tmpFile.Sync()
 			closeErr := tmpFile.Close()
 			if syncErr == nil && closeErr == nil {
@@ -379,6 +401,32 @@ func isUpstreamAuthError(err error) bool {
 	var se upstreamStatusError
 	return errors.As(err, &se) &&
 		(se.StatusCode == http.StatusUnauthorized || se.StatusCode == http.StatusForbidden)
+}
+
+func (s *Server) probeTotalSize(ctx context.Context, mediaURL, grantID string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("build upstream size probe: %w", err)
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	if grantID != "" {
+		req.Header.Set("Authorization", "Bearer "+grantID)
+	}
+	resp, err := s.httpc.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("upstream size probe: %w", err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024)); err != nil {
+		return 0, fmt.Errorf("drain upstream size probe: %w", err)
+	}
+	if resp.StatusCode == http.StatusPartialContent {
+		if total, ok := totalFromContentRange(resp.Header.Get("Content-Range")); ok && total > 0 {
+			return total, nil
+		}
+		return 0, fmt.Errorf("upstream size probe missing Content-Range total")
+	}
+	return 0, upstreamStatusError{StatusCode: resp.StatusCode}
 }
 
 func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string) error {

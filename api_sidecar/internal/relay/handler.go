@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_sidecar/internal/admission"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 )
@@ -208,8 +209,7 @@ func (s *Server) serveWarmIfPresent(c *gin.Context, localPath string) bool {
 	return true
 }
 
-// serveUpload handles processing-input reads. Always memory-only per
-// admission policy (sequential one-shot). The route does not include a
+// serveUpload handles processing-input reads. The route does not include a
 // hash subdirectory — uploads are flat under {basePath}/upload/.
 func (s *Server) serveUpload(c *gin.Context) {
 	forceCloseForMistReader(c)
@@ -230,19 +230,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 	}
 
 	localPath := s.canonicalUploadPath(file)
-	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-		// Unsafe-wrapper staging may have already materialized this file
-		// locally; serve directly when present.
-		f, err := os.Open(localPath)
-		if err != nil {
-			s.serverError(c, "open warm upload", err)
-			return
-		}
-		defer f.Close()
-		if contentType := contentTypeForFile(localPath); contentType != "" {
-			c.Header("Content-Type", contentType)
-		}
-		http.ServeContent(c.Writer, c.Request, filepath.Base(localPath), info.ModTime(), f)
+	if served := s.serveWarmIfPresent(c, localPath); served {
 		return
 	}
 
@@ -252,7 +240,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 		AssetKind: "upload",
 		AssetHash: hash,
 		Ext:       ext,
-		Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_SEQUENTIAL_ONESHOT,
+		Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
@@ -263,9 +251,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 		s.notPlayable(c, res)
 		return
 	}
-	// Upload reads are always memory-only — sequential one-shot. Bypass disk
-	// admission entirely.
-	s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{RetryFullOn416: true})
+	s.fetchAndServeWithIntent(c, "upload", hash, ext, localPath, res, admission.IntentProcessingInput)
 }
 
 func forceCloseForMistReader(c *gin.Context) {
@@ -287,24 +273,20 @@ func forceCloseForMistReader(c *gin.Context) {
 // canonical warm-disk full file written by processing/clip-create
 // always wins above it.
 func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult) string {
+	return s.fetchAndServeWithIntent(c, kind, hash, ext, localPath, res, admission.IntentPlaybackCache)
+}
+
+func (s *Server) fetchAndServeWithIntent(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
 	if c.Request.Method == http.MethodHead {
 		return s.streamRangeNoCache(c, res)
 	}
-	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res)
+	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res, intent)
 }
 
-// streamRangeNoCache forwards Mist's Range to S3, copies the response
-// straight back, and never touches disk. Used for memory-only admission
-// outcomes and for processing-input reads.
+// streamRangeNoCache forwards the requested Range to S3, copies the response
+// straight back, and never touches disk. Used for HEAD probes and memory-only
+// playback-cache outcomes.
 func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) string {
-	return s.streamRangeNoCacheWithOptions(c, res, noCacheOptions{})
-}
-
-type noCacheOptions struct {
-	RetryFullOn416 bool
-}
-
-func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResult, opts noCacheOptions) string {
 	method := c.Request.Method
 	if method == http.MethodHead {
 		method = http.MethodGet
@@ -318,12 +300,9 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 	if res.PeerRelayGrantID != "" {
 		req.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
 	}
-	requestRange := ""
 	if c.Request.Method == http.MethodHead {
-		requestRange = "bytes=0-0"
 		req.Header.Set("Range", "bytes=0-0")
 	} else if rng := c.Request.Header.Get("Range"); rng != "" {
-		requestRange = rng
 		req.Header.Set("Range", rng)
 	}
 	resp, err := s.httpc.Do(req)
@@ -332,31 +311,6 @@ func (s *Server) streamRangeNoCacheWithOptions(c *gin.Context, res *ResolveResul
 		return "error"
 	}
 	defer resp.Body.Close()
-
-	if opts.RetryFullOn416 &&
-		c.Request.Method != http.MethodHead &&
-		requestRange != "" &&
-		resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-		if _, discardErr := io.Copy(io.Discard, resp.Body); discardErr != nil && s.logger != nil {
-			s.logger.WithError(discardErr).Debug("relay upload range retry discarded partial response")
-		}
-		resp.Body.Close()
-
-		retryReq, retryErr := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
-		if retryErr != nil {
-			s.serverError(c, "build upstream retry request", retryErr)
-			return "error"
-		}
-		if res.PeerRelayGrantID != "" {
-			retryReq.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
-		}
-		resp, err = s.httpc.Do(retryReq)
-		if err != nil {
-			s.serverError(c, "upstream retry fetch", err)
-			return "error"
-		}
-		defer resp.Body.Close()
-	}
 
 	// Mirror status and the headers that Mist cares about. Content-Length,
 	// Content-Range, Accept-Ranges drive seekability detection in

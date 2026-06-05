@@ -1,8 +1,8 @@
 // Package relay is the read-through artifact relay that sits between Mist
 // and S3. Mist sees a stable seekable HTTP source for every playable
 // artifact (and for safe-wrapper processing input). Behind that URL the
-// relay materializes bytes from local disk (warm), from S3 into disk (cold,
-// healthy), or from S3 straight to socket (cold, pressured).
+// relay materializes bytes from local disk (warm), from S3 into disk (cold),
+// or from S3 straight to socket for playback-cache reads under pressure.
 //
 // Resolution metadata is fetched from Foghorn via
 // control.RequestRelayResolve (presigned media URL, expected size,

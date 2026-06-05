@@ -42,7 +42,8 @@ const (
 	// of bytes evicted when higher-priority intents need room.
 	IntentPlaybackCache StorageIntent = "playback_cache"
 	// IntentProcessingInput — Mist relay read of a safe-wrapper upload.
-	// Sequential one-shot, so always CacheMemoryOnly regardless of pressure.
+	// Mist inputs may seek repeatedly while parsing MP4/MOV, so this must use
+	// the relay block cache rather than direct memory-only pass-through.
 	IntentProcessingInput StorageIntent = "processing_input"
 	// IntentWarmCache — opportunistic background prefetch. Lowest priority;
 	// skip under any pressure signal.

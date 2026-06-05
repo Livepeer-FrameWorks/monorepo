@@ -45,7 +45,10 @@ func (sm *StorageManager) Decide(
 ) (admission.CacheDecision, error) {
 	switch intent {
 	case admission.IntentProcessingInput:
-		return admission.CacheMemoryOnly, nil
+		if err := sm.admitDiskWrite(ctx, dir, sizeBytes); err != nil {
+			return admission.CacheReject, err
+		}
+		return admission.CacheToDisk, nil
 
 	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentProcessingSourceStage,
 		admission.IntentUnsafeImportStage, admission.IntentDVRChapterFinalization:
