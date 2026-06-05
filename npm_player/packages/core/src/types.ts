@@ -107,12 +107,13 @@ export interface PlayerOptions {
   playbackAuth?: PlaybackAuth;
 
   /**
-   * Diagnostic telemetry toggles. The boot-startup waterfall is always recorded
-   * locally (console in `debug`, and the `bootTrace` event); `boot` enables the
-   * optional lossy beacon to the platform (default off). URLs are query/fragment
-   * stripped before sending.
+   * Diagnostic telemetry toggles (default off, lossy, query/fragment-stripped).
+   * `boot` enables the one-shot startup-waterfall beacon; `session` enables the
+   * viewer-experienced QoE beacon (rebuffering, frame drops, bitrate, EBVS, and
+   * per-asset VOD retention). The boot waterfall is always recorded locally
+   * (console in `debug`, and the `bootTrace` event) regardless of `boot`.
    */
-  telemetry?: { boot?: boolean };
+  telemetry?: { boot?: boolean; session?: boolean };
   /** Override for the telemetry beacon endpoint (defaults derived from `gatewayUrl`). */
   telemetryUrl?: string;
 }

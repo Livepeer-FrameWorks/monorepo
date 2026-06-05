@@ -669,6 +669,7 @@ message MistTrigger {
     RawMistWebhookTrigger raw_mist_webhook = 40;
     PushInputCloseTrigger push_input_close = 41;
     PlaybackBootTrace playback_boot_trace = 42;
+    PlaybackSessionQoe playback_session_qoe = 43;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -1744,6 +1745,103 @@ message PlaybackBootTrace {
   string player_version = 37;
 
   repeated PlaybackBootResource resources = 40;
+}
+
+// PlaybackSessionQoe is a browser-originated viewer-experienced QoE delta. Unlike
+// the one-shot boot trace, a session emits a SEQUENCE of these: periodic
+// heartbeats plus a final beacon on page hide. Every counter is an ADDITIVE DELTA
+// for the window since the previous beacon, so a lost final beacon still leaves
+// correct partial data under sum(). Diagnostic and lossy — never a billing source.
+//
+// Two dedupe modes with DIFFERENT keys (not interchangeable): MistTrigger.event_id
+// (minted per received beacon by Bridge) dedupes Kafka replay; the client-stable
+// tuple (tenant_id, content_id, session_id, beacon_seq) dedupes a double-fired
+// client beacon. Ingest must dedupe on the client-stable tuple before summing —
+// summing a duplicate delta corrupts the ratio.
+//
+// Attribution is server-derived exactly as PlaybackBootTrace; node/cluster are
+// trusted only via a valid telemetry token (cluster_attributed=true).
+message PlaybackSessionQoe {
+  // Server-derived attribution (filled by Bridge; ignored if sent by the browser).
+  optional string tenant_id = 1;
+  optional string stream_id = 2;        // nullable for VOD/standalone artifacts
+  string artifact_hash = 3;
+  string internal_name = 4;
+  string node_id = 5;
+  string serving_cluster_id = 6;
+  string origin_cluster_id = 7;
+  bool cluster_attributed = 8;          // true only when a telemetry token supplied node/cluster
+
+  // Client correlation (browser-supplied).
+  string content_id = 9;                // playback id the browser requested
+  string session_id = 10;
+  int64 client_timestamp_ms = 12;
+
+  // Delta envelope. beacon_seq increments per beacon within a session; the
+  // (content_id, session_id, beacon_seq) tuple is the client-stable dedupe key.
+  uint32 beacon_seq = 13;
+  bool is_final = 14;
+  string flush_reason = 15;             // "heartbeat" | "visibility_hidden" | "pagehide" | "ended" | "error"
+
+  // Context (stable across a session; repeated per beacon for denormalization).
+  string player_type = 30;
+  string protocol = 31;
+  string content_type = 32;
+  bool is_live = 33;
+  string connection_type = 34;          // navigator.connection.effectiveType bucket
+  string player_version = 35;
+
+  // ===== Additive QoE deltas for this window =====
+  // Denominator for all ratios: union of video.played growth (genuine watch time),
+  // NOT wall-clock and NOT currentTime delta.
+  uint64 played_ms = 40;
+  // Genuine rebuffering only — initial buffering, seek waits, and pauses excluded.
+  uint64 rebuffer_ms = 41;
+  uint32 rebuffer_count = 42;
+  // Seek-induced waiting, kept separate for diagnostics; NOT counted as rebuffer.
+  uint64 seek_wait_ms = 43;
+
+  // Rendering quality. Browser frame counters are cumulative & non-resettable, so
+  // the client emits per-window deltas. frame_stats_supported=false means the
+  // platform never reports frame stats (0/0 must not read as "perfect").
+  bool frame_stats_supported = 44;
+  uint64 frames_decoded = 45;           // delta over the window
+  uint64 frames_dropped = 46;           // delta over the window
+  uint64 frames_corrupted = 47;         // delta over the window
+
+  // Session-terminal failure. fatal_error=true only for an unrecoverable error
+  // AFTER first frame; pre-first-frame failures are boot's. The client flushes
+  // this transition immediately so a lost final beacon does not hide it.
+  bool first_frame = 48;                // session reached first painted frame
+  bool fatal_error = 49;                // unrecoverable post-first-frame failure
+  string error_code = 50;
+
+  // ===== Delivery-quality fields =====
+  // Time-weighted bitrate: sum over the window of selected_bitrate_bps * seconds.
+  // Average = sum(bitrate_bps_seconds) / sum(played_ms/1000) at read time.
+  uint64 bitrate_bps_seconds = 60;
+  uint32 abr_upswitch_count = 61;
+  uint32 abr_downswitch_count = 62;
+  // Exit-before-video-start: play was intended but first frame never arrived.
+  // Scope is post-player-ready (the session reporter starts at player onReady):
+  // pre-ready startup failures — gateway/endpoint resolution, no playable source —
+  // are the boot trace's video-start-failure domain, not EBVS.
+  bool play_intent = 63;
+  // Live edge latency (player latency, NOT glass-to-glass), ms; 0 if unknown.
+  uint32 live_edge_latency_ms = 64;
+
+  // VOD retention histogram (empty for live). Fixed-width buckets along the asset
+  // timeline; sparse parallel arrays of per-bucket watched-seconds DELTAS for this
+  // window (retention_buckets[i] gained retention_seconds_watched[i] seconds). The
+  // read layer derives the density ("most replayed") and audience-retention curves.
+  uint32 bucket_width_s = 70;
+  uint32 asset_duration_s = 71;
+  repeated uint32 retention_buckets = 72;
+  repeated float retention_seconds_watched = 73;
+  // Furthest bucket the playhead reached this session (cumulative; the read layer
+  // takes the per-session max). Input to the audience-retention curve — distinct
+  // from watch density, since a seek-to-end raises reach without adding density.
+  uint32 max_bucket_reached = 74;
 }
 
 enum NodeOperationalMode {

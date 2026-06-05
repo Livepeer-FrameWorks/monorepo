@@ -87,8 +87,12 @@ export interface CreatePlayerConfig {
   /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
   playbackAuth?: import("../types").PlaybackAuth;
 
-  /** Diagnostic telemetry toggles. `boot` opts into the lossy boot-trace beacon (default off). */
-  telemetry?: { boot?: boolean };
+  /**
+   * Diagnostic telemetry toggles (default off). `boot` opts into the lossy
+   * boot-trace beacon; `session` opts into the viewer-experienced QoE beacon
+   * (rebuffering, frame drops, bitrate, VOD retention).
+   */
+  telemetry?: { boot?: boolean; session?: boolean };
   /** Override for the telemetry beacon endpoint (defaults derived from gatewayUrl). */
   telemetryUrl?: string;
 

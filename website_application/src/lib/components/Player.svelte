@@ -64,6 +64,10 @@
     forceSource: options.forceSource,
     playbackMode: options.playbackMode,
     mistUrl: options.mistUrl,
+    // Opt in to diagnostic playback telemetry (boot waterfall + viewer-experienced
+    // QoE beacons). Both default-off in the player; we enable them for first-party
+    // surfaces. Lossy and server-attributed — see api_gateway playback telemetry.
+    telemetry: options.telemetry ?? { boot: true, session: true },
   });
 </script>
 

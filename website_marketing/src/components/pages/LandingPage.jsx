@@ -366,6 +366,9 @@ const LandingPage = () => {
                           controls: false,
                           playbackMode: "quality",
                           gatewayUrl: config.gatewayUrl,
+                          // Opt in to diagnostic playback telemetry (default-off in the
+                          // player); the hero demo feeds boot + viewer-QoE beacons too.
+                          telemetry: { boot: true, session: true },
                         }}
                         onStateChange={(st) => setDemoState(st)}
                       />

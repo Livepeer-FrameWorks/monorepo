@@ -55,10 +55,8 @@ func newTestBootHandler(resolver playbackContentResolver, sink triggerSink, allo
 }
 
 func newTestBootHandlerWithSecret(resolver playbackContentResolver, sink triggerSink, allow bool, secret []byte) *PlaybackTelemetryHandler {
-	h := NewPlaybackTelemetryHandler(nil, nil, fakeLimiter{allow: allow}, secret, logging.NewLogger())
-	h.commodore = resolver
-	h.decklog = sink
-	return h
+	intake := NewBeaconIntake(resolver, fakeLimiter{allow: allow}, secret, logging.NewLogger())
+	return NewPlaybackTelemetryHandler(intake, sink)
 }
 
 func postBoot(h *PlaybackTelemetryHandler, body string) *httptest.ResponseRecorder {

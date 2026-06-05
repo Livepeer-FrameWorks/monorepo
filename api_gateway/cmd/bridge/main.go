@@ -540,15 +540,23 @@ func main() {
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
 	}
 
-	// Public player boot telemetry beacon. Unauthenticated and outside the
-	// GraphQL tenant rate-limiter: the browser sends only content_id + ephemeral
-	// trace/session ids, and Bridge derives trusted attribution from Commodore,
-	// mints the canonical event_id, rate-limits per IP, and forwards to Decklog.
+	// Public player telemetry beacons. Unauthenticated and outside the GraphQL
+	// tenant rate-limiter: the browser sends only content_id + ephemeral
+	// trace/session ids, and a shared BeaconIntake derives trusted attribution
+	// from Commodore, mints the canonical event_id, rate-limits per IP, and
+	// verifies the telemetry token. Boot (one-shot startup) and session
+	// (viewer-experienced QoE deltas) beacons share one intake/cache.
 	{
 		telemetrySecret := []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", ""))
-		bootTelemetry := handlers.NewPlaybackTelemetryHandler(serviceClients.Commodore, serviceClients.Decklog, rateLimiter, telemetrySecret, logger)
+		beaconIntake := handlers.NewBeaconIntake(serviceClients.Commodore, rateLimiter, telemetrySecret, logger)
+
+		bootTelemetry := handlers.NewPlaybackTelemetryHandler(beaconIntake, serviceClients.Decklog)
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/playback/telemetry/boot", bootTelemetry.Handle)
 		server.HandleOptionalTrailingSlash(app, http.MethodOptions, "/playback/telemetry/boot", bootTelemetry.HandleOptions)
+
+		sessionTelemetry := handlers.NewPlaybackSessionHandler(beaconIntake, serviceClients.Decklog)
+		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/playback/telemetry/session", sessionTelemetry.Handle)
+		server.HandleOptionalTrailingSlash(app, http.MethodOptions, "/playback/telemetry/session", sessionTelemetry.HandleOptions)
 	}
 
 	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.

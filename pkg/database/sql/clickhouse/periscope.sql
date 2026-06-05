@@ -617,6 +617,144 @@ TTL timestamp + INTERVAL 90 DAY;
 
 
 -- ============================================================================
+-- VIEWER-EXPERIENCED QoE (browser-originated session deltas)
+-- ============================================================================
+-- One row per QoE beacon (heartbeat or final) from the player. Unlike the polled
+-- client_qoe_samples (Mist connection stats, can't see HLS/DASH viewer stalls),
+-- this is what the viewer actually experienced. Every counter is an ADDITIVE
+-- DELTA for the window since the previous beacon, so sum() reconstructs session
+-- totals even when the final beacon is lost. Diagnostic/lossy — never a
+-- viewer-count or billing source.
+--
+-- Dedupe has two distinct modes with different keys:
+--   * MistTrigger event_id (minted per received beacon by Bridge) → Kafka replay.
+--   * client-stable (tenant_id, content_id, session_id, beacon_seq) → a
+--     double-fired client beacon. Bridge mints a FRESH event_id per HTTP request,
+--     so event_id CANNOT catch this; the ReplacingMergeTree ORDER BY does.
+-- Dedup is merge-time (eventual): any reader must consume a deduped surface — read
+-- with FINAL / GROUP BY — and never sum the raw table before replacement, or
+-- duplicates inflate the sums. Ratios (rebuffer_ms/played_ms, dropped/decoded) are
+-- computed at read time over the deduped rows.
+CREATE TABLE IF NOT EXISTS client_qoe_session_deltas (
+    timestamp DateTime,
+    event_id UUID,                       -- Bridge-minted; Kafka-replay idempotency only, NOT the client dedupe key
+    tenant_id UUID,
+    stream_id Nullable(UUID),            -- null for VOD/standalone artifacts
+    artifact_hash String DEFAULT '',
+    internal_name String DEFAULT '',
+    content_id String DEFAULT '',
+    session_id String DEFAULT '',
+
+    beacon_seq UInt32 DEFAULT 0,
+    is_final UInt8 DEFAULT 0,
+    flush_reason LowCardinality(String) DEFAULT '',
+
+    node_id LowCardinality(String) DEFAULT '',
+    serving_cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    cluster_attributed UInt8 DEFAULT 0,  -- 1 only when a telemetry token supplied node/cluster
+
+    player_type LowCardinality(String) DEFAULT '',
+    protocol LowCardinality(String) DEFAULT '',
+    content_type LowCardinality(String) DEFAULT '',
+    is_live UInt8 DEFAULT 0,
+    connection_type LowCardinality(String) DEFAULT '',
+    player_version LowCardinality(String) DEFAULT '',
+
+    -- Additive QoE deltas for the window since the previous beacon.
+    -- played_ms is the genuine-watch-time denominator (union of video.played
+    -- growth), never wall-clock. rebuffer_ms excludes initial buffering, seeks,
+    -- and pauses; seek_wait_ms is kept separate for diagnostics.
+    played_ms UInt64 DEFAULT 0,
+    rebuffer_ms UInt64 DEFAULT 0,
+    rebuffer_count UInt32 DEFAULT 0,
+    seek_wait_ms UInt64 DEFAULT 0,
+
+    -- Rendering quality. Browser frame counters are cumulative/non-resettable, so
+    -- these are per-window deltas. frame_stats_supported = 0 means the platform
+    -- never reports frame stats (0/0 must not read as "perfect").
+    frame_stats_supported UInt8 DEFAULT 0,
+    frames_decoded UInt64 DEFAULT 0,
+    frames_dropped UInt64 DEFAULT 0,
+    frames_corrupted UInt64 DEFAULT 0,
+
+    -- Session-terminal failure. fatal_error = 1 only for an unrecoverable error
+    -- after first frame; the client flushes that transition immediately so a
+    -- lost final beacon does not hide it.
+    first_frame UInt8 DEFAULT 0,
+    fatal_error UInt8 DEFAULT 0,
+    error_code LowCardinality(String) DEFAULT '',
+
+    bitrate_bps_seconds UInt64 DEFAULT 0,
+    abr_upswitch_count UInt32 DEFAULT 0,
+    abr_downswitch_count UInt32 DEFAULT 0,
+    play_intent UInt8 DEFAULT 0,
+    live_edge_latency_ms UInt32 DEFAULT 0,
+
+    -- VOD reach + timeline geometry. bucket_width_s > 0 is the presence bit for a
+    -- real VOD reach sample (live/no-duration beacons leave it 0 and are excluded
+    -- from the retention denominator). Geometry is persisted here too so a seek-only
+    -- session (reached far, watched nothing → no vod_retention_buckets rows) still
+    -- carries the timeline. max_bucket_reached = furthest bucket the playhead reached
+    -- (per-session max at read time); the audience-retention input, distinct from
+    -- watch density.
+    bucket_width_s UInt32 DEFAULT 0,
+    asset_duration_s UInt32 DEFAULT 0,
+    max_bucket_reached UInt32 DEFAULT 0,
+
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
+) ENGINE = ReplacingMergeTree(timestamp)
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+-- ORDER BY tuple IS the ReplacingMergeTree dedupe key: the client-stable identity
+-- of a beacon, which collapses double-fires regardless of the per-request event_id.
+ORDER BY (tenant_id, content_id, session_id, beacon_seq)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- VOD retention heatmap: one row per (session, timeline bucket, beacon). Folded
+-- out of the same session QoE beacon (VOD content only) by the ingest handler.
+-- seconds_watched is the per-bucket watched-seconds DELTA for the beacon window,
+-- so it is additive across a session's beacons and across sessions. This table is
+-- the "most replayed" WATCH-DENSITY source (sum(seconds_watched) per bucket). The
+-- separate AUDIENCE-RETENTION curve (sessions reaching ≥ bucket ÷ total) is derived
+-- from per-session max_bucket_reached on client_qoe_session_deltas, NOT from this
+-- table — a seek-to-end advances reach without adding density here. Buckets are
+-- fixed-WIDTH (bucket_width_s, chosen client-side by duration tier) so the
+-- bucket→timestamp mapping is asset-independent.
+--
+-- Dedup mirrors client_qoe_session_deltas: ReplacingMergeTree on the client-stable
+-- (tenant_id, artifact_hash, session_id, bucket_index, beacon_seq) collapses a
+-- double-fired beacon; event_id carries Kafka-replay idempotency. Curves are
+-- computed at read time over the deduped rows. Any rollup over this table must be
+-- built from a deduped surface (read FINAL or a deduped view), never summed off the
+-- raw ReplacingMergeTree before merge-time replacement runs.
+CREATE TABLE IF NOT EXISTS vod_retention_buckets (
+    timestamp DateTime,
+    event_id UUID,
+    tenant_id UUID,
+    artifact_hash String DEFAULT '',
+    internal_name String DEFAULT '',
+    content_id String DEFAULT '',
+    session_id String DEFAULT '',
+
+    beacon_seq UInt32 DEFAULT 0,
+    bucket_width_s UInt32 DEFAULT 0,
+    asset_duration_s UInt32 DEFAULT 0,
+    bucket_index UInt32,
+    seconds_watched Float32 DEFAULT 0,
+
+    source_region LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
+) ENGINE = ReplacingMergeTree(timestamp)
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, artifact_hash, session_id, bucket_index, beacon_seq)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- ============================================================================
 -- ROUTING DECISIONS
 -- ============================================================================
 

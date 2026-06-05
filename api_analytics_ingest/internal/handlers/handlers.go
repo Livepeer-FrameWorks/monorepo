@@ -208,6 +208,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processClientLifecycleBatch(ctx, event)
 	case "playback_boot":
 		err = h.processPlaybackBootTrace(ctx, event)
+	case "playback_session_qoe":
+		err = h.processPlaybackSessionQoe(ctx, event)
 	case "load_balancing":
 		err = h.processLoadBalancing(ctx, event)
 	case "clip_lifecycle":
@@ -1966,6 +1968,172 @@ func (h *AnalyticsHandler) processPlaybackBootTrace(ctx context.Context, event k
 	}
 	if h.metrics != nil {
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
+	}
+	return nil
+}
+
+// processPlaybackSessionQoe handles a browser-originated viewer-experienced QoE
+// delta (one beacon = one row in client_qoe_session_deltas). Counters are additive
+// deltas for the window since the previous beacon, so summing a session's beacons
+// reconstructs totals even when the final beacon is lost. Attribution is already
+// server-derived by Bridge. Diagnostic/lossy — never a viewer-count or billing
+// source.
+//
+// Dedupe is two-sided: event_id gives Kafka-replay idempotency at the envelope,
+// while the table's ReplacingMergeTree collapses a double-fired client beacon on
+// the client-stable (tenant_id, content_id, session_id, beacon_seq) key. Ratios
+// are computed at read time over the deduped rows — no rollup MV here.
+func (h *AnalyticsHandler) processPlaybackSessionQoe(ctx context.Context, event kafka.AnalyticsEvent) error {
+	var mt ipcpb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_PlaybackSessionQoe)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for playback_session_qoe")
+	}
+	t := tp.PlaybackSessionQoe
+
+	env := analyticsEnvelopeColumns(event)
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO client_qoe_session_deltas (
+			timestamp, event_id, tenant_id, stream_id, artifact_hash, internal_name, content_id, session_id,
+			beacon_seq, is_final, flush_reason,
+			node_id, serving_cluster_id, origin_cluster_id, cluster_attributed,
+			player_type, protocol, content_type, is_live, connection_type, player_version,
+			played_ms, rebuffer_ms, rebuffer_count, seek_wait_ms,
+			frame_stats_supported, frames_decoded, frames_dropped, frames_corrupted,
+			first_frame, fatal_error, error_code,
+			bitrate_bps_seconds, abr_upswitch_count, abr_downswitch_count, play_intent, live_edge_latency_ms,
+			bucket_width_s, asset_duration_s, max_bucket_reached,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare client_qoe_session_deltas batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "error").Inc()
+		}
+		return err
+	}
+	defer closeClickHouseBatch(batch)
+
+	if appendErr := batch.Append(
+		event.Timestamp,
+		parseUUID(event.EventID),
+		event.TenantID,
+		parseUUIDOrNil(t.GetStreamId()),
+		t.GetArtifactHash(),
+		mist.ExtractInternalName(t.GetInternalName()),
+		t.GetContentId(),
+		t.GetSessionId(),
+		t.GetBeaconSeq(),
+		boolToUint8(t.GetIsFinal()),
+		t.GetFlushReason(),
+		t.GetNodeId(),
+		t.GetServingClusterId(),
+		t.GetOriginClusterId(),
+		boolToUint8(t.GetClusterAttributed()),
+		t.GetPlayerType(),
+		t.GetProtocol(),
+		t.GetContentType(),
+		boolToUint8(t.GetIsLive()),
+		t.GetConnectionType(),
+		t.GetPlayerVersion(),
+		t.GetPlayedMs(),
+		t.GetRebufferMs(),
+		t.GetRebufferCount(),
+		t.GetSeekWaitMs(),
+		boolToUint8(t.GetFrameStatsSupported()),
+		t.GetFramesDecoded(),
+		t.GetFramesDropped(),
+		t.GetFramesCorrupted(),
+		boolToUint8(t.GetFirstFrame()),
+		boolToUint8(t.GetFatalError()),
+		t.GetErrorCode(),
+		t.GetBitrateBpsSeconds(),
+		t.GetAbrUpswitchCount(),
+		t.GetAbrDownswitchCount(),
+		boolToUint8(t.GetPlayIntent()),
+		t.GetLiveEdgeLatencyMs(),
+		t.GetBucketWidthS(),
+		t.GetAssetDurationS(),
+		t.GetMaxBucketReached(),
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append session QoE delta to ClickHouse batch: %v", appendErr)
+		return appendErr
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send client_qoe_session_deltas batch: %v", err)
+		return err
+	}
+
+	// VOD retention histogram (VOD beacons only): fan the sparse per-bucket
+	// watched-seconds deltas out into one vod_retention_buckets row per bucket.
+	if err := h.fanOutVodRetention(ctx, event, t); err != nil {
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
+	}
+	return nil
+}
+
+// fanOutVodRetention writes one vod_retention_buckets row per histogram bucket
+// carried on a session QoE beacon. The parallel arrays are length-validated at
+// Bridge; a defensive guard here drops a mismatched pair rather than mis-pairing.
+func (h *AnalyticsHandler) fanOutVodRetention(ctx context.Context, event kafka.AnalyticsEvent, t *ipcpb.PlaybackSessionQoe) error {
+	buckets := t.GetRetentionBuckets()
+	seconds := t.GetRetentionSecondsWatched()
+	if len(buckets) == 0 || len(buckets) != len(seconds) {
+		return nil
+	}
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO vod_retention_buckets (
+			timestamp, event_id, tenant_id, artifact_hash, internal_name, content_id, session_id,
+			beacon_seq, bucket_width_s, asset_duration_s, bucket_index, seconds_watched,
+			source_region, schema_version
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare vod_retention_buckets batch: %v", err)
+		return err
+	}
+	defer closeClickHouseBatch(batch)
+
+	eventID := parseUUID(event.EventID)
+	internalName := mist.ExtractInternalName(t.GetInternalName())
+	env := analyticsEnvelopeColumns(event)
+	for i, bucket := range buckets {
+		if appendErr := batch.Append(
+			event.Timestamp,
+			eventID,
+			event.TenantID,
+			t.GetArtifactHash(),
+			internalName,
+			t.GetContentId(),
+			t.GetSessionId(),
+			t.GetBeaconSeq(),
+			t.GetBucketWidthS(),
+			t.GetAssetDurationS(),
+			bucket,
+			seconds[i],
+			env.sourceRegion,
+			env.schemaVersion,
+		); appendErr != nil {
+			h.logger.Errorf("Failed to append vod_retention_buckets row: %v", appendErr)
+			return appendErr
+		}
+	}
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send vod_retention_buckets batch: %v", err)
+		return err
 	}
 	return nil
 }

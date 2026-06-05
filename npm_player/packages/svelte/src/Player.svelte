@@ -59,7 +59,7 @@
       mistUrl?: string;
       authToken?: string;
       playbackAuth?: import("@livepeer-frameworks/player-core").PlaybackAuth;
-      telemetry?: { boot?: boolean };
+      telemetry?: { boot?: boolean; session?: boolean };
       telemetryUrl?: string;
       autoplay?: boolean;
       muted?: boolean;

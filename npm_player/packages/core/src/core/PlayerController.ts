@@ -17,6 +17,7 @@ import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
 import { BootTracer, type BootTrace } from "./BootTracer";
+import { SessionQoeReporter, type SessionQoeDelta } from "./SessionQoeReporter";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
 import { normalizeMistSourceUrls } from "./MistSourceUrls";
@@ -143,11 +144,13 @@ export interface PlayerControllerConfig {
   translations?: Partial<TranslationStrings>;
 
   /**
-   * Diagnostic telemetry toggles. Boot-waterfall tracing is always recorded
-   * locally (console in debug, `bootTrace` event); `boot` enables the optional
-   * lossy beacon to the platform (default off).
+   * Diagnostic telemetry toggles, all default off and lossy.
+   * - `boot` enables the one-shot startup-waterfall beacon (boot is always
+   *   recorded locally; this only controls the network beacon).
+   * - `session` enables the viewer-experienced QoE beacon (rebuffering, frame
+   *   drops, watch time). Off => the SessionQoeReporter is never created.
    */
-  telemetry?: { boot?: boolean };
+  telemetry?: { boot?: boolean; session?: boolean };
   /** Override for the telemetry beacon endpoint (defaults derived from gatewayUrl). */
   telemetryUrl?: string;
 }
@@ -761,6 +764,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private interactionController: InteractionController | null = null;
   private mistReporter: MistReporter | null = null;
   private bootTracer: BootTracer | null = null;
+  private sessionReporter: SessionQoeReporter | null = null;
   private qualityMonitor: QualityMonitor | null = null;
   private metaTrackManager: MetaTrackManager | null = null;
   private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
@@ -1627,6 +1631,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Start playback */
   async play(): Promise<void> {
+    this.sessionReporter?.markPlayIntent();
     if (this.currentPlayer?.play) {
       await this.currentPlayer.play();
       return;
@@ -2503,6 +2508,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._playbackResumedSinceError = false;
     this._errorText = error;
     this._isPassiveError = Boolean(isPlaybackActive);
+
+    // Terminal failure — fallback was exhausted/unavailable, so this is a genuine
+    // playback failure (not a recovered blip). recordFatalError no-ops before first
+    // frame (boot's domain) and after teardown.
+    this.sessionReporter?.recordFatalError(error);
 
     this.setState("error", { error });
     this.emit("error", { error });
@@ -4028,6 +4038,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this._seekingLoggedOnce = false;
         // Capture the true first painted frame (rVFC) to close the boot waterfall.
         this.bootTracer?.attachVideo(el);
+        this.startSessionReporter(el);
         this.setupVideoEventListeners(el);
         // Listen for player-reported seekable range updates (WebRTC/WHEP data channel)
         if (this.currentPlayer) {
@@ -4079,7 +4090,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       onError: (err) => {
         if (this.isDestroyed) return;
         const message = typeof err === "string" ? err : String(err);
-        // Use setPassiveError for smart error handling with fallback support
+        // Use setPassiveError for smart error handling with fallback support. QoE
+        // fatal is recorded only there, on the terminal (fallback-exhausted) path —
+        // recording here would count errors that successfully recovered via fallback.
         this.setPassiveError(message);
       },
     };
@@ -4654,6 +4667,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // gateway metadata exists, so is_live would otherwise default to false).
     if (state === "gateway_ready") {
       this.bootTracer?.setContext({ isLive: this.isLive() });
+      this.sessionReporter?.setContext({ isLive: this.isLive() });
+    }
+    if (state === "connecting" && (context?.selectedPlayer || context?.selectedProtocol)) {
+      this.sessionReporter?.setContext({
+        playerType: context.selectedPlayer,
+        protocol: context.selectedProtocol,
+      });
     }
 
     // Only emit if state actually changed
@@ -4692,31 +4712,111 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   private beaconBootTrace(trace: BootTrace): void {
     if (!this.config.telemetry?.boot) return;
-    if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
+    this.beaconTelemetry("/playback/telemetry/boot", trace, "boot");
+  }
 
-    const url = this.resolveTelemetryUrl();
-    if (!url) return;
+  /**
+   * Build the session QoE reporter when `telemetry.session` is on (otherwise it
+   * is never created, so playback carries zero instrumentation cost). Shares the
+   * boot trace's sessionId so the two beacons join. Idempotent per attach.
+   */
+  private startSessionReporter(video: HTMLVideoElement): void {
+    if (!this.config.telemetry?.session) return;
+    if (this.sessionReporter) {
+      // onReady can fire again on player fallback / element replacement; re-point
+      // the existing reporter at the new element (idempotent for the same one) so
+      // metrics don't keep reading a stale, detached video.
+      this.sessionReporter.attach(video);
+      return;
+    }
 
+    const reporter = new SessionQoeReporter({
+      contentId: this.config.contentId,
+      sessionId: this.bootTracer?.sessionId ?? `${Date.now().toString(36)}`,
+      contentType: this.getResolvedContentType() ?? undefined,
+      isLive: this.isLive(),
+      playerVersion: PlayerController.VERSION,
+      log: (message) => this.log(message),
+      onFlush: (delta) => this.beaconSessionQoe(delta),
+      statsProvider: () => this.sampleQoeStats(),
+    });
+    reporter.attach(video);
+    this.sessionReporter = reporter;
+    // Autoplay is itself a play intent; an EBVS is play-intended-but-no-first-frame.
+    if (this.config.autoplay !== false) reporter.markPlayIntent();
+    // Final beacon on controller teardown (the pagehide path is handled inside
+    // the reporter for tab-close). finalize() is idempotent across both.
+    this.cleanupFns.push(() => {
+      this.sessionReporter?.finalize("unmount");
+      this.sessionReporter = null;
+    });
+  }
+
+  /** Opt-in lossy beacon of a session QoE delta. Off unless `telemetry.session`. */
+  private beaconSessionQoe(delta: SessionQoeDelta): void {
+    if (!this.config.telemetry?.session) return;
+    this.beaconTelemetry("/playback/telemetry/session", delta, "qoe");
+  }
+
+  /**
+   * Best-effort QoE stats sample for the session reporter: the selected rendition
+   * bitrate (for time-weighted bitrate + ABR switch counts) and live-edge latency
+   * (player latency, not glass-to-glass). Both come from the active player adapter.
+   */
+  private async sampleQoeStats(): Promise<{ bitrateBps?: number; liveEdgeMs?: number } | null> {
+    const getStats = this.currentPlayer?.getStats;
+    if (!getStats) return null;
+    let stats: { currentBitrate?: number; latency?: number } | undefined;
     try {
-      // Echo the resolve-time telemetry token so Bridge can trust cluster
-      // attribution; absent => the trace is still accepted for tenant analytics.
+      stats = await getStats.call(this.currentPlayer);
+    } catch {
+      return null;
+    }
+    if (!stats) return null;
+
+    const bitrateBps = typeof stats.currentBitrate === "number" ? stats.currentBitrate : undefined;
+    let liveEdgeMs: number | undefined;
+    if (typeof stats.latency === "number") {
+      liveEdgeMs = stats.latency; // adapter-reported (e.g. HLS.js liveSyncPosition)
+    } else if (this.isLive()) {
+      const edge = this.getLiveEdge();
+      const cur = this.getEffectiveCurrentTime();
+      if (edge > 0 && cur >= 0) liveEdgeMs = Math.max(0, edge - cur);
+    }
+    return { bitrateBps, liveEdgeMs };
+  }
+
+  /**
+   * Shared telemetry beacon. Echoes the resolve-time telemetry token so Bridge
+   * can trust cluster attribution; absent => still accepted for tenant analytics.
+   * text/plain keeps the cross-origin request CORS-safelisted (no preflight).
+   */
+  private beaconTelemetry(path: string, payload: object, tag: string): void {
+    if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
+    const url = this.resolveTelemetryUrl(path);
+    if (!url) return;
+    try {
       const telemetryToken =
         this.metadata?.telemetryToken ?? this.endpoints?.metadata?.telemetryToken;
-      const payload = telemetryToken ? { ...trace, telemetryToken } : trace;
-      const body = new Blob([JSON.stringify(payload)], { type: "text/plain" });
+      const withToken = telemetryToken ? { ...payload, telemetryToken } : payload;
+      const body = new Blob([JSON.stringify(withToken)], { type: "text/plain" });
       navigator.sendBeacon(url, body);
     } catch (error) {
-      this.log(`[boot] beacon failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.log(`[${tag}] beacon failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  /** Derive the boot-telemetry endpoint from telemetryUrl or the gateway URL. */
-  private resolveTelemetryUrl(): string | null {
-    if (this.config.telemetryUrl) return this.config.telemetryUrl;
+  /** Derive a telemetry endpoint from telemetryUrl or the gateway URL. */
+  private resolveTelemetryUrl(path: string): string | null {
+    // telemetryUrl historically points at the boot endpoint; treat its telemetry
+    // directory as the beacon base so the session path shares the override.
+    if (this.config.telemetryUrl) {
+      return this.config.telemetryUrl.replace(/\/playback\/telemetry\/[a-z_]+\/?$/, path);
+    }
     const gateway = this.config.gatewayUrl || DEFAULT_GATEWAY_URL;
     try {
       const base = gateway.replace(/\/graphql\/?$/, "");
-      return `${base.replace(/\/$/, "")}/playback/telemetry/boot`;
+      return `${base.replace(/\/$/, "")}${path}`;
     } catch {
       return null;
     }

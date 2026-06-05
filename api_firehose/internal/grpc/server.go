@@ -410,6 +410,11 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *ipcpb.MistTrigger) (proto.Mes
 		if payload.PlaybackBootTrace.TenantId != nil {
 			tenantID = *payload.PlaybackBootTrace.TenantId
 		}
+	case *ipcpb.MistTrigger_PlaybackSessionQoe:
+		eventType = "playback_session_qoe"
+		if payload.PlaybackSessionQoe.TenantId != nil {
+			tenantID = *payload.PlaybackSessionQoe.TenantId
+		}
 	case *ipcpb.MistTrigger_NodeLifecycleUpdate:
 		eventType = "node_lifecycle_update"
 		if payload.NodeLifecycleUpdate.TenantId != nil {
