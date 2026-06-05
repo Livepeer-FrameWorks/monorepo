@@ -4,7 +4,7 @@
 
 24/7 DVR with no per-artifact lifetime cap. One DVR artifact spans the entire stream session, regardless of whether the stream ran for 10 minutes or 10 months. Live viewers see a tier-bounded rolling window (Mist `targetAge` + `maxEntries` + `nounlink=1`). Replay viewers navigate the recording sliced into **chapter VOD artifacts** — the chapter finalization queue remuxes each closed chapter's TS segment range into a canonical `.mkv` with `.dtsh` + (optional) Chandler thumbnail tracks, and chapter playback uses the same path as any other VOD artifact.
 
-Most platforms cap live DVR hard (Mux 4h, Cloudflare ~3h, Vimeo 4h) or force per-broadcast asset rotation. FrameWorks ships an unbounded continuous archive with playback-ready chapter VOD artifacts on top.
+Live DVR is designed as a continuous archive rather than a short rolling buffer or per-broadcast asset rotation. Chapter finalization makes long sessions navigable without splitting the source recording into separate DVR artifacts.
 
 This file is the canonical engineering reference. `docs/architecture/clips-dvr.md` covers the broader artifact storage model; this file is the DVR-specific overlay. Standards (chapter ID stability, mode validation, public addressing) live in `docs/standards/dvr-chapters.md`.
 
