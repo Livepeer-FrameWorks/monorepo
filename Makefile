@@ -85,12 +85,19 @@ graphql-all: graphql graphql-frontend graphql-tray
 build:
 	@echo "Building service binaries with version: $(VERSION)"
 	@mkdir -p bin
-	@for service in $(SERVICES); do \
+	@failed=0; \
+	for service in $(SERVICES); do \
 		echo "Building $$service..."; \
-		$(MAKE) build-bin-$$service; \
-	done
-	@echo "Building cli..."
-	@$(MAKE) build-bin-cli
+		$(MAKE) build-bin-$$service || failed=1; \
+	done; \
+	echo "Building cli..."; \
+	$(MAKE) build-bin-cli || failed=1; \
+	if [ $$failed -eq 0 ]; then \
+		echo "✓ Build passed"; \
+	else \
+		echo "✗ Build failed"; \
+		exit 1; \
+	fi
 
 # release-plan: compute per-artefact source hashes + carry-forward decisions
 # against a track-aware baseline release manifest. Output is JSON. The
