@@ -1898,12 +1898,23 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		`, result.FailureCode, result.FailureMessage, paymentID, attemptNumber); attemptUpdateErr != nil {
 			jm.logger.WithError(attemptUpdateErr).WithField("payment_id", paymentID).Warn("mark attempt sca_required")
 		}
+		// Off-session SCA cannot be completed off-session, and the parked
+		// PaymentIntent is not resumable by a payment-method change. The real
+		// resume path is on-session: the overage invoice stays pending/overdue
+		// and the customer pays it in the billing UI, where hosted Checkout
+		// performs the authentication. Direct them there; dunning reminders also
+		// cover the invoice if they do not act.
+		actionURL := strings.TrimSpace(config.GetEnv("WEBAPP_PUBLIC_URL", ""))
+		if actionURL != "" {
+			actionURL = strings.TrimRight(actionURL, "/") + "/account/billing"
+		}
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id":         tenantID,
 			"invoice_id":        invoiceID,
 			"payment_intent_id": result.PaymentIntentID,
-			"next_action_url":   result.NextActionURL,
-		}).Warn("Stripe off-session overage requires customer authentication (SCA)")
+			"action_url":        actionURL,
+		}).Warn("Stripe off-session overage requires customer authentication (SCA); directing customer to on-session invoice payment")
+		go sendTenantActionRequiredEmail(tenantID, invoiceID, float64(amountCents)/100, currency, actionURL)
 		return nil
 
 	case result.Status == "failed":
