@@ -2823,27 +2823,28 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "false", false, nil
 	}
 
+	capacityID := viewerCapacityID(userNew.GetRequestUrl(), userNew.GetSessionId())
+
 	// Per-tenant concurrent-viewer cap. Hard limit, independent of cluster
-	// load. Set semantics on session_id makes re-fires (USER_NEW after
-	// reconnect with the same session_id) idempotent — already-tracked
-	// sessions are admitted without consuming a fresh slot. Cap value is the
-	// broadcaster's tenant max_viewers, cached in streamContext at
-	// PUSH_REWRITE.
+	// load. Set semantics on fwcid deduplicate Mist sessions that belong to
+	// the same playback redirect; direct playback without fwcid falls back to
+	// session_id. Cap value is the broadcaster's tenant max_viewers, cached in
+	// streamContext at PUSH_REWRITE.
 	if info.TenantID != "" && info.MaxViewers > 0 {
 		tc := state.DefaultTenantCapacity()
-		sessionID := userNew.GetSessionId()
 		current := tc.CountViewers(info.TenantID)
-		alreadyTracked := tc.HasViewer(info.TenantID, sessionID)
+		alreadyTracked := tc.HasViewer(info.TenantID, capacityID)
 		if !alreadyTracked && int32(current) >= info.MaxViewers {
 			p.logger.WithFields(logging.Fields{
-				"session_id":  sessionID,
-				"tenant_id":   info.TenantID,
-				"current":     current,
-				"max_viewers": info.MaxViewers,
+				"session_id":         userNew.GetSessionId(),
+				"viewer_capacity_id": capacityID,
+				"tenant_id":          info.TenantID,
+				"current":            current,
+				"max_viewers":        info.MaxViewers,
 			}).Warn("Rejecting viewer: tenant concurrent-viewer cap reached")
 			return "false", false, nil
 		}
-		tc.RegisterViewer(info.TenantID, sessionID)
+		tc.RegisterViewer(info.TenantID, capacityID)
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -3079,9 +3080,12 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		trigger.OriginClusterId = &info.OriginClusterID
 	}
 
-	// Decrement the broadcaster's concurrent-viewer count. Set semantics
-	// make duplicate USER_END fires safe (no-op for unknown sessions).
-	state.DefaultTenantCapacity().UnregisterViewer(info.TenantID, userEnd.GetSessionId())
+	capacityID := userEnd.GetSessionId()
+	correlatedCapacity := false
+	if viewerID := state.DefaultManager().ActiveVirtualViewerIDForSession(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName); viewerID != "" {
+		capacityID = viewerID
+		correlatedCapacity = true
+	}
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
 
@@ -3126,6 +3130,9 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 	clientIP := userEnd.GetHost()
 	if disconnected := state.DefaultManager().DisconnectVirtualViewerBySessionID(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName, clientIP); disconnected {
 		state.DefaultManager().UpdateUserConnection(internalStreamName, trigger.GetNodeId(), info.TenantID, -1)
+		state.DefaultTenantCapacity().UnregisterViewer(info.TenantID, capacityID)
+	} else if !correlatedCapacity {
+		state.DefaultTenantCapacity().UnregisterViewer(info.TenantID, capacityID)
 	}
 
 	if decklogErr != nil && shouldSurfaceDecklogError(trigger) {
@@ -3143,6 +3150,13 @@ func extractCorrelationID(requestURL string) string {
 		return ""
 	}
 	return parsedURL.Query().Get("fwcid")
+}
+
+func viewerCapacityID(requestURL, sessionID string) string {
+	if viewerID := extractCorrelationID(requestURL); viewerID != "" {
+		return viewerID
+	}
+	return sessionID
 }
 
 // handleLiveTrackList processes LIVE_TRACK_LIST trigger (non-blocking)

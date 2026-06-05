@@ -11,9 +11,9 @@ import (
 
 // TenantCapacityManager tracks per-tenant concurrent stream and viewer counts
 // for runtime fair-use enforcement. Counts are kept as sets keyed by stable
-// identifiers (internal_name for streams, session_id for viewers) so duplicate
-// trigger fires are idempotent — Mist can re-fire PUSH_REWRITE on retry or
-// USER_NEW on reconnect without inflating the count.
+// identifiers (internal_name for streams, fwcid/session fallback for viewers)
+// so duplicate trigger fires are idempotent — Mist can re-fire PUSH_REWRITE
+// on retry or USER_NEW on reconnect without inflating the count.
 //
 // When EnableRedisSync is called, sets are mirrored to Redis (SADD/SREM)
 // and counts are sourced from Redis (SCARD) so multiple Foghorn instances
@@ -24,13 +24,11 @@ import (
 type TenantCapacityManager struct {
 	mu      sync.RWMutex
 	streams map[string]map[string]struct{} // tenant_id -> set(internal_name)
-	viewers map[string]map[string]struct{} // tenant_id -> set(session_id)
+	viewers map[string]map[string]struct{} // tenant_id -> set(viewer capacity id)
 
 	redis     goredis.UniversalClient
 	clusterID string
 }
-
-const tenantViewerSetTTL = 2 * time.Hour
 
 func NewTenantCapacityManager() *TenantCapacityManager {
 	return &TenantCapacityManager{
@@ -232,9 +230,9 @@ func (m *TenantCapacityManager) HasStream(tenantID, internalName string) bool {
 	return present
 }
 
-// RegisterViewer records an active viewer session for a tenant. Idempotent.
-func (m *TenantCapacityManager) RegisterViewer(tenantID, sessionID string) int {
-	if tenantID == "" || sessionID == "" {
+// RegisterViewer records an active viewer capacity id for a tenant. Idempotent.
+func (m *TenantCapacityManager) RegisterViewer(tenantID, viewerID string) int {
+	if tenantID == "" || viewerID == "" {
 		return 0
 	}
 	m.mu.Lock()
@@ -243,7 +241,7 @@ func (m *TenantCapacityManager) RegisterViewer(tenantID, sessionID string) int {
 		set = make(map[string]struct{})
 		m.viewers[tenantID] = set
 	}
-	set[sessionID] = struct{}{}
+	set[viewerID] = struct{}{}
 	r := m.redis
 	key := ""
 	if r != nil {
@@ -254,10 +252,11 @@ func (m *TenantCapacityManager) RegisterViewer(tenantID, sessionID string) int {
 	if r != nil {
 		ctx, cancel := redisCtx()
 		defer cancel()
-		// Best-effort viewer SADD; see comment on stream SADD above.
+		// Viewer membership is lifecycle-driven; keep the tenant set
+		// unexpired while any viewer is tracked.
 		pipe := r.Pipeline()
-		pipe.SAdd(ctx, key, sessionID)
-		pipe.Expire(ctx, key, tenantViewerSetTTL)
+		pipe.SAdd(ctx, key, viewerID)
+		pipe.Persist(ctx, key)
 		if _, err := pipe.Exec(ctx); err != nil {
 			return count
 		}
@@ -265,9 +264,9 @@ func (m *TenantCapacityManager) RegisterViewer(tenantID, sessionID string) int {
 	return count
 }
 
-// UnregisterViewer removes an active viewer.
-func (m *TenantCapacityManager) UnregisterViewer(tenantID, sessionID string) int {
-	if tenantID == "" || sessionID == "" {
+// UnregisterViewer removes an active viewer capacity id.
+func (m *TenantCapacityManager) UnregisterViewer(tenantID, viewerID string) int {
+	if tenantID == "" || viewerID == "" {
 		return 0
 	}
 	m.mu.Lock()
@@ -279,7 +278,7 @@ func (m *TenantCapacityManager) UnregisterViewer(tenantID, sessionID string) int
 	}
 	count := 0
 	if set != nil {
-		delete(set, sessionID)
+		delete(set, viewerID)
 		if len(set) == 0 {
 			delete(m.viewers, tenantID)
 		} else {
@@ -291,7 +290,7 @@ func (m *TenantCapacityManager) UnregisterViewer(tenantID, sessionID string) int
 		ctx, cancel := redisCtx()
 		defer cancel()
 		// Best-effort viewer SREM.
-		r.SRem(ctx, key, sessionID) //nolint:errcheck
+		r.SRem(ctx, key, viewerID) //nolint:errcheck
 	}
 	return count
 }
@@ -321,13 +320,13 @@ func (m *TenantCapacityManager) CountViewers(tenantID string) int {
 	return int(n)
 }
 
-// HasViewer reports whether (tenant, session_id) is currently registered.
-func (m *TenantCapacityManager) HasViewer(tenantID, sessionID string) bool {
-	if tenantID == "" || sessionID == "" {
+// HasViewer reports whether (tenant, viewer capacity id) is currently registered.
+func (m *TenantCapacityManager) HasViewer(tenantID, viewerID string) bool {
+	if tenantID == "" || viewerID == "" {
 		return false
 	}
 	m.mu.RLock()
-	_, local := m.viewers[tenantID][sessionID]
+	_, local := m.viewers[tenantID][viewerID]
 	r := m.redis
 	key := ""
 	if r != nil {
@@ -339,7 +338,7 @@ func (m *TenantCapacityManager) HasViewer(tenantID, sessionID string) bool {
 	}
 	ctx, cancel := redisCtx()
 	defer cancel()
-	present, err := r.SIsMember(ctx, key, sessionID).Result()
+	present, err := r.SIsMember(ctx, key, viewerID).Result()
 	if err != nil {
 		return local
 	}

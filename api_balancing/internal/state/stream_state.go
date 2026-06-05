@@ -120,11 +120,62 @@ type VirtualViewer struct {
 	StreamName     string             `json:"stream_name"`     // Internal stream name
 	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
 	MistSessionID  string             `json:"mist_session_id"` // Mist session ID for disconnect correlation
+	MistSessionIDs []string           `json:"mist_session_ids,omitempty"`
 	State          VirtualViewerState `json:"state"`           // Current lifecycle state
 	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
 	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
 	DisconnectTime time.Time          `json:"disconnect_time"` // When USER_END received (zero if not yet)
 	EstBandwidth   uint64             `json:"est_bandwidth"`   // Estimated bytes/sec for this viewer
+}
+
+func (v *VirtualViewer) addMistSessionID(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	if v.MistSessionID == "" {
+		v.MistSessionID = sessionID
+	}
+	for _, existing := range v.MistSessionIDs {
+		if existing == sessionID {
+			return
+		}
+	}
+	v.MistSessionIDs = append(v.MistSessionIDs, sessionID)
+}
+
+func (v *VirtualViewer) hasMistSessionID(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	if v.MistSessionID == sessionID {
+		return true
+	}
+	for _, existing := range v.MistSessionIDs {
+		if existing == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+func (v *VirtualViewer) removeMistSessionID(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	remaining := v.MistSessionIDs[:0]
+	for _, existing := range v.MistSessionIDs {
+		if existing != sessionID {
+			remaining = append(remaining, existing)
+		}
+	}
+	v.MistSessionIDs = remaining
+	if v.MistSessionID == sessionID {
+		v.MistSessionID = ""
+		if len(v.MistSessionIDs) > 0 {
+			v.MistSessionID = v.MistSessionIDs[0]
+		}
+	}
+	return v.MistSessionID == "" && len(v.MistSessionIDs) == 0
 }
 
 // NodeState captures per-node state
@@ -431,14 +482,15 @@ func (sm *StreamStateManager) GetAllStreamStates() []*StreamState {
 	return states
 }
 
-// GetStreamsByTenant returns all active streams for a specific tenant
+// GetStreamsByTenant returns fresh live streams with an active input for a tenant.
 func (sm *StreamStateManager) GetStreamsByTenant(tenantID string) []*StreamState {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
+	cutoff := time.Now().Add(-sm.getStaleThreshold())
 	var states []*StreamState
 	for _, state := range sm.streams {
-		if state.TenantID == tenantID && state.Status == "live" {
+		if state.TenantID == tenantID && state.Status == "live" && state.Inputs > 0 && state.LastUpdate.After(cutoff) {
 			stateCopy := *state
 			stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
 			copy(stateCopy.Tracks, state.Tracks)
@@ -3397,7 +3449,7 @@ func (sm *StreamStateManager) AttachVirtualViewerSession(viewerID, nodeID, strea
 			viewer.State == VirtualViewerActive &&
 			viewer.NodeID == nodeID &&
 			viewer.StreamName == streamName {
-			viewer.MistSessionID = mistSessionID
+			viewer.addMistSessionID(mistSessionID)
 			return true
 		}
 	}
@@ -3410,18 +3462,20 @@ func (sm *StreamStateManager) AttachVirtualViewerSession(viewerID, nodeID, strea
 		if viewer.StreamName != streamName || viewer.ClientIP != clientIP {
 			continue
 		}
-		if viewer.MistSessionID == "" || viewer.MistSessionID == mistSessionID {
-			viewer.MistSessionID = mistSessionID
-			return true
-		}
+		viewer.addMistSessionID(mistSessionID)
+		return true
 	}
 
 	return false
 }
 
 func (sm *StreamStateManager) HasActiveVirtualViewerSession(mistSessionID, nodeID, streamName string) bool {
+	return sm.ActiveVirtualViewerIDForSession(mistSessionID, nodeID, streamName) != ""
+}
+
+func (sm *StreamStateManager) ActiveVirtualViewerIDForSession(mistSessionID, nodeID, streamName string) string {
 	if mistSessionID == "" {
-		return false
+		return ""
 	}
 
 	sm.mu.RLock()
@@ -3432,12 +3486,12 @@ func (sm *StreamStateManager) HasActiveVirtualViewerSession(mistSessionID, nodeI
 		if viewer == nil || viewer.State != VirtualViewerActive {
 			continue
 		}
-		if viewer.StreamName == streamName && viewer.MistSessionID == mistSessionID {
-			return true
+		if viewer.StreamName == streamName && viewer.hasMistSessionID(mistSessionID) {
+			return viewer.ID
 		}
 	}
 
-	return false
+	return ""
 }
 
 // ConfirmVirtualViewer transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
@@ -3494,7 +3548,7 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 	}
 
 	if mistSessionID != "" {
-		matchedViewer.MistSessionID = mistSessionID
+		matchedViewer.addMistSessionID(mistSessionID)
 	}
 
 	confirmed := sm.activateVirtualViewerLocked(node, matchedViewer)
@@ -3527,7 +3581,7 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 			if viewer == nil || viewer.State != VirtualViewerActive {
 				continue
 			}
-			if viewer.StreamName == streamName && viewer.MistSessionID == mistSessionID {
+			if viewer.StreamName == streamName && viewer.hasMistSessionID(mistSessionID) {
 				if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
 					matchedViewer = viewer
 					oldestTime = viewer.ConnectTime
@@ -3552,6 +3606,10 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 	}
 
 	if matchedViewer != nil {
+		if mistSessionID != "" && !matchedViewer.removeMistSessionID(mistSessionID) {
+			sm.mu.Unlock()
+			return false
+		}
 		matchedViewer.State = VirtualViewerDisconnected
 		matchedViewer.DisconnectTime = time.Now()
 		sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)

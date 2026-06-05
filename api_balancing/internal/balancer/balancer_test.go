@@ -417,9 +417,11 @@ func TestWeightAndStreamAccessors(t *testing.T) {
 	if err := sm.UpdateStreamFromBuffer("stream-a", "stream-a", "node-a", "tenant-a", "FULL", ""); err != nil {
 		t.Fatalf("failed to seed stream-a: %v", err)
 	}
+	sm.UpdateNodeStats("stream-a", "node-a", 1, 1, 1024, 0, false)
 	if err := sm.UpdateStreamFromBuffer("stream-b", "stream-b", "node-b", "tenant-b", "FULL", ""); err != nil {
 		t.Fatalf("failed to seed stream-b: %v", err)
 	}
+	sm.UpdateNodeStats("stream-b", "node-b", 1, 1, 1024, 0, false)
 
 	streams := lb.GetStreamsByTenant("tenant-a")
 	if len(streams) != 1 || streams[0].InternalName != "stream-a" {

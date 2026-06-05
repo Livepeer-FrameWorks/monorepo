@@ -699,6 +699,49 @@ func TestDisconnectVirtualViewerBySessionID_ReturnsTrueForActiveViewer(t *testin
 	}
 }
 
+func TestDisconnectVirtualViewerBySessionID_WaitsForLastMistSession(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-multi-session"
+	streamName := "stream-multi-session"
+	clientIP := "203.0.113.9"
+
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	if confirmed := sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, "mist-session-a"); !confirmed {
+		t.Fatal("expected viewer confirmation")
+	}
+	if attached := sm.AttachVirtualViewerSession(viewerID, nodeID, streamName, clientIP, "mist-session-b"); !attached {
+		t.Fatal("expected second Mist session attachment")
+	}
+
+	if got := sm.ActiveVirtualViewerIDForSession("mist-session-a", nodeID, streamName); got != viewerID {
+		t.Fatalf("session-a viewer id = %q, want %q", got, viewerID)
+	}
+	if got := sm.ActiveVirtualViewerIDForSession("mist-session-b", nodeID, streamName); got != viewerID {
+		t.Fatalf("session-b viewer id = %q, want %q", got, viewerID)
+	}
+
+	if disconnected := sm.DisconnectVirtualViewerBySessionID("mist-session-a", nodeID, streamName, clientIP); disconnected {
+		t.Fatal("first session end must not disconnect the virtual viewer")
+	}
+	sm.mu.RLock()
+	viewerState := sm.virtualViewers[viewerID].State
+	sm.mu.RUnlock()
+	if viewerState != VirtualViewerActive {
+		t.Fatalf("expected viewer to stay active after first session end, got %s", viewerState)
+	}
+
+	if disconnected := sm.DisconnectVirtualViewerBySessionID("mist-session-b", nodeID, streamName, clientIP); !disconnected {
+		t.Fatal("last session end must disconnect the virtual viewer")
+	}
+	sm.mu.RLock()
+	viewerState = sm.virtualViewers[viewerID].State
+	sm.mu.RUnlock()
+	if viewerState != VirtualViewerDisconnected {
+		t.Fatalf("expected viewer to be disconnected, got %s", viewerState)
+	}
+}
+
 func TestStreamStateTransitionsAndTenantIsolation(t *testing.T) {
 	sm := NewStreamStateManager()
 
@@ -711,9 +754,11 @@ func TestStreamStateTransitionsAndTenantIsolation(t *testing.T) {
 	if err := sm.UpdateStreamFromBuffer(streamA, "tenantA", nodeID, tenantA, "BUFFERING", ""); err != nil {
 		t.Fatalf("unexpected error updating stream A: %v", err)
 	}
+	sm.UpdateNodeStats("tenantA", nodeID, 1, 1, 1024, 0, false)
 	if err := sm.UpdateStreamFromBuffer(streamB, "tenantB", nodeID, tenantB, "READY", ""); err != nil {
 		t.Fatalf("unexpected error updating stream B: %v", err)
 	}
+	sm.UpdateNodeStats("tenantB", nodeID, 1, 1, 1024, 0, false)
 
 	streamsForA := sm.GetStreamsByTenant(tenantA)
 	if len(streamsForA) != 1 {
@@ -727,6 +772,39 @@ func TestStreamStateTransitionsAndTenantIsolation(t *testing.T) {
 	streamsForA = sm.GetStreamsByTenant(tenantA)
 	if len(streamsForA) != 0 {
 		t.Fatalf("expected no live streams for tenant A after offline, got %d", len(streamsForA))
+	}
+}
+
+func TestGetStreamsByTenantRequiresFreshActiveInput(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	tenantID := "tenant-cap"
+	nodeID := "edge-1"
+	freshInput := "fresh-input"
+	staleInput := "stale-input"
+	playbackOnly := "playback-only"
+
+	sm.UpdateNodeStats(freshInput, nodeID, 1, 1, 1024, 0, false)
+	sm.mu.Lock()
+	sm.streams[freshInput].TenantID = tenantID
+	sm.mu.Unlock()
+	sm.UpdateNodeStats(staleInput, nodeID, 1, 1, 1024, 0, false)
+	sm.mu.Lock()
+	sm.streams[staleInput].TenantID = tenantID
+	sm.mu.Unlock()
+	sm.UpdateNodeStats(playbackOnly, nodeID, 1, 0, 0, 1024, false)
+	sm.mu.Lock()
+	sm.streams[playbackOnly].TenantID = tenantID
+	sm.streams[playbackOnly].Status = "live"
+	sm.streams[staleInput].LastUpdate = time.Now().Add(-2 * time.Minute)
+	sm.mu.Unlock()
+
+	got := sm.GetStreamsByTenant(tenantID)
+	if len(got) != 1 {
+		t.Fatalf("GetStreamsByTenant returned %d streams, want 1: %#v", len(got), got)
+	}
+	if got[0].InternalName != freshInput {
+		t.Fatalf("GetStreamsByTenant returned %q, want %q", got[0].InternalName, freshInput)
 	}
 }
 

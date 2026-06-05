@@ -1263,6 +1263,110 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	}
 }
 
+func TestViewerCapUsesCorrelationIDInsteadOfMistSession(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	state.ResetDefaultTenantCapacityForTests()
+	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
+
+	processor := newTestProcessor(t)
+	tenantID := "tenant-viewer-cap"
+	nodeID := "node-viewer-cap"
+	internalName := "stream-viewer-cap"
+	clientIP := "192.0.2.50"
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+		TenantID:          tenantID,
+		MaxViewers:        1,
+		RequiresAuth:      false,
+		RequiresAuthKnown: true,
+	}, time.Minute)
+
+	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
+	resp, abort, err := processor.handlePlayRewrite(&ipcpb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+			PlayRewrite: &ipcpb.ViewerResolveTrigger{
+				RequestedStream: "live+" + internalName,
+				ViewerHost:      clientIP,
+				OutputType:      "HLS",
+				RequestUrl:      "https://edge.example/view/hls/live+stream/index.m3u8?fwcid=" + viewerID,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handlePlayRewrite failed: %v", err)
+	}
+	if abort || resp != "live+"+internalName {
+		t.Fatalf("expected allowed PLAY_REWRITE, got response=%q abort=%v", resp, abort)
+	}
+
+	for _, sessionID := range []string{"mist-session-a", "mist-session-b"} {
+		resp, abort, err = processor.handleUserNew(&ipcpb.MistTrigger{
+			NodeId:   nodeID,
+			TenantId: &tenantID,
+			TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+				ViewerConnect: &ipcpb.ViewerConnectTrigger{
+					StreamName: "live+" + internalName,
+					Host:       clientIP,
+					Connector:  "HLS",
+					RequestUrl: "https://edge.example/view/hls/live+stream/index.m3u8?fwcid=" + viewerID,
+					SessionId:  sessionID,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("handleUserNew(%s) failed: %v", sessionID, err)
+		}
+		if abort || resp != "true" {
+			t.Fatalf("expected USER_NEW %s allowed, got response=%q abort=%v", sessionID, resp, abort)
+		}
+	}
+	if got := state.DefaultTenantCapacity().CountViewers(tenantID); got != 1 {
+		t.Fatalf("same fwcid across Mist sessions must count once, got %d", got)
+	}
+
+	_, _, err = processor.handleUserEnd(&ipcpb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
+				SessionId:  "mist-session-a",
+				StreamName: "live+" + internalName,
+				Connector:  "HLS",
+				Host:       clientIP,
+				Duration:   10,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleUserEnd failed: %v", err)
+	}
+	if got := state.DefaultTenantCapacity().CountViewers(tenantID); got != 1 {
+		t.Fatalf("first correlated USER_END must keep the fwcid capacity slot while another session is active, got %d", got)
+	}
+
+	_, _, err = processor.handleUserEnd(&ipcpb.MistTrigger{
+		NodeId:   nodeID,
+		TenantId: &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
+				SessionId:  "mist-session-b",
+				StreamName: "live+" + internalName,
+				Connector:  "HLS",
+				Host:       clientIP,
+				Duration:   12,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second handleUserEnd failed: %v", err)
+	}
+	if got := state.DefaultTenantCapacity().CountViewers(tenantID); got != 0 {
+		t.Fatalf("last correlated USER_END must release the fwcid capacity slot, got %d", got)
+	}
+}
+
 func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
