@@ -1,5 +1,11 @@
 import {
   BRAND_NAME,
+  CONTACT_EMAIL,
+  APP_SITE_URL,
+  DOCS_SITE_URL,
+  API_SITE_URL,
+  FORMS_SITE_URL,
+  MARKETING_SITE_URL,
   GITHUB_URL,
   LIVEPEER_URL,
   LIVEPEER_EXPLORER_URL,
@@ -10,26 +16,31 @@ import {
   DEMO_FIXTURES,
 } from "@frameworks/site-config";
 
-function requireEnv(name) {
+function publicConfig(name, fallback) {
   const value = import.meta.env[name];
-  if (!value) {
+  if (typeof value === "string" && value.trim() !== "") {
+    return value;
+  }
+  if (!fallback) {
     throw new Error(`${name} is required`);
   }
-  return value;
+  return fallback;
 }
 
-// Deployment-owned values from VITE_*, product constants from site-config.
-const marketingUrl = requireEnv("VITE_MARKETING_SITE_URL");
+// Public defaults come from site-config; VITE_* overrides let local and
+// provisioned deployments point the static bundle at environment-specific origins.
+const marketingUrl = publicConfig("VITE_MARKETING_SITE_URL", MARKETING_SITE_URL);
 const domain = new URL(marketingUrl).hostname;
+const apiUrl = publicConfig("VITE_GRAPHQL_HTTP_URL", `${API_SITE_URL}/graphql`);
 
 const config = {
-  appUrl: requireEnv("VITE_APP_URL"),
-  docsUrl: requireEnv("VITE_DOCS_SITE_URL"),
-  contactApiUrl: requireEnv("VITE_CONTACT_API_URL"),
-  contactEmail: requireEnv("VITE_CONTACT_EMAIL"),
+  appUrl: publicConfig("VITE_APP_URL", APP_SITE_URL),
+  docsUrl: publicConfig("VITE_DOCS_SITE_URL", DOCS_SITE_URL),
+  contactApiUrl: publicConfig("VITE_CONTACT_API_URL", FORMS_SITE_URL),
+  contactEmail: publicConfig("VITE_CONTACT_EMAIL", CONTACT_EMAIL),
   turnstileSiteKey: import.meta.env.VITE_TURNSTILE_FORMS_SITE_KEY ?? "",
-  gatewayUrl: requireEnv("VITE_GRAPHQL_HTTP_URL"),
-  mcpUrl: requireEnv("VITE_MCP_URL"),
+  gatewayUrl: apiUrl,
+  mcpUrl: publicConfig("VITE_MCP_URL", `${API_SITE_URL}/mcp`),
 
   githubUrl: GITHUB_URL,
   livepeerUrl: LIVEPEER_URL,

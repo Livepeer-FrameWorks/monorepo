@@ -7,6 +7,8 @@ export const MARKETING_SITE_URL = "https://frameworks.network";
 export const APP_SITE_URL = "https://app.frameworks.network";
 export const DOCS_SITE_URL = "https://logbook.frameworks.network";
 export const API_SITE_URL = "https://bridge.frameworks.network";
+export const FORMS_SITE_URL = "https://steward.frameworks.network";
+export const CONTACT_EMAIL = "info@frameworks.network";
 
 export const GITHUB_URL = "https://github.com/livepeer-frameworks/monorepo";
 export const LIVEPEER_URL = "https://livepeer.org";
