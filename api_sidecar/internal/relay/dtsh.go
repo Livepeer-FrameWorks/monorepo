@@ -33,32 +33,11 @@ import (
 func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, streamInternal string) {
 	forceCloseForMistReader(c)
 
-	nestedPath := s.nestedSidecarPathFor(kind, file, streamInternal)
-	if nestedPath != "" {
-		if info, err := os.Stat(nestedPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			if err := dtsh.ValidateFile(nestedPath); err != nil {
-				if s.logger != nil {
-					s.logger.WithError(err).WithField("local_path", nestedPath).Warn("relay warm dtsh invalid; removing and returning generation signal")
-				}
-				_ = os.Remove(nestedPath)
-				c.Status(http.StatusNotFound)
-				return
-			}
-			f, err := os.Open(nestedPath)
-			if err != nil {
-				if s.logger != nil {
-					s.logger.WithError(err).WithField("local_path", nestedPath).Debug("relay warm dtsh open failed; returning generation signal")
-				}
-				c.Status(http.StatusNotFound)
-				return
-			}
-			defer f.Close()
-			http.ServeContent(c.Writer, c.Request, filepath.Base(nestedPath), info.ModTime(), f)
-			return
-		}
+	localPath := s.canonicalFilePath(kind, file)
+	if nestedPath := s.nestedSidecarPathFor(kind, file, streamInternal); nestedPath != "" {
+		localPath = nestedPath
 	}
 
-	localPath := s.canonicalFilePath(kind, file)
 	if info, err := os.Stat(localPath); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		if err := dtsh.ValidateFile(localPath); err != nil {
 			if s.logger != nil {

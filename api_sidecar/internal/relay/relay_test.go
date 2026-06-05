@@ -607,6 +607,37 @@ func TestClipDtshPutLandsNextToNestedClipMedia(t *testing.T) {
 	}
 }
 
+func TestClipDtshGetDoesNotUseFlatSidecarForStreamScopedClip(t *testing.T) {
+	dir := t.TempDir()
+	hash := "abc"
+	file := hash + ".mkv.dtsh"
+	flatPath := filepath.Join(dir, "clips", file)
+	if err := os.MkdirAll(filepath.Dir(flatPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(flatPath, validDtshBytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{
+		out: map[string]*ResolveResult{"clip/" + hash: {
+			State:         pb.AssetState_ASSET_STATE_PLAYABLE,
+			URLTTLSeconds: 60,
+		}},
+	}, nil)
+	ts := mount(t, s)
+	defer ts.Close()
+
+	resp, err := doMistGet(t, ts.URL+"/internal/artifact/clip/streamA/"+file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
 func TestDtshPutUnexpectedEOFDoesNotReportSuccess(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"
