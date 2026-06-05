@@ -907,6 +907,10 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 		m.logger.WithError(err).WithField("path", caddyConfigPath()).Warn("Failed to persist production Caddyfile")
 		return false
 	}
+	if err := repairCaddyTLSFiles(bundles); err != nil {
+		m.logger.WithError(err).Warn("Caddy TLS bundle metadata repair failed")
+		return false
+	}
 	if err := verifyCaddyTLSFiles(bundles); err != nil {
 		m.logger.WithError(err).Warn("Caddy TLS bundle preflight failed")
 		return false
@@ -923,6 +927,21 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 		return true
 	}
 	return false
+}
+
+func repairCaddyTLSFiles(bundles []CaddyfileBundle) error {
+	for _, bundle := range bundles {
+		if strings.TrimSpace(bundle.TLSCertPath) == "" && strings.TrimSpace(bundle.TLSKeyPath) == "" {
+			continue
+		}
+		if err := repairManagedFileMetadata(bundle.TLSCertPath, 0o644); err != nil {
+			return fmt.Errorf("cert %s: %w", bundle.TLSCertPath, err)
+		}
+		if err := repairManagedFileMetadata(bundle.TLSKeyPath, 0o640); err != nil {
+			return fmt.Errorf("key %s: %w", bundle.TLSKeyPath, err)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) persistCaddyfile(content []byte) error {

@@ -379,7 +379,50 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 	}
 }
 
-func TestActivateCaddyRejectsUnreadableKeyBeforeReload(t *testing.T) {
+func TestActivateCaddyRepairsUnreadableKeyBeforeReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	t.Setenv("CADDY_CONFIG_PATH", path)
+	bundleDir := t.TempDir()
+	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+
+	reloadCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reloadCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+
+	seed := &ipcpb.ConfigSeed{
+		TlsBundles: []*ipcpb.TLSCertBundle{{
+			BundleId:      "cluster:media-eu-1",
+			CertPem:       "cert",
+			KeyPem:        "key",
+			SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
+		}},
+	}
+	m := &Manager{logger: logging.NewLogger()}
+	changed, results := m.applyTLSBundles(seed.GetTlsBundles())
+	if !changed || len(results) != 1 || !results[0].Success {
+		t.Fatalf("applyTLSBundles changed=%v results=%#v", changed, results)
+	}
+	keyPath := filepath.Join(bundleDir, "cluster_media-eu-1.key")
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod key: %v", err)
+	}
+	if !m.activateCaddy(seed, false) {
+		t.Fatal("activateCaddy returned false for repairable key metadata")
+	}
+	if mode := fileMode(t, keyPath); mode != 0o640 {
+		t.Fatalf("repaired key mode = %o, want 0640", mode)
+	}
+	if reloadCount != 1 {
+		t.Fatalf("reload count = %d, want 1", reloadCount)
+	}
+}
+
+func TestActivateCaddyRejectsMissingKeyBeforeReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
 	t.Setenv("CADDY_CONFIG_PATH", path)
 	bundleDir := t.TempDir()
@@ -406,11 +449,11 @@ func TestActivateCaddyRejectsUnreadableKeyBeforeReload(t *testing.T) {
 		t.Fatalf("applyTLSBundles changed=%v results=%#v", changed, results)
 	}
 	keyPath := filepath.Join(bundleDir, "cluster_media-eu-1.key")
-	if err := os.Chmod(keyPath, 0o600); err != nil {
-		t.Fatalf("chmod key: %v", err)
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatalf("remove key: %v", err)
 	}
 	if m.activateCaddy(seed, false) {
-		t.Fatal("activateCaddy returned true for unreadable key")
+		t.Fatal("activateCaddy returned true for missing key")
 	}
 }
 
