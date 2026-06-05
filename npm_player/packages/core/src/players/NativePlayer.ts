@@ -75,6 +75,8 @@ export class NativePlayerImpl extends BasePlayer {
   private whepBeginMs = 0;
   private whepEndMs = 0;
   private whepPlayRate: number | "auto" | "fast-forward" = "auto";
+  private whepPlayRequested = false;
+  private whepHoldRequested = false;
   private currentOptions: PlayerOptions | null = null;
   private streamInfoRef: StreamInfo | null = null;
   private selectedTrack = "auto";
@@ -237,6 +239,8 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentOptions = options;
     this.streamInfoRef = streamInfo ?? null;
     this.isMP3Source = source.type === "html5/audio/mp3";
+    this.whepPlayRequested = false;
+    this.whepHoldRequested = false;
     container.classList.add("fw-player-container");
 
     // Create video element
@@ -383,16 +387,20 @@ export class NativePlayerImpl extends BasePlayer {
   }
 
   async play(): Promise<void> {
-    if (this.controlChannel?.isOpen) {
-      this.controlChannel.play();
+    if (this.currentMimeType === "whep") {
+      this.whepPlayRequested = true;
+      this.whepHoldRequested = false;
+      this.controlChannel?.play();
     }
     return super.play();
   }
 
   pause(): void {
     super.pause();
-    if (this.controlChannel?.isOpen) {
-      this.controlChannel.hold();
+    if (this.currentMimeType === "whep") {
+      this.whepHoldRequested = true;
+      this.whepPlayRequested = false;
+      this.controlChannel?.hold();
     }
   }
 
@@ -517,6 +525,8 @@ export class NativePlayerImpl extends BasePlayer {
     this.whepBufferWindow = 0;
     this.whepBeginMs = 0;
     this.whepEndMs = 0;
+    this.whepPlayRequested = false;
+    this.whepHoldRequested = false;
 
     // Best-effort WHEP session DELETE (CORS may block this)
     if (this.sessionUrl) {
@@ -716,6 +726,11 @@ export class NativePlayerImpl extends BasePlayer {
       if (this.controlOpenTimer) {
         clearTimeout(this.controlOpenTimer);
         this.controlOpenTimer = null;
+      }
+      if (this.whepPlayRequested && !video.paused) {
+        control.play();
+      } else if (this.whepHoldRequested || video.paused) {
+        control.hold();
       }
       this.emit("seekablechange", {
         start: this.whepBeginMs,

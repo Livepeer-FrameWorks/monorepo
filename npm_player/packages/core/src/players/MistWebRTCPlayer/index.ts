@@ -51,6 +51,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
   // Track change detection (P1)
   private currentTracks: string[] = [];
+  private playRequested = false;
+  private holdRequested = false;
 
   // Store source/options for loop reconnect (P1)
   private currentSource: StreamSource | null = null;
@@ -163,6 +165,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.currentSource = source;
     this.currentOptions = options;
     this.streamInfoRef = streamInfo ?? null;
+    this.playRequested = false;
+    this.holdRequested = false;
     container.classList.add("fw-player-container");
 
     // Load browser equalizer script (P0) - extract host from source URL
@@ -207,6 +211,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   }
 
   async play(): Promise<void> {
+    this.playRequested = true;
+    this.holdRequested = false;
     if (this.signaling?.isConnected) {
       this.signaling.play();
     }
@@ -215,6 +221,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
   pause(): void {
     super.pause();
+    this.holdRequested = true;
+    this.playRequested = false;
     if (this.signaling?.isConnected) {
       this.signaling.pause();
     }
@@ -270,6 +278,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.currentOptions = null;
     this.streamInfoRef = null;
     this.selectedTrack = "auto";
+    this.playRequested = false;
+    this.holdRequested = false;
     this.listeners.clear();
   }
 
@@ -717,6 +727,11 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Dispatch webrtc_connected event (P2)
     this.signaling.on("connected", () => {
       if (this.destroyed) return;
+      if (this.playRequested && !video.paused) {
+        this.signaling?.play();
+      } else if (this.holdRequested || video.paused) {
+        this.signaling?.pause();
+      }
       video.dispatchEvent(new Event("webrtc_connected"));
     });
 
