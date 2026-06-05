@@ -10911,8 +10911,9 @@ type RecordingCompleteTrigger struct {
 	// Mist exit reason from the trigger payload. exit_reason is the machine code
 	// (mRExitReason); a CLEAN_* prefix means the output finished cleanly, any
 	// other value is a failure. human_exit_reason is the human-readable detail.
-	ExitReason      *string `protobuf:"bytes,11,opt,name=exit_reason,json=exitReason,proto3,oneof" json:"exit_reason,omitempty"`
-	HumanExitReason *string `protobuf:"bytes,12,opt,name=human_exit_reason,json=humanExitReason,proto3,oneof" json:"human_exit_reason,omitempty"`
+	ExitReason      *string        `protobuf:"bytes,11,opt,name=exit_reason,json=exitReason,proto3,oneof" json:"exit_reason,omitempty"`
+	HumanExitReason *string        `protobuf:"bytes,12,opt,name=human_exit_reason,json=humanExitReason,proto3,oneof" json:"human_exit_reason,omitempty"`
+	Tracks          []*StreamTrack `protobuf:"bytes,13,rep,name=tracks,proto3" json:"tracks,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -11029,6 +11030,13 @@ func (x *RecordingCompleteTrigger) GetHumanExitReason() string {
 		return *x.HumanExitReason
 	}
 	return ""
+}
+
+func (x *RecordingCompleteTrigger) GetTracks() []*StreamTrack {
+	if x != nil {
+		return x.Tracks
+	}
+	return nil
 }
 
 // RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
@@ -14758,6 +14766,11 @@ type StreamTrack struct {
 	FrameMsMin    *float64 `protobuf:"fixed64,18,opt,name=frame_ms_min,json=frameMsMin,proto3,oneof" json:"frame_ms_min,omitempty"`
 	KeyframeMsMax *float64 `protobuf:"fixed64,19,opt,name=keyframe_ms_max,json=keyframeMsMax,proto3,oneof" json:"keyframe_ms_max,omitempty"` // Raw keyframe interval max (from keys.ms_max)
 	KeyframeMsMin *float64 `protobuf:"fixed64,20,opt,name=keyframe_ms_min,json=keyframeMsMin,proto3,oneof" json:"keyframe_ms_min,omitempty"` // Raw keyframe interval min (from keys.ms_min)
+	TrackIndex    *int32   `protobuf:"varint,21,opt,name=track_index,json=trackIndex,proto3,oneof" json:"track_index,omitempty"`
+	FirstMs       *int64   `protobuf:"varint,22,opt,name=first_ms,json=firstMs,proto3,oneof" json:"first_ms,omitempty"`
+	LastMs        *int64   `protobuf:"varint,23,opt,name=last_ms,json=lastMs,proto3,oneof" json:"last_ms,omitempty"`
+	TrackId       *int64   `protobuf:"varint,24,opt,name=track_id,json=trackId,proto3,oneof" json:"track_id,omitempty"`
+	Selected      *bool    `protobuf:"varint,25,opt,name=selected,proto3,oneof" json:"selected,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -14930,6 +14943,41 @@ func (x *StreamTrack) GetKeyframeMsMin() float64 {
 		return *x.KeyframeMsMin
 	}
 	return 0
+}
+
+func (x *StreamTrack) GetTrackIndex() int32 {
+	if x != nil && x.TrackIndex != nil {
+		return *x.TrackIndex
+	}
+	return 0
+}
+
+func (x *StreamTrack) GetFirstMs() int64 {
+	if x != nil && x.FirstMs != nil {
+		return *x.FirstMs
+	}
+	return 0
+}
+
+func (x *StreamTrack) GetLastMs() int64 {
+	if x != nil && x.LastMs != nil {
+		return *x.LastMs
+	}
+	return 0
+}
+
+func (x *StreamTrack) GetTrackId() int64 {
+	if x != nil && x.TrackId != nil {
+		return *x.TrackId
+	}
+	return 0
+}
+
+func (x *StreamTrack) GetSelected() bool {
+	if x != nil && x.Selected != nil {
+		return *x.Selected
+	}
+	return false
 }
 
 type StoredArtifact struct {
@@ -19290,7 +19338,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x17_primary_audio_channelsB\x1c\n" +
 	"\x1a_primary_audio_sample_rateB\f\n" +
 	"\n" +
-	"_stream_id\"\x94\x04\n" +
+	"_stream_id\"\xca\x04\n" +
 	"\x18RecordingCompleteTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x1b\n" +
@@ -19307,7 +19355,8 @@ const file_ipc_proto_rawDesc = "" +
 	" \x01(\tH\x01R\bstreamId\x88\x01\x01\x12$\n" +
 	"\vexit_reason\x18\v \x01(\tH\x02R\n" +
 	"exitReason\x88\x01\x01\x12/\n" +
-	"\x11human_exit_reason\x18\f \x01(\tH\x03R\x0fhumanExitReason\x88\x01\x01B\n" +
+	"\x11human_exit_reason\x18\f \x01(\tH\x03R\x0fhumanExitReason\x88\x01\x01\x124\n" +
+	"\x06tracks\x18\r \x03(\v2\x1c.helmsmancontrol.StreamTrackR\x06tracksB\n" +
 	"\n" +
 	"\b_node_idB\f\n" +
 	"\n" +
@@ -20098,7 +20147,7 @@ const file_ipc_proto_rawDesc = "" +
 	"replicated\x18\x06 \x01(\bR\n" +
 	"replicated\x12#\n" +
 	"\rpacket_counts\x18\a \x03(\x03R\fpacketCounts\x12+\n" +
-	"\x11total_connections\x18\b \x03(\x03R\x10totalConnections\"\xb2\a\n" +
+	"\x11total_connections\x18\b \x03(\x03R\x10totalConnections\"\x9a\t\n" +
 	"\vStreamTrack\x12\x1d\n" +
 	"\n" +
 	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x1d\n" +
@@ -20132,7 +20181,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\fframe_ms_min\x18\x12 \x01(\x01H\x0eR\n" +
 	"frameMsMin\x88\x01\x01\x12+\n" +
 	"\x0fkeyframe_ms_max\x18\x13 \x01(\x01H\x0fR\rkeyframeMsMax\x88\x01\x01\x12+\n" +
-	"\x0fkeyframe_ms_min\x18\x14 \x01(\x01H\x10R\rkeyframeMsMin\x88\x01\x01B\x0f\n" +
+	"\x0fkeyframe_ms_min\x18\x14 \x01(\x01H\x10R\rkeyframeMsMin\x88\x01\x01\x12$\n" +
+	"\vtrack_index\x18\x15 \x01(\x05H\x11R\n" +
+	"trackIndex\x88\x01\x01\x12\x1e\n" +
+	"\bfirst_ms\x18\x16 \x01(\x03H\x12R\afirstMs\x88\x01\x01\x12\x1c\n" +
+	"\alast_ms\x18\x17 \x01(\x03H\x13R\x06lastMs\x88\x01\x01\x12\x1e\n" +
+	"\btrack_id\x18\x18 \x01(\x03H\x14R\atrackId\x88\x01\x01\x12\x1f\n" +
+	"\bselected\x18\x19 \x01(\bH\x15R\bselected\x88\x01\x01B\x0f\n" +
 	"\r_bitrate_kbpsB\x0e\n" +
 	"\f_bitrate_bpsB\t\n" +
 	"\a_bufferB\t\n" +
@@ -20149,7 +20204,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\r_frame_ms_maxB\x0f\n" +
 	"\r_frame_ms_minB\x12\n" +
 	"\x10_keyframe_ms_maxB\x12\n" +
-	"\x10_keyframe_ms_min\"\xa7\x04\n" +
+	"\x10_keyframe_ms_minB\x0e\n" +
+	"\f_track_indexB\v\n" +
+	"\t_first_msB\n" +
+	"\n" +
+	"\b_last_msB\v\n" +
+	"\t_track_idB\v\n" +
+	"\t_selected\"\xa7\x04\n" +
 	"\x0eStoredArtifact\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -20892,66 +20953,67 @@ var file_ipc_proto_depIdxs = []int32{
 	103, // 145: helmsmancontrol.ViewerDisconnectTrigger.host_times:type_name -> helmsmancontrol.SessionTimeShare
 	127, // 146: helmsmancontrol.StreamBufferTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
 	127, // 147: helmsmancontrol.StreamTrackListTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
-	110, // 148: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
-	112, // 149: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
-	121, // 150: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
-	124, // 151: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
-	125, // 152: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	163, // 153: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	128, // 154: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
-	35,  // 155: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
-	5,   // 156: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	18,  // 157: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
-	18,  // 158: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
-	13,  // 159: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
-	14,  // 160: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
-	15,  // 161: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
-	16,  // 162: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
-	6,   // 163: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	7,   // 164: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
-	17,  // 165: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
-	164, // 166: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
-	129, // 167: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
-	130, // 168: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
-	131, // 169: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
-	122, // 170: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
-	5,   // 171: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
-	132, // 172: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
-	135, // 173: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	170, // 174: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
-	132, // 175: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
-	168, // 176: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	136, // 177: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	165, // 178: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	141, // 179: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
-	166, // 180: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
-	145, // 181: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	167, // 182: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	168, // 183: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
-	155, // 184: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
-	156, // 185: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
-	158, // 186: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
-	159, // 187: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	168, // 188: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	154, // 189: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	154, // 190: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	157, // 191: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	126, // 192: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	27,  // 193: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	59,  // 194: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	53,  // 195: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	19,  // 196: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	153, // 197: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	27,  // 198: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	60,  // 199: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	171, // 200: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	171, // 201: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	171, // 202: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	198, // [198:203] is the sub-list for method output_type
-	193, // [193:198] is the sub-list for method input_type
-	193, // [193:193] is the sub-list for extension type_name
-	193, // [193:193] is the sub-list for extension extendee
-	0,   // [0:193] is the sub-list for field type_name
+	127, // 148: helmsmancontrol.RecordingCompleteTrigger.tracks:type_name -> helmsmancontrol.StreamTrack
+	110, // 149: helmsmancontrol.ClientLifecycleBatch.samples:type_name -> helmsmancontrol.ClientLifecycleUpdate
+	112, // 150: helmsmancontrol.PlaybackBootTrace.resources:type_name -> helmsmancontrol.PlaybackBootResource
+	121, // 151: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
+	124, // 152: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
+	125, // 153: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
+	163, // 154: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	128, // 155: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
+	35,  // 156: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
+	5,   // 157: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	18,  // 158: helmsmancontrol.LoadBalancingData.client_bucket:type_name -> helmsmancontrol.GeoBucket
+	18,  // 159: helmsmancontrol.LoadBalancingData.node_bucket:type_name -> helmsmancontrol.GeoBucket
+	13,  // 160: helmsmancontrol.ClipLifecycleData.stage:type_name -> helmsmancontrol.ClipLifecycleData.Stage
+	14,  // 161: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
+	15,  // 162: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
+	16,  // 163: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
+	6,   // 164: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
+	7,   // 165: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	17,  // 166: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
+	164, // 167: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	129, // 168: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
+	130, // 169: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
+	131, // 170: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
+	122, // 171: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
+	5,   // 172: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
+	132, // 173: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
+	135, // 174: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
+	170, // 175: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	132, // 176: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
+	168, // 177: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
+	136, // 178: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	165, // 179: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	141, // 180: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
+	166, // 181: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	145, // 182: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	167, // 183: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	168, // 184: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	155, // 185: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
+	156, // 186: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
+	158, // 187: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
+	159, // 188: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
+	168, // 189: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	154, // 190: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	154, // 191: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	157, // 192: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
+	126, // 193: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	27,  // 194: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	59,  // 195: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	53,  // 196: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	19,  // 197: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	153, // 198: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	27,  // 199: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	60,  // 200: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	171, // 201: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	171, // 202: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	171, // 203: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	199, // [199:204] is the sub-list for method output_type
+	194, // [194:199] is the sub-list for method input_type
+	194, // [194:194] is the sub-list for extension type_name
+	194, // [194:194] is the sub-list for extension extendee
+	0,   // [0:194] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }

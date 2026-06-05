@@ -1774,6 +1774,7 @@ func processingRecordingEndEvent(rec *pb.RecordingCompleteTrigger) ProcessingRec
 		MediaDurationMs: rec.GetMediaDurationMs(),
 		ExitReason:      rec.GetExitReason(),
 		HumanExitReason: rec.GetHumanExitReason(),
+		Tracks:          processingTracksFromProto(rec.GetTracks()),
 	}
 }
 

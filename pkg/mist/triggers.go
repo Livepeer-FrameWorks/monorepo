@@ -430,8 +430,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 
 	case TriggerRecordingEnd:
-		if len(params) < 8 {
-			return nil, fmt.Errorf("RECORDING_END requires at least 8 parameters, got %d", len(params))
+		if len(params) < 13 {
+			return nil, fmt.Errorf("RECORDING_END requires 13 parameters including track summary, got %d", len(params))
 		}
 		trigger := &pb.RecordingCompleteTrigger{
 			StreamName:     params[0],
@@ -463,10 +463,22 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			exitReason := strings.TrimSpace(params[10])
 			trigger.ExitReason = &exitReason
 		}
-		if len(params) > 11 {
-			humanExitReason := strings.TrimSpace(strings.Join(params[11:], "\n"))
-			trigger.HumanExitReason = &humanExitReason
+		humanParts := params[11:]
+		summaryJSON := strings.TrimSpace(humanParts[len(humanParts)-1])
+		if !strings.HasPrefix(summaryJSON, "{") {
+			return nil, fmt.Errorf("RECORDING_END missing final track summary JSON")
 		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(summaryJSON), &summary); err != nil {
+			return nil, fmt.Errorf("RECORDING_END track summary JSON: %w", err)
+		}
+		trigger.Tracks = parseRecordingTrackSummary(summary)
+		if len(trigger.Tracks) == 0 {
+			return nil, fmt.Errorf("RECORDING_END track summary contains no tracks")
+		}
+		humanParts = humanParts[:len(humanParts)-1]
+		humanExitReason := strings.TrimSpace(strings.Join(humanParts, "\n"))
+		trigger.HumanExitReason = &humanExitReason
 		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingComplete{
 			RecordingComplete: trigger,
 		}
@@ -603,6 +615,22 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 			TrackName: trackName,
 			Codec:     codec,
 		}
+		if idx, ok := int64FromAny(trackMap["idx"]); ok {
+			trackIndex := int32(idx)
+			track.TrackIndex = &trackIndex
+		}
+		if id, ok := int64FromAny(trackMap["id"]); ok {
+			track.TrackId = &id
+		}
+		if firstMs, ok := int64FromAny(trackMap["firstms"]); ok {
+			track.FirstMs = &firstMs
+		}
+		if lastMs, ok := int64FromAny(trackMap["lastms"]); ok {
+			track.LastMs = &lastMs
+		}
+		if selected, ok := trackMap["selected"].(bool); ok {
+			track.Selected = &selected
+		}
 
 		// Extract bitrate
 		if kbits, ok := trackMap["kbits"].(float64); ok {
@@ -610,6 +638,11 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 			bitrateBps := int64(kbits * 1000)
 			track.BitrateKbps = &bitrateKbps
 			track.BitrateBps = &bitrateBps
+		}
+		if bps, ok := int64FromAny(trackMap["bps"]); ok {
+			track.BitrateBps = &bps
+			kbps := int32(bps / 1000)
+			track.BitrateKbps = &kbps
 		}
 
 		// Extract buffer and jitter
@@ -622,8 +655,12 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 			track.Jitter = &jitterInt
 		}
 
+		if typ, ok := trackMap["type"].(string); ok {
+			track.TrackType = typ
+		}
+
 		// Determine track type and extract type-specific fields
-		if strings.Contains(trackName, "video_") || codec == "H264" || codec == "H265" || codec == "AV1" {
+		if track.TrackType == "video" || strings.Contains(trackName, "video_") || codec == "H264" || codec == "H265" || codec == "AV1" {
 			track.TrackType = "video"
 
 			// Extract video-specific fields
@@ -649,7 +686,7 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 				track.Resolution = &resolution
 			}
 
-		} else if strings.Contains(trackName, "audio_") || codec == "AAC" || codec == "opus" || codec == "MP3" {
+		} else if track.TrackType == "audio" || strings.Contains(trackName, "audio_") || codec == "AAC" || codec == "opus" || codec == "MP3" {
 			track.TrackType = "audio"
 
 			// Extract audio-specific fields
@@ -662,7 +699,7 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 				track.SampleRate = &sampleRate
 			}
 
-		} else if strings.Contains(trackName, "meta_") || codec == "JSON" {
+		} else if track.TrackType == "meta" || strings.Contains(trackName, "meta_") || codec == "JSON" {
 			track.TrackType = "meta"
 		} else {
 			track.TrackType = "unknown"
@@ -696,4 +733,42 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 	}
 
 	return tracks
+}
+
+func parseRecordingTrackSummary(summary map[string]any) []*pb.StreamTrack {
+	rawTracks, ok := summary["tracks"].([]any)
+	if !ok {
+		return nil
+	}
+	tracksData := make(map[string]any, len(rawTracks))
+	for i, raw := range rawTracks {
+		trackMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := fmt.Sprintf("track_%d", i)
+		if idx, ok := int64FromAny(trackMap["idx"]); ok {
+			name = fmt.Sprintf("track_%d", idx)
+		}
+		tracksData[name] = trackMap
+	}
+	return parseTracksFromJSON(tracksData)
+}
+
+func int64FromAny(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	default:
+		return 0, false
+	}
 }

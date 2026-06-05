@@ -225,6 +225,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
+	pushEndReceived := false
+	var recordingEndDeadline <-chan time.Time
 	const stallTimeout = 3 * time.Minute
 
 	restartWithLocalMistProc := func(reason string) error {
@@ -247,6 +249,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		// restarted push produces a fresh one. Otherwise the post-loop
 		// validation would run against the old push's bytes/duration.
 		recordingEnd = nil
+		pushEndReceived = false
+		recordingEndDeadline = nil
 		var waitErr error
 		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -266,6 +270,22 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
+	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
+		if !pushEndReceived || recordingEnd == nil {
+			return false, false
+		}
+		srcInfo, srcSpan := sourceFromReadinessOutputs(streamOutputs)
+		if hasLivepeer && !fallbackAttempted && !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
+			log.Warn("Chapter finalize: Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
+			if restartErr := restartWithLocalMistProc("rendition_incomplete"); restartErr != nil {
+				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+				h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
+				return false, true
+			}
+			return false, false
+		}
+		return true, false
+	}
 
 loop:
 	for {
@@ -284,19 +304,11 @@ loop:
 				return
 			}
 			log.Info("Chapter finalize: PUSH_END received")
-			// A clean PUSH_END is not proof of a complete rendition set: a
-			// Livepeer gateway can return fewer renditions than requested
-			// without stalling or exiting unrecoverably. Validate the finished
-			// stream's video tracks before publishing and fall back to local
-			// MistProcAV when renditions are short.
-			srcInfo, srcSpan := sourceFromReadinessOutputs(streamOutputs)
-			if hasLivepeer && !fallbackAttempted && !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, srcSpan) {
-				log.Warn("Chapter finalize: Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
-				if restartErr := restartWithLocalMistProc("rendition_incomplete"); restartErr != nil {
-					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
-					return
-				}
+			pushEndReceived = true
+			recordingEndDeadline = time.After(5 * time.Second)
+			if ready, failed := terminalSignalsReady(); failed {
+				return
+			} else if !ready {
 				continue loop
 			}
 			break loop
@@ -316,6 +328,13 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Chapter finalize: RECORDING_END received")
+			recordingEndDeadline = nil
+			if ready, failed := terminalSignalsReady(); failed {
+				return
+			} else if !ready {
+				continue loop
+			}
+			break loop
 		case evt := <-processExitCh:
 			evtFields := processExitFields(evt)
 			if shouldIgnoreProcessExit(evt, ignoredProcessExitBootCounts) {
@@ -365,6 +384,11 @@ loop:
 					fmt.Sprintf("chapter finalize stalled at %dms", lastMs), nil, "", 0)
 				return
 			}
+		case <-recordingEndDeadline:
+			log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
+			return
 		case <-ctx.Done():
 			// ctx covers the entire job (recovery fetches +
 			// admission + push). Stalls are caught above; this
@@ -377,41 +401,6 @@ loop:
 		}
 	}
 
-	if recordingEnd == nil {
-		// Chapter finalize is a push-to-file like the main processing path:
-		// RECORDING_END is guaranteed and carries the only authoritative
-		// completion proof (bytes + media duration). The wait is an ordering
-		// cushion for the two triggers, not a "maybe it arrives" timeout — if
-		// it never comes, fail loudly rather than declaring success from file
-		// size alone. Matches processing.go (do not weaken to a file-size
-		// fallback here).
-		deadline := time.After(5 * time.Second)
-		for recordingEnd == nil {
-			select {
-			case recEnd := <-recordingEndCh:
-				if recordingEndIsStale(recEnd) {
-					log.WithFields(logging.Fields{
-						"time_started":    recEnd.TimeStarted,
-						"push_started_at": currentPushStartedAt,
-						"file_path":       recEnd.FilePath,
-					}).Warn("Chapter finalize: ignoring stale RECORDING_END from a retired push after PUSH_END")
-					continue
-				}
-				recordingEnd = &recEnd
-				log.WithFields(logging.Fields{
-					"bytes":             recEnd.BytesWritten,
-					"media_duration_ms": recEnd.MediaDurationMs,
-					"file_path":         recEnd.FilePath,
-					"exit_reason":       recEnd.ExitReason,
-				}).Info("Chapter finalize: RECORDING_END received after PUSH_END")
-			case <-deadline:
-				log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
-				return
-			}
-		}
-	}
 	if recordingEnd != nil {
 		if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
 			log.WithError(err).WithFields(logging.Fields{
@@ -456,7 +445,7 @@ loop:
 	}
 	if fallbackAttempted {
 		srcInfo, _ := sourceFromReadinessOutputs(streamOutputs)
-		if !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, chapterSpanMs) {
+		if !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, chapterSpanMs) {
 			log.Error("Chapter finalize: post-fallback local output is missing or has truncated renditions; refusing to publish")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)

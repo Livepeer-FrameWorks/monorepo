@@ -71,6 +71,7 @@ type ProcessingRecordingEndEvent struct {
 	MediaDurationMs int64
 	ExitReason      string
 	HumanExitReason string
+	Tracks          []processingMetaVideoTrack
 }
 
 var (
@@ -507,7 +508,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		return
 	}
 
-	// Single select loop: 4 signal sources, one goroutine, no races.
+	// Single select loop: terminal triggers, process state, progress, and timeouts.
 	progressTicker := time.NewTicker(30 * time.Second)
 	defer progressTicker.Stop()
 	absoluteTimeout := time.After(4 * time.Hour)
@@ -515,6 +516,8 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
+	pushEndReceived := false
+	var recordingEndDeadline <-chan time.Time
 	const stallTimeout = 3 * time.Minute
 
 	// restartWithLocalFallback swaps Livepeer for local MistProcAV and restarts
@@ -543,6 +546,8 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		// restarted push produces a fresh one. Without this the post-loop
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
+		pushEndReceived = false
+		recordingEndDeadline = nil
 		var waitErr error
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -567,6 +572,20 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
+	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
+		if !pushEndReceived || recordingEnd == nil {
+			return false, false
+		}
+		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
+		if hasLivepeer && !fallbackAttempted && !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
+			log.Warn("Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
+			if !restartWithLocalFallback("Livepeer", 0) {
+				return false, true
+			}
+			return false, false
+		}
+		return true, false
+	}
 
 loop:
 	for {
@@ -585,17 +604,11 @@ loop:
 				return
 			}
 			log.Info("Processing completed (PUSH_END received)")
-			// A clean PUSH_END is not proof of a complete rendition set: a
-			// Livepeer gateway can return fewer renditions than requested
-			// without stalling or exiting unrecoverably. Validate the finished
-			// stream's video tracks before publishing and fall back to local
-			// MistProcAV when renditions are short.
-			srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
-			if hasLivepeer && !fallbackAttempted && !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, srcSpan) {
-				log.Warn("Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
-				if !restartWithLocalFallback("Livepeer", 0) {
-					return
-				}
+			pushEndReceived = true
+			recordingEndDeadline = time.After(5 * time.Second)
+			if ready, failed := terminalSignalsReady(); failed {
+				return
+			} else if !ready {
 				continue loop
 			}
 			break loop
@@ -615,6 +628,13 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Processing RECORDING_END received")
+			recordingEndDeadline = nil
+			if ready, failed := terminalSignalsReady(); failed {
+				return
+			} else if !ready {
+				continue loop
+			}
+			break loop
 
 		case evt := <-processExitCh:
 			evtFields := processExitFields(evt)
@@ -680,6 +700,12 @@ loop:
 				return
 			}
 
+		case <-recordingEndDeadline:
+			log.Error("Processing PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
+			return
+
 		case <-absoluteTimeout:
 			log.Warn("Processing absolute timeout exceeded")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -688,42 +714,6 @@ loop:
 		}
 	}
 
-	if recordingEnd == nil {
-		// PUSH_END and RECORDING_END both fire for a push-to-file stop, but
-		// from different Mist trigger sites with no guaranteed arrival order;
-		// the wait is an ordering cushion, not a "maybe it'll come" timeout.
-		// RECORDING_END carries the only authoritative completion proof
-		// (bytes + media duration + exit reason), so if it never arrives
-		// something is broken (trigger config, delivery, Mist regression) —
-		// fail loudly and let Foghorn requeue rather than declaring success
-		// from file size alone.
-		deadline := time.After(5 * time.Second)
-		for recordingEnd == nil {
-			select {
-			case recEnd := <-recordingEndCh:
-				if recordingEndIsStale(recEnd) {
-					log.WithFields(logging.Fields{
-						"time_started":    recEnd.TimeStarted,
-						"push_started_at": currentPushStartedAt,
-						"file_path":       recEnd.FilePath,
-					}).Warn("Ignoring stale RECORDING_END from a retired push after PUSH_END")
-					continue
-				}
-				recordingEnd = &recEnd
-				log.WithFields(logging.Fields{
-					"bytes":             recEnd.BytesWritten,
-					"media_duration_ms": recEnd.MediaDurationMs,
-					"file_path":         recEnd.FilePath,
-					"exit_reason":       recEnd.ExitReason,
-				}).Info("Processing RECORDING_END received after PUSH_END")
-			case <-deadline:
-				log.Error("Processing PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
-				return
-			}
-		}
-	}
 	if recordingEnd != nil {
 		if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
 			log.WithError(err).WithFields(logging.Fields{
@@ -760,7 +750,7 @@ loop:
 		// source-height track and requires every rendition to cover the source span)
 		// validates it; fail closed if incomplete.
 		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
-		if !h.livepeerRenditionsComplete(log, streamName, req.GetProcessesJson(), srcInfo, srcSpan) {
+		if !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
 			log.Error("Post-fallback local output is missing or has truncated renditions; refusing to publish")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)
@@ -776,7 +766,7 @@ loop:
 		// without a fallback already passed the in-loop rendition check, so it needs
 		// nothing more.
 		srcInfo, _ := sourceFromReadinessOutputs(outputs)
-		authoritativeSpan, ok := h.authoritativeSourceSpanMs(log, streamName, sourceDurationMs, srcInfo.Height)
+		authoritativeSpan, ok := authoritativeSourceSpanFromTracks(log, recordingEnd.Tracks, sourceDurationMs, srcInfo.Height)
 		if !ok {
 			log.Error("Could not determine authoritative source span for local-AV output; refusing to publish")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -1160,16 +1150,12 @@ func (t processingMetaVideoTrack) spanMs() float64 { return t.lastms - t.firstms
 //   - truncated renditions: a matched track whose span falls more than
 //     maxRenditionSpanShortfallMs below the source span (the EOF-race symptom).
 //
-// It does NOT fail open: when completeness cannot be proven (metadata
-// unfetchable after retries, or missing/short/wrong tracks) it returns false so
+// It does NOT fail open: when completeness cannot be proven from the final
+// RECORDING_END track summary (missing/short/wrong tracks), it returns false so
 // the caller runs the one local-MistProcAV fallback rather than publishing a
 // possibly-incomplete Livepeer output. "No renditions requested" returns true
 // because there is nothing to prove.
-func (h *ProcessingJobHandler) livepeerRenditionsComplete(log *logrus.Entry, streamName, processesJSON string, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
-	// Aggregate across all Livepeer processes so a multi-process config can't
-	// pass by satisfying only the first. A malformed config can't be proven
-	// complete, so fail closed (fall back to local AV) rather than treat it as
-	// "nothing to prove".
+func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
 	expected, err := mist.AllLivepeerProfilesFromProcessesJSON(processesJSON, source)
 	if err != nil {
 		log.WithError(err).Warn("Malformed Livepeer process config; treating renditions as incomplete")
@@ -1178,12 +1164,7 @@ func (h *ProcessingJobHandler) livepeerRenditionsComplete(log *logrus.Entry, str
 	if len(expected) == 0 {
 		return true
 	}
-	meta, err := h.fetchProcessingStreamMetaWithRetry(streamName)
-	if err != nil {
-		log.WithError(err).Warn("Could not inspect finished stream metadata; treating renditions as incomplete (will fall back to local MistProcAV)")
-		return false
-	}
-	return renditionsCompleteFromTracks(log, expected, parseProcessingMetaVideoTracks(meta), source, sourceSpanMs)
+	return renditionsCompleteFromTracks(log, expected, tracks, source, sourceSpanMs)
 }
 
 // renditionsCompleteFromTracks is the pure rendition-completeness decision,
@@ -1315,38 +1296,7 @@ func sourceFromReadinessOutputs(outputs map[string]string) (mist.SourceMediaInfo
 	return src, span
 }
 
-// fetchProcessingStreamMetaWithRetry retries the metadata fetch a few times so a
-// transient blip right after PUSH_END does not force an unnecessary local
-// re-process via the fail-toward-fallback path.
-func (h *ProcessingJobHandler) fetchProcessingStreamMetaWithRetry(streamName string) (map[string]interface{}, error) {
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Second)
-		}
-		meta, err := h.fetchProcessingStreamMeta(streamName)
-		if err == nil {
-			return meta, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
-// authoritativeSourceSpanMs proves the source span from the completion-time source
-// passthrough track (the LONGEST track at source height — at PUSH_END the source
-// ran to EOF, so that is the full source duration), raising the readiness snapshot
-// which can understate a VOD that became ready before reaching EOF. It returns
-// ok=false when the span cannot be proven (probe failed, or no source-height track
-// present); the caller MUST fail closed rather than trust the partial readiness
-// span, otherwise a 2s-readiness 2s-output truncation would pass.
-func (h *ProcessingJobHandler) authoritativeSourceSpanMs(log *logrus.Entry, streamName string, readinessSpanMs int64, sourceHeight int) (int64, bool) {
-	meta, err := h.fetchProcessingStreamMetaWithRetry(streamName)
-	if err != nil {
-		log.WithError(err).Warn("Could not probe source track span for completeness check")
-		return 0, false
-	}
-	tracks := parseProcessingMetaVideoTracks(meta)
+func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMetaVideoTrack, readinessSpanMs int64, sourceHeight int) (int64, bool) {
 	srcHeight := sourceHeight
 	if srcHeight <= 0 {
 		for _, t := range tracks {
@@ -1364,6 +1314,7 @@ func (h *ProcessingJobHandler) authoritativeSourceSpanMs(log *logrus.Entry, stre
 		}
 	}
 	if sourceTrackSpanMs < 0 {
+		log.Warn("RECORDING_END did not include a source-height video track; refusing to prove output completeness")
 		return 0, false
 	}
 	if readinessSpanMs > sourceTrackSpanMs {
@@ -1372,38 +1323,8 @@ func (h *ProcessingJobHandler) authoritativeSourceSpanMs(log *logrus.Entry, stre
 	return sourceTrackSpanMs, true
 }
 
-// fetchProcessingStreamMeta fetches and parses the MistServer JSON metadata for
-// a stream (json_<stream>.js), exposing the per-track DTSC metadata including
-// firstms/lastms. Unlike active_streams health, this carries per-track spans.
-func (h *ProcessingJobHandler) fetchProcessingStreamMeta(streamName string) (map[string]interface{}, error) {
-	if h.mistServerURL == "" {
-		return nil, fmt.Errorf("MISTSERVER_URL not configured")
-	}
-	url := mistJSONURL(h.mistServerURL, streamName, "metaeverywhere=1&inclzero=1")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
-	}
-	var data map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
 // parseProcessingMetaVideoTracks extracts renderable video tracks (excluding
-// thumbnail JPEG tracks) from Mist stream JSON metadata. The tracks live under
-// "meta"."tracks" (older shape) or top-level "tracks".
+// thumbnail JPEG tracks) from Mist stream JSON metadata.
 func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMetaVideoTrack {
 	tracksRaw := meta["tracks"]
 	if inner, ok := meta["meta"].(map[string]interface{}); ok {
@@ -1449,6 +1370,30 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 			t.lastms = v
 		}
 		out = append(out, t)
+	}
+	return out
+}
+
+func processingTracksFromProto(tracks []*pb.StreamTrack) []processingMetaVideoTrack {
+	out := make([]processingMetaVideoTrack, 0, len(tracks))
+	for _, track := range tracks {
+		if track == nil {
+			continue
+		}
+		codec := normalizeTrackCodec(track.GetCodec())
+		if codec == "" || codec == "JPEG" {
+			continue
+		}
+		if track.GetTrackType() != "video" && track.GetWidth() <= 0 && track.GetHeight() <= 0 {
+			continue
+		}
+		out = append(out, processingMetaVideoTrack{
+			codec:   codec,
+			width:   int(track.GetWidth()),
+			height:  int(track.GetHeight()),
+			firstms: float64(track.GetFirstMs()),
+			lastms:  float64(track.GetLastMs()),
+		})
 	}
 	return out
 }

@@ -287,6 +287,50 @@ func TestParseProcessingMetaVideoTracksExcludesThumbnailsAndCarriesSpan(t *testi
 	}
 }
 
+func TestProcessingTracksFromProtoCarriesRecordingEndSpan(t *testing.T) {
+	width := int32(1280)
+	height := int32(720)
+	firstMs := int64(0)
+	lastMs := int64(30000)
+	tracks := processingTracksFromProto([]*pb.StreamTrack{{
+		TrackType: "video",
+		Codec:     "H264",
+		Width:     &width,
+		Height:    &height,
+		FirstMs:   &firstMs,
+		LastMs:    &lastMs,
+	}})
+	if len(tracks) != 1 {
+		t.Fatalf("tracks=%d, want 1", len(tracks))
+	}
+	if tracks[0].height != 720 || tracks[0].spanMs() != 30000 {
+		t.Fatalf("unexpected track: %+v span=%v", tracks[0], tracks[0].spanMs())
+	}
+}
+
+func TestAuthoritativeSourceSpanFromRecordingEndTracks(t *testing.T) {
+	tracks := []processingMetaVideoTrack{
+		{codec: "H264", width: 1280, height: 720, firstms: 0, lastms: 30000},
+		{codec: "H264", width: 640, height: 360, firstms: 0, lastms: 30000},
+	}
+	got, ok := authoritativeSourceSpanFromTracks(logrus.NewEntry(logrus.New()), tracks, 1000, 720)
+	if !ok {
+		t.Fatal("expected source span from final RECORDING_END tracks")
+	}
+	if got != 30000 {
+		t.Fatalf("span=%d, want 30000", got)
+	}
+}
+
+func TestAuthoritativeSourceSpanFromRecordingEndTracksFailsWithoutSourceHeight(t *testing.T) {
+	tracks := []processingMetaVideoTrack{
+		{codec: "H264", width: 640, height: 360, firstms: 0, lastms: 30000},
+	}
+	if _, ok := authoritativeSourceSpanFromTracks(logrus.NewEntry(logrus.New()), tracks, 1000, 720); ok {
+		t.Fatal("expected missing source-height track to fail closed")
+	}
+}
+
 func TestRenditionsCompleteFromTracks(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)

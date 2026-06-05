@@ -133,8 +133,9 @@ func TestParseTriggerToProtobufRecordingEnd(t *testing.T) {
 	// Full RECORDING_END payload per Output::getExitTriggerPayload
 	// (mistserver src/output/output.cpp): stream, target, output, bytes,
 	// secondsWriting, timeStarted, timeEnded, mediaDurationMs, firstPacketTime,
-	// lastPacketTime, machine exit reason, human exit reason.
-	payload := []byte("processing+job1\n/tmp/out.mkv\nMistOutMKV\n4096\n12\n1700000000\n1700000012\n12000\n0\n12000\nCLEAN_EOF\nclean end-of-file\n")
+	// lastPacketTime, machine exit reason, human exit reason, final JSON track
+	// summary.
+	payload := []byte("processing+job1\n/tmp/out.mkv\nMistOutMKV\n4096\n12\n1700000000\n1700000012\n12000\n0\n12000\nCLEAN_EOF\nclean end-of-file\n{\"tracks\":[{\"idx\":0,\"id\":7,\"selected\":true,\"type\":\"video\",\"codec\":\"H264\",\"width\":1280,\"height\":720,\"firstms\":0,\"lastms\":12000,\"bps\":800000,\"rate\":30}]}\n")
 
 	trig, err := ParseTriggerToProtobuf(TriggerRecordingEnd, payload, "node-1", logger)
 	if err != nil {
@@ -156,11 +157,29 @@ func TestParseTriggerToProtobufRecordingEnd(t *testing.T) {
 	if got.GetHumanExitReason() != "clean end-of-file" {
 		t.Errorf("human_exit_reason=%q", got.GetHumanExitReason())
 	}
+	if len(got.GetTracks()) != 1 {
+		t.Fatalf("tracks=%d, want 1", len(got.GetTracks()))
+	}
+	track := got.GetTracks()[0]
+	if track.GetTrackIndex() != 0 || track.GetTrackId() != 7 || track.GetTrackType() != "video" || track.GetCodec() != "H264" {
+		t.Fatalf("track identity mismatch: %+v", track)
+	}
+	if track.GetWidth() != 1280 || track.GetHeight() != 720 || track.GetFirstMs() != 0 || track.GetLastMs() != 12000 {
+		t.Fatalf("track media summary mismatch: %+v", track)
+	}
+	if !track.GetSelected() {
+		t.Fatal("track selected=false, want true")
+	}
 	if !IsCleanExitReason(got.GetExitReason()) {
 		t.Errorf("CLEAN_EOF should be a clean exit reason")
 	}
 	if IsCleanExitReason("WRITE_FAILURE") || IsCleanExitReason("") {
 		t.Errorf("non-CLEAN_* reasons must not be clean")
+	}
+
+	oldPayload := []byte("processing+job1\n/tmp/out.mkv\nMistOutMKV\n4096\n12\n1700000000\n1700000012\n12000\n0\n12000\nCLEAN_EOF\nclean end-of-file\n")
+	if _, err := ParseTriggerToProtobuf(TriggerRecordingEnd, oldPayload, "node-1", logger); err == nil {
+		t.Fatal("expected RECORDING_END without track summary to fail")
 	}
 }
 

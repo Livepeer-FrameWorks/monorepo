@@ -1565,6 +1565,7 @@ message RecordingCompleteTrigger {
   // other value is a failure. human_exit_reason is the human-readable detail.
   optional string exit_reason = 11;
   optional string human_exit_reason = 12;
+  repeated StreamTrack tracks = 13;
 }
 
 // RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
@@ -2217,6 +2218,11 @@ message StreamTrack {
   optional double frame_ms_min = 18;
   optional double keyframe_ms_max = 19;  // Raw keyframe interval max (from keys.ms_max)
   optional double keyframe_ms_min = 20;  // Raw keyframe interval min (from keys.ms_min)
+  optional int32 track_index = 21;
+  optional int64 first_ms = 22;
+  optional int64 last_ms = 23;
+  optional int64 track_id = 24;
+  optional bool selected = 25;
 }
 
 message StoredArtifact {
