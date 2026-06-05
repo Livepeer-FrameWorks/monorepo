@@ -909,25 +909,54 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, lookup s
 		lookup.nodeID, lookup.nodeID,
 		lookup.internalName, lookup.internalName)
 	if err != nil {
-		h.logger.WithError(err).Debug("Stream start lookup failed; using STREAM_END time as zero-duration fallback")
-		return fallbackEndedAtMS
+		h.logger.WithError(err).Debug("Stream start current-state lookup failed")
+		return 0
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return fallbackEndedAtMS
+		return 0
 	}
 	var startedAtMS int64
 	if err := rows.Scan(&startedAtMS); err != nil {
-		h.logger.WithError(err).Debug("Stream start lookup scan failed; using STREAM_END time as zero-duration fallback")
-		return fallbackEndedAtMS
+		h.logger.WithError(err).Debug("Stream start current-state lookup scan failed")
+		return 0
 	}
 	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
-		return h.lookupStreamStartedAtMSFromEventLog(ctx, lookup, fallbackEndedAtMS)
+		return startedFromEvents
 	}
 	return startedAtMS
 }
 
 func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) int64 {
+	type filterScope struct {
+		nodeID       string
+		clusterID    string
+		internalName string
+	}
+	scopes := []filterScope{
+		{nodeID: lookup.nodeID, clusterID: lookup.clusterID, internalName: lookup.internalName},
+		{nodeID: lookup.nodeID, clusterID: lookup.clusterID},
+		{nodeID: lookup.nodeID, internalName: lookup.internalName},
+		{clusterID: lookup.clusterID, internalName: lookup.internalName},
+		{nodeID: lookup.nodeID},
+		{clusterID: lookup.clusterID},
+		{internalName: lookup.internalName},
+		{},
+	}
+	seen := make(map[filterScope]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		if startedAtMS := h.lookupStreamStartedAtMSFromEventLogScope(ctx, lookup, fallbackEndedAtMS, scope.nodeID, scope.clusterID, scope.internalName); startedAtMS > 0 && startedAtMS < fallbackEndedAtMS {
+			return startedAtMS
+		}
+	}
+	return 0
+}
+
+func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64, nodeID, clusterID, internalName string) int64 {
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT toUnixTimestamp(min(timestamp)) * 1000
@@ -955,30 +984,30 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Conte
 		  )
 		LIMIT 1`,
 		lookup.tenantID, lookup.streamID,
-		lookup.nodeID, lookup.nodeID,
-		lookup.clusterID, lookup.clusterID,
-		lookup.internalName, lookup.internalName,
+		nodeID, nodeID,
+		clusterID, clusterID,
+		internalName, internalName,
 		endedAt,
 		lookup.tenantID, lookup.streamID,
-		lookup.nodeID, lookup.nodeID,
-		lookup.clusterID, lookup.clusterID,
-		lookup.internalName, lookup.internalName,
+		nodeID, nodeID,
+		clusterID, clusterID,
+		internalName, internalName,
 		endedAt)
 	if err != nil {
-		h.logger.WithError(err).Debug("Stream start event-log lookup failed; using STREAM_END time as zero-duration fallback")
-		return fallbackEndedAtMS
+		h.logger.WithError(err).Debug("Stream start event-log lookup failed")
+		return 0
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return fallbackEndedAtMS
+		return 0
 	}
 	var startedAtMS int64
 	if err := rows.Scan(&startedAtMS); err != nil {
-		h.logger.WithError(err).Debug("Stream start event-log lookup scan failed; using STREAM_END time as zero-duration fallback")
-		return fallbackEndedAtMS
+		h.logger.WithError(err).Debug("Stream start event-log lookup scan failed")
+		return 0
 	}
 	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
-		return fallbackEndedAtMS
+		return 0
 	}
 	return startedAtMS
 }

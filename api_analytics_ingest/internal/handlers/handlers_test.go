@@ -1370,6 +1370,110 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	}
 }
 
+func TestRawStreamEndLeavesMissingStartUnknown(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	endedAt := time.Unix(1710000600, 0).UTC()
+	trigger := &ipcpb.MistTrigger{
+		NodeId:      "edge-1",
+		TriggerType: "STREAM_END",
+		RequestId:   "source-event-stream-end",
+		Timestamp:   endedAt.UnixMilli(),
+		TenantId:    &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"source_event_id": "source-event-stream-end",
+			"trigger_type":    "STREAM_END",
+			"node_id":         "edge-1",
+			"received_at_ms":  endedAt.Format(time.RFC3339),
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	finalBatch := conn.batches["periscope.stream_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
+	}
+	row := finalBatch.rows[0]
+	if row[12] != int64(0) {
+		t.Fatalf("expected missing source_started_at_ms to stay 0, got %#v", row[12])
+	}
+	if row[13] != endedAt.UnixMilli() {
+		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	}
+}
+
+func TestRawStreamEndUsesEventLogStart(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	startedAt := time.Unix(1710000000, 0).UTC()
+	endedAt := startedAt.Add(10 * time.Minute)
+	conn.addQueryRow("periscope.stream_event_log", startedAt.UnixMilli())
+	trigger := &ipcpb.MistTrigger{
+		NodeId:      "edge-1",
+		TriggerType: "STREAM_END",
+		RequestId:   "source-event-stream-end",
+		Timestamp:   endedAt.UnixMilli(),
+		TenantId:    &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
+				StreamName: "live+demo",
+				StreamId:   &streamID,
+			},
+		},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatalf("marshal trigger: %v", err)
+	}
+
+	err = handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload,
+		Headers: map[string]string{
+			"source_event_id": "source-event-stream-end",
+			"trigger_type":    "STREAM_END",
+			"node_id":         "edge-1",
+			"received_at_ms":  endedAt.Format(time.RFC3339),
+		},
+		Topic: "analytics.raw_mist_triggers",
+	})
+	if err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+
+	finalBatch := conn.batches["periscope.stream_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
+	}
+	row := finalBatch.rows[0]
+	if row[12] != startedAt.UnixMilli() {
+		t.Fatalf("expected event-log source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[12])
+	}
+	if row[13] != endedAt.UnixMilli() {
+		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	}
+}
+
 func TestRawStreamEndUsesOfflineCurrentStartedAt(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
