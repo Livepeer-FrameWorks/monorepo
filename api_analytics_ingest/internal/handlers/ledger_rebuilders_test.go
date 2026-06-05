@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/google/uuid"
 )
 
 // windowsForSpan is the bucketing primitive every ledger rebuilder uses
@@ -123,5 +124,98 @@ func TestViewerUsageTombstonesOnlyRetractsStaleNonZeroWindows(t *testing.T) {
 	got := tombstones[0]
 	if got.windowStartMS != staleWindow || got.clusterID != "cluster-a" || got.streamID != "stream-a" || got.sourceEventID != "source-stale" {
 		t.Fatalf("unexpected tombstone: %#v", got)
+	}
+}
+
+func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	start := time.Date(2026, 6, 5, 18, 56, 0, 0, time.UTC)
+	end := start.Add(2 * time.Minute)
+
+	conn.addQueryRow(
+		"periscope.stream_sessions_final",
+		tenantID,
+		"edge-eu-1",
+		"media-eu-1",
+		streamID,
+		"vod+demo",
+		"source-event-1",
+		end.UnixMilli(),
+		end.UnixMilli(),
+		int64(7),
+	)
+	conn.addQueryRow("periscope.stream_event_log", start.UnixMilli())
+
+	if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
+		t.Fatalf("rebuildStreamRuntime5m: %v", err)
+	}
+
+	batch := conn.batches["periscope.stream_runtime_5m"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected one stream_runtime_5m row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[2] != "media-eu-1" || row[3] != streamID {
+		t.Fatalf("unexpected stream runtime identity row: %#v", row)
+	}
+	if got := row[4]; got != uint32(120) {
+		t.Fatalf("active_seconds = %#v, want 120", got)
+	}
+}
+
+func TestStreamRuntimeRebuilderFailsClosedWhenCustomerStreamStartIsMissing(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	end := time.Date(2026, 6, 5, 18, 58, 0, 0, time.UTC)
+	conn.addQueryRow(
+		"periscope.stream_sessions_final",
+		uuid.NewString(),
+		"edge-eu-1",
+		"media-eu-1",
+		uuid.NewString(),
+		"vod+demo",
+		"source-event-1",
+		end.UnixMilli(),
+		end.UnixMilli(),
+		int64(7),
+	)
+
+	err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute))
+	if err == nil {
+		t.Fatal("expected missing customer stream start to fail closed")
+	}
+	if batch := conn.batches["periscope.stream_runtime_5m"]; batch != nil && len(batch.rows) > 0 {
+		t.Fatalf("unexpected stream_runtime_5m rows after failed rebuild: %#v", batch.rows)
+	}
+}
+
+func TestStreamRuntimeRebuilderSkipsInternalProcessingBootWithoutStart(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	end := time.Date(2026, 6, 5, 18, 58, 0, 0, time.UTC)
+	conn.addQueryRow(
+		"periscope.stream_sessions_final",
+		uuid.NewString(),
+		"edge-eu-1",
+		"media-eu-1",
+		uuid.NewString(),
+		"processing+artifact",
+		"source-event-1",
+		end.UnixMilli(),
+		end.UnixMilli(),
+		int64(0),
+	)
+
+	if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
+		t.Fatalf("internal processing boot should be skipped without failing rebuild: %v", err)
+	}
+	if batch := conn.batches["periscope.stream_runtime_5m"]; batch != nil && len(batch.rows) > 0 {
+		t.Fatalf("unexpected stream_runtime_5m rows for internal processing boot: %#v", batch.rows)
 	}
 }

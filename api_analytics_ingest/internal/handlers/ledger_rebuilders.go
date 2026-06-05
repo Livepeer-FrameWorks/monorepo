@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/google/uuid"
 )
 
 // 5-minute canonical ledger rebuilders. Each rebuilder reads its source
@@ -376,6 +379,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			SELECT
 				tenant_id, node_id, stream_id, source_event_id,
 				argMax(cluster_id,           projection_version_ms) AS cluster_id,
+				argMax(stream_name,          projection_version_ms) AS stream_name,
 				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
 				argMax(source_ended_at_ms,   projection_version_ms) AS source_ended_at_ms,
 				argMax(total_viewers,        projection_version_ms) AS peak_viewers,
@@ -385,12 +389,11 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			GROUP BY tenant_id, node_id, stream_id, source_event_id
 		)
 		SELECT
-			tenant_id, cluster_id, stream_id, source_event_id,
+			tenant_id, node_id, cluster_id, stream_id, stream_name, source_event_id,
 			source_started_at_ms, source_ended_at_ms, peak_viewers
 		FROM s
 		WHERE closed_reason = 'final'
-		  AND source_started_at_ms > 0
-		  AND source_ended_at_ms > source_started_at_ms`,
+		  AND source_ended_at_ms > 0`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("stream_runtime_5m source query: %w", err)
@@ -412,12 +415,27 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	rowsEmitted := 0
 	for rows.Next() {
 		var (
-			tenantID, clusterID, streamID, sourceEventID string
-			startMS, endMS                               int64
-			peakViewers                                  int64
+			tenantID, nodeID, clusterID, streamID, streamName, sourceEventID string
+			startMS, endMS                                                   int64
+			peakViewers                                                      int64
 		)
-		if err := rows.Scan(&tenantID, &clusterID, &streamID, &sourceEventID, &startMS, &endMS, &peakViewers); err != nil {
+		if err := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers); err != nil {
 			return fmt.Errorf("stream_runtime_5m scan: %w", err)
+		}
+		if startMS <= 0 || endMS <= startMS {
+			resolvedStartMS, err := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
+			if err != nil {
+				return err
+			}
+			if resolvedStartMS > 0 && resolvedStartMS < endMS {
+				startMS = resolvedStartMS
+			}
+		}
+		if startMS <= 0 || endMS <= startMS {
+			if !isInternalProcessingRuntime(streamName) {
+				return fmt.Errorf("stream_runtime_5m missing start for tenant=%s stream=%s node=%s name=%s ended_at_ms=%d", tenantID, streamID, nodeID, streamName, endMS)
+			}
+			continue
 		}
 		pv := uint32(peakViewers)
 		if peakViewers < 0 {
@@ -452,6 +470,29 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_runtime_5m", "inserted").Add(float64(rowsEmitted))
 	}
 	return nil
+}
+
+func isInternalProcessingRuntime(streamName string) bool {
+	return strings.HasPrefix(mist.ExtractInternalName(streamName), "processing+") ||
+		strings.HasPrefix(strings.TrimSpace(streamName), "processing+")
+}
+
+func (h *AnalyticsHandler) lookupStreamRuntimeStartMS(ctx context.Context, tenantID, streamID, nodeID, clusterID, streamName string, fallbackEndedAtMS int64) (int64, error) {
+	parsedTenantID, err := uuid.Parse(tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("parse stream runtime tenant_id %q: %w", tenantID, err)
+	}
+	parsedStreamID, err := uuid.Parse(streamID)
+	if err != nil {
+		return 0, fmt.Errorf("parse stream runtime stream_id %q: %w", streamID, err)
+	}
+	return h.lookupStreamStartedAtMS(ctx, streamStartLookup{
+		tenantID:     parsedTenantID,
+		streamID:     parsedStreamID,
+		nodeID:       nodeID,
+		clusterID:    clusterID,
+		internalName: mist.ExtractInternalName(streamName),
+	}, fallbackEndedAtMS), nil
 }
 
 // --- storage_gb_seconds_5m ---
