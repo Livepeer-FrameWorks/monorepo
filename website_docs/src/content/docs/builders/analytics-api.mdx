@@ -23,13 +23,14 @@ The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/stre
   authenticated tenants also see subscribed or owned clusters with basic cluster-level KPIs.
 </Aside>
 
-<Aside type="note" title="Player startup QoE is shipping incrementally">
-  Stream health, routing, geographic, usage, and client QoE summaries are available today. Player
-  **startup** QoE from the FrameWorks npm player — time-to-first-frame waterfall and
-  manifest/segment Resource Timing — ships as an opt-in beacon, surfaced via
-  `analytics.health.playerBootSummary`. Still maturing: rebuffering and rendition-change capture,
-  and QoE from non-npm / third-party players. See [View-Level QoE
-  Analytics](/roadmap#view-level-qoe-analytics).
+<Aside type="note" title="Player QoE is shipping incrementally">
+  Stream health, routing, geographic, usage, and client QoE summaries are available today. The
+  FrameWorks npm player also reports view-level QoE as an opt-in beacon: startup time-to-first-frame
+  and manifest/segment Resource Timing (`analytics.health.playerBootSummary`), plus
+  viewer-experienced rebuffering, frame drops, bitrate/rendition switches, exit-before-start, and
+  per-asset VOD retention (`analytics.health.sessionQoeSummary` and
+  `analytics.health.vodRetention`). Still maturing: QoE from non-npm / third-party players. See
+  [View-Level QoE Analytics](/roadmap#view-level-qoe-analytics).
 </Aside>
 
 ## Per-stream analytics

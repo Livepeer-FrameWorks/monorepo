@@ -258,6 +258,73 @@ Two read surfaces (both diagnostic, never billing/viewer-count truth):
   serving cluster/node, for operators of clusters they own. Token-attributed rows only;
   never exposes content/stream/session/URL/foreign-tenant identifiers.
 
+### Viewer-experienced QoE (session deltas)
+
+Where the boot trace covers _how playback started_, `client_qoe_session_deltas` covers
+_how it went_: the viewer's actually-experienced quality after first frame. This is the
+authoritative source for rebuffering — the server cannot see it. For HLS/DASH the player
+prefetches segments, so the origin buffer (`stream_health_samples` → `rebuffering_events`)
+reads healthy while the viewer's media buffer underruns on a bad last-mile link;
+`rebuffering_events` is **origin/stream buffer state, not per-viewer rebuffering**.
+
+The npm player's `SessionQoeReporter` measures, all client-side, at instrumentation time:
+
+- **Rebuffering** — a `waiting` event is classified (initial buffering / seek-induced /
+  pause / genuine) and only genuine post-first-frame stalls count. The ratio denominator
+  is genuine watch time = the union of `video.played`, never wall-clock.
+- **Mid-stream failure** — only a post-first-frame fatal media error (pre-first-frame
+  failures are the boot trace's).
+- **Rendering** — frame decoded/dropped/corrupted _deltas_ (the browser counters are
+  cumulative and non-resettable), with a `frame_stats_supported` flag so 0/0 is not read
+  as perfect.
+- **Delivery** — time-weighted bitrate (`Σ selected_bitrate × played_seconds`), ABR
+  up/down switch counts (sampled from the player adapter `getStats()`), live-edge latency
+  (player latency, **not** glass-to-glass), and EBVS (`play_intent ∧ ¬first_frame`).
+
+Every counter is an **additive delta** for the window since the previous beacon. A session
+emits periodic heartbeats (~30s, jittered to respect the per-IP limiter) plus a final
+beacon on `pagehide`/teardown and a non-terminal flush on `visibilitychange→hidden`, so a
+lost final beacon — which correlates with bad QoE and early exit — still leaves correct
+partial data under `sum()` instead of biasing results upward. Heartbeats also carry the
+non-additive signals — play-intent (EBVS) and VOD reach — not just the delta counters, so
+even a session that never reaches first frame or only seeks survives a lost final. The
+beacon is opt-in (default-off `telemetry.session`) and shares the boot trace's `session_id`.
+
+Same trust boundary as the boot beacon (server-derived attribution, token-gated
+`cluster_attributed`), forwarded by Bridge at `/playback/telemetry/session` via the shared
+`BeaconIntake`. **Dedup is two-sided and the keys are not interchangeable:** the
+Bridge-minted `event_id` covers Kafka replay, while a double-fired _client_ beacon is
+collapsed by the table's `ReplacingMergeTree` on the client-stable
+`(tenant_id, content_id, session_id, beacon_seq)` (Bridge mints a fresh `event_id` per HTTP
+request, so `event_id` cannot catch it). Ratios are computed at read time over the deduped
+rows; any future rollup must be built from a deduped surface, never summed off the raw
+`ReplacingMergeTree` before merges run.
+
+The VOD retention heatmap rides the same beacon: for VOD content the player folds a
+per-bucket watched-seconds histogram (fixed-width buckets, sparse deltas) into the
+session beacon, which ingest fans out into `vod_retention_buckets`. The read layer derives
+two **independent** curves per artifact: the density / "most replayed" curve
+(`Σ seconds_watched` per bucket, from `vod_retention_buckets`) and the audience-retention
+curve (sessions reaching ≥ bucket ÷ total) — a suffix sum of the per-session furthest
+bucket reached (`max_bucket_reached` on `client_qoe_session_deltas`), **not** from
+`vod_retention_buckets`, since a seek-to-end advances reach without adding density. No 5m
+rollup is materialized yet; read-time ratios over the raw deduped tables suffice at current
+volume, and any future rollup must be built from a deduped surface (never summed off the
+raw `ReplacingMergeTree`).
+
+Read surfaces mirror the boot path's two-surface model: a **tenant** QoE summary +
+VOD retention (`analytics.health.sessionQoeSummary` / `.vodRetention`) and a
+**cluster-ops** aggregate (`analytics.infra.clusterQoeOps`, token-attributed rows
+only). The dashboard surfaces them at `/analytics/qoe` (rebuffering ratio, frame
+drops, EBVS, bitrate + a VOD retention heatmap). The 5m num/denom rollup is deferred
+until volume demands it — reads compute ratios at read time over the raw deduped
+(`FINAL`) tables.
+
+> Status: live end-to-end — player → Bridge → Decklog →
+> `client_qoe_session_deltas` + `vod_retention_buckets` → Periscope query
+> (`GetSessionQoeSummary`/`GetClusterQoeOps`/`GetVodRetention`) → GraphQL →
+> `/analytics/qoe` dashboard.
+
 ## 6) Query: Periscope Query (gRPC API)
 
 Periscope Query is the read API that sits in front of ClickHouse. It provides:

@@ -18,7 +18,7 @@ FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and 
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → GraphQL subscriptions or polling · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
 - **What you gain:** RTMP/RTMPS, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · cross-cluster federation · sovereign and hybrid hosting · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · per-video heatmaps and retention curves · per-region replication knob · iframe-embed-as-a-product · first-class Python/PHP/C#/Java/Go SDKs · outbound HTTP webhooks · VOD URL-pull import · watermarking as a managed feature.
+- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · first-class Python/PHP/C#/Java/Go SDKs · outbound HTTP webhooks · VOD URL-pull import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -320,7 +320,7 @@ Worth being honest about, especially if you don't actually need live:
 - **DRM** (FairPlay / Widevine / PlayReady) — in development.
 - **Outbound HTTP webhooks** — GraphQL subscriptions today; HTTP-callback delivery is on the roadmap.
 - **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, Compositing, and Video Analysis are on the [roadmap](/roadmap).
-- **Per-video heatmaps and retention curves** — view-level QoE analytics are on the roadmap.
+- **Per-video heatmaps and retention curves** — per-asset watch-density and retention curves now ship for the FrameWorks player; broader cross-player view-level QoE is still on the [roadmap](/roadmap#view-level-qoe-analytics).
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
 - **First-class Python, PHP, C#, Java, Go SDKs** — use GraphQL codegen against the public schema until first-party SDKs ship.

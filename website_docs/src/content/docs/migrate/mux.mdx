@@ -33,7 +33,7 @@ worth keeping during the cut-over.
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** Mux Data-class view-level QoE analytics · DRM · live auto-captions · productized custom-domain SKU · outbound HTTP
+- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · outbound HTTP
   webhooks · breadth of first-class server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
   Java/.NET) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
   Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
@@ -358,18 +358,15 @@ over once you trust the numbers.
 Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Be honest with
 your stack about which of these you depend on before cutting over.
 
-- **Mux Data-class view-level QoE analytics.** Mux Data is the platform's hardest-to-replace
-  surface and is genuinely best-in-class for QoE — view-level traces, rebuffering /
-  startup-time / error attribution, ad observability, and a player-agnostic SDK that spans
-  Video.js, hls.js, Shaka, native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks ships
-  stream-side analytics today; view-level cross-player observability is tracked on the
-  [roadmap](/roadmap#view-level-qoe-analytics).
-
-  **For teams unwilling to give up Mux Data on day one:** Mux Data's SDK binds at the
-  underlying media-element / hls.js layer, which is the same surface our player uses. Drop-in
-  coexistence with `@livepeer-frameworks/player-*` is **expected to work**, but we haven't
-  shipped a tested wiring recipe yet. File an [in-app ticket](%APP_URL%/support) if you want
-  us to validate it for your stack and publish a `/builders/...` page.
+- **Mux Data-class view-level QoE analytics.** Mux Data is best-in-class here — view-level
+  traces, ad observability, and a player-agnostic SDK that spans Video.js, hls.js, Shaka,
+  native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks has closed a good chunk of
+  this: the FrameWorks player now reports view-level QoE — rebuffering ratio, frame drops,
+  startup time-to-first-frame, bitrate/rendition switches, exit-before-start, and per-asset
+  VOD retention/watch-density — surfaced in the dashboard at `/analytics/qoe`. What's still on
+  the [roadmap](/roadmap#view-level-qoe-analytics) is the breadth Mux Data has: QoE from
+  third-party / non-FrameWorks players and ad-specific observability. If your stack leans on
+  those today, weigh that gap before cutting over.
 
 - **DRM** — Widevine, PlayReady, and FairPlay are in development; not GA. Mux ships productized
   DRM today.
@@ -414,9 +411,6 @@ Heads-up so nothing surprises you:
   thumbnail, `g` for GIF, `s` for storyboard, `d` for DRM). FrameWorks treats one signed URL
   as the auth boundary across HLS / LL-HLS / DASH / WHEP / MP4 — no per-asset-type token swap
   in your client.
-- **Mux Data co-existence is untested.** It is _expected_ to work on the FrameWorks player
-  given the SDK binds at the media-element/hls.js layer; we haven't shipped a recipe. Don't
-  treat it as a guaranteed drop-in until you've validated for your stack.
 - **GraphQL learning curve.** If you've never written a query, the
   [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available
   fields. Skipper can also draft queries.
