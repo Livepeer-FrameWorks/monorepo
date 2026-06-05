@@ -16,6 +16,7 @@ import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
+import { BootTracer, type BootTrace } from "./BootTracer";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
 import { normalizeMistSourceUrls } from "./MistSourceUrls";
@@ -140,6 +141,15 @@ export interface PlayerControllerConfig {
   locale?: FwLocale;
   /** Custom translation overrides applied on top of the locale pack. */
   translations?: Partial<TranslationStrings>;
+
+  /**
+   * Diagnostic telemetry toggles. Boot-waterfall tracing is always recorded
+   * locally (console in debug, `bootTrace` event); `boot` enables the optional
+   * lossy beacon to the platform (default off).
+   */
+  telemetry?: { boot?: boolean };
+  /** Override for the telemetry beacon endpoint (defaults derived from gatewayUrl). */
+  telemetryUrl?: string;
 }
 
 export interface PlayerControllerEvents {
@@ -260,6 +270,14 @@ export interface PlayerControllerEvents {
 
   /** Loading-state poster info changed (sprite cues + URLs + tile geometry for the loading overlay). */
   loadingPosterChange: { poster: LoadingPosterInfo | null };
+
+  /**
+   * Boot startup waterfall resolved (success/error/abandoned). Diagnostic. Fires
+   * once per boot attempt: a normal attach is one, and an offline→online recovery
+   * re-anchors a fresh attempt that fires again. An offline wait that never
+   * recovers emits nothing.
+   */
+  bootTrace: BootTrace;
 }
 
 // ============================================================================
@@ -717,6 +735,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _autoplayActivationCleanup: (() => void) | null = null;
   private _autoplayActivationVideo: HTMLVideoElement | null = null;
 
+  /** Player SDK version, stamped onto diagnostic boot traces. Tracks package.json. */
+  private static readonly VERSION = "0.5.3";
+
   // Error handling constants
   private static readonly AUTO_CLEAR_ERROR_DELAY_MS = 2000;
   private static readonly HARD_FAILURE_ERROR_THRESHOLD = 5;
@@ -739,6 +760,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private abrController: ABRController | null = null;
   private interactionController: InteractionController | null = null;
   private mistReporter: MistReporter | null = null;
+  private bootTracer: BootTracer | null = null;
   private qualityMonitor: QualityMonitor | null = null;
   private metaTrackManager: MetaTrackManager | null = null;
   private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
@@ -794,6 +816,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.container = container;
     this.isAttached = true;
+
+    // Start the boot waterfall before the first state transition so boot_start
+    // anchors at attach time. Always records locally; reporting is via the event.
+    this.bootTracer = this.createBootTracer();
+
     this.setState("booting");
 
     try {
@@ -811,6 +838,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       if (!this.endpoints?.primary) {
         this.setState("no_endpoint", { gatewayStatus: "error" });
+        // Terminal boot failure on a page that stays mounted — emit now rather
+        // than waiting for teardown, so error-rate telemetry isn't undercounted.
+        this.bootTracer?.finalize("error");
         return;
       }
 
@@ -824,6 +854,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       if (!this.streamInfo || this.streamInfo.source.length === 0) {
         this.setState("error", { error: "No playable sources found" });
         this.emit("error", { error: "No playable sources found" });
+        this.bootTracer?.finalize("error");
         return;
       }
 
@@ -842,6 +873,20 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       if (!isOffline) {
         this.setState("error", { error: message });
         this.emit("error", { error: message });
+        // Boot definitively failed (resolution threw after retries); emit the
+        // error trace now rather than waiting for teardown. (Offline streams are
+        // handled separately below — they are not boot errors.)
+        this.bootTracer?.recordError(message);
+        this.bootTracer?.finalize("error");
+      }
+
+      // Offline streams keep polling for an online transition. Waiting on an
+      // offline stream is not a boot attempt, so drop the trace now — detach()
+      // would otherwise emit a spurious abandoned sample. Recovery re-anchors a
+      // fresh trace when the stream actually comes online.
+      if (isOffline) {
+        this.bootTracer?.cancel();
+        this.bootTracer = null;
       }
 
       // Even if initial resolution failed (e.g., stream offline), start polling
@@ -858,6 +903,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * The controller can be re-attached to a new container.
    */
   detach(): void {
+    // Close any open boot trace before state is torn down. No-op if a first
+    // frame already finalized it; otherwise reports abandoned/error.
+    this.bootTracer?.abandon();
+    this.bootTracer = null;
+
     this.cleanup();
     this.clearHoverTimeout();
     this.isAttached = false;
@@ -2829,6 +2879,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       cache: "no-store",
       headers: this.playbackAuthHeaders(),
     });
+    // Player-owned request: cache headers are readable here (unlike HLS.js/native fetches).
+    this.bootTracer?.recordOwnedResponse(jsonUrl, response.headers);
     if (!response.ok) {
       throw new Error(`MistServer HTTP ${response.status}`);
     }
@@ -2960,6 +3012,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     try {
       this.endpoints = await this.gatewayClient.resolve();
+      // Split the GraphQL resolve from Mist hydration in the boot waterfall.
+      this.bootTracer?.mark("gateway_resolved");
       this.applyPlaybackAuthToEndpoints();
       this.setMetadataSeed(this.endpoints?.metadata ?? null);
       // Spin up Chandler-tier sprite + poster URLs as soon as metadata is known, so cold streams
@@ -3143,6 +3197,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   ): Promise<void> {
     if (!this.container) return;
 
+    // Stream came online. If the viewer never reached first frame, this is the
+    // real boot — re-anchor a fresh trace at wake so the offline wait doesn't
+    // inflate TTFF, regardless of whether we fresh-attach or resume below. A
+    // mid-playback blip (playback already started) keeps its finished trace.
+    // cancel() disables the old tracer's video-frame callback so it can't
+    // finalize with the polluted offline-anchored timing.
+    if (!this._hasPlaybackStarted) {
+      this.bootTracer?.cancel();
+      this.bootTracer = this.createBootTracer();
+    }
+
     if (this._initializePlayerInFlight) {
       this.log("Stream came online while player initialization is in flight; waiting");
       try {
@@ -3150,6 +3215,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       } catch {}
       if (!this.container || this.isDestroyed) return;
       if (this.currentPlayer && this.videoElement && this.state !== "error") {
+        this.bootTracer?.attachVideo(this.videoElement);
         await this.attemptConfiguredAutoplay(this.videoElement, "online transition", 0);
         return;
       }
@@ -3183,6 +3249,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.log("Stream came online, resuming playback");
     const video = this.videoElement;
     if (!video) return;
+
+    // Resuming an already-attached player: the fresh recovery tracer must watch
+    // this video for first frame, else it would later emit a spurious abandoned.
+    this.bootTracer?.attachVideo(video);
 
     if (await this.attemptConfiguredAutoplay(video, "online transition", 0)) {
       return;
@@ -3476,6 +3546,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       if (!this.streamInfo || this.streamInfo.source.length === 0) {
         this.setState("error", { error: "No playable sources found" });
+        this.bootTracer?.finalize("error");
         return;
       }
 
@@ -3485,6 +3556,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       const message = error instanceof Error ? error.message : "Late initialization failed";
       this.log(`[initializeLateFromStreamState] Failed: ${message}`);
       this.setState("error", { error: message });
+      this.bootTracer?.recordError(message);
+      this.bootTracer?.finalize("error");
     }
   }
 
@@ -3953,6 +4026,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.videoElement = el;
         this.currentPlayer = this.playerManager.getCurrentPlayer();
         this._seekingLoggedOnce = false;
+        // Capture the true first painted frame (rVFC) to close the boot waterfall.
+        this.bootTracer?.attachVideo(el);
         this.setupVideoEventListeners(el);
         // Listen for player-reported seekable range updates (WebRTC/WHEP data channel)
         if (this.currentPlayer) {
@@ -4573,6 +4648,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private setState(state: PlayerState, context?: PlayerStateContext): void {
     this.state = state;
 
+    // Feed the boot waterfall (records marks regardless of emit dedup).
+    this.bootTracer?.onState(state, context);
+    // Stamp live-ness once metadata has resolved (the tracer is created before
+    // gateway metadata exists, so is_live would otherwise default to false).
+    if (state === "gateway_ready") {
+      this.bootTracer?.setContext({ isLive: this.isLive() });
+    }
+
     // Only emit if state actually changed
     if (this.lastEmittedState !== state) {
       this.lastEmittedState = state;
@@ -4583,6 +4666,59 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private log(message: string): void {
     if (this.config.debug) {
       console.log(`[PlayerController] ${message}`);
+    }
+  }
+
+  /** Build a boot tracer wired to this controller's emit/beacon/endpoint state. */
+  private createBootTracer(): BootTracer {
+    return new BootTracer({
+      contentId: this.config.contentId,
+      contentType: this.getResolvedContentType() ?? undefined,
+      playerVersion: PlayerController.VERSION,
+      getEndpoints: () => this.endpoints,
+      log: (message) => this.log(message),
+      onComplete: (trace) => {
+        this.emit("bootTrace", trace);
+        this.beaconBootTrace(trace);
+      },
+    });
+  }
+
+  /**
+   * Opt-in lossy beacon of the finished boot trace to Bridge. Off unless
+   * `telemetry.boot` is set. Uses sendBeacon with a text/plain body so the
+   * cross-origin request stays CORS-safelisted (no preflight); Bridge derives
+   * trusted attribution from contentId server-side and ignores client ids.
+   */
+  private beaconBootTrace(trace: BootTrace): void {
+    if (!this.config.telemetry?.boot) return;
+    if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
+
+    const url = this.resolveTelemetryUrl();
+    if (!url) return;
+
+    try {
+      // Echo the resolve-time telemetry token so Bridge can trust cluster
+      // attribution; absent => the trace is still accepted for tenant analytics.
+      const telemetryToken =
+        this.metadata?.telemetryToken ?? this.endpoints?.metadata?.telemetryToken;
+      const payload = telemetryToken ? { ...trace, telemetryToken } : trace;
+      const body = new Blob([JSON.stringify(payload)], { type: "text/plain" });
+      navigator.sendBeacon(url, body);
+    } catch (error) {
+      this.log(`[boot] beacon failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** Derive the boot-telemetry endpoint from telemetryUrl or the gateway URL. */
+  private resolveTelemetryUrl(): string | null {
+    if (this.config.telemetryUrl) return this.config.telemetryUrl;
+    const gateway = this.config.gatewayUrl || DEFAULT_GATEWAY_URL;
+    try {
+      const base = gateway.replace(/\/graphql\/?$/, "");
+      return `${base.replace(/\/$/, "")}/playback/telemetry/boot`;
+    } catch {
+      return null;
     }
   }
 

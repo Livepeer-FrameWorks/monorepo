@@ -65,7 +65,7 @@ const RESOLVE_VIEWER_QUERY = `
     resolveViewerEndpoint(contentId: $contentId) {
       primary { nodeId baseUrl protocol url geoDistance loadScore outputs }
       fallbacks { nodeId baseUrl protocol url geoDistance loadScore outputs }
-      metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt thumbnailAssets { posterUrl spriteVttUrl spriteJpgUrl assetKey } }
+      metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt telemetryToken thumbnailAssets { posterUrl spriteVttUrl spriteJpgUrl assetKey } }
     }
   }
 `;

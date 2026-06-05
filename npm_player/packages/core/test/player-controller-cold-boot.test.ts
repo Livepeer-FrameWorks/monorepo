@@ -43,6 +43,8 @@ describe("PlayerController cold boot recovery", () => {
       volume: 1,
       play: vi.fn().mockResolvedValue(undefined),
       pause: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     };
     const currentPlayer = {
       play: vi.fn().mockResolvedValue(undefined),
@@ -66,6 +68,47 @@ describe("PlayerController cold boot recovery", () => {
     expect(lateInit).not.toHaveBeenCalled();
     expect(currentPlayer.play).toHaveBeenCalledOnce();
     expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it("cancels the stale tracer and attaches the fresh tracer when in-flight init recovers", async () => {
+    const c = makeController();
+    const video = {
+      paused: true,
+      muted: false,
+      volume: 1,
+      play: vi.fn().mockResolvedValue(undefined),
+      pause: vi.fn(),
+    };
+    const staleTracer = {
+      cancel: vi.fn(),
+    };
+    const freshTracer = {
+      attachVideo: vi.fn(),
+    };
+    const currentPlayer = {
+      play: vi.fn().mockResolvedValue(undefined),
+    };
+
+    (c as any).container = { innerHTML: "" };
+    (c as any).videoElement = video;
+    (c as any).currentPlayer = currentPlayer;
+    (c as any)._hasPlaybackStarted = false;
+    (c as any)._initializePlayerInFlight = Promise.resolve();
+    (c as any).bootTracer = staleTracer;
+    (c as any).state = "connecting";
+
+    vi.spyOn(c as any, "createBootTracer").mockReturnValue(freshTracer);
+    const autoplay = vi.spyOn(c as any, "attemptConfiguredAutoplay").mockResolvedValue(true);
+
+    await (c as any).recoverPlaybackAfterOnlineTransition({
+      source: [
+        { type: "html5/application/vnd.apple.mpegurl", url: "https://edge/live/index.m3u8" },
+      ],
+    });
+
+    expect(staleTracer.cancel).toHaveBeenCalledOnce();
+    expect(freshTracer.attachVideo).toHaveBeenCalledWith(video);
+    expect(autoplay).toHaveBeenCalledWith(video, "online transition", 0);
   });
 
   it("retries selected player playback muted before requiring user interaction", async () => {

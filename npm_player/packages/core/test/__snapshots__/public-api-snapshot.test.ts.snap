@@ -6,6 +6,7 @@ exports[`public API snapshot > keeps exported symbol surface stable 1`] = `
   "AirPlayController",
   "AudioGainController",
   "BasePlayer",
+  "BootTracer",
   "BreakpointObserver",
   "ChandlerAssetSource",
   "DEFAULT_BLUEPRINTS",

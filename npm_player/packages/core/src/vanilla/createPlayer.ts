@@ -87,6 +87,11 @@ export interface CreatePlayerConfig {
   /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
   playbackAuth?: import("../types").PlaybackAuth;
 
+  /** Diagnostic telemetry toggles. `boot` opts into the lossy boot-trace beacon (default off). */
+  telemetry?: { boot?: boolean };
+  /** Override for the telemetry beacon endpoint (defaults derived from gatewayUrl). */
+  telemetryUrl?: string;
+
   /** Playback options */
   autoplay?: boolean;
   muted?: boolean;
@@ -348,6 +353,8 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     mistUrl: config.mistUrl,
     authToken: config.authToken,
     playbackAuth: config.playbackAuth,
+    telemetry: config.telemetry,
+    telemetryUrl: config.telemetryUrl,
     autoplay: config.autoplay ?? true,
     muted: config.muted ?? false,
     controls: config.controls ?? true,

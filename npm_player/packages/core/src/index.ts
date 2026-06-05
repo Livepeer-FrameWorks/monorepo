@@ -53,6 +53,16 @@ export { LiveDurationProxy } from "./core/LiveDurationProxy";
 export { TimerManager } from "./core/TimerManager";
 export { TypedEventEmitter, TypedEventEmitter as EventEmitter } from "./core/EventEmitter";
 export { TelemetryReporter } from "./core/TelemetryReporter";
+export { BootTracer } from "./core/BootTracer";
+export type {
+  BootTrace,
+  BootMark,
+  BootOutcome,
+  BootSpans,
+  BootResourceKind,
+  BootResourceTiming,
+  BootTracerConfig,
+} from "./core/BootTracer";
 
 // Player interface and base class
 export type {

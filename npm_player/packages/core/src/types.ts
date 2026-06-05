@@ -105,6 +105,16 @@ export interface PlayerOptions {
    * DASH.js, and WHEP.
    */
   playbackAuth?: PlaybackAuth;
+
+  /**
+   * Diagnostic telemetry toggles. The boot-startup waterfall is always recorded
+   * locally (console in `debug`, and the `bootTrace` event); `boot` enables the
+   * optional lossy beacon to the platform (default off). URLs are query/fragment
+   * stripped before sending.
+   */
+  telemetry?: { boot?: boolean };
+  /** Override for the telemetry beacon endpoint (defaults derived from `gatewayUrl`). */
+  telemetryUrl?: string;
 }
 
 /**
@@ -329,6 +339,8 @@ export interface ContentMetadata {
   format?: string;
   /** Chandler-served thumbnail asset URLs (poster, sprite, VTT cues) */
   thumbnailAssets?: ThumbnailAssetUrls;
+  /** Short-lived signed token echoed on the boot-telemetry beacon for cluster attribution. */
+  telemetryToken?: string;
   /** MistServer authoritative snapshot (merged into this metadata) */
   mist?: MistStreamInfo;
   /** Parsed track summary (derived from Mist metadata when available) */

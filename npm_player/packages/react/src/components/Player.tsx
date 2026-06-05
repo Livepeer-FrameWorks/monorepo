@@ -87,6 +87,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
     mistUrl: options?.mistUrl,
     authToken: options?.authToken,
     playbackAuth: options?.playbackAuth,
+    telemetry: options?.telemetry,
+    telemetryUrl: options?.telemetryUrl,
     locale: options?.locale,
     translations: options?.translations,
     autoplay: options?.autoplay !== false,

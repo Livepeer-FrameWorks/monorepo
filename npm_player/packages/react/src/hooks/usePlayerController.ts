@@ -293,6 +293,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       mistUrl: configRef.current.mistUrl,
       authToken: configRef.current.authToken,
       playbackAuth: configRef.current.playbackAuth,
+      telemetry: configRef.current.telemetry,
+      telemetryUrl: configRef.current.telemetryUrl,
       locale: configRef.current.locale,
       translations: configRef.current.translations,
       autoplay: configRef.current.autoplay,
