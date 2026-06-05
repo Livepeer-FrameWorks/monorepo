@@ -540,6 +540,17 @@ func main() {
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/v1/bootstrap/infrastructure-node", infraBootstrap.Handle)
 	}
 
+	// Public player boot telemetry beacon. Unauthenticated and outside the
+	// GraphQL tenant rate-limiter: the browser sends only content_id + ephemeral
+	// trace/session ids, and Bridge derives trusted attribution from Commodore,
+	// mints the canonical event_id, rate-limits per IP, and forwards to Decklog.
+	{
+		telemetrySecret := []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", ""))
+		bootTelemetry := handlers.NewPlaybackTelemetryHandler(serviceClients.Commodore, serviceClients.Decklog, rateLimiter, telemetrySecret, logger)
+		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/playback/telemetry/boot", bootTelemetry.Handle)
+		server.HandleOptionalTrailingSlash(app, http.MethodOptions, "/playback/telemetry/boot", bootTelemetry.HandleOptions)
+	}
+
 	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.
 	// No auth middleware - signature verification happens in the target service.
 	// Route pattern: /webhooks/{service}/{provider}

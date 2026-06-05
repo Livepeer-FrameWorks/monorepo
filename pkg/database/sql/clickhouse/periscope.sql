@@ -552,6 +552,71 @@ GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
 
 -- ============================================================================
+-- PLAYER BOOT TELEMETRY (browser-originated startup waterfall)
+-- ============================================================================
+-- One row per player boot attempt (browser sendBeacon -> Bridge -> Decklog).
+-- Diagnostic/lossy, never a viewer-count or billing source. Attribution is
+-- server-derived: Bridge stamps tenant_id/stream_id/artifact_hash from Commodore
+-- and mints event_id; node_id/serving_cluster_id are trusted only when a
+-- telemetry token supplied them (cluster_attributed = 1), which gates the
+-- cluster-ops read surface. Percentiles are computed at read time over this raw
+-- table — there is deliberately no rollup MV (quantile() is not mergeable in a
+-- plain MergeTree; add an AggregatingMergeTree rollup only if volume demands).
+CREATE TABLE IF NOT EXISTS player_boot_samples (
+    timestamp DateTime,
+    event_id UUID,
+    tenant_id UUID,
+    stream_id Nullable(UUID),
+    artifact_hash String DEFAULT '',
+    internal_name String DEFAULT '',
+    session_id String DEFAULT '',
+    trace_id String DEFAULT '',
+
+    node_id LowCardinality(String) DEFAULT '',
+    serving_cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    cluster_attributed UInt8 DEFAULT 0,
+
+    total_ttf_ms UInt32 DEFAULT 0,
+    gateway_resolve_ms UInt32 DEFAULT 0,
+    mist_hydrate_ms UInt32 DEFAULT 0,
+    player_select_ms UInt32 DEFAULT 0,
+    connect_ms UInt32 DEFAULT 0,
+    prebuffer_ms UInt32 DEFAULT 0,
+
+    outcome LowCardinality(String) DEFAULT '',
+    error_code LowCardinality(String) DEFAULT '',
+    player_type LowCardinality(String) DEFAULT '',
+    protocol LowCardinality(String) DEFAULT '',
+    content_type LowCardinality(String) DEFAULT '',
+    is_live UInt8 DEFAULT 0,
+    connection_type LowCardinality(String) DEFAULT '',
+    player_version LowCardinality(String) DEFAULT '',
+
+    manifest_url String DEFAULT '',
+    manifest_ms UInt32 DEFAULT 0,
+    manifest_transfer_size UInt64 DEFAULT 0,
+    first_segment_url String DEFAULT '',
+    first_segment_ms UInt32 DEFAULT 0,
+    first_segment_transfer_size UInt64 DEFAULT 0,
+    cdn_cache_status LowCardinality(String) DEFAULT '',
+    age_seconds Nullable(UInt32) DEFAULT NULL,
+    resources String DEFAULT '',
+
+    source_region LowCardinality(String) DEFAULT '',
+    stream_origin_region LowCardinality(String) DEFAULT '',
+    stream_origin_cluster_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+-- stream_id is Nullable (null for VOD), so it cannot appear raw in the sorting
+-- key without allow_nullable_key; ifNull() makes the key non-nullable while
+-- keeping per-stream locality.
+ORDER BY (tenant_id, ifNull(stream_id, toUUID('00000000-0000-0000-0000-000000000000')), timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+-- ============================================================================
 -- ROUTING DECISIONS
 -- ============================================================================
 

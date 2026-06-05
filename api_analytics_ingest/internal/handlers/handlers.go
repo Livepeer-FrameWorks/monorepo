@@ -206,6 +206,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processNodeLifecycle(ctx, event)
 	case "client_lifecycle_batch":
 		err = h.processClientLifecycleBatch(ctx, event)
+	case "playback_boot":
+		err = h.processPlaybackBootTrace(ctx, event)
 	case "load_balancing":
 		err = h.processLoadBalancing(ctx, event)
 	case "clip_lifecycle":
@@ -1821,6 +1823,149 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 	if err := batch.Send(); err != nil {
 		h.logger.Errorf("Failed to send ClickHouse client QoE batch: %v", err)
 		return err
+	}
+	return nil
+}
+
+// processPlaybackBootTrace handles a browser-originated player boot waterfall.
+// One trace = one ClickHouse row in player_boot_samples. Attribution is already
+// server-derived (Bridge stamped tenant_id/stream_id/cluster fields and minted
+// the canonical event_id); this handler just persists. Diagnostic/lossy — never
+// a viewer-count or billing source. Percentiles are computed at read time, so
+// there is no rollup MV here.
+func (h *AnalyticsHandler) processPlaybackBootTrace(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing player boot trace event: %s", event.EventID)
+
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_PlaybackBootTrace)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for playback_boot")
+	}
+	t := tp.PlaybackBootTrace
+
+	var clusterAttributed uint8
+	if t.GetClusterAttributed() {
+		clusterAttributed = 1
+	}
+	var isLive uint8
+	if t.GetIsLive() {
+		isLive = 1
+	}
+
+	// Manifest/first-segment headline fields + full resource array.
+	var manifestURL, firstSegmentURL string
+	var manifestMs, firstSegmentMs uint32
+	var manifestSize, firstSegmentSize uint64
+	var cacheStatus string
+	var ageSeconds *uint32
+	for _, r := range t.GetResources() {
+		switch r.GetKind() {
+		case "manifest":
+			if manifestURL == "" {
+				manifestURL = r.GetUrl()
+				manifestMs = r.GetDurationMs()
+				manifestSize = r.GetTransferSize()
+			}
+		case "first_segment":
+			if firstSegmentURL == "" {
+				firstSegmentURL = r.GetUrl()
+				firstSegmentMs = r.GetDurationMs()
+				firstSegmentSize = r.GetTransferSize()
+			}
+		case "mist_json":
+			if cacheStatus == "" {
+				cacheStatus = r.GetCacheStatus()
+			}
+			if ageSeconds == nil && r.AgeSeconds != nil {
+				v := r.GetAgeSeconds()
+				ageSeconds = &v
+			}
+		}
+	}
+
+	resourcesJSON := "[]"
+	if res := t.GetResources(); len(res) > 0 {
+		if encoded, err := json.Marshal(res); err == nil {
+			resourcesJSON = string(encoded)
+		}
+	}
+
+	env := analyticsEnvelopeColumns(event)
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO player_boot_samples (
+			timestamp, event_id, tenant_id, stream_id, artifact_hash, internal_name, session_id, trace_id,
+			node_id, serving_cluster_id, origin_cluster_id, cluster_attributed,
+			total_ttf_ms, gateway_resolve_ms, mist_hydrate_ms, player_select_ms, connect_ms, prebuffer_ms,
+			outcome, error_code, player_type, protocol, content_type, is_live, connection_type, player_version,
+			manifest_url, manifest_ms, manifest_transfer_size,
+			first_segment_url, first_segment_ms, first_segment_transfer_size,
+			cdn_cache_status, age_seconds, resources,
+			source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare player_boot_samples batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "error").Inc()
+		}
+		return err
+	}
+	defer closeClickHouseBatch(batch)
+
+	if appendErr := batch.Append(
+		event.Timestamp,
+		parseUUID(event.EventID),
+		event.TenantID,
+		parseUUIDOrNil(t.GetStreamId()),
+		t.GetArtifactHash(),
+		mist.ExtractInternalName(t.GetInternalName()),
+		t.GetSessionId(),
+		t.GetTraceId(),
+		t.GetNodeId(),
+		t.GetServingClusterId(),
+		t.GetOriginClusterId(),
+		clusterAttributed,
+		t.GetTotalTtfMs(),
+		t.GetGatewayResolveMs(),
+		t.GetMistHydrateMs(),
+		t.GetPlayerSelectMs(),
+		t.GetConnectMs(),
+		t.GetPrebufferMs(),
+		t.GetOutcome(),
+		t.GetErrorCode(),
+		t.GetPlayerType(),
+		t.GetProtocol(),
+		t.GetContentType(),
+		isLive,
+		t.GetConnectionType(),
+		t.GetPlayerVersion(),
+		manifestURL,
+		manifestMs,
+		manifestSize,
+		firstSegmentURL,
+		firstSegmentMs,
+		firstSegmentSize,
+		cacheStatus,
+		ageSeconds,
+		resourcesJSON,
+		env.sourceRegion,
+		env.streamOriginRegion,
+		env.streamOriginClusterID,
+		env.schemaVersion,
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append player boot trace to ClickHouse batch: %v", appendErr)
+		return appendErr
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send player_boot_samples batch: %v", err)
+		return err
+	}
+	if h.metrics != nil {
+		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
 	}
 	return nil
 }

@@ -405,6 +405,11 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		if payload.ClientLifecycleBatch.TenantId != nil {
 			tenantID = *payload.ClientLifecycleBatch.TenantId
 		}
+	case *pb.MistTrigger_PlaybackBootTrace:
+		eventType = "playback_boot"
+		if payload.PlaybackBootTrace.TenantId != nil {
+			tenantID = *payload.PlaybackBootTrace.TenantId
+		}
 	case *pb.MistTrigger_NodeLifecycleUpdate:
 		eventType = "node_lifecycle_update"
 		if payload.NodeLifecycleUpdate.TenantId != nil {

@@ -668,6 +668,7 @@ message MistTrigger {
     ClientLifecycleBatch client_lifecycle_batch = 39;
     RawMistWebhookTrigger raw_mist_webhook = 40;
     PushInputCloseTrigger push_input_close = 41;
+    PlaybackBootTrace playback_boot_trace = 42;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -1679,6 +1680,69 @@ message ClientLifecycleBatch {
   int64 window_start = 5;
   int64 window_end = 6;
   repeated ClientLifecycleUpdate samples = 7;
+}
+
+// PlaybackBootResource is one Resource Timing entry the player observed during
+// startup (manifest, first segment, Mist json, poster). Sizes/timings come from
+// the browser's PerformanceResourceTiming; cache_status/age are only present for
+// requests the player itself owns (e.g. Mist json), never HLS.js/native fetches.
+message PlaybackBootResource {
+  string kind = 1;                 // "manifest" | "first_segment" | "mist_json" | "poster" | "other"
+  string url = 2;
+  uint32 ttfb_ms = 3;
+  uint32 duration_ms = 4;
+  uint64 transfer_size = 5;
+  uint64 encoded_body_size = 6;
+  uint64 decoded_body_size = 7;
+  optional string cache_status = 8;
+  optional uint32 age_seconds = 9;
+}
+
+// PlaybackBootTrace is a one-shot browser-originated startup waterfall
+// (time-to-first-frame split into spans) plus Resource Timing. Diagnostic and
+// lossy — never a billing/viewer-count source.
+//
+// Attribution is server-derived: the browser sends content_id + ephemeral
+// trace_id/session_id; Bridge resolves tenant_id/stream_id/artifact_hash and
+// mints the canonical MistTrigger.event_id. node_id/cluster fields are trusted
+// only when a valid telemetry token supplied them (cluster_attributed=true);
+// otherwise they are left empty and excluded from cluster-ops aggregates.
+message PlaybackBootTrace {
+  // Server-derived attribution (filled by Bridge; ignored if sent by the browser).
+  optional string tenant_id = 1;
+  optional string stream_id = 2;        // nullable for VOD/standalone artifacts
+  string artifact_hash = 3;
+  string internal_name = 4;
+  string node_id = 5;
+  string serving_cluster_id = 6;
+  string origin_cluster_id = 7;
+  bool cluster_attributed = 8;          // true only when a telemetry token supplied node/cluster
+
+  // Client correlation (browser-supplied).
+  string content_id = 9;                // playback id the browser requested
+  string session_id = 10;
+  string trace_id = 11;
+  int64 client_timestamp_ms = 12;
+
+  // Waterfall spans (ms).
+  uint32 total_ttf_ms = 20;
+  uint32 gateway_resolve_ms = 21;
+  uint32 mist_hydrate_ms = 22;
+  uint32 player_select_ms = 23;
+  uint32 connect_ms = 24;
+  uint32 prebuffer_ms = 25;
+
+  // Context.
+  string outcome = 30;                  // "success" | "error" | "abandoned"
+  string error_code = 31;
+  string player_type = 32;
+  string protocol = 33;
+  string content_type = 34;
+  bool is_live = 35;
+  string connection_type = 36;          // navigator.connection.effectiveType bucket
+  string player_version = 37;
+
+  repeated PlaybackBootResource resources = 40;
 }
 
 enum NodeOperationalMode {
