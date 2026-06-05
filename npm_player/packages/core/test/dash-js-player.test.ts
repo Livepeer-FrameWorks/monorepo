@@ -6,13 +6,19 @@ import { DashJsPlayerImpl } from "../src/players/DashJsPlayer";
 
 const dashMocks = vi.hoisted(() => {
   const handlers = new Map<string, Array<(event?: unknown) => void>>();
+  const state: { startupEvent: string | null } = { startupEvent: "streamInitialized" };
+  const emit = (event: string, payload?: unknown) => {
+    handlers.get(event)?.forEach((handler) => handler(payload));
+  };
 
   return {
     handlers,
+    state,
+    emit,
     initialize: vi.fn(() => {
-      handlers
-        .get("streamInitialized")
-        ?.forEach((handler) => handler({ type: "streamInitialized" }));
+      if (state.startupEvent) {
+        emit(state.startupEvent, { type: state.startupEvent });
+      }
     }),
     updateSettings: vi.fn(),
     on: vi.fn((event: string, handler: (event?: unknown) => void) => {
@@ -49,6 +55,7 @@ describe("DashJsPlayerImpl", () => {
   beforeEach(() => {
     dashMocks.initialize.mockReset();
     dashMocks.handlers.clear();
+    dashMocks.state.startupEvent = "streamInitialized";
     dashMocks.updateSettings.mockReset();
     dashMocks.on.mockReset();
     dashMocks.off.mockReset();
@@ -165,6 +172,34 @@ describe("DashJsPlayerImpl", () => {
     expect(dashMocks.initialize.mock.invocationCallOrder[0]).toBeLessThan(
       onReady.mock.invocationCallOrder[0]
     );
+  });
+
+  it("rejects initialization instead of emitting ready when dash.js never starts", async () => {
+    vi.useFakeTimers();
+    dashMocks.state.startupEvent = null;
+    const player = new DashJsPlayerImpl();
+    const container = document.createElement("div");
+    const onReady = vi.fn();
+
+    try {
+      const initialization = player.initialize(
+        container,
+        { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
+        { autoplay: true, muted: true, onReady },
+        { source: [], meta: { tracks: [] }, type: "live" }
+      );
+      const expectedFailure = expect(initialization).rejects.toThrow(
+        "DASH startup failed: DASH startup timed out before stream initialization"
+      );
+
+      await vi.waitFor(() => expect(dashMocks.initialize).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await expectedFailure;
+      expect(onReady).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses a conservative live delay for live DASH startup", async () => {

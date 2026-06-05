@@ -244,7 +244,7 @@ export class DashJsPlayerImpl extends BasePlayer {
   }
 
   private waitForDashStartup(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (!this.dashPlayer) {
         resolve();
         return;
@@ -253,18 +253,35 @@ export class DashJsPlayerImpl extends BasePlayer {
       let settled = false;
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-      const finish = () => {
+      const cleanup = () => {
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        this.dashPlayer?.off?.("streamInitialized", succeed);
+        this.dashPlayer?.off?.("canPlay", succeed);
+        this.dashPlayer?.off?.("error", fail);
+      };
+
+      const succeed = () => {
         if (settled) return;
         settled = true;
-        if (timeoutId !== null) clearTimeout(timeoutId);
-        this.dashPlayer?.off?.("streamInitialized", finish);
-        this.dashPlayer?.off?.("canPlay", finish);
+        cleanup();
         resolve();
       };
 
-      this.dashPlayer.on("streamInitialized", finish);
-      this.dashPlayer.on("canPlay", finish);
-      timeoutId = setTimeout(finish, 3000);
+      const fail = (event?: any) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const message =
+          event?.event?.message ||
+          event?.message ||
+          "DASH startup timed out before stream initialization";
+        reject(new Error(`DASH startup failed: ${message}`));
+      };
+
+      this.dashPlayer.on("streamInitialized", succeed);
+      this.dashPlayer.on("canPlay", succeed);
+      this.dashPlayer.on("error", fail);
+      timeoutId = setTimeout(fail, 3000);
     });
   }
 
