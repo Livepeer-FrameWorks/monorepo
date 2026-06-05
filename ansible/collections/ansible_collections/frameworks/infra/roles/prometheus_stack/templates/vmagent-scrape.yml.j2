@@ -4,6 +4,9 @@ scrape_configs:
 {% for target in vmagent_scrape_targets %}
   - job_name: {{ target.job_name | to_json }}
     metrics_path: {{ target.path | default('/metrics') | to_json }}
+{% if target.max_scrape_size is defined and target.max_scrape_size %}
+    max_scrape_size: {{ target.max_scrape_size }}
+{% endif %}
     static_configs:
       - targets:
 {% for address in target.targets %}

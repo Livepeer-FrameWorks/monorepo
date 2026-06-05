@@ -41,7 +41,7 @@ For native mode (systemd):
 The logs command automatically detects the service mode and uses
 the appropriate log viewing method.`,
 		Example: `  frameworks cluster logs quartermaster
-  frameworks cluster logs quartermaster --follow
+  frameworks cluster logs foghorn-eu --tail 200
   frameworks cluster logs bridge --tail 100 --follow`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -99,7 +99,11 @@ journalctl to the current boot, or --since for a relative/absolute time window.`
 				return err
 			}
 			defer rc.Cleanup()
-			return runLogsSnapshot(cmd, rc.Manifest, opts)
+			snapshotOpts := opts
+			if strings.TrimSpace(snapshotOpts.EdgeManifest) == "" && !cmd.Flags().Changed("edge-manifest") {
+				snapshotOpts.EdgeManifest = defaultEdgeManifestPath(rc.ManifestPath)
+			}
+			return runLogsSnapshot(cmd, rc.Manifest, snapshotOpts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "journalctl time window when --boot is not set")
@@ -111,76 +115,24 @@ journalctl to the current boot, or --since for a relative/absolute time window.`
 	return cmd
 }
 
+type logTarget struct {
+	ServiceName string
+	DeployName  string
+	HostName    string
+	Host        inventory.Host
+}
+
 // runLogs executes the logs command against an already-loaded manifest.
 func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName string, follow bool, tail int) error {
-	var err error
-
-	// Find host for service
-	var host inventory.Host
-	var found bool
-
-	// Check infrastructure
-	if serviceName == "postgres" && manifest.Infrastructure.Postgres.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.Postgres.Host)
-	} else if serviceName == "kafka" && manifest.Infrastructure.Kafka.Enabled {
-		if len(manifest.Infrastructure.Kafka.Brokers) > 0 {
-			host, found = manifest.GetHost(manifest.Infrastructure.Kafka.Brokers[0].Host)
-		}
-	} else if serviceName == "clickhouse" && manifest.Infrastructure.ClickHouse.Enabled {
-		host, found = manifest.GetHost(manifest.Infrastructure.ClickHouse.Host)
+	targets, err := resolveLogTargets(manifest, serviceName)
+	if err != nil {
+		return err
+	}
+	if follow && len(targets) > 1 {
+		return fmt.Errorf("%s has %d hosts; use non-follow logs or cluster logs snapshot for HA services", serviceName, len(targets))
 	}
 
-	// Check application services
-	if !found {
-		if svcConfig, ok := manifest.Services[serviceName]; ok {
-			if svcConfig.Enabled {
-				host, found = manifest.GetHost(svcConfig.Host)
-			}
-		}
-	}
-
-	// Check interfaces
-	if !found {
-		if ifaceConfig, ok := manifest.Interfaces[serviceName]; ok {
-			if ifaceConfig.Enabled {
-				host, found = manifest.GetHost(ifaceConfig.Host)
-			}
-		}
-	}
-
-	// Check observability
-	if !found {
-		if obsConfig, ok := manifest.Observability[serviceName]; ok {
-			if obsConfig.Enabled {
-				host, found = manifest.GetHost(obsConfig.Host)
-			}
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
-	}
-
-	// Resolve deploy name
-	deployName := serviceName
-	if svcCfg, ok := manifest.Services[serviceName]; ok {
-		deployName, err = resolveDeployName(serviceName, svcCfg)
-		if err != nil {
-			return err
-		}
-	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
-		deployName, err = resolveDeployName(serviceName, ifaceCfg)
-		if err != nil {
-			return err
-		}
-	} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
-		deployName, err = resolveDeployName(serviceName, obsCfg)
-		if err != nil {
-			return err
-		}
-	}
-
-	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Fetching logs for %s on %s", serviceName, host.ExternalIP))
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Fetching logs for %s from %d host(s)", serviceName, len(targets)))
 	fmt.Fprintln(cmd.OutOrStdout(), "")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -202,79 +154,229 @@ func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName strin
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	// Detect service mode
-	detector := detect.NewDetector(sshPool, host)
-	state, err := detector.Detect(ctx, deployName)
-	if err != nil {
-		return fmt.Errorf("failed to detect service: %w", err)
-	}
+	for _, target := range targets {
+		if len(targets) > 1 {
+			fmt.Fprintf(cmd.OutOrStdout(), "== %s (%s) ==\n", target.HostName, firstNonEmpty(target.Host.ExternalIP, "local"))
+		}
 
-	if !state.Exists {
-		return fmt.Errorf("service %s does not exist on %s", serviceName, host.ExternalIP)
-	}
+		detector := detect.NewDetector(sshPool, target.Host)
+		state, err := detector.Detect(ctx, target.DeployName)
+		if err != nil {
+			return fmt.Errorf("%s: failed to detect service: %w", target.HostName, err)
+		}
 
-	// Build log command based on mode
-	var logCmd string
-	switch state.Mode {
+		if !state.Exists {
+			return fmt.Errorf("service %s does not exist on %s", serviceName, target.Host.ExternalIP)
+		}
+
+		logCmd, err := buildLogCommand(target.DeployName, state.Mode, follow, tail)
+		if err != nil {
+			return err
+		}
+
+		if follow {
+			return streamLogCommand(ctx, target.Host, stringFlag(cmd, "ssh-key").Value, logCmd)
+		}
+
+		var runner ssh.Runner
+		if target.Host.ExternalIP == "" || target.Host.ExternalIP == "localhost" || target.Host.ExternalIP == "127.0.0.1" {
+			runner = ssh.NewLocalRunner("")
+		} else {
+			sshConfig := &ssh.ConnectionConfig{
+				Address:  target.Host.ExternalIP,
+				Port:     22,
+				User:     target.Host.User,
+				KeyPath:  sshKey,
+				HostName: target.Host.Name,
+				Timeout:  30 * time.Second,
+			}
+			runner, err = sshPool.Get(sshConfig)
+			if err != nil {
+				return fmt.Errorf("%s: failed to connect to host: %w", target.HostName, err)
+			}
+		}
+
+		result, err := runner.Run(ctx, logCmd)
+		if err != nil {
+			return fmt.Errorf("%s: failed to fetch logs: %w", target.HostName, err)
+		}
+
+		if result.ExitCode != 0 {
+			fmt.Fprintf(cmd.OutOrStderr(), "Error fetching logs from %s: %s\n", target.HostName, result.Stderr)
+			return fmt.Errorf("%s: log command exited with code %d", target.HostName, result.ExitCode)
+		}
+
+		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
+		if len(targets) > 1 && !strings.HasSuffix(result.Stdout, "\n") {
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+	}
+	return nil
+}
+
+func buildLogCommand(deployName, mode string, follow bool, tail int) (string, error) {
+	switch mode {
 	case "docker":
-		logCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose logs", deployName)
+		logCmd := fmt.Sprintf("cd /opt/frameworks/%s && docker compose logs", deployName)
 		if tail > 0 {
 			logCmd += fmt.Sprintf(" --tail=%d", tail)
 		}
 		if follow {
 			logCmd += " --follow"
 		}
-
+		return logCmd, nil
 	case "native":
-		logCmd = fmt.Sprintf("journalctl -u frameworks-%s", deployName)
+		logCmd := fmt.Sprintf("journalctl -u frameworks-%s", deployName)
 		if tail > 0 {
 			logCmd += fmt.Sprintf(" -n %d", tail)
 		}
 		if follow {
 			logCmd += " -f"
 		}
-
+		return logCmd, nil
 	default:
-		return fmt.Errorf("unknown service mode: %s (cannot determine log location)", state.Mode)
+		return "", fmt.Errorf("unknown service mode: %s (cannot determine log location)", mode)
+	}
+}
+
+func resolveLogTargets(manifest *inventory.Manifest, serviceName string) ([]logTarget, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("manifest is required")
 	}
 
-	if follow {
-		return streamLogCommand(ctx, host, stringFlag(cmd, "ssh-key").Value, logCmd)
+	if serviceName == "postgres" && manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
+		return infrastructureLogTargets(manifest, serviceName, "postgres", manifest.Infrastructure.Postgres.AllHosts())
+	}
+	if serviceName == "kafka" && manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
+		return infrastructureLogTargets(manifest, serviceName, "kafka", kafkaLogHosts(manifest.Infrastructure.Kafka))
+	}
+	if serviceName == "clickhouse" && manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
+		return infrastructureLogTargets(manifest, serviceName, "clickhouse", []string{manifest.Infrastructure.ClickHouse.Host})
 	}
 
-	// Get runner
-	var runner ssh.Runner
-	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
-		runner = ssh.NewLocalRunner("")
-	} else {
-		sshConfig := &ssh.ConnectionConfig{
-			Address:  host.ExternalIP,
-			Port:     22,
-			User:     host.User,
-			HostName: host.Name,
-			Timeout:  30 * time.Second,
-		}
-		runner, err = sshPool.Get(sshConfig)
-		if err != nil {
-			return fmt.Errorf("failed to connect to host: %w", err)
-		}
+	if targets, ok, err := serviceLogTargets(manifest, serviceName, manifest.Services); ok || err != nil {
+		return targets, err
+	}
+	if targets, ok, err := serviceLogTargets(manifest, serviceName, manifest.Interfaces); ok || err != nil {
+		return targets, err
+	}
+	if targets, ok, err := serviceLogTargets(manifest, serviceName, manifest.Observability); ok || err != nil {
+		return targets, err
 	}
 
-	// Execute log command
-	result, err := runner.Run(ctx, logCmd)
+	return nil, fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+}
+
+func serviceLogTargets(manifest *inventory.Manifest, serviceName string, configs map[string]inventory.ServiceConfig) ([]logTarget, bool, error) {
+	cfg, ok := configs[serviceName]
+	if !ok {
+		return nil, false, nil
+	}
+	if !cfg.Enabled {
+		return nil, true, fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+	}
+	deployName, err := resolveDeployName(serviceName, cfg)
 	if err != nil {
-		return fmt.Errorf("failed to fetch logs: %w", err)
+		return nil, true, err
 	}
-
-	if result.ExitCode != 0 {
-		fmt.Fprintf(cmd.OutOrStderr(), "Error fetching logs: %s\n", result.Stderr)
-		return fmt.Errorf("log command exited with code %d", result.ExitCode)
+	hostNames := serviceHostNames(cfg)
+	if len(hostNames) == 0 {
+		return nil, true, fmt.Errorf("service %s has no host(s) in manifest", serviceName)
 	}
+	targets, err := hostLogTargets(manifest, serviceName, deployName, hostNames)
+	return targets, true, err
+}
 
-	// Print logs
-	fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-
+func serviceHostNames(cfg inventory.ServiceConfig) []string {
+	if len(cfg.Hosts) > 0 {
+		return dedupeStrings(cfg.Hosts)
+	}
+	if cfg.Host != "" {
+		return []string{cfg.Host}
+	}
 	return nil
+}
+
+func infrastructureLogTargets(manifest *inventory.Manifest, serviceName, deployName string, hosts []string) ([]logTarget, error) {
+	hosts = dedupeStrings(hosts)
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("service %s has no host(s) in manifest", serviceName)
+	}
+	return hostLogTargets(manifest, serviceName, deployName, hosts)
+}
+
+func hostLogTargets(manifest *inventory.Manifest, serviceName, deployName string, hostNames []string) ([]logTarget, error) {
+	targets := make([]logTarget, 0, len(hostNames))
+	for _, hostName := range hostNames {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			return nil, fmt.Errorf("service %s references unknown host %s", serviceName, hostName)
+		}
+		host.Name = firstNonEmpty(host.Name, hostName)
+		targets = append(targets, logTarget{
+			ServiceName: serviceName,
+			DeployName:  deployName,
+			HostName:    hostName,
+			Host:        host,
+		})
+	}
+	return targets, nil
+}
+
+func kafkaLogHosts(cfg *inventory.KafkaConfig) []string {
+	hosts := make([]string, 0, len(cfg.Brokers)+len(cfg.Controllers))
+	for _, controller := range cfg.Controllers {
+		hosts = append(hosts, controller.Host)
+	}
+	for _, broker := range cfg.Brokers {
+		hosts = append(hosts, broker.Host)
+	}
+	for _, regional := range cfg.Regional {
+		for _, controller := range regional.Controllers {
+			hosts = append(hosts, controller.Host)
+		}
+		for _, broker := range regional.Brokers {
+			hosts = append(hosts, broker.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		for _, broker := range cfg.Brokers {
+			hosts = append(hosts, broker.Host)
+		}
+	}
+	return hosts
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func defaultEdgeManifestPath(clusterManifestPath string) string {
+	clusterManifestPath = strings.TrimSpace(clusterManifestPath)
+	if clusterManifestPath == "" {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(clusterManifestPath), "edge.yaml")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return ""
 }
 
 func runLogsSnapshot(cmd *cobra.Command, manifest *inventory.Manifest, opts logsSnapshotOptions) error {
@@ -533,6 +635,15 @@ journal_unit() {
     fi
   fi
 }
+redact_snapshot_secrets() {
+  sed -E \
+    -e 's/(password:[[:space:]]*).*/\1[redacted]/I' \
+    -e 's/(password=).*/\1[redacted]/I' \
+    -e 's/(VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD=).*/\1[redacted]/' \
+    -e 's/(-remoteWrite\.basicAuth\.password=)[^[:space:]]+/\1[redacted]/g' \
+    -e 's/(bearerToken=)[^[:space:]]+/\1[redacted]/Ig' \
+    -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[A-Za-z0-9._=+-]+/\1[redacted]/Ig'
+}
 echo "== host =="
 hostname -f 2>/dev/null || hostname
 date -u +"%%Y-%%m-%%dT%%H:%%M:%%SZ"
@@ -571,16 +682,32 @@ echo "== privateer sync diagnostics =="
 if systemctl list-unit-files frameworks-privateer.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units frameworks-privateer.service --all --no-legend --no-pager >/dev/null 2>&1; then
   systemctl show frameworks-privateer.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
   echo "-- privateer safe env --"
-  if [ -f /etc/frameworks/privateer.env ]; then
-    grep -E '^(QUARTERMASTER_GRPC_ADDR|NAVIGATOR_GRPC_ADDR|PRIVATEER_(PORT|SYNC_INTERVAL|SYNC_TIMEOUT|CERT_SYNC_INTERVAL|DATA_DIR|STATIC_PEERS_FILE)|NODE_|CLUSTER_ID)=' /etc/frameworks/privateer.env 2>/dev/null || true
+  env_files="$(
+    systemctl show frameworks-privateer.service -p EnvironmentFiles --value --no-page 2>/dev/null |
+      tr ' ' '\n' |
+      sed -E 's/^-//; s/;.*$//' |
+      awk 'NF'
+  )"
+  if [ -z "$env_files" ]; then
+    env_files="$(systemctl cat frameworks-privateer.service 2>/dev/null | sed -nE 's/^EnvironmentFile=-?([^ ;]+).*/\1/p')"
+  fi
+  if [ -z "$env_files" ]; then
+    env_files="$(find /etc/frameworks -maxdepth 3 -type f -name '*privateer*.env' 2>/dev/null | sort)"
+  fi
+  if [ -z "$env_files" ]; then
+    echo "(no privateer environment files found)"
   else
-    echo "(no /etc/frameworks/privateer.env)"
+    for env_file in $env_files; do
+      [ -f "$env_file" ] || continue
+      echo "### $env_file"
+      grep -E '^(QUARTERMASTER_GRPC_ADDR|NAVIGATOR_GRPC_ADDR|PRIVATEER_(PORT|SYNC_INTERVAL|SYNC_TIMEOUT|CERT_SYNC_INTERVAL|DATA_DIR|STATIC_PEERS_FILE)|NODE_|CLUSTER_ID)=' "$env_file" 2>/dev/null || true
+    done
   fi
   echo "-- privateer sync errors --"
   journal_unit frameworks-privateer.service | grep -Ei 'SyncMesh|sync infrastructure|sync after node registration|node registration|mesh revision|last-known|deadline|timeout|unavailable|failed' | tail -n 120 || true
   echo "-- privateer health --"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 2 http://127.0.0.1:18012/healthz 2>&1 || true
+    curl -fsS --max-time 2 http://127.0.0.1:18012/health 2>&1 || true
     echo
     curl -fsS --max-time 2 http://127.0.0.1:18012/metrics 2>/dev/null | grep -Ei 'privateer|mesh|sync|wireguard' | tail -n 80 || true
   fi
@@ -590,6 +717,30 @@ if systemctl list-unit-files frameworks-privateer.service --no-legend --no-pager
   fi
 else
   echo "(frameworks-privateer.service not installed)"
+fi
+echo
+echo "== telemetry remote write diagnostics =="
+for unit in vmauth.service vmagent.service frameworks-vmagent-edge.service; do
+  if systemctl list-unit-files "$unit" --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units "$unit" --all --no-legend --no-pager >/dev/null 2>&1; then
+    echo "-- ${unit} status --"
+    systemctl show "$unit" -p Id -p LoadState -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
+    echo "-- ${unit} unit --"
+    systemctl cat "$unit" 2>/dev/null | redact_snapshot_secrets || true
+    echo "-- ${unit} remote write/backend lines --"
+    journal_unit "$unit" | grep -Ei 'remote.?write|backend|vmauth|vmagent|victoria|unavailable|502|401|403|5[0-9][0-9]|error|warn|failed|timeout' | tail -n 120 || true
+  fi
+done
+echo "-- telemetry configs --"
+for conf in /etc/vmauth/config.yml /etc/vmagent/scrape.yml /etc/vmagent/vmagent.env /etc/frameworks/vmagent-edge.yml; do
+  [ -f "$conf" ] || continue
+  echo "### $conf"
+  sed -n '1,180p' "$conf" 2>/dev/null | redact_snapshot_secrets || true
+done
+if command -v curl >/dev/null 2>&1; then
+  echo "-- local vmagent metrics --"
+  curl -fsS --max-time 2 http://127.0.0.1:8429/metrics 2>/dev/null | grep -Ei 'vmagent_remotewrite|remote_write|vmauth|queue|dropped|retries|errors' | tail -n 100 || true
+  echo "-- local vmauth metrics --"
+  curl -fsS --max-time 2 http://127.0.0.1:8427/metrics 2>/dev/null | grep -Ei 'vmauth|backend|requests|errors|upstream' | tail -n 100 || true
 fi
 echo
 echo "== redis sentinel diagnostics =="

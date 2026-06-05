@@ -3383,14 +3383,15 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 	}
 
 	type target struct {
-		name    string
-		address string
-		path    string
-		labels  map[string]string
+		name          string
+		address       string
+		path          string
+		labels        map[string]string
+		maxScrapeSize int
 	}
 
 	var targets []target
-	addTarget := func(name, address string, port int, path string, labels map[string]string) {
+	addTarget := func(name, address string, port int, path string, labels map[string]string, maxScrapeSize ...int) {
 		if port == 0 {
 			return
 		}
@@ -3400,11 +3401,16 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		if path == "" {
 			path = "/metrics"
 		}
+		var scrapeSize int
+		if len(maxScrapeSize) > 0 {
+			scrapeSize = maxScrapeSize[0]
+		}
 		targets = append(targets, target{
-			name:    name,
-			address: fmt.Sprintf("%s:%d", address, port),
-			path:    path,
-			labels:  labels,
+			name:          name,
+			address:       fmt.Sprintf("%s:%d", address, port),
+			path:          path,
+			labels:        labels,
+			maxScrapeSize: scrapeSize,
 		})
 	}
 	addServiceTarget := func(name string, svc inventory.ServiceConfig, source string) {
@@ -3472,7 +3478,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
 			tserverLabels := maps.Clone(baseLabels)
 			tserverLabels["port"] = "tserver"
-			addTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels)
+			addTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels, 64*1024*1024)
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host == hostName {
@@ -3496,12 +3502,16 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 
 	result := make([]map[string]any, 0, len(targets))
 	for _, tgt := range targets {
-		result = append(result, map[string]any{
+		item := map[string]any{
 			"job_name": tgt.name,
 			"targets":  []string{tgt.address},
 			"path":     tgt.path,
 			"labels":   tgt.labels,
-		})
+		}
+		if tgt.maxScrapeSize > 0 {
+			item["max_scrape_size"] = tgt.maxScrapeSize
+		}
+		result = append(result, item)
 	}
 
 	return result

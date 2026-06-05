@@ -3068,6 +3068,9 @@ func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
 	if got := scrapeTargetLabels(t, tserver)["port"]; got != "tserver" {
 		t.Fatalf("tserver port label = %q, want tserver", got)
 	}
+	if got := tserver["max_scrape_size"]; got != 64*1024*1024 {
+		t.Fatalf("tserver max_scrape_size = %v, want %d", got, 64*1024*1024)
+	}
 }
 
 func TestBuildVMAgentScrapeTargetsIncludesClickHouse(t *testing.T) {
