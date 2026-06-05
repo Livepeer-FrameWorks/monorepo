@@ -680,6 +680,39 @@ frameworks cluster logs snapshot --boot --tail 800 --edge-manifest ./clusters/pr
 frameworks cluster logs snapshot --output /tmp/fw-logs
 ```
 
+### frameworks cluster snapshot
+
+Collect a bounded incident bundle from the cluster manifest. The snapshot
+includes HA-aware host logs and read-only database metadata for
+PostgreSQL/YugabyteDB and ClickHouse: table sizes, row estimates, migration
+ledgers, ClickHouse parts, and pending mutations.
+
+**Usage:**
+
+```bash
+frameworks cluster snapshot [flags]
+```
+
+**Flags:**
+
+- `--manifest string` - Cluster manifest file
+- `--since string` - Journal window when `--boot` is not set (default: `4 hours ago`)
+- `--boot` - Collect logs from the current boot instead of `--since`
+- `--tail int` - Maximum journal lines per unit; set `0` for all lines in scope (default: 500)
+- `--output, -o string` - Local output directory; defaults to a temp directory
+- `--parallel int` - Maximum hosts to collect in parallel (default: 6)
+- `--edge-manifest string` - Optional edge manifest to include edge nodes
+- `--skip-logs` - Skip host and service logs
+- `--skip-db` - Skip database metadata
+
+**Examples:**
+
+```bash
+frameworks cluster snapshot --gitops-dir ../gitops --cluster production --since "2 hours ago"
+frameworks cluster snapshot --boot --tail 800 --output /tmp/fw-snapshot
+frameworks cluster snapshot --skip-logs --output /tmp/fw-db-state
+```
+
 ---
 
 ### frameworks cluster os
