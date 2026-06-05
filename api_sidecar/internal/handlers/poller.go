@@ -2098,8 +2098,14 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 func validLocalDtsh(path string) bool {
 	if err := dtsh.ValidateFile(path); err != nil {
-		if !os.IsNotExist(err) && monitorLogger != nil {
-			monitorLogger.WithError(err).WithField("local_path", path).Warn("Ignoring invalid local .dtsh")
+		if os.IsNotExist(err) {
+			return false
+		}
+		if monitorLogger != nil {
+			monitorLogger.WithError(err).WithField("local_path", path).Warn("Removing invalid local .dtsh")
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) && monitorLogger != nil {
+			monitorLogger.WithError(removeErr).WithField("local_path", path).Warn("Failed to remove invalid local .dtsh")
 		}
 		return false
 	}

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,5 +65,76 @@ func TestUploadToPresignedURLClampsBodyToContentLength(t *testing.T) {
 	}
 	if gotBody != "abc" {
 		t.Fatalf("uploaded body = %q, want %q", gotBody, "abc")
+	}
+}
+
+func TestUploadBytesToPresignedURLRetriesReplayableBody(t *testing.T) {
+	var attempts int
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll failed: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewPresignedClient(logging.NewLogger())
+	err := client.UploadBytesToPresignedURL(context.Background(), server.URL, []byte("thumbnail"), nil)
+	if err != nil {
+		t.Fatalf("UploadBytesToPresignedURL returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	for i, body := range bodies {
+		if body != "thumbnail" {
+			t.Fatalf("body[%d] = %q, want thumbnail", i, body)
+		}
+	}
+}
+
+func TestUploadFileToPresignedURLRetriesReplayableBody(t *testing.T) {
+	var attempts int
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll failed: %v", err)
+		}
+		bodies = append(bodies, string(body))
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	localPath := filepath.Join(t.TempDir(), "sprite.jpg")
+	if err := os.WriteFile(localPath, []byte("jpeg"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	client := NewPresignedClient(logging.NewLogger())
+	err := client.UploadFileToPresignedURL(context.Background(), server.URL, localPath, nil)
+	if err != nil {
+		t.Fatalf("UploadFileToPresignedURL returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	for i, body := range bodies {
+		if body != "jpeg" {
+			t.Fatalf("body[%d] = %q, want jpeg", i, body)
+		}
 	}
 }

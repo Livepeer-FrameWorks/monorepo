@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -19,6 +20,7 @@ func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
 	keyPath := filepath.Join(dir, "certs", "key.pem")
 	t.Setenv("HELMSMAN_TLS_CERT_PATH", certPath)
 	t.Setenv("HELMSMAN_TLS_KEY_PATH", keyPath)
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 	if !m.applyTLSBundle(&ipcpb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
@@ -88,6 +90,7 @@ func fullFileMode(t *testing.T, path string) os.FileMode {
 func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 	bundles := []*ipcpb.TLSCertBundle{
@@ -150,6 +153,7 @@ func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	m := &Manager{logger: logging.NewLogger()}
 
@@ -337,6 +341,8 @@ func TestReloadCaddyReadsConfiguredPath(t *testing.T) {
 func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Caddyfile")
 	t.Setenv("CADDY_CONFIG_PATH", path)
+	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", t.TempDir())
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
 
 	reloadCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -352,10 +358,16 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 		},
 		TlsBundles: []*ipcpb.TLSCertBundle{{
 			BundleId:      "cluster:media-eu-1",
+			CertPem:       "cert",
+			KeyPem:        "key",
 			SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
 		}},
 	}
 	m := &Manager{logger: logging.NewLogger()}
+	changed, results := m.applyTLSBundles(seed.GetTlsBundles())
+	if !changed || len(results) != 1 || !results[0].Success {
+		t.Fatalf("applyTLSBundles changed=%v results=%#v", changed, results)
+	}
 	if !m.activateCaddy(seed, false) {
 		t.Fatal("first activateCaddy returned false")
 	}
@@ -364,6 +376,41 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 	}
 	if reloadCount != 2 {
 		t.Fatalf("reload count = %d, want 2", reloadCount)
+	}
+}
+
+func TestActivateCaddyRejectsUnreadableKeyBeforeReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	t.Setenv("CADDY_CONFIG_PATH", path)
+	bundleDir := t.TempDir()
+	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", bundleDir)
+	t.Setenv("CADDY_TLS_GROUP", strconv.Itoa(os.Getgid()))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("reload should not be called when TLS preflight fails")
+	}))
+	defer srv.Close()
+	t.Setenv("CADDY_ADMIN_URL", srv.URL)
+
+	seed := &ipcpb.ConfigSeed{
+		TlsBundles: []*ipcpb.TLSCertBundle{{
+			BundleId:      "cluster:media-eu-1",
+			CertPem:       "cert",
+			KeyPem:        "key",
+			SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
+		}},
+	}
+	m := &Manager{logger: logging.NewLogger()}
+	changed, results := m.applyTLSBundles(seed.GetTlsBundles())
+	if !changed || len(results) != 1 || !results[0].Success {
+		t.Fatalf("applyTLSBundles changed=%v results=%#v", changed, results)
+	}
+	keyPath := filepath.Join(bundleDir, "cluster_media-eu-1.key")
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod key: %v", err)
+	}
+	if m.activateCaddy(seed, false) {
+		t.Fatal("activateCaddy returned true for unreadable key")
 	}
 }
 

@@ -3,6 +3,7 @@ package control
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,9 @@ import (
 // HTTP client for S3 presigned URL uploads
 var httpClient = &http.Client{
 	Timeout: 2 * time.Minute,
+	Transport: &http.Transport{
+		TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+	},
 }
 
 // newHTTPRequest creates an HTTP request with context

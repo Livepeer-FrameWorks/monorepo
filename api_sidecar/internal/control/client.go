@@ -2747,10 +2747,17 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 	defer cancel()
 
 	var uploadedKeys []string
+	failedUploads := 0
 	for _, upload := range uploads {
 		localPath := upload.GetLocalPath()
 		if localPath == "" {
 			logger.WithField("file_name", upload.GetFileName()).Warn("No local_path in thumbnail upload response")
+			failedUploads++
+			continue
+		}
+		if upload.GetPresignedUrl() == "" {
+			logger.WithField("file_name", upload.GetFileName()).Warn("No presigned URL in thumbnail upload response")
+			failedUploads++
 			continue
 		}
 
@@ -2762,16 +2769,18 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 					"local_path": localPath,
 					"error":      err,
 				}).Error("Failed to read thumbnail VTT")
+				failedUploads++
 				continue
 			}
 			normalized := normalizeThumbnailVTTReferences(string(data))
-			if err := presignedClient.UploadToPresignedURL(ctx, upload.GetPresignedUrl(), strings.NewReader(normalized), int64(len(normalized)), nil); err != nil {
+			if err := presignedClient.UploadBytesToPresignedURL(ctx, upload.GetPresignedUrl(), []byte(normalized), nil); err != nil {
 				logger.WithFields(logging.Fields{
 					"file_name":  upload.GetFileName(),
 					"local_path": localPath,
 					"s3_key":     upload.GetS3Key(),
 					"error":      err,
 				}).Error("Failed to upload thumbnail to S3")
+				failedUploads++
 				continue
 			}
 		} else if err := presignedClient.UploadFileToPresignedURL(ctx, upload.GetPresignedUrl(), localPath, nil); err != nil {
@@ -2781,6 +2790,7 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 				"s3_key":     upload.GetS3Key(),
 				"error":      err,
 			}).Error("Failed to upload thumbnail to S3")
+			failedUploads++
 			continue
 		}
 
@@ -2791,8 +2801,12 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		}).Info("Thumbnail uploaded to S3")
 	}
 
-	if len(uploadedKeys) == 0 {
-		logger.Warn("No thumbnails uploaded successfully")
+	if failedUploads > 0 || len(uploadedKeys) != len(uploads) {
+		logger.WithFields(logging.Fields{
+			"uploaded_count": len(uploadedKeys),
+			"failed_count":   failedUploads,
+			"expected_count": len(uploads),
+		}).Warn("Thumbnail upload incomplete; not marking thumbnail ready")
 		return
 	}
 

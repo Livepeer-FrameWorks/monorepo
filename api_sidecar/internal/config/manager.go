@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -593,6 +595,12 @@ func writeBundleFiles(certPath, keyPath string, bundle *ipcpb.TLSCertBundle) (bo
 		return false, fmt.Errorf("install cert: %w", err)
 	}
 	certTmp = ""
+	if err := repairManagedFileMetadata(certPath, 0o644); err != nil {
+		return false, fmt.Errorf("repair cert metadata: %w", err)
+	}
+	if err := repairManagedFileMetadata(keyPath, 0o640); err != nil {
+		return false, fmt.Errorf("repair key metadata: %w", err)
+	}
 	return true, nil
 }
 
@@ -714,6 +722,14 @@ func (m *Manager) applyTLSBundle(bundle *ipcpb.TLSCertBundle) bool {
 		return false
 	}
 	certTmp = ""
+	if err := repairManagedFileMetadata(certPath, 0o644); err != nil {
+		m.logger.WithError(err).Warn("Failed to repair TLS certificate metadata")
+		return false
+	}
+	if err := repairManagedFileMetadata(keyPath, 0o640); err != nil {
+		m.logger.WithError(err).Warn("Failed to repair TLS key metadata")
+		return false
+	}
 
 	m.logger.WithFields(logging.Fields{
 		"domain":     bundle.GetDomain(),
@@ -778,27 +794,73 @@ func managedFileUpToDate(path string, data []byte, mode os.FileMode) bool {
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
 		return false
 	}
-	if !sameGroupAsParent(info, filepath.Dir(path)) {
+	targetGID, ok := caddyReadableGroupID(filepath.Dir(path))
+	if !ok || !sameGroup(info, targetGID) {
 		return false
 	}
 	existing, err := os.ReadFile(path)
 	return err == nil && bytes.Equal(existing, data)
 }
 
-func sameGroupAsParent(fileInfo os.FileInfo, parentDir string) bool {
-	fileStat, ok := fileInfo.Sys().(*syscall.Stat_t)
+func repairManagedFileMetadata(path string, mode os.FileMode) error {
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
+	targetGID, ok := caddyReadableGroupID(filepath.Dir(path))
 	if !ok {
-		return true
+		return fmt.Errorf("resolve caddy-readable group for %s", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if sameGroup(info, targetGID) {
+		return nil
+	}
+	return os.Chown(path, -1, targetGID)
+}
+
+func caddyReadableGroupID(parentDir string) (int, bool) {
+	if groupName := strings.TrimSpace(os.Getenv("CADDY_TLS_GROUP")); groupName != "" {
+		if gid, err := strconv.Atoi(groupName); err == nil {
+			return gid, true
+		}
+		if gid, ok := lookupGroupID(groupName); ok {
+			return gid, true
+		}
+	}
+	if gid, ok := lookupGroupID("caddy"); ok {
+		return gid, true
 	}
 	parentInfo, err := os.Stat(parentDir)
 	if err != nil {
-		return true
+		return 0, false
 	}
 	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
 	if !ok {
-		return true
+		return 0, false
 	}
-	return fileStat.Gid == parentStat.Gid
+	return int(parentStat.Gid), true
+}
+
+func lookupGroupID(name string) (int, bool) {
+	g, err := user.LookupGroup(name)
+	if err != nil {
+		return 0, false
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, false
+	}
+	return gid, true
+}
+
+func sameGroup(fileInfo os.FileInfo, gid int) bool {
+	fileStat, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	return int(fileStat.Gid) == gid
 }
 
 func removeIfNotEmpty(path string) {
@@ -843,6 +905,10 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 	}
 	if err := m.persistCaddyfile([]byte(rendered)); err != nil {
 		m.logger.WithError(err).WithField("path", caddyConfigPath()).Warn("Failed to persist production Caddyfile")
+		return false
+	}
+	if err := verifyCaddyTLSFiles(bundles); err != nil {
+		m.logger.WithError(err).Warn("Caddy TLS bundle preflight failed")
 		return false
 	}
 
@@ -939,6 +1005,49 @@ func caddyBundlesCoverHost(bundles []CaddyfileBundle, host string) bool {
 		}
 	}
 	return false
+}
+
+func verifyCaddyTLSFiles(bundles []CaddyfileBundle) error {
+	for _, bundle := range bundles {
+		if strings.TrimSpace(bundle.TLSCertPath) == "" && strings.TrimSpace(bundle.TLSKeyPath) == "" {
+			continue
+		}
+		if err := verifyCaddyTLSFile(bundle.TLSCertPath, 0o644, false); err != nil {
+			return fmt.Errorf("cert %s: %w", bundle.TLSCertPath, err)
+		}
+		if err := verifyCaddyTLSFile(bundle.TLSKeyPath, 0o640, true); err != nil {
+			return fmt.Errorf("key %s: %w", bundle.TLSKeyPath, err)
+		}
+	}
+	return nil
+}
+
+func verifyCaddyTLSFile(path string, wantMode os.FileMode, requireGroupRead bool) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("empty path")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file")
+	}
+	if mode := info.Mode().Perm(); mode != wantMode {
+		return fmt.Errorf("mode %o, want %o", mode, wantMode)
+	}
+	if requireGroupRead && info.Mode().Perm()&0o040 == 0 {
+		return fmt.Errorf("group read bit is not set")
+	}
+	targetGID, ok := caddyReadableGroupID(filepath.Dir(path))
+	if !ok {
+		return fmt.Errorf("resolve caddy-readable group")
+	}
+	if !sameGroup(info, targetGID) {
+		return fmt.Errorf("group is not caddy-readable")
+	}
+	return nil
 }
 
 func caddyAdminAddr() string {
