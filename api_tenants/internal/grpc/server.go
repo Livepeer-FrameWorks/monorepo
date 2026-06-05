@@ -7990,31 +7990,46 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 	if err != nil {
 		return nil, fmt.Errorf("provided service query: %w", err)
 	}
-	for _, targetType := range provided {
-		dependents := topology.ServiceDependents([]string{targetType})
-		if len(dependents) == 0 {
-			continue
-		}
-		globalDependents := topology.GlobalDNSServiceDependents([]string{targetType})
-		var dependentPeerNodeIDs []string
-		queryErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			rows, queryErr := s.db.QueryContext(ctx, `
-				WITH provided AS (
-					SELECT DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id, $2) AS provider_cluster
-					FROM quartermaster.services svc
+	inputs := reciprocalServiceDependencyInputs(provided)
+	if len(inputs) == 0 {
+		return out, nil
+	}
+	providedTypes := make([]string, 0, len(inputs))
+	dependentTypes := make([]string, 0, len(inputs))
+	globalFlags := make([]bool, 0, len(inputs))
+	for _, input := range inputs {
+		providedTypes = append(providedTypes, input.providedType)
+		dependentTypes = append(dependentTypes, input.dependentType)
+		globalFlags = append(globalFlags, input.global)
+	}
+
+	var dependentPeerNodeIDs []string
+	queryErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		rows, queryErr := s.db.QueryContext(ctx, `
+				WITH dependency_input AS (
+					SELECT provided_type, dependent_type, is_global
+					FROM unnest($3::text[], $4::text[], $5::boolean[]) AS t(provided_type, dependent_type, is_global)
+				),
+				provided AS (
+					SELECT DISTINCT di.provided_type,
+					       COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id, $2) AS provider_cluster
+					FROM dependency_input di
+					JOIN quartermaster.services svc ON svc.type = di.provided_type
 					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
 					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
 					LEFT JOIN quartermaster.service_cluster_assignments sca
 					  ON sca.service_instance_id = si.id AND sca.is_active = true
 					WHERE si.node_id = $1
 					  AND si.status IN ('running', 'active')
-					  AND svc.type = $3
 					UNION
-					SELECT $2::text AS provider_cluster
+					SELECT DISTINCT di.provided_type, $2::text AS provider_cluster
+					FROM dependency_input di
 				),
 				service_scope AS (
-					SELECT COUNT(DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id)) AS provider_cluster_count
-					FROM quartermaster.services svc
+					SELECT di.provided_type,
+					       COUNT(DISTINCT COALESCE(NULLIF(sca.cluster_id, ''), NULLIF(si.cluster_id, ''), n.cluster_id)) AS provider_cluster_count
+					FROM dependency_input di
+					JOIN quartermaster.services svc ON svc.type = di.provided_type
 					JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
 					JOIN quartermaster.infrastructure_nodes n ON n.node_id = si.node_id
 					LEFT JOIN quartermaster.service_cluster_assignments sca
@@ -8022,7 +8037,7 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 					WHERE si.status IN ('running', 'active')
 					  AND n.wireguard_ip IS NOT NULL
 					  AND n.status = 'active'
-					  AND svc.type = $3
+					GROUP BY di.provided_type
 				),
 				node_services AS (
 					SELECT si.node_id, svc.type AS service_type
@@ -8094,52 +8109,90 @@ func (s *QuartermasterServer) collectReciprocalServicePeerNodeIDs(ctx context.Co
 				SELECT DISTINCT n.node_id
 				FROM quartermaster.infrastructure_nodes n
 				JOIN node_services ns ON ns.node_id = n.node_id
-				CROSS JOIN service_scope ss
+				JOIN dependency_input di ON di.dependent_type = ns.service_type
+				LEFT JOIN service_scope ss ON ss.provided_type = di.provided_type
 				WHERE n.node_id <> $1
 				  AND n.wireguard_public_key IS NOT NULL
 				  AND n.wireguard_ip IS NOT NULL
 				  AND n.status = 'active'
-				  AND ns.service_type = ANY($4::text[])
 				  AND (
-					ns.service_type = ANY($5::text[])
+					di.is_global
 					OR
-					ss.provider_cluster_count <= 1
+					COALESCE(ss.provider_cluster_count, 0) <= 1
 					OR EXISTS (
 						SELECT 1
 						FROM provided p
 						JOIN consumer_contexts cc ON cc.node_id = n.node_id AND cc.cluster_id = p.provider_cluster
+						WHERE p.provided_type = di.provided_type
 					)
 				  )
-				`, nodeID, clusterID, targetType, pq.Array(dependents), pq.Array(globalDependents))
-			if queryErr != nil {
-				return fmt.Errorf("dependent node query service_type=%s: %w", targetType, queryErr)
-			}
-			defer func() { _ = rows.Close() }()
-
-			var nextPeerNodeIDs []string
-			for rows.Next() {
-				var peerNodeID string
-				if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
-					return fmt.Errorf("scan dependent node service_type=%s: %w", targetType, scanErr)
-				}
-				if peerNodeID != "" {
-					nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
-				}
-			}
-			if err := rows.Err(); err != nil {
-				return fmt.Errorf("iterate dependent nodes service_type=%s: %w", targetType, err)
-			}
-			dependentPeerNodeIDs = nextPeerNodeIDs
-			return nil
-		})
+			`, nodeID, clusterID, pq.Array(providedTypes), pq.Array(dependentTypes), pq.Array(globalFlags))
 		if queryErr != nil {
-			return nil, queryErr
+			return fmt.Errorf("dependent node query: %w", queryErr)
 		}
-		for _, peerNodeID := range dependentPeerNodeIDs {
-			out[peerNodeID] = struct{}{}
+		defer func() { _ = rows.Close() }()
+
+		var nextPeerNodeIDs []string
+		for rows.Next() {
+			var peerNodeID string
+			if scanErr := rows.Scan(&peerNodeID); scanErr != nil {
+				return fmt.Errorf("scan dependent node: %w", scanErr)
+			}
+			if peerNodeID != "" {
+				nextPeerNodeIDs = append(nextPeerNodeIDs, peerNodeID)
+			}
 		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate dependent nodes: %w", err)
+		}
+		dependentPeerNodeIDs = nextPeerNodeIDs
+		return nil
+	})
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	for _, peerNodeID := range dependentPeerNodeIDs {
+		out[peerNodeID] = struct{}{}
 	}
 	return out, nil
+}
+
+type reciprocalServiceDependencyInput struct {
+	providedType  string
+	dependentType string
+	global        bool
+}
+
+func reciprocalServiceDependencyInputs(provided []string) []reciprocalServiceDependencyInput {
+	var out []reciprocalServiceDependencyInput
+	seen := map[string]struct{}{}
+	for _, providedType := range provided {
+		if providedType == "" {
+			continue
+		}
+		dependents := topology.ServiceDependents([]string{providedType})
+		if len(dependents) == 0 {
+			continue
+		}
+		globalDependents := map[string]struct{}{}
+		for _, dependentType := range topology.GlobalDNSServiceDependents([]string{providedType}) {
+			globalDependents[dependentType] = struct{}{}
+		}
+		for _, dependentType := range dependents {
+			key := providedType + "\x00" + dependentType
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			_, isGlobal := globalDependents[dependentType]
+			out = append(out, reciprocalServiceDependencyInput{
+				providedType:  providedType,
+				dependentType: dependentType,
+				global:        isGlobal,
+			})
+		}
+	}
+	return out
 }
 
 func (s *QuartermasterServer) meshProvidedServiceTypes(ctx context.Context, nodeID string) ([]string, error) {

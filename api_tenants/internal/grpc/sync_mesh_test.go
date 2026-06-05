@@ -70,8 +70,8 @@ func expectReciprocalDependentNodes(mock sqlmock.Sqlmock, clusterID, nodeID, tar
 	for _, id := range nodeIDs {
 		rows.AddRow(id)
 	}
-	mock.ExpectQuery(`(?s)WITH provided AS .*SELECT DISTINCT n\.node_id`).
-		WithArgs(nodeID, clusterID, targetType, sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`(?s)WITH dependency_input AS .*SELECT DISTINCT n\.node_id`).
+		WithArgs(nodeID, clusterID, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(rows)
 }
 
@@ -483,8 +483,8 @@ func TestCollectReciprocalServicePeerNodeIDsRetriesSchemaVersionMismatch(t *test
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	expectReciprocalProvidedServices(mock, "central-1", "quartermaster")
-	mock.ExpectQuery(`(?s)WITH provided AS .*SELECT DISTINCT n\.node_id`).
-		WithArgs("central-1", "core", "quartermaster", sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`(?s)WITH dependency_input AS .*SELECT DISTINCT n\.node_id`).
+		WithArgs("central-1", "core", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnError(&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 121, got 120"})
 	expectReciprocalDependentNodes(mock, "core", "central-1", "quartermaster", "regional-1")
 
