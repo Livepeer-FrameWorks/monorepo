@@ -1,5 +1,5 @@
 -- Validate the regex CHECK constraints added NOT VALID in
--- v0.2.64/expand/002 (now that all running binaries write canonical
+-- v0.2.82/expand/002 (now that all running binaries write canonical
 -- meter names) and widen the usage_type columns so the regex's max
 -- length (64) is actually reachable in storage.
 --

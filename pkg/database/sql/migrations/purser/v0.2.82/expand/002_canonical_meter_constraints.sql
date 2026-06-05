@@ -4,7 +4,7 @@
 -- while still rejecting garbage values.
 --
 -- ADD CONSTRAINT runs NOT VALID so the swap is non-blocking: new writes
--- are checked, existing rows are not scanned. v0.2.64/postdeploy/001
+-- are checked, existing rows are not scanned. v0.2.82/postdeploy/001
 -- runs VALIDATE CONSTRAINT to enforce on existing data once the old
 -- enum-aware code paths are out of service.
 --
