@@ -174,6 +174,7 @@ The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
 - `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues).
 - `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.
+- `player_boot_samples`: Browser-originated player startup waterfall (time-to-first-frame split into spans, plus Resource Timing for manifest/segment/CDN). Diagnostic-only — see "Player boot telemetry" below. No rollup MV: percentiles are computed at read time (`quantileIf`) because `quantile()` is not mergeable in a plain MergeTree.
 - `node_metrics_samples` and `node_state_current`: Node telemetry and “current state” snapshots.
 - `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`).
 - `artifact_events` and `artifact_state_current`: Clip/DVR lifecycle events + current artifact state.
@@ -222,6 +223,40 @@ This makes `client_qoe_samples` (and the derived `client_qoe_5m` MV) **diagnosti
 
 - `client_qoe_5m.active_sessions = count(DISTINCT session_id)` per 5-minute bucket is a _sampled_ metric. A session whose entire lifetime falls between two 60s polls produces no QoE rows and is invisible to this rollup.
 - For live viewer counts, use final connection lifecycle state derived from `USER_NEW` / `USER_END`. For billing, read `viewer_sessions_final` and derived canonical ledgers — sampled QoE rows are never authoritative.
+
+### Player boot telemetry
+
+Unlike `client_qoe_samples` (server-observed, periodic), `player_boot_samples` is a
+**browser-originated, one-shot** record of how a single playback session started.
+The npm player records a boot waterfall — `gateway_resolve` (GraphQL) split from
+`mist_hydrate` (`json_*.js`), then `player_select`, `connect`, `prebuffer`, to the
+first painted frame (`requestVideoFrameCallback`) — plus Resource Timing for the
+manifest/first segment. It is always logged locally and emitted as a `bootTrace`
+event; an **opt-in** (default-off) `sendBeacon` posts it to Bridge.
+
+Trust boundary — the browser is untrusted:
+
+- The beacon carries only `content_id` + ephemeral `trace_id`/`session_id`. **Bridge**
+  resolves `content_id` through Commodore to stamp trusted `tenant_id` /
+  `stream_id` / `artifact_hash`, and **mints the canonical `event_id`** (UUIDv7) — a
+  client cannot poison dedup keys or claim ownership. Bridge rate-limits per IP and
+  drops (204) anything unresolvable or over-limit. Telemetry is lossy by design.
+- Serving `node_id` / `serving_cluster_id` are trusted **only** from a signed
+  telemetry token (a later beacon cannot prove which edge served it). `resolveViewerEndpoint`
+  mints it (bound to the resolved content + serving endpoint, ~10 min TTL) when
+  `TELEMETRY_TOKEN_SECRET` is configured — a **platform** key, never a customer
+  playback-auth secret (`pkg/telemetrytoken`). The player echoes it on the beacon.
+  Without a valid token those fields stay empty and `cluster_attributed = 0`, which
+  excludes the row from the cluster-ops read surface. `origin_cluster_id` is
+  authoritative from Commodore.
+
+Two read surfaces (both diagnostic, never billing/viewer-count truth):
+
+- **Tenant** — `analytics.health.playerBootSummary`: TTF p50/p95/p99 + span averages for
+  the tenant that owns the content.
+- **Cluster ops** — `analytics.infra.clusterBootOps`: aggregate/redacted per
+  serving cluster/node, for operators of clusters they own. Token-attributed rows only;
+  never exposes content/stream/session/URL/foreign-tenant identifiers.
 
 ## 6) Query: Periscope Query (gRPC API)
 

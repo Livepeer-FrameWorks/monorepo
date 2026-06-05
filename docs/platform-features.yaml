@@ -541,9 +541,8 @@ features:
     description: Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and expanding QoE diagnostics.
     status: partial
     gap_reason: |
-      Stream, routing, server-side QoS, and current client QoE summaries are live across API, dashboard, MCP, and docs.
-      The QoE Analytics RFC is still active: public SDK-to-platform telemetry ingest, TTFF/rebuffering/failure/quality-change capture,
-      non-npm player support, sampling/retention policy, and view-level dashboards are not fully productized yet.
+      Stream, routing, server-side QoS, client QoE, and player boot telemetry (TTFF waterfall + Resource Timing) are live across API, dashboard, MCP, and docs.
+      Still maturing: rebuffering/quality-change capture in the boot path, non-npm player support, and broader sampling/retention policy.
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }
@@ -571,6 +570,7 @@ features:
         routes:
           - "/analytics"
           - "/analytics/audience"
+          - "/analytics/player-experience"
           - "/analytics/usage"
           - "/streams/:id/analytics"
           - "/streams/:id/health"

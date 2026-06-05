@@ -894,7 +894,7 @@
       "area": "analytics",
       "description": "Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and expanding QoE diagnostics.",
       "status": "partial",
-      "gap_reason": "Stream, routing, server-side QoS, and current client QoE summaries are live across API, dashboard, MCP, and docs.\nThe QoE Analytics RFC is still active: public SDK-to-platform telemetry ingest, TTFF/rebuffering/failure/quality-change capture,\nnon-npm player support, sampling/retention policy, and view-level dashboards are not fully productized yet.\n",
+      "gap_reason": "Stream, routing, server-side QoS, client QoE, and player boot telemetry (TTFF waterfall + Resource Timing) are live across API, dashboard, MCP, and docs.\nStill maturing: rebuffering/quality-change capture in the boot path, non-npm player support, and broader sampling/retention policy.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -941,6 +941,7 @@
           "routes": [
             "/analytics",
             "/analytics/audience",
+            "/analytics/player-experience",
             "/analytics/usage",
             "/streams/:id/analytics",
             "/streams/:id/health"

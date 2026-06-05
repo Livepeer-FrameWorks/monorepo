@@ -120,6 +120,24 @@ Reserved fields for quality-of-experience tracking:
 | `video_startup_time_ms`  | ms    | Gauge   | Time from play request to first frame |
 | `seek_latency_ms`        | ms    | Gauge   | Time to complete seek operation       |
 
+### Player Boot Telemetry (landed)
+
+Time-to-first-frame is captured by the browser player as a one-shot boot waterfall
+(`player_boot_samples`; see analytics-pipeline.md → "Player boot telemetry"). All
+span fields are **ms**; `total_ttf_ms` is the headline TTFF. Percentiles are computed
+at read time (`quantileIf` over boots that reached first frame), not pre-rolled.
+
+| Field                | Unit | Description                             |
+| -------------------- | ---- | --------------------------------------- |
+| `total_ttf_ms`       | ms   | boot_start → first painted frame (rVFC) |
+| `gateway_resolve_ms` | ms   | GraphQL `resolveViewerEndpoint` only    |
+| `mist_hydrate_ms`    | ms   | MistServer `json_*.js` hydration        |
+| `player_select_ms`   | ms   | Player/source selection                 |
+| `connect_ms`         | ms   | Player init / network connect           |
+| `prebuffer_ms`       | ms   | Initial buffering before first frame    |
+
+Ingest exposes `periscope_player_boot_events_total{status}` (Counter; `processed`/`error`).
+
 ## Counter vs Gauge Semantics
 
 ### Counter
