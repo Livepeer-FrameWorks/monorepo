@@ -1,0 +1,18 @@
+# VOD retention curve for one artifact: per-bucket watched-seconds (density) and
+# reached-count audience retention (sessions reaching each bucket). Drives the heatmap.
+query GetVodRetention($artifactHash: String!, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      vodRetention(artifactHash: $artifactHash, timeRange: $timeRange) {
+        bucketWidthS
+        assetDurationS
+        totalSessions
+        points {
+          bucketIndex
+          secondsWatched
+          reached
+        }
+      }
+    }
+  }
+}

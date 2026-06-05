@@ -997,6 +997,27 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): PlayerBootSummary!
+  """
+  Viewer-experienced QoE summary (rebuffering, frame drops, bitrate, EBVS) for the
+  tenant that owns the content. Read-time ratios over the player-reported session
+  beacons. Diagnostic only — never billing/viewer-count truth.
+  """
+  sessionQoeSummary(
+    streamId: ID
+    artifactHash: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): SessionQoeSummary!
+  """
+  VOD retention curve for one artifact: per-bucket watched-seconds (density / "most
+  replayed") plus reached-count audience retention (sessions reaching each bucket).
+  `artifactHash` is required.
+  """
+  vodRetention(
+    artifactHash: String!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): VodRetention!
 }
 
 """
@@ -1122,6 +1143,15 @@ type AnalyticsInfra {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): [ClusterBootOps!]!
+  """
+  Cluster-ops viewer-QoE aggregate per serving node/protocol, for operators of
+  clusters they own. Aggregate/redacted; only token-attributed rows are included.
+  """
+  clusterQoeOps(
+    clusterId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): [ClusterQoeOps!]!
   """
   Federation events: origin pulls, peer connections, leader elections, etc.
   """
@@ -6333,6 +6363,58 @@ type ClusterBootOps {
   errorCount: Int!
   p95TtfMs: Float!
   cacheHitRatio: Float!
+}
+"""
+Viewer-experienced QoE summary. Ratios are sum(numerator)/sum(denominator) over
+the player-reported session beacons; rebufferingRatio is the headline QoE number.
+"""
+type SessionQoeSummary {
+  sessionCount: Int!
+  playedHours: Float!
+  rebufferingRatio: Float!
+  rebuffersPerHour: Float!
+  avgRebufferMs: Float!
+  frameDropRatio: Float!
+  playbackFailureRate: Float!
+  ebvsRate: Float!
+  avgBitrateBps: Float!
+  abrSwitchesPerHour: Float!
+  avgLiveEdgeLatencyMs: Float!
+}
+"""
+Cluster-ops viewer-QoE aggregate per serving node/protocol (token-attributed,
+redacted — no content/stream/session identifiers).
+"""
+type ClusterQoeOps {
+  servingClusterId: String!
+  nodeId: String!
+  protocol: String!
+  sessionCount: Int!
+  rebufferingRatio: Float!
+  frameDropRatio: Float!
+  avgBitrateBps: Float!
+}
+"""
+One point of the VOD retention curve: a fixed-width timeline bucket with its
+watched-seconds density and the count of sessions that reached it.
+"""
+type VodRetentionPoint {
+  bucketIndex: Int!
+  secondsWatched: Float!
+  "Sessions whose furthest playhead position is at or beyond this bucket (audience retention numerator)."
+  reached: Int!
+}
+"""
+VOD retention curve for an artifact. retention(T) = points[T].reached /
+totalSessions (monotonic non-increasing); density(T) = points[T].secondsWatched
+(the "most replayed" curve). Buckets are fixed-width (bucketWidthS) along the asset
+timeline. These differ because a seek-to-end raises reach without adding density.
+"""
+type VodRetention {
+  bucketWidthS: Int!
+  assetDurationS: Int!
+  totalSessions: Int!
+  points: [VodRetentionPoint!]!
 }
 
 # Real-time node state from node_state_current (ReplacingMergeTree - current state snapshot)

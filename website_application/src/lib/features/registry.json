@@ -892,9 +892,9 @@
       "slug": "analytics",
       "name": "Analytics",
       "area": "analytics",
-      "description": "Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and expanding QoE diagnostics.",
+      "description": "Stream health, viewers, geographic, routing, quality tiers, federation, node metrics, and view-level player QoE (rebuffering, frame drops, startup, VOD retention).",
       "status": "partial",
-      "gap_reason": "Stream, routing, server-side QoS, client QoE, and player boot telemetry (TTFF waterfall + Resource Timing) are live across API, dashboard, MCP, and docs.\nStill maturing: rebuffering/quality-change capture in the boot path, non-npm player support, and broader sampling/retention policy.\n",
+      "gap_reason": "Stream, routing, server-side QoS, and client QoE are live, plus view-level player QoE from the FrameWorks player: boot telemetry (TTFF waterfall + Resource Timing), viewer-experienced rebuffering, frame drops, bitrate/quality switches, exit-before-start, and per-asset VOD retention/watch-density — across API, dashboard, MCP, and docs.\nStill maturing: QoE from non-FrameWorks / third-party players, and broader sampling/rollups.\n",
       "required_surfaces": {
         "docs": {
           "required": true

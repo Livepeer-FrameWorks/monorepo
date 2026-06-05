@@ -185,6 +185,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Startup time-to-first-frame and boot waterfall diagnostics",
       },
+      qoe: {
+        name: "Playback QoE",
+        href: "/analytics/qoe",
+        icon: "Activity",
+        active: true,
+        description: "Viewer-experienced rebuffering, frame drops, and VOD retention",
+      },
       usage: {
         name: "Usage & Costs",
         href: "/analytics/usage",

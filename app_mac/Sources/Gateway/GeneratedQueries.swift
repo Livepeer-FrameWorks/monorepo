@@ -1166,6 +1166,25 @@ enum GQL {
   }
   """
 
+  static let GetClusterQoeOps = """
+  # Cluster-ops viewer-QoE aggregate (operator view, token-attributed rows only).
+  query GetClusterQoeOps($clusterId: ID, $timeRange: TimeRangeInput) {
+    analytics {
+      infra {
+        clusterQoeOps(clusterId: $clusterId, timeRange: $timeRange) {
+          servingClusterId
+          nodeId
+          protocol
+          sessionCount
+          rebufferingRatio
+          frameDropRatio
+          avgBitrateBps
+        }
+      }
+    }
+  }
+  """
+
   static let GetClustersAccess = """
   # Fetch cluster access permissions and resource limits for the current tenant
   query GetClustersAccess {
@@ -2552,6 +2571,30 @@ enum GQL {
   }
   """
 
+  static let GetSessionQoeSummary = """
+  # Viewer-experienced QoE summary (rebuffering, frame drops, bitrate, EBVS) for the
+  # QoE dashboard. Read-time ratios over the player-reported session beacons.
+  query GetSessionQoeSummary($streamId: ID, $artifactHash: String, $timeRange: TimeRangeInput) {
+    analytics {
+      health {
+        sessionQoeSummary(streamId: $streamId, artifactHash: $artifactHash, timeRange: $timeRange) {
+          sessionCount
+          playedHours
+          rebufferingRatio
+          rebuffersPerHour
+          avgRebufferMs
+          frameDropRatio
+          playbackFailureRate
+          ebvsRate
+          avgBitrateBps
+          abrSwitchesPerHour
+          avgLiveEdgeLatencyMs
+        }
+      }
+    }
+  }
+  """
+
   static let GetSigningKeysConnection = """
   # List the tenant's playback signing keys with optional status filter
   query GetSigningKeysConnection($status: String, $first: Int = 50, $after: String) {
@@ -3801,6 +3844,27 @@ enum GQL {
         endCursor
       }
       totalCount
+    }
+  }
+  """
+
+  static let GetVodRetention = """
+  # VOD retention curve for one artifact: per-bucket watched-seconds (density) and
+  # reached-count audience retention (sessions reaching each bucket). Drives the heatmap.
+  query GetVodRetention($artifactHash: String!, $timeRange: TimeRangeInput) {
+    analytics {
+      health {
+        vodRetention(artifactHash: $artifactHash, timeRange: $timeRange) {
+          bucketWidthS
+          assetDurationS
+          totalSessions
+          points {
+            bucketIndex
+            secondsWatched
+            reached
+          }
+        }
+      }
     }
   }
   """

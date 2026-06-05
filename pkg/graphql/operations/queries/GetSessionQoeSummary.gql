@@ -1,0 +1,21 @@
+# Viewer-experienced QoE summary (rebuffering, frame drops, bitrate, EBVS) for the
+# QoE dashboard. Read-time ratios over the player-reported session beacons.
+query GetSessionQoeSummary($streamId: ID, $artifactHash: String, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      sessionQoeSummary(streamId: $streamId, artifactHash: $artifactHash, timeRange: $timeRange) {
+        sessionCount
+        playedHours
+        rebufferingRatio
+        rebuffersPerHour
+        avgRebufferMs
+        frameDropRatio
+        playbackFailureRate
+        ebvsRate
+        avgBitrateBps
+        abrSwitchesPerHour
+        avgLiveEdgeLatencyMs
+      }
+    }
+  }
+}

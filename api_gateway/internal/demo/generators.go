@@ -4562,6 +4562,79 @@ func GenerateClusterBootOps() []*periscopepb.ClusterBootOps {
 	}
 }
 
+// GenerateSessionQoeSummary returns demo viewer-experienced QoE summary data.
+func GenerateSessionQoeSummary() *periscopepb.SessionQoeSummary {
+	return &periscopepb.SessionQoeSummary{
+		SessionCount:         3420,
+		PlayedHours:          512.4,
+		RebufferingRatio:     0.0061,
+		RebuffersPerHour:     1.8,
+		AvgRebufferMs:        540,
+		FrameDropRatio:       0.0009,
+		PlaybackFailureRate:  0.004,
+		EbvsRate:             0.021,
+		AvgBitrateBps:        4_350_000,
+		AbrSwitchesPerHour:   6.2,
+		AvgLiveEdgeLatencyMs: 3200,
+	}
+}
+
+// GenerateClusterQoeOps returns demo cluster-ops QoE aggregate data.
+func GenerateClusterQoeOps() []*periscopepb.ClusterQoeOps {
+	return []*periscopepb.ClusterQoeOps{
+		{
+			ServingClusterId: "cluster-us-east",
+			NodeId:           "edge-nyc-1",
+			Protocol:         "hls",
+			SessionCount:     1840,
+			RebufferingRatio: 0.0058,
+			FrameDropRatio:   0.0008,
+			AvgBitrateBps:    4_500_000,
+		},
+		{
+			ServingClusterId: "cluster-us-east",
+			NodeId:           "edge-nyc-2",
+			Protocol:         "webrtc",
+			SessionCount:     420,
+			RebufferingRatio: 0.0021,
+			FrameDropRatio:   0.0012,
+			AvgBitrateBps:    2_800_000,
+		},
+	}
+}
+
+// GenerateVodRetention returns a demo VOD retention curve: a typical "high early
+// drop-off, replayed climax" shape over a 5-minute (300s / 2s-bucket) asset.
+func GenerateVodRetention() *periscopepb.VodRetention {
+	const width = 2
+	const duration = 300
+	total := int64(500)
+	points := make([]*periscopepb.VodRetentionPoint, 0, duration/width)
+	for b := 0; b*width < duration; b++ {
+		frac := float64(b) / float64(duration/width)
+		// reached is the audience-retention curve: monotonic non-increasing from
+		// total (everyone reaches bucket 0) down to ~40% by the end.
+		reached := int64(float64(total) * (1 - 0.6*frac))
+		// Watch density tracks reach but adds a replay bump near 80% (a hot moment
+		// re-watched) — which is exactly why density ≠ retention.
+		densityViewers := float64(reached)
+		if frac > 0.75 && frac < 0.85 {
+			densityViewers += float64(total) * 0.18
+		}
+		points = append(points, &periscopepb.VodRetentionPoint{
+			BucketIndex:    int64(b),
+			SecondsWatched: densityViewers * float64(width) * 0.92,
+			Reached:        reached,
+		})
+	}
+	return &periscopepb.VodRetention{
+		BucketWidthS:   width,
+		AssetDurationS: duration,
+		TotalSessions:  total,
+		Points:         points,
+	}
+}
+
 // GenerateClusterTrafficMatrix returns demo cross-cluster traffic data.
 func GenerateClusterTrafficMatrix() []*periscopepb.ClusterPairTraffic {
 	centralLat, centralLon := float64Ptr(41.8781), float64Ptr(-87.6298)

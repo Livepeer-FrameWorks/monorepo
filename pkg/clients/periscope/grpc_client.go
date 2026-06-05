@@ -1003,6 +1003,52 @@ func (c *GRPCClient) GetClusterBootOps(ctx context.Context, tenantID string, clu
 	return c.aggregated.GetClusterBootOps(ctx, req)
 }
 
+// GetSessionQoeSummary returns the tenant-scoped viewer-experienced QoE summary
+// (read-time ratios over client_qoe_session_deltas).
+func (c *GRPCClient) GetSessionQoeSummary(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts) (*periscopepb.GetSessionQoeSummaryResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.GetSessionQoeSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	if artifactHash != nil {
+		req.ArtifactHash = artifactHash
+	}
+	return c.aggregated.GetSessionQoeSummary(ctx, req)
+}
+
+// GetClusterQoeOps returns the redacted operator QoE aggregate for the given owned
+// clusters (token-attributed rows only).
+func (c *GRPCClient) GetClusterQoeOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterQoeOpsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.GetClusterQoeOpsRequest{
+		TenantId:   tenantID,
+		ClusterIds: clusterIDs,
+		TimeRange:  buildTimeRange(timeRange),
+	}
+	return c.aggregated.GetClusterQoeOps(ctx, req)
+}
+
+// GetVodRetention returns the per-bucket VOD retention curve for one artifact.
+func (c *GRPCClient) GetVodRetention(ctx context.Context, tenantID string, artifactHash string, timeRange *TimeRangeOpts) (*periscopepb.GetVodRetentionResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.GetVodRetentionRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+		TimeRange:    buildTimeRange(timeRange),
+	}
+	return c.aggregated.GetVodRetention(ctx, req)
+}
+
 // ListOrchestrators lists vantage-independent orchestrator state for a tenant.
 // orchAddr empty = full list; non-empty = single-row filter.
 func (c *GRPCClient) ListOrchestrators(ctx context.Context, tenantID string, orchAddr *string, opts *CursorPaginationOpts) (*periscopepb.ListOrchestratorsResponse, error) {

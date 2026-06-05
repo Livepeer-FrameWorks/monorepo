@@ -214,6 +214,16 @@ func (r *analyticsHealthResolver) PlayerBootSummary(ctx context.Context, obj *ma
 	return r.DoGetPlayerBootSummary(ctx, streamID, artifactHash, timeRange, noCache)
 }
 
+// SessionQoeSummary is the resolver for the sessionQoeSummary field.
+func (r *analyticsHealthResolver) SessionQoeSummary(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.SessionQoeSummary, error) {
+	return r.DoGetSessionQoeSummary(ctx, streamID, artifactHash, timeRange, noCache)
+}
+
+// VodRetention is the resolver for the vodRetention field.
+func (r *analyticsHealthResolver) VodRetention(ctx context.Context, obj *markers.AnalyticsHealth, artifactHash string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.VodRetention, error) {
+	return r.DoGetVodRetention(ctx, artifactHash, timeRange, noCache)
+}
+
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -280,6 +290,11 @@ func (r *analyticsInfraResolver) ClusterTrafficMatrix(ctx context.Context, obj *
 // ClusterBootOps is the resolver for the clusterBootOps field.
 func (r *analyticsInfraResolver) ClusterBootOps(ctx context.Context, obj *markers.AnalyticsInfra, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterBootOps, error) {
 	return r.DoGetClusterBootOps(ctx, clusterID, timeRange, noCache)
+}
+
+// ClusterQoeOps is the resolver for the clusterQoeOps field.
+func (r *analyticsInfraResolver) ClusterQoeOps(ctx context.Context, obj *markers.AnalyticsInfra, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterQoeOps, error) {
+	return r.DoGetClusterQoeOps(ctx, clusterID, timeRange, noCache)
 }
 
 // FederationEventsConnection is the resolver for the federationEventsConnection field.

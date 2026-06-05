@@ -4916,6 +4916,298 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *periscopep
 	return &periscopepb.GetClusterBootOpsResponse{Rows: out}, nil
 }
 
+// GetSessionQoeSummary returns the tenant-scoped viewer-experienced QoE summary.
+// client_qoe_session_deltas is a ReplacingMergeTree of additive beacon deltas, so
+// it is read with FINAL (collapses double-fired beacons) and ratios are
+// sum(numerator)/sum(denominator). Per-session flags (EBVS, mid-stream failure)
+// are rolled up per session in an inner query first — otherwise a pre-first-frame
+// beacon would mark every session as EBVS. Diagnostic only.
+func (s *PeriscopeServer) GetSessionQoeSummary(ctx context.Context, req *periscopepb.GetSessionQoeSummaryRequest) (*periscopepb.GetSessionQoeSummaryResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	filter := "tenant_id = ? AND timestamp >= ? AND timestamp <= ?"
+	args := []any{tenantID, startTime, endTime}
+	if streamID := req.GetStreamId(); streamID != "" {
+		filter += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+	if artifactHash := req.GetArtifactHash(); artifactHash != "" {
+		filter += " AND artifact_hash = ?"
+		args = append(args, artifactHash)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			count() AS session_count,
+			toFloat64(sum(s_played_ms)) / 3600000.0 AS played_hours,
+			sum(s_rebuffer_ms) / nullIf(sum(s_played_ms), 0) AS rebuffering_ratio,
+			sum(s_rebuffer_count) / nullIf(toFloat64(sum(s_played_ms)) / 3600000.0, 0) AS rebuffers_per_hour,
+			sum(s_rebuffer_ms) / nullIf(sum(s_rebuffer_count), 0) AS avg_rebuffer_ms,
+			sum(s_frames_dropped) / nullIf(sum(s_frames_decoded), 0) AS frame_drop_ratio,
+			countIf(s_fatal = 1 AND s_first = 1) / nullIf(countIf(s_first = 1), 0) AS playback_failure_rate,
+			countIf(s_intent = 1 AND s_first = 0) / nullIf(countIf(s_intent = 1), 0) AS ebvs_rate,
+			sum(s_bitrate_bps_seconds) / nullIf(toFloat64(sum(s_played_ms)) / 1000.0, 0) AS avg_bitrate_bps,
+			sum(s_abr_switches) / nullIf(toFloat64(sum(s_played_ms)) / 3600000.0, 0) AS abr_switches_per_hour,
+			avgIf(s_live_edge, s_live_edge > 0) AS avg_live_edge
+		FROM (
+			SELECT
+				session_id,
+				sum(played_ms) AS s_played_ms,
+				sum(rebuffer_ms) AS s_rebuffer_ms,
+				sum(rebuffer_count) AS s_rebuffer_count,
+				sumIf(frames_decoded, frame_stats_supported = 1) AS s_frames_decoded,
+				sumIf(frames_dropped, frame_stats_supported = 1) AS s_frames_dropped,
+				sum(bitrate_bps_seconds) AS s_bitrate_bps_seconds,
+				sum(abr_upswitch_count + abr_downswitch_count) AS s_abr_switches,
+				max(fatal_error) AS s_fatal,
+				max(first_frame) AS s_first,
+				max(play_intent) AS s_intent,
+				avgIf(live_edge_latency_ms, live_edge_latency_ms > 0) AS s_live_edge
+			FROM client_qoe_session_deltas FINAL
+			WHERE %s
+			GROUP BY session_id
+		)
+	`, filter)
+
+	var sessionCount int64
+	var playedHours, rebufRatio, rebufPerHour, avgRebufMs, frameDropRatio sql.NullFloat64
+	var failRate, ebvsRate, avgBitrate, abrPerHour, avgLiveEdge sql.NullFloat64
+	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+		&sessionCount, &playedHours, &rebufRatio, &rebufPerHour, &avgRebufMs, &frameDropRatio,
+		&failRate, &ebvsRate, &avgBitrate, &abrPerHour, &avgLiveEdge,
+	); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+
+	return &periscopepb.GetSessionQoeSummaryResponse{
+		Summary: &periscopepb.SessionQoeSummary{
+			SessionCount:         sessionCount,
+			PlayedHours:          sanitizeFloat64(playedHours.Float64),
+			RebufferingRatio:     sanitizeFloat64(rebufRatio.Float64),
+			RebuffersPerHour:     sanitizeFloat64(rebufPerHour.Float64),
+			AvgRebufferMs:        sanitizeFloat64(avgRebufMs.Float64),
+			FrameDropRatio:       sanitizeFloat64(frameDropRatio.Float64),
+			PlaybackFailureRate:  sanitizeFloat64(failRate.Float64),
+			EbvsRate:             sanitizeFloat64(ebvsRate.Float64),
+			AvgBitrateBps:        sanitizeFloat64(avgBitrate.Float64),
+			AbrSwitchesPerHour:   sanitizeFloat64(abrPerHour.Float64),
+			AvgLiveEdgeLatencyMs: sanitizeFloat64(avgLiveEdge.Float64),
+		},
+	}, nil
+}
+
+// GetClusterQoeOps returns the operator-facing QoE aggregate for clusters the
+// caller owns — token-attributed rows only (cluster_attributed = 1), redacted to
+// serving cluster/node/protocol. Ratios are over the deduped (FINAL) beacon sums.
+func (s *PeriscopeServer) GetClusterQoeOps(ctx context.Context, req *periscopepb.GetClusterQoeOpsRequest) (*periscopepb.GetClusterQoeOpsResponse, error) {
+	if _, err := requireTenantID(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	clusterIDs := req.GetClusterIds()
+	if len(clusterIDs) == 0 {
+		return &periscopepb.GetClusterQoeOpsResponse{}, nil
+	}
+
+	placeholders := make([]string, len(clusterIDs))
+	args := []any{startTime, endTime}
+	for i, id := range clusterIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			serving_cluster_id,
+			node_id,
+			protocol,
+			uniqExact(session_id) AS session_count,
+			sum(rebuffer_ms) / nullIf(sum(played_ms), 0) AS rebuffering_ratio,
+			sumIf(frames_dropped, frame_stats_supported = 1) / nullIf(sumIf(frames_decoded, frame_stats_supported = 1), 0) AS frame_drop_ratio,
+			sum(bitrate_bps_seconds) / nullIf(toFloat64(sum(played_ms)) / 1000.0, 0) AS avg_bitrate_bps
+		FROM client_qoe_session_deltas FINAL
+		WHERE cluster_attributed = 1
+		  AND timestamp >= ? AND timestamp <= ?
+		  AND serving_cluster_id IN (%s)
+		GROUP BY serving_cluster_id, node_id, protocol
+		ORDER BY serving_cluster_id, node_id, protocol
+		LIMIT 1000
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*periscopepb.ClusterQoeOps
+	for rows.Next() {
+		var servingClusterID, nodeID, protocol string
+		var sessionCount int64
+		var rebufRatio, frameDropRatio, avgBitrate sql.NullFloat64
+		if err := rows.Scan(&servingClusterID, &nodeID, &protocol, &sessionCount, &rebufRatio, &frameDropRatio, &avgBitrate); err != nil {
+			s.logger.WithError(err).Error("Failed to scan client_qoe_session_deltas cluster-ops row")
+			continue
+		}
+		out = append(out, &periscopepb.ClusterQoeOps{
+			ServingClusterId: servingClusterID,
+			NodeId:           nodeID,
+			Protocol:         protocol,
+			SessionCount:     sessionCount,
+			RebufferingRatio: sanitizeFloat64(rebufRatio.Float64),
+			FrameDropRatio:   sanitizeFloat64(frameDropRatio.Float64),
+			AvgBitrateBps:    sanitizeFloat64(avgBitrate.Float64),
+		})
+	}
+	return &periscopepb.GetClusterQoeOpsResponse{Rows: out}, nil
+}
+
+// GetVodRetention returns the per-bucket retention curve for one artifact. Watch
+// density (Σ seconds watched) comes from vod_retention_buckets; the audience-retention
+// curve (sessions reaching ≥ bucket ÷ total) is the suffix sum of per-session
+// max_bucket_reached from client_qoe_session_deltas. Both read with FINAL.
+func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.GetVodRetentionRequest) (*periscopepb.GetVodRetentionResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	artifactHash := req.GetArtifactHash()
+	if artifactHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_hash is required")
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	args := []any{tenantID, artifactHash, startTime, endTime}
+
+	// Audience-retention input + timeline geometry, both from the session beacons
+	// (authoritative per-session). The inner per-session HAVING bw > 0 is the presence
+	// gate: live / no-duration / malformed beacons leave bucket_width_s = 0 and are
+	// excluded, so they can't contaminate the denominator as "reached bucket 0".
+	// Geometry comes from here too, so a seek-only session (no density rows) still
+	// carries the timeline. total_sessions is the retention denominator.
+	// Bound the curve length against pathological inputs (the duration tiers keep real
+	// assets well under this — a 3h asset at 15s buckets is ~720). reach and density
+	// are both folded into this cap so the numerator and denominator stay consistent.
+	const maxRetentionBucket = 5000
+	reachHist := map[int64]int64{}
+	var totalSessions, maxBucket, bucketWidth, assetDuration int64
+	rrows, err := s.clickhouse.QueryContext(ctx, `
+		SELECT reach, bw, dur, toInt64(count()) AS sessions FROM (
+			SELECT session_id,
+				toInt64(max(max_bucket_reached)) AS reach,
+				toInt64(max(bucket_width_s)) AS bw,
+				toInt64(max(asset_duration_s)) AS dur
+			FROM client_qoe_session_deltas FINAL
+			WHERE tenant_id = ? AND artifact_hash = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY session_id
+			HAVING bw > 0
+		) GROUP BY reach, bw, dur ORDER BY reach
+	`, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rrows.Close() }()
+	for rrows.Next() {
+		var reach, bw, dur, sessions int64
+		if scanErr := rrows.Scan(&reach, &bw, &dur, &sessions); scanErr != nil {
+			s.logger.WithError(scanErr).Error("Failed to scan vod reach row")
+			continue
+		}
+		// Fold an over-cap reach into the cap bucket so the session still counts at
+		// every bucket ≤ cap (dropping it would inflate the denominator vs the curve).
+		if reach > maxRetentionBucket {
+			reach = maxRetentionBucket
+		}
+		reachHist[reach] += sessions
+		totalSessions += sessions
+		if reach > maxBucket {
+			maxBucket = reach
+		}
+		if bw > bucketWidth {
+			bucketWidth = bw
+		}
+		if dur > assetDuration {
+			assetDuration = dur
+		}
+	}
+	if rowsErr := rrows.Err(); rowsErr != nil {
+		return nil, wrapClickhouseError(rowsErr, "database error")
+	}
+	if totalSessions == 0 {
+		return &periscopepb.GetVodRetentionResponse{Retention: &periscopepb.VodRetention{}}, nil
+	}
+
+	// Watch density: seconds watched per bucket.
+	densityMap := map[int64]float64{}
+	drows, err := s.clickhouse.QueryContext(ctx, `
+		SELECT toInt64(bucket_index) AS bucket_index, toFloat64(sum(seconds_watched)) AS secs
+		FROM vod_retention_buckets FINAL
+		WHERE tenant_id = ? AND artifact_hash = ? AND timestamp >= ? AND timestamp <= ?
+		GROUP BY bucket_index
+		ORDER BY bucket_index
+		LIMIT 10000
+	`, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = drows.Close() }()
+	for drows.Next() {
+		var bucketIndex int64
+		var secs float64
+		if scanErr := drows.Scan(&bucketIndex, &secs); scanErr != nil {
+			s.logger.WithError(scanErr).Error("Failed to scan vod_retention_buckets row")
+			continue
+		}
+		if bucketIndex > maxRetentionBucket {
+			bucketIndex = maxRetentionBucket
+		}
+		densityMap[bucketIndex] += secs
+		if bucketIndex > maxBucket {
+			maxBucket = bucketIndex
+		}
+	}
+	if rowsErr := drows.Err(); rowsErr != nil {
+		return nil, wrapClickhouseError(rowsErr, "database error")
+	}
+
+	// reached[b] = sessions whose furthest position is at or beyond bucket b — the
+	// suffix sum of the reach histogram, so the curve is monotonic non-increasing.
+	reachedAtOrAfter := make([]int64, maxBucket+2)
+	for b := maxBucket; b >= 0; b-- {
+		reachedAtOrAfter[b] = reachedAtOrAfter[b+1] + reachHist[b]
+	}
+
+	points := make([]*periscopepb.VodRetentionPoint, 0, maxBucket+1)
+	for b := int64(0); b <= maxBucket; b++ {
+		points = append(points, &periscopepb.VodRetentionPoint{
+			BucketIndex:    b,
+			SecondsWatched: sanitizeFloat64(densityMap[b]),
+			Reached:        reachedAtOrAfter[b],
+		})
+	}
+
+	return &periscopepb.GetVodRetentionResponse{
+		Retention: &periscopepb.VodRetention{
+			BucketWidthS:   bucketWidth,
+			AssetDurationS: assetDuration,
+			TotalSessions:  totalSessions,
+			Points:         points,
+		},
+	}, nil
+}
+
 // ============================================================================
 // Node Performance 5-Minute Aggregates
 // ============================================================================

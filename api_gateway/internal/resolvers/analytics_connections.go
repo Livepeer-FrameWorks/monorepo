@@ -3449,6 +3449,135 @@ func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, t
 	return resp.GetRows(), nil
 }
 
+// DoGetSessionQoeSummary returns the tenant-scoped viewer-experienced QoE summary.
+func (r *Resolver) DoGetSessionQoeSummary(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.SessionQoeSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateSessionQoeSummary(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if normalizedStreamID != nil {
+		streamKey = *normalizedStreamID
+	}
+	artifactKey := ""
+	if artifactHash != nil {
+		artifactKey = *artifactHash
+	}
+	keyParts := []string{tenantID, streamKey, artifactKey, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "session_qoe_summary", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetSessionQoeSummary(ctx, tenantID, normalizedStreamID, artifactHash, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*periscopepb.GetSessionQoeSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for session qoe summary: %T", val)
+	}
+	if resp.GetSummary() == nil {
+		return &periscopepb.SessionQoeSummary{}, nil
+	}
+	return resp.GetSummary(), nil
+}
+
+// DoGetVodRetention returns the per-bucket VOD retention curve for one artifact.
+func (r *Resolver) DoGetVodRetention(ctx context.Context, artifactHash string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.VodRetention, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateVodRetention(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if artifactHash == "" {
+		return nil, fmt.Errorf("artifactHash is required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+	keyParts := []string{tenantID, artifactHash, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "vod_retention", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetVodRetention(ctx, tenantID, artifactHash, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*periscopepb.GetVodRetentionResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for vod retention: %T", val)
+	}
+	if resp.GetRetention() == nil {
+		return &periscopepb.VodRetention{}, nil
+	}
+	return resp.GetRetention(), nil
+}
+
+// DoGetClusterQoeOps returns the redacted operator QoE aggregate for owned clusters.
+func (r *Resolver) DoGetClusterQoeOps(ctx context.Context, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterQoeOps, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateClusterQoeOps(), nil
+	}
+
+	tenantID, owned, err := r.requireClusterOperatorTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	clusterIDs := make([]string, 0, len(owned))
+	if clusterID != nil && *clusterID != "" {
+		if _, ok := owned[*clusterID]; !ok {
+			return nil, fmt.Errorf("cluster not owned by caller")
+		}
+		clusterIDs = append(clusterIDs, *clusterID)
+	} else {
+		for id := range owned {
+			clusterIDs = append(clusterIDs, id)
+		}
+	}
+	sort.Strings(clusterIDs)
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+	keyParts := append([]string{tenantID, timeKey(startTime), timeKey(endTime)}, clusterIDs...)
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "cluster_qoe_ops", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetClusterQoeOps(ctx, tenantID, clusterIDs, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*periscopepb.GetClusterQoeOpsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for cluster qoe ops: %T", val)
+	}
+	return resp.GetRows(), nil
+}
+
 // DoGetClusterTrafficMatrix returns cross-cluster routing traffic.
 func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterPairTraffic, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {

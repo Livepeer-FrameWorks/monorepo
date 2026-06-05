@@ -1,0 +1,16 @@
+# Cluster-ops viewer-QoE aggregate (operator view, token-attributed rows only).
+query GetClusterQoeOps($clusterId: ID, $timeRange: TimeRangeInput) {
+  analytics {
+    infra {
+      clusterQoeOps(clusterId: $clusterId, timeRange: $timeRange) {
+        servingClusterId
+        nodeId
+        protocol
+        sessionCount
+        rebufferingRatio
+        frameDropRatio
+        avgBitrateBps
+      }
+    }
+  }
+}

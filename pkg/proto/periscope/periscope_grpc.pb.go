@@ -1541,6 +1541,9 @@ const (
 	AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetClientQoeSummary"
 	AggregatedAnalyticsService_GetPlayerBootSummary_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetPlayerBootSummary"
 	AggregatedAnalyticsService_GetClusterBootOps_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetClusterBootOps"
+	AggregatedAnalyticsService_GetSessionQoeSummary_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetSessionQoeSummary"
+	AggregatedAnalyticsService_GetClusterQoeOps_FullMethodName            = "/periscope.AggregatedAnalyticsService/GetClusterQoeOps"
+	AggregatedAnalyticsService_GetVodRetention_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetVodRetention"
 	AggregatedAnalyticsService_GetNetworkUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetNetworkUsage"
 	AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetAcquisitionFunnel"
 	AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetAcquisitionCohortUsage"
@@ -1578,6 +1581,12 @@ type AggregatedAnalyticsServiceClient interface {
 	// only) for operators of the serving cluster.
 	GetPlayerBootSummary(ctx context.Context, in *GetPlayerBootSummaryRequest, opts ...grpc.CallOption) (*GetPlayerBootSummaryResponse, error)
 	GetClusterBootOps(ctx context.Context, in *GetClusterBootOpsRequest, opts ...grpc.CallOption) (*GetClusterBootOpsResponse, error)
+	// Viewer-experienced QoE (rebuffering/frames/bitrate over client_qoe_session_deltas):
+	// tenant-scoped summary, cluster-ops aggregate (token-attributed rows only), and
+	// the per-artifact VOD retention curve.
+	GetSessionQoeSummary(ctx context.Context, in *GetSessionQoeSummaryRequest, opts ...grpc.CallOption) (*GetSessionQoeSummaryResponse, error)
+	GetClusterQoeOps(ctx context.Context, in *GetClusterQoeOpsRequest, opts ...grpc.CallOption) (*GetClusterQoeOpsResponse, error)
+	GetVodRetention(ctx context.Context, in *GetVodRetentionRequest, opts ...grpc.CallOption) (*GetVodRetentionResponse, error)
 	GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error)
@@ -1811,6 +1820,36 @@ func (c *aggregatedAnalyticsServiceClient) GetClusterBootOps(ctx context.Context
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetSessionQoeSummary(ctx context.Context, in *GetSessionQoeSummaryRequest, opts ...grpc.CallOption) (*GetSessionQoeSummaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionQoeSummaryResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetSessionQoeSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetClusterQoeOps(ctx context.Context, in *GetClusterQoeOpsRequest, opts ...grpc.CallOption) (*GetClusterQoeOpsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClusterQoeOpsResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetClusterQoeOps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetVodRetention(ctx context.Context, in *GetVodRetentionRequest, opts ...grpc.CallOption) (*GetVodRetentionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVodRetentionResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetVodRetention_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *aggregatedAnalyticsServiceClient) GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNetworkUsageResponse)
@@ -1873,6 +1912,12 @@ type AggregatedAnalyticsServiceServer interface {
 	// only) for operators of the serving cluster.
 	GetPlayerBootSummary(context.Context, *GetPlayerBootSummaryRequest) (*GetPlayerBootSummaryResponse, error)
 	GetClusterBootOps(context.Context, *GetClusterBootOpsRequest) (*GetClusterBootOpsResponse, error)
+	// Viewer-experienced QoE (rebuffering/frames/bitrate over client_qoe_session_deltas):
+	// tenant-scoped summary, cluster-ops aggregate (token-attributed rows only), and
+	// the per-artifact VOD retention curve.
+	GetSessionQoeSummary(context.Context, *GetSessionQoeSummaryRequest) (*GetSessionQoeSummaryResponse, error)
+	GetClusterQoeOps(context.Context, *GetClusterQoeOpsRequest) (*GetClusterQoeOpsResponse, error)
+	GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error)
 	GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error)
@@ -1951,6 +1996,15 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetPlayerBootSummary(contex
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterBootOps(context.Context, *GetClusterBootOpsRequest) (*GetClusterBootOpsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterBootOps not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetSessionQoeSummary(context.Context, *GetSessionQoeSummaryRequest) (*GetSessionQoeSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionQoeSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterQoeOps(context.Context, *GetClusterQoeOpsRequest) (*GetClusterQoeOpsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterQoeOps not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVodRetention not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNetworkUsage not implemented")
@@ -2379,6 +2433,60 @@ func _AggregatedAnalyticsService_GetClusterBootOps_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetSessionQoeSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionQoeSummaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetSessionQoeSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetSessionQoeSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetSessionQoeSummary(ctx, req.(*GetSessionQoeSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetClusterQoeOps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterQoeOpsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterQoeOps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetClusterQoeOps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterQoeOps(ctx, req.(*GetClusterQoeOpsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetVodRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVodRetentionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetVodRetention(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetVodRetention_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetVodRetention(ctx, req.(*GetVodRetentionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AggregatedAnalyticsService_GetNetworkUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNetworkUsageRequest)
 	if err := dec(in); err != nil {
@@ -2527,6 +2635,18 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClusterBootOps",
 			Handler:    _AggregatedAnalyticsService_GetClusterBootOps_Handler,
+		},
+		{
+			MethodName: "GetSessionQoeSummary",
+			Handler:    _AggregatedAnalyticsService_GetSessionQoeSummary_Handler,
+		},
+		{
+			MethodName: "GetClusterQoeOps",
+			Handler:    _AggregatedAnalyticsService_GetClusterQoeOps_Handler,
+		},
+		{
+			MethodName: "GetVodRetention",
+			Handler:    _AggregatedAnalyticsService_GetVodRetention_Handler,
 		},
 		{
 			MethodName: "GetNetworkUsage",

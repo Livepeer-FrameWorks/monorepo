@@ -1202,6 +1202,12 @@ service AggregatedAnalyticsService {
   // only) for operators of the serving cluster.
   rpc GetPlayerBootSummary(GetPlayerBootSummaryRequest) returns (GetPlayerBootSummaryResponse);
   rpc GetClusterBootOps(GetClusterBootOpsRequest) returns (GetClusterBootOpsResponse);
+  // Viewer-experienced QoE (rebuffering/frames/bitrate over client_qoe_session_deltas):
+  // tenant-scoped summary, cluster-ops aggregate (token-attributed rows only), and
+  // the per-artifact VOD retention curve.
+  rpc GetSessionQoeSummary(GetSessionQoeSummaryRequest) returns (GetSessionQoeSummaryResponse);
+  rpc GetClusterQoeOps(GetClusterQoeOpsRequest) returns (GetClusterQoeOpsResponse);
+  rpc GetVodRetention(GetVodRetentionRequest) returns (GetVodRetentionResponse);
   rpc GetNetworkUsage(GetNetworkUsageRequest) returns (GetNetworkUsageResponse);
   rpc GetAcquisitionFunnel(GetAcquisitionFunnelRequest) returns (GetAcquisitionFunnelResponse);
   rpc GetAcquisitionCohortUsage(GetAcquisitionCohortUsageRequest) returns (GetAcquisitionCohortUsageResponse);
@@ -1904,6 +1910,86 @@ message GetClusterBootOpsRequest {
 
 message GetClusterBootOpsResponse {
   repeated ClusterBootOps rows = 1;
+}
+
+// Viewer-experienced QoE summary — read-time ratios over client_qoe_session_deltas
+// for the tenant that owns the content. Counters are additive deltas, so ratios
+// are sum(numerator)/sum(denominator); per-session flags (EBVS, failure) are rolled
+// up per session first. Diagnostic only, never billing/viewer-count truth.
+message SessionQoeSummary {
+  int64 session_count = 1;            // distinct sessions
+  double played_hours = 2;
+  double rebuffering_ratio = 3;       // Σrebuffer_ms / Σplayed_ms
+  double rebuffers_per_hour = 4;      // Σrebuffer_count / played_hours
+  double avg_rebuffer_ms = 5;         // Σrebuffer_ms / Σrebuffer_count
+  double frame_drop_ratio = 6;        // Σdropped / Σdecoded over frame-stats-supported beacons
+  double playback_failure_rate = 7;   // sessions with a post-first-frame fatal / sessions reaching first frame
+  double ebvs_rate = 8;               // sessions play-intended but no first frame / play-intended sessions
+  double avg_bitrate_bps = 9;         // Σ(bitrate_bps_seconds) / Σplayed_seconds
+  double abr_switches_per_hour = 10;
+  double avg_live_edge_latency_ms = 11;
+}
+
+message GetSessionQoeSummaryRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  optional string artifact_hash = 3;
+  common.TimeRange time_range = 4;
+}
+
+message GetSessionQoeSummaryResponse {
+  SessionQoeSummary summary = 1;
+}
+
+// Cluster-ops QoE aggregate — operator view keyed by serving node/protocol.
+// Aggregate/redacted only; token-attributed rows (cluster_attributed = 1).
+message ClusterQoeOps {
+  string serving_cluster_id = 1;
+  string node_id = 2;
+  string protocol = 3;
+  int64 session_count = 4;
+  double rebuffering_ratio = 5;
+  double frame_drop_ratio = 6;
+  double avg_bitrate_bps = 7;
+}
+
+message GetClusterQoeOpsRequest {
+  string tenant_id = 1;            // caller; authorized to clusters they own at the API layer
+  repeated string cluster_ids = 2; // clusters the caller owns
+  common.TimeRange time_range = 3;
+}
+
+message GetClusterQoeOpsResponse {
+  repeated ClusterQoeOps rows = 1;
+}
+
+// VOD retention — one point per fixed-width timeline bucket for an artifact, with
+// the density ("most replayed", seconds watched) and the audience-retention input
+// (reached = distinct sessions whose furthest playhead position is at or beyond
+// this bucket). retention(T) = reached[T] / total_sessions (monotonic
+// non-increasing); density(T) = seconds_watched[T]. These differ because a
+// seek-to-end raises reach without adding watch density.
+message VodRetentionPoint {
+  int64 bucket_index = 1;
+  double seconds_watched = 2;
+  int64 reached = 3;
+}
+
+message VodRetention {
+  int64 bucket_width_s = 1;
+  int64 asset_duration_s = 2;
+  int64 total_sessions = 3;
+  repeated VodRetentionPoint points = 4;
+}
+
+message GetVodRetentionRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetVodRetentionResponse {
+  VodRetention retention = 1;
 }
 
 // ============================================================================
