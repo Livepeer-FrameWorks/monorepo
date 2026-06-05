@@ -10,7 +10,10 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"frameworks/api_balancing/internal/balancer"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
 
@@ -574,7 +577,7 @@ func TestRemoteArtifactFiltering_ExcludesUnauthorizedPeers(t *testing.T) {
 		{PeerCluster: "authorized-1", BaseURL: "https://a.example.com", GeoLat: 0, GeoLon: 0},
 		{PeerCluster: "unauthorized", BaseURL: "https://b.example.com", GeoLat: 0, GeoLon: 0},
 	}
-	allowedClusters := []*pb.TenantClusterPeer{{ClusterId: "authorized-1"}}
+	allowedClusters := []*quartermasterpb.TenantClusterPeer{{ClusterId: "authorized-1"}}
 
 	var authorizedHits []*RemoteArtifactInfo
 	for _, h := range remoteHits {
@@ -596,7 +599,7 @@ func TestRemoteArtifactFiltering_AllUnauthorizedYieldsNoHits(t *testing.T) {
 		{PeerCluster: "unauthorized-1", BaseURL: "https://a.example.com"},
 		{PeerCluster: "unauthorized-2", BaseURL: "https://b.example.com"},
 	}
-	allowedClusters := []*pb.TenantClusterPeer{{ClusterId: "some-other-cluster"}}
+	allowedClusters := []*quartermasterpb.TenantClusterPeer{{ClusterId: "some-other-cluster"}}
 
 	var authorizedHits []*RemoteArtifactInfo
 	for _, h := range remoteHits {
@@ -616,8 +619,8 @@ func (s stubPeerResolver) GetPeerAddr(clusterID string) string { return "foghorn
 
 type stubFedClient struct{}
 
-func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
-	return &pb.PrepareArtifactResponse{Ready: true, Url: "https://s3.example.com/artifact-1.mp4?sig=x", InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4"}, nil
+func (s stubFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
+	return &foghornfederationpb.PrepareArtifactResponse{Ready: true, Url: "https://s3.example.com/artifact-1.mp4?sig=x", InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4"}, nil
 }
 
 func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
@@ -627,7 +630,7 @@ func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-other", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}}, nil)
+	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-other", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}}, nil)
 	if err == nil {
 		t.Fatal("expected unauthorized origin cluster error")
 	}
@@ -670,7 +673,7 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
 	if err == nil {
 		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
@@ -684,8 +687,8 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 // peer-relay response: Ready=true, a peer_relay_url, and NO S3 url.
 type peerRelayFedClient struct{}
 
-func (peerRelayFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
-	return &pb.PrepareArtifactResponse{
+func (peerRelayFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
+	return &foghornfederationpb.PrepareArtifactResponse{
 		Ready:            true,
 		PeerRelayUrl:     "https://edge-b.example.com/internal/artifact/vod/artifact-1.mp4",
 		PeerRelayGrantId: "grant-xyz",
@@ -718,7 +721,7 @@ func TestResolveRemoteArtifact_PeerRelayAdoptsPendingNotSynced(t *testing.T) {
 	// artifactResp nil makes the post-adoption recursion return immediately
 	// (content not found) instead of needing a full re-query mock — we're
 	// asserting the adoption shape, and that it does NOT loop.
-	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
 	if err == nil {
 		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
@@ -736,12 +739,12 @@ type redirectFedClient struct {
 	calls           int
 }
 
-func (s *redirectFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+func (s *redirectFedClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	s.calls++
 	if clusterID == s.originCluster {
-		return &pb.PrepareArtifactResponse{RedirectClusterId: s.redirectCluster}, nil
+		return &foghornfederationpb.PrepareArtifactResponse{RedirectClusterId: s.redirectCluster}, nil
 	}
-	return &pb.PrepareArtifactResponse{
+	return &foghornfederationpb.PrepareArtifactResponse{
 		Ready:              true,
 		Url:                "https://s3.example.com/artifact-1.mp4?sig=x",
 		InternalName:       "stream-a",
@@ -784,7 +787,7 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 
 	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1",
 		"artifact-1", "cluster-origin", "clip", "tenant-1",
-		[]*pb.TenantClusterPeer{
+		[]*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "cluster-origin"},
 			{ClusterId: "cluster-storage"},
 		}, nil)
@@ -802,13 +805,13 @@ func TestBuildThumbnailAssets(t *testing.T) {
 		name         string
 		chandlerBase string
 		assetKey     string
-		want         *pb.ThumbnailAssets
+		want         *sharedpb.ThumbnailAssets
 	}{
 		{
 			name:         "live stream",
 			chandlerBase: "https://chandler.example.com",
 			assetKey:     "stream-uuid-123",
-			want: &pb.ThumbnailAssets{
+			want: &sharedpb.ThumbnailAssets{
 				PosterUrl:    "https://chandler.example.com/assets/stream-uuid-123/poster.jpg",
 				SpriteVttUrl: "https://chandler.example.com/assets/stream-uuid-123/sprite.vtt",
 				SpriteJpgUrl: "https://chandler.example.com/assets/stream-uuid-123/sprite.jpg",
@@ -819,7 +822,7 @@ func TestBuildThumbnailAssets(t *testing.T) {
 			name:         "DVR artifact with trailing slash",
 			chandlerBase: "https://chandler.example.com/",
 			assetKey:     "abc123hash",
-			want: &pb.ThumbnailAssets{
+			want: &sharedpb.ThumbnailAssets{
 				PosterUrl:    "https://chandler.example.com/assets/abc123hash/poster.jpg",
 				SpriteVttUrl: "https://chandler.example.com/assets/abc123hash/sprite.vtt",
 				SpriteJpgUrl: "https://chandler.example.com/assets/abc123hash/sprite.jpg",
@@ -914,7 +917,7 @@ func TestArtifactNodesFromDBBuildsWarmNodeFallback(t *testing.T) {
 	if got.Artifact.GetFormat() != "mp4" {
 		t.Fatalf("format = %q", got.Artifact.GetFormat())
 	}
-	if got.Artifact.GetArtifactType() != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+	if got.Artifact.GetArtifactType() != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
 		t.Fatalf("artifact type = %v", got.Artifact.GetArtifactType())
 	}
 
@@ -934,7 +937,7 @@ func TestResolveAndAdoptRemoteArtifact_RejectsUnauthorizedOrigin(t *testing.T) {
 		context.Background(),
 		"artifact-1", "clip", "internal-1",
 		"cluster-evil", "tenant-1",
-		[]*pb.TenantClusterPeer{{ClusterId: "cluster-allowed"}},
+		[]*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}},
 	)
 	if err == nil || !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("expected not-authorized error for origin outside allowlist, got %v", err)

@@ -2156,7 +2156,7 @@ type SkipperInvestigationEvent {
   resourceType: String!
 }
 
-# DVR lifecycle event - bound to proto.DVRLifecycleData
+# DVR lifecycle event - bound to ipcpb.DVRLifecycleData
 type DVREvent {
   status: String!
   dvrHash: String!
@@ -2172,7 +2172,7 @@ type DVREvent {
   stream: Stream
 }
 
-# Real-time track list update from Signalman - bound to proto.StreamTrackListTrigger
+# Real-time track list update from Signalman - bound to ipcpb.StreamTrackListTrigger
 type TrackListUpdate {
   streamId: ID!
   stream: Stream
@@ -2192,7 +2192,7 @@ type TrackListUpdate {
   primaryAudioSampleRate: Int
 }
 
-# Real-time clip lifecycle event from Signalman - bound to proto.ClipLifecycleData
+# Real-time clip lifecycle event from Signalman - bound to ipcpb.ClipLifecycleData
 type ClipLifecycle {
   stage: Int!
   clipHash: String!
@@ -2214,7 +2214,7 @@ type ClipLifecycle {
   clipMode: String
 }
 
-# Real-time VOD upload lifecycle event from Signalman - bound to proto.VodLifecycleData
+# Real-time VOD upload lifecycle event from Signalman - bound to ipcpb.VodLifecycleData
 type VodLifecycle {
   status: Int! # VodLifecycleData.Status enum value
   vodHash: String! # Artifact hash (from Commodore)
@@ -4964,7 +4964,7 @@ type TenantSubscription {
   updatedAt: Time!
 }
 
-# Bound to proto.BillingStatusResponse
+# Bound to purserpb.BillingStatusResponse
 type BillingStatus {
   currentTier: BillingTier
   subscription: TenantSubscription # Full subscription details with custom terms
@@ -5053,7 +5053,7 @@ type CountryMetrics {
   egressGb: Float!
 }
 
-# Bound to proto.TenantUsageResponse - date-range usage with costs
+# Bound to purserpb.TenantUsageResponse - date-range usage with costs
 type TenantUsage {
   billingPeriod: String!
   usage: [UsageEntry!]!
@@ -5188,7 +5188,7 @@ type MollieMandate {
   createdAt: Time
 }
 
-# Bound to proto.UsageRecord - individual usage records
+# Bound to purserpb.UsageRecord - individual usage records
 type UsageRecord {
   id: ID!
   clusterId: String
@@ -5358,7 +5358,7 @@ input BillingAddressInput {
   country: String!
 }
 
-# Bound to proto.InfrastructureCluster
+# Bound to quartermasterpb.InfrastructureCluster
 """
 A streaming cluster containing one or more infrastructure nodes.
 Clusters provide isolated capacity for streaming workloads.
@@ -6138,7 +6138,7 @@ type ArtifactEvent implements Node {
 }
 
 # Current state of clips/DVR/VOD from artifact_state_current table
-# Bound to proto.ArtifactState
+# Bound to periscopepb.ArtifactState
 type ArtifactState {
   streamId: ID!
   stream: Stream
@@ -6336,7 +6336,7 @@ type ClusterBootOps {
 }
 
 # Real-time node state from node_state_current (ReplacingMergeTree - current state snapshot)
-# Bound to proto.LiveNode
+# Bound to periscopepb.LiveNode
 type LiveNode {
   nodeId: String!
   tenantId: ID!

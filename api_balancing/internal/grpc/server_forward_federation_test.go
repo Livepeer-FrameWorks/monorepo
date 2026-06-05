@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
 	"github.com/sirupsen/logrus"
 )
@@ -27,16 +27,16 @@ type forwardCall struct {
 	streamID     string
 }
 
-func (m *mockFedRPC) QueryStream(context.Context, string, string, *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (m *mockFedRPC) QueryStream(context.Context, string, string, *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	return nil, nil
 }
-func (m *mockFedRPC) NotifyOriginPull(context.Context, string, string, *pb.OriginPullNotification) (*pb.OriginPullAck, error) {
+func (m *mockFedRPC) NotifyOriginPull(context.Context, string, string, *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	return nil, nil
 }
-func (m *mockFedRPC) PrepareArtifact(context.Context, string, string, *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+func (m *mockFedRPC) PrepareArtifact(context.Context, string, string, *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	return nil, nil
 }
-func (m *mockFedRPC) ForwardArtifactCommand(_ context.Context, clusterID, addr string, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error) {
+func (m *mockFedRPC) ForwardArtifactCommand(_ context.Context, clusterID, addr string, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
 	m.calls = append(m.calls, forwardCall{
 		clusterID:    clusterID,
 		addr:         addr,
@@ -52,7 +52,7 @@ func (m *mockFedRPC) ForwardArtifactCommand(_ context.Context, clusterID, addr s
 	if m.handlers != nil {
 		handled = m.handlers[clusterID]
 	}
-	return &pb.ForwardArtifactCommandResponse{Handled: handled}, nil
+	return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: handled}, nil
 }
 
 type mockPeerResolver struct {

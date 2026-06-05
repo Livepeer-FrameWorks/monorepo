@@ -11,7 +11,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -115,7 +115,7 @@ func handleCreatePushTarget(ctx context.Context, args CreatePushTargetInput, c *
 	if args.StreamID == "" || args.TargetURI == "" || args.Name == "" || args.Platform == "" {
 		return toolError("stream_id, platform, name, and target_uri are all required")
 	}
-	t, err := c.Commodore.CreatePushTarget(ctx, &pb.CreatePushTargetRequest{
+	t, err := c.Commodore.CreatePushTarget(ctx, &commodorepb.CreatePushTargetRequest{
 		StreamId:  args.StreamID,
 		Platform:  strings.ToLower(args.Platform),
 		Name:      args.Name,
@@ -138,7 +138,7 @@ func handleUpdatePushTarget(ctx context.Context, args UpdatePushTargetInput, c *
 	if args.ID == "" {
 		return toolError("id is required")
 	}
-	req := &pb.UpdatePushTargetRequest{Id: args.ID}
+	req := &commodorepb.UpdatePushTargetRequest{Id: args.ID}
 	req.Name = args.Name
 	req.TargetUri = args.TargetURI
 	req.IsEnabled = args.IsEnabled
@@ -168,7 +168,7 @@ func handleDeletePushTarget(ctx context.Context, args DeletePushTargetInput, c *
 	})
 }
 
-func pushTargetToResult(t *pb.PushTarget) PushTargetResult {
+func pushTargetToResult(t *commodorepb.PushTarget) PushTargetResult {
 	if t == nil {
 		return PushTargetResult{}
 	}

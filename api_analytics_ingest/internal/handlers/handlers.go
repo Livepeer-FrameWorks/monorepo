@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -323,7 +323,7 @@ func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
 // ReplacingMergeTree(ingested_at_ms) via argMax-on-read. See
 // docs/architecture/trigger-durability.md.
 func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg kafka.Message) error {
-	var trigger pb.MistTrigger
+	var trigger ipcpb.MistTrigger
 	if err := proto.Unmarshal(msg.Value, &trigger); err != nil {
 		h.logger.WithError(err).WithField("topic", msg.Topic).Error("Failed to unmarshal raw MistTrigger; dropping poison message")
 		return nil
@@ -457,11 +457,11 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 	h.logger.Infof("Processing storage snapshot event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> StorageSnapshot
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StorageSnapshot)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StorageSnapshot)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for storage_snapshot")
 	}
@@ -571,7 +571,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	h.logger.Infof("Processing stream lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> StreamLifecycleUpdate
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
@@ -584,7 +584,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		}).Warn("Stream lifecycle event missing or invalid stream_id; skipping to avoid corrupting current state")
 		return nil
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StreamLifecycleUpdate)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for stream_lifecycle_update")
 	}
@@ -860,7 +860,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 
 // processViewerConnection writes connection_events (connect/disconnect) to ClickHouse
 func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event kafka.AnalyticsEvent, isConnect bool) error {
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
@@ -887,7 +887,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	payloadIsConnect := false
 	payloadType := ""
 	switch p := mt.GetTriggerPayload().(type) {
-	case *pb.MistTrigger_ViewerConnect:
+	case *ipcpb.MistTrigger_ViewerConnect:
 		payloadIsConnect = true
 		payloadType = "viewer_connect"
 		vc := p.ViewerConnect
@@ -917,7 +917,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 			nodeBucketH3 = bucket.H3Index
 			nodeBucketRes = uint8(bucket.Resolution)
 		}
-	case *pb.MistTrigger_ViewerDisconnect:
+	case *ipcpb.MistTrigger_ViewerDisconnect:
 		payloadIsConnect = false
 		payloadType = "viewer_disconnect"
 		vd := p.ViewerDisconnect
@@ -1191,7 +1191,7 @@ func isValidUUIDString(value string) bool {
 	return parsed != uuid.Nil
 }
 
-func mistTriggerStreamID(mt *pb.MistTrigger) string {
+func mistTriggerStreamID(mt *ipcpb.MistTrigger) string {
 	if mt == nil {
 		return ""
 	}
@@ -1200,45 +1200,45 @@ func mistTriggerStreamID(mt *pb.MistTrigger) string {
 	}
 
 	switch p := mt.GetTriggerPayload().(type) {
-	case *pb.MistTrigger_PushRewrite:
+	case *ipcpb.MistTrigger_PushRewrite:
 		return validPayloadStreamID(p.PushRewrite.GetStreamId())
-	case *pb.MistTrigger_PlayRewrite:
+	case *ipcpb.MistTrigger_PlayRewrite:
 		return validPayloadStreamID(p.PlayRewrite.GetStreamId())
-	case *pb.MistTrigger_StreamSource:
+	case *ipcpb.MistTrigger_StreamSource:
 		return validPayloadStreamID(p.StreamSource.GetStreamId())
-	case *pb.MistTrigger_PushOutStart:
+	case *ipcpb.MistTrigger_PushOutStart:
 		return validPayloadStreamID(p.PushOutStart.GetStreamId())
-	case *pb.MistTrigger_PushEnd:
+	case *ipcpb.MistTrigger_PushEnd:
 		return validPayloadStreamID(p.PushEnd.GetStreamId())
-	case *pb.MistTrigger_ViewerConnect:
+	case *ipcpb.MistTrigger_ViewerConnect:
 		return validPayloadStreamID(p.ViewerConnect.GetStreamId())
-	case *pb.MistTrigger_ViewerDisconnect:
+	case *ipcpb.MistTrigger_ViewerDisconnect:
 		return validPayloadStreamID(p.ViewerDisconnect.GetStreamId())
-	case *pb.MistTrigger_StreamBuffer:
+	case *ipcpb.MistTrigger_StreamBuffer:
 		return validPayloadStreamID(p.StreamBuffer.GetStreamId())
-	case *pb.MistTrigger_StreamEnd:
+	case *ipcpb.MistTrigger_StreamEnd:
 		return validPayloadStreamID(p.StreamEnd.GetStreamId())
-	case *pb.MistTrigger_TrackList:
+	case *ipcpb.MistTrigger_TrackList:
 		return validPayloadStreamID(p.TrackList.GetStreamId())
-	case *pb.MistTrigger_RecordingComplete:
+	case *ipcpb.MistTrigger_RecordingComplete:
 		return validPayloadStreamID(p.RecordingComplete.GetStreamId())
-	case *pb.MistTrigger_RecordingSegment:
+	case *ipcpb.MistTrigger_RecordingSegment:
 		return validPayloadStreamID(p.RecordingSegment.GetStreamId())
-	case *pb.MistTrigger_StreamLifecycleUpdate:
+	case *ipcpb.MistTrigger_StreamLifecycleUpdate:
 		return validPayloadStreamID(p.StreamLifecycleUpdate.GetStreamId())
-	case *pb.MistTrigger_ClientLifecycleUpdate:
+	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
 		return validPayloadStreamID(p.ClientLifecycleUpdate.GetStreamId())
-	case *pb.MistTrigger_ClientLifecycleBatch:
+	case *ipcpb.MistTrigger_ClientLifecycleBatch:
 		return validPayloadStreamID(p.ClientLifecycleBatch.GetStreamId())
-	case *pb.MistTrigger_LoadBalancingData:
+	case *ipcpb.MistTrigger_LoadBalancingData:
 		return validPayloadStreamID(p.LoadBalancingData.GetStreamId())
-	case *pb.MistTrigger_ClipLifecycleData:
+	case *ipcpb.MistTrigger_ClipLifecycleData:
 		return validPayloadStreamID(p.ClipLifecycleData.GetStreamId())
-	case *pb.MistTrigger_DvrLifecycleData:
+	case *ipcpb.MistTrigger_DvrLifecycleData:
 		return validPayloadStreamID(p.DvrLifecycleData.GetStreamId())
-	case *pb.MistTrigger_StorageLifecycleData:
+	case *ipcpb.MistTrigger_StorageLifecycleData:
 		return validPayloadStreamID(p.StorageLifecycleData.GetStreamId())
-	case *pb.MistTrigger_FederationEventData:
+	case *ipcpb.MistTrigger_FederationEventData:
 		return validPayloadStreamID(p.FederationEventData.GetStreamId())
 	}
 	return mt.GetStreamId()
@@ -1455,11 +1455,11 @@ func (h *AnalyticsHandler) requireStreamID(ctx context.Context, event kafka.Anal
 // processPushRewrite handles PUSH_REWRITE events (publisher ingest start)
 func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing push rewrite event: %s", event.EventID)
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_PushRewrite)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for push_rewrite")
 	}
@@ -1599,14 +1599,14 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	h.logger.Infof("Processing load balancing event: %s", event.EventID)
 
 	// Parse MistTrigger envelope
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_LoadBalancingData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_LoadBalancingData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for load_balancing")
 	}
@@ -1742,11 +1742,11 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing client lifecycle batch event: %s", event.EventID)
 
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleBatch)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_ClientLifecycleBatch)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for client_lifecycle_batch")
 	}
@@ -1836,11 +1836,11 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 func (h *AnalyticsHandler) processPlaybackBootTrace(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing player boot trace event: %s", event.EventID)
 
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_PlaybackBootTrace)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_PlaybackBootTrace)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for playback_boot")
 	}
@@ -1976,11 +1976,11 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	h.logger.Infof("Processing node lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> NodeLifecycleUpdate
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_NodeLifecycleUpdate)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for node_lifecycle_update")
 	}
@@ -2195,7 +2195,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	h.logger.Infof("Processing stream buffer event: %s", event.EventID)
 
 	// Parse MistTrigger envelope and extract StreamBufferTrigger
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
@@ -2205,7 +2205,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
 		return nil
 	}
-	payload, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer)
+	payload, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StreamBuffer)
 	if !ok || payload == nil {
 		return fmt.Errorf("unexpected payload for stream_buffer")
 	}
@@ -2446,7 +2446,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 }
 
 // extractPrimaryTracks finds the first video and audio tracks from a list of StreamTracks
-func extractPrimaryTracks(tracks []*pb.StreamTrack) (video, audio *pb.StreamTrack) {
+func extractPrimaryTracks(tracks []*ipcpb.StreamTrack) (video, audio *ipcpb.StreamTrack) {
 	for _, t := range tracks {
 		if t.GetTrackType() == "video" && video == nil {
 			video = t
@@ -2466,11 +2466,11 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	h.logger.Infof("Processing stream end event: %s", event.EventID)
 
 	// Parse MistTrigger envelope and extract StreamEndTrigger
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamEnd)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StreamEnd)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for stream_end")
 	}
@@ -2622,7 +2622,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	h.logger.Infof("Processing track list event: %s", event.EventID)
 
 	// Parse LiveTrackListTrigger from protobuf
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
@@ -2634,7 +2634,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		h.isDuplicateEvent(ctx, "stream_event_log", eventID, event.EventType) {
 		return nil
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_TrackList)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_TrackList)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for track_list")
 	}
@@ -2750,14 +2750,14 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	h.logger.Infof("Processing clip lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> ClipLifecycleData
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClipLifecycleData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_ClipLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for clip_lifecycle")
 	}
@@ -2956,14 +2956,14 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	h.logger.Infof("Processing DVR lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> DVRLifecycleData
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
 		return err
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_DvrLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for dvr_lifecycle")
 	}
@@ -3134,11 +3134,11 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	h.logger.Infof("Processing VOD lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> VodLifecycleData
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_VodLifecycleData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_VodLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for vod_lifecycle")
 	}
@@ -3303,26 +3303,26 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 }
 
 // normalizeVodStage maps VodLifecycleData.Status enum to lowercase stage string
-func normalizeVodStage(status pb.VodLifecycleData_Status) string {
+func normalizeVodStage(status ipcpb.VodLifecycleData_Status) string {
 	switch status {
-	case pb.VodLifecycleData_STATUS_REQUESTED:
+	case ipcpb.VodLifecycleData_STATUS_REQUESTED:
 		return "requested"
-	case pb.VodLifecycleData_STATUS_UPLOADING:
+	case ipcpb.VodLifecycleData_STATUS_UPLOADING:
 		return "uploading"
-	case pb.VodLifecycleData_STATUS_PROCESSING:
+	case ipcpb.VodLifecycleData_STATUS_PROCESSING:
 		return "processing"
-	case pb.VodLifecycleData_STATUS_COMPLETED:
+	case ipcpb.VodLifecycleData_STATUS_COMPLETED:
 		return "completed"
-	case pb.VodLifecycleData_STATUS_FAILED:
+	case ipcpb.VodLifecycleData_STATUS_FAILED:
 		return "failed"
-	case pb.VodLifecycleData_STATUS_DELETED:
+	case ipcpb.VodLifecycleData_STATUS_DELETED:
 		return "deleted"
 	default:
 		return "unknown"
 	}
 }
 
-func vodProgressPercent(vodData *pb.VodLifecycleData) uint8 {
+func vodProgressPercent(vodData *ipcpb.VodLifecycleData) uint8 {
 	if vodData == nil {
 		return 0
 	}
@@ -3341,11 +3341,11 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 	h.logger.Infof("Processing storage lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> StorageLifecycleData
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StorageLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for storage_lifecycle")
 	}
@@ -3424,8 +3424,8 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 func (h *AnalyticsHandler) upsertArtifactStorageState(
 	ctx context.Context,
 	event kafka.AnalyticsEvent,
-	mt *pb.MistTrigger,
-	sld *pb.StorageLifecycleData,
+	mt *ipcpb.MistTrigger,
+	sld *ipcpb.StorageLifecycleData,
 	internalName string,
 	actionStr string,
 ) error {
@@ -3434,7 +3434,7 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 	}
 	// Relay read-through events measure S3 egress by asset; without a durable
 	// local cache path they are not proof that the whole asset is hot.
-	if sld.GetAction() == pb.StorageLifecycleData_ACTION_CACHED && strings.TrimSpace(sld.GetLocalPath()) == "" {
+	if sld.GetAction() == ipcpb.StorageLifecycleData_ACTION_CACHED && strings.TrimSpace(sld.GetLocalPath()) == "" {
 		return nil
 	}
 	storageLocation, syncStatus, isHot, isSynced, isFrozen := storageStateFromAction(sld.GetAction())
@@ -3443,12 +3443,12 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 	}
 	stage := "completed"
 	switch sld.GetAction() {
-	case pb.StorageLifecycleData_ACTION_DELETED:
+	case ipcpb.StorageLifecycleData_ACTION_DELETED:
 		stage = "deleted"
-	case pb.StorageLifecycleData_ACTION_SYNC_FAILED,
-		pb.StorageLifecycleData_ACTION_EVICT_FAILED,
-		pb.StorageLifecycleData_ACTION_CACHE_FAILED,
-		pb.StorageLifecycleData_ACTION_LOCAL_MISSING:
+	case ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED,
+		ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
+		ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED,
+		ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING:
 		stage = "failed"
 	}
 
@@ -3502,29 +3502,29 @@ func (h *AnalyticsHandler) upsertArtifactStorageState(
 	return nil
 }
 
-func storageStateFromAction(action pb.StorageLifecycleData_Action) (storageLocation, syncStatus string, isHot, isSynced, isFrozen bool) {
+func storageStateFromAction(action ipcpb.StorageLifecycleData_Action) (storageLocation, syncStatus string, isHot, isSynced, isFrozen bool) {
 	switch action {
-	case pb.StorageLifecycleData_ACTION_SYNC_STARTED:
+	case ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED:
 		return "local", "in_progress", true, false, false
-	case pb.StorageLifecycleData_ACTION_SYNCED:
+	case ipcpb.StorageLifecycleData_ACTION_SYNCED:
 		return "local", "synced", true, true, false
-	case pb.StorageLifecycleData_ACTION_EVICTED:
+	case ipcpb.StorageLifecycleData_ACTION_EVICTED:
 		return "s3", "synced", false, true, true
-	case pb.StorageLifecycleData_ACTION_CACHE_STARTED:
+	case ipcpb.StorageLifecycleData_ACTION_CACHE_STARTED:
 		// Read-through relay started filling a local cache block. The
 		// authoritative bytes remain on S3; storage_location stays 's3'.
 		return "s3", "synced", false, true, true
-	case pb.StorageLifecycleData_ACTION_CACHED:
+	case ipcpb.StorageLifecycleData_ACTION_CACHED:
 		return "local", "synced", true, true, false
-	case pb.StorageLifecycleData_ACTION_DELETED:
+	case ipcpb.StorageLifecycleData_ACTION_DELETED:
 		return "deleted", "deleted", false, false, false
-	case pb.StorageLifecycleData_ACTION_SYNC_FAILED:
+	case ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED:
 		return "local", "failed", true, false, false
-	case pb.StorageLifecycleData_ACTION_EVICT_FAILED:
+	case ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED:
 		return "local", "synced", true, true, false
-	case pb.StorageLifecycleData_ACTION_CACHE_FAILED:
+	case ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED:
 		return "s3", "synced", false, true, true
-	case pb.StorageLifecycleData_ACTION_LOCAL_MISSING:
+	case ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING:
 		return "local", "lost_local", false, false, false
 	default:
 		return "", "", false, false, false
@@ -3535,11 +3535,11 @@ func storageStateFromAction(action pb.StorageLifecycleData_Action) (storageLocat
 func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing federation event: %s", event.EventID)
 
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_FederationEventData)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_FederationEventData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for federation_event")
 	}
@@ -3624,17 +3624,17 @@ func nilIfZeroInt32ToUint32(v int32) interface{} {
 }
 
 // normalizeDVRStage converts proto DVRLifecycleData_Status to lowercase stage string for ClickHouse
-func normalizeDVRStage(status pb.DVRLifecycleData_Status) string {
+func normalizeDVRStage(status ipcpb.DVRLifecycleData_Status) string {
 	switch status {
-	case pb.DVRLifecycleData_STATUS_STARTED:
+	case ipcpb.DVRLifecycleData_STATUS_STARTED:
 		return "started"
-	case pb.DVRLifecycleData_STATUS_RECORDING:
+	case ipcpb.DVRLifecycleData_STATUS_RECORDING:
 		return "recording"
-	case pb.DVRLifecycleData_STATUS_STOPPED:
+	case ipcpb.DVRLifecycleData_STATUS_STOPPED:
 		return "stopped"
-	case pb.DVRLifecycleData_STATUS_FAILED:
+	case ipcpb.DVRLifecycleData_STATUS_FAILED:
 		return "failed"
-	case pb.DVRLifecycleData_STATUS_DELETED:
+	case ipcpb.DVRLifecycleData_STATUS_DELETED:
 		return "deleted"
 	default:
 		return "unknown"
@@ -3647,11 +3647,11 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	h.logger.Infof("Processing process billing event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> ProcessBillingEvent
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ProcessBilling)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_ProcessBilling)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for process_billing")
 	}
@@ -3814,11 +3814,11 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	h.logger.Debugf("Processing API request batch event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> APIRequestBatch
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ApiRequestBatch)
+	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_ApiRequestBatch)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for api_request_batch")
 	}

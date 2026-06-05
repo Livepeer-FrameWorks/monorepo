@@ -2,10 +2,9 @@ package grpc
 
 import (
 	"context"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	"slices"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const tenantAliasBackstopInterval = 5 * time.Minute
@@ -99,7 +98,7 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 		return false
 	}
 
-	statusResp, err := s.navigatorClient.GetTenantAliasStatus(ctx, &pb.GetTenantAliasStatusRequest{TenantId: d.tenantID})
+	statusResp, err := s.navigatorClient.GetTenantAliasStatus(ctx, &dnspb.GetTenantAliasStatusRequest{TenantId: d.tenantID})
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", d.tenantID).Debug("tenant-alias backstop: status lookup failed")
 		return false

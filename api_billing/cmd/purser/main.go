@@ -22,7 +22,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -210,8 +210,9 @@ func main() {
 		logger.Warn("MOLLIE_API_KEY not set - Mollie functionality disabled")
 	}
 
-	// Initialize handlers
-	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, stripeClient, decklogClient)
+	// Initialize the webhook/checkout handler service (replaces the prior
+	// package-global handlers.Init).
+	billingSvc := handlers.NewService(db, logger, handlerMetrics, qmGRPCClient, mollieClient, stripeClient, decklogClient)
 
 	// Shared tier reconciler — used by PurserServer.ChangeBillingTier and
 	// by JobManager's downgrade applier so both apply the same grant/suspend
@@ -219,7 +220,7 @@ func main() {
 	tierReconciler := tieraccess.NewReconciler(db, qmGRPCClient, logger)
 
 	// Initialize and start JobManager for background billing tasks
-	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler)
+	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler, billingSvc)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -259,6 +260,7 @@ func main() {
 			QuartermasterClient: qmGRPCClient,
 			CommodoreClient:     commodoreClient,
 			DecklogClient:       decklogClient,
+			Billing:             billingSvc,
 			CertFile:            config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 			KeyFile:             config.GetEnv("GRPC_TLS_KEY_PATH", ""),
 			AllowInsecure:       config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
@@ -298,7 +300,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "purser",
 			Version:        version.Version,
 			Protocol:       "http",

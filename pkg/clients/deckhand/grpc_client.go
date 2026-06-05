@@ -9,7 +9,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -20,7 +20,7 @@ const DefaultServerName = "deckhand.internal"
 // GRPCClient is the gRPC client for Deckhand (Support Messaging)
 type GRPCClient struct {
 	conn    *grpc.ClientConn
-	client  pb.DeckhandServiceClient
+	client  deckhandpb.DeckhandServiceClient
 	logger  logging.Logger
 	timeout time.Duration
 }
@@ -101,7 +101,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	return &GRPCClient{
 		conn:    conn,
-		client:  pb.NewDeckhandServiceClient(conn),
+		client:  deckhandpb.NewDeckhandServiceClient(conn),
 		logger:  config.Logger,
 		timeout: config.Timeout,
 	}, nil
@@ -116,11 +116,11 @@ func (c *GRPCClient) Close() error {
 }
 
 // ListConversations returns all conversations for a tenant
-func (c *GRPCClient) ListConversations(ctx context.Context, tenantID string, page, perPage int32) (*pb.ListConversationsResponse, error) {
+func (c *GRPCClient) ListConversations(ctx context.Context, tenantID string, page, perPage int32) (*deckhandpb.ListConversationsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.ListConversations(ctx, &pb.ListConversationsRequest{
+	return c.client.ListConversations(ctx, &deckhandpb.ListConversationsRequest{
 		TenantId: tenantID,
 		Page:     page,
 		PerPage:  perPage,
@@ -128,11 +128,11 @@ func (c *GRPCClient) ListConversations(ctx context.Context, tenantID string, pag
 }
 
 // SearchConversations searches conversations for a tenant by keyword.
-func (c *GRPCClient) SearchConversations(ctx context.Context, tenantID, query string, page, perPage int32) (*pb.SearchConversationsResponse, error) {
+func (c *GRPCClient) SearchConversations(ctx context.Context, tenantID, query string, page, perPage int32) (*deckhandpb.SearchConversationsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.SearchConversations(ctx, &pb.SearchConversationsRequest{
+	return c.client.SearchConversations(ctx, &deckhandpb.SearchConversationsRequest{
 		TenantId: tenantID,
 		Query:    query,
 		Page:     page,
@@ -141,21 +141,21 @@ func (c *GRPCClient) SearchConversations(ctx context.Context, tenantID, query st
 }
 
 // GetConversation returns a single conversation by ID
-func (c *GRPCClient) GetConversation(ctx context.Context, conversationID string) (*pb.DeckhandConversation, error) {
+func (c *GRPCClient) GetConversation(ctx context.Context, conversationID string) (*deckhandpb.DeckhandConversation, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.GetConversation(ctx, &pb.GetConversationRequest{
+	return c.client.GetConversation(ctx, &deckhandpb.GetConversationRequest{
 		ConversationId: conversationID,
 	})
 }
 
 // CreateConversation creates a new conversation
-func (c *GRPCClient) CreateConversation(ctx context.Context, subject, initialMessage string, customAttrs map[string]string) (*pb.DeckhandConversation, error) {
+func (c *GRPCClient) CreateConversation(ctx context.Context, subject, initialMessage string, customAttrs map[string]string) (*deckhandpb.DeckhandConversation, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.CreateConversation(ctx, &pb.CreateConversationRequest{
+	return c.client.CreateConversation(ctx, &deckhandpb.CreateConversationRequest{
 		Subject:          subject,
 		InitialMessage:   initialMessage,
 		CustomAttributes: customAttrs,
@@ -163,11 +163,11 @@ func (c *GRPCClient) CreateConversation(ctx context.Context, subject, initialMes
 }
 
 // ListMessages returns messages for a conversation
-func (c *GRPCClient) ListMessages(ctx context.Context, conversationID string, page, perPage int32) (*pb.ListMessagesResponse, error) {
+func (c *GRPCClient) ListMessages(ctx context.Context, conversationID string, page, perPage int32) (*deckhandpb.ListMessagesResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.ListMessages(ctx, &pb.ListMessagesRequest{
+	return c.client.ListMessages(ctx, &deckhandpb.ListMessagesRequest{
 		ConversationId: conversationID,
 		Page:           page,
 		PerPage:        perPage,
@@ -175,11 +175,11 @@ func (c *GRPCClient) ListMessages(ctx context.Context, conversationID string, pa
 }
 
 // SendMessage sends a message in a conversation
-func (c *GRPCClient) SendMessage(ctx context.Context, conversationID, content string) (*pb.DeckhandMessage, error) {
+func (c *GRPCClient) SendMessage(ctx context.Context, conversationID, content string) (*deckhandpb.DeckhandMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.client.SendMessage(ctx, &pb.SendMessageRequest{
+	return c.client.SendMessage(ctx, &deckhandpb.SendMessageRequest{
 		ConversationId: conversationID,
 		Content:        content,
 	})

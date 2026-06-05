@@ -9,7 +9,7 @@ import (
 
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +23,7 @@ type AccessMiddlewareConfig struct {
 }
 
 type BillingClient interface {
-	GetBillingStatus(ctx context.Context, tenantID string) (*pb.BillingStatusResponse, error)
+	GetBillingStatus(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error)
 }
 
 func AccessMiddleware(cfg AccessMiddlewareConfig) gin.HandlerFunc {

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -24,7 +24,7 @@ const (
 //
 // tenant_id is required so the row is correctly attributed; stream_id can be
 // empty when resolution couldn't reach a tenant (e.g. commodore_error).
-func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *pb.RecordPullSourceEventRequest) (*emptypb.Empty, error) {
+func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *commodorepb.RecordPullSourceEventRequest) (*emptypb.Empty, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -63,7 +63,7 @@ func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *pb.Rec
 // stream_id or internal_name must be supplied; both filter the same way.
 // Tenant scoping is enforced from the caller's JWT — this is the operator-
 // facing read for the webapp's pull source health view.
-func (s *CommodoreServer) ListPullSourceEvents(ctx context.Context, req *pb.ListPullSourceEventsRequest) (*pb.ListPullSourceEventsResponse, error) {
+func (s *CommodoreServer) ListPullSourceEvents(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -102,16 +102,16 @@ func (s *CommodoreServer) ListPullSourceEvents(ctx context.Context, req *pb.List
 	}
 	if qErr != nil {
 		if errors.Is(qErr, sql.ErrNoRows) {
-			return &pb.ListPullSourceEventsResponse{}, nil
+			return &commodorepb.ListPullSourceEventsResponse{}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "pull_source_events query failed: %v", qErr)
 	}
 	defer func() { _ = rows.Close() }()
 
-	out := &pb.ListPullSourceEventsResponse{}
+	out := &commodorepb.ListPullSourceEventsResponse{}
 	for rows.Next() {
 		var (
-			ev                                  pb.PullSourceEvent
+			ev                                  commodorepb.PullSourceEvent
 			id, sid, internalName, kind, detail string
 			createdAt                           = sql.NullTime{}
 		)

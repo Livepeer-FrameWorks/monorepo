@@ -8,7 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
 	"context"
 
@@ -58,7 +58,7 @@ func TestNotifyOriginPullRejectsTenantMismatch(t *testing.T) {
 	server, _, _ := testFederationServerWithCache(t)
 	setLiveStreamState(t, "tenantA+stream", "source-1", "tenant-a", "edge-a.example.com")
 
-	ack, err := server.NotifyOriginPull(svcAuthCtx(), &pb.OriginPullNotification{
+	ack, err := server.NotifyOriginPull(svcAuthCtx(), &foghornfederationpb.OriginPullNotification{
 		StreamName:    "tenantA+stream",
 		SourceNodeId:  "source-1",
 		DestClusterId: "cluster-b",
@@ -87,7 +87,7 @@ func TestNotifyOriginPullFailsWhenRegistryUnavailable(t *testing.T) {
 	control.SetStreamRegistry(nil)
 	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
 
-	ack, err := server.NotifyOriginPull(svcAuthCtx(), &pb.OriginPullNotification{
+	ack, err := server.NotifyOriginPull(svcAuthCtx(), &foghornfederationpb.OriginPullNotification{
 		StreamName:    "tenantA+stream",
 		SourceNodeId:  "source-1",
 		DestClusterId: "cluster-b",
@@ -106,7 +106,7 @@ func TestNotifyOriginPullKeepsBareMistNativeStreamName(t *testing.T) {
 	server, _, _ := testFederationServerWithCache(t)
 	setLiveStreamState(t, "frameworks-demo", "source-1", "tenant-a", "https://edge-a.example.com")
 
-	ack, err := server.NotifyOriginPull(svcAuthCtx(), &pb.OriginPullNotification{
+	ack, err := server.NotifyOriginPull(svcAuthCtx(), &foghornfederationpb.OriginPullNotification{
 		StreamName:    "frameworks-demo",
 		SourceNodeId:  "source-1",
 		DestClusterId: "cluster-b",

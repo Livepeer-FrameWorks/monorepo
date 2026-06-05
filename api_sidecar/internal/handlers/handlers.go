@@ -19,7 +19,7 @@ import (
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -66,7 +66,7 @@ func incMistWebhook(triggerType, status string) {
 	metrics.MistWebhookRequests.WithLabelValues(triggerType, status).Inc()
 }
 
-func applyTenantContext(trigger *pb.MistTrigger) {
+func applyTenantContext(trigger *ipcpb.MistTrigger) {
 	if trigger == nil {
 		return
 	}
@@ -79,7 +79,7 @@ func applyTenantContext(trigger *pb.MistTrigger) {
 // after stamping the stable source_event_id on RequestId for Foghorn ack
 // correlation and a deterministic UUID on EventId for downstream Periscope
 // dedupe. Returns the stable id so callers can include it in structured logs.
-func forwardDurable(triggerType string, body []byte, mistTrigger *pb.MistTrigger) (string, error) {
+func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrigger) (string, error) {
 	nodeID := control.GetCurrentNodeID()
 	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body)
 	mistTrigger.RequestId = sourceEventID
@@ -88,13 +88,13 @@ func forwardDurable(triggerType string, body []byte, mistTrigger *pb.MistTrigger
 }
 
 func forwardDurableParseFailure(triggerType string, body []byte, parseErr error) (string, error) {
-	rawTrigger := &pb.MistTrigger{
+	rawTrigger := &ipcpb.MistTrigger{
 		TriggerType: triggerType,
 		NodeId:      control.GetCurrentNodeID(),
 		Timestamp:   time.Now().UnixMilli(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_RawMistWebhook{
-			RawMistWebhook: &pb.RawMistWebhookTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
+			RawMistWebhook: &ipcpb.RawMistWebhookTrigger{
 				PayloadRaw: body,
 				ParseError: parseErr.Error(),
 			},
@@ -1762,7 +1762,7 @@ func HandleRecordingEnd(c *gin.Context) {
 	c.String(http.StatusOK, "OK")
 }
 
-func processingRecordingEndEvent(rec *pb.RecordingCompleteTrigger) ProcessingRecordingEndEvent {
+func processingRecordingEndEvent(rec *ipcpb.RecordingCompleteTrigger) ProcessingRecordingEndEvent {
 	return ProcessingRecordingEndEvent{
 		StreamName:      rec.GetStreamName(),
 		FilePath:        rec.GetFilePath(),
@@ -1885,7 +1885,7 @@ func triggerClipSync(filePath string, sizeBytes uint64) {
 }
 
 // enrichStreamBufferTrigger computes Helmsman-specific metrics from parsed tracks
-func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
+func enrichStreamBufferTrigger(trigger *ipcpb.StreamBufferTrigger) {
 	if trigger == nil {
 		return
 	}
@@ -1937,7 +1937,7 @@ func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
 }
 
 // enrichLiveTrackListTrigger computes quality metrics and primary track info from tracks
-func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
+func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 	if trigger == nil || trigger.Tracks == nil {
 		return
 	}
@@ -1946,7 +1946,7 @@ func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
 	totalTracks := int32(len(tracks))
 	trigger.TotalTracks = &totalTracks
 
-	var videoTracks, audioTracks []*pb.StreamTrack
+	var videoTracks, audioTracks []*ipcpb.StreamTrack
 	for _, track := range tracks {
 		switch track.TrackType {
 		case "video":
@@ -2008,9 +2008,9 @@ func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
 }
 
 // determineQualityTier determines quality tier with rich format: "1080p60 H264 @ 6Mbps"
-func determineQualityTier(tracks []*pb.StreamTrack) string {
+func determineQualityTier(tracks []*ipcpb.StreamTrack) string {
 	// Find primary video track (highest resolution)
-	var primaryVideo *pb.StreamTrack
+	var primaryVideo *ipcpb.StreamTrack
 	maxHeight := int32(0)
 	for _, track := range tracks {
 		if track.TrackType == "video" && track.Height != nil {
@@ -2206,7 +2206,7 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	turnaroundMsInt, _ := strconv.ParseInt(turnaroundMs, 10, 64)
 	speedFactorFloat, _ := strconv.ParseFloat(speedFactor, 64)
 
-	billingEvent := &pb.ProcessBillingEvent{
+	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:      nodeName,
 		StreamName:  streamName,
 		ProcessType: "Livepeer",
@@ -2237,12 +2237,12 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	// on trigger_type = LIVEPEER_SEGMENT_COMPLETE. The forwardDurable
 	// helper stamps the stable source_event_id on RequestId and the
 	// deterministic typed UUID on EventId.
-	billingTrigger := &pb.MistTrigger{
+	billingTrigger := &ipcpb.MistTrigger{
 		TriggerType: string(mist.TriggerLivepeerSegmentComplete),
 		NodeId:      control.GetCurrentNodeID(),
 		Timestamp:   time.Now().UnixMilli(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
 			ProcessBilling: billingEvent,
 		},
 	}
@@ -2380,7 +2380,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 
 	durationMs := secondsSinceLastInt * 1000
 
-	billingEvent := &pb.ProcessBillingEvent{
+	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:              nodeName,
 		StreamName:          streamName,
 		ProcessType:         "AV",
@@ -2422,12 +2422,12 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	// on trigger_type = PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE. forwardDurable
 	// stamps the stable source_event_id on RequestId; the raw body is the
 	// source hash input.
-	billingTrigger := &pb.MistTrigger{
+	billingTrigger := &ipcpb.MistTrigger{
 		TriggerType: string(mist.TriggerProcessAVSegmentComplete),
 		NodeId:      control.GetCurrentNodeID(),
 		Timestamp:   time.Now().UnixMilli(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
 			ProcessBilling: billingEvent,
 		},
 	}
@@ -2521,26 +2521,26 @@ func HandleSetNodeMode(c *gin.Context) {
 	})
 }
 
-func parseMode(s string) (pb.NodeOperationalMode, bool) {
+func parseMode(s string) (ipcpb.NodeOperationalMode, bool) {
 	switch strings.ToLower(s) {
 	case "normal":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL, true
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL, true
 	case "draining":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING, true
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING, true
 	case "maintenance":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE, true
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE, true
 	default:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED, false
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED, false
 	}
 }
 
-func modeToString(m pb.NodeOperationalMode) string {
+func modeToString(m ipcpb.NodeOperationalMode) string {
 	switch m {
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
 		return "normal"
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
 		return "draining"
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
 		return "maintenance"
 	default:
 		return "normal"

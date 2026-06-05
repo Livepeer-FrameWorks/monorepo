@@ -7,7 +7,7 @@ import (
 
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -39,7 +39,7 @@ var (
 	triggerForwarderWakeup  = make(chan struct{}, 1)
 	triggerForwarderStarted atomic.Bool
 
-	pendingTriggerAcks   = make(map[string]chan *pb.MistTriggerAck)
+	pendingTriggerAcks   = make(map[string]chan *ipcpb.MistTriggerAck)
 	pendingTriggerAcksMu sync.Mutex
 )
 
@@ -66,7 +66,7 @@ func initTriggerForwarder(logger logging.Logger) {
 // (sha256(node_id || NUL || trigger_type || NUL || payload_raw)); duplicate
 // deliveries from Mist with the same id collide on disk and are forwarded at
 // most once.
-func SendDurableMistTrigger(trigger *pb.MistTrigger) error {
+func SendDurableMistTrigger(trigger *ipcpb.MistTrigger) error {
 	if !triggerForwarderStarted.Load() || triggerWAL == nil {
 		return errTriggerForwarderUnready
 	}
@@ -126,7 +126,7 @@ func TriggerWALPendingDepth() (int, error) {
 
 // ListTriggerWALPending returns the persisted MistTrigger envelopes in
 // oldest-first order. Used by /internal/triggers/wal for inspection.
-func ListTriggerWALPending() ([]*pb.MistTrigger, error) {
+func ListTriggerWALPending() ([]*ipcpb.MistTrigger, error) {
 	if triggerWAL == nil {
 		return nil, errTriggerForwarderUnready
 	}
@@ -137,7 +137,7 @@ func ListTriggerWALPending() ([]*pb.MistTrigger, error) {
 // blocked awaiting it. Calls that arrive after the ack channel has been
 // removed (timeout, restart) are dropped — the next forwarder pass will
 // re-send and observe the ack again.
-func handleMistTriggerAck(ack *pb.MistTriggerAck) {
+func handleMistTriggerAck(ack *ipcpb.MistTriggerAck) {
 	if ack == nil {
 		return
 	}
@@ -191,14 +191,14 @@ func drainTriggerWAL(logger logging.Logger) {
 	}
 }
 
-func sendDurableTriggerAndAwaitAck(trigger *pb.MistTrigger, logger logging.Logger) bool {
+func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Logger) bool {
 	requestID := trigger.GetRequestId()
 	if requestID == "" {
 		logger.Warn("Skipping WAL trigger with empty request_id")
 		return false
 	}
 
-	ch := make(chan *pb.MistTriggerAck, 1)
+	ch := make(chan *ipcpb.MistTriggerAck, 1)
 	pendingTriggerAcksMu.Lock()
 	pendingTriggerAcks[requestID] = ch
 	pendingTriggerAcksMu.Unlock()
@@ -212,9 +212,9 @@ func sendDurableTriggerAndAwaitAck(trigger *pb.MistTrigger, logger logging.Logge
 	if stream == nil {
 		return false
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger},
+		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).WithField("source_event_id", requestID).Warn("Stream send failed; will retry from WAL")

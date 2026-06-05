@@ -6,9 +6,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestRecordPullSourceEventResolvedStampsActiveIngestCluster(t *testing.T) {
@@ -30,7 +29,7 @@ func TestRecordPullSourceEventResolvedStampsActiveIngestCluster(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	_, err = server.RecordPullSourceEvent(context.Background(), &pb.RecordPullSourceEventRequest{
+	_, err = server.RecordPullSourceEvent(context.Background(), &commodorepb.RecordPullSourceEventRequest{
 		TenantId:     "tenant-1",
 		StreamId:     "stream-1",
 		InternalName: "internal-1",
@@ -57,7 +56,7 @@ func TestRecordPullSourceEventNonResolvedOnlyLogsEvent(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	_, err = server.RecordPullSourceEvent(context.Background(), &pb.RecordPullSourceEventRequest{
+	_, err = server.RecordPullSourceEvent(context.Background(), &commodorepb.RecordPullSourceEventRequest{
 		TenantId:     "tenant-1",
 		StreamId:     "stream-1",
 		InternalName: "internal-1",

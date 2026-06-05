@@ -2,19 +2,19 @@ package control
 
 import (
 	"context"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // setMockValidator sets the package-level validateBootstrapTokenFn for tests
 // and returns a cleanup function that restores it to nil.
-func setMockValidator(t *testing.T, resp *pb.ValidateBootstrapTokenResponse) {
+func setMockValidator(t *testing.T, resp *quartermasterpb.ValidateBootstrapTokenResponse) {
 	t.Helper()
-	validateBootstrapTokenFn = func(_ context.Context, _ string) (*pb.ValidateBootstrapTokenResponse, error) {
+	validateBootstrapTokenFn = func(_ context.Context, _ string) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
 		return resp, nil
 	}
 	t.Cleanup(func() { validateBootstrapTokenFn = nil })
@@ -24,14 +24,14 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
 	t.Setenv("BRAND_DOMAIN", "example.com")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
 		Kind:      "edge_node",
 		ClusterId: "us_west_1",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_validtoken",
 		ExternalIp:      "1.2.3.4",
 	})
@@ -90,14 +90,14 @@ func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
 	}
 	t.Setenv("GRPC_TLS_CA_PATH", caPath)
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
 		Kind:      "edge_node",
 		ClusterId: "us_west_1",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_validtoken",
 	})
 	if err != nil {
@@ -110,7 +110,7 @@ func TestPreRegisterEdge_ReturnsConfiguredCABundle(t *testing.T) {
 
 func TestPreRegisterEdge_EmptyToken(t *testing.T) {
 	srv := &EdgeProvisioningServer{}
-	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	_, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "",
 	})
 	if err == nil {
@@ -123,7 +123,7 @@ func TestPreRegisterEdge_EmptyToken(t *testing.T) {
 
 func TestPreRegisterEdge_WhitespaceOnlyToken(t *testing.T) {
 	srv := &EdgeProvisioningServer{}
-	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	_, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "   ",
 	})
 	if err == nil {
@@ -132,13 +132,13 @@ func TestPreRegisterEdge_WhitespaceOnlyToken(t *testing.T) {
 }
 
 func TestPreRegisterEdge_InvalidToken(t *testing.T) {
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:  false,
 		Reason: "not_found",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	_, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_bogus",
 	})
 	if err == nil {
@@ -150,13 +150,13 @@ func TestPreRegisterEdge_InvalidToken(t *testing.T) {
 }
 
 func TestPreRegisterEdge_WrongTokenKind(t *testing.T) {
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
 		Kind:  "service",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	_, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_servicetoken",
 	})
 	if err == nil {
@@ -174,7 +174,7 @@ func TestPreRegisterEdge_NoValidatorNoQM(t *testing.T) {
 	t.Cleanup(func() { validateBootstrapTokenFn = nil })
 
 	srv := &EdgeProvisioningServer{}
-	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	_, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_anytoken",
 	})
 	if err == nil {
@@ -189,13 +189,13 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	os.Unsetenv("CLUSTER_ID")
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
 		Kind:  "edge_node",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_nobound",
 	})
 	if err != nil {
@@ -218,14 +218,14 @@ func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "env-cluster")
 	t.Setenv("BRAND_DOMAIN", "example.com")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
 		Kind:      "edge_node",
 		ClusterId: "token-bound-cluster",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_bound",
 	})
 	if err != nil {
@@ -241,7 +241,7 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "test")
 	t.Setenv("BRAND_DOMAIN", "example.com")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
 		Kind:  "edge_node",
 	})
@@ -249,7 +249,7 @@ func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	srv := &EdgeProvisioningServer{}
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
-		resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 			EnrollmentToken: "bt_unique",
 		})
 		if err != nil {
@@ -266,14 +266,14 @@ func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "eu_west_1")
 	t.Setenv("BRAND_DOMAIN", "example.com")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
 		Kind:      "edge_node",
 		ClusterId: "eu_west_1",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: "bt_named",
 		PreferredNodeId: "edge-eu-1",
 	})
@@ -292,14 +292,14 @@ func TestPreRegisterEdge_UsesPreferredNodeIDWithoutDoublePrefix(t *testing.T) {
 func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "example.com")
 
-	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid:     true,
 		Kind:      "edge_node",
 		ClusterId: "___",
 	})
 
 	srv := &EdgeProvisioningServer{}
-	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{EnrollmentToken: "bt_slug"})
+	resp, err := srv.PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{EnrollmentToken: "bt_slug"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

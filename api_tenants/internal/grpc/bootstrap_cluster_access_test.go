@@ -7,7 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -25,7 +25,7 @@ func TestBootstrapClusterAccess_RequiresServiceToken(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	// No auth_type set on context.
-	if _, err := server.BootstrapClusterAccess(context.Background(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(context.Background(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "core-1",
 	}); err == nil {
 		t.Fatal("expected PermissionDenied for non-service-token caller")
@@ -40,12 +40,12 @@ func TestBootstrapClusterAccess_ValidatesArgs(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		ClusterId: "core-1",
 	}); err == nil {
 		t.Fatal("expected error for missing tenant_id")
 	}
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001",
 	}); err == nil {
 		t.Fatal("expected error for missing cluster_id")
@@ -64,7 +64,7 @@ func TestBootstrapClusterAccess_RejectsUnknownTenant(t *testing.T) {
 		WithArgs("00000000-0000-0000-0000-000000000099").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000099", ClusterId: "core-1",
 	}); err == nil {
 		t.Fatal("expected NotFound for unknown tenant")
@@ -89,7 +89,7 @@ func TestBootstrapClusterAccess_RejectsNonPlatformOfficial(t *testing.T) {
 		WithArgs("private-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_platform_official", "is_active"}).AddRow(false, true))
 
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "private-1",
 	}); err == nil {
 		t.Fatal("expected FailedPrecondition for non-platform-official cluster")
@@ -114,7 +114,7 @@ func TestBootstrapClusterAccess_RejectsInactiveCluster(t *testing.T) {
 		WithArgs("retired-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_platform_official", "is_active"}).AddRow(true, false))
 
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "retired-1",
 	}); err == nil {
 		t.Fatal("expected FailedPrecondition for inactive cluster")
@@ -150,7 +150,7 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 			AddRow("Acme", nil, "free", true, false))
 	mock.ExpectCommit()
 
-	if _, err := server.BootstrapClusterAccess(serviceCtx(), &pb.BootstrapClusterAccessRequest{
+	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId: "00000000-0000-0000-0000-000000000001", ClusterId: "core-1",
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)

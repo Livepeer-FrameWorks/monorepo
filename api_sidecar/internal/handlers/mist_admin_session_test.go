@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,7 +19,7 @@ import (
 // of a test so the middleware can run without a real Foghorn control stream.
 func withFakeSessionValidator(
 	t *testing.T,
-	session func(ctx context.Context, token string) (*pb.EdgeMistAdminSessionResponse, error),
+	session func(ctx context.Context, token string) (*ipcpb.EdgeMistAdminSessionResponse, error),
 ) {
 	t.Helper()
 	prevSession := validateMistAdminSession
@@ -33,11 +33,11 @@ func withFakeSessionValidator(
 
 func TestRequireMistAdmin_AcceptsValidCookie(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, token string) (*pb.EdgeMistAdminSessionResponse, error) {
+		func(_ context.Context, token string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 			if token != "cookie-token" {
 				t.Errorf("unexpected token forwarded: %q", token)
 			}
-			return &pb.EdgeMistAdminSessionResponse{
+			return &ipcpb.EdgeMistAdminSessionResponse{
 				Valid:     true,
 				UserId:    "u1",
 				TenantId:  "t1",
@@ -78,7 +78,7 @@ func TestRequireMistAdmin_AcceptsValidCookie(t *testing.T) {
 
 func TestRequireMistAdmin_RejectsBearerWithoutSessionCookie(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 			t.Fatalf("session validator should not be called without a cookie")
 			return nil, nil
 		})
@@ -106,8 +106,8 @@ func TestRequireMistAdmin_RejectsBearerWithoutSessionCookie(t *testing.T) {
 
 func TestRequireMistAdmin_RejectsInvalidCookie(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
-			return &pb.EdgeMistAdminSessionResponse{Valid: false}, nil
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
+			return &ipcpb.EdgeMistAdminSessionResponse{Valid: false}, nil
 		})
 
 	gin.SetMode(gin.TestMode)
@@ -133,7 +133,7 @@ func TestRequireMistAdmin_RejectsInvalidCookie(t *testing.T) {
 
 func TestRequireMistAdmin_ValidationUnavailable(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 			return nil, errors.New("control stream disconnected")
 		})
 
@@ -160,8 +160,8 @@ func TestRequireMistAdmin_ValidationUnavailable(t *testing.T) {
 
 func TestRequireMistAdmin_RejectsExpiredCookie(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
-			return &pb.EdgeMistAdminSessionResponse{
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
+			return &ipcpb.EdgeMistAdminSessionResponse{
 				Valid:     true,
 				ExpiresAt: time.Now().Add(-1 * time.Second).Unix(),
 			}, nil
@@ -191,11 +191,11 @@ func TestRequireMistAdmin_RejectsExpiredCookie(t *testing.T) {
 func TestMistAdminSessionHandler_PostSetsCookieAndRedirects(t *testing.T) {
 	exp := time.Now().Add(5 * time.Minute).Unix()
 	withFakeSessionValidator(t,
-		func(_ context.Context, token string) (*pb.EdgeMistAdminSessionResponse, error) {
+		func(_ context.Context, token string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 			if token != "fresh-session-token" {
 				t.Errorf("unexpected token: %q", token)
 			}
-			return &pb.EdgeMistAdminSessionResponse{
+			return &ipcpb.EdgeMistAdminSessionResponse{
 				Valid:     true,
 				UserId:    "u1",
 				TenantId:  "t1",
@@ -304,8 +304,8 @@ func TestMistAdminSessionHandler_RejectsMissingToken(t *testing.T) {
 
 func TestMistAdminSessionHandler_RejectsInvalidToken(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
-			return &pb.EdgeMistAdminSessionResponse{Valid: false}, nil
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
+			return &ipcpb.EdgeMistAdminSessionResponse{Valid: false}, nil
 		})
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -332,7 +332,7 @@ func TestMistAdminSessionHandler_RejectsInvalidToken(t *testing.T) {
 
 func TestMistAdminSessionHandler_ValidationUnavailable(t *testing.T) {
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 			return nil, errors.New("control stream disconnected")
 		})
 	gin.SetMode(gin.TestMode)
@@ -362,8 +362,8 @@ func TestMistAdminSessionHandler_RejectsExpiredToken(t *testing.T) {
 	// Token that has technically validated but has zero TTL left — the
 	// handler must refuse to set a cookie with a non-positive Max-Age.
 	withFakeSessionValidator(t,
-		func(_ context.Context, _ string) (*pb.EdgeMistAdminSessionResponse, error) {
-			return &pb.EdgeMistAdminSessionResponse{
+		func(_ context.Context, _ string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
+			return &ipcpb.EdgeMistAdminSessionResponse{
 				Valid:     true,
 				UserId:    "u1",
 				TenantId:  "t1",

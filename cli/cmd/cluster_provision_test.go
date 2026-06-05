@@ -25,7 +25,8 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
@@ -56,10 +57,10 @@ func testEdgeTelemetryPrivateKeyB64(t *testing.T) string {
 }
 
 type fakeFoghornClusterAssigner struct {
-	calls     []*pb.AssignServiceToClusterRequest
-	drains    []*pb.DrainServiceInstanceRequest
-	services  []*pb.Service
-	instances map[string][]*pb.ServiceInstance
+	calls     []*quartermasterpb.AssignServiceToClusterRequest
+	drains    []*quartermasterpb.DrainServiceInstanceRequest
+	services  []*quartermasterpb.Service
+	instances map[string][]*quartermasterpb.ServiceInstance
 	errFor    map[string]error
 }
 
@@ -73,7 +74,7 @@ func TestServiceExistsTracksPreexistingStoppedServices(t *testing.T) {
 	}
 }
 
-func (f *fakeFoghornClusterAssigner) AssignServiceToCluster(_ context.Context, req *pb.AssignServiceToClusterRequest) error {
+func (f *fakeFoghornClusterAssigner) AssignServiceToCluster(_ context.Context, req *quartermasterpb.AssignServiceToClusterRequest) error {
 	f.calls = append(f.calls, req)
 	if f.errFor != nil {
 		if err := f.errFor[req.GetClusterId()]; err != nil {
@@ -83,29 +84,29 @@ func (f *fakeFoghornClusterAssigner) AssignServiceToCluster(_ context.Context, r
 	return nil
 }
 
-func (f *fakeFoghornClusterAssigner) DrainServiceInstance(_ context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
+func (f *fakeFoghornClusterAssigner) DrainServiceInstance(_ context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error) {
 	f.drains = append(f.drains, req)
-	return &pb.DrainServiceInstanceResponse{}, nil
+	return &quartermasterpb.DrainServiceInstanceResponse{}, nil
 }
 
-func (f *fakeFoghornClusterAssigner) ListServices(_ context.Context, _ *pb.CursorPaginationRequest) (*pb.ListServicesResponse, error) {
-	return &pb.ListServicesResponse{Services: f.services}, nil
+func (f *fakeFoghornClusterAssigner) ListServices(_ context.Context, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesResponse, error) {
+	return &quartermasterpb.ListServicesResponse{Services: f.services}, nil
 }
 
-func (f *fakeFoghornClusterAssigner) ListServiceInstances(_ context.Context, _, serviceID, _ string, _ *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error) {
-	return &pb.ListServiceInstancesResponse{Instances: f.instances[serviceID]}, nil
+func (f *fakeFoghornClusterAssigner) ListServiceInstances(_ context.Context, _, serviceID, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+	return &quartermasterpb.ListServiceInstancesResponse{Instances: f.instances[serviceID]}, nil
 }
 
-func fakePoolServices(names ...string) []*pb.Service {
-	services := make([]*pb.Service, 0, len(names))
+func fakePoolServices(names ...string) []*quartermasterpb.Service {
+	services := make([]*quartermasterpb.Service, 0, len(names))
 	for _, name := range names {
-		services = append(services, &pb.Service{ServiceId: name, Type: name})
+		services = append(services, &quartermasterpb.Service{ServiceId: name, Type: name})
 	}
 	return services
 }
 
-func fakeServiceInstance(id, serviceID, nodeID, status string) *pb.ServiceInstance {
-	return &pb.ServiceInstance{
+func fakeServiceInstance(id, serviceID, nodeID, status string) *quartermasterpb.ServiceInstance {
+	return &quartermasterpb.ServiceInstance{
 		Id:         id,
 		InstanceId: id,
 		ServiceId:  serviceID,
@@ -301,27 +302,27 @@ func newTestCommandWithOutput(out *bytes.Buffer) *cobra.Command {
 }
 
 type fakePublicServiceRegistrar struct {
-	reqs []*pb.BootstrapServiceRequest
+	reqs []*quartermasterpb.BootstrapServiceRequest
 }
 
-func (f *fakePublicServiceRegistrar) BootstrapService(_ context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
+func (f *fakePublicServiceRegistrar) BootstrapService(_ context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error) {
 	f.reqs = append(f.reqs, req)
-	return &pb.BootstrapServiceResponse{}, nil
+	return &quartermasterpb.BootstrapServiceResponse{}, nil
 }
 
 type fakeIngressDesiredStateRegistrar struct {
-	tlsBundles []*pb.TLSBundle
-	sites      []*pb.IngressSite
+	tlsBundles []*quartermasterpb.TLSBundle
+	sites      []*quartermasterpb.IngressSite
 }
 
-func (f *fakeIngressDesiredStateRegistrar) UpsertTLSBundle(_ context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error) {
+func (f *fakeIngressDesiredStateRegistrar) UpsertTLSBundle(_ context.Context, bundle *quartermasterpb.TLSBundle) (*quartermasterpb.TLSBundleResponse, error) {
 	f.tlsBundles = append(f.tlsBundles, bundle)
-	return &pb.TLSBundleResponse{Bundle: bundle}, nil
+	return &quartermasterpb.TLSBundleResponse{Bundle: bundle}, nil
 }
 
-func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error) {
+func (f *fakeIngressDesiredStateRegistrar) UpsertIngressSite(_ context.Context, site *quartermasterpb.IngressSite) (*quartermasterpb.IngressSiteResponse, error) {
 	f.sites = append(f.sites, site)
-	return &pb.IngressSiteResponse{Site: site}, nil
+	return &quartermasterpb.IngressSiteResponse{Site: site}, nil
 }
 
 func TestBootstrapInternalCertSANsIncludeHostInternalName(t *testing.T) {
@@ -354,7 +355,7 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsMediaClusters(t *tes
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway", "vmauth"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn":          {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
 			"chandler":         {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
 			"livepeer-gateway": {fakeServiceInstance("gateway-core-1", "livepeer-gateway", "core-1", "running")},
@@ -415,7 +416,7 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsDeclaredPoolInstance
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn", "chandler", "livepeer-gateway"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"livepeer-gateway": {
 				fakeServiceInstance("gateway-inst-1", "livepeer-gateway", "gateway-1", "running"),
 				fakeServiceInstance("gateway-inst-2", "livepeer-gateway", "gateway-2", "running"),
@@ -480,7 +481,7 @@ func TestReconcileServiceClusterAssignmentsWithClientScopesVMAUTHByTargetRegion(
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("vmauth"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"vmauth": {
 				fakeServiceInstance("vmauth-eu-1", "vmauth", "regional-eu-1", "running"),
 				fakeServiceInstance("vmauth-eu-2", "vmauth", "regional-eu-2", "running"),
@@ -539,7 +540,7 @@ func TestReconcileServiceClusterAssignmentsWithClientAssignsAliasedPoolInstances
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn": {
 				fakeServiceInstance("foghorn-eu", "foghorn", "regional-eu-1", "running"),
 				fakeServiceInstance("foghorn-us", "foghorn", "regional-us-1", "running"),
@@ -578,7 +579,7 @@ func TestReconcileServiceClusterAssignmentsWithClientDrainsRemovedService(t *tes
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn": {fakeServiceInstance("stale-foghorn", "foghorn", "core-1", "running")},
 		},
 	}
@@ -613,7 +614,7 @@ func TestReconcileServiceClusterAssignmentsWithClientDefersMissingFutureService(
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("chandler"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"chandler": {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
 		},
 	}
@@ -752,7 +753,7 @@ func TestReconcileRemovedServicePlacementsKeepsAliasedPoolHosts(t *testing.T) {
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("chandler"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"chandler": {
 				fakeServiceInstance("chandler-central", "chandler", "central-eu-1", "running"),
 				fakeServiceInstance("chandler-eu", "chandler", "regional-eu-1", "running"),
@@ -796,7 +797,7 @@ func TestReconcileServiceClusterAssignmentsWithClientDoesNotDrainBeforeValidatio
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn", "chandler"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn":  {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
 			"chandler": {fakeServiceInstance("chandler-core-1", "chandler", "core-1", "running")},
 		},
@@ -831,7 +832,7 @@ func TestReconcileRemovedServicePlacementsCleansStaleGatewayHost(t *testing.T) {
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("livepeer-gateway"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"livepeer-gateway": {
 				fakeServiceInstance("gateway-central", "livepeer-gateway", "central-eu-1", "running"),
 				fakeServiceInstance("gateway-eu", "livepeer-gateway", "regional-eu-1", "running"),
@@ -870,7 +871,7 @@ func TestReconcileRemovedServicePlacementsDisabledServiceCleansAllInstances(t *t
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn": {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
 		},
 	}
@@ -903,7 +904,7 @@ func TestReconcileRemovedServicePlacementsCleansDeletedServiceOnKnownHosts(t *te
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("livepeer-gateway"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"livepeer-gateway": {
 				fakeServiceInstance("gateway-core-1", "livepeer-gateway", "core-1", "running"),
 				fakeServiceInstance("gateway-other-cluster", "livepeer-gateway", "other-core-1", "running"),
@@ -941,7 +942,7 @@ func TestReconcileRemovedServicePlacementsSkipsUnknownHosts(t *testing.T) {
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("livepeer-gateway"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"livepeer-gateway": {
 				fakeServiceInstance("gateway-missing", "livepeer-gateway", "central-eu-1", "running"),
 			},
@@ -975,7 +976,7 @@ func TestReconcileRemovedServicePlacementsSkipsNonDeployableRegistryServices(t *
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("livepeer-gateway", "telemetry"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"livepeer-gateway": {
 				fakeServiceInstance("gateway-central", "livepeer-gateway", "central-eu-1", "running"),
 			},
@@ -1048,7 +1049,7 @@ func TestReconcileServiceClusterAssignmentsWithClientReturnsClusterError(t *test
 	}
 	assigner := &fakeFoghornClusterAssigner{
 		services: fakePoolServices("foghorn"),
-		instances: map[string][]*pb.ServiceInstance{
+		instances: map[string][]*quartermasterpb.ServiceInstance{
 			"foghorn": {fakeServiceInstance("foghorn-core-1", "foghorn", "core-1", "running")},
 		},
 		errFor: map[string]error{

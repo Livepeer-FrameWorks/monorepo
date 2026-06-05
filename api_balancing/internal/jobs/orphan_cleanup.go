@@ -9,7 +9,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 )
@@ -246,7 +246,7 @@ func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD,
 
 func (j *OrphanCleanupJob) retryClipDeletion(_ctx context.Context, orphan orphanedClip) {
 	requestID := uuid.NewString()
-	deleteReq := &pb.ClipDeleteRequest{
+	deleteReq := &ipcpb.ClipDeleteRequest{
 		ClipHash:  orphan.ClipHash,
 		RequestId: requestID,
 	}
@@ -270,7 +270,7 @@ func (j *OrphanCleanupJob) retryClipDeletion(_ctx context.Context, orphan orphan
 
 func (j *OrphanCleanupJob) retryDVRDeletion(_ctx context.Context, orphan orphanedDVR) {
 	requestID := uuid.NewString()
-	deleteReq := &pb.DVRDeleteRequest{
+	deleteReq := &ipcpb.DVRDeleteRequest{
 		DvrHash:   orphan.DVRHash,
 		RequestId: requestID,
 	}
@@ -294,7 +294,7 @@ func (j *OrphanCleanupJob) retryDVRDeletion(_ctx context.Context, orphan orphane
 
 func (j *OrphanCleanupJob) retryVODDeletion(_ctx context.Context, orphan orphanedVOD) {
 	requestID := uuid.NewString()
-	deleteReq := &pb.VodDeleteRequest{
+	deleteReq := &ipcpb.VodDeleteRequest{
 		VodHash:   orphan.VODHash,
 		RequestId: requestID,
 	}

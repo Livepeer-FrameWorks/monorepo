@@ -10,7 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
 )
 
@@ -141,8 +141,8 @@ func TestIsBlockedIP(t *testing.T) {
 }
 
 func TestPickPolicyTarget(t *testing.T) {
-	mk := func(stream, vod, clip string) *pb.SetPlaybackPolicyRequest {
-		return &pb.SetPlaybackPolicyRequest{
+	mk := func(stream, vod, clip string) *commodorepb.SetPlaybackPolicyRequest {
+		return &commodorepb.SetPlaybackPolicyRequest{
 			StreamId:   stream,
 			VodAssetId: vod,
 			ClipId:     clip,
@@ -151,7 +151,7 @@ func TestPickPolicyTarget(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		req      *pb.SetPlaybackPolicyRequest
+		req      *commodorepb.SetPlaybackPolicyRequest
 		wantKind string
 		wantErr  bool
 	}{
@@ -185,7 +185,7 @@ func TestPickPolicyTarget(t *testing.T) {
 
 func TestBuildPolicyJSON(t *testing.T) {
 	t.Run("public produces type-only doc", func(t *testing.T) {
-		raw, err := buildPolicyJSON("public", &pb.SetPlaybackPolicyRequest{})
+		raw, err := buildPolicyJSON("public", &commodorepb.SetPlaybackPolicyRequest{})
 		if err != nil {
 			t.Fatalf("build: %v", err)
 		}
@@ -198,8 +198,8 @@ func TestBuildPolicyJSON(t *testing.T) {
 	})
 
 	t.Run("webhook caps timeout at 10000ms", func(t *testing.T) {
-		req := &pb.SetPlaybackPolicyRequest{
-			Webhook: &pb.PlaybackWebhookPolicy{
+		req := &commodorepb.SetPlaybackPolicyRequest{
+			Webhook: &commodorepb.PlaybackWebhookPolicy{
 				Url:       "https://customer.example/access",
 				TimeoutMs: 60000,
 				SecretPt:  "ignored-here",
@@ -218,8 +218,8 @@ func TestBuildPolicyJSON(t *testing.T) {
 	})
 
 	t.Run("webhook applies default timeout", func(t *testing.T) {
-		req := &pb.SetPlaybackPolicyRequest{
-			Webhook: &pb.PlaybackWebhookPolicy{Url: "https://customer.example/access"},
+		req := &commodorepb.SetPlaybackPolicyRequest{
+			Webhook: &commodorepb.PlaybackWebhookPolicy{Url: "https://customer.example/access"},
 		}
 		raw, err := buildPolicyJSON("webhook", req)
 		if err != nil {
@@ -231,7 +231,7 @@ func TestBuildPolicyJSON(t *testing.T) {
 	})
 
 	t.Run("jwt empty body produces empty jwt block", func(t *testing.T) {
-		raw, err := buildPolicyJSON("jwt", &pb.SetPlaybackPolicyRequest{})
+		raw, err := buildPolicyJSON("jwt", &commodorepb.SetPlaybackPolicyRequest{})
 		if err != nil {
 			t.Fatalf("build: %v", err)
 		}
@@ -270,7 +270,7 @@ func TestCreateSigningKeyWrapsCountAndInsertInTransactionWithAdvisoryLock(t *tes
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 
-	resp, err := server.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: "key-name"})
+	resp, err := server.CreateSigningKey(ctx, &commodorepb.CreateSigningKeyRequest{Name: "key-name"})
 	if err != nil {
 		t.Fatalf("CreateSigningKey: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestCreateSigningKeyAtCapRollsBackAndReturnsResourceExhausted(t *testing.T)
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 
-	if _, err := server.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: "key-name"}); err == nil {
+	if _, err := server.CreateSigningKey(ctx, &commodorepb.CreateSigningKeyRequest{Name: "key-name"}); err == nil {
 		t.Fatal("want ResourceExhausted, got nil")
 	} else if !strings.Contains(err.Error(), "active signing-key cap") {
 		t.Fatalf("want cap error, got %v", err)
@@ -366,7 +366,7 @@ func TestListSigningKeysUsesAfterCursor(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 
-	resp, err := server.ListSigningKeys(ctx, &pb.ListSigningKeysRequest{Limit: 2, AfterId: afterID})
+	resp, err := server.ListSigningKeys(ctx, &commodorepb.ListSigningKeysRequest{Limit: 2, AfterId: afterID})
 	if err != nil {
 		t.Fatalf("ListSigningKeys: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestResolvePlaybackPolicyPublicReadOmitsWebhookSecret(t *testing.T) {
 			AddRow(policyJSON, "ciphertext", "tenant-1"))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.ResolvePlaybackPolicy(context.Background(), &pb.ResolvePlaybackPolicyRequest{PlaybackId: "playback-1"})
+	resp, err := server.ResolvePlaybackPolicy(context.Background(), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "playback-1"})
 	if err != nil {
 		t.Fatalf("ResolvePlaybackPolicy: %v", err)
 	}

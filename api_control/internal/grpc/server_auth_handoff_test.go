@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -171,7 +171,7 @@ func TestExchangeAuthorizationCode_VerifierMismatch(t *testing.T) {
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 
-	_, err = server.ExchangeAuthorizationCode(context.Background(), &pb.ExchangeAuthorizationCodeRequest{
+	_, err = server.ExchangeAuthorizationCode(context.Background(), &commodorepb.ExchangeAuthorizationCodeRequest{
 		Code:         rawCode,
 		CodeVerifier: "WRONG-verifier-does-not-match-stored-challenge",
 		ClientId:     "tray-mac",
@@ -217,7 +217,7 @@ func TestExchangeAuthorizationCode_AlreadyConsumed(t *testing.T) {
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 
-	_, err = server.ExchangeAuthorizationCode(context.Background(), &pb.ExchangeAuthorizationCodeRequest{
+	_, err = server.ExchangeAuthorizationCode(context.Background(), &commodorepb.ExchangeAuthorizationCodeRequest{
 		Code:         rawCode,
 		CodeVerifier: "any",
 		ClientId:     "tray-mac",
@@ -242,7 +242,7 @@ func TestCompleteAuthorization_RequiresSession(t *testing.T) {
 	server := &CommodoreServer{logger: logrus.New()}
 
 	// No ctxkeys.KeyUserID / KeyTenantID on the context.
-	_, err := server.CompleteAuthorization(context.Background(), &pb.CompleteAuthorizationRequest{
+	_, err := server.CompleteAuthorization(context.Background(), &commodorepb.CompleteAuthorizationRequest{
 		ClientId:            "tray-mac",
 		RedirectUri:         "http://127.0.0.1:54321/callback",
 		CodeChallenge:       "any",
@@ -262,7 +262,7 @@ func TestCompleteAuthorization_RequiresSession(t *testing.T) {
 func TestApproveDeviceAuthorization_RequiresSession(t *testing.T) {
 	server := &CommodoreServer{logger: logrus.New()}
 
-	_, err := server.ApproveDeviceAuthorization(context.Background(), &pb.ApproveDeviceAuthorizationRequest{
+	_, err := server.ApproveDeviceAuthorization(context.Background(), &commodorepb.ApproveDeviceAuthorizationRequest{
 		UserCode: "ABCD-EFGH",
 	})
 	if err == nil {
@@ -276,7 +276,7 @@ func TestApproveDeviceAuthorization_RequiresSession(t *testing.T) {
 	// InvalidArgument, not silently match some row.
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
-	_, err = server.ApproveDeviceAuthorization(ctx, &pb.ApproveDeviceAuthorizationRequest{
+	_, err = server.ApproveDeviceAuthorization(ctx, &commodorepb.ApproveDeviceAuthorizationRequest{
 		UserCode: "garbage",
 	})
 	if err == nil {
@@ -290,7 +290,7 @@ func TestApproveDeviceAuthorization_RequiresSession(t *testing.T) {
 func TestLookupDeviceAuthorization_RequiresSession(t *testing.T) {
 	server := &CommodoreServer{logger: logrus.New()}
 
-	_, err := server.LookupDeviceAuthorization(context.Background(), &pb.LookupDeviceAuthorizationRequest{
+	_, err := server.LookupDeviceAuthorization(context.Background(), &commodorepb.LookupDeviceAuthorizationRequest{
 		UserCode: "ABCD-EFGH",
 	})
 	if err == nil {
@@ -302,7 +302,7 @@ func TestLookupDeviceAuthorization_RequiresSession(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
-	_, err = server.LookupDeviceAuthorization(ctx, &pb.LookupDeviceAuthorizationRequest{
+	_, err = server.LookupDeviceAuthorization(ctx, &commodorepb.LookupDeviceAuthorizationRequest{
 		UserCode: "garbage",
 	})
 	if err == nil {
@@ -333,7 +333,7 @@ func TestLookupDeviceAuthorization_ReturnsPendingClientMetadata(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
 
-	resp, err := server.LookupDeviceAuthorization(ctx, &pb.LookupDeviceAuthorizationRequest{
+	resp, err := server.LookupDeviceAuthorization(ctx, &commodorepb.LookupDeviceAuthorizationRequest{
 		UserCode: "abcd efgh",
 	})
 	if err != nil {

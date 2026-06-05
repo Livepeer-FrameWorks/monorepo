@@ -1,14 +1,13 @@
 package resolvers
 
 import (
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"math"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestSanitizePlatformOverviewGraphQL(t *testing.T) {
-	resp := &pb.GetPlatformOverviewResponse{
+	resp := &periscopepb.GetPlatformOverviewResponse{
 		AverageViewers:   math.NaN(),
 		PeakBandwidth:    math.Inf(1),
 		StreamHours:      math.Inf(-1),

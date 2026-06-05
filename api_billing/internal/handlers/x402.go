@@ -20,7 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -523,7 +523,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		}
 	}
 
-	emitBillingEvent(eventX402SettlementPending, tenantID, "x402_nonce", txHash, &pb.BillingEvent{
+	emitBillingEvent(h.db, h.logger, eventX402SettlementPending, tenantID, "x402_nonce", txHash, &ipcpb.BillingEvent{
 		Amount:   float64(verifyResult.AmountCents) / 100,
 		Currency: billing.DefaultCurrency(),
 		Status:   "pending",

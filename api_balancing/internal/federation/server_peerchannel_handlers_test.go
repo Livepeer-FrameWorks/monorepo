@@ -7,21 +7,21 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc"
 )
 
 type noopClipCreator struct{}
 
-func (noopClipCreator) CreateClip(context.Context, *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
-	return &pb.CreateClipResponse{}, nil
+func (noopClipCreator) CreateClip(context.Context, *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
+	return &sharedpb.CreateClipResponse{}, nil
 }
 
 type noopDVRCreator struct{}
 
-func (noopDVRCreator) StartDVR(context.Context, *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
-	return &pb.StartDVRResponse{}, nil
+func (noopDVRCreator) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
+	return &sharedpb.StartDVRResponse{}, nil
 }
 
 func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
@@ -40,10 +40,10 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 	peerCluster := "cluster-b"
 	stream := &testPeerChannelServerStream{
 		ctx: serviceAuthContext(),
-		messages: []*pb.PeerMessage{
+		messages: []*foghornfederationpb.PeerMessage{
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
+				Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
 					StreamName:  "stream-1",
 					NodeId:      "node-1",
 					BaseUrl:     "edge-1.example.com",
@@ -58,7 +58,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_ReplicationEvent{ReplicationEvent: &pb.ReplicationEvent{
+				Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{ReplicationEvent: &foghornfederationpb.ReplicationEvent{
 					StreamName: "stream-rep",
 					NodeId:     "node-rep",
 					BaseUrl:    "edge-2.example.com",
@@ -68,8 +68,8 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_ClusterSummary{ClusterSummary: &pb.ClusterEdgeSummary{
-					Edges: []*pb.EdgeSnapshot{{
+				Payload: &foghornfederationpb.PeerMessage_ClusterSummary{ClusterSummary: &foghornfederationpb.ClusterEdgeSummary{
+					Edges: []*foghornfederationpb.EdgeSnapshot{{
 						NodeId:         "node-summary",
 						BaseUrl:        "edge-summary.example.com",
 						GeoLat:         3.3,
@@ -86,7 +86,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_StreamLifecycle{StreamLifecycle: &pb.StreamLifecycleEvent{
+				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
 					InternalName: "stream-live",
 					TenantId:     "tenant-a",
 					ClusterId:    peerCluster,
@@ -95,7 +95,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_StreamLifecycle{StreamLifecycle: &pb.StreamLifecycleEvent{
+				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
 					InternalName: "stream-live",
 					TenantId:     "tenant-a",
 					ClusterId:    peerCluster,
@@ -104,12 +104,12 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_StreamAd{StreamAd: &pb.StreamAdvertisement{
+				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
 					InternalName: "stream-ad",
 					TenantId:     "tenant-a",
 					PlaybackId:   "play-1",
 					IsLive:       true,
-					Edges: []*pb.PeerStreamEdge{{
+					Edges: []*foghornfederationpb.PeerStreamEdge{{
 						NodeId:      "node-ad",
 						BaseUrl:     "edge-ad.example.com",
 						DtscUrl:     "dtsc://edge-ad.example.com/stream-ad",
@@ -126,8 +126,8 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_ArtifactAd{ArtifactAd: &pb.ArtifactAdvertisement{
-					Artifacts: []*pb.ArtifactLocation{{
+				Payload: &foghornfederationpb.PeerMessage_ArtifactAd{ArtifactAd: &foghornfederationpb.ArtifactAdvertisement{
+					Artifacts: []*foghornfederationpb.ArtifactLocation{{
 						ArtifactHash: "artifact-1",
 						ArtifactType: "clip",
 						TenantId:     "tenant-a",
@@ -144,7 +144,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{
+				Payload: &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &foghornfederationpb.PeerHeartbeat{
 					ProtocolVersion:  1,
 					StreamCount:      5,
 					TotalBwAvailable: 9999,
@@ -155,7 +155,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			},
 			{
 				ClusterId: peerCluster,
-				Payload: &pb.PeerMessage_CapacitySummary{CapacitySummary: &pb.CapacitySummary{
+				Payload: &foghornfederationpb.PeerMessage_CapacitySummary{CapacitySummary: &foghornfederationpb.CapacitySummary{
 					TotalBandwidth:     1000,
 					AvailableBandwidth: 900,
 					TotalEdges:         2,

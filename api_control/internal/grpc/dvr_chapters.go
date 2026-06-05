@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -20,7 +20,7 @@ import (
 
 // RetrieveDVRChapter validates tenant ownership then forwards to the
 // DVR's origin Foghorn (where the dvr_segments ledger and chapter rows live).
-func (s *CommodoreServer) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
+func (s *CommodoreServer) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -45,7 +45,7 @@ func (s *CommodoreServer) RetrieveDVRChapter(ctx context.Context, req *pb.Retrie
 
 // ListDVRChapters validates tenant ownership then forwards to the DVR's
 // origin Foghorn.
-func (s *CommodoreServer) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, error) {
+func (s *CommodoreServer) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err

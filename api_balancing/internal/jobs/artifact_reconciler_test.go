@@ -10,7 +10,8 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
@@ -73,7 +74,7 @@ func TestArtifactReconciler_TriggerCoalesces(t *testing.T) {
 func TestReconcile_NilS3Client_Noop(t *testing.T) {
 	r := &ArtifactReconciler{
 		s3Client:   nil,
-		sendFreeze: func(string, *pb.FreezeRequest) error { t.Fatal("should not be called"); return nil },
+		sendFreeze: func(string, *ipcpb.FreezeRequest) error { t.Fatal("should not be called"); return nil },
 		logger:     logging.NewLogger(),
 	}
 	r.reconcile() // should not panic
@@ -175,7 +176,7 @@ func TestRetryFailed_QueryError_ReturnsZero(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error { return nil })
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts").WillReturnError(fmt.Errorf("db down"))
 
 	count := r.retryFailed(context.Background())
@@ -191,7 +192,7 @@ func TestRetryFailed_RespectsBatchLimit(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error { return nil })
 	r.batchSize = 3
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
@@ -243,7 +244,7 @@ func TestAdvancePending_QueryError_ReturnsZero(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error { return nil })
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts").WillReturnError(fmt.Errorf("timeout"))
 
 	count := r.advancePending(context.Background())
@@ -380,7 +381,7 @@ func TestSendFreezeForArtifact_UnsupportedType(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error {
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error {
 		t.Fatal("should not be called")
 		return nil
 	})
@@ -401,7 +402,7 @@ func TestSendFreezeForArtifact_DVRUnsupported(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error {
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error {
 		t.Fatal("should not be called")
 		return nil
 	})
@@ -427,7 +428,7 @@ func TestSendFreezeForArtifact_PresignFailure(t *testing.T) {
 			return "", fmt.Errorf("S3 unavailable")
 		},
 	}
-	r := newTestReconciler(t, mockDB, s3, nil, func(string, *pb.FreezeRequest) error {
+	r := newTestReconciler(t, mockDB, s3, nil, func(string, *ipcpb.FreezeRequest) error {
 		t.Fatal("should not be called after presign failure")
 		return nil
 	})
@@ -484,7 +485,7 @@ func TestReconcileOrphaned_NoArtifactsInState_ReturnsZero(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, &mockCommodoreClient{}, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, &mockCommodoreClient{}, func(string, *ipcpb.FreezeRequest) error { return nil })
 	count := r.reconcileOrphaned(context.Background())
 	if count != 0 {
 		t.Fatalf("expected 0 with empty state, got %d", count)
@@ -495,8 +496,8 @@ func TestReconcileOrphaned_ExistingHashSkipped(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
-		{ClipHash: "existing-hash", FilePath: "/data/existing.mp4", SizeBytes: 100, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
+		{ClipHash: "existing-hash", FilePath: "/data/existing.mp4", SizeBytes: 100, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
 	})
 
 	mockDB, mock, err := sqlmock.New()
@@ -506,7 +507,7 @@ func TestReconcileOrphaned_ExistingHashSkipped(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{}
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	// Batch check returns this hash as existing
 	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts").
@@ -525,8 +526,8 @@ func TestReconcileOrphaned_CreatesLifecycleRow(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
-		{ClipHash: "new-hash", FilePath: "/data/new.mp4", SizeBytes: 200, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
+		{ClipHash: "new-hash", FilePath: "/data/new.mp4", SizeBytes: 200, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
 	})
 
 	mockDB, mock, err := sqlmock.New()
@@ -536,11 +537,11 @@ func TestReconcileOrphaned_CreatesLifecycleRow(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{
-		resolveClipHashFn: func(_ context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
-			return &pb.ResolveClipHashResponse{Found: true, TenantId: "tenant-1", StreamInternalName: "stream-1"}, nil
+		resolveClipHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
+			return &commodorepb.ResolveClipHashResponse{Found: true, TenantId: "tenant-1", StreamInternalName: "stream-1"}, nil
 		},
 	}
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	// Batch check — hash not found
 	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts").
@@ -571,8 +572,8 @@ func TestReconcileOrphaned_DVROrphanSkipped(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
-		{ClipHash: "dvr-hash", FilePath: "/data/dvr/abc", SizeBytes: 1024, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR},
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
+		{ClipHash: "dvr-hash", FilePath: "/data/dvr/abc", SizeBytes: 1024, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR},
 	})
 
 	mockDB, mock, err := sqlmock.New()
@@ -582,7 +583,7 @@ func TestReconcileOrphaned_DVROrphanSkipped(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{}
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	// Batch check returns no existing rows; DVR candidate should be skipped
 	// before any INSERT into foghorn.artifacts.
@@ -608,7 +609,7 @@ func TestRetryFailed_SQLExcludesDVR(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	// Match SQL containing the DVR filter clause; sqlmock uses regex.
 	mock.ExpectQuery(`artifact_type != 'dvr'`).
@@ -628,7 +629,7 @@ func TestAdvancePending_SQLExcludesDVR(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	mock.ExpectQuery(`artifact_type != 'dvr'`).
 		WithArgs(50).
@@ -644,8 +645,8 @@ func TestReconcileOrphaned_CommodoreFails_Skips(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
-		{ClipHash: "unresolvable", FilePath: "/data/unresolvable.mp4", SizeBytes: 50, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
+		{ClipHash: "unresolvable", FilePath: "/data/unresolvable.mp4", SizeBytes: 50, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
 	})
 
 	mockDB, mock, err := sqlmock.New()
@@ -655,11 +656,11 @@ func TestReconcileOrphaned_CommodoreFails_Skips(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{
-		resolveClipHashFn: func(_ context.Context, _ string) (*pb.ResolveClipHashResponse, error) {
+		resolveClipHashFn: func(_ context.Context, _ string) (*commodorepb.ResolveClipHashResponse, error) {
 			return nil, fmt.Errorf("commodore unavailable")
 		},
 	}
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *ipcpb.FreezeRequest) error { return nil })
 
 	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}))
@@ -674,10 +675,10 @@ func TestReconcileOrphaned_RespectsBatchSize(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
-		{ClipHash: "hash-a", FilePath: "/a.mp4", SizeBytes: 1, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
-		{ClipHash: "hash-b", FilePath: "/b.mp4", SizeBytes: 1, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
-		{ClipHash: "hash-c", FilePath: "/c.mp4", SizeBytes: 1, ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
+		{ClipHash: "hash-a", FilePath: "/a.mp4", SizeBytes: 1, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+		{ClipHash: "hash-b", FilePath: "/b.mp4", SizeBytes: 1, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+		{ClipHash: "hash-c", FilePath: "/c.mp4", SizeBytes: 1, ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
 	})
 
 	mockDB, mock, err := sqlmock.New()
@@ -687,11 +688,11 @@ func TestReconcileOrphaned_RespectsBatchSize(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{
-		resolveClipHashFn: func(_ context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
-			return &pb.ResolveClipHashResponse{Found: true, TenantId: "t1", StreamInternalName: "s1"}, nil
+		resolveClipHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
+			return &commodorepb.ResolveClipHashResponse{Found: true, TenantId: "t1", StreamInternalName: "s1"}, nil
 		},
 	}
-	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *pb.FreezeRequest) error { return nil })
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, commodore, func(string, *ipcpb.FreezeRequest) error { return nil })
 	r.batchSize = 1
 
 	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts").
@@ -767,8 +768,8 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 
 func TestResolveArtifactContext_Clip(t *testing.T) {
 	commodore := &mockCommodoreClient{
-		resolveClipHashFn: func(_ context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
-			return &pb.ResolveClipHashResponse{Found: true, TenantId: "t-clip", StreamInternalName: "s-clip"}, nil
+		resolveClipHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
+			return &commodorepb.ResolveClipHashResponse{Found: true, TenantId: "t-clip", StreamInternalName: "s-clip"}, nil
 		},
 	}
 	r := &ArtifactReconciler{commodore: commodore}
@@ -783,8 +784,8 @@ func TestResolveArtifactContext_Clip(t *testing.T) {
 
 func TestResolveArtifactContext_DVR(t *testing.T) {
 	commodore := &mockCommodoreClient{
-		resolveDVRHashFn: func(_ context.Context, hash string) (*pb.ResolveDVRHashResponse, error) {
-			return &pb.ResolveDVRHashResponse{Found: true, TenantId: "t-dvr", StreamInternalName: "s-dvr"}, nil
+		resolveDVRHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error) {
+			return &commodorepb.ResolveDVRHashResponse{Found: true, TenantId: "t-dvr", StreamInternalName: "s-dvr"}, nil
 		},
 	}
 	r := &ArtifactReconciler{commodore: commodore}
@@ -799,8 +800,8 @@ func TestResolveArtifactContext_DVR(t *testing.T) {
 
 func TestResolveArtifactContext_Vod(t *testing.T) {
 	commodore := &mockCommodoreClient{
-		resolveVodHashFn: func(_ context.Context, hash string) (*pb.ResolveVodHashResponse, error) {
-			return &pb.ResolveVodHashResponse{Found: true, TenantId: "t-vod", InternalName: "s-vod"}, nil
+		resolveVodHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error) {
+			return &commodorepb.ResolveVodHashResponse{Found: true, TenantId: "t-vod", InternalName: "s-vod"}, nil
 		},
 	}
 	r := &ArtifactReconciler{commodore: commodore}
@@ -815,8 +816,8 @@ func TestResolveArtifactContext_Vod(t *testing.T) {
 
 func TestResolveArtifactContext_NotFound(t *testing.T) {
 	commodore := &mockCommodoreClient{
-		resolveClipHashFn: func(_ context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
-			return &pb.ResolveClipHashResponse{Found: false}, nil
+		resolveClipHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
+			return &commodorepb.ResolveClipHashResponse{Found: false}, nil
 		},
 	}
 	r := &ArtifactReconciler{commodore: commodore}
@@ -887,13 +888,13 @@ func TestGetExtension(t *testing.T) {
 
 func TestArtifactTypeFromProto(t *testing.T) {
 	tests := []struct {
-		input pb.ArtifactEvent_ArtifactType
+		input ipcpb.ArtifactEvent_ArtifactType
 		want  string
 	}{
-		{pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED, ""},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED, ""},
 		{99, ""},
 	}
 	for _, tc := range tests {

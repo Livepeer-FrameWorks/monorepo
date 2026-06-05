@@ -4,8 +4,7 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
@@ -27,7 +26,7 @@ const cpuSampleWindow = 250 * time.Millisecond
 // the agent is running on. Returns nil on any collection failure: proto scalar
 // fields cannot distinguish "missing" from a real zero, so partial snapshots
 // would overwrite previously-good server values with zeroes.
-func collectResourceSnapshot(ctx context.Context, diskPath string) *pb.NodeResourceSnapshot {
+func collectResourceSnapshot(ctx context.Context, diskPath string) *quartermasterpb.NodeResourceSnapshot {
 	if diskPath == "" {
 		diskPath = snapshotDiskPath
 	}
@@ -51,7 +50,7 @@ func collectResourceSnapshot(ctx context.Context, diskPath string) *pb.NodeResou
 		return nil
 	}
 
-	return &pb.NodeResourceSnapshot{
+	return &quartermasterpb.NodeResourceSnapshot{
 		CpuPercent:     float32(pcts[0]),
 		RamUsedBytes:   vm.Used,
 		RamTotalBytes:  vm.Total,

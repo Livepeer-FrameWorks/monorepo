@@ -8,7 +8,8 @@ import (
 	"frameworks/api_dns/internal/logic"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 type DNSReconciler struct {
@@ -24,10 +25,10 @@ type DNSReconciler struct {
 }
 
 type quartermasterClient interface {
-	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
-	ListTLSBundles(ctx context.Context, clusterID string, pagination *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error)
-	ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*proto.ListServiceInstancesByTypeResponse, error)
-	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *proto.CursorPaginationRequest) (*proto.ListIngressSitesResponse, error)
+	ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListTLSBundles(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error)
+	ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*quartermasterpb.ListServiceInstancesByTypeResponse, error)
+	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error)
 }
 
 func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManager, qmClient quartermasterClient, logger logging.Logger, interval time.Duration, rootDomain, acmeEmail string, serviceTypes []string, healthStaleSeconds int) *DNSReconciler {
@@ -222,7 +223,7 @@ func (r *DNSReconciler) hasPhysicalIngress(ctx context.Context, clusterID, nodeI
 	// unprovisioned — which would prune a valid physical A record.
 	var after *string
 	for {
-		page := &proto.CursorPaginationRequest{First: 100, After: after}
+		page := &commonpb.CursorPaginationRequest{First: 100, After: after}
 		resp, err := r.qmClient.ListIngressSites(ctx, clusterID, nodeID, page)
 		if err != nil {
 			return false, err
@@ -368,7 +369,7 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 	}
 }
 
-func usesBunnyClusterDNS(cluster *proto.InfrastructureCluster) bool {
+func usesBunnyClusterDNS(cluster *quartermasterpb.InfrastructureCluster) bool {
 	return pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType()))
 }
 

@@ -7,7 +7,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing/storagecost"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 // Storage cost projection. A single GraphQL request that returns N assets
@@ -22,7 +22,7 @@ type storagePricingCtxKey struct{}
 type storagePricingCacheEntry struct {
 	mu      sync.Mutex
 	loaded  bool
-	pricing *pb.StoragePricing
+	pricing *purserpb.StoragePricing
 	err     error
 }
 
@@ -34,7 +34,7 @@ func WithStoragePricingCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, storagePricingCtxKey{}, &storagePricingCacheEntry{})
 }
 
-func (r *Resolver) resolveStoragePricing(ctx context.Context, tenantID string) (*pb.StoragePricing, error) {
+func (r *Resolver) resolveStoragePricing(ctx context.Context, tenantID string) (*purserpb.StoragePricing, error) {
 	if tenantID == "" || r.Clients.Purser == nil {
 		return nil, nil
 	}

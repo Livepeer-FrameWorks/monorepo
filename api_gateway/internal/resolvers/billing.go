@@ -16,7 +16,10 @@ import (
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/gin-gonic/gin"
@@ -78,7 +81,7 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.Invoice, 0, len(edges))
+	edgeNodes := make([]*purserpb.Invoice, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -144,7 +147,7 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.UsageRecord, 0, len(edges))
+	edgeNodes := make([]*purserpb.UsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -160,8 +163,8 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 }
 
 // buildBillingPaginationRequest creates a proto pagination request from GraphQL params
-func buildBillingPaginationRequest(first *int, after *string, last *int, before *string) *pb.CursorPaginationRequest {
-	req := &pb.CursorPaginationRequest{}
+func buildBillingPaginationRequest(first *int, after *string, last *int, before *string) *commonpb.CursorPaginationRequest {
+	req := &commonpb.CursorPaginationRequest{}
 
 	if first != nil {
 		limit := pagination.ClampLimit(*first)
@@ -187,7 +190,7 @@ func buildBillingPaginationRequest(first *int, after *string, last *int, before 
 }
 
 // buildInvoicesConnection is a helper for demo mode
-func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, after *string) *model.InvoicesConnection {
+func (r *Resolver) buildInvoicesConnection(invoices []*purserpb.Invoice, first *int, after *string) *model.InvoicesConnection {
 	limit := pagination.DefaultLimit
 	if first != nil {
 		limit = pagination.ClampLimit(*first)
@@ -219,7 +222,7 @@ func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, a
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.Invoice, 0, len(edges))
+	edgeNodes := make([]*purserpb.Invoice, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -235,7 +238,7 @@ func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, a
 }
 
 // buildUsageRecordsConnection is a helper for demo mode
-func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first *int, after *string) *model.UsageRecordsConnection {
+func (r *Resolver) buildUsageRecordsConnection(records []*purserpb.UsageRecord, first *int, after *string) *model.UsageRecordsConnection {
 	limit := pagination.DefaultLimit
 	if first != nil {
 		limit = pagination.ClampLimit(*first)
@@ -267,7 +270,7 @@ func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first 
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.UsageRecord, 0, len(edges))
+	edgeNodes := make([]*purserpb.UsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -283,7 +286,7 @@ func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first 
 }
 
 // DoGetBillingTiers returns available billing tiers
-func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*pb.BillingTier, error) {
+func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*purserpb.BillingTier, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing tiers")
 		return demo.GenerateBillingTiers(), nil
@@ -297,14 +300,14 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*pb.BillingTier, er
 		return nil, fmt.Errorf("failed to load billing tiers: %w", err)
 	}
 
-	result := make([]*pb.BillingTier, len(resp.Tiers))
+	result := make([]*purserpb.BillingTier, len(resp.Tiers))
 	copy(result, resp.Tiers)
 
 	return result, nil
 }
 
 // DoGetInvoices returns tenant invoices
-func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
+func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoices")
 		return demo.GenerateInvoices(), nil
@@ -323,14 +326,14 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 		return nil, fmt.Errorf("failed to load invoices: %w", err)
 	}
 
-	result := make([]*pb.Invoice, len(resp.Invoices))
+	result := make([]*purserpb.Invoice, len(resp.Invoices))
 	copy(result, resp.Invoices)
 
 	return result, nil
 }
 
 // DoGetInvoice returns a specific invoice by ID
-func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*pb.Invoice, error) {
+func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoice, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -353,7 +356,7 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*pb.Invoice, er
 }
 
 // DoGetBillingStatus returns current billing status for tenant
-func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusResponse, error) {
+func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*purserpb.BillingStatusResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing status")
 		return demo.GenerateBillingStatus(), nil
@@ -393,7 +396,7 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusRes
 }
 
 // DoGetInvoicePreview returns the current draft invoice for the tenant (authoritative preview)
-func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*pb.Invoice, error) {
+func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*purserpb.Invoice, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoice preview")
 		return demo.GenerateInvoicePreview(), nil
@@ -405,7 +408,7 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*pb.Invoice, error)
 	}
 
 	status := "draft"
-	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, &status, &pb.CursorPaginationRequest{First: 1})
+	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, &status, &commonpb.CursorPaginationRequest{First: 1})
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoice preview")
 		return nil, fmt.Errorf("failed to load invoice preview: %w", err)
@@ -419,7 +422,7 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*pb.Invoice, error)
 }
 
 // DoGetLiveUsageSummary returns near-real-time usage summary for the current period.
-func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, periodEnd *time.Time) (*pb.LiveUsageSummary, error) {
+func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, periodEnd *time.Time) (*periscopepb.LiveUsageSummary, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic live usage summary")
 		return demo.GenerateLiveUsageSummary(), nil
@@ -515,7 +518,7 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 	}, nil
 }
 
-func demoTenantUsageFromInvoicePreview(preview *pb.Invoice) (*model.TenantUsage, error) {
+func demoTenantUsageFromInvoicePreview(preview *purserpb.Invoice) (*model.TenantUsage, error) {
 	if preview == nil {
 		return nil, fmt.Errorf("demo invoice preview missing")
 	}
@@ -525,7 +528,7 @@ func demoTenantUsageFromInvoicePreview(preview *pb.Invoice) (*model.TenantUsage,
 		billingPeriod = preview.PeriodStart.AsTime().Format("2006-01-02") + " to " + preview.PeriodEnd.AsTime().Format("2006-01-02")
 	}
 
-	lineItems := make([]*pb.LineItem, 0, len(preview.GetLineItems()))
+	lineItems := make([]*purserpb.LineItem, 0, len(preview.GetLineItems()))
 	var usageEntries []*model.UsageEntry
 	var costEntries []*model.CostEntry
 	totalCost := 0.0
@@ -560,7 +563,7 @@ func demoTenantUsageFromInvoicePreview(preview *pb.Invoice) (*model.TenantUsage,
 }
 
 // DoGetUsageRecords returns usage records for tenant
-func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*pb.UsageRecord, error) {
+func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*purserpb.UsageRecord, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage records")
 		return demo.GenerateUsageRecords(), nil
@@ -576,7 +579,7 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 	// Build time range for usage records
 	tr := buildUsageTimeRange(timeRange, 30*24*time.Hour)
 
-	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, &pb.CursorPaginationRequest{First: 500})
+	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, &commonpb.CursorPaginationRequest{First: 500})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get usage records")
 		return nil, fmt.Errorf("failed to get usage records: %w", err)
@@ -586,7 +589,7 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 }
 
 // DoGetUsageAggregates returns rollup-backed aggregates for usage charts
-func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) ([]*pb.UsageAggregate, error) {
+func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) ([]*purserpb.UsageAggregate, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage aggregates")
 		records := demo.GenerateUsageRecords()
@@ -609,22 +612,22 @@ func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.Ti
 	return resp.Aggregates, nil
 }
 
-func buildUsageTimeRange(timeRange *model.TimeRangeInput, defaultWindow time.Duration) *pb.TimeRange {
+func buildUsageTimeRange(timeRange *model.TimeRangeInput, defaultWindow time.Duration) *commonpb.TimeRange {
 	if timeRange == nil {
 		end := time.Now()
 		start := end.Add(-defaultWindow)
-		return &pb.TimeRange{
+		return &commonpb.TimeRange{
 			Start: timestamppb.New(start),
 			End:   timestamppb.New(end),
 		}
 	}
-	return &pb.TimeRange{
+	return &commonpb.TimeRange{
 		Start: timestamppb.New(timeRange.Start),
 		End:   timestamppb.New(timeRange.End),
 	}
 }
 
-func buildUsageAggregates(records []*pb.UsageRecord, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) []*pb.UsageAggregate {
+func buildUsageAggregates(records []*purserpb.UsageRecord, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) []*purserpb.UsageAggregate {
 	type key struct {
 		usageType string
 		start     time.Time
@@ -642,7 +645,7 @@ func buildUsageAggregates(records []*pb.UsageRecord, timeRange *model.TimeRangeI
 		endTime = timeRange.End
 	}
 
-	buckets := map[key]*pb.UsageAggregate{}
+	buckets := map[key]*purserpb.UsageAggregate{}
 
 	for _, record := range records {
 		if record == nil {
@@ -667,7 +670,7 @@ func buildUsageAggregates(records []*pb.UsageRecord, timeRange *model.TimeRangeI
 		bucketStart, bucketEnd := bucketForGranularity(ts, granularity)
 		k := key{usageType: record.UsageType, start: bucketStart}
 		if _, ok := buckets[k]; !ok {
-			buckets[k] = &pb.UsageAggregate{
+			buckets[k] = &purserpb.UsageAggregate{
 				UsageType:   record.UsageType,
 				UsageValue:  0,
 				Granularity: granularity,
@@ -678,7 +681,7 @@ func buildUsageAggregates(records []*pb.UsageRecord, timeRange *model.TimeRangeI
 		buckets[k].UsageValue += record.UsageValue
 	}
 
-	result := make([]*pb.UsageAggregate, 0, len(buckets))
+	result := make([]*purserpb.UsageAggregate, 0, len(buckets))
 	for _, agg := range buckets {
 		result = append(result, agg)
 	}
@@ -709,7 +712,7 @@ func bucketForGranularity(ts time.Time, granularity string) (time.Time, time.Tim
 }
 
 // DoCreatePayment processes a payment
-func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*pb.PaymentResponse, error) {
+func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*purserpb.PaymentResponse, error) {
 	purserMethod, methodErr := purserPaymentMethod(input.Method)
 	if methodErr != nil {
 		return nil, methodErr
@@ -721,7 +724,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		if !ok {
 			return nil, fmt.Errorf("invoice not found: %s", input.InvoiceID)
 		}
-		resp := &pb.PaymentResponse{
+		resp := &purserpb.PaymentResponse{
 			Id:        "payment_demo_" + time.Now().Format("20060102150405"),
 			Amount:    amount,
 			Currency:  cur,
@@ -771,7 +774,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		returnURL = *input.ReturnURL
 	}
 
-	paymentReq := &pb.PaymentRequest{
+	paymentReq := &purserpb.PaymentRequest{
 		InvoiceId: input.InvoiceID,
 		Method:    purserMethod,
 		ReturnUrl: returnURL,
@@ -791,12 +794,12 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 	if provider == "" {
 		provider = purserMethod
 	}
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventPaymentCreated,
 		ResourceType: "payment",
 		ResourceId:   resp.Id,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId:  tenantID,
 				PaymentId: resp.Id,
 				InvoiceId: input.InvoiceID,
@@ -948,7 +951,7 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 }
 
 // DoUpdateSubscriptionCustomTerms updates custom billing terms for a tenant subscription
-func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*pb.TenantSubscription, error) {
+func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*purserpb.TenantSubscription, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic subscription update")
 		return demo.GenerateBillingStatus().Subscription, nil
@@ -957,13 +960,13 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	r.Logger.WithField("tenant_id", tenantID).Info("Updating subscription custom terms")
 
 	// Build the update request
-	req := &pb.UpdateSubscriptionRequest{
+	req := &purserpb.UpdateSubscriptionRequest{
 		TenantId: tenantID,
 	}
 
 	// Convert custom features input to proto
 	if input.CustomFeatures != nil {
-		features := &pb.BillingFeatures{}
+		features := &purserpb.BillingFeatures{}
 		if input.CustomFeatures.Recording != nil {
 			features.Recording = *input.CustomFeatures.Recording
 		}
@@ -991,9 +994,9 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		if len(input.PricingOverrides) == 0 {
 			req.ClearPricingOverrides = true
 		} else {
-			rules := make([]*pb.PricingRule, 0, len(input.PricingOverrides))
+			rules := make([]*purserpb.PricingRule, 0, len(input.PricingOverrides))
 			for _, r := range input.PricingOverrides {
-				rule := &pb.PricingRule{
+				rule := &purserpb.PricingRule{
 					Meter:            r.Meter,
 					Model:            r.Model,
 					Currency:         r.Currency,
@@ -1031,13 +1034,13 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 	}
 
 	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventSubscriptionUpdated,
 		ResourceType: "subscription",
 		ResourceId:   subscription.Id,
 		TenantId:     tenantID,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId:       tenantID,
 				SubscriptionId: subscription.Id,
 				Status:         subscription.Status,
@@ -1136,9 +1139,9 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 	}
 
 	// Convert time range
-	var pbTimeRange *pb.TimeRange
+	var pbTimeRange *commonpb.TimeRange
 	if timeRange != nil {
-		pbTimeRange = &pb.TimeRange{
+		pbTimeRange = &commonpb.TimeRange{
 			Start: timestamppb.New(timeRange.Start),
 			End:   timestamppb.New(timeRange.End),
 		}
@@ -1305,12 +1308,12 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 	}
 
 	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventPaymentCreated,
 		ResourceType: "payment",
 		ResourceId:   resp.PaymentId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId:  tenantID,
 				PaymentId: resp.PaymentId,
 				Provider:  "mollie",
@@ -1357,12 +1360,12 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 	}
 
 	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventSubscriptionCreated,
 		ResourceType: "subscription",
 		ResourceId:   resp.SubscriptionId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId:       tenantID,
 				SubscriptionId: resp.SubscriptionId,
 				Provider:       "mollie",
@@ -1385,7 +1388,7 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 }
 
 // DoListMollieMandates lists Mollie mandates for the current tenant
-func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*pb.MollieMandate, error) {
+func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.MollieMandate, error) {
 	if middleware.IsDemoMode(ctx) {
 		ts := time.Now().AddDate(0, -1, 0)
 		details := map[string]interface{}{
@@ -1393,7 +1396,7 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*pb.MollieMandat
 			"consumer_account": "NL00DEMO0000000000",
 		}
 		structDetails, _ := structpb.NewStruct(details)
-		return []*pb.MollieMandate{
+		return []*purserpb.MollieMandate{
 			{
 				MollieMandateId:  "mdt_demo_123",
 				MollieCustomerId: "cst_demo_123",
@@ -1420,7 +1423,7 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*pb.MollieMandat
 		return resp.Mandates, nil
 	}
 
-	return []*pb.MollieMandate{}, nil
+	return []*purserpb.MollieMandate{}, nil
 }
 
 // ============================================================================
@@ -1468,7 +1471,7 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 		Info("Creating card top-up checkout")
 
 	// Build the gRPC request
-	req := &pb.CreateCardTopupRequest{
+	req := &purserpb.CreateCardTopupRequest{
 		TenantId:    tenantID,
 		AmountCents: int64(input.AmountCents),
 		Currency:    currency,
@@ -1491,12 +1494,12 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 
 	userID := userIDFromContext(ctx)
 	amount := float64(input.AmountCents) / 100.0
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTopupCreated,
 		ResourceType: "topup",
 		ResourceId:   resp.TopupId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId: tenantID,
 				TopupId:  resp.TopupId,
 				Amount:   amount,
@@ -1524,12 +1527,12 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 func demoCryptoTopup(input model.CreateCryptoTopupInput) *model.CryptoTopupResult {
 	now := time.Now()
 	asset := input.Asset
-	if asset == pb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
-		asset = pb.CryptoAsset_CRYPTO_ASSET_ETH
+	if asset == purserpb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
+		asset = purserpb.CryptoAsset_CRYPTO_ASSET_ETH
 	}
 	var symbol, priceUSD, baseUnits, tokenAmt string
 	switch asset {
-	case pb.CryptoAsset_CRYPTO_ASSET_ETH:
+	case purserpb.CryptoAsset_CRYPTO_ASSET_ETH:
 		symbol, priceUSD = "ETH", "3300.00"
 		// $cents/100 / 3300 ETH × 1e18 wei
 		token := float64(input.AmountCents) / 100.0 / 3300.0
@@ -1575,7 +1578,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 
 	// Validate asset (already a proto enum from gqlgen)
 	protoAsset := input.Asset
-	if protoAsset == pb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
+	if protoAsset == purserpb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
 		return nil, fmt.Errorf("unsupported crypto asset: %s", input.Asset)
 	}
 
@@ -1589,7 +1592,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		WithField("asset", input.Asset).
 		Info("Creating crypto top-up deposit address")
 
-	req := &pb.CreateCryptoTopupRequest{
+	req := &purserpb.CreateCryptoTopupRequest{
 		TenantId:            tenantID,
 		ExpectedAmountCents: int64(input.AmountCents),
 		Asset:               protoAsset,
@@ -1608,12 +1611,12 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 	if resp.AssetSymbol != "" {
 		provider = "crypto_" + strings.ToLower(resp.AssetSymbol)
 	}
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTopupCreated,
 		ResourceType: "topup",
 		ResourceId:   resp.TopupId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
+		Payload: &ipcpb.ServiceEvent_BillingEvent{
+			BillingEvent: &ipcpb.BillingEvent{
 				TenantId: tenantID,
 				TopupId:  resp.TopupId,
 				Amount:   amount,
@@ -1654,7 +1657,7 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 		return &model.CryptoTopupStatus{
 			ID:             topupID,
 			DepositAddress: "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
-			Asset:          pb.CryptoAsset_CRYPTO_ASSET_ETH,
+			Asset:          purserpb.CryptoAsset_CRYPTO_ASSET_ETH,
 			Status:         "pending",
 			Confirmations:  0,
 			ExpiresAt:      expiresAt,
@@ -1831,16 +1834,16 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 // ============================================================================
 
 // DoGetBillingDetails returns billing details for the current tenant
-func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*pb.BillingDetails, error) {
+func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDetails, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing details")
 		now := time.Now()
-		return &pb.BillingDetails{
+		return &purserpb.BillingDetails{
 			TenantId:  "demo-tenant",
 			Email:     "billing@example.com",
 			Company:   "Demo Company Inc.",
 			VatNumber: "DE123456789",
-			Address: &pb.BillingAddress{
+			Address: &purserpb.BillingAddress{
 				Street:     "123 Demo Street",
 				City:       "Berlin",
 				State:      "",
@@ -1867,11 +1870,11 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*pb.BillingDetails,
 }
 
 // DoUpdateBillingDetails updates billing details for the current tenant
-func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*pb.BillingDetails, error) {
+func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*purserpb.BillingDetails, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing details after update")
 		now := time.Now()
-		details := &pb.BillingDetails{
+		details := &purserpb.BillingDetails{
 			TenantId:   "demo-tenant",
 			IsComplete: false,
 			UpdatedAt:  timestamppb.New(now),
@@ -1886,7 +1889,7 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 			details.VatNumber = *input.VatNumber
 		}
 		if input.Address != nil {
-			details.Address = &pb.BillingAddress{
+			details.Address = &purserpb.BillingAddress{
 				Street:     input.Address.Street,
 				City:       input.Address.City,
 				PostalCode: input.Address.PostalCode,
@@ -1909,7 +1912,7 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 	}
 
 	// Build proto request
-	req := &pb.UpdateBillingDetailsRequest{
+	req := &purserpb.UpdateBillingDetailsRequest{
 		TenantId: tenantID,
 	}
 	if input.Email != nil {
@@ -1922,7 +1925,7 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		req.VatNumber = input.VatNumber
 	}
 	if input.Address != nil {
-		req.Address = &pb.BillingAddress{
+		req.Address = &purserpb.BillingAddress{
 			Street:     input.Address.Street,
 			City:       input.Address.City,
 			PostalCode: input.Address.PostalCode,
@@ -1939,12 +1942,12 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		return nil, err
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventBillingDetailsUpdated,
 		ResourceType: "billing_details",
 		ResourceId:   tenantID,
-		Payload: &pb.ServiceEvent_TenantEvent{
-			TenantEvent: &pb.TenantEvent{
+		Payload: &ipcpb.ServiceEvent_TenantEvent{
+			TenantEvent: &ipcpb.TenantEvent{
 				TenantId:      tenantID,
 				ChangedFields: []string{"billing_details"},
 			},

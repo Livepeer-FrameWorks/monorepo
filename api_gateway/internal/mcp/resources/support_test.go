@@ -4,30 +4,29 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestConvertSender(t *testing.T) {
 	tests := []struct {
 		name string
-		in   pb.MessageSender
+		in   deckhandpb.MessageSender
 		want string
 	}{
 		{
 			name: "user",
-			in:   pb.MessageSender_MESSAGE_SENDER_USER,
+			in:   deckhandpb.MessageSender_MESSAGE_SENDER_USER,
 			want: "user",
 		},
 		{
 			name: "agent",
-			in:   pb.MessageSender_MESSAGE_SENDER_AGENT,
+			in:   deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			want: "agent",
 		},
 		{
 			name: "unknown fallback",
-			in:   pb.MessageSender(999),
+			in:   deckhandpb.MessageSender(999),
 			want: "unknown",
 		},
 	}
@@ -45,10 +44,10 @@ func TestConvertSender(t *testing.T) {
 func TestConvertMessage(t *testing.T) {
 	createdAt := time.Date(2026, 2, 10, 3, 4, 5, 0, time.UTC)
 
-	msg := &pb.DeckhandMessage{
+	msg := &deckhandpb.DeckhandMessage{
 		Id:        "m1",
 		Content:   "hello",
-		Sender:    pb.MessageSender_MESSAGE_SENDER_AGENT,
+		Sender:    deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 		CreatedAt: timestamppb.New(createdAt),
 	}
 
@@ -73,17 +72,17 @@ func TestConvertConversation(t *testing.T) {
 	updatedAt := time.Date(2026, 2, 11, 4, 5, 6, 0, time.UTC)
 	lastCreatedAt := time.Date(2026, 2, 11, 4, 4, 0, 0, time.UTC)
 
-	conv := &pb.DeckhandConversation{
+	conv := &deckhandpb.DeckhandConversation{
 		Id:          "c1",
 		Subject:     "Playback keeps buffering",
-		Status:      pb.ConversationStatus_CONVERSATION_STATUS_PENDING,
+		Status:      deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING,
 		UnreadCount: 3,
 		CreatedAt:   timestamppb.New(createdAt),
 		UpdatedAt:   timestamppb.New(updatedAt),
-		LastMessage: &pb.DeckhandMessage{
+		LastMessage: &deckhandpb.DeckhandMessage{
 			Id:        "m2",
 			Content:   "We are checking your cluster status.",
-			Sender:    pb.MessageSender_MESSAGE_SENDER_AGENT,
+			Sender:    deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			CreatedAt: timestamppb.New(lastCreatedAt),
 		},
 	}
@@ -120,10 +119,10 @@ func TestConvertConversation(t *testing.T) {
 }
 
 func TestConvertConversation_UnknownAndNilFields(t *testing.T) {
-	conv := &pb.DeckhandConversation{
+	conv := &deckhandpb.DeckhandConversation{
 		Id:          "c2",
 		Subject:     "",
-		Status:      pb.ConversationStatus(999),
+		Status:      deckhandpb.ConversationStatus(999),
 		UnreadCount: 0,
 	}
 

@@ -19,7 +19,7 @@ import (
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/shopspring/decimal"
 
@@ -595,7 +595,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	if wallet.Purpose == "invoice" && wallet.InvoiceID != nil {
 		if invoicePayment != nil {
-			emitBillingEvent(eventPaymentSucceeded, wallet.TenantID, "payment", invoicePayment.PaymentID, &pb.BillingEvent{
+			emitBillingEvent(cm.db, cm.logger, eventPaymentSucceeded, wallet.TenantID, "payment", invoicePayment.PaymentID, &ipcpb.BillingEvent{
 				PaymentId: invoicePayment.PaymentID,
 				InvoiceId: *wallet.InvoiceID,
 				Amount:    invoicePayment.Amount,
@@ -606,7 +606,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 				TxHash:    tx.Hash,
 				Network:   wallet.Network,
 			})
-			emitBillingEvent(eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &pb.BillingEvent{
+			emitBillingEvent(cm.db, cm.logger, eventInvoicePaid, wallet.TenantID, "invoice", *wallet.InvoiceID, &ipcpb.BillingEvent{
 				InvoiceId: *wallet.InvoiceID,
 				Amount:    invoicePayment.Amount,
 				Currency:  invoicePayment.Currency,
@@ -618,7 +618,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 			})
 		}
 	} else if wallet.Purpose == "prepaid" {
-		emitBillingEvent(eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &pb.BillingEvent{
+		emitBillingEvent(cm.db, cm.logger, eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &ipcpb.BillingEvent{
 			TopupId:  wallet.ID,
 			Amount:   float64(creditedCents) / 100.0,
 			Currency: creditedCurrency,

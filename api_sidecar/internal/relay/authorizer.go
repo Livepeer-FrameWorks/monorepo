@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"frameworks/api_sidecar/internal/control"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // RelayPullAuthorizer decides whether an inbound peer-relay pull that
@@ -29,7 +29,7 @@ func (a *controlAuthorizer) AuthorizeRelayPull(ctx context.Context, grantID, art
 	if err != nil {
 		return false, err
 	}
-	resp, err := control.RequestAuthorizeRelayPull(ctx, &pb.AuthorizeRelayPullRequest{
+	resp, err := control.RequestAuthorizeRelayPull(ctx, &ipcpb.AuthorizeRelayPullRequest{
 		RequestId:    id,
 		GrantId:      grantID,
 		ArtifactHash: artifactHash,

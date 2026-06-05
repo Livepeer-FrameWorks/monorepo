@@ -38,7 +38,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/google/uuid"
@@ -69,14 +75,14 @@ type CacheInvalidator interface {
 	InvalidateTenantCache(tenantID string) int
 	InvalidatePlaybackAuthCache(tenantID string, internalNames []string) int
 	GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus
-	GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer
+	GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer
 }
 
 type federationRPC interface {
-	QueryStream(ctx context.Context, peerClusterID, peerAddr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error)
-	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error)
-	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
-	ForwardArtifactCommand(ctx context.Context, peerClusterID, peerAddr string, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error)
+	QueryStream(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error)
+	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error)
+	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error)
+	ForwardArtifactCommand(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error)
 }
 
 type peerAddrResolver interface {
@@ -86,12 +92,12 @@ type peerAddrResolver interface {
 
 // FoghornGRPCServer implements the Foghorn control plane gRPC services
 type FoghornGRPCServer struct {
-	pb.UnimplementedClipControlServiceServer
-	pb.UnimplementedDVRControlServiceServer
-	pb.UnimplementedViewerControlServiceServer
-	pb.UnimplementedVodControlServiceServer
-	pb.UnimplementedTenantControlServiceServer
-	pb.UnimplementedNodeControlServiceServer
+	foghornpb.UnimplementedClipControlServiceServer
+	foghornpb.UnimplementedDVRControlServiceServer
+	foghornpb.UnimplementedViewerControlServiceServer
+	foghornpb.UnimplementedVodControlServiceServer
+	foghornpb.UnimplementedTenantControlServiceServer
+	foghornpb.UnimplementedNodeControlServiceServer
 
 	db                  *sql.DB
 	logger              logging.Logger
@@ -126,7 +132,7 @@ type FoghornGRPCServer struct {
 // server uses to resolve a tenant's official cluster + cluster_peers
 // metadata (for S3 backing lookup).
 type quartermasterRoutingResolver interface {
-	GetClusterRouting(ctx context.Context, req *pb.GetClusterRoutingRequest) (*pb.ClusterRoutingResponse, error)
+	GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error)
 }
 
 // storageResolverFactory builds a per-request storage.ClusterResolver. The
@@ -172,12 +178,12 @@ func NewFoghornGRPCServer(
 
 // RegisterServices registers all Foghorn gRPC services with the server
 func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
-	pb.RegisterClipControlServiceServer(grpcServer, s)
-	pb.RegisterDVRControlServiceServer(grpcServer, s)
-	pb.RegisterViewerControlServiceServer(grpcServer, s)
-	pb.RegisterVodControlServiceServer(grpcServer, s)
-	pb.RegisterTenantControlServiceServer(grpcServer, s)
-	pb.RegisterNodeControlServiceServer(grpcServer, s)
+	foghornpb.RegisterClipControlServiceServer(grpcServer, s)
+	foghornpb.RegisterDVRControlServiceServer(grpcServer, s)
+	foghornpb.RegisterViewerControlServiceServer(grpcServer, s)
+	foghornpb.RegisterVodControlServiceServer(grpcServer, s)
+	foghornpb.RegisterTenantControlServiceServer(grpcServer, s)
+	foghornpb.RegisterNodeControlServiceServer(grpcServer, s)
 }
 
 // enrichClusterID returns the cluster for an operation. Prefers explicit
@@ -275,7 +281,7 @@ func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenant
 	if s.quartermasterClient != nil {
 		routingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 		defer cancel()
-		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &pb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil && routing.OfficialClusterId != nil {
+		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil && routing.OfficialClusterId != nil {
 			officialCluster = *routing.OfficialClusterId
 		}
 	}
@@ -319,7 +325,7 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 	}
 	sort.Strings(clusterIDs)
 
-	req := &pb.ForwardArtifactCommandRequest{
+	req := &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      command,
 		ArtifactHash: artifactHash,
 		TenantId:     tenantID,
@@ -421,12 +427,12 @@ func (s *FoghornGRPCServer) consumePendingDVRStop(internalName string) bool {
 	return ok
 }
 
-func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason string) {
+func (s *FoghornGRPCServer) emitDVRStartFailure(req *sharedpb.StartDVRRequest, reason string) {
 	if s.decklogClient == nil {
 		return
 	}
-	dvrData := &pb.DVRLifecycleData{
-		Status: pb.DVRLifecycleData_STATUS_FAILED,
+	dvrData := &ipcpb.DVRLifecycleData{
+		Status: ipcpb.DVRLifecycleData_STATUS_FAILED,
 		Error:  &reason,
 		StreamInternalName: func() *string {
 			if req.InternalName != "" {
@@ -464,7 +470,7 @@ func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason 
 // The live DVR window is INDEPENDENT of retention. Retention is post-end-
 // only and computed at FinalizeDVR from the snapshotted dvr_retention_days
 // column; it does not clamp the rolling Mist window.
-func (s *FoghornGRPCServer) resolveEffectiveDVRConfig(req *pb.StartDVRRequest) dvrpolicy.Effective {
+func (s *FoghornGRPCServer) resolveEffectiveDVRConfig(req *sharedpb.StartDVRRequest) dvrpolicy.Effective {
 	tier := dvrpolicy.Tier{}
 	if p := req.GetDvrPolicy(); p != nil {
 		tier.DefaultWindowSeconds = int(p.GetDefaultWindowSeconds())
@@ -554,7 +560,7 @@ func sourceNodeFromHint(sourceNodeHint string) (nodeID string, baseURL string, o
 //
 // Return semantics: 0 means "keep forever" (FinalizeDVR writes NULL
 // retention_until); >0 sets that many days.
-func dvrRetentionDays(p *pb.DVRPolicy) int32 {
+func dvrRetentionDays(p *sharedpb.DVRPolicy) int32 {
 	if p == nil || p.RecordingRetentionDays == nil {
 		return 30
 	}
@@ -630,7 +636,7 @@ func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
 // emitRoutingEvent sends a routing decision event via the shared builder.
 // Delegates to handlers.SendRoutingEvent with the server's decklog client.
 func (s *FoghornGRPCServer) emitRoutingEvent(
-	primary *pb.ViewerEndpoint,
+	primary *sharedpb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
 	internalName, streamTenantID, streamID string,
 	durationMs float32,
@@ -671,8 +677,8 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 
 // buildClipLifecycleData creates an enriched ClipLifecycleData with timing fields
 // CRITICAL: This function fixes the missing enrichment bug documented in ipc.proto lines 575-580
-func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClipRequest, reqID, clipHash string) *pb.ClipLifecycleData {
-	data := &pb.ClipLifecycleData{
+func buildClipLifecycleData(stage ipcpb.ClipLifecycleData_Stage, req *sharedpb.CreateClipRequest, reqID, clipHash string) *ipcpb.ClipLifecycleData {
+	data := &ipcpb.ClipLifecycleData{
 		Stage:     stage,
 		RequestId: &reqID,
 	}
@@ -705,7 +711,7 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 		data.DurationSec = req.DurationSec
 	}
 	// Include mode for analytics
-	if req.Mode != pb.ClipMode_CLIP_MODE_UNSPECIFIED {
+	if req.Mode != sharedpb.ClipMode_CLIP_MODE_UNSPECIFIED {
 		modeStr := req.Mode.String()
 		data.ClipMode = &modeStr
 	}
@@ -718,13 +724,13 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	return data
 }
 
-func clipProcessingSourceKind(kind pb.ClipPullRequest_SourceKind) string {
+func clipProcessingSourceKind(kind ipcpb.ClipPullRequest_SourceKind) string {
 	switch kind {
-	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
+	case ipcpb.ClipPullRequest_SOURCE_KIND_LIVE:
 		return "live"
-	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
+	case ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
 		return "dvr_rolling"
-	case pb.ClipPullRequest_SOURCE_KIND_CHAPTER:
+	case ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER:
 		return "chapter"
 	default:
 		return ""
@@ -746,7 +752,7 @@ func clipProcessingPreferredNode(nodeID string) string {
 }
 
 // CreateClip creates a new clip from a stream
-func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	if req.StreamInternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_internal_name is required")
 	}
@@ -814,7 +820,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
 	clipCluster := s.enrichClusterID(req.GetClusterId(), req.StreamInternalName, req.GetTenantId())
 	if s.decklogClient != nil {
-		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
+		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
 		if clipCluster != "" {
 			clipData.OriginClusterId = &clipCluster
 			clipData.ServingClusterId = &clipCluster
@@ -836,7 +842,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 	if dispatchErr != nil {
 		if s.decklogClient != nil {
-			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
+			failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
 			errMsg := fmt.Sprintf("clip source dispatch: %v", dispatchErr)
 			failedData.Error = &errMsg
 			if clipCluster != "" {
@@ -866,7 +872,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 resolve:
 	for {
 		switch dispatch.kind {
-		case pb.ClipPullRequest_SOURCE_KIND_LIVE:
+		case ipcpb.ClipPullRequest_SOURCE_KIND_LIVE:
 			ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
 			host, _, _, _, _, ingestErr := s.lb.GetBestNodeWithScore(ictx, req.StreamInternalName, 0, 0, map[string]int{}, "", true)
 			liveNodeID := ""
@@ -881,7 +887,7 @@ resolve:
 				// A live-fully-covered request short-circuits recorded
 				// assessment, so the DVR/chapter candidates may be empty —
 				// assess them now that a recorded fallback is needed.
-				liveCov = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_LIVE}
+				liveCov = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE}
 				recordedDVR, recordedChap, recErr := s.computeRecordedCoverages(ctx, req.TenantId, req.StreamInternalName, startMs, clipEndMs)
 				if recErr != nil {
 					return nil, status.Errorf(codes.Unavailable, "live clip source unroutable and recorded source assessment failed: %v", recErr)
@@ -903,7 +909,7 @@ resolve:
 			ingestHost = host
 			sourceHost = host
 			sourceNodeID = liveNodeID
-		case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
+		case ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
 			dvrNodeID := dispatch.sourceNodeID
 			var dvrHost string
 			var hostErr error
@@ -914,7 +920,7 @@ resolve:
 				// The winning DVR's recording node is not in current state
 				// (absent/disconnected). Drop the DVR candidate and re-rank
 				// among the remaining sources rather than failing the clip.
-				dvrCov = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
+				dvrCov = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
 				fallback, reErr := chooseClipSource(startMs, clipEndMs, liveCov, dvrCov, chapCov)
 				if reErr != nil {
 					return nil, status.Errorf(codes.Unavailable, "active DVR recording node unavailable and no other source covers the range: %v", hostErr)
@@ -980,7 +986,7 @@ resolve:
 	sourceStreamName := dispatch.streamName
 	sourceBaseURL := ""
 	switch dispatch.kind {
-	case pb.ClipPullRequest_SOURCE_KIND_LIVE:
+	case ipcpb.ClipPullRequest_SOURCE_KIND_LIVE:
 		var sourceErr error
 		sourceStreamName, sourceErr = clipLiveSourceStreamName(ctx, req)
 		if sourceErr != nil {
@@ -995,7 +1001,7 @@ resolve:
 		if sourceHost != "" && sourceNodeID != "" && sourceNodeID != storageNodeID {
 			sourceBaseURL = control.DeriveMistHTTPBase(sourceHost)
 		}
-	case pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
+	case ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING:
 		if sourceHost != "" && sourceNodeID != "" && sourceNodeID != storageNodeID {
 			sourceBaseURL = control.DeriveMistHTTPBase(sourceHost)
 		}
@@ -1042,7 +1048,7 @@ resolve:
 		`, fmt.Sprintf("processing queue unavailable: %v", err), clipHash, req.TenantId)
 
 		if s.decklogClient != nil {
-			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
+			failedData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
 			failedData.Error = func() *string { e := fmt.Sprintf("processing queue unavailable: %v", err); return &e }()
 			go func() {
 				if errSend := artifactoutbox.EnqueueClipLifecycle(failedData); errSend != nil {
@@ -1069,7 +1075,7 @@ resolve:
 
 	// Emit STAGE_QUEUED event to Decklog (with enriched timing fields)
 	if s.decklogClient != nil {
-		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
+		clipData := buildClipLifecycleData(ipcpb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
 		go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 	}
 
@@ -1080,7 +1086,7 @@ resolve:
 		"clip_format":     format,
 	})
 
-	return &pb.CreateClipResponse{
+	return &sharedpb.CreateClipResponse{
 		Status:              "queued",
 		IngestHost:          ingestHost,
 		StorageHost:         storageHost,
@@ -1095,7 +1101,7 @@ resolve:
 }
 
 // DeleteClip deletes a clip
-func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error) {
+func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	if req.ClipHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
 	}
@@ -1122,7 +1128,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
-			return &pb.DeleteClipResponse{Success: true, Message: "clip deleted via federation"}, nil
+			return &sharedpb.DeleteClipResponse{Success: true, Message: "clip deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "clip not found")
 	} else if err != nil {
@@ -1130,7 +1136,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	}
 
 	if currentStatus == "deleted" {
-		return &pb.DeleteClipResponse{
+		return &sharedpb.DeleteClipResponse{
 			Success: false,
 			Message: "clip is already deleted",
 		}, nil
@@ -1149,7 +1155,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	// Send delete request to Helmsman if we know the storage node
 	if nodeID != "" {
 		requestID := uuid.NewString()
-		deleteReq := &pb.ClipDeleteRequest{
+		deleteReq := &ipcpb.ClipDeleteRequest{
 			ClipHash:  req.ClipHash,
 			RequestId: requestID,
 		}
@@ -1226,7 +1232,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	if cleanupError != "" {
 		message = "clip deleted (" + cleanupError + ")"
 	}
-	return &pb.DeleteClipResponse{
+	return &sharedpb.DeleteClipResponse{
 		Success: true,
 		Message: message,
 	}, nil
@@ -1235,7 +1241,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 // DVR CONTROL SERVICE IMPLEMENTATION
 
 // StartDVR initiates DVR recording for a stream
-func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	return s.startDVR(ctx, req, "")
 }
 
@@ -1243,11 +1249,11 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 // Auto-record calls this from PUSH_REWRITE before active-stream lifecycle
 // state may have propagated through Redis/DB. Manual API starts intentionally
 // use StartDVR so they still require observed live source state.
-func (s *FoghornGRPCServer) StartDVRWithSourceHint(ctx context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error) {
+func (s *FoghornGRPCServer) StartDVRWithSourceHint(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (*sharedpb.StartDVRResponse, error) {
 	return s.startDVR(ctx, req, sourceNodeID)
 }
 
-func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRRequest, sourceNodeHint string) (*pb.StartDVRResponse, error) {
+func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeHint string) (*sharedpb.StartDVRResponse, error) {
 	if req.InternalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
 	}
@@ -1318,7 +1324,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 				playbackID = resp.PlaybackId
 			}
 		}
-		return &pb.StartDVRResponse{
+		return &sharedpb.StartDVRResponse{
 			Status:        "already_started",
 			DvrHash:       existingHash,
 			IngestHost:    baseURL,
@@ -1334,14 +1340,14 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	var playbackID string
 	var streamID string
 	if control.CommodoreClient != nil {
-		regReq := &pb.RegisterDVRRequest{
+		regReq := &commodorepb.RegisterDVRRequest{
 			TenantId:           req.TenantId,
 			UserId:             req.GetUserId(),
 			StreamId:           req.GetStreamId(),
 			StreamInternalName: req.InternalName,
 			OriginClusterId:    s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
 		}
-		var regResp *pb.RegisterDVRResponse
+		var regResp *commodorepb.RegisterDVRResponse
 		regResp, err = control.CommodoreClient.RegisterDVR(ctx, regReq)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to register DVR with Commodore")
@@ -1394,7 +1400,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 
 	if err != nil {
 		if control.CommodoreClient != nil {
-			if _, cleanupErr := control.CommodoreClient.UpdateDVRRetention(ctx, &pb.UpdateDVRRetentionRequest{
+			if _, cleanupErr := control.CommodoreClient.UpdateDVRRetention(ctx, &commodorepb.UpdateDVRRetentionRequest{
 				DvrHash:        dvrHash,
 				TenantId:       req.TenantId,
 				RetentionUntil: timestamppb.New(time.Now().UTC()),
@@ -1436,8 +1442,8 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		if s.decklogClient != nil {
 			stoppedAt := time.Now().Unix()
 			errorMsg := "stream ended before DVR start"
-			dvrData := &pb.DVRLifecycleData{
-				Status:  pb.DVRLifecycleData_STATUS_STOPPED,
+			dvrData := &ipcpb.DVRLifecycleData{
+				Status:  ipcpb.DVRLifecycleData_STATUS_STOPPED,
 				DvrHash: dvrHash,
 				EndedAt: &stoppedAt,
 				Error:   &errorMsg,
@@ -1468,7 +1474,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 			}
 			go artifactoutbox.EnqueueDVRLifecycleLogged(dvrData)
 		}
-		return &pb.StartDVRResponse{
+		return &sharedpb.StartDVRResponse{
 			Status:        responseStatus,
 			DvrHash:       dvrHash,
 			IngestHost:    baseURL,
@@ -1502,7 +1508,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	// DVR configuration. Effective live-window / segment / max_entries are
 	// resolved by pkg/dvrpolicy above. The sidecar applies these values
 	// verbatim and never interprets tier or cluster context.
-	config := &pb.DVRConfig{
+	config := &ipcpb.DVRConfig{
 		Enabled:          true,
 		Format:           "ts",
 		SegmentDuration:  int32(effective.SegmentDurationSeconds),
@@ -1534,7 +1540,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 	// Send gRPC control message to storage Helmsman. source_runtime_name
 	// is Foghorn-authoritative: Helmsman uses it verbatim as the Mist
 	// push_start.stream arg, no silent live+ default for mist_native.
-	dvrReq := &pb.DVRStartRequest{
+	dvrReq := &ipcpb.DVRStartRequest{
 		DvrHash:           dvrHash,
 		InternalName:      req.InternalName,
 		SourceRuntimeName: sourceStreamName,
@@ -1556,8 +1562,8 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 
 		// Emit FAILED event to Decklog
 		if s.decklogClient != nil {
-			failedData := &pb.DVRLifecycleData{
-				Status:  pb.DVRLifecycleData_STATUS_FAILED,
+			failedData := &ipcpb.DVRLifecycleData{
+				Status:  ipcpb.DVRLifecycleData_STATUS_FAILED,
 				DvrHash: dvrHash,
 				Error:   func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }(),
 				StreamId: func() *string {
@@ -1611,8 +1617,8 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 
 	// Emit DVR STATUS_STARTED event to Decklog
 	if s.decklogClient != nil {
-		dvrData := &pb.DVRLifecycleData{
-			Status:           pb.DVRLifecycleData_STATUS_STARTED,
+		dvrData := &ipcpb.DVRLifecycleData{
+			Status:           ipcpb.DVRLifecycleData_STATUS_STARTED,
 			DvrHash:          dvrHash,
 			OriginClusterId:  &dvrCluster,
 			ServingClusterId: &dvrCluster,
@@ -1654,7 +1660,7 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *pb.StartDVRReques
 		"dvr_hash":   dvrHash,
 	})
 
-	return &pb.StartDVRResponse{
+	return &sharedpb.StartDVRResponse{
 		Status:        "started",
 		DvrHash:       dvrHash,
 		IngestHost:    baseURL,
@@ -1699,7 +1705,7 @@ func dvrSourceStreamName(internalName string) string {
 	return internalName
 }
 
-func clipLiveSourceStreamName(ctx context.Context, req *pb.CreateClipRequest) (string, error) {
+func clipLiveSourceStreamName(ctx context.Context, req *sharedpb.CreateClipRequest) (string, error) {
 	internalName := strings.TrimSpace(req.GetStreamInternalName())
 	if internalName == "" {
 		return "", fmt.Errorf("stream_internal_name is required")
@@ -1738,7 +1744,7 @@ func clipLiveSourceStreamName(ctx context.Context, req *pb.CreateClipRequest) (s
 }
 
 // StopDVR stops an active DVR recording
-func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error) {
+func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRequest) (*sharedpb.StopDVRResponse, error) {
 	if req.DvrHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
 	}
@@ -1767,7 +1773,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 			streamID = *req.StreamId
 		}
 		if handled, _ := s.forwardArtifactToFederation(ctx, "stop_dvr", req.DvrHash, req.GetTenantId(), streamID); handled {
-			return &pb.StopDVRResponse{Success: true, Message: "DVR stopped via federation"}, nil
+			return &sharedpb.StopDVRResponse{Success: true, Message: "DVR stopped via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
@@ -1777,7 +1783,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 
 	switch dvrStatus {
 	case "completed", "completed_partial", "failed", "ready", "deleted", "finalizing":
-		return &pb.StopDVRResponse{
+		return &sharedpb.StopDVRResponse{
 			Success: false,
 			Message: fmt.Sprintf("DVR recording already finished with status: %s", dvrStatus),
 		}, nil
@@ -1796,7 +1802,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 	}
 
 	// Send stop command to storage Helmsman
-	stopReq := &pb.DVRStopRequest{
+	stopReq := &ipcpb.DVRStopRequest{
 		DvrHash:   req.DvrHash,
 		RequestId: req.DvrHash,
 	}
@@ -1814,14 +1820,14 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		s.logger.WithError(err).Error("Failed to update DVR status to stopping")
 	}
 
-	return &pb.StopDVRResponse{
+	return &sharedpb.StopDVRResponse{
 		Success: true,
 		Message: "DVR recording stopping",
 	}, nil
 }
 
 // DeleteDVR deletes a DVR recording and its files
-func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error) {
+func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
 	if req.DvrHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
 	}
@@ -1850,7 +1856,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
-			return &pb.DeleteDVRResponse{Success: true, Message: "DVR deleted via federation"}, nil
+			return &sharedpb.DeleteDVRResponse{Success: true, Message: "DVR deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
@@ -1859,7 +1865,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	}
 
 	if dvrStatus == "deleted" {
-		return &pb.DeleteDVRResponse{
+		return &sharedpb.DeleteDVRResponse{
 			Success: false,
 			Message: "DVR recording is already deleted",
 		}, nil
@@ -1876,7 +1882,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	// If still recording, stop it first
 	if dvrStatus == "recording" || dvrStatus == "requested" || dvrStatus == "starting" {
 		if nodeID != "" {
-			stopReq := &pb.DVRStopRequest{
+			stopReq := &ipcpb.DVRStopRequest{
 				DvrHash:   req.DvrHash,
 				RequestId: req.DvrHash,
 			}
@@ -1895,7 +1901,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	// Send delete request to Helmsman if we know the storage node
 	if nodeID != "" {
 		requestID := uuid.NewString()
-		deleteReq := &pb.DVRDeleteRequest{
+		deleteReq := &ipcpb.DVRDeleteRequest{
 			DvrHash:   req.DvrHash,
 			RequestId: requestID,
 		}
@@ -1958,7 +1964,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	if cleanupError != "" {
 		message = "DVR recording deleted (" + cleanupError + ")"
 	}
-	return &pb.DeleteDVRResponse{
+	return &sharedpb.DeleteDVRResponse{
 		Success: true,
 		Message: message,
 	}, nil
@@ -1967,7 +1973,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 // VIEWER CONTROL SERVICE IMPLEMENTATION
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
-func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
 	if req.ContentId == "" {
 		return nil, status.Error(codes.InvalidArgument, "content_id is required")
 	}
@@ -2039,7 +2045,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 		}
 	}
 
-	var response *pb.ViewerEndpointResponse
+	var response *sharedpb.ViewerEndpointResponse
 
 	switch resolvedType {
 	case "live":
@@ -2088,7 +2094,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	return response, nil
 }
 
-func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpointRequest, resolution *control.ContentResolution) error {
+func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, resolution *control.ContentResolution) error {
 	if control.CommodoreClient == nil {
 		s.logger.WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -2109,7 +2115,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 	if policyInternalName == "" {
 		policyInternalName = resolution.InternalName
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, policyInternalName, &pb.ViewerConnectTrigger{
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, policyInternalName, &ipcpb.ViewerConnectTrigger{
 		StreamName:  policyInternalName,
 		SessionId:   "resolve:" + req.GetContentId(),
 		Host:        req.GetViewerIp(),
@@ -2123,7 +2129,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 	return nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*quartermasterpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:             s.db,
@@ -2198,7 +2204,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 
 // collectRemoteEdges queries the federation cache for each peer cluster's edge summary
 // and converts the results to RemoteEdgeCandidates for the load balancer.
-func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
 		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
@@ -2240,7 +2246,7 @@ func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.
 //	                  no DTSC URL); caller keeps the summary-level redirect.
 //	(nil, err)     — arrangement infra failure (registry/deps/peer/notify);
 //	                  caller surfaces 5xx instead of silently redirecting.
-func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *sharedpb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
 	if s.federationClient == nil || s.peerManager == nil {
 		return nil, nil
 	}
@@ -2268,7 +2274,7 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 
 	type queryResult struct {
 		clusterID string
-		resp      *pb.QueryStreamResponse
+		resp      *foghornfederationpb.QueryStreamResponse
 	}
 	ch := make(chan queryResult, len(remotes))
 	var wg sync.WaitGroup
@@ -2283,7 +2289,7 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 			defer wg.Done()
 			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			resp, err := s.federationClient.QueryStream(qCtx, cid, caddr, &pb.QueryStreamRequest{
+			resp, err := s.federationClient.QueryStream(qCtx, cid, caddr, &foghornfederationpb.QueryStreamRequest{
 				StreamName:        internalName,
 				ViewerLat:         lat,
 				ViewerLon:         lon,
@@ -2298,7 +2304,7 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 	}
 	go func() { wg.Wait(); close(ch) }()
 
-	var bestCandidate *pb.EdgeCandidate
+	var bestCandidate *foghornfederationpb.EdgeCandidate
 	var bestCluster string
 	for qr := range ch {
 		for _, c := range qr.resp.Candidates {
@@ -2324,8 +2330,8 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 
 	// No origin-pull possible — redirect viewer to the remote cluster directly
 	playURL := control.PlaybackEdgeRedirectURL(bestCandidate.BaseUrl, viewKey)
-	confirmed := &pb.ViewerEndpointResponse{
-		Primary: &pb.ViewerEndpoint{
+	confirmed := &sharedpb.ViewerEndpointResponse{
+		Primary: &sharedpb.ViewerEndpoint{
 			NodeId:    bestCandidate.NodeId,
 			BaseUrl:   bestCandidate.BaseUrl,
 			Protocol:  "redirect",
@@ -2367,7 +2373,7 @@ func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response 
 // tryBeginOriginPull guard sits in front of the shared helper to coalesce
 // concurrent gRPC arrangement requests on this instance before they all
 // line up on the Redis lock.
-func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *pb.ViewerEndpointResponse) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *sharedpb.ViewerEndpointResponse) (*sharedpb.ViewerEndpointResponse, error) {
 	if s.remoteEdgeCache == nil || remote.DtscUrl == "" {
 		return nil, nil
 	}
@@ -2377,7 +2383,7 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 		if registry != nil {
 			if loc, ok := registry.LocalReplication(ctx, internalName); ok {
 				if endpoint := s.buildLocalEndpoint(loc.DestNodeID, loc.DestNodeBaseURL, viewKey); endpoint != nil {
-					return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
+					return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
 				}
 			}
 		}
@@ -2439,7 +2445,7 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 	}
 	endpoint := s.buildLocalEndpoint(result.DestNodeID, result.DestNodeBaseURL, viewKey)
 	if endpoint != nil {
-		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
+		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
 	}
 	return nil, nil
 }
@@ -2470,7 +2476,7 @@ func (s *FoghornGRPCServer) finishOriginPull(streamName string) {
 // an active inbound replication. Takes the dest-node identity directly so
 // callers can pass it from either the registry's Location or any other
 // origin-pull bookkeeping without round-tripping through a record type.
-func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, viewKey string) *pb.ViewerEndpoint {
+func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, viewKey string) *sharedpb.ViewerEndpoint {
 	outputs, exists := control.GetNodeOutputs(destNodeID)
 	if !exists || outputs.Outputs == nil {
 		return nil
@@ -2483,7 +2489,7 @@ func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, view
 }
 
 // queryStreamFanOut performs cold-start QueryStream to peer clusters when EdgeSummary is empty.
-func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	if s.federationClient == nil || s.peerManager == nil {
 		return nil
 	}
@@ -2507,7 +2513,7 @@ func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName,
 			defer wg.Done()
 			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			resp, err := s.federationClient.QueryStream(qCtx, peerID, peerAddr, &pb.QueryStreamRequest{
+			resp, err := s.federationClient.QueryStream(qCtx, peerID, peerAddr, &foghornfederationpb.QueryStreamRequest{
 				StreamName:        internalName,
 				ViewerLat:         lat,
 				ViewerLon:         lon,
@@ -2560,7 +2566,7 @@ func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName,
 // Unavailable rather than route through the archive/warm-cache lane.
 // Archive routing would silently land viewers on nodes that don't own
 // the live segments and produce stale playback.
-func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
 	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
 	if derr != nil {
@@ -2602,7 +2608,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *p
 	if latest == "" {
 		return nil, status.Error(codes.FailedPrecondition, "DVR is no longer active and has no playable chapters yet; query dvrChapters when finalization completes")
 	}
-	chapterReq := &pb.ViewerEndpointRequest{
+	chapterReq := &sharedpb.ViewerEndpointRequest{
 		ContentId: latest,
 	}
 	if vip := req.GetViewerIp(); vip != "" {
@@ -2647,7 +2653,7 @@ func (s *FoghornGRPCServer) latestPlayableChapterForDVR(ctx context.Context, dis
 // live resolver so it reports the DVR identity that's actually being
 // served. Without this clients see ContentType="live" for an active
 // DVR endpoint and lose the rolling-window/seek semantics distinction.
-func overrideActiveDVRMetadata(resp *pb.ViewerEndpointResponse, dispatch *control.DVRArtifactDispatch) {
+func overrideActiveDVRMetadata(resp *sharedpb.ViewerEndpointResponse, dispatch *control.DVRArtifactDispatch) {
 	if resp == nil || resp.Metadata == nil || dispatch == nil {
 		return
 	}
@@ -2658,7 +2664,7 @@ func overrideActiveDVRMetadata(resp *pb.ViewerEndpointResponse, dispatch *contro
 	// field carries the distinction between "live" and "recording".
 }
 
-func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:              s.db,
@@ -2826,7 +2832,7 @@ func generateVodHash(tenantID, filename string, timestamp time.Time) string {
 }
 
 // CreateVodUpload initiates a multipart upload and returns presigned URLs
-func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -2987,7 +2993,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		go func(artifactHash, tenantID, cluster string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := control.CommodoreClient.UpdateArtifactStorageCluster(ctx, tenantID, pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, artifactHash, cluster); err != nil {
+			if _, err := control.CommodoreClient.UpdateArtifactStorageCluster(ctx, tenantID, commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, artifactHash, cluster); err != nil {
 				s.logger.WithError(err).WithFields(logging.Fields{
 					"artifact_hash":   artifactHash,
 					"storage_cluster": cluster,
@@ -2998,8 +3004,8 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 
 	// Emit VOD lifecycle event to Decklog (STATUS_REQUESTED)
 	if s.decklogClient != nil {
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_REQUESTED,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_REQUESTED,
 			VodHash:     artifactHash,
 			UploadId:    &uploadID,
 			Filename:    &req.Filename,
@@ -3019,15 +3025,15 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	}
 
 	// Convert storage.UploadPart to proto
-	protoParts := make([]*pb.VodUploadPart, len(parts))
+	protoParts := make([]*sharedpb.VodUploadPart, len(parts))
 	for i, p := range parts {
-		protoParts[i] = &pb.VodUploadPart{
+		protoParts[i] = &sharedpb.VodUploadPart{
 			PartNumber:   int32(p.PartNumber),
 			PresignedUrl: p.PresignedURL,
 		}
 	}
 
-	return &pb.CreateVodUploadResponse{
+	return &sharedpb.CreateVodUploadResponse{
 		UploadId:     uploadID,
 		ArtifactId:   artifactHash,
 		ArtifactHash: artifactHash,
@@ -3041,7 +3047,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 // GetVodUploadStatus reports server-authoritative state of an in-flight multipart upload.
 // Used by the gateway/MCP and by the browser uploader's reload-recovery path to reconcile
 // local state against what S3 has actually received.
-func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetVodUploadStatusRequest) (*pb.GetVodUploadStatusResponse, error) {
+func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.GetVodUploadStatusRequest) (*sharedpb.GetVodUploadStatusResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -3076,7 +3082,7 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetV
 		return nil, status.Error(codes.Internal, "failed to load upload status")
 	}
 
-	resp := &pb.GetVodUploadStatusResponse{
+	resp := &sharedpb.GetVodUploadStatusResponse{
 		UploadId:     req.UploadId,
 		State:        mapArtifactStatusToVodStatus(artStatus),
 		ArtifactHash: artifactHash,
@@ -3093,16 +3099,16 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetV
 
 	// Multipart-complete uploads report stored object metadata, not S3 part state.
 	switch resp.State {
-	case pb.VodStatus_VOD_STATUS_PROCESSING,
-		pb.VodStatus_VOD_STATUS_READY,
-		pb.VodStatus_VOD_STATUS_FAILED,
-		pb.VodStatus_VOD_STATUS_DELETED:
+	case sharedpb.VodStatus_VOD_STATUS_PROCESSING,
+		sharedpb.VodStatus_VOD_STATUS_READY,
+		sharedpb.VodStatus_VOD_STATUS_FAILED,
+		sharedpb.VodStatus_VOD_STATUS_DELETED:
 		return resp, nil
 	}
 
 	// Expired session: report EXPIRED without paying for a ListParts call.
 	if uploadExpiresAt.Valid && time.Now().After(uploadExpiresAt.Time) {
-		resp.State = pb.VodStatus_VOD_STATUS_EXPIRED
+		resp.State = sharedpb.VodStatus_VOD_STATUS_EXPIRED
 		resp.LastErrorCode = "upload_expired"
 		return resp, nil
 	}
@@ -3117,9 +3123,9 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetV
 		resp.LastErrorCode = "storage_reconciliation_failed"
 		return resp, nil
 	}
-	resp.UploadedParts = make([]*pb.VodUploadedPart, 0, len(uploaded))
+	resp.UploadedParts = make([]*sharedpb.VodUploadedPart, 0, len(uploaded))
 	for _, p := range uploaded {
-		resp.UploadedParts = append(resp.UploadedParts, &pb.VodUploadedPart{
+		resp.UploadedParts = append(resp.UploadedParts, &sharedpb.VodUploadedPart{
 			PartNumber: int32(p.PartNumber),
 			Etag:       p.ETag,
 			SizeBytes:  p.SizeBytes,
@@ -3137,31 +3143,31 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *pb.GetV
 
 // mapArtifactStatusToVodStatus maps the foghorn.artifacts.status string column to the
 // VodStatus enum surfaced to clients. Unknown/empty maps to UNSPECIFIED.
-func mapArtifactStatusToVodStatus(s string) pb.VodStatus {
+func mapArtifactStatusToVodStatus(s string) sharedpb.VodStatus {
 	switch s {
 	case "uploading", "requested":
-		return pb.VodStatus_VOD_STATUS_UPLOADING
+		return sharedpb.VodStatus_VOD_STATUS_UPLOADING
 	case "processing":
-		return pb.VodStatus_VOD_STATUS_PROCESSING
+		return sharedpb.VodStatus_VOD_STATUS_PROCESSING
 	case "completed", "complete", "done", "ready", "synced":
-		return pb.VodStatus_VOD_STATUS_READY
+		return sharedpb.VodStatus_VOD_STATUS_READY
 	case "failed":
-		return pb.VodStatus_VOD_STATUS_FAILED
+		return sharedpb.VodStatus_VOD_STATUS_FAILED
 	case "deleted":
-		return pb.VodStatus_VOD_STATUS_DELETED
+		return sharedpb.VodStatus_VOD_STATUS_DELETED
 	default:
-		return pb.VodStatus_VOD_STATUS_UNSPECIFIED
+		return sharedpb.VodStatus_VOD_STATUS_UNSPECIFIED
 	}
 }
 
-func vodUploadLastErrorCode(state pb.VodStatus, errorMessage string) string {
+func vodUploadLastErrorCode(state sharedpb.VodStatus, errorMessage string) string {
 	if errorMessage == "" {
 		return ""
 	}
 	switch state {
-	case pb.VodStatus_VOD_STATUS_FAILED:
+	case sharedpb.VodStatus_VOD_STATUS_FAILED:
 		return "processing_failed"
-	case pb.VodStatus_VOD_STATUS_DELETED:
+	case sharedpb.VodStatus_VOD_STATUS_DELETED:
 		return "deleted"
 	default:
 		return "artifact_error"
@@ -3169,7 +3175,7 @@ func vodUploadLastErrorCode(state pb.VodStatus, errorMessage string) string {
 }
 
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded
-func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	if req.UploadId == "" {
 		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
@@ -3227,8 +3233,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		// Emit VOD lifecycle event (STATUS_FAILED)
 		if s.decklogClient != nil {
 			errMsg := fmt.Sprintf("S3 upload failed: %v", err)
-			vodData := &pb.VodLifecycleData{
-				Status:      pb.VodLifecycleData_STATUS_FAILED,
+			vodData := &ipcpb.VodLifecycleData{
+				Status:      ipcpb.VodLifecycleData_STATUS_FAILED,
 				VodHash:     artifactHash,
 				UploadId:    &req.UploadId,
 				Error:       &errMsg,
@@ -3294,11 +3300,11 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	}
 
 	if s.decklogClient != nil {
-		lifecycleStatus := pb.VodLifecycleData_STATUS_PROCESSING
+		lifecycleStatus := ipcpb.VodLifecycleData_STATUS_PROCESSING
 		if pipelineFailed {
-			lifecycleStatus = pb.VodLifecycleData_STATUS_FAILED
+			lifecycleStatus = ipcpb.VodLifecycleData_STATUS_FAILED
 		}
-		vodData := &pb.VodLifecycleData{
+		vodData := &ipcpb.VodLifecycleData{
 			Status:      lifecycleStatus,
 			VodHash:     artifactHash,
 			UploadId:    &req.UploadId,
@@ -3319,21 +3325,21 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	asset, err := s.lookupCompletedUploadAsset(artifactHash, pipelineFailed)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch asset after upload completion")
-		status := pb.VodStatus_VOD_STATUS_PROCESSING
+		status := sharedpb.VodStatus_VOD_STATUS_PROCESSING
 		if pipelineFailed {
-			status = pb.VodStatus_VOD_STATUS_FAILED
+			status = sharedpb.VodStatus_VOD_STATUS_FAILED
 		}
-		return &pb.CompleteVodUploadResponse{Asset: &pb.VodAssetInfo{
+		return &sharedpb.CompleteVodUploadResponse{Asset: &sharedpb.VodAssetInfo{
 			ArtifactHash: artifactHash,
 			Status:       status,
 		}}, nil
 	}
 
-	return &pb.CompleteVodUploadResponse{Asset: asset}, nil
+	return &sharedpb.CompleteVodUploadResponse{Asset: asset}, nil
 }
 
 // AbortVodUpload cancels an in-progress multipart upload
-func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUploadRequest) (*pb.AbortVodUploadResponse, error) {
+func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.AbortVodUploadRequest) (*sharedpb.AbortVodUploadResponse, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	if req.UploadId == "" {
 		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
@@ -3387,8 +3393,8 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 
 	// Emit VOD lifecycle event (STATUS_DELETED)
 	if s.decklogClient != nil {
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_DELETED,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
 			VodHash:     artifactHash,
 			UploadId:    &req.UploadId,
 			TenantId:    &req.TenantId,
@@ -3400,14 +3406,14 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
-	return &pb.AbortVodUploadResponse{
+	return &sharedpb.AbortVodUploadResponse{
 		Success: true,
 		Message: "upload aborted successfully",
 	}, nil
 }
 
 // GetVodAsset returns a single VOD asset by hash
-func (s *FoghornGRPCServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRequest) (*pb.VodAssetInfo, error) {
+func (s *FoghornGRPCServer) GetVodAsset(ctx context.Context, req *sharedpb.GetVodAssetRequest) (*sharedpb.VodAssetInfo, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	if req.ArtifactHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "artifact_hash is required")
@@ -3428,7 +3434,7 @@ func (s *FoghornGRPCServer) GetVodAsset(ctx context.Context, req *pb.GetVodAsset
 // ListVodAssets returns paginated list of VOD assets
 // NOTE: Tenant-wide queries should go through Commodore.ListVodAssets (business registry owner)
 // This Foghorn endpoint is for lifecycle data queries, matching clips pattern
-func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAssetsRequest) (*pb.ListVodAssetsResponse, error) {
+func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *sharedpb.ListVodAssetsRequest) (*sharedpb.ListVodAssetsResponse, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	// Tenant-wide VOD listing should go through Commodore.ListVodAssets
 	// This endpoint returns lifecycle data for artifact-specific queries
@@ -3487,7 +3493,7 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 	}
 	defer rows.Close()
 
-	var assets []*pb.VodAssetInfo
+	var assets []*sharedpb.VodAssetInfo
 	for rows.Next() {
 		asset, err := s.scanVodAsset(rows)
 		if err != nil {
@@ -3520,9 +3526,9 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListVodAssetsResponse{
+	resp := &sharedpb.ListVodAssetsResponse{
 		Assets: assets,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -3544,7 +3550,7 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 }
 
 // DeleteVodAsset deletes a VOD asset
-func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error) {
+func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error) {
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	if req.ArtifactHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "artifact_hash is required")
@@ -3574,7 +3580,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
-			return &pb.DeleteVodAssetResponse{Success: true, Message: "VOD deleted via federation"}, nil
+			return &sharedpb.DeleteVodAssetResponse{Success: true, Message: "VOD deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "VOD asset not found")
 	} else if err != nil {
@@ -3583,7 +3589,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 	}
 
 	if currentStatus == "deleted" {
-		return &pb.DeleteVodAssetResponse{
+		return &sharedpb.DeleteVodAssetResponse{
 			Success: false,
 			Message: "VOD asset is already deleted",
 		}, nil
@@ -3616,7 +3622,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 			if scanErr := rows.Scan(&nodeID); scanErr != nil {
 				continue
 			}
-			deleteReq := &pb.VodDeleteRequest{
+			deleteReq := &ipcpb.VodDeleteRequest{
 				VodHash:   req.ArtifactHash,
 				RequestId: requestID,
 			}
@@ -3688,8 +3694,8 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		if len(cleanupErrors) > 0 {
 			cleanupError = strings.Join(cleanupErrors, "; ")
 		}
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_DELETED,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
 			VodHash:     req.ArtifactHash,
 			TenantId:    &req.TenantId,
 			CompletedAt: proto.Int64(time.Now().Unix()),
@@ -3711,7 +3717,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 	}
 
-	return &pb.DeleteVodAssetResponse{
+	return &sharedpb.DeleteVodAssetResponse{
 		Success: true,
 		Message: "VOD asset deleted successfully",
 	}, nil
@@ -3719,7 +3725,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 // Helper functions for VOD service
 
-func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash string) (*pb.VodAssetInfo, error) {
+func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash string) (*sharedpb.VodAssetInfo, error) {
 	query := `
 		SELECT a.artifact_hash, a.artifact_hash, a.status, a.size_bytes,
 		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
@@ -3747,7 +3753,7 @@ func (s *FoghornGRPCServer) markVodArtifactFailed(artifactHash string) error {
 	return err
 }
 
-func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*pb.VodAssetInfo, error) {
+func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*sharedpb.VodAssetInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -3756,15 +3762,15 @@ func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipe
 		return asset, nil
 	}
 	if pipelineFailed {
-		return &pb.VodAssetInfo{
+		return &sharedpb.VodAssetInfo{
 			ArtifactHash: artifactHash,
-			Status:       pb.VodStatus_VOD_STATUS_FAILED,
+			Status:       sharedpb.VodStatus_VOD_STATUS_FAILED,
 		}, nil
 	}
 	return nil, err
 }
 
-func (s *FoghornGRPCServer) scanVodAsset(rows *sql.Rows) (*pb.VodAssetInfo, error) {
+func (s *FoghornGRPCServer) scanVodAsset(rows *sql.Rows) (*sharedpb.VodAssetInfo, error) {
 	var id, artifactHash, statusStr, storageLocation, s3URL, filename, title, description string
 	var videoCodec, audioCodec, resolution, s3UploadID, s3Key sql.NullString
 	var sizeBytes sql.NullInt64
@@ -3792,7 +3798,7 @@ func (s *FoghornGRPCServer) scanVodAsset(rows *sql.Rows) (*pb.VodAssetInfo, erro
 	), nil
 }
 
-func (s *FoghornGRPCServer) scanVodAssetRow(row *sql.Row) (*pb.VodAssetInfo, error) {
+func (s *FoghornGRPCServer) scanVodAssetRow(row *sql.Row) (*sharedpb.VodAssetInfo, error) {
 	var id, artifactHash, statusStr, storageLocation, s3URL, filename, title, description string
 	var videoCodec, audioCodec, resolution, s3UploadID, s3Key sql.NullString
 	var sizeBytes sql.NullInt64
@@ -3825,25 +3831,25 @@ func buildVodAssetInfo(
 	sizeBytes sql.NullInt64, durationMs sql.NullInt32, resolution, videoCodec, audioCodec sql.NullString,
 	bitrateKbps sql.NullInt32, s3UploadID, s3Key, errorMessage sql.NullString,
 	createdAt, updatedAt time.Time, expiresAt sql.NullTime,
-) *pb.VodAssetInfo {
+) *sharedpb.VodAssetInfo {
 	// Map status string to proto enum
-	var protoStatus pb.VodStatus
+	var protoStatus sharedpb.VodStatus
 	switch statusStr {
 	case "uploading":
-		protoStatus = pb.VodStatus_VOD_STATUS_UPLOADING
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_UPLOADING
 	case "processing":
-		protoStatus = pb.VodStatus_VOD_STATUS_PROCESSING
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_PROCESSING
 	case "completed", "complete", "done", "ready", "synced":
-		protoStatus = pb.VodStatus_VOD_STATUS_READY
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_READY
 	case "failed":
-		protoStatus = pb.VodStatus_VOD_STATUS_FAILED
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_FAILED
 	case "deleted":
-		protoStatus = pb.VodStatus_VOD_STATUS_DELETED
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_DELETED
 	default:
-		protoStatus = pb.VodStatus_VOD_STATUS_UNSPECIFIED
+		protoStatus = sharedpb.VodStatus_VOD_STATUS_UNSPECIFIED
 	}
 
-	asset := &pb.VodAssetInfo{
+	asset := &sharedpb.VodAssetInfo{
 		Id:              id,
 		ArtifactHash:    artifactHash,
 		Title:           title,
@@ -3960,8 +3966,8 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 		}
 	}
 
-	clipData := &pb.ClipLifecycleData{
-		Stage:    pb.ClipLifecycleData_STAGE_DELETED,
+	clipData := &ipcpb.ClipLifecycleData{
+		Stage:    ipcpb.ClipLifecycleData_STAGE_DELETED,
 		ClipHash: clipHash,
 	}
 	if cleanupError != "" {
@@ -4053,8 +4059,8 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 		}
 	}
 
-	dvrData := &pb.DVRLifecycleData{
-		Status:  pb.DVRLifecycleData_STATUS_DELETED,
+	dvrData := &ipcpb.DVRLifecycleData{
+		Status:  ipcpb.DVRLifecycleData_STATUS_DELETED,
 		DvrHash: dvrHash,
 	}
 	if cleanupError != "" {
@@ -4097,7 +4103,7 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 
 // TerminateTenantStreams stops all active streams for a suspended tenant
 // Called by Purser when a tenant's prepaid balance drops below -$10
-func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.TerminateTenantStreamsRequest) (*pb.TerminateTenantStreamsResponse, error) {
+func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *foghornpb.TerminateTenantStreamsRequest) (*foghornpb.TerminateTenantStreamsResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -4111,7 +4117,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 	streams := s.lb.GetStreamsByTenant(req.TenantId)
 	if len(streams) == 0 {
 		s.logger.WithField("tenant_id", req.TenantId).Debug("No active streams to terminate")
-		return &pb.TerminateTenantStreamsResponse{
+		return &foghornpb.TerminateTenantStreamsResponse{
 			StreamsTerminated:  0,
 			SessionsTerminated: 0,
 			StreamNames:        []string{},
@@ -4133,7 +4139,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 	// Send stop_sessions to each node
 	sessionsTerminated := int32(0)
 	for nodeID, nodeStreams := range streamsByNode {
-		stopReq := &pb.StopSessionsRequest{
+		stopReq := &ipcpb.StopSessionsRequest{
 			StreamNames: nodeStreams,
 			TenantId:    req.TenantId,
 			Reason:      req.Reason,
@@ -4157,7 +4163,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 		"stream_names":        allStreamNames,
 	}).Info("Tenant stream termination completed")
 
-	return &pb.TerminateTenantStreamsResponse{
+	return &foghornpb.TerminateTenantStreamsResponse{
 		StreamsTerminated:  int32(len(allStreamNames)),
 		SessionsTerminated: sessionsTerminated,
 		StreamNames:        allStreamNames,
@@ -4169,7 +4175,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.
 // policy or signing-key mutation. The re-fired USER_NEW reads the fresh policy
 // and decides allow/deny per session. Empty internal_names fans out across the
 // tenant's known live streams and artifact sessions.
-func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.InvalidatePlaybackAuthRequest) (*pb.InvalidatePlaybackAuthResponse, error) {
+func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *foghornpb.InvalidatePlaybackAuthRequest) (*foghornpb.InvalidatePlaybackAuthResponse, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -4185,7 +4191,7 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 
 	names := s.resolvePlaybackAuthInvalidationNames(ctx, req.GetTenantId(), req.GetInternalNames())
 	if len(names) == 0 {
-		return &pb.InvalidatePlaybackAuthResponse{}, nil
+		return &foghornpb.InvalidatePlaybackAuthResponse{}, nil
 	}
 
 	if s.cacheInvalidator != nil {
@@ -4208,7 +4214,7 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 	attempted := int32(len(streamsByNode))
 	failedNodeIDs := make([]string, 0)
 	for nodeID, nodeStreams := range streamsByNode {
-		invReq := &pb.InvalidateSessionsRequest{
+		invReq := &ipcpb.InvalidateSessionsRequest{
 			StreamNames: nodeStreams,
 			TenantId:    req.GetTenantId(),
 			Reason:      req.GetReason(),
@@ -4235,7 +4241,7 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *pb.
 		"nodes_failed":        len(failedNodeIDs),
 	}).Info("Dispatched invalidate_sessions for playback-policy change")
 
-	return &pb.InvalidatePlaybackAuthResponse{
+	return &foghornpb.InvalidatePlaybackAuthResponse{
 		StreamsInvalidated: int32(len(names)),
 		NodesDispatched:    dispatched,
 		NodesAttempted:     attempted,
@@ -4376,14 +4382,14 @@ func artifactSessionName(internalName string) string {
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *pb.InvalidateTenantCacheRequest) (*pb.InvalidateTenantCacheResponse, error) {
+func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *foghornpb.InvalidateTenantCacheRequest) (*foghornpb.InvalidateTenantCacheResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
 	if s.cacheInvalidator == nil {
 		s.logger.WithField("tenant_id", req.TenantId).Warn("Cache invalidator not configured, skipping cache invalidation")
-		return &pb.InvalidateTenantCacheResponse{
+		return &foghornpb.InvalidateTenantCacheResponse{
 			EntriesInvalidated: 0,
 		}, nil
 	}
@@ -4396,13 +4402,13 @@ func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *pb.I
 		"entries_invalidated": entriesInvalidated,
 	}).Info("Invalidated tenant cache entries")
 
-	return &pb.InvalidateTenantCacheResponse{
+	return &foghornpb.InvalidateTenantCacheResponse{
 		EntriesInvalidated: int32(entriesInvalidated),
 	}, nil
 }
 
 // SetNodeOperationalMode changes a node's operational mode with tenant ownership validation.
-func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
@@ -4430,16 +4436,16 @@ func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *pb.
 		}).Warn("Failed to push operational mode to node (may not be connected)")
 	}
 
-	return &pb.SetNodeModeResponse{
+	return &foghornpb.SetNodeModeResponse{
 		NodeId:  nodeID,
 		Mode:    string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
 		Message: fmt.Sprintf("Node %s set to %s", nodeID, mode),
-		Status:  pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS,
+		Status:  foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS,
 	}, nil
 }
 
 // GetNodeHealth returns real-time health and routing state for a node.
-func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
@@ -4458,7 +4464,7 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHe
 		lastHB = ns.LastHeartbeat.UTC().Format(time.RFC3339)
 	}
 
-	resp := &pb.GetNodeHealthResponse{
+	resp := &foghornpb.GetNodeHealthResponse{
 		NodeId:            nodeID,
 		OperationalMode:   string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
 		IsHealthy:         ns.IsHealthy && !ns.IsStale,
@@ -4487,7 +4493,7 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHe
 	return resp, nil
 }
 
-func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeID string) []*pb.NodeComponentVersion {
+func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeID string) []*foghornpb.NodeComponentVersion {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -4501,9 +4507,9 @@ func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeI
 		return nil
 	}
 	defer rows.Close()
-	var out []*pb.NodeComponentVersion
+	var out []*foghornpb.NodeComponentVersion
 	for rows.Next() {
-		v := &pb.NodeComponentVersion{}
+		v := &foghornpb.NodeComponentVersion{}
 		if err := rows.Scan(&v.Component, &v.Version); err != nil {
 			return nil
 		}

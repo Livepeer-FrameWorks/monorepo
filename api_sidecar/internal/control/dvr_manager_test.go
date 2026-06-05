@@ -9,7 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestGetActiveDVRHashes_Empty(t *testing.T) {
@@ -146,8 +146,8 @@ segments/seg1.ts
 		jobs:        make(map[string]*DVRJob),
 		storagePath: storagePath,
 	}
-	var sent []*pb.ControlMessage
-	err := dm.StopRecordingWithSender(dvrHash, func(msg *pb.ControlMessage) {
+	var sent []*ipcpb.ControlMessage
+	err := dm.StopRecordingWithSender(dvrHash, func(msg *ipcpb.ControlMessage) {
 		sent = append(sent, msg)
 	})
 	if err != nil {

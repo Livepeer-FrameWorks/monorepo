@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/dtsh"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // serveSidecarGetWithStream handles GET/HEAD for sidecar requests.
@@ -67,7 +67,7 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		AssetKind: kind,
 		AssetHash: hash,
 		Ext:       ext,
-		Hint:      pb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
+		Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package foghorn;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn;foghornpb";
 
 import "common.proto";
 import "shared.proto";

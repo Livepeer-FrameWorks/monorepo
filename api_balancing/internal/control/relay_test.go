@@ -12,7 +12,8 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
@@ -59,10 +60,10 @@ func newTestStore(t *testing.T) (*state.RedisStateStore, *miniredis.Miniredis) {
 // --- mocks ---
 
 type mockRelayClient struct {
-	relay pb.FoghornRelayClient
+	relay foghornrelaypb.FoghornRelayClient
 }
 
-func (m *mockRelayClient) Relay() pb.FoghornRelayClient { return m.relay }
+func (m *mockRelayClient) Relay() foghornrelaypb.FoghornRelayClient { return m.relay }
 
 type mockRelayPool struct {
 	client CommandRelayClient
@@ -74,13 +75,13 @@ func (m *mockRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
 }
 
 type fakeFoghornRelayClient struct {
-	resp   *pb.ForwardCommandResponse
+	resp   *foghornrelaypb.ForwardCommandResponse
 	err    error
-	last   *pb.ForwardCommandRequest
+	last   *foghornrelaypb.ForwardCommandRequest
 	lastMD metadata.MD
 }
 
-func (f *fakeFoghornRelayClient) ForwardCommand(ctx context.Context, req *pb.ForwardCommandRequest, _ ...grpc.CallOption) (*pb.ForwardCommandResponse, error) {
+func (f *fakeFoghornRelayClient) ForwardCommand(ctx context.Context, req *foghornrelaypb.ForwardCommandRequest, _ ...grpc.CallOption) (*foghornrelaypb.ForwardCommandResponse, error) {
 	f.last = req
 	if md, ok := metadata.FromOutgoingContext(ctx); ok {
 		f.lastMD = md
@@ -89,12 +90,12 @@ func (f *fakeFoghornRelayClient) ForwardCommand(ctx context.Context, req *pb.For
 }
 
 type fakeControlStream struct {
-	pb.HelmsmanControl_ConnectServer
-	sent []*pb.ControlMessage
+	ipcpb.HelmsmanControl_ConnectServer
+	sent []*ipcpb.ControlMessage
 	err  error
 }
 
-func (f *fakeControlStream) Send(msg *pb.ControlMessage) error {
+func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -227,7 +228,7 @@ func TestProcessCanDelete_VerifiesDurableObjectBeforeAllowingEviction(t *testing
 	})
 
 	stream := &fakeControlStream{}
-	processCanDeleteRequest(&pb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
+	processCanDeleteRequest(&ipcpb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
 	resp := stream.sent[0].GetCanDeleteResponse()
 	if resp == nil || !resp.GetSafeToDelete() || resp.GetReason() != "synced_verified" {
 		t.Fatalf("response=%+v, want safe synced_verified", resp)
@@ -257,7 +258,7 @@ func TestProcessCanDelete_RejectsSyncedMetadataWhenDurableObjectMissing(t *testi
 	})
 
 	stream := &fakeControlStream{}
-	processCanDeleteRequest(&pb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
+	processCanDeleteRequest(&ipcpb.CanDeleteRequest{AssetHash: "hash", NodeId: "node-1"}, "node-1", stream, logging.NewLogger())
 	resp := stream.sent[0].GetCanDeleteResponse()
 	if resp == nil || resp.GetSafeToDelete() || resp.GetReason() != "s3_object_missing" {
 		t.Fatalf("response=%+v, want unsafe s3_object_missing", resp)
@@ -270,7 +271,7 @@ func TestForward_NoOwner(t *testing.T) {
 	store, _ := newTestStore(t)
 	r := buildRelay(t, store, "self-1", "10.0.0.1:9090", nil)
 
-	err := r.forward(context.Background(), &pb.ForwardCommandRequest{
+	err := r.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "unknown-node",
 	})
 	if !errors.Is(err, ErrNotConnected) {
@@ -287,7 +288,7 @@ func TestForward_OwnerIsSelf(t *testing.T) {
 
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", nil)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected when owner is self, got %v", err)
 	}
@@ -302,7 +303,7 @@ func TestForward_OwnerNoAddr(t *testing.T) {
 
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", nil)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if err == nil {
 		t.Fatal("expected error when owner has no address")
 	}
@@ -319,7 +320,7 @@ func TestForward_Success(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &pb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -327,9 +328,9 @@ func TestForward_Success(t *testing.T) {
 
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}},
 	})
 	if err != nil {
 		t.Fatalf("expected nil error on successful forward, got %v", err)
@@ -344,7 +345,7 @@ func TestForward_PeerRejects(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &pb.ForwardCommandResponse{Delivered: false, Error: "node disconnected"},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: "node disconnected"},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -352,9 +353,9 @@ func TestForward_PeerRejects(t *testing.T) {
 
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStart{DvrStart: &ipcpb.DVRStartRequest{}},
 	})
 	if err == nil {
 		t.Fatal("expected error when peer rejects command")
@@ -374,9 +375,9 @@ func TestForward_DialError(t *testing.T) {
 	pool := &mockRelayPool{err: fmt.Errorf("connection refused")}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}},
 	})
 	if err == nil {
 		t.Fatal("expected error on dial failure")
@@ -409,9 +410,9 @@ func TestForward_DialError_PreservesFreshOwner(t *testing.T) {
 	}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", racingPool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}},
 	})
 	if err == nil {
 		t.Fatal("expected error on dial failure")
@@ -439,9 +440,9 @@ func TestForward_PeerUnimplemented_PreservesOwner(t *testing.T) {
 	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}},
 	})
 	if err == nil {
 		t.Fatal("expected unimplemented relay error")
@@ -470,7 +471,7 @@ func TestForward_NilResponseClearsOwner(t *testing.T) {
 	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if err == nil {
 		t.Fatal("expected nil response error")
 	}
@@ -501,7 +502,7 @@ func (p *racingRelayPool) GetOrCreate(_, _ string) (CommandRelayClient, error) {
 
 func TestForward_NotConfigured(t *testing.T) {
 	r := buildRelay(t, nil, "self-instance", "10.0.0.1:9090", nil)
-	err := r.forward(context.Background(), &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	err := r.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if err == nil {
 		t.Fatal("expected not configured error")
 	}
@@ -517,12 +518,12 @@ func TestForward_AttachesRelayMetadata(t *testing.T) {
 		t.Fatalf("SetConnOwner: %v", err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}})
 
-	err := r.forward(ctx, &pb.ForwardCommandRequest{
+	err := r.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-1",
-		Command: &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{
+		Command: &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{
 			DvrHash:   "dvr-1",
 			RequestId: "req-123",
 		}},
@@ -561,7 +562,7 @@ func TestSendWithRelay_LocalSuccess(t *testing.T) {
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 	setCommandRelay(t, r)
 
-	err := SendStopSessions("node-1", &pb.StopSessionsRequest{})
+	err := SendStopSessions("node-1", &ipcpb.StopSessionsRequest{})
 	if err != nil {
 		t.Fatalf("expected nil error when local send succeeds, got %v", err)
 	}
@@ -580,7 +581,7 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &pb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -589,7 +590,7 @@ func TestSendWithRelay_LocalFailRelay(t *testing.T) {
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 	setCommandRelay(t, r)
 
-	err := SendDVRStart("node-1", &pb.DVRStartRequest{})
+	err := SendDVRStart("node-1", &ipcpb.DVRStartRequest{})
 	if err != nil {
 		t.Fatalf("expected nil error after relay success, got %v", err)
 	}
@@ -605,12 +606,12 @@ func TestSendWithRelay_PropagatesRelayFailure(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &pb.ForwardCommandResponse{Delivered: false, Error: "peer says no"},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: false, Error: "peer says no"},
 	}
 	p := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
-	err := SendDVRStop("node-1", &pb.DVRStopRequest{RequestId: "req-9"})
+	err := SendDVRStop("node-1", &ipcpb.DVRStopRequest{RequestId: "req-9"})
 	if err == nil {
 		t.Fatal("expected combined local+relay error")
 	}
@@ -623,7 +624,7 @@ func TestSendWithRelay_NoRelay(t *testing.T) {
 	ensureRegistry(t)
 	setCommandRelay(t, nil)
 
-	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
+	err := SendDVRStop("node-1", &ipcpb.DVRStopRequest{})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected when relay is nil, got %v", err)
 	}
@@ -642,7 +643,7 @@ func TestSendWithRelay_ReturnsLocalAndRelayFailure(t *testing.T) {
 	r := buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool)
 	setCommandRelay(t, r)
 
-	err := SendDVRStop("node-1", &pb.DVRStopRequest{})
+	err := SendDVRStop("node-1", &ipcpb.DVRStopRequest{})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected wrapper, got %v", err)
 	}
@@ -661,7 +662,7 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 	}
 
 	fakeRelay := &fakeFoghornRelayClient{
-		resp: &pb.ForwardCommandResponse{Delivered: true},
+		resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true},
 	}
 	pool := &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
@@ -673,13 +674,13 @@ func TestSendWithRelay_MultipleSendTypes(t *testing.T) {
 		name string
 		fn   func() error
 	}{
-		{"DVRStart", func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) }},
-		{"DVRStop", func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) }},
-		{"ClipDelete", func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) }},
-		{"DVRDelete", func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) }},
-		{"VodDelete", func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) }},
-		{"DtshSyncRequest", func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) }},
-		{"StopSessions", func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) }},
+		{"DVRStart", func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) }},
+		{"DVRStop", func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) }},
+		{"ClipDelete", func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) }},
+		{"DVRDelete", func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) }},
+		{"VodDelete", func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) }},
+		{"DtshSyncRequest", func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) }},
+		{"StopSessions", func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) }},
 	}
 
 	for _, tc := range tests {
@@ -705,22 +706,22 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 		t.Fatalf("SetConnOwner: %v", err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
 	pool := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", pool))
 
-	if err := PushOperationalMode("canonical-local", pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING); err != nil {
+	if err := PushOperationalMode("canonical-local", ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING); err != nil {
 		t.Fatalf("PushOperationalMode local: %v", err)
 	}
 	if len(localStream.sent) != 1 {
 		t.Fatalf("expected one local control message, got %d", len(localStream.sent))
 	}
 	localSeed := localStream.sent[0].GetConfigSeed()
-	if localSeed == nil || localSeed.GetOperationalMode() != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING {
+	if localSeed == nil || localSeed.GetOperationalMode() != ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING {
 		t.Fatalf("expected local draining config seed, got %+v", localSeed)
 	}
 
-	if err := PushOperationalMode("canonical-remote", pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil {
+	if err := PushOperationalMode("canonical-remote", ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil {
 		t.Fatalf("PushOperationalMode remote: %v", err)
 	}
 	if fakeRelay.last == nil {
@@ -733,7 +734,7 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 	if remoteSeed.GetNodeId() != "canonical-remote" {
 		t.Fatalf("expected remote seed node_id canonical-remote, got %q", remoteSeed.GetNodeId())
 	}
-	if remoteSeed.GetOperationalMode() != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE {
+	if remoteSeed.GetOperationalMode() != ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE {
 		t.Fatalf("expected maintenance mode relay, got %s", remoteSeed.GetOperationalMode())
 	}
 }
@@ -747,34 +748,34 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		t.Fatalf("SetConnOwner: %v", err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
 	p := &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}
 	setCommandRelay(t, buildRelay(t, store, "self-instance", "10.0.0.1:9090", p))
 
 	sendByField := map[string]func() error{
-		"config_seed":             func() error { return SendConfigSeed("node-1", &pb.ConfigSeed{NodeId: "node-1"}) },
-		"dvr_start":               func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) },
-		"dvr_stop":                func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) },
-		"clip_delete":             func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) },
-		"dvr_delete":              func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) },
-		"vod_delete":              func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) },
-		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &pb.DtshSyncRequest{}) },
-		"stop_sessions":           func() error { return SendStopSessions("node-1", &pb.StopSessionsRequest{}) },
-		"invalidate_sessions":     func() error { return SendInvalidateSessions("node-1", &pb.InvalidateSessionsRequest{}) },
-		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &pb.ActivatePushTargets{}) },
-		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &pb.DeactivatePushTargets{}) },
-		"processing_job":          func() error { return SendProcessingJob("node-1", &pb.ProcessingJobRequest{}) },
-		"freeze":                  func() error { return SendFreezeRequest("node-1", &pb.FreezeRequest{}) },
-		"desired_state_update":    func() error { return SendDesiredStateUpdate("node-1", &pb.DesiredStateUpdate{}) },
-		"apply_managed_stream":    func() error { return SendApplyManagedStream("node-1", &pb.ApplyManagedStream{Name: "demo"}) },
-		"retract_managed_stream":  func() error { return SendRetractManagedStream("node-1", &pb.RetractManagedStream{Name: "demo"}) },
-		"drain_stream":            func() error { return SendDrainStream("node-1", &pb.DrainStreamRequest{RuntimeName: "live+demo"}) },
+		"config_seed":             func() error { return SendConfigSeed("node-1", &ipcpb.ConfigSeed{NodeId: "node-1"}) },
+		"dvr_start":               func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) },
+		"dvr_stop":                func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) },
+		"clip_delete":             func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) },
+		"dvr_delete":              func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) },
+		"vod_delete":              func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) },
+		"dtsh_sync":               func() error { return SendDtshSyncRequest("node-1", &ipcpb.DtshSyncRequest{}) },
+		"stop_sessions":           func() error { return SendStopSessions("node-1", &ipcpb.StopSessionsRequest{}) },
+		"invalidate_sessions":     func() error { return SendInvalidateSessions("node-1", &ipcpb.InvalidateSessionsRequest{}) },
+		"activate_push_targets":   func() error { return SendActivatePushTargets("node-1", &ipcpb.ActivatePushTargets{}) },
+		"deactivate_push_targets": func() error { return SendDeactivatePushTargets("node-1", &ipcpb.DeactivatePushTargets{}) },
+		"processing_job":          func() error { return SendProcessingJob("node-1", &ipcpb.ProcessingJobRequest{}) },
+		"freeze":                  func() error { return SendFreezeRequest("node-1", &ipcpb.FreezeRequest{}) },
+		"desired_state_update":    func() error { return SendDesiredStateUpdate("node-1", &ipcpb.DesiredStateUpdate{}) },
+		"apply_managed_stream":    func() error { return SendApplyManagedStream("node-1", &ipcpb.ApplyManagedStream{Name: "demo"}) },
+		"retract_managed_stream":  func() error { return SendRetractManagedStream("node-1", &ipcpb.RetractManagedStream{Name: "demo"}) },
+		"drain_stream":            func() error { return SendDrainStream("node-1", &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"}) },
 		"dvr_update_source": func() error {
-			return SendDVRUpdateSource("node-1", &pb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"})
+			return SendDVRUpdateSource("node-1", &ipcpb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"})
 		},
 	}
 
-	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
+	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
 	fieldsFromProto := make(map[string]struct{}, oneofFields.Len())
 	for i := 0; i < oneofFields.Len(); i++ {
 		fieldsFromProto[string(oneofFields.Get(i).Name())] = struct{}{}
@@ -833,11 +834,11 @@ func TestSendWithRelay_LocalSendErrorDoesNotRelay(t *testing.T) {
 		name string
 		fn   func() error
 	}{
-		{"DVRStart", func() error { return SendDVRStart("node-1", &pb.DVRStartRequest{}) }},
-		{"DVRStop", func() error { return SendDVRStop("node-1", &pb.DVRStopRequest{}) }},
-		{"ClipDelete", func() error { return SendClipDelete("node-1", &pb.ClipDeleteRequest{}) }},
-		{"DVRDelete", func() error { return SendDVRDelete("node-1", &pb.DVRDeleteRequest{}) }},
-		{"VodDelete", func() error { return SendVodDelete("node-1", &pb.VodDeleteRequest{}) }},
+		{"DVRStart", func() error { return SendDVRStart("node-1", &ipcpb.DVRStartRequest{}) }},
+		{"DVRStop", func() error { return SendDVRStop("node-1", &ipcpb.DVRStopRequest{}) }},
+		{"ClipDelete", func() error { return SendClipDelete("node-1", &ipcpb.ClipDeleteRequest{}) }},
+		{"DVRDelete", func() error { return SendDVRDelete("node-1", &ipcpb.DVRDeleteRequest{}) }},
+		{"VodDelete", func() error { return SendVodDelete("node-1", &ipcpb.VodDeleteRequest{}) }},
 	}
 
 	for _, tc := range tests {

@@ -17,7 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -63,12 +63,12 @@ type DVRJob struct {
 	// Used verbatim — Helmsman never re-derives or applies a live+ default.
 	SourceRuntimeName string
 	SourceURL         string
-	Config            *pb.DVRConfig
+	Config            *ipcpb.DVRConfig
 	StartTime         time.Time
 	PushID            int // MistServer push ID
 	OutputDir         string
 	ManifestPath      string
-	SendFunc          func(*pb.ControlMessage)
+	SendFunc          func(*ipcpb.ControlMessage)
 	Logger            logging.Logger
 
 	// Progress tracking
@@ -660,7 +660,7 @@ func (dm *DVRManager) UpdateSource(dvrHash, sourceRuntimeName, sourceURL string)
 // Foghorn-authoritative Mist runtime name for the source stream (live+<x>
 // / pull+<x> / bare native). Helmsman uses it verbatim as the Mist
 // push_start.stream argument and never re-derives.
-func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
+func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRuntimeName, sourceURL string, config *ipcpb.DVRConfig, sendFunc func(*ipcpb.ControlMessage)) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
@@ -758,7 +758,7 @@ func (dm *DVRManager) recoverActiveDVRJobsFromMist(basePath string, logger loggi
 			PushID:       push.ID,
 			OutputDir:    dir.outputDir,
 			ManifestPath: dir.manifestPath,
-			SendFunc: func(msg *pb.ControlMessage) {
+			SendFunc: func(msg *ipcpb.ControlMessage) {
 				if err := sendOrEnqueue(msg); err != nil {
 					logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR completion queued for retry")
 				}
@@ -850,7 +850,7 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 // writing the recording, the in-memory job is gone but the on-disk DVR
 // layout is still authoritative enough to emit completion and let Foghorn
 // finalize the chapter.
-func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.ControlMessage)) error {
+func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*ipcpb.ControlMessage)) error {
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
 	if !exists {
@@ -898,7 +898,7 @@ func (dm *DVRManager) StopRecordingWithSender(dvrHash string, sendFunc func(*pb.
 	return nil
 }
 
-func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*pb.ControlMessage)) error {
+func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*ipcpb.ControlMessage)) error {
 	segmentsDir := resolveDVRSegmentsDirByHash(dvrHash)
 	if segmentsDir == "" {
 		return fmt.Errorf("DVR recording not found for hash %s", dvrHash)
@@ -1251,7 +1251,7 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 	dm.mutex.Unlock()
 
 	if sendFunc != nil {
-		progress := &pb.DVRProgress{
+		progress := &ipcpb.DVRProgress{
 			DvrHash:      dvrHash,
 			Status:       status,
 			SegmentCount: int32(segmentCount),
@@ -1259,9 +1259,9 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 			Message:      fmt.Sprintf("Recording %d segments", segmentCount),
 		}
 
-		msg := &pb.ControlMessage{
+		msg := &ipcpb.ControlMessage{
 			SentAt:  timestamppb.Now(),
-			Payload: &pb.ControlMessage_DvrProgress{DvrProgress: progress},
+			Payload: &ipcpb.ControlMessage_DvrProgress{DvrProgress: progress},
 		}
 		sendFunc(msg)
 	}
@@ -1526,7 +1526,7 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 
 	durationSeconds := int32(time.Since(job.StartTime).Seconds())
 
-	stopped := &pb.DVRStopped{
+	stopped := &ipcpb.DVRStopped{
 		DvrHash:         job.DVRHash,
 		Status:          status,
 		Error:           errorMsg,
@@ -1535,9 +1535,9 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 		SizeBytes:       sizeBytes,
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_DvrStopped{DvrStopped: stopped},
+		Payload: &ipcpb.ControlMessage_DvrStopped{DvrStopped: stopped},
 	}
 	sendFunc(msg)
 }

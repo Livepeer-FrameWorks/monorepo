@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
 )
 
@@ -29,7 +29,7 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.MintChapterPlaybackID(context.Background(), &pb.MintChapterPlaybackIDRequest{
+	resp, err := server.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId:       "chap-1",
 		TenantId:        "tenant-1",
 		ArtifactHash:    "artifact-aaa",
@@ -57,7 +57,7 @@ func TestMintChapterPlaybackID_RejectsMissingArgs(t *testing.T) {
 	defer db.Close()
 	server := &CommodoreServer{db: db, logger: logrus.New()}
 
-	cases := []*pb.MintChapterPlaybackIDRequest{
+	cases := []*commodorepb.MintChapterPlaybackIDRequest{
 		{TenantId: "t", ArtifactHash: "a"},
 		{ChapterId: "c", ArtifactHash: "a"},
 		{ChapterId: "c", TenantId: "t"},
@@ -86,7 +86,7 @@ func TestResolveChapterPlaybackID_Roundtrip(t *testing.T) {
 			AddRow("chap-1", "tenant-1", "artifact-aaa"))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.ResolveChapterPlaybackID(context.Background(), &pb.ResolveChapterPlaybackIDRequest{
+	resp, err := server.ResolveChapterPlaybackID(context.Background(), &commodorepb.ResolveChapterPlaybackIDRequest{
 		PlaybackId: "pb_existing_chapter",
 	})
 	if err != nil {
@@ -115,7 +115,7 @@ func TestResolveChapterPlaybackID_NotFoundReturnsFoundFalse(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"chapter_id", "tenant_id", "artifact_hash"}))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.ResolveChapterPlaybackID(context.Background(), &pb.ResolveChapterPlaybackIDRequest{
+	resp, err := server.ResolveChapterPlaybackID(context.Background(), &commodorepb.ResolveChapterPlaybackIDRequest{
 		PlaybackId: "pb_missing",
 	})
 	if err != nil {

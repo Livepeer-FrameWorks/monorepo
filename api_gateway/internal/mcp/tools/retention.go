@@ -12,7 +12,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -134,7 +134,7 @@ func handleGetRetentionPolicy(ctx context.Context, c *clients.ServiceClients, lo
 	if tenantID == "" {
 		return nil, nil, mcperrors.AuthRequired()
 	}
-	resp, err := c.Commodore.GetMediaRetentionPolicy(ctx, &pb.GetMediaRetentionPolicyRequest{TenantId: tenantID})
+	resp, err := c.Commodore.GetMediaRetentionPolicy(ctx, &commodorepb.GetMediaRetentionPolicyRequest{TenantId: tenantID})
 	if err != nil {
 		logger.WithError(err).Warn("get_retention_policy failed")
 		return toolError(fmt.Sprintf("failed to read retention policy: %v", err))
@@ -174,7 +174,7 @@ func handleSetRetentionPolicy(ctx context.Context, args SetRetentionPolicyInput,
 		return result, meta, err
 	}
 	target := targetTypeFromString(args.TargetType)
-	if target == pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
+	if target == commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
 		return toolError("target_type must be one of: vod, dvr, clip")
 	}
 	days := int32(0)
@@ -187,7 +187,7 @@ func handleSetRetentionPolicy(ctx context.Context, args SetRetentionPolicyInput,
 			return toolError("days must be >= 0 (0 = keep forever)")
 		}
 	}
-	resp, err := c.Commodore.SetMediaRetentionPolicy(ctx, &pb.SetMediaRetentionPolicyRequest{
+	resp, err := c.Commodore.SetMediaRetentionPolicy(ctx, &commodorepb.SetMediaRetentionPolicyRequest{
 		TenantId:   tenantID,
 		TargetType: target,
 		Days:       days,
@@ -239,7 +239,7 @@ func handleSetStreamRetentionOverrides(ctx context.Context, args SetStreamRetent
 		!args.ClearDvrRetentionOverride && !args.ClearClipRetentionOverride {
 		return toolError("at least one override or clear flag is required")
 	}
-	req := &pb.SetStreamRetentionOverridesRequest{
+	req := &commodorepb.SetStreamRetentionOverridesRequest{
 		TenantId:                   tenantID,
 		StreamId:                   args.StreamID,
 		DvrRetentionDaysOverride:   args.DvrRetentionDaysOverride,
@@ -267,16 +267,16 @@ func handleSetStreamRetentionOverrides(ctx context.Context, args SetStreamRetent
 // targetTypeFromString maps the MCP-side string discriminator to the proto
 // enum. Returns UNSPECIFIED on unknown so Commodore returns a clear
 // InvalidArgument rather than the tool silently coercing.
-func targetTypeFromString(s string) pb.MediaRetentionTarget {
+func targetTypeFromString(s string) commodorepb.MediaRetentionTarget {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "dvr":
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR
 	case "clip":
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP
 	case "vod":
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD
 	}
-	return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED
+	return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED
 }
 
 func handleUpdateAssetRetention(ctx context.Context, args UpdateAssetRetentionInput, c *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
@@ -291,7 +291,7 @@ func handleUpdateAssetRetention(ctx context.Context, args UpdateAssetRetentionIn
 		return toolError("target_id is required")
 	}
 	tt := targetTypeFromString(args.TargetType)
-	if tt == pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
+	if tt == commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
 		return toolError("target_type must be one of: dvr, clip, vod")
 	}
 	hasDays := args.RetentionDays != nil
@@ -306,7 +306,7 @@ func handleUpdateAssetRetention(ctx context.Context, args UpdateAssetRetentionIn
 		return toolError("retention_days must be >= 0 (0 = keep forever)")
 	}
 
-	req := &pb.UpdateAssetRetentionRequest{
+	req := &commodorepb.UpdateAssetRetentionRequest{
 		TenantId:   tenantID,
 		TargetType: tt,
 		TargetId:   args.TargetID,
@@ -342,10 +342,10 @@ func handleResetAssetRetention(ctx context.Context, args ResetAssetRetentionInpu
 		return toolError("target_id is required")
 	}
 	tt := targetTypeFromString(args.TargetType)
-	if tt == pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
+	if tt == commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
 		return toolError("target_type must be one of: dvr, clip, vod")
 	}
-	resp, err := c.Commodore.ResetAssetRetention(ctx, &pb.ResetAssetRetentionRequest{
+	resp, err := c.Commodore.ResetAssetRetention(ctx, &commodorepb.ResetAssetRetentionRequest{
 		TenantId:   tenantID,
 		TargetType: tt,
 		TargetId:   args.TargetID,
@@ -357,7 +357,7 @@ func handleResetAssetRetention(ctx context.Context, args ResetAssetRetentionInpu
 	return toolSuccess(toAssetRetentionResult(resp))
 }
 
-func toAssetRetentionResult(resp *pb.UpdateAssetRetentionResponse) AssetRetentionResult {
+func toAssetRetentionResult(resp *commodorepb.UpdateAssetRetentionResponse) AssetRetentionResult {
 	out := AssetRetentionResult{
 		TargetID:      resp.GetTargetId(),
 		RetentionDays: resp.GetRetentionDays(),

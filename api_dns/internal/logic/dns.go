@@ -14,7 +14,8 @@ import (
 	"frameworks/api_dns/internal/provider/cloudflare"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
@@ -105,10 +106,10 @@ const (
 )
 
 type quartermasterClient interface {
-	ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error)
-	ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*proto.ListHealthyNodesForDNSResponse, error)
-	GetCluster(ctx context.Context, clusterID string) (*proto.ClusterResponse, error)
-	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
+	ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error)
+	ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error)
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
 }
 
 // NewDNSManager creates a new DNSManager
@@ -265,14 +266,14 @@ func SanitizeLabel(raw string) string {
 }
 
 // ClusterSlug returns a DNS-safe slug for a cluster, preferring cluster_id over cluster_name.
-func ClusterSlug(cluster *proto.InfrastructureCluster) string {
+func ClusterSlug(cluster *quartermasterpb.InfrastructureCluster) string {
 	if cluster == nil {
 		return "default"
 	}
 	return pkgdns.ClusterSlug(cluster.GetClusterId(), cluster.GetClusterName())
 }
 
-func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
+func (m *DNSManager) clusterSlug(cluster *quartermasterpb.InfrastructureCluster) string {
 	return ClusterSlug(cluster)
 }
 
@@ -297,7 +298,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
 
-	nodesByCluster := make(map[string][]*proto.InfrastructureNode)
+	nodesByCluster := make(map[string][]*quartermasterpb.InfrastructureNode)
 	for _, node := range nodesResp.GetNodes() {
 		clusterID := node.GetClusterId()
 		if clusterID == "" {
@@ -398,7 +399,7 @@ func (m *DNSManager) syncOneCluster(
 	ctx context.Context,
 	serviceType string,
 	provider pkgdns.Provider,
-	cluster *proto.InfrastructureCluster,
+	cluster *quartermasterpb.InfrastructureCluster,
 	nodes []dnsNode,
 	authoritative bool,
 	partialErrors map[string]string,
@@ -809,7 +810,7 @@ func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType strin
 	if err != nil {
 		return nil, fmt.Errorf("list healthy nodes: %w", err)
 	}
-	var filtered []*proto.InfrastructureNode
+	var filtered []*quartermasterpb.InfrastructureNode
 	for _, n := range nodesResp.GetNodes() {
 		if _, ok := platformClusters[n.GetClusterId()]; ok {
 			filtered = append(filtered, n)
@@ -1208,7 +1209,7 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string,
 	return nil
 }
 
-func dnsNodesFromProto(nodes []*proto.InfrastructureNode) []dnsNode {
+func dnsNodesFromProto(nodes []*quartermasterpb.InfrastructureNode) []dnsNode {
 	out := make([]dnsNode, 0, len(nodes))
 	seen := map[string]struct{}{}
 	for _, node := range nodes {

@@ -12,7 +12,7 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -587,16 +587,16 @@ func TestGetUint64SliceFromMap(t *testing.T) {
 func TestNormalizeVodStage(t *testing.T) {
 	cases := []struct {
 		name     string
-		status   pb.VodLifecycleData_Status
+		status   ipcpb.VodLifecycleData_Status
 		expected string
 	}{
-		{name: "requested", status: pb.VodLifecycleData_STATUS_REQUESTED, expected: "requested"},
-		{name: "uploading", status: pb.VodLifecycleData_STATUS_UPLOADING, expected: "uploading"},
-		{name: "processing", status: pb.VodLifecycleData_STATUS_PROCESSING, expected: "processing"},
-		{name: "completed", status: pb.VodLifecycleData_STATUS_COMPLETED, expected: "completed"},
-		{name: "failed", status: pb.VodLifecycleData_STATUS_FAILED, expected: "failed"},
-		{name: "deleted", status: pb.VodLifecycleData_STATUS_DELETED, expected: "deleted"},
-		{name: "unknown", status: pb.VodLifecycleData_STATUS_UNSPECIFIED, expected: "unknown"},
+		{name: "requested", status: ipcpb.VodLifecycleData_STATUS_REQUESTED, expected: "requested"},
+		{name: "uploading", status: ipcpb.VodLifecycleData_STATUS_UPLOADING, expected: "uploading"},
+		{name: "processing", status: ipcpb.VodLifecycleData_STATUS_PROCESSING, expected: "processing"},
+		{name: "completed", status: ipcpb.VodLifecycleData_STATUS_COMPLETED, expected: "completed"},
+		{name: "failed", status: ipcpb.VodLifecycleData_STATUS_FAILED, expected: "failed"},
+		{name: "deleted", status: ipcpb.VodLifecycleData_STATUS_DELETED, expected: "deleted"},
+		{name: "unknown", status: ipcpb.VodLifecycleData_STATUS_UNSPECIFIED, expected: "unknown"},
 	}
 
 	for _, tc := range cases {
@@ -611,13 +611,13 @@ func TestNormalizeVodStage(t *testing.T) {
 func TestVodProgressPercent(t *testing.T) {
 	cases := []struct {
 		name     string
-		data     *pb.VodLifecycleData
+		data     *ipcpb.VodLifecycleData
 		expected uint8
 	}{
 		{name: "nil", data: nil, expected: 0},
-		{name: "negative", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(-5)}, expected: 0},
-		{name: "in range", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(42)}, expected: 42},
-		{name: "capped", data: &pb.VodLifecycleData{ProgressPct: int32Ptr(150)}, expected: 100},
+		{name: "negative", data: &ipcpb.VodLifecycleData{ProgressPct: int32Ptr(-5)}, expected: 0},
+		{name: "in range", data: &ipcpb.VodLifecycleData{ProgressPct: int32Ptr(42)}, expected: 42},
+		{name: "capped", data: &ipcpb.VodLifecycleData{ProgressPct: int32Ptr(150)}, expected: 100},
 	}
 
 	for _, tc := range cases {
@@ -632,17 +632,17 @@ func TestVodProgressPercent(t *testing.T) {
 func TestStorageStateFromAction(t *testing.T) {
 	tests := []struct {
 		name       string
-		action     pb.StorageLifecycleData_Action
+		action     ipcpb.StorageLifecycleData_Action
 		location   string
 		syncStatus string
 		hot        bool
 		synced     bool
 		frozen     bool
 	}{
-		{name: "synced keeps local hot", action: pb.StorageLifecycleData_ACTION_SYNCED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
-		{name: "evicted is frozen cold", action: pb.StorageLifecycleData_ACTION_EVICTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
-		{name: "cached restores hot", action: pb.StorageLifecycleData_ACTION_CACHED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
-		{name: "sync failure keeps hot local", action: pb.StorageLifecycleData_ACTION_SYNC_FAILED, location: "local", syncStatus: "failed", hot: true, synced: false, frozen: false},
+		{name: "synced keeps local hot", action: ipcpb.StorageLifecycleData_ACTION_SYNCED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "evicted is frozen cold", action: ipcpb.StorageLifecycleData_ACTION_EVICTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
+		{name: "cached restores hot", action: ipcpb.StorageLifecycleData_ACTION_CACHED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "sync failure keeps hot local", action: ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED, location: "local", syncStatus: "failed", hot: true, synced: false, frozen: false},
 	}
 
 	for _, tc := range tests {
@@ -660,15 +660,15 @@ func TestStorageStateFromAction(t *testing.T) {
 func TestNormalizeDVRStage(t *testing.T) {
 	cases := []struct {
 		name     string
-		status   pb.DVRLifecycleData_Status
+		status   ipcpb.DVRLifecycleData_Status
 		expected string
 	}{
-		{name: "started", status: pb.DVRLifecycleData_STATUS_STARTED, expected: "started"},
-		{name: "recording", status: pb.DVRLifecycleData_STATUS_RECORDING, expected: "recording"},
-		{name: "stopped", status: pb.DVRLifecycleData_STATUS_STOPPED, expected: "stopped"},
-		{name: "failed", status: pb.DVRLifecycleData_STATUS_FAILED, expected: "failed"},
-		{name: "deleted", status: pb.DVRLifecycleData_STATUS_DELETED, expected: "deleted"},
-		{name: "unknown", status: pb.DVRLifecycleData_STATUS_UNSPECIFIED, expected: "unknown"},
+		{name: "started", status: ipcpb.DVRLifecycleData_STATUS_STARTED, expected: "started"},
+		{name: "recording", status: ipcpb.DVRLifecycleData_STATUS_RECORDING, expected: "recording"},
+		{name: "stopped", status: ipcpb.DVRLifecycleData_STATUS_STOPPED, expected: "stopped"},
+		{name: "failed", status: ipcpb.DVRLifecycleData_STATUS_FAILED, expected: "failed"},
+		{name: "deleted", status: ipcpb.DVRLifecycleData_STATUS_DELETED, expected: "deleted"},
+		{name: "unknown", status: ipcpb.DVRLifecycleData_STATUS_UNSPECIFIED, expected: "unknown"},
 	}
 
 	for _, tc := range cases {
@@ -681,20 +681,20 @@ func TestNormalizeDVRStage(t *testing.T) {
 }
 
 func TestExtractPrimaryTracks(t *testing.T) {
-	videoPrimary := &pb.StreamTrack{TrackType: "video", TrackName: "video-primary"}
-	videoSecondary := &pb.StreamTrack{TrackType: "video", TrackName: "video-secondary"}
-	audioPrimary := &pb.StreamTrack{TrackType: "audio", TrackName: "audio-primary"}
+	videoPrimary := &ipcpb.StreamTrack{TrackType: "video", TrackName: "video-primary"}
+	videoSecondary := &ipcpb.StreamTrack{TrackType: "video", TrackName: "video-secondary"}
+	audioPrimary := &ipcpb.StreamTrack{TrackType: "audio", TrackName: "audio-primary"}
 
 	cases := []struct {
 		name      string
-		tracks    []*pb.StreamTrack
-		wantVideo *pb.StreamTrack
-		wantAudio *pb.StreamTrack
+		tracks    []*ipcpb.StreamTrack
+		wantVideo *ipcpb.StreamTrack
+		wantAudio *ipcpb.StreamTrack
 	}{
 		{name: "empty", tracks: nil, wantVideo: nil, wantAudio: nil},
-		{name: "audio only", tracks: []*pb.StreamTrack{audioPrimary}, wantVideo: nil, wantAudio: audioPrimary},
-		{name: "video then audio", tracks: []*pb.StreamTrack{videoPrimary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
-		{name: "multiple videos", tracks: []*pb.StreamTrack{videoPrimary, videoSecondary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
+		{name: "audio only", tracks: []*ipcpb.StreamTrack{audioPrimary}, wantVideo: nil, wantAudio: audioPrimary},
+		{name: "video then audio", tracks: []*ipcpb.StreamTrack{videoPrimary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
+		{name: "multiple videos", tracks: []*ipcpb.StreamTrack{videoPrimary, videoSecondary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
 	}
 
 	for _, tc := range cases {
@@ -906,7 +906,7 @@ func TestParseProtobufData(t *testing.T) {
 				"host":       "1.2.3.4",
 			},
 		}
-		var payload pb.ViewerConnectTrigger
+		var payload ipcpb.ViewerConnectTrigger
 		if err := handler.parseProtobufData(event, &payload); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -924,7 +924,7 @@ func TestParseProtobufData(t *testing.T) {
 				"streamName": map[string]interface{}{"nested": true},
 			},
 		}
-		var payload pb.ViewerConnectTrigger
+		var payload ipcpb.ViewerConnectTrigger
 		if err := handler.parseProtobufData(event, &payload); err == nil {
 			t.Fatal("expected error for invalid payload")
 		}
@@ -938,7 +938,7 @@ func TestParseProtobufData(t *testing.T) {
 				"futureOnlyField": "newer-producer",
 			},
 		}
-		var payload pb.ViewerConnectTrigger
+		var payload ipcpb.ViewerConnectTrigger
 		if err := handler.parseProtobufData(event, &payload); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -953,7 +953,7 @@ func TestParseProtobufData(t *testing.T) {
 				"bad": func() {},
 			},
 		}
-		var payload pb.ViewerConnectTrigger
+		var payload ipcpb.ViewerConnectTrigger
 		if err := handler.parseProtobufData(event, &payload); err == nil {
 			t.Fatal("expected error for marshal failure")
 		}
@@ -1055,10 +1055,10 @@ func TestViewerConnectionPayloadMismatch(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName: "live+demo",
 				SessionId:  "sess-1",
 				Connector:  "hls",
@@ -1091,10 +1091,10 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+demo",
 				SessionId:  "sess-1",
 				Connector:  "hls",
@@ -1139,10 +1139,10 @@ func TestViewerConnectionPreservesZeroCoordinateWhenPresent(t *testing.T) {
 	streamID := uuid.NewString()
 	lat := float64(0)
 	lon := float64(4.9041)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName:      "live+demo",
 				SessionId:       "sess-zero",
 				Connector:       "hls",
@@ -1184,10 +1184,10 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	secondsConnected := uint64(42)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName:       "live+demo",
 				SessionId:        "sess-2",
 				Connector:        "hls",
@@ -1227,9 +1227,9 @@ func TestViewerDisconnectUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName: "live+demo",
 				StreamId:   &streamID,
 				SessionId:  "sess-payload",
@@ -1265,14 +1265,14 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
 		TriggerType: "USER_END",
 		RequestId:   "source-event-1",
 		Timestamp:   time.Now().UnixMilli(),
 		StreamId:    &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName: "live+demo",
 				StreamId:   &streamID,
 				SessionId:  "sess-final",
@@ -1330,14 +1330,14 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
 		TriggerType: "STREAM_END",
 		RequestId:   "source-event-stream-end",
 		Timestamp:   time.Now().UnixMilli(),
 		TenantId:    &tenantID,
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
 				StreamName: "live+demo",
 				StreamId:   &streamID,
 			},
@@ -1379,15 +1379,15 @@ func TestRawStreamEndUsesOfflineCurrentStartedAt(t *testing.T) {
 	startedAt := time.Unix(1710000000, 0).UTC()
 	endedAt := startedAt.Add(10 * time.Minute)
 	conn.addQueryRow("periscope.stream_state_current", startedAt.UnixMilli())
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
 		ClusterId:   &clusterID,
 		TriggerType: "STREAM_END",
 		RequestId:   "source-event-stream-end",
 		Timestamp:   endedAt.UnixMilli(),
 		TenantId:    &tenantID,
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
 				StreamName: "live+demo",
 				StreamId:   &streamID,
 			},
@@ -1448,14 +1448,14 @@ func TestRawProcessingFinalUsesPayloadClusterID(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	clusterID := "marketplace-edge-a"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
 		TriggerType: "LIVEPEER_SEGMENT_COMPLETE",
 		RequestId:   "source-event-processing",
 		Timestamp:   time.Now().UnixMilli(),
 		TenantId:    &tenantID,
-		TriggerPayload: &pb.MistTrigger_ProcessBilling{
-			ProcessBilling: &pb.ProcessBillingEvent{
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+			ProcessBilling: &ipcpb.ProcessBillingEvent{
 				NodeId:        "edge-1",
 				StreamName:    "live+demo",
 				ProcessType:   "Livepeer",
@@ -1505,11 +1505,11 @@ func TestPushInputCloseDoesNotMutateStreamStateCurrent(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_PushInputClose{
-			PushInputClose: &pb.PushInputCloseTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
+			PushInputClose: &ipcpb.PushInputCloseTrigger{
 				StreamName:    "live+demo",
 				RemoteHost:    "203.0.113.7",
 				BinaryName:    "MistInRTMP",
@@ -1550,11 +1550,11 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	streamID := uuid.NewString()
 	lat := float64(52.3676)
 	lon := float64(0)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
 				StreamName:         "live+demo",
 				PushUrl:            "rtmp://edge-ingest.example/live/demo",
 				PublisherLatitude:  &lat,
@@ -1604,11 +1604,11 @@ func TestPushRewriteStartedAtLookupRequiresLiveState(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{StreamName: "live+demo"},
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "live+demo"},
 		},
 	})
 	event := kafka.AnalyticsEvent{
@@ -1647,11 +1647,11 @@ func TestStreamLifecycleStartedAtLookupRequiresLiveState(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				InternalName: "live+demo",
 				Status:       "live",
 			},
@@ -1706,11 +1706,11 @@ func TestStreamLifecyclePreservesExistingLiveStartedAt(t *testing.T) {
 	streamID := uuid.NewString()
 	startedAt := time.Unix(1709990000, 0).UTC()
 	conn.addQueryRow("periscope.stream_state_current", startedAt)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				InternalName: "live+demo",
 				Status:       "live",
 			},
@@ -1745,11 +1745,11 @@ func TestPushRewriteDuplicateStillRefreshesCurrentState(t *testing.T) {
 	streamID := uuid.NewString()
 	eventID := uuid.New()
 	conn.addDuplicate("stream_event_log", eventID)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{StreamName: "live+demo"},
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "live+demo"},
 		},
 	})
 	event := kafka.AnalyticsEvent{
@@ -1779,12 +1779,12 @@ func TestStreamEndWritesCurrentStateOffline(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	eventTime := time.Unix(1710000000, 0)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId:  &streamID,
 		NodeId:    "edge-eu-1",
 		ClusterId: stringPtr("media-eu-1"),
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
 				StreamName:      "live+demo",
 				UploadedBytes:   int64Ptr(1024),
 				DownloadedBytes: int64Ptr(2048),
@@ -1848,11 +1848,11 @@ func TestStreamEndDuplicateStillRefreshesCurrentState(t *testing.T) {
 	streamID := uuid.NewString()
 	eventID := uuid.New()
 	conn.addDuplicate("stream_event_log", eventID)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		NodeId:   "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{StreamName: "live+demo"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "live+demo"},
 		},
 	})
 	event := kafka.AnalyticsEvent{
@@ -1881,10 +1881,10 @@ func TestStreamEndUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		NodeId: "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{
 				StreamName: "live+demo",
 				StreamId:   stringPtr(streamID),
 			},
@@ -1914,24 +1914,24 @@ func TestStreamEndUsesPayloadStreamIDWhenEnvelopeMissing(t *testing.T) {
 
 func TestMistTriggerStreamIDFallsBackToLifecyclePayloads(t *testing.T) {
 	streamID := uuid.NewString()
-	tests := map[string]*pb.MistTrigger{
+	tests := map[string]*ipcpb.MistTrigger{
 		"stream_buffer": {
-			TriggerPayload: &pb.MistTrigger_StreamBuffer{StreamBuffer: &pb.StreamBufferTrigger{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{StreamBuffer: &ipcpb.StreamBufferTrigger{StreamId: &streamID}},
 		},
 		"track_list": {
-			TriggerPayload: &pb.MistTrigger_TrackList{TrackList: &pb.StreamTrackListTrigger{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_TrackList{TrackList: &ipcpb.StreamTrackListTrigger{StreamId: &streamID}},
 		},
 		"clip_lifecycle": {
-			TriggerPayload: &pb.MistTrigger_ClipLifecycleData{ClipLifecycleData: &pb.ClipLifecycleData{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{ClipLifecycleData: &ipcpb.ClipLifecycleData{StreamId: &streamID}},
 		},
 		"dvr_lifecycle": {
-			TriggerPayload: &pb.MistTrigger_DvrLifecycleData{DvrLifecycleData: &pb.DVRLifecycleData{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{DvrLifecycleData: &ipcpb.DVRLifecycleData{StreamId: &streamID}},
 		},
 		"load_balancing": {
-			TriggerPayload: &pb.MistTrigger_LoadBalancingData{LoadBalancingData: &pb.LoadBalancingData{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_LoadBalancingData{LoadBalancingData: &ipcpb.LoadBalancingData{StreamId: &streamID}},
 		},
 		"storage_lifecycle": {
-			TriggerPayload: &pb.MistTrigger_StorageLifecycleData{StorageLifecycleData: &pb.StorageLifecycleData{StreamId: &streamID}},
+			TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{StorageLifecycleData: &ipcpb.StorageLifecycleData{StreamId: &streamID}},
 		},
 	}
 
@@ -1949,11 +1949,11 @@ func TestStorageLifecycleCachedWithoutLocalPathDoesNotUpdateCurrentState(t *test
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-			StorageLifecycleData: &pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_CACHED,
+		TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &ipcpb.StorageLifecycleData{
+				Action:    ipcpb.StorageLifecycleData_ACTION_CACHED,
 				AssetType: "vod",
 				AssetHash: "asset-hash",
 				StreamId:  &streamID,
@@ -1988,11 +1988,11 @@ func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	nodeID := "edge-eu-1"
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-			DvrLifecycleData: &pb.DVRLifecycleData{
-				Status:             pb.DVRLifecycleData_STATUS_STOPPED,
+		TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &ipcpb.DVRLifecycleData{
+				Status:             ipcpb.DVRLifecycleData_STATUS_STOPPED,
 				DvrHash:            "dvr-hash",
 				TenantId:           &tenantID,
 				StreamInternalName: stringPtr("demo-stream"),
@@ -2036,10 +2036,10 @@ func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	streamID := uuid.NewString()
 	eventID := uuid.New()
 	conn.addDuplicate("viewer_connection_events", eventID)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+demo",
 				SessionId:  "sess-3",
 				Connector:  "hls",
@@ -2073,11 +2073,11 @@ func TestViewerConnectionClusterContextFallback(t *testing.T) {
 
 	t.Run("cluster inherits origin when missing", func(t *testing.T) {
 		clusterFromOrigin := "origin-cluster-a"
-		data := mustMistTriggerData(t, &pb.MistTrigger{
+		data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 			StreamId:        &streamID,
 			OriginClusterId: &clusterFromOrigin,
-			TriggerPayload: &pb.MistTrigger_ViewerConnect{
-				ViewerConnect: &pb.ViewerConnectTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+				ViewerConnect: &ipcpb.ViewerConnectTrigger{
 					StreamName: "live+demo",
 					SessionId:  "sess-origin",
 					Connector:  "hls",
@@ -2113,11 +2113,11 @@ func TestViewerConnectionClusterContextFallback(t *testing.T) {
 
 	t.Run("origin inherits cluster when missing", func(t *testing.T) {
 		clusterID := "local-cluster-b"
-		data := mustMistTriggerData(t, &pb.MistTrigger{
+		data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 			StreamId:  &streamID,
 			ClusterId: &clusterID,
-			TriggerPayload: &pb.MistTrigger_ViewerConnect{
-				ViewerConnect: &pb.ViewerConnectTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+				ViewerConnect: &ipcpb.ViewerConnectTrigger{
 					StreamName: "live+demo",
 					SessionId:  "sess-cluster",
 					Connector:  "webrtc",
@@ -2181,16 +2181,16 @@ func TestClipLifecyclePersistsServingAndOriginClusterAttribution(t *testing.T) {
 	clusterID := "cluster-serving"
 	originClusterID := "cluster-origin"
 
-	data := mustMistTriggerData(t, &pb.MistTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 		StreamId:        &streamID,
 		ClusterId:       &clusterID,
 		OriginClusterId: &originClusterID,
-		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
-			ClipLifecycleData: &pb.ClipLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{
+			ClipLifecycleData: &ipcpb.ClipLifecycleData{
 				StreamInternalName: stringPtr("live+demo-stream"),
 				RequestId:          stringPtr("clip-request"),
 				ClipHash:           "clip-hash-1",
-				Stage:              pb.ClipLifecycleData_STAGE_DONE,
+				Stage:              ipcpb.ClipLifecycleData_STAGE_DONE,
 			},
 		},
 	})
@@ -2224,9 +2224,9 @@ func TestClipLifecyclePersistsServingAndOriginClusterAttribution(t *testing.T) {
 func TestHandleAnalyticsEventMissingStreamIDDropped(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
-	data := mustMistTriggerData(t, &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+demo",
 				SessionId:  "sess-4",
 				Connector:  "hls",
@@ -2266,10 +2266,10 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 		Timestamp: time.Now(),
 		Source:    "decklog",
 		TenantID:  uuid.NewString(),
-		Data: mustMistTriggerData(t, &pb.MistTrigger{
-			TriggerPayload: &pb.MistTrigger_FederationEventData{
-				FederationEventData: &pb.FederationEventData{
-					EventType:                  pb.FederationEventType_REPLICATION_LOOP_PREVENTED,
+		Data: mustMistTriggerData(t, &ipcpb.MistTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_FederationEventData{
+				FederationEventData: &ipcpb.FederationEventData{
+					EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
 					LocalCluster:               "central-primary",
 					RemoteCluster:              "us-east-edge",
 					StreamName:                 stringPtr("demo_live_stream_001"),
@@ -2357,7 +2357,7 @@ func TestWriteIngestErrorPayloadMarshalFailure(t *testing.T) {
 	}
 }
 
-func mustMistTriggerData(t *testing.T, mt *pb.MistTrigger) map[string]interface{} {
+func mustMistTriggerData(t *testing.T, mt *ipcpb.MistTrigger) map[string]interface{} {
 	t.Helper()
 	bytes, err := protojson.Marshal(mt)
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -88,11 +88,11 @@ func TestGetVodUploadStatus_RequiresTenantAndUploadID(t *testing.T) {
 	srv, _, cleanup := newStatusServer(t, &fakeVodS3Client{})
 	defer cleanup()
 
-	_, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{UploadId: "u1"})
+	_, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{UploadId: "u1"})
 	if got := status.Code(err); got != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for missing tenant, got %s", got)
 	}
-	_, err = srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{TenantId: "t1"})
+	_, err = srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{TenantId: "t1"})
 	if got := status.Code(err); got != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for missing upload_id, got %s", got)
 	}
@@ -115,7 +115,7 @@ func TestCreateVodUpload_MetadataFailureAbortsMultipartUpload(t *testing.T) {
 
 	internalName := "vod-test"
 	vodHash := "hash-1"
-	_, err := srv.CreateVodUpload(context.Background(), &pb.CreateVodUploadRequest{
+	_, err := srv.CreateVodUpload(context.Background(), &sharedpb.CreateVodUploadRequest{
 		TenantId:     "00000000-0000-0000-0000-000000000001",
 		UserId:       "00000000-0000-0000-0000-000000000002",
 		Filename:     "video.mp4",
@@ -142,7 +142,7 @@ func TestGetVodUploadStatus_NotFoundForWrongTenant(t *testing.T) {
 		WithArgs("up-1", "wrong-tenant").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	_, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "wrong-tenant",
 		UploadId: "up-1",
 	})
@@ -164,14 +164,14 @@ func TestGetVodUploadStatus_TerminalStateSkipsS3(t *testing.T) {
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "ready",
 			nil, time.Now().Add(30*24*time.Hour), nil, nil))
 
-	resp, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
 		UploadId: "up-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.State != pb.VodStatus_VOD_STATUS_READY {
+	if resp.State != sharedpb.VodStatus_VOD_STATUS_READY {
 		t.Fatalf("expected READY, got %v", resp.State)
 	}
 	if s3.listUpID != "" {
@@ -184,7 +184,7 @@ func TestGetVodUploadStatus_TerminalStateSkipsS3(t *testing.T) {
 
 func TestMapArtifactStatusToVodStatus_TerminalAliases(t *testing.T) {
 	for _, status := range []string{"completed", "complete", "done", "ready", "synced"} {
-		if got := mapArtifactStatusToVodStatus(status); got != pb.VodStatus_VOD_STATUS_READY {
+		if got := mapArtifactStatusToVodStatus(status); got != sharedpb.VodStatus_VOD_STATUS_READY {
 			t.Fatalf("expected %q to map to READY, got %v", status, got)
 		}
 	}
@@ -199,7 +199,7 @@ func TestGetVodUploadStatus_FailedStateReturnsErrorCode(t *testing.T) {
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "failed",
 			"transcode crashed", nil, nil, nil))
 
-	resp, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
 		UploadId: "up-1",
 	})
@@ -222,14 +222,14 @@ func TestGetVodUploadStatus_ProcessingSkipsExpiryAndS3(t *testing.T) {
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "processing",
 			nil, nil, expired, 5))
 
-	resp, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
 		UploadId: "up-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.State != pb.VodStatus_VOD_STATUS_PROCESSING {
+	if resp.State != sharedpb.VodStatus_VOD_STATUS_PROCESSING {
 		t.Fatalf("expected PROCESSING, got %v", resp.State)
 	}
 	if s3.listUpID != "" {
@@ -247,14 +247,14 @@ func TestGetVodUploadStatus_ExpiredSession(t *testing.T) {
 		WithArgs("up-1", "t1").
 		WillReturnRows(statusRows().AddRow("hash-1", "key", "uploading", nil, nil, expired, 5))
 
-	resp, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
 		UploadId: "up-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.State != pb.VodStatus_VOD_STATUS_EXPIRED {
+	if resp.State != sharedpb.VodStatus_VOD_STATUS_EXPIRED {
 		t.Fatalf("expected EXPIRED, got %v", resp.State)
 	}
 	if s3.listUpID != "" {
@@ -278,14 +278,14 @@ func TestGetVodUploadStatus_LiveReconciliation(t *testing.T) {
 		WillReturnRows(statusRows().AddRow("hash-1", "vod/t1/hash-1/hash-1.mp4", "uploading",
 			nil, nil, future, 4))
 
-	resp, err := srv.GetVodUploadStatus(context.Background(), &pb.GetVodUploadStatusRequest{
+	resp, err := srv.GetVodUploadStatus(context.Background(), &sharedpb.GetVodUploadStatusRequest{
 		TenantId: "t1",
 		UploadId: "up-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.State != pb.VodStatus_VOD_STATUS_UPLOADING {
+	if resp.State != sharedpb.VodStatus_VOD_STATUS_UPLOADING {
 		t.Fatalf("expected UPLOADING, got %v", resp.State)
 	}
 	if len(resp.UploadedParts) != 2 {

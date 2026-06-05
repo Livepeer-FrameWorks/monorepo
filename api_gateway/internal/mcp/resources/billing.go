@@ -11,7 +11,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -170,8 +171,8 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients) 
 	}
 
 	// Find the tenant's current tier if authenticated
-	var currentTier *pb.BillingTier
-	var subscription *pb.TenantSubscription
+	var currentTier *purserpb.BillingTier
+	var subscription *purserpb.TenantSubscription
 	if tenantID != "" {
 		sub, err := clients.Purser.GetSubscription(ctx, tenantID)
 		if err != nil {
@@ -232,11 +233,11 @@ func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients) 
 	return marshalResourceResult("billing://pricing", pricing)
 }
 
-func effectivePricingRules(tierRules []*pb.PricingRule, subscription *pb.TenantSubscription) []*pb.PricingRule {
+func effectivePricingRules(tierRules []*purserpb.PricingRule, subscription *purserpb.TenantSubscription) []*purserpb.PricingRule {
 	if subscription == nil || len(subscription.GetPricingOverrides()) == 0 {
 		return tierRules
 	}
-	overrides := make(map[string]*pb.PricingRule, len(subscription.GetPricingOverrides()))
+	overrides := make(map[string]*purserpb.PricingRule, len(subscription.GetPricingOverrides()))
 	for _, override := range subscription.GetPricingOverrides() {
 		if override == nil || override.GetMeter() == "" {
 			continue
@@ -244,7 +245,7 @@ func effectivePricingRules(tierRules []*pb.PricingRule, subscription *pb.TenantS
 		overrides[override.GetMeter()] = override
 	}
 
-	out := make([]*pb.PricingRule, 0, len(tierRules)+len(overrides))
+	out := make([]*purserpb.PricingRule, 0, len(tierRules)+len(overrides))
 	seen := make(map[string]bool, len(tierRules))
 	for _, tierRule := range tierRules {
 		if tierRule == nil {
@@ -272,11 +273,11 @@ func effectivePricingRules(tierRules []*pb.PricingRule, subscription *pb.TenantS
 	return out
 }
 
-func mergePricingRule(base, override *pb.PricingRule) *pb.PricingRule {
+func mergePricingRule(base, override *purserpb.PricingRule) *purserpb.PricingRule {
 	if base == nil {
 		return override
 	}
-	merged := &pb.PricingRule{
+	merged := &purserpb.PricingRule{
 		Meter:            base.GetMeter(),
 		Model:            base.GetModel(),
 		Currency:         base.GetCurrency(),
@@ -329,7 +330,7 @@ func handleBillingTransactions(ctx context.Context, clients *clients.ServiceClie
 	}
 
 	// Build pagination request for last 20 transactions
-	pagination := &pb.CursorPaginationRequest{
+	pagination := &commonpb.CursorPaginationRequest{
 		First: 20,
 	}
 

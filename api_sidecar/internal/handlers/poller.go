@@ -23,7 +23,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -55,7 +55,7 @@ type ClipInfo struct {
 	HasDtsh      bool // True if .dtsh index file exists locally
 	AccessCount  int
 	LastAccessed time.Time
-	ArtifactType pb.ArtifactEvent_ArtifactType
+	ArtifactType ipcpb.ArtifactEvent_ArtifactType
 }
 
 // PrometheusMonitor handles monitoring of MistServer Prometheus endpoints
@@ -169,9 +169,9 @@ var (
 	prevStreamClients = map[streamClientKey]struct{}{}
 )
 
-func currentComponentVersions() []*pb.EdgeComponentVersion {
+func currentComponentVersions() []*ipcpb.EdgeComponentVersion {
 	recorded := updater.ReadComponentVersions()
-	versions := []*pb.EdgeComponentVersion{{
+	versions := []*ipcpb.EdgeComponentVersion{{
 		Component: "helmsman",
 		Version: firstNonEmptyString(
 			recorded["HELMSMAN_VERSION"],
@@ -193,7 +193,7 @@ func currentComponentVersions() []*pb.EdgeComponentVersion {
 			values = append(values, recorded[key], os.Getenv(key))
 		}
 		if value := firstNonEmptyString(values...); value != "" {
-			versions = append(versions, &pb.EdgeComponentVersion{Component: component.name, Version: value})
+			versions = append(versions, &ipcpb.EdgeComponentVersion{Component: component.name, Version: value})
 		}
 	}
 	return versions
@@ -1369,12 +1369,12 @@ func markLocalDtshPresent(kind, hash, localPath string) {
 	if !validLocalDtsh(localPath) {
 		return
 	}
-	var artifactType pb.ArtifactEvent_ArtifactType
+	var artifactType ipcpb.ArtifactEvent_ArtifactType
 	switch kind {
 	case "vod":
-		artifactType = pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+		artifactType = ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD
 	case "clip":
-		artifactType = pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+		artifactType = ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP
 	default:
 		return
 	}
@@ -1484,7 +1484,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 			CreatedAt:    info.ModTime(),
 			SegmentCount: 0,
 			HasDtsh:      hasDtsh,
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 		}
 		artifactIndex[hash] = vodInfo
 		totalSize += uint64(info.Size())
@@ -1570,7 +1570,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 							HasDtsh:      hasDtsh,
 							AccessCount:  0,
 							LastAccessed: fileInfo.ModTime(),
-							ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+							ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 						}
 
 						artifactIndex[clipHash] = clipInfo
@@ -1624,7 +1624,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 					HasDtsh:      hasDtsh,
 					AccessCount:  0,
 					LastAccessed: fileInfo.ModTime(),
-					ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+					ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 				}
 
 				artifactIndex[clipHash] = clipInfo
@@ -1749,7 +1749,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 				HasDtsh:      hasDtsh,
 				AccessCount:  0,
 				LastAccessed: fileInfo.ModTime(),
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 			}
 
 			artifactIndex[dvrHash] = dvrInfo
@@ -1762,7 +1762,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 }
 
 // GetStoredArtifacts returns artifacts from the global prometheusMonitor's artifactIndex
-func GetStoredArtifacts() []*pb.StoredArtifact {
+func GetStoredArtifacts() []*ipcpb.StoredArtifact {
 	if prometheusMonitor == nil {
 		return nil
 	}
@@ -1770,9 +1770,9 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 	prometheusMonitor.mutex.RLock()
 	defer prometheusMonitor.mutex.RUnlock()
 
-	var artifacts []*pb.StoredArtifact
+	var artifacts []*ipcpb.StoredArtifact
 	for clipHash, clipInfo := range prometheusMonitor.artifactIndex {
-		artifact := &pb.StoredArtifact{
+		artifact := &ipcpb.StoredArtifact{
 			ClipHash:   clipHash,
 			StreamName: clipInfo.StreamName,
 			FilePath:   clipInfo.FilePath,
@@ -1780,11 +1780,11 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 			CreatedAt:  clipInfo.CreatedAt.Unix(),
 			Format:     clipInfo.Format,
 			HasDtsh:    clipInfo.HasDtsh,
-			ArtifactType: func() pb.ArtifactEvent_ArtifactType {
-				if clipInfo.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED {
+			ArtifactType: func() ipcpb.ArtifactEvent_ArtifactType {
+				if clipInfo.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED {
 					return clipInfo.ArtifactType
 				}
-				return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+				return ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 			}(),
 			AccessCount: func() uint64 {
 				if clipInfo.AccessCount < 0 {
@@ -1812,7 +1812,7 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 }
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
-func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]any, logger logging.Logger) *pb.MistTrigger {
+func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]any, logger logging.Logger) *ipcpb.MistTrigger {
 	// Use public edge URL for client-facing BaseUrl (for playback URLs)
 	// Fall back to internal URL if public not configured
 	baseURL := pm.edgePublicURL
@@ -1820,7 +1820,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		baseURL = pm.baseURL
 	}
 
-	nodeUpdate := &pb.NodeLifecycleUpdate{
+	nodeUpdate := &ipcpb.NodeLifecycleUpdate{
 		NodeId:            nodeID,
 		BaseUrl:           baseURL, // Client-facing URL for playback
 		EventType:         "node_lifecycle_update",
@@ -2016,10 +2016,10 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	// This is CRITICAL for load balancing - balancer checks stream.Inputs > 0
 	if jsonData != nil {
 		if streams, ok := jsonData["streams"].(map[string]any); ok {
-			nodeUpdate.Streams = make(map[string]*pb.StreamData)
+			nodeUpdate.Streams = make(map[string]*ipcpb.StreamData)
 			for streamName, streamData := range streams {
 				if streamInfo, ok := streamData.(map[string]any); ok {
-					sd := &pb.StreamData{}
+					sd := &ipcpb.StreamData{}
 
 					// Extract from curr array: [viewers, inputs, outgoing, unspecified, cached]
 					if curr, ok := streamInfo["curr"].([]any); ok {
@@ -2084,13 +2084,13 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		}
 	}
 
-	return &pb.MistTrigger{
+	return &ipcpb.MistTrigger{
 		TriggerType: "NODE_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
 		Timestamp:   time.Now().Unix(),
 		Blocking:    false,
 		RequestId:   "", // Non-blocking
-		TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
 			NodeLifecycleUpdate: nodeUpdate,
 		},
 	}
@@ -2145,13 +2145,13 @@ func getDiskUsage(path string) (total, used uint64, err error) {
 }
 
 // enrichNodeLifecycleTrigger enriches node lifecycle trigger with Helmsman-specific data
-func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge, capStorage, capProcessing string, roles []string) {
+func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEdge, capStorage, capProcessing string, roles []string) {
 	if nodeUpdate := mistTrigger.GetNodeLifecycleUpdate(); nodeUpdate != nil {
 		// Report the authoritative mode from ConfigSeed (set by Foghorn), not the env var
 		nodeUpdate.OperationalMode = sidecarcfg.GetOperationalMode()
 
 		// Add capabilities
-		nodeUpdate.Capabilities = &pb.NodeCapabilities{
+		nodeUpdate.Capabilities = &ipcpb.NodeCapabilities{
 			Ingest:     capIngest == "" || capIngest == "1" || strings.ToLower(capIngest) == "true",
 			Edge:       capEdge == "" || capEdge == "1" || strings.ToLower(capEdge) == "true",
 			Storage:    capStorage == "" || capStorage == "1" || strings.ToLower(capStorage) == "true",
@@ -2160,14 +2160,14 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 		}
 
 		// Add storage info
-		nodeUpdate.Storage = &pb.StorageInfo{
+		nodeUpdate.Storage = &ipcpb.StorageInfo{
 			LocalPath: os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"),
 			S3Bucket:  os.Getenv("HELMSMAN_STORAGE_S3_BUCKET"),
 			S3Prefix:  os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
 		}
 
 		// Add limits from environment
-		limits := &pb.NodeLimits{}
+		limits := &ipcpb.NodeLimits{}
 		hasLimits := false
 		if maxT, err := strconv.Atoi(os.Getenv("HELMSMAN_MAX_TRANSCODES")); err == nil && maxT > 0 {
 			limits.MaxTranscodes = safeInt32(maxT)
@@ -2217,12 +2217,12 @@ func interpretCapabilityFlag(value string, def bool) bool {
 }
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf
-func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *pb.MistTrigger {
+func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *ipcpb.MistTrigger {
 	status := "waiting"
 	if streamAPIHasLiveMedia(streamData, trackDetails, trackCount) {
 		status = "live"
 	}
-	streamLifecycleUpdate := &pb.StreamLifecycleUpdate{
+	streamLifecycleUpdate := &ipcpb.StreamLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,
 		Status:       status,
@@ -2474,13 +2474,13 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 		streamLifecycleUpdate.TrackCount = &count
 	}
 
-	return &pb.MistTrigger{
+	return &ipcpb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
 		Timestamp:   time.Now().Unix(),
 		Blocking:    false,
 		RequestId:   "",
-		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: streamLifecycleUpdate,
 		},
 	}
@@ -2545,8 +2545,8 @@ func hasMistTag(value any, want string) bool {
 }
 
 // convertClientAPIToMistTrigger converts client API response data to a MistTrigger protobuf
-func convertClientAPIToMistTrigger(nodeID, _streamName, internalName, protocol, host, sessionID string, connectionTime, position float64, bandwidthIn, bandwidthOut float64, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted int64, _logger logging.Logger) *pb.MistTrigger {
-	clientLifecycleUpdate := &pb.ClientLifecycleUpdate{
+func convertClientAPIToMistTrigger(nodeID, _streamName, internalName, protocol, host, sessionID string, connectionTime, position float64, bandwidthIn, bandwidthOut float64, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted int64, _logger logging.Logger) *ipcpb.MistTrigger {
+	clientLifecycleUpdate := &ipcpb.ClientLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,
 		Action:       "connect",
@@ -2583,13 +2583,13 @@ func convertClientAPIToMistTrigger(nodeID, _streamName, internalName, protocol, 
 	eventID := uuid.NewString()
 	clientLifecycleUpdate.EventId = &eventID
 
-	return &pb.MistTrigger{
+	return &ipcpb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
 		Timestamp:   time.Now().Unix(),
 		Blocking:    false,
 		RequestId:   "",
-		TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleUpdate{
 			ClientLifecycleUpdate: clientLifecycleUpdate,
 		},
 	}

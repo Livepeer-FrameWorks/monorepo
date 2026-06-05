@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
@@ -68,7 +68,7 @@ func TestThresholdCheckReturnViolations(t *testing.T) {
 	snapshot := &healthSnapshot{
 		TenantID:      "tenant-a",
 		ActiveStreams: 1,
-		Health: &pb.StreamHealthSummary{
+		Health: &periscopepb.StreamHealthSummary{
 			AvgBufferHealth: 1.0,
 			AvgFps:          20,
 			AvgBitrate:      400000,
@@ -89,7 +89,7 @@ func TestThresholdCheckReturnViolations(t *testing.T) {
 
 func TestSnapshotToMetricMapSkipsUnknownFPS(t *testing.T) {
 	metrics := snapshotToMetricMap(&healthSnapshot{
-		Health: &pb.StreamHealthSummary{
+		Health: &periscopepb.StreamHealthSummary{
 			AvgFps:          0,
 			AvgBitrate:      5000000,
 			AvgBufferHealth: 3,
@@ -100,7 +100,7 @@ func TestSnapshotToMetricMapSkipsUnknownFPS(t *testing.T) {
 	}
 
 	metrics = snapshotToMetricMap(&healthSnapshot{
-		Health: &pb.StreamHealthSummary{AvgFps: 29.97},
+		Health: &periscopepb.StreamHealthSummary{AvgFps: 29.97},
 	})
 	if got := metrics["avg_fps"]; got != 29.97 {
 		t.Fatalf("avg_fps = %v, want 29.97", got)
@@ -112,7 +112,7 @@ func TestInvestigationPromptTreatsZeroFPSAsUnknown(t *testing.T) {
 		TenantID:      "tenant-a",
 		ActiveStreams: 1,
 		Window:        15,
-		Health: &pb.StreamHealthSummary{
+		Health: &periscopepb.StreamHealthSummary{
 			AvgFps:          0,
 			AvgBitrate:      5000000,
 			AvgBufferHealth: 1,
@@ -147,18 +147,18 @@ func TestProcessTenantHealthySkipsLLM(t *testing.T) {
 	}
 
 	fp := &fakePeriscopeClient{
-		healthResp: &pb.GetStreamHealthSummaryResponse{
-			Summary: &pb.StreamHealthSummary{
+		healthResp: &periscopepb.GetStreamHealthSummaryResponse{
+			Summary: &periscopepb.StreamHealthSummary{
 				AvgBufferHealth: 3.0,
 				AvgFps:          30,
 				AvgBitrate:      5000000,
 				TotalIssueCount: 0,
 			},
 		},
-		qoeResp: &pb.GetClientQoeSummaryResponse{
-			Summary: &pb.ClientQoeSummary{},
+		qoeResp: &periscopepb.GetClientQoeSummaryResponse{
+			Summary: &periscopepb.ClientQoeSummary{},
 		},
-		overviewResp: &pb.GetPlatformOverviewResponse{ActiveStreams: 5},
+		overviewResp: &periscopepb.GetPlatformOverviewResponse{ActiveStreams: 5},
 	}
 
 	agent := NewAgent(AgentConfig{
@@ -185,15 +185,15 @@ func TestProcessTenantDegradedInvestigates(t *testing.T) {
 	reporter := &Reporter{Store: store}
 
 	fp := &fakePeriscopeClient{
-		healthResp: &pb.GetStreamHealthSummaryResponse{
-			Summary: &pb.StreamHealthSummary{
+		healthResp: &periscopepb.GetStreamHealthSummaryResponse{
+			Summary: &periscopepb.StreamHealthSummary{
 				AvgBufferHealth: 1.0,
 				AvgFps:          20,
 				AvgBitrate:      400000,
 				TotalIssueCount: 2,
 			},
 		},
-		overviewResp: &pb.GetPlatformOverviewResponse{ActiveStreams: 3},
+		overviewResp: &periscopepb.GetPlatformOverviewResponse{ActiveStreams: 3},
 	}
 
 	agent := NewAgent(AgentConfig{
@@ -283,27 +283,27 @@ func TestReporterBuildNotificationUsesDefaultRecipientLast(t *testing.T) {
 // --- Test helpers ---
 
 type fakePeriscopeClient struct {
-	healthResp    *pb.GetStreamHealthSummaryResponse
-	qoeResp       *pb.GetClientQoeSummaryResponse
-	overviewResp  *pb.GetPlatformOverviewResponse
-	streamMetrics *pb.GetStreamHealthMetricsResponse
+	healthResp    *periscopepb.GetStreamHealthSummaryResponse
+	qoeResp       *periscopepb.GetClientQoeSummaryResponse
+	overviewResp  *periscopepb.GetPlatformOverviewResponse
+	streamMetrics *periscopepb.GetStreamHealthMetricsResponse
 }
 
-func (f *fakePeriscopeClient) GetStreamHealthSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error) {
+func (f *fakePeriscopeClient) GetStreamHealthSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error) {
 	return f.healthResp, nil
 }
 
-func (f *fakePeriscopeClient) GetClientQoeSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error) {
+func (f *fakePeriscopeClient) GetClientQoeSummary(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error) {
 	return f.qoeResp, nil
 }
 
-func (f *fakePeriscopeClient) GetPlatformOverview(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*pb.GetPlatformOverviewResponse, error) {
+func (f *fakePeriscopeClient) GetPlatformOverview(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*periscopepb.GetPlatformOverviewResponse, error) {
 	return f.overviewResp, nil
 }
 
-func (f *fakePeriscopeClient) GetStreamHealthMetrics(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error) {
+func (f *fakePeriscopeClient) GetStreamHealthMetrics(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error) {
 	if f.streamMetrics != nil {
 		return f.streamMetrics, nil
 	}
-	return &pb.GetStreamHealthMetricsResponse{}, nil
+	return &periscopepb.GetStreamHealthMetricsResponse{}, nil
 }

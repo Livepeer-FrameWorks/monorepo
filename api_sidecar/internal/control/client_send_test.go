@@ -2,10 +2,9 @@ package control
 
 import (
 	"context"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // --- SendFreezeComplete ---
@@ -138,9 +137,9 @@ func TestSendStorageLifecycle_Connected(t *testing.T) {
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
 
-	data := &pb.StorageLifecycleData{
+	data := &ipcpb.StorageLifecycleData{
 		AssetHash: "hash-lc",
-		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,
+		Action:    ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED,
 		SizeBytes: 2048,
 	}
 	err := SendStorageLifecycle(data)
@@ -166,7 +165,7 @@ func TestSendStorageLifecycle_Connected(t *testing.T) {
 	if slData.AssetHash != "hash-lc" {
 		t.Fatalf("expected hash, got %q", slData.AssetHash)
 	}
-	if slData.Action != pb.StorageLifecycleData_ACTION_SYNC_STARTED {
+	if slData.Action != ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED {
 		t.Fatalf("expected SYNC_STARTED, got %v", slData.Action)
 	}
 }
@@ -240,7 +239,7 @@ func TestRequestFreezePermission_Approved(t *testing.T) {
 
 	ctx := context.Background()
 	done := make(chan struct{})
-	var resp *pb.FreezePermissionResponse
+	var resp *ipcpb.FreezePermissionResponse
 	var err error
 
 	go func() {
@@ -273,7 +272,7 @@ func TestRequestFreezePermission_Approved(t *testing.T) {
 	reqID := fpReq.RequestId
 
 	// Simulate Foghorn's response
-	handleFreezePermissionResponse(&pb.FreezePermissionResponse{
+	handleFreezePermissionResponse(&ipcpb.FreezePermissionResponse{
 		RequestId:       reqID,
 		Approved:        true,
 		PresignedPutUrl: "https://s3.example.com/put?sig=abc",
@@ -354,7 +353,7 @@ func TestRequestCanDelete_Safe(t *testing.T) {
 	}
 
 	// Simulate Foghorn's response
-	handleCanDeleteResponse(&pb.CanDeleteResponse{
+	handleCanDeleteResponse(&ipcpb.CanDeleteResponse{
 		AssetHash:      "hash-can-del",
 		SafeToDelete:   true,
 		Reason:         "synced_to_s3",
@@ -408,7 +407,7 @@ func TestRequestCanDelete_NotSafe(t *testing.T) {
 		}
 	}
 
-	handleCanDeleteResponse(&pb.CanDeleteResponse{
+	handleCanDeleteResponse(&ipcpb.CanDeleteResponse{
 		AssetHash:    "hash-not-safe",
 		SafeToDelete: false,
 		Reason:       "not_synced",
@@ -446,7 +445,7 @@ func TestValidateEdgeToken_Fresh(t *testing.T) {
 
 	ctx := context.Background()
 	done := make(chan struct{})
-	var resp *pb.ValidateEdgeTokenResponse
+	var resp *ipcpb.ValidateEdgeTokenResponse
 	var err error
 
 	go func() {
@@ -473,7 +472,7 @@ func TestValidateEdgeToken_Fresh(t *testing.T) {
 	// Get the requestID from the sent message
 	reqID := stream.sent[0].RequestId
 
-	handleValidateEdgeTokenResponse(reqID, &pb.ValidateEdgeTokenResponse{
+	handleValidateEdgeTokenResponse(reqID, &ipcpb.ValidateEdgeTokenResponse{
 		Valid:    true,
 		TenantId: "tenant-abc",
 	})
@@ -497,7 +496,7 @@ func TestValidateEdgeToken_Cached(t *testing.T) {
 
 	// Pre-populate cache
 	edgeTokenCache.Store("tok-cached", &edgeTokenResult{
-		resp: &pb.ValidateEdgeTokenResponse{
+		resp: &ipcpb.ValidateEdgeTokenResponse{
 			Valid:    true,
 			TenantId: "tenant-cached",
 		},
@@ -526,7 +525,7 @@ func TestValidateEdgeToken_CacheExpired(t *testing.T) {
 
 	// Expired cache entry
 	edgeTokenCache.Store("tok-expired", &edgeTokenResult{
-		resp:      &pb.ValidateEdgeTokenResponse{Valid: true},
+		resp:      &ipcpb.ValidateEdgeTokenResponse{Valid: true},
 		expiresAt: time.Now().Add(-1 * time.Minute),
 	})
 

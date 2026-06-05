@@ -20,7 +20,7 @@ import (
 	"frameworks/api_sidecar/internal/dtsh"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -328,7 +328,7 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath s
 
 // Handle executes a processing job: activates the processing+ wildcard stream,
 // starts a push to local disk as MKV, waits for PUSH_END, reports result.
-func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*pb.ControlMessage)) {
+func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 	log := h.logger.WithFields(logging.Fields{
 		"job_id":        req.GetJobId(),
 		"job_type":      req.GetJobType(),
@@ -813,7 +813,7 @@ loop:
 // Returns an error that is safe to surface to the caller's sendResult
 // "failed" path; admission rejection and push failure are both fatal
 // to the job.
-func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, vodDir, streamName, outputPath string) error {
+func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, vodDir, streamName, outputPath string) error {
 	if sm := GetStorageManager(); sm != nil {
 		var estSize uint64
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -860,7 +860,7 @@ type processingTrackPresence struct {
 // until Mist has exposed source media. Mist's file-output path owns the
 // generated-track/header gate, so push_start can pin the stream before short
 // VOD inputs run to EOF.
-func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *pb.ProcessingJobRequest, streamName string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(req.GetProcessesJson())
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
@@ -1369,7 +1369,7 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 	return out
 }
 
-func processingTracksFromProto(tracks []*pb.StreamTrack) []processingMetaVideoTrack {
+func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVideoTrack {
 	out := make([]processingMetaVideoTrack, 0, len(tracks))
 	for _, track := range tracks {
 		if track == nil {
@@ -1809,13 +1809,13 @@ func ParseProcessExitTrigger(body []byte) (ProcessExitEvent, error) {
 	return evt, nil
 }
 
-func (h *ProcessingJobHandler) sendProgress(send func(*pb.ControlMessage), jobID string, progressPct int32, lastMs, sourceDurationMs int64) {
+func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jobID string, progressPct int32, lastMs, sourceDurationMs int64) {
 	if send == nil {
 		return
 	}
-	send(&pb.ControlMessage{
-		Payload: &pb.ControlMessage_ProcessingJobProgress{
-			ProcessingJobProgress: &pb.ProcessingJobProgress{
+	send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ProcessingJobProgress{
+			ProcessingJobProgress: &ipcpb.ProcessingJobProgress{
 				JobId:            jobID,
 				ProgressPct:      progressPct,
 				LastMs:           lastMs,
@@ -1828,13 +1828,13 @@ func (h *ProcessingJobHandler) sendProgress(send func(*pb.ControlMessage), jobID
 
 // updateProcessConfigCache tells Foghorn to update the STREAM_PROCESS cache
 // for this artifact with the given processes_json (used for Livepeer fallback).
-func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*pb.ControlMessage), artifactHash, processesJSON string) {
+func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), artifactHash, processesJSON string) {
 	if send == nil {
 		return
 	}
-	send(&pb.ControlMessage{
-		Payload: &pb.ControlMessage_ProcessingJobResult{
-			ProcessingJobResult: &pb.ProcessingJobResult{
+	send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ProcessingJobResult{
+			ProcessingJobResult: &ipcpb.ProcessingJobResult{
 				JobId:  "cache_update:" + artifactHash,
 				Status: "cache_update",
 				Outputs: map[string]string{
@@ -2012,7 +2012,7 @@ func isHLSSource(sourceURL string, params map[string]string) bool {
 
 // rewriteHLSManifest downloads the HLS manifest, rewrites segment paths
 // to presigned HTTPS URLs, and saves to local disk for MistServer to read.
-func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *pb.ProcessingJobRequest) (string, error) {
+func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *ipcpb.ProcessingJobRequest) (string, error) {
 	params := req.GetParams()
 	manifestURL := req.GetSourceUrl()
 
@@ -2098,12 +2098,12 @@ func extractHLSTagURI(line string) string {
 	return line[start : start+end]
 }
 
-func (h *ProcessingJobHandler) sendResult(send func(*pb.ControlMessage), jobID, status, errMsg string, outputs map[string]string, outputPath string, outputSizeBytes int64) {
+func (h *ProcessingJobHandler) sendResult(send func(*ipcpb.ControlMessage), jobID, status, errMsg string, outputs map[string]string, outputPath string, outputSizeBytes int64) {
 	if send == nil {
 		return
 	}
-	send(&pb.ControlMessage{
-		Payload: &pb.ControlMessage_ProcessingJobResult{ProcessingJobResult: &pb.ProcessingJobResult{
+	send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ProcessingJobResult{ProcessingJobResult: &ipcpb.ProcessingJobResult{
 			JobId:           jobID,
 			Status:          status,
 			Error:           errMsg,

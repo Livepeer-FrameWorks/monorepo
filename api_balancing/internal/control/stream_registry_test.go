@@ -3,25 +3,24 @@ package control
 import (
 	"context"
 	"errors"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeCommodore struct {
-	resp *pb.ResolveStreamContextResponse
+	resp *commodorepb.ResolveStreamContextResponse
 	err  error
 	hits int
 }
 
-func (f *fakeCommodore) ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*pb.ResolveStreamContextResponse, error) {
+func (f *fakeCommodore) ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*commodorepb.ResolveStreamContextResponse, error) {
 	f.hits++
 	return f.resp, f.err
 }
 
-func nativeResp() *pb.ResolveStreamContextResponse {
-	return &pb.ResolveStreamContextResponse{
+func nativeResp() *commodorepb.ResolveStreamContextResponse {
+	return &commodorepb.ResolveStreamContextResponse{
 		Admitted:     true,
 		StreamId:     "stream-uuid-1",
 		PlaybackId:   "frameworks-demo",
@@ -144,7 +143,7 @@ func TestResolveSourceByPlaybackID_DifferentFromInternal(t *testing.T) {
 }
 
 func TestResolveSourceMiss_FailClosed(t *testing.T) {
-	r := NewStreamRegistry(&fakeCommodore{resp: &pb.ResolveStreamContextResponse{Admitted: false}}, "cluster-A", time.Minute)
+	r := NewStreamRegistry(&fakeCommodore{resp: &commodorepb.ResolveStreamContextResponse{Admitted: false}}, "cluster-A", time.Minute)
 	_, err := r.ResolveSourceByInternalName(context.Background(), "nonexistent")
 	if !errors.Is(err, ErrUnknownStream) {
 		t.Errorf("err = %v, want ErrUnknownStream", err)
@@ -208,7 +207,7 @@ func TestResolveSource_NilClient_FailClosed(t *testing.T) {
 
 func TestMissLogger_FiresOnMiss(t *testing.T) {
 	var gotKind, gotKey string
-	r := NewStreamRegistry(&fakeCommodore{resp: &pb.ResolveStreamContextResponse{Admitted: false}}, "cluster-A", time.Minute)
+	r := NewStreamRegistry(&fakeCommodore{resp: &commodorepb.ResolveStreamContextResponse{Admitted: false}}, "cluster-A", time.Minute)
 	r.SetMissLogger(func(_ context.Context, refKind, key string) {
 		gotKind, gotKey = refKind, key
 	})

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func TestGetChandlerBaseURLUsesExplicitOverride(t *testing.T) {
@@ -27,7 +27,7 @@ func TestGetChandlerBaseURLUsesExplicitOverride(t *testing.T) {
 	t.Setenv("CHANDLER_PORT", "9999")
 
 	localClusterID = "media-central-primary"
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("should not be called when override is set")
 	}
 
@@ -45,7 +45,7 @@ func TestGetChandlerBaseURLForClusterUsesExplicitOverride(t *testing.T) {
 	})
 
 	t.Setenv("CHANDLER_BASE_URL", "http://localhost:18090/")
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("should not resolve cluster when override is set")
 	}
 
@@ -69,8 +69,8 @@ func TestGetChandlerBaseURLDerivesPlatformDomainFromClusterMetadata(t *testing.T
 	t.Setenv("CHANDLER_PORT", "18020")
 
 	localClusterID = "media-central-primary"
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   "media-central-primary",
 			ClusterName: "Media Central Primary",
 			BaseUrl:     "frameworks.network",
@@ -81,7 +81,7 @@ func TestGetChandlerBaseURLDerivesPlatformDomainFromClusterMetadata(t *testing.T
 		t.Fatalf("expected platform-derived Chandler base URL, got %q", got)
 	}
 
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("should use cached Chandler base URL after first resolve")
 	}
 	if got := getChandlerBaseURL(); got != "https://chandler.media-central-primary.frameworks.network" {
@@ -104,8 +104,8 @@ func TestGetChandlerBaseURLNormalizesClusterBaseURL(t *testing.T) {
 	t.Setenv("CHANDLER_PORT", "18020")
 
 	localClusterID = "media-eu-1"
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   "media-eu-1",
 			ClusterName: "Media EU 1",
 			BaseUrl:     "https://frameworks.network/",
@@ -132,7 +132,7 @@ func TestGetChandlerBaseURLFallsBackToHostAndPort(t *testing.T) {
 	t.Setenv("CHANDLER_PORT", "18020")
 
 	localClusterID = "media-central-primary"
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		return nil, errors.New("quartermaster unavailable")
 	}
 
@@ -169,8 +169,8 @@ func TestGetChandlerInternalBaseURLsFallsBackToManagedPublicBase(t *testing.T) {
 	t.Setenv("CHANDLER_PORT", "")
 
 	localClusterID = "media-central-primary"
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   "media-central-primary",
 			ClusterName: "Media Central Primary",
 			BaseUrl:     "frameworks.network",
@@ -240,16 +240,16 @@ func TestGetChandlerBaseURLForCluster_DerivesPerClusterURL(t *testing.T) {
 		clearChandlerPerClusterCache()
 	})
 
-	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 		switch clusterID {
 		case "media-eu-1":
-			return &pb.InfrastructureCluster{
+			return &quartermasterpb.InfrastructureCluster{
 				ClusterId:   "media-eu-1",
 				ClusterName: "Media EU 1",
 				BaseUrl:     "frameworks.network",
 			}, nil
 		case "media-us-1":
-			return &pb.InfrastructureCluster{
+			return &quartermasterpb.InfrastructureCluster{
 				ClusterId:   "media-us-1",
 				ClusterName: "Media US 1",
 				BaseUrl:     "frameworks.network",
@@ -274,8 +274,8 @@ func TestGetChandlerBaseURLForCluster_NormalizesClusterBaseURL(t *testing.T) {
 		clearChandlerPerClusterCache()
 	})
 
-	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{
+	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   clusterID,
 			ClusterName: clusterID,
 			BaseUrl:     "https://frameworks.network/",
@@ -296,9 +296,9 @@ func TestGetChandlerBaseURLForCluster_PerClusterCachingIsolatesEntries(t *testin
 	})
 
 	calls := map[string]int{}
-	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 		calls[clusterID]++
-		return &pb.InfrastructureCluster{
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   clusterID,
 			ClusterName: clusterID,
 			BaseUrl:     "frameworks.network",
@@ -314,7 +314,7 @@ func TestGetChandlerBaseURLForCluster_PerClusterCachingIsolatesEntries(t *testin
 	}
 
 	// Re-lookup of media-eu-1 within TTL must hit cache.
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		t.Fatal("cache miss within TTL")
 		return nil, nil
 	}
@@ -335,7 +335,7 @@ func TestGetChandlerBaseURLForCluster_EmptyClusterIDReturnsEmpty(t *testing.T) {
 		clearChandlerPerClusterCache()
 	})
 
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		t.Fatal("must not call cluster lookup for empty cluster id")
 		return nil, nil
 	}
@@ -353,7 +353,7 @@ func TestGetChandlerBaseURLForCluster_LookupErrorIsNotCached(t *testing.T) {
 	})
 
 	calls := 0
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
 		calls++
 		return nil, errors.New("quartermaster down")
 	}
@@ -390,8 +390,8 @@ func TestGetChandlerBaseURLForCluster_DoesNotMutateLegacyResolvedURL(t *testing.
 	t.Setenv("CHANDLER_PORT", "18020")
 
 	localClusterID = "media-central-primary"
-	getClusterFn = func(_ context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{
+	getClusterFn = func(_ context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{
 			ClusterId:   clusterID,
 			ClusterName: clusterID,
 			BaseUrl:     "frameworks.network",

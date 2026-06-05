@@ -10,7 +10,7 @@ import (
 	"frameworks/api_realtime/internal/metrics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,7 +19,7 @@ import (
 
 // SignalmanServer implements the gRPC SignalmanService
 type SignalmanServer struct {
-	pb.UnimplementedSignalmanServiceServer
+	signalmanpb.UnimplementedSignalmanServiceServer
 	hub     *Hub
 	logger  logging.Logger
 	metrics *metrics.Metrics
@@ -28,7 +28,7 @@ type SignalmanServer struct {
 // Hub manages all connected gRPC streaming clients
 type Hub struct {
 	clients    map[*Client]bool
-	broadcast  chan *pb.SignalmanEvent
+	broadcast  chan *signalmanpb.SignalmanEvent
 	register   chan *Client
 	unregister chan *Client
 	logger     logging.Logger
@@ -40,11 +40,11 @@ type Hub struct {
 
 // Client represents a connected gRPC streaming client
 type Client struct {
-	stream   pb.SignalmanService_SubscribeServer
-	channels []pb.Channel
+	stream   signalmanpb.SignalmanService_SubscribeServer
+	channels []signalmanpb.Channel
 	userID   string
 	tenantID string
-	send     chan *pb.ServerMessage
+	send     chan *signalmanpb.ServerMessage
 	done     chan struct{}
 	logger   logging.Logger
 	mutex    sync.RWMutex
@@ -54,7 +54,7 @@ type Client struct {
 func NewSignalmanServer(logger logging.Logger, m *metrics.Metrics) *SignalmanServer {
 	hub := &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan *pb.SignalmanEvent, 256),
+		broadcast:  make(chan *signalmanpb.SignalmanEvent, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     logger,
@@ -137,26 +137,26 @@ func (h *Hub) run() {
 // redactSensitiveData removes sensitive fields from event data before broadcast.
 // Only redacts client-facing events (viewer connect/disconnect, client lifecycle, messaging content).
 // Infrastructure IPs (nodes, load balancing) are NOT redacted.
-func redactSensitiveData(event *pb.SignalmanEvent) {
+func redactSensitiveData(event *signalmanpb.SignalmanEvent) {
 	if event == nil || event.Data == nil {
 		return
 	}
 
 	switch p := event.Data.Payload.(type) {
-	case *pb.EventData_ViewerConnect:
+	case *signalmanpb.EventData_ViewerConnect:
 		if p.ViewerConnect != nil {
 			p.ViewerConnect.Host = "" // Redact client IP
 		}
-	case *pb.EventData_ViewerDisconnect:
+	case *signalmanpb.EventData_ViewerDisconnect:
 		if p.ViewerDisconnect != nil {
 			p.ViewerDisconnect.Host = "" // Redact client IP
 		}
-	case *pb.EventData_ClientLifecycle:
+	case *signalmanpb.EventData_ClientLifecycle:
 		if p.ClientLifecycle != nil {
 			p.ClientLifecycle.Host = "" // Redact client IP
 		}
 		// LoadBalancingData, NodeLifecycleUpdate - do NOT redact (infrastructure IPs)
-	case *pb.EventData_MessageLifecycle:
+	case *signalmanpb.EventData_MessageLifecycle:
 		if p.MessageLifecycle != nil {
 			p.MessageLifecycle.Content = nil
 			p.MessageLifecycle.Subject = nil
@@ -165,7 +165,7 @@ func redactSensitiveData(event *pb.SignalmanEvent) {
 }
 
 // broadcastEvent sends an event to all relevant clients
-func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
+func (h *Hub) broadcastEvent(event *signalmanpb.SignalmanEvent) {
 	if event == nil {
 		h.logger.Warn("Skipping broadcast of nil event")
 		return
@@ -185,8 +185,8 @@ func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
 			continue
 		}
 
-		msg := &pb.ServerMessage{
-			Message: &pb.ServerMessage_Event{
+		msg := &signalmanpb.ServerMessage{
+			Message: &signalmanpb.ServerMessage_Event{
 				Event: event,
 			},
 		}
@@ -218,13 +218,13 @@ func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
 }
 
 // BroadcastEvent allows external callers (e.g., Kafka consumer) to broadcast events
-func (h *Hub) BroadcastEvent(event *pb.SignalmanEvent) {
+func (h *Hub) BroadcastEvent(event *signalmanpb.SignalmanEvent) {
 	h.broadcast <- event
 }
 
 // BroadcastToTenant broadcasts an event to clients of a specific tenant
-func (h *Hub) BroadcastToTenant(tenantID string, eventType pb.EventType, channel pb.Channel, data *pb.EventData) {
-	event := &pb.SignalmanEvent{
+func (h *Hub) BroadcastToTenant(tenantID string, eventType signalmanpb.EventType, channel signalmanpb.Channel, data *signalmanpb.EventData) {
+	event := &signalmanpb.SignalmanEvent{
 		EventType: eventType,
 		Channel:   channel,
 		Data:      data,
@@ -238,28 +238,28 @@ func (h *Hub) BroadcastToTenant(tenantID string, eventType pb.EventType, channel
 }
 
 // BroadcastInfrastructure broadcasts infrastructure events (no tenant scope)
-func (h *Hub) BroadcastInfrastructure(eventType pb.EventType, data *pb.EventData) {
-	event := &pb.SignalmanEvent{
+func (h *Hub) BroadcastInfrastructure(eventType signalmanpb.EventType, data *signalmanpb.EventData) {
+	event := &signalmanpb.SignalmanEvent{
 		EventType: eventType,
-		Channel:   pb.Channel_CHANNEL_SYSTEM,
+		Channel:   signalmanpb.Channel_CHANNEL_SYSTEM,
 		Data:      data,
 		Timestamp: timestamppb.Now(),
 	}
 	if h.metrics != nil && h.metrics.EventsPublished != nil {
-		h.metrics.EventsPublished.WithLabelValues(eventType.String(), channelToString(pb.Channel_CHANNEL_SYSTEM)).Inc()
+		h.metrics.EventsPublished.WithLabelValues(eventType.String(), channelToString(signalmanpb.Channel_CHANNEL_SYSTEM)).Inc()
 	}
 	h.broadcast <- event
 }
 
 // shouldReceive determines if a client should receive an event
-func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
+func (c *Client) shouldReceive(event *signalmanpb.SignalmanEvent) bool {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	// Check channel subscription
 	subscribed := false
 	for _, ch := range c.channels {
-		if ch == event.Channel || ch == pb.Channel_CHANNEL_ALL {
+		if ch == event.Channel || ch == signalmanpb.Channel_CHANNEL_ALL {
 			subscribed = true
 			break
 		}
@@ -276,7 +276,7 @@ func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
 		}
 	} else {
 		// Infrastructure event - only send to system channel subscribers
-		if event.Channel != pb.Channel_CHANNEL_SYSTEM {
+		if event.Channel != signalmanpb.Channel_CHANNEL_SYSTEM {
 			return false
 		}
 	}
@@ -285,17 +285,17 @@ func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
 }
 
 // Subscribe implements bidirectional streaming for realtime events
-func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) error {
+func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_SubscribeServer) error {
 	ctx := stream.Context()
 	userID := ctxkeys.GetUserID(ctx)
 	tenantID := ctxkeys.GetTenantID(ctx)
 
 	client := &Client{
 		stream:   stream,
-		channels: []pb.Channel{},
+		channels: []signalmanpb.Channel{},
 		userID:   userID,
 		tenantID: tenantID,
-		send:     make(chan *pb.ServerMessage, 256),
+		send:     make(chan *signalmanpb.ServerMessage, 256),
 		done:     make(chan struct{}),
 		logger:   s.logger,
 	}
@@ -360,11 +360,11 @@ func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) 
 		}
 
 		switch m := msg.Message.(type) {
-		case *pb.ClientMessage_Subscribe:
+		case *signalmanpb.ClientMessage_Subscribe:
 			client.handleSubscribe(m.Subscribe)
-		case *pb.ClientMessage_Unsubscribe:
+		case *signalmanpb.ClientMessage_Unsubscribe:
 			client.handleUnsubscribe(m.Unsubscribe)
-		case *pb.ClientMessage_Ping:
+		case *signalmanpb.ClientMessage_Ping:
 			client.handlePing(m.Ping)
 		}
 	}
@@ -393,9 +393,9 @@ func (c *Client) sendLoop() {
 }
 
 // handleSubscribe processes a subscribe request
-func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
+func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 	c.mutex.Lock()
-	existing := make(map[pb.Channel]struct{}, len(c.channels))
+	existing := make(map[signalmanpb.Channel]struct{}, len(c.channels))
 	for _, ch := range c.channels {
 		existing[ch] = struct{}{}
 	}
@@ -406,7 +406,7 @@ func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
 		existing[ch] = struct{}{}
 		c.channels = append(c.channels, ch)
 	}
-	currentChannels := make([]pb.Channel, len(c.channels))
+	currentChannels := make([]signalmanpb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
 	c.mutex.Unlock()
 
@@ -417,9 +417,9 @@ func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
 	}).Info("Client subscribed to channels")
 
 	// Send confirmation
-	confirmation := &pb.ServerMessage{
-		Message: &pb.ServerMessage_SubscriptionConfirmed{
-			SubscriptionConfirmed: &pb.SubscriptionConfirmation{
+	confirmation := &signalmanpb.ServerMessage{
+		Message: &signalmanpb.ServerMessage_SubscriptionConfirmed{
+			SubscriptionConfirmed: &signalmanpb.SubscriptionConfirmation{
 				SubscribedChannels: currentChannels,
 			},
 		},
@@ -433,7 +433,7 @@ func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
 }
 
 // handleUnsubscribe processes an unsubscribe request
-func (c *Client) handleUnsubscribe(req *pb.UnsubscribeRequest) {
+func (c *Client) handleUnsubscribe(req *signalmanpb.UnsubscribeRequest) {
 	c.mutex.Lock()
 	// Remove channels
 	for _, toRemove := range req.Channels {
@@ -445,7 +445,7 @@ func (c *Client) handleUnsubscribe(req *pb.UnsubscribeRequest) {
 		}
 		c.channels = filtered
 	}
-	currentChannels := make([]pb.Channel, len(c.channels))
+	currentChannels := make([]signalmanpb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
 	c.mutex.Unlock()
 
@@ -455,9 +455,9 @@ func (c *Client) handleUnsubscribe(req *pb.UnsubscribeRequest) {
 	}).Info("Client unsubscribed from channels")
 
 	// Send confirmation
-	confirmation := &pb.ServerMessage{
-		Message: &pb.ServerMessage_SubscriptionConfirmed{
-			SubscriptionConfirmed: &pb.SubscriptionConfirmation{
+	confirmation := &signalmanpb.ServerMessage{
+		Message: &signalmanpb.ServerMessage_SubscriptionConfirmed{
+			SubscriptionConfirmed: &signalmanpb.SubscriptionConfirmation{
 				SubscribedChannels: currentChannels,
 			},
 		},
@@ -471,10 +471,10 @@ func (c *Client) handleUnsubscribe(req *pb.UnsubscribeRequest) {
 }
 
 // handlePing processes a ping request
-func (c *Client) handlePing(ping *pb.Ping) {
-	pong := &pb.ServerMessage{
-		Message: &pb.ServerMessage_Pong{
-			Pong: &pb.Pong{
+func (c *Client) handlePing(ping *signalmanpb.Ping) {
+	pong := &signalmanpb.ServerMessage{
+		Message: &signalmanpb.ServerMessage_Pong{
+			Pong: &signalmanpb.Pong{
 				TimestampMs: ping.TimestampMs,
 			},
 		},
@@ -488,7 +488,7 @@ func (c *Client) handlePing(ping *pb.Ping) {
 }
 
 // GetHubStats returns hub statistics
-func (s *SignalmanServer) GetHubStats(ctx context.Context, req *pb.GetHubStatsRequest) (*pb.HubStats, error) {
+func (s *SignalmanServer) GetHubStats(ctx context.Context, req *signalmanpb.GetHubStatsRequest) (*signalmanpb.HubStats, error) {
 	s.hub.mutex.RLock()
 	defer s.hub.mutex.RUnlock()
 
@@ -501,7 +501,7 @@ func (s *SignalmanServer) GetHubStats(ctx context.Context, req *pb.GetHubStatsRe
 		client.mutex.RUnlock()
 	}
 
-	return &pb.HubStats{
+	return &signalmanpb.HubStats{
 		TotalConnections:     int32(len(s.hub.clients)),
 		TotalClients:         int32(len(s.hub.clients)),
 		ChannelSubscriptions: channelStats,
@@ -510,73 +510,73 @@ func (s *SignalmanServer) GetHubStats(ctx context.Context, req *pb.GetHubStatsRe
 
 // Helper functions
 
-func channelToString(ch pb.Channel) string {
+func channelToString(ch signalmanpb.Channel) string {
 	switch ch {
-	case pb.Channel_CHANNEL_STREAMS:
+	case signalmanpb.Channel_CHANNEL_STREAMS:
 		return "streams"
-	case pb.Channel_CHANNEL_ANALYTICS:
+	case signalmanpb.Channel_CHANNEL_ANALYTICS:
 		return "analytics"
-	case pb.Channel_CHANNEL_SYSTEM:
+	case signalmanpb.Channel_CHANNEL_SYSTEM:
 		return "system"
-	case pb.Channel_CHANNEL_ALL:
+	case signalmanpb.Channel_CHANNEL_ALL:
 		return "all"
-	case pb.Channel_CHANNEL_MESSAGING:
+	case signalmanpb.Channel_CHANNEL_MESSAGING:
 		return "messaging"
-	case pb.Channel_CHANNEL_AI:
+	case signalmanpb.Channel_CHANNEL_AI:
 		return "ai"
 	default:
 		return "unknown"
 	}
 }
 
-func eventTypeToString(et pb.EventType) string {
+func eventTypeToString(et signalmanpb.EventType) string {
 	switch et {
 	// Stream events
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
 		return "stream_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
 		return "stream_track_list"
-	case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER:
 		return "stream_buffer"
-	case pb.EventType_EVENT_TYPE_STREAM_END:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_END:
 		return "stream_end"
-	case pb.EventType_EVENT_TYPE_STREAM_SOURCE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE:
 		return "stream_source"
-	case pb.EventType_EVENT_TYPE_PLAY_REWRITE:
+	case signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE:
 		return "play_rewrite"
 	// System events
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
 		return "node_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_LOAD_BALANCING:
+	case signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING:
 		return "load_balancing"
 	// Analytics events
-	case pb.EventType_EVENT_TYPE_VIEWER_CONNECT:
+	case signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT:
 		return "viewer_connect"
-	case pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
+	case signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
 		return "viewer_disconnect"
-	case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
 		return "client_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
 		return "clip_lifecycle"
-	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
 		return "dvr_lifecycle"
-	case pb.EventType_EVENT_TYPE_PUSH_REWRITE:
+	case signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE:
 		return "push_rewrite"
-	case pb.EventType_EVENT_TYPE_PUSH_OUT_START:
+	case signalmanpb.EventType_EVENT_TYPE_PUSH_OUT_START:
 		return "push_out_start"
-	case pb.EventType_EVENT_TYPE_PUSH_END:
+	case signalmanpb.EventType_EVENT_TYPE_PUSH_END:
 		return "push_end"
-	case pb.EventType_EVENT_TYPE_RECORDING_COMPLETE:
+	case signalmanpb.EventType_EVENT_TYPE_RECORDING_COMPLETE:
 		return "recording_complete"
-	case pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
 		return "storage_lifecycle"
-	case pb.EventType_EVENT_TYPE_PROCESS_BILLING:
+	case signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING:
 		return "process_billing"
-	case pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
+	case signalmanpb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		return "storage_snapshot"
-	case pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
 		return "message_lifecycle"
-	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+	case signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
 		return "skipper_investigation"
 	default:
 		return "unknown"

@@ -16,22 +16,20 @@
 # - foghorn_federation.proto: Cross-cluster federation (Foghorn ↔ Foghorn)
 # - foghorn_relay.proto: Intra-cluster HA command relay (Foghorn ↔ Foghorn)
 proto: clean
-	protoc --go_out=. \
-		--go_opt=paths=source_relative \
+	protoc -I. \
+		--go_out=. \
+		--go_opt=module=github.com/Livepeer-FrameWorks/monorepo/pkg/proto \
 		--go-grpc_out=. \
-		--go-grpc_opt=paths=source_relative \
+		--go-grpc_opt=module=github.com/Livepeer-FrameWorks/monorepo/pkg/proto \
 		common.proto shared.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn.proto foghorn_federation.proto foghorn_relay.proto deckhand.proto skipper.proto
 
-# Clean generated files
+# Clean generated files. Removes the old flat-package output at the root AND the
+# per-package subdirectory output, so a stale flat *.pb.go can never linger.
 clean:
 	rm -f *.pb.go *_grpc.pb.go
+	rm -f common/*.pb.go shared/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
 
 # Install required tools
 install-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
-
-# Generate proto and copy to legacy location for backward compatibility
-generate-all: proto
-	@echo "Proto files generated in pkg/proto/"
-	@echo "All services should import from: github.com/Livepeer-FrameWorks/monorepo/pkg/proto"

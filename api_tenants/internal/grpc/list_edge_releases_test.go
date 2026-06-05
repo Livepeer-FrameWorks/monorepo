@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -26,7 +26,7 @@ func TestListEdgeReleasesNormalizesChannelFilter(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"channel", "version", "components", "published_at"}).
 			AddRow("rc", "v1.2.3", `{}`, publishedAt))
 
-	resp, err := server.ListEdgeReleases(context.Background(), &pb.ListEdgeReleasesRequest{Channel: " RC "})
+	resp, err := server.ListEdgeReleases(context.Background(), &quartermasterpb.ListEdgeReleasesRequest{Channel: " RC "})
 	if err != nil {
 		t.Fatalf("ListEdgeReleases: %v", err)
 	}

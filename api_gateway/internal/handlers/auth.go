@@ -11,7 +11,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
@@ -77,7 +78,7 @@ func isEmailNotVerifiedLoginMessage(message string) bool {
 }
 
 // parseBehavior converts JSON behavior string to proto BehaviorData
-func parseBehavior(behaviorStr string) *pb.BehaviorData {
+func parseBehavior(behaviorStr string) *commodorepb.BehaviorData {
 	if behaviorStr == "" {
 		return nil
 	}
@@ -85,7 +86,7 @@ func parseBehavior(behaviorStr string) *pb.BehaviorData {
 	if err := json.Unmarshal([]byte(behaviorStr), &b); err != nil {
 		return nil
 	}
-	return &pb.BehaviorData{
+	return &commodorepb.BehaviorData{
 		FormShownAt: b.FormShownAt,
 		SubmittedAt: b.SubmittedAt,
 		Mouse:       b.Mouse,
@@ -128,7 +129,7 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.Login(c.Request.Context(), &pb.LoginRequest{
+		resp, err := h.commodore.Login(c.Request.Context(), &commodorepb.LoginRequest{
 			Email:          req.Email,
 			Password:       req.Password,
 			TurnstileToken: req.TurnstileToken,
@@ -232,7 +233,7 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 			referralCode = c.Query("ref")
 		}
 
-		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature, attribution.Enrich(c.Request, &pb.SignupAttribution{
+		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature, attribution.Enrich(c.Request, &commonpb.SignupAttribution{
 			SignupChannel: "wallet",
 			SignupMethod:  "wallet_ethereum",
 			UtmSource:     utmSource,
@@ -337,7 +338,7 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 		if referralCode == "" {
 			referralCode = c.Query("ref")
 		}
-		resp, err := h.commodore.Register(c.Request.Context(), &pb.RegisterRequest{
+		resp, err := h.commodore.Register(c.Request.Context(), &commodorepb.RegisterRequest{
 			Email:          req.Email,
 			Password:       req.Password,
 			FirstName:      req.FirstName,
@@ -346,7 +347,7 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 			TurnstileToken: req.TurnstileToken,
 			HumanCheck:     req.HumanCheck,
 			Behavior:       parseBehavior(req.Behavior),
-			Attribution: attribution.Enrich(c.Request, &pb.SignupAttribution{
+			Attribution: attribution.Enrich(c.Request, &commonpb.SignupAttribution{
 				SignupChannel: "web",
 				SignupMethod:  "email_password",
 				UtmSource:     utmSource,
@@ -596,7 +597,7 @@ func (h *AuthHandlers) AuthorizeComplete() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.CompleteAuthorization(c.Request.Context(), &pb.CompleteAuthorizationRequest{
+		resp, err := h.commodore.CompleteAuthorization(c.Request.Context(), &commodorepb.CompleteAuthorizationRequest{
 			ClientId:            req.ClientID,
 			RedirectUri:         req.RedirectURI,
 			CodeChallenge:       req.CodeChallenge,
@@ -647,7 +648,7 @@ func (h *AuthHandlers) OAuthToken() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.ExchangeAuthorizationCode(c.Request.Context(), &pb.ExchangeAuthorizationCodeRequest{
+		resp, err := h.commodore.ExchangeAuthorizationCode(c.Request.Context(), &commodorepb.ExchangeAuthorizationCodeRequest{
 			Code:         req.Code,
 			CodeVerifier: req.CodeVerifier,
 			ClientId:     req.ClientID,
@@ -694,7 +695,7 @@ func (h *AuthHandlers) DeviceStart() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.StartDeviceAuthorization(c.Request.Context(), &pb.StartDeviceAuthorizationRequest{
+		resp, err := h.commodore.StartDeviceAuthorization(c.Request.Context(), &commodorepb.StartDeviceAuthorizationRequest{
 			ClientId: req.ClientID,
 			Scope:    req.Scope,
 		})
@@ -738,7 +739,7 @@ func (h *AuthHandlers) DevicePoll() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.PollDeviceAuthorization(c.Request.Context(), &pb.PollDeviceAuthorizationRequest{
+		resp, err := h.commodore.PollDeviceAuthorization(c.Request.Context(), &commodorepb.PollDeviceAuthorizationRequest{
 			DeviceCode: req.DeviceCode,
 			ClientId:   req.ClientID,
 		})
@@ -788,7 +789,7 @@ func (h *AuthHandlers) DeviceLookup() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.LookupDeviceAuthorization(c.Request.Context(), &pb.LookupDeviceAuthorizationRequest{
+		resp, err := h.commodore.LookupDeviceAuthorization(c.Request.Context(), &commodorepb.LookupDeviceAuthorizationRequest{
 			UserCode: req.UserCode,
 		})
 		if err != nil {
@@ -836,7 +837,7 @@ func (h *AuthHandlers) DeviceApprove() gin.HandlerFunc {
 			return
 		}
 
-		resp, err := h.commodore.ApproveDeviceAuthorization(c.Request.Context(), &pb.ApproveDeviceAuthorizationRequest{
+		resp, err := h.commodore.ApproveDeviceAuthorization(c.Request.Context(), &commodorepb.ApproveDeviceAuthorizationRequest{
 			UserCode: req.UserCode,
 		})
 		if err != nil {
@@ -944,7 +945,7 @@ func (h *AuthHandlers) UpdateMe() gin.HandlerFunc {
 			return
 		}
 
-		pbReq := &pb.UpdateMeRequest{}
+		pbReq := &commodorepb.UpdateMeRequest{}
 		if req.FirstName != nil {
 			pbReq.FirstName = req.FirstName
 		}
@@ -1008,7 +1009,7 @@ func (h *AuthHandlers) GetNewsletterStatus() gin.HandlerFunc {
 }
 
 // userToJSON converts a proto User to a JSON-friendly map
-func userToJSON(u *pb.User) map[string]any {
+func userToJSON(u *commodorepb.User) map[string]any {
 	if u == nil {
 		return nil
 	}

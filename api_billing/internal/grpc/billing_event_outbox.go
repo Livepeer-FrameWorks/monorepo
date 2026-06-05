@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -61,10 +61,10 @@ func (s *PurserServer) EnqueueBillingEventTx(
 		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	},
 	eventType, tenantID, userID, resourceType, resourceID string,
-	payload *pb.BillingEvent,
+	payload *ipcpb.BillingEvent,
 ) (string, error) {
 	if payload == nil {
-		payload = &pb.BillingEvent{}
+		payload = &ipcpb.BillingEvent{}
 	}
 	if payload.TenantId == "" {
 		payload.TenantId = tenantID
@@ -91,7 +91,7 @@ func (s *PurserServer) EnqueueBillingEventTx(
 func (s *PurserServer) enqueueBillingEvent(
 	ctx context.Context,
 	eventType, tenantID, userID, resourceType, resourceID string,
-	payload *pb.BillingEvent,
+	payload *ipcpb.BillingEvent,
 ) {
 	if s.db == nil || tenantID == "" {
 		return
@@ -254,7 +254,7 @@ func (s *PurserServer) dispatchBillingOutboxRow(ctx context.Context, row billing
 	if s.decklogClient == nil {
 		return nil, errors.New("decklog client not configured")
 	}
-	payload := &pb.BillingEvent{}
+	payload := &ipcpb.BillingEvent{}
 	if len(row.billingJSON) > 0 {
 		if err := protojson.Unmarshal(row.billingJSON, payload); err != nil {
 			return nil, fmt.Errorf("unmarshal billing event payload: %w", err)
@@ -263,7 +263,7 @@ func (s *PurserServer) dispatchBillingOutboxRow(ctx context.Context, row billing
 	if payload.TenantId == "" {
 		payload.TenantId = row.tenantID
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    row.eventType,
 		Timestamp:    timestamppb.New(row.createdAt),
 		Source:       "purser",
@@ -271,7 +271,7 @@ func (s *PurserServer) dispatchBillingOutboxRow(ctx context.Context, row billing
 		UserId:       row.userID,
 		ResourceType: row.resourceType,
 		ResourceId:   row.resourceID,
-		Payload:      &pb.ServiceEvent_BillingEvent{BillingEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_BillingEvent{BillingEvent: payload},
 	}
 	_ = ctx // decklog client manages its own context via authContext()
 	if err := s.decklogClient.SendServiceEvent(event); err != nil {

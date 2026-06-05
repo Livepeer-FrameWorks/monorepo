@@ -15,7 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -148,7 +148,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "periscope-query",
 			Version:        version.Version,
 			Protocol:       "http",

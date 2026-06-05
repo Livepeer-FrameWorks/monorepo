@@ -7,7 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Reserved FrameWorks Mist stream tags. MistServer treats `tags` on a stream
@@ -186,15 +186,15 @@ func mistEntryToSnapshot(entry map[string]interface{}) managedStreamLocalSnapsho
 // after its own restart — without this, a Foghorn restart followed by a
 // DB-row removal would leave the Mist config in place forever (the
 // reconciler's retract diff would never see the stream).
-func snapshotAppliedManagedStreamsForRegister() []*pb.AppliedManagedStream {
+func snapshotAppliedManagedStreamsForRegister() []*ipcpb.AppliedManagedStream {
 	appliedManagedStreams.Lock()
 	defer appliedManagedStreams.Unlock()
 	if len(appliedManagedStreams.m) == 0 {
 		return nil
 	}
-	out := make([]*pb.AppliedManagedStream, 0, len(appliedManagedStreams.m))
+	out := make([]*ipcpb.AppliedManagedStream, 0, len(appliedManagedStreams.m))
 	for name, snap := range appliedManagedStreams.m {
-		out = append(out, &pb.AppliedManagedStream{
+		out = append(out, &ipcpb.AppliedManagedStream{
 			Name:       name,
 			Source:     snap.source,
 			AlwaysOn:   snap.alwaysOn,
@@ -209,7 +209,7 @@ func snapshotAppliedManagedStreamsForRegister() []*pb.AppliedManagedStream {
 // Foghorn's ApplyManagedStream command. Idempotent: a re-Apply with
 // identical fields is a no-op. A change in any field triggers AddStreams
 // (which Mist treats as a replace).
-func handleApplyManagedStream(logger logging.Logger, req *pb.ApplyManagedStream) {
+func handleApplyManagedStream(logger logging.Logger, req *ipcpb.ApplyManagedStream) {
 	if req == nil || req.GetName() == "" || req.GetSource() == "" {
 		return
 	}
@@ -294,7 +294,7 @@ func handleApplyManagedStream(logger logging.Logger, req *pb.ApplyManagedStream)
 // only deletes streams the sidecar previously Applied. A Retract for an
 // unknown name is silently ignored — protects tenant push/pull streams from
 // any stale or spoofed Retract.
-func handleRetractManagedStream(logger logging.Logger, req *pb.RetractManagedStream) {
+func handleRetractManagedStream(logger logging.Logger, req *ipcpb.RetractManagedStream) {
 	if req == nil || req.GetName() == "" {
 		return
 	}

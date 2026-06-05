@@ -11,12 +11,11 @@ import (
 	"strings"
 	"time"
 
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const (
@@ -54,7 +53,7 @@ type signedBundleClaims struct {
 // playback_policy_invalidation_outbox with the minimum-acceptable
 // bundle_version in internal_names. Foghorn's cache watermark bumps to that
 // value on receipt, invalidating prior bundles.
-func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *pb.GetSignedPolicyBundleRequest) (*pb.GetSignedPolicyBundleResponse, error) {
+func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commodorepb.GetSignedPolicyBundleRequest) (*commodorepb.GetSignedPolicyBundleResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	streamID := strings.TrimSpace(req.GetStreamId())
 	if tenantID == "" {
@@ -123,8 +122,8 @@ func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *pb.Get
 		return nil, status.Errorf(codes.Internal, "persist bundle: %v", err)
 	}
 
-	return &pb.GetSignedPolicyBundleResponse{
-		Bundle: &pb.SignedPolicyBundle{
+	return &commodorepb.GetSignedPolicyBundleResponse{
+		Bundle: &commodorepb.SignedPolicyBundle{
 			BundleJwt:     bundleJWT,
 			BundleVersion: bundleVersion,
 			IssuedAt:      timestamppb.New(issuedAt),

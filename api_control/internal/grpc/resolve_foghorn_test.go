@@ -8,7 +8,8 @@ import (
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -203,7 +204,7 @@ func TestResolveFoghornForTenant_EmptyAddr_EvictsAndRetries(t *testing.T) {
 
 func TestNormalizeClusterRoute_FallbacksForLegacyQuartermaster(t *testing.T) {
 	route := &clusterRoute{
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer", FoghornGrpcAddr: "foghorn-peer:50051"},
 		},
 	}
@@ -235,7 +236,7 @@ func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	}
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
-	_, err := server.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{ContentId: "stream-1"})
+	_, err := server.ResolveViewerEndpoint(ctx, &sharedpb.ViewerEndpointRequest{ContentId: "stream-1"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -268,7 +269,7 @@ func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "demo-media",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "peer-media", FoghornGrpcAddr: "foghorn-peer:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -401,7 +402,7 @@ func TestResolveAddrFromRoute_PeerCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "foghorn-primary:50051",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 			{ClusterId: "cluster-peer-2", FoghornGrpcAddr: "foghorn-peer2:50051"},
 		},
@@ -416,7 +417,7 @@ func TestResolveAddrFromRoute_PrimaryWithoutAddrFallsBackToPeers(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "cluster-primary", FoghornGrpcAddr: "foghorn-primary-from-peer:50051"},
 		},
 	}
@@ -430,7 +431,7 @@ func TestResolveAddrFromRoute_UnknownCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "foghorn-primary:50051",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 		},
 	}
@@ -449,7 +450,7 @@ func TestResolveFoghornForCluster_CacheHit(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -480,7 +481,7 @@ func TestResolveFoghornForCluster_EvictsOnMiss(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -541,7 +542,7 @@ func TestResolveFoghornForArtifact_RoutesToOriginCluster(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "cluster-origin", FoghornGrpcAddr: "foghorn-origin:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -572,7 +573,7 @@ func TestResolveIngestEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	}
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
-	_, err := server.ResolveIngestEndpoint(ctx, &pb.IngestEndpointRequest{StreamKey: "sk_test"})
+	_, err := server.ResolveIngestEndpoint(ctx, &sharedpb.IngestEndpointRequest{StreamKey: "sk_test"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -593,7 +594,7 @@ func TestResolveIngestEndpoint_UnauthenticatedRequiresStreamKey(t *testing.T) {
 		logger: logrus.New(),
 	}
 
-	_, err := server.ResolveIngestEndpoint(context.Background(), &pb.IngestEndpointRequest{})
+	_, err := server.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

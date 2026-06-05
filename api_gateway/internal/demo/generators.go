@@ -13,7 +13,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,10 +49,10 @@ const (
 )
 
 // GenerateStreams creates realistic demo stream data
-func GenerateStreams() []*pb.Stream {
+func GenerateStreams() []*commodorepb.Stream {
 	now := time.Now()
 
-	return []*pb.Stream{
+	return []*commodorepb.Stream{
 		{
 			StreamId:       DemoStreamID,
 			InternalName:   DemoStreamInternal,
@@ -122,14 +129,14 @@ func GenerateStreams() []*pb.Stream {
 }
 
 // GenerateStreamAnalyticsSummary creates MV-backed range aggregates for demo mode.
-func GenerateStreamAnalyticsSummary(streamID string) *pb.StreamAnalyticsSummary {
+func GenerateStreamAnalyticsSummary(streamID string) *periscopepb.StreamAnalyticsSummary {
 	now := time.Now()
 	start := now.Add(-7 * 24 * time.Hour)
 
-	return &pb.StreamAnalyticsSummary{
+	return &periscopepb.StreamAnalyticsSummary{
 		TenantId:  DemoTenantID,
 		StreamId:  streamID,
-		TimeRange: &pb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(now)},
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(now)},
 
 		RangeAvgViewers:            42.3,
 		RangePeakConcurrentViewers: 128,
@@ -149,7 +156,7 @@ func GenerateStreamAnalyticsSummary(streamID string) *pb.StreamAnalyticsSummary 
 		RangeRebufferCount:         53,
 		RangeIssueCount:            18,
 		RangeBufferDryCount:        9,
-		RangeQuality: &pb.QualityTierSummary{
+		RangeQuality: &periscopepb.QualityTierSummary{
 			Tier_2160PMinutes: 15,
 			Tier_1440PMinutes: 130,
 			Tier_1080PMinutes: 780,
@@ -167,7 +174,7 @@ func GenerateStreamAnalyticsSummary(streamID string) *pb.StreamAnalyticsSummary 
 // GenerateStreamAnalyticsSummariesConnection creates demo stream summaries for bulk queries
 func GenerateStreamAnalyticsSummariesConnection() *model.StreamAnalyticsSummaryConnection {
 	streamIDs := []string{"demo_stream_001", "demo_stream_002", "demo_stream_003", "demo_stream_004", "demo_stream_005"}
-	summaries := make([]*pb.StreamAnalyticsSummary, len(streamIDs))
+	summaries := make([]*periscopepb.StreamAnalyticsSummary, len(streamIDs))
 	edges := make([]*model.StreamAnalyticsSummaryEdge, len(streamIDs))
 
 	for i, id := range streamIDs {
@@ -199,15 +206,15 @@ func GenerateStreamAnalyticsSummariesConnection() *model.StreamAnalyticsSummaryC
 }
 
 // GenerateViewerCountTimeSeries creates demo time-bucketed viewer counts for charts
-func GenerateViewerCountTimeSeries() []*pb.ViewerCountBucket {
+func GenerateViewerCountTimeSeries() []*periscopepb.ViewerCountBucket {
 	now := time.Now()
-	buckets := make([]*pb.ViewerCountBucket, 24)
+	buckets := make([]*periscopepb.ViewerCountBucket, 24)
 
 	// Simulate viewer count over last 24 buckets (5 min each = 2 hours)
 	viewerCounts := []int32{12, 15, 23, 34, 45, 67, 89, 85, 78, 92, 87, 76, 65, 58, 71, 69, 54, 47, 39, 31, 28, 35, 42, 55}
 
 	for i, count := range viewerCounts {
-		buckets[i] = &pb.ViewerCountBucket{
+		buckets[i] = &periscopepb.ViewerCountBucket{
 			Timestamp:   timestamppb.New(now.Add(-time.Duration(23-i) * 5 * time.Minute)),
 			ViewerCount: count,
 			StreamId:    "demo_live_stream_001",
@@ -218,8 +225,8 @@ func GenerateViewerCountTimeSeries() []*pb.ViewerCountBucket {
 }
 
 // GenerateBillingTiers creates demo billing tier data
-func GenerateBillingTiers() []*pb.BillingTier {
-	tiers := []*pb.BillingTier{
+func GenerateBillingTiers() []*purserpb.BillingTier {
+	tiers := []*purserpb.BillingTier{
 		{
 			Id:          "tier_demo_payg",
 			TierName:    "payg",
@@ -227,7 +234,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "Prepaid pay-as-you-go pricing with no included usage.",
 			BasePrice:   0.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:    true,
 				Analytics:    true,
 				ApiAccess:    true,
@@ -246,13 +253,13 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "Self-hosted with Livepeer transcoding. Watermarked player, no SLA.",
 			BasePrice:   0.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:    false,
 				Analytics:    true,
 				ApiAccess:    true,
 				SupportLevel: "community",
 			},
-			PricingRules: []*pb.PricingRule{},
+			PricingRules: []*purserpb.PricingRule{},
 			Entitlements: map[string]string{"recording_retention_days": "30"},
 			TierLevel:    1,
 			IsActive:     true,
@@ -265,7 +272,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "120K delivered minutes, hosted load balancing, custom subdomain.",
 			BasePrice:   79.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:    true,
 				Analytics:    true,
 				ApiAccess:    true,
@@ -284,7 +291,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "500K delivered minutes, priority processing, team features, advanced analytics.",
 			BasePrice:   249.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:    true,
 				Analytics:    true,
 				ApiAccess:    true,
@@ -303,7 +310,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "2M delivered minutes, dedicated processing capacity, 24/7 support and SLA.",
 			BasePrice:   999.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
 				ApiAccess:      true,
@@ -324,7 +331,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 			Description: "Custom capacity, private deployments, dedicated support, custom SLAs.",
 			BasePrice:   0.00,
 			Currency:    "EUR",
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
 				CustomBranding: true,
@@ -332,7 +339,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 				SupportLevel:   "dedicated",
 				Sla:            true,
 			},
-			PricingRules: []*pb.PricingRule{},
+			PricingRules: []*purserpb.PricingRule{},
 			Entitlements: map[string]string{},
 			TierLevel:    5,
 			IsActive:     true,
@@ -345,7 +352,7 @@ func GenerateBillingTiers() []*pb.BillingTier {
 	return tiers
 }
 
-func setDemoBillingTierProcesses(tier *pb.BillingTier) {
+func setDemoBillingTierProcesses(tier *purserpb.BillingTier) {
 	tier.ProcessesLive = demoProcessesLive
 	tier.ProcessesDvr = demoProcessesDVR
 	tier.ProcessesClip = demoProcessesClip
@@ -354,7 +361,7 @@ func setDemoBillingTierProcesses(tier *pb.BillingTier) {
 }
 
 // GenerateInvoices creates demo invoice data
-func GenerateInvoices() []*pb.Invoice {
+func GenerateInvoices() []*purserpb.Invoice {
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
@@ -394,7 +401,7 @@ func GenerateInvoices() []*pb.Invoice {
 		},
 	})
 
-	return []*pb.Invoice{
+	return []*purserpb.Invoice{
 		{
 			Id:                   "inv_demo_current_001",
 			TenantId:             DemoTenantID,
@@ -446,7 +453,7 @@ func GenerateInvoices() []*pb.Invoice {
 }
 
 // GenerateInvoicePreview creates a demo draft invoice for the current period
-func GenerateInvoicePreview() *pb.Invoice {
+func GenerateInvoicePreview() *purserpb.Invoice {
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
@@ -465,7 +472,7 @@ func GenerateInvoicePreview() *pb.Invoice {
 		},
 	})
 
-	return &pb.Invoice{
+	return &purserpb.Invoice{
 		Id:                   "inv_demo_draft_0001",
 		TenantId:             DemoTenantID,
 		Amount:               249.71,
@@ -491,11 +498,11 @@ func GenerateInvoicePreview() *pb.Invoice {
 }
 
 // GenerateLiveUsageSummary creates demo live usage summary with per-codec breakdown
-func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
+func GenerateLiveUsageSummary() *periscopepb.LiveUsageSummary {
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
-	return &pb.LiveUsageSummary{
+	return &periscopepb.LiveUsageSummary{
 		TenantId:    "00000000-0000-0000-0000-000000000001",
 		PeriodStart: timestamppb.New(periodStart),
 		PeriodEnd:   timestamppb.New(now),
@@ -536,7 +543,7 @@ func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
 		// Geo enrichment
 		UniqueCountries: 7,
 		UniqueCities:    42,
-		GeoBreakdown: []*pb.CountryMetric{
+		GeoBreakdown: []*periscopepb.CountryMetric{
 			{CountryCode: "US", ViewerCount: 520, ViewerHours: 185.2, EgressGb: 62.4},
 			{CountryCode: "GB", ViewerCount: 180, ViewerHours: 68.5, EgressGb: 24.1},
 			{CountryCode: "DE", ViewerCount: 145, ViewerHours: 52.3, EgressGb: 18.7},
@@ -571,13 +578,13 @@ func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
 }
 
 // GenerateBillingStatus creates demo billing status
-func GenerateBillingStatus() *pb.BillingStatusResponse {
+func GenerateBillingStatus() *purserpb.BillingStatusResponse {
 	now := time.Now()
 	nextBilling := now.Add(18 * 24 * time.Hour)
 
-	return &pb.BillingStatusResponse{
+	return &purserpb.BillingStatusResponse{
 		TenantId: DemoTenantID,
-		Subscription: &pb.TenantSubscription{
+		Subscription: &purserpb.TenantSubscription{
 			Id:                 "sub_demo_123",
 			TenantId:           DemoTenantID,
 			TierId:             "tier_demo_developer",
@@ -591,9 +598,9 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			UpdatedAt:          timestamppb.Now(),
 			// Demo subscriptions leave per-tenant overrides empty so the tier's
 			// own pricing rules and entitlements apply.
-			PricingOverrides:     []*pb.PricingRule{},
+			PricingOverrides:     []*purserpb.PricingRule{},
 			EntitlementOverrides: map[string]string{},
-			CustomFeatures: &pb.BillingFeatures{
+			CustomFeatures: &purserpb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
 				CustomBranding: true,
@@ -602,7 +609,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 				Sla:            true,
 			},
 		},
-		Tier: &pb.BillingTier{
+		Tier: &purserpb.BillingTier{
 			Id:            "tier_demo_developer",
 			TierName:      "developer",
 			DisplayName:   "Developer",
@@ -612,7 +619,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			BillingPeriod: "monthly",
 			PricingRules:  demoPricingRulesForTier("developer"),
 			Entitlements:  map[string]string{"recording_retention_days": "0"},
-			Features: &pb.BillingFeatures{
+			Features: &purserpb.BillingFeatures{
 				Recording:      true,
 				Analytics:      true,
 				CustomBranding: true,
@@ -638,15 +645,15 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 		NextBillingDate:   timestamppb.New(nextBilling),
 		OutstandingAmount: 0.00,
 		Currency:          "EUR",
-		PendingInvoices:   []*pb.Invoice{}, // Empty slice
-		RecentPayments:    []*pb.Payment{}, // Empty slice
+		PendingInvoices:   []*purserpb.Invoice{}, // Empty slice
+		RecentPayments:    []*purserpb.Payment{}, // Empty slice
 		PaymentMethods:    []string{"card", "crypto_usdc", "crypto_eth"},
 	}
 }
 
 // GenerateUsageRecords creates demo usage records
 // Usage types must match what frontend expects and what Purser stores
-func GenerateUsageRecords() []*pb.UsageRecord {
+func GenerateUsageRecords() []*purserpb.UsageRecord {
 	now := time.Now()
 
 	// Define usage type data: type name, value, unit for details
@@ -672,7 +679,7 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		}},
 	}
 
-	records := make([]*pb.UsageRecord, len(usageData))
+	records := make([]*purserpb.UsageRecord, len(usageData))
 
 	for i, data := range usageData {
 		// Build usage details as structpb.Struct
@@ -693,7 +700,7 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 
 		periodStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Duration(i) * time.Hour)
 		periodEnd := periodStart.Add(time.Hour)
-		records[i] = &pb.UsageRecord{
+		records[i] = &purserpb.UsageRecord{
 			Id:           "usage_demo_" + now.Format("20060102") + "_" + data.usageType,
 			TenantId:     "00000000-0000-0000-0000-000000000001",
 			ClusterId:    "cluster_demo_us_west",
@@ -712,10 +719,10 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 }
 
 // GenerateDeveloperTokens creates demo API tokens
-func GenerateDeveloperTokens() []*pb.APITokenInfo {
+func GenerateDeveloperTokens() []*commodorepb.APITokenInfo {
 	now := time.Now()
 
-	return []*pb.APITokenInfo{
+	return []*commodorepb.APITokenInfo{
 		{
 			Id:          "token_demo_production",
 			TokenName:   "Production API Access",
@@ -747,11 +754,11 @@ func GenerateDeveloperTokens() []*pb.APITokenInfo {
 }
 
 // GenerateStreamKeys creates demo stream key data
-func GenerateStreamKeys(streamID string) []*pb.StreamKey {
+func GenerateStreamKeys(streamID string) []*commodorepb.StreamKey {
 	now := time.Now()
 	lastUsed1 := now.Add(-1 * time.Hour)
 	lastUsed2 := now.Add(-3 * 24 * time.Hour)
-	return []*pb.StreamKey{
+	return []*commodorepb.StreamKey{
 		{
 			Id:         "sk_demo_1",
 			TenantId:   "tenant_demo_1",
@@ -780,9 +787,9 @@ func GenerateStreamKeys(streamID string) []*pb.StreamKey {
 }
 
 // GenerateTenant creates demo tenant data
-func GenerateTenant() *pb.Tenant {
+func GenerateTenant() *quartermasterpb.Tenant {
 	now := time.Now()
-	return &pb.Tenant{
+	return &quartermasterpb.Tenant{
 		Id:                    "00000000-0000-0000-0000-000000000001",
 		Name:                  "FrameWorks Demo Organization",
 		Subdomain:             stringPtr("demo"),
@@ -799,10 +806,10 @@ func GenerateTenant() *pb.Tenant {
 }
 
 // GeneratePlatformOverview creates demo platform metrics
-func GeneratePlatformOverview() *pb.GetPlatformOverviewResponse {
+func GeneratePlatformOverview() *periscopepb.GetPlatformOverviewResponse {
 	now := time.Now()
 
-	return &pb.GetPlatformOverviewResponse{
+	return &periscopepb.GetPlatformOverviewResponse{
 		TenantId:              "00000000-0000-0000-0000-000000000001",
 		TotalStreams:          42,
 		ActiveStreams:         7,
@@ -821,7 +828,7 @@ func GeneratePlatformOverview() *pb.GetPlatformOverviewResponse {
 		IngestHours:           284.5,         // Same as StreamHours (alias)
 		PeakConcurrentViewers: 89,            // Max concurrent viewers at any instant
 		TotalViews:            8734,          // Total view sessions started
-		TimeRange:             &pb.TimeRange{Start: timestamppb.New(now.Add(-24 * time.Hour)), End: timestamppb.New(now)},
+		TimeRange:             &commonpb.TimeRange{Start: timestamppb.New(now.Add(-24 * time.Hour)), End: timestamppb.New(now)},
 	}
 }
 
@@ -884,9 +891,8 @@ func GenerateStreamEvents() []*model.StreamEvent {
 }
 
 // GenerateViewerMetricsEvents creates demo viewer metrics for subscription
-// ViewerMetrics is now bound to proto.ClientLifecycleUpdate
-func GenerateViewerMetricsEvents() []*pb.ClientLifecycleUpdate {
-	return []*pb.ClientLifecycleUpdate{
+func GenerateViewerMetricsEvents() []*ipcpb.ClientLifecycleUpdate {
+	return []*ipcpb.ClientLifecycleUpdate{
 		{
 			NodeId:          "node_demo_us_west_01",
 			InternalName:    "demo_live_stream_001",
@@ -917,9 +923,9 @@ func GenerateViewerMetricsEvents() []*pb.ClientLifecycleUpdate {
 }
 
 // GenerateConnectionEventSubscriptionEvents creates demo viewer connection events for subscription
-func GenerateConnectionEventSubscriptionEvents() []*pb.ConnectionEvent {
+func GenerateConnectionEventSubscriptionEvents() []*periscopepb.ConnectionEvent {
 	now := time.Now()
-	return []*pb.ConnectionEvent{
+	return []*periscopepb.ConnectionEvent{
 		{
 			EventId:        "conn_demo_001",
 			Timestamp:      timestamppb.New(now.Add(-5 * time.Second)),
@@ -956,9 +962,9 @@ func GenerateConnectionEventSubscriptionEvents() []*pb.ConnectionEvent {
 }
 
 // GenerateStorageEventSubscriptionEvents creates demo storage lifecycle events for subscription
-func GenerateStorageEventSubscriptionEvents() []*pb.StorageEvent {
+func GenerateStorageEventSubscriptionEvents() []*periscopepb.StorageEvent {
 	now := time.Now()
-	return []*pb.StorageEvent{
+	return []*periscopepb.StorageEvent{
 		{
 			Id:        "storage_demo_001",
 			Timestamp: timestamppb.New(now.Add(-30 * time.Second)),
@@ -991,9 +997,9 @@ func GenerateStorageEventSubscriptionEvents() []*pb.StorageEvent {
 }
 
 // GenerateProcessingEventSubscriptionEvents creates demo processing events for subscription
-func GenerateProcessingEventSubscriptionEvents() []*pb.ProcessingUsageRecord {
+func GenerateProcessingEventSubscriptionEvents() []*periscopepb.ProcessingUsageRecord {
 	now := time.Now()
-	return []*pb.ProcessingUsageRecord{
+	return []*periscopepb.ProcessingUsageRecord{
 		{
 			Id:            "process_demo_001",
 			Timestamp:     timestamppb.New(now.Add(-10 * time.Second)),
@@ -1024,12 +1030,11 @@ func GenerateProcessingEventSubscriptionEvents() []*pb.ProcessingUsageRecord {
 }
 
 // GenerateTrackListEvents creates demo track list events for subscription
-// TrackListEvent is now bound to proto.StreamTrackListTrigger
-func GenerateTrackListEvents() []*pb.StreamTrackListTrigger {
-	return []*pb.StreamTrackListTrigger{
+func GenerateTrackListEvents() []*ipcpb.StreamTrackListTrigger {
+	return []*ipcpb.StreamTrackListTrigger{
 		{
 			StreamName: "demo_live_stream_001",
-			Tracks: []*pb.StreamTrack{
+			Tracks: []*ipcpb.StreamTrack{
 				{
 					TrackName:   "video_main",
 					TrackType:   "video",
@@ -1057,7 +1062,7 @@ func GenerateTrackListEvents() []*pb.StreamTrackListTrigger {
 		},
 		{
 			StreamName: "demo_live_stream_001",
-			Tracks: []*pb.StreamTrack{
+			Tracks: []*ipcpb.StreamTrack{
 				{
 					TrackName:   "video_main",
 					TrackType:   "video",
@@ -1095,13 +1100,12 @@ func GenerateTrackListEvents() []*pb.StreamTrackListTrigger {
 }
 
 // GenerateSystemHealthEvents creates demo system health events for subscription
-// SystemHealthEvent is now bound to proto.NodeLifecycleUpdate
-func GenerateSystemHealthEvents() []*pb.NodeLifecycleUpdate {
+func GenerateSystemHealthEvents() []*ipcpb.NodeLifecycleUpdate {
 	ramMax := uint64(16 * 1024 * 1024 * 1024)
 	shmTotal := uint64(4 * 1024 * 1024 * 1024)
 	diskTotal := uint64(1000 * 1024 * 1024 * 1024)
 
-	return []*pb.NodeLifecycleUpdate{
+	return []*ipcpb.NodeLifecycleUpdate{
 		{
 			NodeId:         "node_demo_us_west_01",
 			CpuTenths:      652, // 65.2%
@@ -1144,9 +1148,9 @@ func GenerateSystemHealthEvents() []*pb.NodeLifecycleUpdate {
 }
 
 // GenerateStreamHealthMetrics creates demo stream health metrics
-func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
+func GenerateStreamHealthMetrics() []*periscopepb.StreamHealthMetric {
 	now := time.Now()
-	metrics := make([]*pb.StreamHealthMetric, 0, 50)
+	metrics := make([]*periscopepb.StreamHealthMetric, 0, 50)
 
 	// Base values
 	videoWidth := int32(1920)
@@ -1187,7 +1191,7 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 		videoBitrate := bitrateVal
 		hasIssues := bufferState != "FULL"
 
-		tracks := []*pb.StreamTrack{
+		tracks := []*ipcpb.StreamTrack{
 			{
 				TrackName:   "video_main",
 				TrackType:   "video",
@@ -1208,7 +1212,7 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 			},
 		}
 
-		metric := &pb.StreamHealthMetric{
+		metric := &periscopepb.StreamHealthMetric{
 			Timestamp:              timestamppb.New(ts),
 			StreamId:               DemoStreamID,
 			TenantId:               "00000000-0000-0000-0000-000000000001",
@@ -1244,11 +1248,11 @@ func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 }
 
 // GenerateViewerTimeSeries creates demo viewer count time series data for charts
-func GenerateViewerTimeSeries() []*pb.ViewerCountBucket {
+func GenerateViewerTimeSeries() []*periscopepb.ViewerCountBucket {
 	now := time.Now()
 	// Generate 288 data points (24 hours * 12 per hour) at 5-minute intervals
 	totalPoints := 288
-	buckets := make([]*pb.ViewerCountBucket, 0, totalPoints)
+	buckets := make([]*periscopepb.ViewerCountBucket, 0, totalPoints)
 
 	baseViewers := 150.0
 
@@ -1274,7 +1278,7 @@ func GenerateViewerTimeSeries() []*pb.ViewerCountBucket {
 			viewers = 5
 		}
 
-		buckets = append(buckets, &pb.ViewerCountBucket{
+		buckets = append(buckets, &periscopepb.ViewerCountBucket{
 			Timestamp:   timestamppb.New(ts),
 			ViewerCount: int32(viewers),
 			StreamId:    "demo_live_stream_001",
@@ -1285,10 +1289,10 @@ func GenerateViewerTimeSeries() []*pb.ViewerCountBucket {
 }
 
 // GenerateViewerGeographics creates realistic demo viewer geographic data
-func GenerateViewerGeographics() []*pb.ConnectionEvent {
+func GenerateViewerGeographics() []*periscopepb.ConnectionEvent {
 	now := time.Now()
 
-	return []*pb.ConnectionEvent{
+	return []*periscopepb.ConnectionEvent{
 		// Connect event - no duration/bytes yet
 		{
 			EventId:        "evt_demo_1",
@@ -1399,7 +1403,7 @@ func GenerateGeographicDistribution() *model.GeographicDistribution {
 	now := time.Now()
 
 	return &model.GeographicDistribution{
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(now.Add(-24 * time.Hour)),
 			End:   timestamppb.New(now),
 		},
@@ -1407,7 +1411,7 @@ func GenerateGeographicDistribution() *model.GeographicDistribution {
 		UniqueCountries: 5,
 		UniqueCities:    8,
 		TotalViewers:    1247,
-		TopCountries: []*pb.CountryMetric{
+		TopCountries: []*periscopepb.CountryMetric{
 			{
 				CountryCode: "US",
 				ViewerCount: 623,
@@ -1424,7 +1428,7 @@ func GenerateGeographicDistribution() *model.GeographicDistribution {
 				Percentage:  15.0,
 			},
 		},
-		TopCities: []*pb.CityMetric{
+		TopCities: []*periscopepb.CityMetric{
 			{
 				City:        "San Francisco",
 				CountryCode: "US",
@@ -1476,7 +1480,7 @@ func GenerateGeographicDistribution() *model.GeographicDistribution {
 }
 
 // GenerateRoutingEvents creates realistic demo routing event data
-func GenerateRoutingEvents() []*pb.RoutingEvent {
+func GenerateRoutingEvents() []*periscopepb.RoutingEvent {
 	now := time.Now()
 
 	str := func(s string) *string { return &s }
@@ -1485,19 +1489,19 @@ func GenerateRoutingEvents() []*pb.RoutingEvent {
 
 	// H3 index examples at resolution 5 (~25km hexagons)
 	// These are valid H3 indexes for the given lat/lng coordinates
-	sfClientBucket := &pb.GeoBucket{H3Index: 0x85283473fffffff, Resolution: 5}     // San Francisco area
-	sfNodeBucket := &pb.GeoBucket{H3Index: 0x85283477fffffff, Resolution: 5}       // Palo Alto area
-	londonClientBucket := &pb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
-	londonNodeBucket := &pb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
-	tokyoClientBucket := &pb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
-	tokyoNodeBucket := &pb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
-	nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
+	sfClientBucket := &ipcpb.GeoBucket{H3Index: 0x85283473fffffff, Resolution: 5}     // San Francisco area
+	sfNodeBucket := &ipcpb.GeoBucket{H3Index: 0x85283477fffffff, Resolution: 5}       // Palo Alto area
+	londonClientBucket := &ipcpb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
+	londonNodeBucket := &ipcpb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
+	tokyoClientBucket := &ipcpb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
+	tokyoNodeBucket := &ipcpb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
+	nyClientBucket := &ipcpb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
 
 	// Demo cluster and tenant IDs for dual-tenant attribution
 	demoClusterID := str("central-primary")
 	demoStreamTenantID := str("00000000-0000-0000-0000-000000000001")
 
-	return []*pb.RoutingEvent{
+	return []*periscopepb.RoutingEvent{
 		// US West routing events - multiple to same node for realistic counts
 		{
 			Id:              "demo_routing_001",
@@ -1641,17 +1645,17 @@ func GenerateRoutingEvents() []*pb.RoutingEvent {
 }
 
 // GenerateViewerEndpointResponse returns a demo viewer endpoint resolution payload
-func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse {
+func GenerateViewerEndpointResponse(contentID string) *sharedpb.ViewerEndpointResponse {
 	if contentID == "" {
 		contentID = "demo_live_stream_001"
 	}
 	contentType := inferViewerContentType(contentID)
 
-	primaryOutputs := map[string]*pb.OutputEndpoint{
+	primaryOutputs := map[string]*sharedpb.OutputEndpoint{
 		"WHEP": {
 			Protocol: "WHEP",
 			Url:      "https://edge-egress.demo.frameworks.video/whep/demo_live_stream_001",
-			Capabilities: &pb.OutputCapability{
+			Capabilities: &sharedpb.OutputCapability{
 				SupportsSeek:          false,
 				SupportsQualitySwitch: true,
 				HasAudio:              true,
@@ -1662,7 +1666,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		"HLS": {
 			Protocol: "HLS",
 			Url:      "https://edge-egress.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
-			Capabilities: &pb.OutputCapability{
+			Capabilities: &sharedpb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: true,
 				HasAudio:              true,
@@ -1672,11 +1676,11 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		},
 	}
 
-	fallbackOutputs := map[string]*pb.OutputEndpoint{
+	fallbackOutputs := map[string]*sharedpb.OutputEndpoint{
 		"HLS": {
 			Protocol: "HLS",
 			Url:      "https://edge-egress.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
-			Capabilities: &pb.OutputCapability{
+			Capabilities: &sharedpb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: true,
 				HasAudio:              true,
@@ -1687,7 +1691,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		"HTTP": {
 			Protocol: "HTTP",
 			Url:      "https://edge-egress.eu.demo.frameworks.video/http/demo_live_stream_001",
-			Capabilities: &pb.OutputCapability{
+			Capabilities: &sharedpb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: false,
 				HasAudio:              true,
@@ -1697,7 +1701,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		},
 	}
 
-	primary := &pb.ViewerEndpoint{
+	primary := &sharedpb.ViewerEndpoint{
 		NodeId:      "node_demo_us_west_01",
 		BaseUrl:     "https://edge-egress.demo.frameworks.video",
 		Protocol:    "webrtc",
@@ -1707,7 +1711,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		Outputs:     primaryOutputs,
 	}
 
-	fallback := &pb.ViewerEndpoint{
+	fallback := &sharedpb.ViewerEndpoint{
 		NodeId:      "node_demo_eu_west_01",
 		BaseUrl:     "https://edge-egress.eu.demo.frameworks.video",
 		Protocol:    "hls",
@@ -1725,7 +1729,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		status = "live"
 	}
 
-	metadata := &pb.PlaybackMetadata{
+	metadata := &sharedpb.PlaybackMetadata{
 		Status:        status,
 		IsLive:        isLive,
 		Viewers:       132,
@@ -1734,11 +1738,11 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		ContentId:     contentID,
 		ContentType:   contentType,
 		ProtocolHints: []string{"WHEP", "HLS", "HTTP"},
-		Tracks: []*pb.PlaybackTrack{
+		Tracks: []*sharedpb.PlaybackTrack{
 			{Type: "video", Codec: "H264", BitrateKbps: 2500, Width: 1920, Height: 1080},
 			{Type: "audio", Codec: "AAC", BitrateKbps: 128, Channels: 2, SampleRate: 48000},
 		},
-		Instances: []*pb.PlaybackInstance{
+		Instances: []*sharedpb.PlaybackInstance{
 			{
 				NodeId:           "node_demo_us_west_01",
 				Viewers:          78,
@@ -1764,9 +1768,9 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		DurationSeconds: &durationSeconds,
 	}
 
-	return &pb.ViewerEndpointResponse{
+	return &sharedpb.ViewerEndpointResponse{
 		Primary:   primary,
-		Fallbacks: []*pb.ViewerEndpoint{fallback},
+		Fallbacks: []*sharedpb.ViewerEndpoint{fallback},
 		Metadata:  metadata,
 	}
 }
@@ -1791,7 +1795,7 @@ func inferViewerContentType(contentID string) string {
 }
 
 // GenerateIngestEndpointResponse creates demo ingest endpoint data for StreamCrafter
-func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse {
+func GenerateIngestEndpointResponse(streamKey string) *sharedpb.IngestEndpointResponse {
 	if streamKey == "" {
 		streamKey = "demo_stream_key_001"
 	}
@@ -1807,7 +1811,7 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 	region := "US West"
 	loadScore := 0.25
 
-	primary := &pb.IngestEndpoint{
+	primary := &sharedpb.IngestEndpoint{
 		NodeId:    "node_demo_us_west_01",
 		BaseUrl:   "https://edge-ingest.demo.frameworks.video",
 		WhipUrl:   &whipURL,
@@ -1824,7 +1828,7 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 	fallbackRegion := "EU West"
 	fallbackLoadScore := 0.42
 
-	fallback := &pb.IngestEndpoint{
+	fallback := &sharedpb.IngestEndpoint{
 		NodeId:    "node_demo_eu_west_01",
 		BaseUrl:   "https://edge-ingest.eu.demo.frameworks.video",
 		WhipUrl:   &fallbackWhipURL,
@@ -1834,7 +1838,7 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 		LoadScore: &fallbackLoadScore,
 	}
 
-	metadata := &pb.IngestMetadata{
+	metadata := &sharedpb.IngestMetadata{
 		StreamId:         streamID,
 		StreamKey:        streamKey,
 		TenantId:         "00000000-0000-0000-0000-000000000001",
@@ -1843,9 +1847,9 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 		Description:      &description,
 	}
 
-	return &pb.IngestEndpointResponse{
+	return &sharedpb.IngestEndpointResponse{
 		Primary:   primary,
-		Fallbacks: []*pb.IngestEndpoint{fallback},
+		Fallbacks: []*sharedpb.IngestEndpoint{fallback},
 		Metadata:  metadata,
 	}
 }
@@ -1869,7 +1873,7 @@ func GenerateRoutingEventsConnection() *model.RoutingEventsConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.RoutingEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.RoutingEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1899,7 +1903,7 @@ func GenerateConnectionEventsConnection() *model.ConnectionEventsConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ConnectionEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ConnectionEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1918,7 +1922,7 @@ func GenerateConnectionEventsConnection() *model.ConnectionEventsConnection {
 func GenerateArtifactEventsConnection() *model.ArtifactEventsConnection {
 	now := time.Now()
 
-	events := []*pb.ClipEvent{
+	events := []*periscopepb.ClipEvent{
 		{
 			RequestId:    "clip_req_demo_001",
 			Timestamp:    timestamppb.New(now.Add(-30 * time.Minute)),
@@ -1955,7 +1959,7 @@ func GenerateArtifactEventsConnection() *model.ArtifactEventsConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ClipEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ClipEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1974,7 +1978,7 @@ func GenerateArtifactEventsConnection() *model.ArtifactEventsConnection {
 func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 	now := time.Now()
 
-	metrics := []*pb.NodeMetric{
+	metrics := []*periscopepb.NodeMetric{
 		{
 			Id:                 "nm_demo_001",
 			Timestamp:          timestamppb.New(now.Add(-5 * time.Minute)),
@@ -2033,7 +2037,7 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.NodeMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2052,7 +2056,7 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 func GenerateNodeMetrics1hConnection() *model.NodeMetrics1hConnection {
 	now := time.Now()
 
-	metrics := []*pb.NodeMetricHourly{
+	metrics := []*periscopepb.NodeMetricHourly{
 		{
 			Id:                "nmh_demo_001",
 			Timestamp:         timestamppb.New(now.Truncate(time.Hour)),
@@ -2091,7 +2095,7 @@ func GenerateNodeMetrics1hConnection() *model.NodeMetrics1hConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.NodeMetricHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetricHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2107,8 +2111,8 @@ func GenerateNodeMetrics1hConnection() *model.NodeMetrics1hConnection {
 }
 
 // GenerateNodeMetricsAggregated creates demo aggregated node metrics
-func GenerateNodeMetricsAggregated() []*pb.NodeMetricsAggregated {
-	return []*pb.NodeMetricsAggregated{
+func GenerateNodeMetricsAggregated() []*periscopepb.NodeMetricsAggregated {
+	return []*periscopepb.NodeMetricsAggregated{
 		{
 			NodeId:            "node_demo_us_west_01",
 			ClusterId:         "cluster_demo_us_west",
@@ -2146,7 +2150,7 @@ func GenerateStreamHealthMetricsConnection() *model.StreamHealthMetricsConnectio
 		}
 	}
 
-	edgeNodes := make([]*pb.StreamHealthMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamHealthMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2165,14 +2169,14 @@ func GenerateStreamHealthMetricsConnection() *model.StreamHealthMetricsConnectio
 func GenerateTrackListEventsConnection() *model.TrackListEventsConnection {
 	now := time.Now()
 
-	events := []*pb.TrackListEvent{
+	events := []*periscopepb.TrackListEvent{
 		{
 			Id:        "tle_demo_001",
 			Timestamp: timestamppb.New(now.Add(-10 * time.Minute)),
 			NodeId:    "node_demo_us_west_01",
 			StreamId:  "demo_live_stream_001",
 			TrackList: `[{"trackName":"video_main","trackType":"video","codec":"H264","width":1920,"height":1080,"fps":30},{"trackName":"audio_main","trackType":"audio","codec":"AAC"}]`,
-			Tracks: []*pb.StreamTrack{
+			Tracks: []*ipcpb.StreamTrack{
 				{
 					TrackName: "video_main",
 					TrackType: "video",
@@ -2195,7 +2199,7 @@ func GenerateTrackListEventsConnection() *model.TrackListEventsConnection {
 			NodeId:    "node_demo_us_west_01",
 			StreamId:  "demo_live_stream_001",
 			TrackList: `[{"trackName":"video_main","trackType":"video","codec":"H264","width":1920,"height":1080,"fps":30},{"trackName":"audio_main","trackType":"audio","codec":"AAC"},{"trackName":"audio_spanish","trackType":"audio","codec":"AAC"}]`,
-			Tracks: []*pb.StreamTrack{
+			Tracks: []*ipcpb.StreamTrack{
 				{
 					TrackName: "video_main",
 					TrackType: "video",
@@ -2227,7 +2231,7 @@ func GenerateTrackListEventsConnection() *model.TrackListEventsConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.TrackListEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.TrackListEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2273,11 +2277,11 @@ func GenerateStreamEventsConnection() *model.StreamEventsConnection {
 }
 
 // GenerateBufferEvents creates demo stream buffer events with health payloads.
-func GenerateBufferEvents(streamID string) []*pb.BufferEvent {
+func GenerateBufferEvents(streamID string) []*periscopepb.BufferEvent {
 	now := time.Now()
 	statuses := []string{"FULL", "DRY", "RECOVER", "EMPTY"}
 
-	events := make([]*pb.BufferEvent, 0, 12)
+	events := make([]*periscopepb.BufferEvent, 0, 12)
 	for i := 0; i < 12; i++ {
 		status := statuses[i%len(statuses)]
 		payload := map[string]interface{}{
@@ -2293,7 +2297,7 @@ func GenerateBufferEvents(streamID string) []*pb.BufferEvent {
 
 		eventPayload, _ := structpb.NewStruct(payload)
 		eventDataBytes, _ := json.Marshal(payload)
-		events = append(events, &pb.BufferEvent{
+		events = append(events, &periscopepb.BufferEvent{
 			EventId:      fmt.Sprintf("buffer_%d", i+1),
 			Timestamp:    timestamppb.New(now.Add(-time.Duration(i) * time.Minute)),
 			Status:       status,
@@ -2320,7 +2324,7 @@ func GenerateBufferEventsConnection(streamID string) *model.BufferEventsConnecti
 		}
 	}
 
-	edgeNodes := make([]*pb.BufferEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.BufferEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2336,11 +2340,11 @@ func GenerateBufferEventsConnection(streamID string) *model.BufferEventsConnecti
 }
 
 // GenerateArtifactState creates a demo artifact state for a single request ID
-func GenerateArtifactState(requestID string) *pb.ArtifactState {
+func GenerateArtifactState(requestID string) *periscopepb.ArtifactState {
 	now := time.Now()
 
 	// Return a realistic artifact based on the request ID
-	return &pb.ArtifactState{
+	return &periscopepb.ArtifactState{
 		RequestId:       requestID,
 		TenantId:        "00000000-0000-0000-0000-000000000001",
 		StreamId:        "demo_live_stream_001",
@@ -2361,7 +2365,7 @@ func GenerateArtifactState(requestID string) *pb.ArtifactState {
 func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 	now := time.Now()
 
-	artifacts := []*pb.ArtifactState{
+	artifacts := []*periscopepb.ArtifactState{
 		{
 			RequestId:       "artifact_demo_001",
 			TenantId:        "00000000-0000-0000-0000-000000000001",
@@ -2409,7 +2413,7 @@ func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ArtifactState, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ArtifactState, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2428,7 +2432,7 @@ func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyConnection {
 	now := time.Now()
 
-	records := []*pb.StreamConnectionHourly{
+	records := []*periscopepb.StreamConnectionHourly{
 		{
 			Id:            "sch_demo_001",
 			Hour:          timestamppb.New(now.Truncate(time.Hour)),
@@ -2466,7 +2470,7 @@ func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyCon
 		}
 	}
 
-	edgeNodes := make([]*pb.StreamConnectionHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamConnectionHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2485,7 +2489,7 @@ func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyCon
 func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 	now := time.Now()
 
-	records := []*pb.ClientMetrics5M{
+	records := []*periscopepb.ClientMetrics5M{
 		{
 			Id:                "cm5_demo_001",
 			Timestamp:         timestamppb.New(now.Truncate(5 * time.Minute)),
@@ -2532,7 +2536,7 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ClientMetrics5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ClientMetrics5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2551,7 +2555,7 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 	now := time.Now()
 
-	records := []*pb.QualityTierDaily{
+	records := []*periscopepb.QualityTierDaily{
 		{
 			Id:                "qtd_demo_001",
 			Day:               timestamppb.New(now.Truncate(24 * time.Hour)),
@@ -2619,7 +2623,7 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.QualityTierDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.QualityTierDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2638,7 +2642,7 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 func GenerateStorageUsageConnection() *model.StorageUsageConnection {
 	now := time.Now()
 
-	records := []*pb.StorageUsageRecord{
+	records := []*periscopepb.StorageUsageRecord{
 		{
 			Id:              "su_demo_001",
 			Timestamp:       timestamppb.New(now.Add(-1 * time.Hour)),
@@ -2694,7 +2698,7 @@ func GenerateStorageUsageConnection() *model.StorageUsageConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.StorageUsageRecord, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StorageUsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2719,7 +2723,7 @@ func GenerateStorageEventsConnection(internalName *string) *model.StorageEventsC
 		streamFilter = *internalName
 	}
 
-	events := []*pb.StorageEvent{
+	events := []*periscopepb.StorageEvent{
 		{
 			Id:         "se_demo_001",
 			Timestamp:  timestamppb.New(now.Add(-30 * time.Minute)),
@@ -2797,7 +2801,7 @@ func GenerateStorageEventsConnection(internalName *string) *model.StorageEventsC
 		}
 	}
 
-	edgeNodes := make([]*pb.StorageEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StorageEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2822,7 +2826,7 @@ func GenerateViewerSessionsConnection(streamFilter *string) *model.ViewerSession
 		stream = *streamFilter
 	}
 
-	sessions := []*pb.ViewerSession{
+	sessions := []*periscopepb.ViewerSession{
 		{
 			SessionId:         "sess_demo_viewer_001",
 			Timestamp:         timestamppb.New(now.Add(-30 * time.Minute)),
@@ -2933,7 +2937,7 @@ func GenerateViewerSessionsConnection(streamFilter *string) *model.ViewerSession
 		}
 	}
 
-	edgeNodes := make([]*pb.ViewerSession, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerSession, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2952,7 +2956,7 @@ func GenerateViewerSessionsConnection(streamFilter *string) *model.ViewerSession
 func GenerateServiceInstancesConnection() *model.ServiceInstancesConnection {
 	now := time.Now()
 
-	instances := []*pb.ServiceInstance{
+	instances := []*quartermasterpb.ServiceInstance{
 		{
 			Id:              "svc_demo_001",
 			InstanceId:      "mist-instance-001",
@@ -3005,7 +3009,7 @@ func GenerateServiceInstancesConnection() *model.ServiceInstancesConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.ServiceInstance, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3021,9 +3025,9 @@ func GenerateServiceInstancesConnection() *model.ServiceInstancesConnection {
 }
 
 // GenerateServiceInstances returns a slice of demo service instances (non-paginated)
-func GenerateServiceInstances() []*pb.ServiceInstance {
+func GenerateServiceInstances() []*quartermasterpb.ServiceInstance {
 	conn := GenerateServiceInstancesConnection()
-	result := make([]*pb.ServiceInstance, len(conn.Edges))
+	result := make([]*quartermasterpb.ServiceInstance, len(conn.Edges))
 	for i, edge := range conn.Edges {
 		result[i] = edge.Node
 	}
@@ -3034,7 +3038,7 @@ func GenerateServiceInstances() []*pb.ServiceInstance {
 func GenerateNodesConnection() *model.NodesConnection {
 	now := time.Now()
 
-	nodes := []*pb.InfrastructureNode{
+	nodes := []*quartermasterpb.InfrastructureNode{
 		{
 			Id:            "node_demo_us_west_01",
 			NodeId:        "node_demo_us_west_01",
@@ -3093,7 +3097,7 @@ func GenerateNodesConnection() *model.NodesConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.InfrastructureNode, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.InfrastructureNode, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3112,7 +3116,7 @@ func GenerateNodesConnection() *model.NodesConnection {
 func GenerateClustersConnection() *model.ClustersConnection {
 	now := time.Now()
 
-	clusters := []*pb.InfrastructureCluster{
+	clusters := []*quartermasterpb.InfrastructureCluster{
 		{
 			Id:                   "cluster_demo_us_west",
 			ClusterId:            "cluster_demo_us_west",
@@ -3153,7 +3157,7 @@ func GenerateClustersConnection() *model.ClustersConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.InfrastructureCluster, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3169,9 +3173,9 @@ func GenerateClustersConnection() *model.ClustersConnection {
 }
 
 // GenerateBootstrapTokens creates demo bootstrap tokens
-func GenerateBootstrapTokens() []*pb.BootstrapToken {
+func GenerateBootstrapTokens() []*quartermasterpb.BootstrapToken {
 	now := time.Now()
-	return []*pb.BootstrapToken{
+	return []*quartermasterpb.BootstrapToken{
 		{
 			Id:         "token_boot_001",
 			Name:       "Edge Node Token",
@@ -3187,9 +3191,9 @@ func GenerateBootstrapTokens() []*pb.BootstrapToken {
 }
 
 // GenerateInfrastructureNodes returns a slice of demo nodes (wrapper around connection gen)
-func GenerateInfrastructureNodes() []*pb.InfrastructureNode {
+func GenerateInfrastructureNodes() []*quartermasterpb.InfrastructureNode {
 	conn := GenerateNodesConnection()
-	result := make([]*pb.InfrastructureNode, len(conn.Edges))
+	result := make([]*quartermasterpb.InfrastructureNode, len(conn.Edges))
 	for i, edge := range conn.Edges {
 		result[i] = edge.Node
 	}
@@ -3197,9 +3201,9 @@ func GenerateInfrastructureNodes() []*pb.InfrastructureNode {
 }
 
 // GenerateInfrastructureClusters returns a slice of demo clusters (wrapper around connection gen)
-func GenerateInfrastructureClusters() []*pb.InfrastructureCluster {
+func GenerateInfrastructureClusters() []*quartermasterpb.InfrastructureCluster {
 	conn := GenerateClustersConnection()
-	result := make([]*pb.InfrastructureCluster, len(conn.Edges))
+	result := make([]*quartermasterpb.InfrastructureCluster, len(conn.Edges))
 	for i, edge := range conn.Edges {
 		result[i] = edge.Node
 	}
@@ -3207,9 +3211,9 @@ func GenerateInfrastructureClusters() []*pb.InfrastructureCluster {
 }
 
 // GenerateClips returns a slice of demo clips matching shared.ClipInfo
-func GenerateClips() []*pb.ClipInfo {
+func GenerateClips() []*sharedpb.ClipInfo {
 	now := time.Now()
-	return []*pb.ClipInfo{
+	return []*sharedpb.ClipInfo{
 		{
 			Id:          "clip_info_demo_001",
 			ClipHash:    "a1b2c3d4e5f6789012345678901234ab",
@@ -3252,14 +3256,14 @@ func GenerateClips() []*pb.ClipInfo {
 // ============================================================================
 
 // GenerateMarketplaceClusters returns demo marketplace cluster entries
-func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
-	return []*pb.MarketplaceClusterEntry{
+func GenerateMarketplaceClusters() []*quartermasterpb.MarketplaceClusterEntry {
+	return []*quartermasterpb.MarketplaceClusterEntry{
 		{
 			ClusterId:        DemoMediaClusterID,
 			ClusterName:      "Demo Media Cluster",
 			ShortDescription: stringPtr("Platform media cluster seeded for local development"),
-			Visibility:       pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
-			PricingModel:     pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
+			Visibility:       quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+			PricingModel:     quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
 			OwnerName:        stringPtr("FrameWorks"),
 			IsEligible:       true,
 			IsSubscribed:     true,
@@ -3268,8 +3272,8 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 			ClusterId:         DemoCentralClusterID,
 			ClusterName:       "Central Primary",
 			ShortDescription:  stringPtr("Core platform cluster used by provisioned central services"),
-			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
-			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
+			Visibility:        quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+			PricingModel:      quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_METERED,
 			MonthlyPriceCents: 0,
 			OwnerName:         stringPtr("FrameWorks"),
 			IsEligible:        true,
@@ -3279,8 +3283,8 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 			ClusterId:         DemoSelfHostedCluster,
 			ClusterName:       "Demo Self-hosted Cluster",
 			ShortDescription:  stringPtr("Tenant-owned edge cluster with self-hosted pricing"),
-			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE,
-			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
+			Visibility:        quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE,
+			PricingModel:      quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
 			MonthlyPriceCents: 0,
 			OwnerName:         stringPtr("Demo Tenant"),
 			IsEligible:        true,
@@ -3290,8 +3294,8 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 			ClusterId:         "cluster_demo_enterprise",
 			ClusterName:       "Enterprise Private Cloud",
 			ShortDescription:  stringPtr("Dedicated infrastructure for enterprise clients"),
-			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED,
-			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY,
+			Visibility:        quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED,
+			PricingModel:      quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY,
 			MonthlyPriceCents: 99900, // $999/month
 			OwnerName:         stringPtr("ACME Corp"),
 			IsEligible:        false,
@@ -3303,9 +3307,9 @@ func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
 
 // GenerateMySubscriptions returns clusters the demo tenant is subscribed to
 // This represents the "My Subscriptions" list showing clusters the user has access to
-func GenerateMySubscriptions() []*pb.InfrastructureCluster {
+func GenerateMySubscriptions() []*quartermasterpb.InfrastructureCluster {
 	now := time.Now()
-	return []*pb.InfrastructureCluster{
+	return []*quartermasterpb.InfrastructureCluster{
 		{
 			Id:                   DemoMediaClusterID,
 			ClusterId:            DemoMediaClusterID,
@@ -3342,9 +3346,9 @@ func GenerateMySubscriptions() []*pb.InfrastructureCluster {
 }
 
 // GenerateClusterInvites returns demo cluster invites (for cluster owners)
-func GenerateClusterInvites() []*pb.ClusterInvite {
+func GenerateClusterInvites() []*quartermasterpb.ClusterInvite {
 	now := time.Now()
-	return []*pb.ClusterInvite{
+	return []*quartermasterpb.ClusterInvite{
 		{
 			Id:                "invite_demo_001",
 			ClusterId:         "cluster_demo_enterprise",
@@ -3360,9 +3364,9 @@ func GenerateClusterInvites() []*pb.ClusterInvite {
 }
 
 // GenerateMyClusterInvites returns demo pending invites for the current tenant
-func GenerateMyClusterInvites() []*pb.ClusterInvite {
+func GenerateMyClusterInvites() []*quartermasterpb.ClusterInvite {
 	now := time.Now()
-	return []*pb.ClusterInvite{
+	return []*quartermasterpb.ClusterInvite{
 		{
 			Id:                "invite_demo_002",
 			ClusterId:         "cluster_demo_premium",
@@ -3378,15 +3382,15 @@ func GenerateMyClusterInvites() []*pb.ClusterInvite {
 }
 
 // GeneratePendingSubscriptions returns demo pending subscription requests
-func GeneratePendingSubscriptions() []*pb.ClusterSubscription {
+func GeneratePendingSubscriptions() []*quartermasterpb.ClusterSubscription {
 	now := time.Now()
-	return []*pb.ClusterSubscription{
+	return []*quartermasterpb.ClusterSubscription{
 		{
 			Id:                 "sub_demo_001",
 			TenantId:           "tenant_demo_requester",
 			ClusterId:          "cluster_demo_enterprise",
 			AccessLevel:        "subscriber",
-			SubscriptionStatus: pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL,
+			SubscriptionStatus: quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL,
 			TenantName:         stringPtr("Requester Corp"),
 			ClusterName:        stringPtr("Enterprise Private Cloud"),
 			RequestedAt:        timestamppb.New(now.Add(-4 * time.Hour)),
@@ -3405,7 +3409,7 @@ func GenerateNodePerformance5mConnection(nodeID *string) *model.NodePerformance5
 		nodeFilter = *nodeID
 	}
 
-	records := []*pb.NodePerformance5M{
+	records := []*periscopepb.NodePerformance5M{
 		{
 			Id:             "np5m_demo_001",
 			Timestamp:      timestamppb.New(now.Truncate(5 * time.Minute)),
@@ -3452,7 +3456,7 @@ func GenerateNodePerformance5mConnection(nodeID *string) *model.NodePerformance5
 		}
 	}
 
-	edgeNodes := make([]*pb.NodePerformance5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodePerformance5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3476,7 +3480,7 @@ func GenerateViewerHoursHourlyConnection(stream *string) *model.ViewerHoursHourl
 		streamID = *stream
 	}
 
-	records := []*pb.ViewerHoursHourly{
+	records := []*periscopepb.ViewerHoursHourly{
 		{
 			Id:                  "vhh_demo_001",
 			Hour:                timestamppb.New(now.Truncate(time.Hour)),
@@ -3517,7 +3521,7 @@ func GenerateViewerHoursHourlyConnection(stream *string) *model.ViewerHoursHourl
 		}
 	}
 
-	edgeNodes := make([]*pb.ViewerHoursHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerHoursHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3536,7 +3540,7 @@ func GenerateViewerHoursHourlyConnection(stream *string) *model.ViewerHoursHourl
 func GenerateViewerGeoHourlyConnection() *model.ViewerGeoHourlyConnection {
 	now := time.Now()
 
-	records := []*pb.ViewerGeoHourly{
+	records := []*periscopepb.ViewerGeoHourly{
 		{
 			Id:          "vgh_demo_001",
 			Hour:        timestamppb.New(now.Truncate(time.Hour)),
@@ -3583,7 +3587,7 @@ func GenerateViewerGeoHourlyConnection() *model.ViewerGeoHourlyConnection {
 		}
 	}
 
-	edgeNodes := make([]*pb.ViewerGeoHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerGeoHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3607,7 +3611,7 @@ func GenerateStreamHealth5mConnection(stream *string) *model.StreamHealth5mConne
 		streamID = *stream
 	}
 
-	records := []*pb.StreamHealth5M{
+	records := []*periscopepb.StreamHealth5M{
 		{
 			Id:             "sh5m_demo_001",
 			Timestamp:      timestamppb.New(now.Truncate(5 * time.Minute)),
@@ -3660,7 +3664,7 @@ func GenerateStreamHealth5mConnection(stream *string) *model.StreamHealth5mConne
 		}
 	}
 
-	edgeNodes := make([]*pb.StreamHealth5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamHealth5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3676,7 +3680,7 @@ func GenerateStreamHealth5mConnection(stream *string) *model.StreamHealth5mConne
 }
 
 // GenerateTenantDailyStats creates demo daily tenant statistics
-func GenerateTenantDailyStats(days *int) []*pb.TenantDailyStat {
+func GenerateTenantDailyStats(days *int) []*periscopepb.TenantDailyStat {
 	now := time.Now()
 	daysCount := 7
 	if days != nil && *days > 0 {
@@ -3686,10 +3690,10 @@ func GenerateTenantDailyStats(days *int) []*pb.TenantDailyStat {
 		daysCount = 365
 	}
 
-	stats := make([]*pb.TenantDailyStat, daysCount)
+	stats := make([]*periscopepb.TenantDailyStat, daysCount)
 	for i := 0; i < daysCount; i++ {
 		dayTime := now.Add(time.Duration(-i) * 24 * time.Hour).Truncate(24 * time.Hour)
-		stats[i] = &pb.TenantDailyStat{
+		stats[i] = &periscopepb.TenantDailyStat{
 			Id:            fmt.Sprintf("tds_demo_%03d", i+1),
 			Date:          timestamppb.New(dayTime),
 			TenantId:      "00000000-0000-0000-0000-000000000001",
@@ -3722,9 +3726,9 @@ func GenerateVodUploadSession(filename string, sizeBytes float64) *model.VodUplo
 		partCount = 100 // Cap for demo
 	}
 
-	parts := make([]*pb.VodUploadPart, partCount)
+	parts := make([]*sharedpb.VodUploadPart, partCount)
 	for i := 0; i < partCount; i++ {
-		parts[i] = &pb.VodUploadPart{
+		parts[i] = &sharedpb.VodUploadPart{
 			PartNumber:   int32(i + 1),
 			PresignedUrl: fmt.Sprintf("https://demo-s3.example.com/vod/upload/%s?partNumber=%d&uploadId=demo_upload_123", filename, i+1),
 		}
@@ -3742,18 +3746,18 @@ func GenerateVodUploadSession(filename string, sizeBytes float64) *model.VodUplo
 }
 
 // GenerateVodUploadStatus creates resumable multipart upload state for demo mode.
-func GenerateVodUploadStatus(uploadID string) *pb.GetVodUploadStatusResponse {
+func GenerateVodUploadStatus(uploadID string) *sharedpb.GetVodUploadStatusResponse {
 	now := time.Now()
 	if strings.TrimSpace(uploadID) == "" {
 		uploadID = "demo_upload_active"
 	}
 
-	return &pb.GetVodUploadStatusResponse{
+	return &sharedpb.GetVodUploadStatusResponse{
 		UploadId:       uploadID,
-		State:          pb.VodStatus_VOD_STATUS_UPLOADING,
+		State:          sharedpb.VodStatus_VOD_STATUS_UPLOADING,
 		ExpiresAt:      timestamppb.New(now.Add(90 * time.Minute)),
 		RetentionUntil: timestamppb.New(now.AddDate(0, 0, 180)),
-		UploadedParts: []*pb.VodUploadedPart{
+		UploadedParts: []*sharedpb.VodUploadedPart{
 			{PartNumber: 1, Etag: "\"demo-part-1-etag\"", SizeBytes: 20 * 1024 * 1024},
 			{PartNumber: 3, Etag: "\"demo-part-3-etag\"", SizeBytes: 20 * 1024 * 1024},
 		},
@@ -3873,7 +3877,7 @@ func GenerateVodAssets() []*model.VodAsset {
 func GenerateProcessingUsageConnection(streamName *string, processType *string) *model.ProcessingUsageConnection {
 	now := time.Now()
 
-	records := []*pb.ProcessingUsageRecord{
+	records := []*periscopepb.ProcessingUsageRecord{
 		{
 			Id:                  "pu_demo_001",
 			Timestamp:           timestamppb.New(now.Add(-1 * time.Hour)),
@@ -3948,7 +3952,7 @@ func GenerateProcessingUsageConnection(streamName *string, processType *string) 
 
 	// Filter by streamName if provided
 	if streamName != nil && *streamName != "" {
-		var filtered []*pb.ProcessingUsageRecord
+		var filtered []*periscopepb.ProcessingUsageRecord
 		for _, r := range records {
 			if r.StreamId == *streamName {
 				filtered = append(filtered, r)
@@ -3959,7 +3963,7 @@ func GenerateProcessingUsageConnection(streamName *string, processType *string) 
 
 	// Filter by processType if provided
 	if processType != nil && *processType != "" {
-		var filtered []*pb.ProcessingUsageRecord
+		var filtered []*periscopepb.ProcessingUsageRecord
 		for _, r := range records {
 			if r.ProcessType == *processType {
 				filtered = append(filtered, r)
@@ -3977,7 +3981,7 @@ func GenerateProcessingUsageConnection(streamName *string, processType *string) 
 	}
 
 	// Generate demo summaries (last 7 days) with per-codec breakdown
-	summaries := make([]*pb.ProcessingUsageSummary, 7)
+	summaries := make([]*periscopepb.ProcessingUsageSummary, 7)
 	for i := 0; i < 7; i++ {
 		day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
 		// Calculate totals from per-codec values
@@ -3992,7 +3996,7 @@ func GenerateProcessingUsageConnection(streamName *string, processType *string) 
 		avAac := float64(800 + i*15) // Audio is FREE
 		avOpus := float64(200 + i*5) // Audio is FREE
 
-		summaries[i] = &pb.ProcessingUsageSummary{
+		summaries[i] = &periscopepb.ProcessingUsageSummary{
 			Date:     timestamppb.New(day),
 			TenantId: "00000000-0000-0000-0000-000000000001",
 			// Livepeer totals
@@ -4021,7 +4025,7 @@ func GenerateProcessingUsageConnection(streamName *string, processType *string) 
 		}
 	}
 
-	edgeNodes := make([]*pb.ProcessingUsageRecord, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ProcessingUsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -4052,14 +4056,14 @@ func GenerateRebufferingEventsConnection(internalName *string) *model.Rebufferin
 
 	// Generate sample rebuffering events
 	bufferStates := []string{"FILLING", "FULL", "DRY", "FILLING"}
-	events := make([]*pb.RebufferingEvent, 4)
+	events := make([]*periscopepb.RebufferingEvent, 4)
 
 	for i := 0; i < 4; i++ {
 		timestamp := now.Add(-time.Duration(30-i*5) * time.Minute)
 		rebufferStart := timestamp.Add(-time.Second * 2)
 		rebufferEnd := timestamp
 
-		events[i] = &pb.RebufferingEvent{
+		events[i] = &periscopepb.RebufferingEvent{
 			Id:            fmt.Sprintf("rebuf_%d", i+1),
 			Timestamp:     timestamppb.New(timestamp),
 			StreamId:      streamName,
@@ -4079,7 +4083,7 @@ func GenerateRebufferingEventsConnection(internalName *string) *model.Rebufferin
 		}
 	}
 
-	edgeNodes := make([]*pb.RebufferingEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.RebufferingEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -4104,7 +4108,7 @@ func GenerateTenantAnalyticsDailyConnection() *model.TenantAnalyticsDailyConnect
 	now := time.Now()
 
 	// Generate 7 days of tenant analytics
-	records := make([]*pb.TenantAnalyticsDaily, 7)
+	records := make([]*periscopepb.TenantAnalyticsDaily, 7)
 	for i := 0; i < 7; i++ {
 		day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
 
@@ -4114,7 +4118,7 @@ func GenerateTenantAnalyticsDailyConnection() *model.TenantAnalyticsDailyConnect
 		baseViewers := 100 + rand.Intn(500)
 		baseEgress := int64(10_000_000_000 + rand.Intn(50_000_000_000)) // 10-60 GB
 
-		records[i] = &pb.TenantAnalyticsDaily{
+		records[i] = &periscopepb.TenantAnalyticsDaily{
 			Id:            fmt.Sprintf("tad_%s", day.Format("2006-01-02")),
 			Day:           timestamppb.New(day),
 			TotalStreams:  int32(baseStreams),
@@ -4132,7 +4136,7 @@ func GenerateTenantAnalyticsDailyConnection() *model.TenantAnalyticsDailyConnect
 		}
 	}
 
-	edgeNodes := make([]*pb.TenantAnalyticsDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.TenantAnalyticsDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -4162,7 +4166,7 @@ func GenerateStreamAnalyticsDailyConnection(internalName *string) *model.StreamA
 	}
 
 	// Generate 7 days × N streams
-	var records []*pb.StreamAnalyticsDaily
+	var records []*periscopepb.StreamAnalyticsDaily
 	for _, stream := range streamNames {
 		for i := 0; i < 7; i++ {
 			day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
@@ -4174,7 +4178,7 @@ func GenerateStreamAnalyticsDailyConnection(internalName *string) *model.StreamA
 			baseCities := 10 + rand.Intn(30)
 			baseEgress := int64(1_000_000_000 + rand.Intn(10_000_000_000)) // 1-11 GB
 
-			records = append(records, &pb.StreamAnalyticsDaily{
+			records = append(records, &periscopepb.StreamAnalyticsDaily{
 				Id:              fmt.Sprintf("sad_%s_%s", stream, day.Format("2006-01-02")),
 				Day:             timestamppb.New(day),
 				StreamId:        stream,
@@ -4195,7 +4199,7 @@ func GenerateStreamAnalyticsDailyConnection(internalName *string) *model.StreamA
 		}
 	}
 
-	edgeNodes := make([]*pb.StreamAnalyticsDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamAnalyticsDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -4232,21 +4236,21 @@ func GenerateMessageSubscriptionEvents(conversationID string) []*model.Message {
 			ID:             globalid.EncodeComposite(globalid.TypeMessage, rawConversationID, fmt.Sprintf("%s_msg_001", rawConversationID)),
 			ConversationID: conversationGID,
 			Content:        "Thanks for reaching out! How can I help you today?",
-			Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+			Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			CreatedAt:      now.Add(-2 * time.Second),
 		},
 		{
 			ID:             globalid.EncodeComposite(globalid.TypeMessage, rawConversationID, fmt.Sprintf("%s_msg_002", rawConversationID)),
 			ConversationID: conversationGID,
 			Content:        "Let me check that for you. One moment please.",
-			Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+			Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			CreatedAt:      now.Add(-1 * time.Second),
 		},
 		{
 			ID:             globalid.EncodeComposite(globalid.TypeMessage, rawConversationID, fmt.Sprintf("%s_msg_003", rawConversationID)),
 			ConversationID: conversationGID,
 			Content:        "I found the issue - your stream configuration has been updated successfully!",
-			Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+			Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			CreatedAt:      now,
 		},
 	}
@@ -4269,13 +4273,13 @@ func GenerateConversationSubscriptionEvents(conversationID string) []*model.Conv
 		{
 			ID:          conversationGID,
 			Subject:     &subject,
-			Status:      pb.ConversationStatus_CONVERSATION_STATUS_OPEN,
+			Status:      deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN,
 			UnreadCount: 1,
 			LastMessage: &model.Message{
 				ID:             globalid.EncodeComposite(globalid.TypeMessage, rawConversationID, fmt.Sprintf("%s_msg_001", rawConversationID)),
 				ConversationID: conversationGID,
 				Content:        "Thanks for reaching out! We’re looking into this now.",
-				Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+				Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 				CreatedAt:      now.Add(-2 * time.Minute),
 			},
 			CreatedAt: now.Add(-5 * time.Minute),
@@ -4284,13 +4288,13 @@ func GenerateConversationSubscriptionEvents(conversationID string) []*model.Conv
 		{
 			ID:          conversationGID,
 			Subject:     &subject,
-			Status:      pb.ConversationStatus_CONVERSATION_STATUS_PENDING,
+			Status:      deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING,
 			UnreadCount: 0,
 			LastMessage: &model.Message{
 				ID:             globalid.EncodeComposite(globalid.TypeMessage, rawConversationID, fmt.Sprintf("%s_msg_002", rawConversationID)),
 				ConversationID: conversationGID,
 				Content:        "Any updates on your end? We can close this if resolved.",
-				Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+				Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 				CreatedAt:      now.Add(-30 * time.Second),
 			},
 			CreatedAt: now.Add(-5 * time.Minute),
@@ -4303,7 +4307,7 @@ func GenerateConversationSubscriptionEvents(conversationID string) []*model.Conv
 func GenerateAPIUsageConnection(authType *string, operationType *string, operationName *string) *model.APIUsageConnection {
 	now := time.Now()
 
-	records := []*pb.APIUsageRecord{
+	records := []*periscopepb.APIUsageRecord{
 		{
 			Id:              "api_demo_001",
 			Timestamp:       timestamppb.New(now.Add(-1 * time.Hour)),
@@ -4350,7 +4354,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 
 	// Filter by authType if provided
 	if authType != nil && *authType != "" {
-		filtered := []*pb.APIUsageRecord{}
+		filtered := []*periscopepb.APIUsageRecord{}
 		for _, r := range records {
 			if r.AuthType == *authType {
 				filtered = append(filtered, r)
@@ -4361,7 +4365,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 
 	// Filter by operationType if provided
 	if operationType != nil && *operationType != "" {
-		filtered := []*pb.APIUsageRecord{}
+		filtered := []*periscopepb.APIUsageRecord{}
 		for _, r := range records {
 			if r.OperationType == *operationType {
 				filtered = append(filtered, r)
@@ -4371,7 +4375,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 	}
 	// Filter by operationName if provided
 	if operationName != nil && *operationName != "" {
-		filtered := []*pb.APIUsageRecord{}
+		filtered := []*periscopepb.APIUsageRecord{}
 		for _, r := range records {
 			if r.OperationName == *operationName {
 				filtered = append(filtered, r)
@@ -4389,7 +4393,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 		}
 	}
 
-	summaries := []*pb.APIUsageSummary{
+	summaries := []*periscopepb.APIUsageSummary{
 		{
 			Date:            timestamppb.New(now.Truncate(24 * time.Hour)),
 			TenantId:        "00000000-0000-0000-0000-000000000001",
@@ -4440,7 +4444,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 		agg.operations[r.OperationName] = struct{}{}
 	}
 
-	operationSummaries := make([]*pb.APIUsageOperationSummary, 0, len(opAggs))
+	operationSummaries := make([]*periscopepb.APIUsageOperationSummary, 0, len(opAggs))
 	for _, opType := range opOrder {
 		agg := opAggs[opType]
 		if agg == nil {
@@ -4450,7 +4454,7 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 		if agg.totalRequests > 0 {
 			avgDuration = float64(agg.totalDurationMs) / float64(agg.totalRequests)
 		}
-		operationSummaries = append(operationSummaries, &pb.APIUsageOperationSummary{
+		operationSummaries = append(operationSummaries, &periscopepb.APIUsageOperationSummary{
 			OperationType:    opType,
 			TotalRequests:    agg.totalRequests,
 			TotalErrors:      agg.totalErrors,
@@ -4518,8 +4522,8 @@ func GenerateClientQoeSummary() *model.ClientQoeSummary {
 }
 
 // GeneratePlayerBootSummary returns demo player startup summary data.
-func GeneratePlayerBootSummary() *pb.PlayerBootSummary {
-	return &pb.PlayerBootSummary{
+func GeneratePlayerBootSummary() *periscopepb.PlayerBootSummary {
+	return &periscopepb.PlayerBootSummary{
 		BootCount:           1280,
 		ErrorCount:          12,
 		P50TtfMs:            820,
@@ -4535,8 +4539,8 @@ func GeneratePlayerBootSummary() *pb.PlayerBootSummary {
 }
 
 // GenerateClusterBootOps returns demo cluster-ops boot aggregate data.
-func GenerateClusterBootOps() []*pb.ClusterBootOps {
-	return []*pb.ClusterBootOps{
+func GenerateClusterBootOps() []*periscopepb.ClusterBootOps {
+	return []*periscopepb.ClusterBootOps{
 		{
 			ServingClusterId: "cluster-us-east",
 			NodeId:           "edge-nyc-1",
@@ -4559,12 +4563,12 @@ func GenerateClusterBootOps() []*pb.ClusterBootOps {
 }
 
 // GenerateClusterTrafficMatrix returns demo cross-cluster traffic data.
-func GenerateClusterTrafficMatrix() []*pb.ClusterPairTraffic {
+func GenerateClusterTrafficMatrix() []*periscopepb.ClusterPairTraffic {
 	centralLat, centralLon := float64Ptr(41.8781), float64Ptr(-87.6298)
 	usEastLat, usEastLon := float64Ptr(40.7128), float64Ptr(-74.0060)
 	apacLat, apacLon := float64Ptr(35.6762), float64Ptr(139.6503)
 
-	return []*pb.ClusterPairTraffic{
+	return []*periscopepb.ClusterPairTraffic{
 		{ClusterId: "central-primary", RemoteClusterId: "", EventCount: 850, SuccessCount: 842, AvgLatencyMs: 8.2, AvgDistanceKm: 120.5, SuccessRate: 0.991, MaxLatencyMs: 45.0, LocalLatitude: centralLat, LocalLongitude: centralLon},
 		{ClusterId: "central-primary", RemoteClusterId: "us-east-edge", EventCount: 180, SuccessCount: 174, AvgLatencyMs: 22.5, AvgDistanceKm: 1250.0, SuccessRate: 0.967, MaxLatencyMs: 85.0, LocalLatitude: centralLat, LocalLongitude: centralLon, RemoteLatitude: usEastLat, RemoteLongitude: usEastLon},
 		{ClusterId: "central-primary", RemoteClusterId: "apac-edge", EventCount: 95, SuccessCount: 88, AvgLatencyMs: 145.3, AvgDistanceKm: 9800.0, SuccessRate: 0.926, MaxLatencyMs: 320.0, LocalLatitude: centralLat, LocalLongitude: centralLon, RemoteLatitude: apacLat, RemoteLongitude: apacLon},
@@ -4579,7 +4583,7 @@ func GenerateClusterTrafficMatrix() []*pb.ClusterPairTraffic {
 func GenerateFederationEventsConnection() *model.FederationEventsConnection {
 	now := time.Now()
 
-	events := []*pb.FederationEvent{
+	events := []*periscopepb.FederationEvent{
 		{Timestamp: timestamppb.New(now.Add(-5 * time.Minute)), EventType: "origin_pull_arranged", LocalCluster: "us-east-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_live_stream_001"), SourceNode: stringPtr("edge-node-3"), DestNode: stringPtr("primary-node-1"), DtscUrl: stringPtr("dtsc://primary-node-1:4200/demo_live_stream_001"), LatencyMs: float32Ptr(22.5), Role: "leader"},
 		{Timestamp: timestamppb.New(now.Add(-4 * time.Minute)), EventType: "origin_pull_completed", LocalCluster: "us-east-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_live_stream_001"), LatencyMs: float32Ptr(1850.0), TimeToLiveMs: float32Ptr(3600000), Role: "leader"},
 		{Timestamp: timestamppb.New(now.Add(-15 * time.Minute)), EventType: "federation_query", LocalCluster: "apac-edge", RemoteCluster: "central-primary", StreamName: stringPtr("demo_vod_stream_003"), QueriedClusters: uint32Ptr(4), RespondingClusters: uint32Ptr(3), TotalCandidates: uint32Ptr(7), BestRemoteScore: uint64Ptr(93), LatencyMs: float32Ptr(145.0), Role: "leader"},
@@ -4613,9 +4617,9 @@ func GenerateFederationEventsConnection() *model.FederationEventsConnection {
 }
 
 // GenerateFederationSummary returns demo federation summary data.
-func GenerateFederationSummary() *pb.FederationSummary {
-	return &pb.FederationSummary{
-		EventCounts: []*pb.FederationEventCount{
+func GenerateFederationSummary() *periscopepb.FederationSummary {
+	return &periscopepb.FederationSummary{
+		EventCounts: []*periscopepb.FederationEventCount{
 			{EventType: "origin_pull_arranged", Count: 24, FailureCount: 0, AvgLatencyMs: 22.5},
 			{EventType: "origin_pull_completed", Count: 22, FailureCount: 0, AvgLatencyMs: 1850.0},
 			{EventType: "origin_pull_failed", Count: 2, FailureCount: 2, AvgLatencyMs: 0},
@@ -4712,8 +4716,8 @@ func GenerateStreamingConfig() *model.StreamingConfig {
 }
 
 // GeneratePushTargets returns no external push targets in demo mode.
-func GeneratePushTargets(streamID string) []*pb.PushTarget {
-	return []*pb.PushTarget{}
+func GeneratePushTargets(streamID string) []*commodorepb.PushTarget {
+	return []*commodorepb.PushTarget{}
 }
 
 func int32Ptr(v int32) *int32                                  { return &v }
@@ -4743,7 +4747,7 @@ type demoLineSpec struct {
 
 // demoLineItems builds proto line items in the same identity/order shape as the
 // rating engine: base_subscription first, then meter:<name> rows sorted by key.
-func demoLineItems(specs ...demoLineSpec) []*pb.LineItem {
+func demoLineItems(specs ...demoLineSpec) []*purserpb.LineItem {
 	sort.SliceStable(specs, func(i, j int) bool {
 		if specs[i].LineKey == specs[j].LineKey {
 			return false
@@ -4756,7 +4760,7 @@ func demoLineItems(specs ...demoLineSpec) []*pb.LineItem {
 		}
 		return specs[i].LineKey < specs[j].LineKey
 	})
-	out := make([]*pb.LineItem, 0, len(specs))
+	out := make([]*purserpb.LineItem, 0, len(specs))
 	for _, spec := range specs {
 		if spec.LineKey == "" {
 			continue
@@ -4765,7 +4769,7 @@ func demoLineItems(specs ...demoLineSpec) []*pb.LineItem {
 		if desc == "" {
 			desc = demoLineDescription(spec.LineKey)
 		}
-		out = append(out, &pb.LineItem{
+		out = append(out, &purserpb.LineItem{
 			LineKey:          spec.LineKey,
 			Meter:            spec.Meter,
 			Description:      desc,
@@ -4798,25 +4802,25 @@ func demoLineDescription(lineKey string) string {
 	}
 }
 
-func demoPricingRulesForTier(tierName string) []*pb.PricingRule {
+func demoPricingRulesForTier(tierName string) []*purserpb.PricingRule {
 	switch tierName {
 	case "payg":
-		return []*pb.PricingRule{
+		return []*purserpb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.00055", ConfigJson: "{}"},
 			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
 		}
 	case "developer":
-		return []*pb.PricingRule{
+		return []*purserpb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "500000", UnitPrice: "0.00052", ConfigJson: "{}"},
 			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.030", ConfigJson: "{}"},
 		}
 	case "production":
-		return []*pb.PricingRule{
+		return []*purserpb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "2000000", UnitPrice: "0.00050", ConfigJson: "{}"},
 			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.025", ConfigJson: "{}"},
 		}
 	default:
-		return []*pb.PricingRule{
+		return []*purserpb.PricingRule{
 			{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "120000", UnitPrice: "0.00055", ConfigJson: "{}"},
 			{Meter: "storage_gb_seconds_cold", Model: "all_usage", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.035", ConfigJson: "{}"},
 		}

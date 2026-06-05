@@ -80,10 +80,9 @@ func TestParseMollieWebhookID(t *testing.T) {
 }
 
 func TestProcessMollieWebhookGRPC_NilClient(t *testing.T) {
-	logger = logrus.New()
-	mollieClient = nil
+	s := &Service{logger: logrus.New()}
 
-	ok, _, code := ProcessMollieWebhookGRPC([]byte("id=tr_x"), map[string]string{
+	ok, _, code := s.ProcessMollieWebhookGRPC([]byte("id=tr_x"), map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	})
 	if ok {
@@ -95,15 +94,14 @@ func TestProcessMollieWebhookGRPC_NilClient(t *testing.T) {
 }
 
 func TestProcessMollieWebhookGRPC_MissingID(t *testing.T) {
-	logger = logrus.New()
-	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: logger})
+	lg := logrus.New()
+	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: lg})
 	if err != nil {
 		t.Fatalf("failed to construct mollie client: %v", err)
 	}
-	mollieClient = mc
-	t.Cleanup(func() { mollieClient = nil })
+	s := &Service{logger: lg, mollieClient: mc}
 
-	ok, _, code := ProcessMollieWebhookGRPC([]byte(""), map[string]string{
+	ok, _, code := s.ProcessMollieWebhookGRPC([]byte(""), map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	})
 	if ok {
@@ -115,19 +113,18 @@ func TestProcessMollieWebhookGRPC_MissingID(t *testing.T) {
 }
 
 func TestProcessMollieWebhookGRPC_UnknownPayment(t *testing.T) {
-	logger = logrus.New()
-	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: logger})
+	lg := logrus.New()
+	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: lg})
 	if err != nil {
 		t.Fatalf("failed to construct mollie client: %v", err)
 	}
-	mollieClient = mc
-	t.Cleanup(func() { mollieClient = nil })
+	s := &Service{logger: lg, mollieClient: mc}
 
 	withDefaultTransport(t, testRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return newJSONResponse(http.StatusNotFound, `{"status":404,"title":"Not Found","detail":"No payment exists with token tr_unknown"}`), nil
 	}))
 
-	ok, msg, code := ProcessMollieWebhookGRPC([]byte("id=tr_unknown"), map[string]string{
+	ok, msg, code := s.ProcessMollieWebhookGRPC([]byte("id=tr_unknown"), map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	})
 	if ok {

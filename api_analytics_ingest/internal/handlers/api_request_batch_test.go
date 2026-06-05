@@ -9,7 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -69,7 +69,7 @@ func TestProcessAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
 		logger:     logging.NewLoggerWithService("test"),
 	}
 
-	event := buildAPIRequestBatchEvent(t, []*pb.APIRequestAggregate{
+	event := buildAPIRequestBatchEvent(t, []*ipcpb.APIRequestAggregate{
 		{TenantId: uuid.NewString(), AuthType: "jwt", OperationType: "query", RequestCount: 1},
 		{TenantId: uuid.NewString(), AuthType: "jwt", OperationType: "query", RequestCount: 1},
 	})
@@ -89,7 +89,7 @@ func TestProcessAPIRequestBatchSendFailureReturnsError(t *testing.T) {
 		logger:     logging.NewLoggerWithService("test"),
 	}
 
-	event := buildAPIRequestBatchEvent(t, []*pb.APIRequestAggregate{
+	event := buildAPIRequestBatchEvent(t, []*ipcpb.APIRequestAggregate{
 		{TenantId: uuid.NewString(), AuthType: "jwt", OperationType: "query", RequestCount: 1},
 	})
 
@@ -138,12 +138,12 @@ func TestProcessServiceAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
 	}
 }
 
-func buildAPIRequestBatchEvent(t *testing.T, aggregates []*pb.APIRequestAggregate) kafka.AnalyticsEvent {
+func buildAPIRequestBatchEvent(t *testing.T, aggregates []*ipcpb.APIRequestAggregate) kafka.AnalyticsEvent {
 	t.Helper()
 
-	mt := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_ApiRequestBatch{
-			ApiRequestBatch: &pb.APIRequestBatch{
+	mt := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ApiRequestBatch{
+			ApiRequestBatch: &ipcpb.APIRequestBatch{
 				Timestamp:  time.Now().Unix(),
 				SourceNode: "node",
 				Aggregates: aggregates,

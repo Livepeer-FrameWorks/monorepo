@@ -7,8 +7,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto" // Import generated protobuf code
-
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	// Import generated protobuf code
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -19,7 +19,7 @@ const DefaultServerName = "navigator.internal"
 // Client represents a Navigator gRPC client
 type Client struct {
 	conn    *grpc.ClientConn
-	service pb.NavigatorServiceClient
+	service dnspb.NavigatorServiceClient
 	logger  logging.Logger
 }
 
@@ -82,7 +82,7 @@ func NewClient(config Config) (*Client, error) {
 
 	return &Client{
 		conn:    conn,
-		service: pb.NewNavigatorServiceClient(conn),
+		service: dnspb.NewNavigatorServiceClient(conn),
 		logger:  config.Logger,
 	}, nil
 }
@@ -96,7 +96,7 @@ func (c *Client) Close() error {
 }
 
 // SyncDNS calls the Navigator service to synchronize DNS records
-func (c *Client) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
+func (c *Client) SyncDNS(ctx context.Context, req *dnspb.SyncDNSRequest) (*dnspb.SyncDNSResponse, error) {
 	resp, err := c.service.SyncDNS(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sync DNS: %w", err)
@@ -105,7 +105,7 @@ func (c *Client) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncD
 }
 
 // IssueCertificate calls the Navigator service to issue or renew a certificate
-func (c *Client) IssueCertificate(ctx context.Context, req *pb.IssueCertificateRequest) (*pb.IssueCertificateResponse, error) {
+func (c *Client) IssueCertificate(ctx context.Context, req *dnspb.IssueCertificateRequest) (*dnspb.IssueCertificateResponse, error) {
 	resp, err := c.service.IssueCertificate(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to issue certificate: %w", err)
@@ -134,7 +134,7 @@ func (c *Client) GetHealth(ctx context.Context) error {
 }
 
 // GetCertificate retrieves an existing certificate from Navigator.
-func (c *Client) GetCertificate(ctx context.Context, req *pb.GetCertificateRequest) (*pb.GetCertificateResponse, error) {
+func (c *Client) GetCertificate(ctx context.Context, req *dnspb.GetCertificateRequest) (*dnspb.GetCertificateResponse, error) {
 	resp, err := c.service.GetCertificate(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get certificate: %w", err)
@@ -143,7 +143,7 @@ func (c *Client) GetCertificate(ctx context.Context, req *pb.GetCertificateReque
 }
 
 // GetTLSBundle retrieves an existing TLS bundle from Navigator.
-func (c *Client) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+func (c *Client) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error) {
 	resp, err := c.service.GetTLSBundle(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tls bundle: %w", err)
@@ -152,7 +152,7 @@ func (c *Client) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) 
 }
 
 // GetCABundle retrieves the internal CA bundle from Navigator.
-func (c *Client) GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+func (c *Client) GetCABundle(ctx context.Context, req *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error) {
 	resp, err := c.service.GetCABundle(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ca bundle: %w", err)
@@ -164,7 +164,7 @@ func (c *Client) GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*
 // EnsureTenantAlias signals Navigator that a paying tenant should have
 // an alias under the configured tenant zone. Idempotent. Returns
 // immediately; Navigator queues ACME work async.
-func (c *Client) EnsureTenantAlias(ctx context.Context, req *pb.EnsureTenantAliasRequest) (*pb.EnsureTenantAliasResponse, error) {
+func (c *Client) EnsureTenantAlias(ctx context.Context, req *dnspb.EnsureTenantAliasRequest) (*dnspb.EnsureTenantAliasResponse, error) {
 	resp, err := c.service.EnsureTenantAlias(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure tenant alias: %w", err)
@@ -174,7 +174,7 @@ func (c *Client) EnsureTenantAlias(ctx context.Context, req *pb.EnsureTenantAlia
 
 // RemoveTenantAlias signals Navigator to tear down a tenant alias.
 // Idempotent.
-func (c *Client) RemoveTenantAlias(ctx context.Context, req *pb.RemoveTenantAliasRequest) (*pb.RemoveTenantAliasResponse, error) {
+func (c *Client) RemoveTenantAlias(ctx context.Context, req *dnspb.RemoveTenantAliasRequest) (*dnspb.RemoveTenantAliasResponse, error) {
 	resp, err := c.service.RemoveTenantAlias(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove tenant alias: %w", err)
@@ -184,7 +184,7 @@ func (c *Client) RemoveTenantAlias(ctx context.Context, req *pb.RemoveTenantAlia
 
 // GetTenantAliasStatus returns the current alias lifecycle state for a
 // tenant.
-func (c *Client) GetTenantAliasStatus(ctx context.Context, req *pb.GetTenantAliasStatusRequest) (*pb.GetTenantAliasStatusResponse, error) {
+func (c *Client) GetTenantAliasStatus(ctx context.Context, req *dnspb.GetTenantAliasStatusRequest) (*dnspb.GetTenantAliasStatusResponse, error) {
 	resp, err := c.service.GetTenantAliasStatus(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tenant alias status: %w", err)
@@ -194,7 +194,7 @@ func (c *Client) GetTenantAliasStatus(ctx context.Context, req *pb.GetTenantAlia
 
 // ReportConfigSeedApplyResult reports Helmsman's ConfigSeed apply ACK as
 // observed by Foghorn. Navigator persists this as DNS readiness state.
-func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *pb.ReportConfigSeedApplyResultRequest) (*pb.ReportConfigSeedApplyResultResponse, error) {
+func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *dnspb.ReportConfigSeedApplyResultRequest) (*dnspb.ReportConfigSeedApplyResultResponse, error) {
 	resp, err := c.service.ReportConfigSeedApplyResult(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to report config seed apply result: %w", err)
@@ -206,7 +206,7 @@ func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *pb.Report
 // their own domain. Navigator persists the row, verifies CNAMEs, and
 // runs ACME-DNS-01 issuance asynchronously. Idempotent; the returned
 // CNAMEs are stable across calls.
-func (c *Client) EnsureCustomDomain(ctx context.Context, req *pb.EnsureCustomDomainRequest) (*pb.EnsureCustomDomainResponse, error) {
+func (c *Client) EnsureCustomDomain(ctx context.Context, req *dnspb.EnsureCustomDomainRequest) (*dnspb.EnsureCustomDomainResponse, error) {
 	resp, err := c.service.EnsureCustomDomain(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure custom domain: %w", err)
@@ -216,7 +216,7 @@ func (c *Client) EnsureCustomDomain(ctx context.Context, req *pb.EnsureCustomDom
 
 // RemoveCustomDomain signals Navigator to tear down a custom domain.
 // Idempotent.
-func (c *Client) RemoveCustomDomain(ctx context.Context, req *pb.RemoveCustomDomainRequest) (*pb.RemoveCustomDomainResponse, error) {
+func (c *Client) RemoveCustomDomain(ctx context.Context, req *dnspb.RemoveCustomDomainRequest) (*dnspb.RemoveCustomDomainResponse, error) {
 	resp, err := c.service.RemoveCustomDomain(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove custom domain: %w", err)
@@ -226,7 +226,7 @@ func (c *Client) RemoveCustomDomain(ctx context.Context, req *pb.RemoveCustomDom
 
 // GetCustomDomainStatus returns the lifecycle state for a (tenant_id,
 // domain) pair.
-func (c *Client) GetCustomDomainStatus(ctx context.Context, req *pb.GetCustomDomainStatusRequest) (*pb.GetCustomDomainStatusResponse, error) {
+func (c *Client) GetCustomDomainStatus(ctx context.Context, req *dnspb.GetCustomDomainStatusRequest) (*dnspb.GetCustomDomainStatusResponse, error) {
 	resp, err := c.service.GetCustomDomainStatus(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get custom domain status: %w", err)
@@ -236,7 +236,7 @@ func (c *Client) GetCustomDomainStatus(ctx context.Context, req *pb.GetCustomDom
 
 // RemoveTenantAliasCluster removes one cluster's edges from a tenant
 // alias DNS pool.
-func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTenantAliasClusterRequest) (*pb.RemoveTenantAliasClusterResponse, error) {
+func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *dnspb.RemoveTenantAliasClusterRequest) (*dnspb.RemoveTenantAliasClusterResponse, error) {
 	resp, err := c.service.RemoveTenantAliasCluster(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove tenant alias cluster: %w", err)
@@ -246,7 +246,7 @@ func (c *Client) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTen
 
 // RemoveTenantAliasSubdomain retires one specific alias label (the old
 // label on a subdomain rename) without touching the active alias. Idempotent.
-func (c *Client) RemoveTenantAliasSubdomain(ctx context.Context, req *pb.RemoveTenantAliasSubdomainRequest) (*pb.RemoveTenantAliasSubdomainResponse, error) {
+func (c *Client) RemoveTenantAliasSubdomain(ctx context.Context, req *dnspb.RemoveTenantAliasSubdomainRequest) (*dnspb.RemoveTenantAliasSubdomainResponse, error) {
 	resp, err := c.service.RemoveTenantAliasSubdomain(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove tenant alias subdomain: %w", err)
@@ -254,7 +254,7 @@ func (c *Client) RemoveTenantAliasSubdomain(ctx context.Context, req *pb.RemoveT
 	return resp, nil
 }
 
-func (c *Client) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+func (c *Client) IssueInternalCert(ctx context.Context, req *dnspb.IssueInternalCertRequest) (*dnspb.IssueInternalCertResponse, error) {
 	resp, err := c.service.IssueInternalCert(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to issue internal certificate: %w", err)

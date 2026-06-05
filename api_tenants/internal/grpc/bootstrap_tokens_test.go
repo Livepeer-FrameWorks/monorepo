@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func newMockQuartermasterServer(t *testing.T) (*QuartermasterServer, *sql.DB, sqlmock.Sqlmock) {
@@ -52,7 +52,7 @@ func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {
 		WithArgs(hashBootstrapToken("bt_edge")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	resp, err := srv.ValidateBootstrapToken(context.Background(), &pb.ValidateBootstrapTokenRequest{
+	resp, err := srv.ValidateBootstrapToken(context.Background(), &quartermasterpb.ValidateBootstrapTokenRequest{
 		Token:   "bt_edge",
 		Consume: true,
 	})
@@ -75,7 +75,7 @@ func TestCreateEnrollmentTokenRejectsCrossTenantRequest(t *testing.T) {
 	srv, _, _ := newMockQuartermasterServer(t)
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-caller")
-	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{
+	_, err := srv.CreateEnrollmentToken(ctx, &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: "cluster-1",
 		TenantId:  ptr("tenant-other"),
 	})
@@ -107,7 +107,7 @@ func TestCreateEnrollmentTokenRejectsSubscriberAccess(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-subscriber")
-	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	_, err := srv.CreateEnrollmentToken(ctx, &quartermasterpb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("status code = %v, want PermissionDenied", status.Code(err))
 	}
@@ -137,7 +137,7 @@ func TestCreateEnrollmentTokenRejectsTenantAdminSubscriberAccess(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-subscriber")
 	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "admin")
-	_, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	_, err := srv.CreateEnrollmentToken(ctx, &quartermasterpb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("status code = %v, want PermissionDenied", status.Code(err))
 	}
@@ -173,7 +173,7 @@ func TestCreateEnrollmentTokenAllowsOwnerAccess(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-owner")
-	resp, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
+	resp, err := srv.CreateEnrollmentToken(ctx, &quartermasterpb.CreateEnrollmentTokenRequest{ClusterId: "cluster-1"})
 	if err != nil {
 		t.Fatalf("CreateEnrollmentToken: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestCreateEnrollmentTokenRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
-	resp, err := srv.CreateEnrollmentToken(ctx, &pb.CreateEnrollmentTokenRequest{
+	resp, err := srv.CreateEnrollmentToken(ctx, &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: "cluster-1",
 		TenantId:  ptr("tenant-owner"),
 		Name:      ptr("edge provision: edge-eu-1"),
@@ -242,7 +242,7 @@ func TestValidateBootstrapTokenRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "tenant_id", "cluster_id", "expected_ip", "expires_at", "usage_limit", "usage_count", "used_at", "metadata"}).
 			AddRow("edge_node", "tenant-1", nil, nil, expiresAt, nil, int32(0), nil, []byte(`{}`)))
 
-	resp, err := srv.ValidateBootstrapToken(context.Background(), &pb.ValidateBootstrapTokenRequest{Token: "bt_edge"})
+	resp, err := srv.ValidateBootstrapToken(context.Background(), &quartermasterpb.ValidateBootstrapTokenRequest{Token: "bt_edge"})
 	if err != nil {
 		t.Fatalf("ValidateBootstrapToken: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 		mock.ExpectRollback()
 
 		clusterA := "cluster-a"
-		_, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+		_, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 			Token:            "tok-1",
 			Hostname:         "node-1",
 			TargetClusterId:  &clusterA,
@@ -356,7 +356,7 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 		mock.ExpectCommit()
 
 		clusterA := "cluster-a"
-		resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+		resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 			Token:            "tok-2",
 			Hostname:         "node-2",
 			TargetClusterId:  &clusterA,

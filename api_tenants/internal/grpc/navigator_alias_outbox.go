@@ -10,7 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 )
 
 const (
@@ -261,7 +261,7 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 	}
 	switch row.action {
 	case "ensure":
-		resp, err := s.navigatorClient.EnsureTenantAlias(ctx, &pb.EnsureTenantAliasRequest{
+		resp, err := s.navigatorClient.EnsureTenantAlias(ctx, &dnspb.EnsureTenantAliasRequest{
 			TenantId:  row.tenantID,
 			Subdomain: row.subdomain,
 		})
@@ -275,7 +275,7 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 			return []string{"navigator"}, fmt.Errorf("navigator ensure tenant alias rejected: %s", resp.GetError())
 		}
 	case "retire":
-		resp, err := s.navigatorClient.RemoveTenantAliasSubdomain(ctx, &pb.RemoveTenantAliasSubdomainRequest{
+		resp, err := s.navigatorClient.RemoveTenantAliasSubdomain(ctx, &dnspb.RemoveTenantAliasSubdomainRequest{
 			TenantId:  row.tenantID,
 			Subdomain: row.subdomain,
 		})
@@ -289,7 +289,7 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 			return []string{"navigator"}, fmt.Errorf("navigator retire tenant alias rejected: %s", resp.GetError())
 		}
 	case "remove":
-		resp, err := s.navigatorClient.RemoveTenantAlias(ctx, &pb.RemoveTenantAliasRequest{
+		resp, err := s.navigatorClient.RemoveTenantAlias(ctx, &dnspb.RemoveTenantAliasRequest{
 			TenantId: row.tenantID,
 		})
 		if err != nil {
@@ -302,7 +302,7 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 			return []string{"navigator"}, errors.New("navigator remove tenant alias rejected")
 		}
 	case "remove_cluster":
-		resp, err := s.navigatorClient.RemoveTenantAliasCluster(ctx, &pb.RemoveTenantAliasClusterRequest{
+		resp, err := s.navigatorClient.RemoveTenantAliasCluster(ctx, &dnspb.RemoveTenantAliasClusterRequest{
 			TenantId:  row.tenantID,
 			ClusterId: row.clusterID,
 		})

@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -224,14 +224,14 @@ func handleSetPlaybackPolicy(ctx context.Context, args SetPlaybackPolicyInput, c
 		return toolError(`type must be "public", "jwt", or "webhook"`)
 	}
 
-	req := &pb.SetPlaybackPolicyRequest{
+	req := &commodorepb.SetPlaybackPolicyRequest{
 		StreamId:   args.StreamID,
 		VodAssetId: args.VodAssetID,
 		ClipId:     args.ClipID,
 		Type:       policyType,
 	}
 	if policyType == "jwt" {
-		req.Jwt = &pb.PlaybackJwtPolicy{
+		req.Jwt = &commodorepb.PlaybackJwtPolicy{
 			AllowedKids:        args.AllowedKids,
 			RequiredAudience:   args.RequiredAudience,
 			RequiredClaimsJson: args.RequiredClaims,
@@ -241,7 +241,7 @@ func handleSetPlaybackPolicy(ctx context.Context, args SetPlaybackPolicyInput, c
 		if args.WebhookURL == "" {
 			return toolError("webhook_url is required for type=webhook")
 		}
-		req.Webhook = &pb.PlaybackWebhookPolicy{
+		req.Webhook = &commodorepb.PlaybackWebhookPolicy{
 			Url:       args.WebhookURL,
 			SecretPt:  args.WebhookSecret,
 			TimeoutMs: args.WebhookTimeoutMs,
@@ -271,7 +271,7 @@ func handleClearPlaybackPolicy(ctx context.Context, args ClearPlaybackPolicyInpu
 	if vErr := validatePlaybackTarget(args.StreamID, args.VodAssetID, args.ClipID); vErr != nil {
 		return toolError(vErr.Error())
 	}
-	resp, err := c.Commodore.SetPlaybackPolicy(ctx, &pb.SetPlaybackPolicyRequest{
+	resp, err := c.Commodore.SetPlaybackPolicy(ctx, &commodorepb.SetPlaybackPolicyRequest{
 		StreamId:   args.StreamID,
 		VodAssetId: args.VodAssetID,
 		ClipId:     args.ClipID,
@@ -304,7 +304,7 @@ func validatePlaybackTarget(streamID, vodAssetID, clipID string) error {
 	return nil
 }
 
-func signingKeyToResult(k *pb.SigningKey) SigningKeyResult {
+func signingKeyToResult(k *commodorepb.SigningKey) SigningKeyResult {
 	if k == nil {
 		return SigningKeyResult{}
 	}

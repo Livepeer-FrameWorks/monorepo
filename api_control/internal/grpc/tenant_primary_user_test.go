@@ -7,7 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 func TestGetTenantPrimaryUserPrioritizesOwner(t *testing.T) {
@@ -31,7 +31,7 @@ func TestGetTenantPrimaryUserPrioritizesOwner(t *testing.T) {
 			AddRow("user-owner", "info@frameworks.network", "FrameWorks", "Operator"))
 
 	server := &CommodoreServer{db: db, logger: logging.NewLogger()}
-	resp, err := server.GetTenantPrimaryUser(context.Background(), &pb.GetTenantPrimaryUserRequest{TenantId: "tenant-1"})
+	resp, err := server.GetTenantPrimaryUser(context.Background(), &commodorepb.GetTenantPrimaryUserRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetTenantPrimaryUser: %v", err)
 	}

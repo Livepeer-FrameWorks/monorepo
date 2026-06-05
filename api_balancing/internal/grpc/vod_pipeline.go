@@ -9,8 +9,7 @@ import (
 	"frameworks/api_balancing/internal/jobs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
@@ -149,8 +148,8 @@ func (p *VodPipeline) markArtifactReady(ctx context.Context, log *logrus.Entry, 
 
 	if p.decklogClient != nil {
 		progress := int32(100)
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_COMPLETED,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_COMPLETED,
 			VodHash:     artifactHash,
 			TenantId:    &tenantID,
 			CompletedAt: proto.Int64(time.Now().Unix()),
@@ -176,8 +175,8 @@ func (p *VodPipeline) markArtifactFailed(ctx context.Context, log *logrus.Entry,
 
 	if p.decklogClient != nil {
 		errStr := errorMsg
-		vodData := &pb.VodLifecycleData{
-			Status:   pb.VodLifecycleData_STATUS_FAILED,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:   ipcpb.VodLifecycleData_STATUS_FAILED,
 			VodHash:  artifactHash,
 			TenantId: &tenantID,
 			Error:    &errStr,

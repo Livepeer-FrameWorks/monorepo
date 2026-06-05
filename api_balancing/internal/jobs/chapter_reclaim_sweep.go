@@ -10,7 +10,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/lib/pq"
 )
 
@@ -237,7 +237,7 @@ func (s *ChapterReclaimSweep) reclaimChapter(ctx context.Context, c control.DVRC
 			for _, seg := range batch {
 				names = append(names, seg.name)
 			}
-			req := &pb.ReclaimDVRSegment{
+			req := &ipcpb.ReclaimDVRSegment{
 				RequestId:    fmt.Sprintf("chapter-reclaim-%s-%d", c.ChapterID, i),
 				DvrHash:      c.ArtifactHash,
 				SegmentNames: names,

@@ -9,7 +9,7 @@ import (
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
@@ -22,10 +22,10 @@ func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
 		outboxMu.Unlock()
 	})
 
-	handleDesiredStateUpdate(context.Background(), logging.NewLogger(), "req-update-1", &pb.DesiredStateUpdate{
+	handleDesiredStateUpdate(context.Background(), logging.NewLogger(), "req-update-1", &ipcpb.DesiredStateUpdate{
 		NodeId:        "node-1",
 		TargetRelease: "stable:v1",
-	}, func(*pb.ControlMessage) error {
+	}, func(*ipcpb.ControlMessage) error {
 		return errors.New("stream closed")
 	})
 
@@ -110,11 +110,11 @@ func TestHandleClipDelete_NilHandler(t *testing.T) {
 	deleteClipFn = nil
 	t.Cleanup(func() { deleteClipFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
+	req := &ipcpb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
 	handleClipDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -130,11 +130,11 @@ func TestHandleClipDelete_Success(t *testing.T) {
 	storeConn(&fakeControlStream{}, "test-node")
 	t.Cleanup(func() { clearConn() })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
+	req := &ipcpb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
 	handleClipDelete(logger, req, send)
 
 	if len(sent) != 1 {
@@ -167,11 +167,11 @@ func TestHandleClipDelete_Error(t *testing.T) {
 	deleteClipFn = func(hash string) (uint64, error) { return 0, fmt.Errorf("permission denied") }
 	t.Cleanup(func() { deleteClipFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
+	req := &ipcpb.ClipDeleteRequest{ClipHash: "abc123", RequestId: "req-1"}
 	handleClipDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -187,11 +187,11 @@ func TestHandleVodDelete_Success(t *testing.T) {
 	storeConn(&fakeControlStream{}, "vod-node")
 	t.Cleanup(func() { clearConn() })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.VodDeleteRequest{VodHash: "vod-hash-1", RequestId: "req-2"}
+	req := &ipcpb.VodDeleteRequest{VodHash: "vod-hash-1", RequestId: "req-2"}
 	handleVodDelete(logger, req, send)
 
 	if len(sent) != 1 {
@@ -224,11 +224,11 @@ func TestHandleVodDelete_NilHandler(t *testing.T) {
 	deleteVodFn = nil
 	t.Cleanup(func() { deleteVodFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.VodDeleteRequest{VodHash: "vod-hash-1", RequestId: "req-2"}
+	req := &ipcpb.VodDeleteRequest{VodHash: "vod-hash-1", RequestId: "req-2"}
 	handleVodDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -257,11 +257,11 @@ func TestHandleDVRDelete_Success(t *testing.T) {
 	deleteDVRFn = func(hash string) (uint64, error) { return 4096, nil }
 	t.Cleanup(func() { deleteDVRFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.DVRDeleteRequest{DvrHash: "dvr-hash-1", RequestId: "req-3"}
+	req := &ipcpb.DVRDeleteRequest{DvrHash: "dvr-hash-1", RequestId: "req-3"}
 	handleDVRDelete(logger, req, send)
 
 	if len(sent) != 1 {
@@ -290,11 +290,11 @@ func TestHandleDVRDelete_NilHandler(t *testing.T) {
 	deleteDVRFn = nil
 	t.Cleanup(func() { deleteDVRFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.DVRDeleteRequest{DvrHash: "dvr-hash-2", RequestId: "req-4"}
+	req := &ipcpb.DVRDeleteRequest{DvrHash: "dvr-hash-2", RequestId: "req-4"}
 	handleDVRDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -309,11 +309,11 @@ func TestHandleDVRDelete_Error(t *testing.T) {
 	deleteDVRFn = func(hash string) (uint64, error) { return 0, fmt.Errorf("not found") }
 	t.Cleanup(func() { deleteDVRFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.DVRDeleteRequest{DvrHash: "dvr-hash-3", RequestId: "req-5"}
+	req := &ipcpb.DVRDeleteRequest{DvrHash: "dvr-hash-3", RequestId: "req-5"}
 	handleDVRDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -326,11 +326,11 @@ func TestHandleVodDelete_Error(t *testing.T) {
 	deleteVodFn = func(hash string) (uint64, error) { return 0, fmt.Errorf("access denied") }
 	t.Cleanup(func() { deleteVodFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.VodDeleteRequest{VodHash: "vod-hash-2", RequestId: "req-6"}
+	req := &ipcpb.VodDeleteRequest{VodHash: "vod-hash-2", RequestId: "req-6"}
 	handleVodDelete(logger, req, send)
 
 	if len(sent) != 0 {
@@ -368,11 +368,11 @@ func TestHandleDVRDelete_StopsRecordingFirst(t *testing.T) {
 	}
 	t.Cleanup(func() { deleteDVRFn = prev })
 
-	var sent []*pb.ControlMessage
-	send := func(m *pb.ControlMessage) { sent = append(sent, m) }
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
 
 	logger := logging.NewLogger()
-	req := &pb.DVRDeleteRequest{DvrHash: "dvr-active", RequestId: "req-stop"}
+	req := &ipcpb.DVRDeleteRequest{DvrHash: "dvr-active", RequestId: "req-stop"}
 	handleDVRDelete(logger, req, send)
 
 	if deleteCalledWithHash != "dvr-active" {

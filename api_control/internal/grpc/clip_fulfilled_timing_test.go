@@ -1,9 +1,8 @@
 package grpc
 
 import (
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // commodore.clips stores the fulfilled range Foghorn harvested. Foghorn's
@@ -13,33 +12,33 @@ import (
 func TestFulfilledClipTiming(t *testing.T) {
 	cases := []struct {
 		name         string
-		resp         *pb.CreateClipResponse
+		resp         *sharedpb.CreateClipResponse
 		wantStart    int64
 		wantDuration int64
 		wantOK       bool
 	}{
 		{
 			name:         "full absolute clip",
-			resp:         &pb.CreateClipResponse{EffectiveStartMs: 1_700_000_000_000, EffectiveDurationMs: 60_000},
+			resp:         &sharedpb.CreateClipResponse{EffectiveStartMs: 1_700_000_000_000, EffectiveDurationMs: 60_000},
 			wantStart:    1_700_000_000_000,
 			wantDuration: 60_000,
 			wantOK:       true,
 		},
 		{
 			name:         "partial best-effort clip",
-			resp:         &pb.CreateClipResponse{EffectiveStartMs: 1_700_000_035_000, EffectiveDurationMs: 25_000, Partial: true},
+			resp:         &sharedpb.CreateClipResponse{EffectiveStartMs: 1_700_000_035_000, EffectiveDurationMs: 25_000, Partial: true},
 			wantStart:    1_700_000_035_000,
 			wantDuration: 25_000,
 			wantOK:       true,
 		},
 		{
 			name:   "missing fulfilled range fails closed",
-			resp:   &pb.CreateClipResponse{},
+			resp:   &sharedpb.CreateClipResponse{},
 			wantOK: false,
 		},
 		{
 			name:   "zero duration fails closed",
-			resp:   &pb.CreateClipResponse{EffectiveStartMs: 1_700_000_000_000, EffectiveDurationMs: 0},
+			resp:   &sharedpb.CreateClipResponse{EffectiveStartMs: 1_700_000_000_000, EffectiveDurationMs: 0},
 			wantOK: false,
 		},
 	}

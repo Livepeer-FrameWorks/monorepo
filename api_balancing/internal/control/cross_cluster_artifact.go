@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"strings"
 	"sync"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // adoptRemoteArtifactRow upserts the local foghorn.artifacts pointer for a
@@ -117,7 +117,7 @@ type CrossClusterArtifactURL struct {
 // Returns the federation result (format, stream name) for building the relay
 // URL. originClusterID/tenantID/peers come from Commodore's by-internal-name
 // resolve at STREAM_SOURCE time.
-func ResolveAndAdoptRemoteArtifact(ctx context.Context, artifactHash, contentType, internalName, originClusterID, tenantID string, peers []*pb.TenantClusterPeer) (*CrossClusterArtifactURL, error) {
+func ResolveAndAdoptRemoteArtifact(ctx context.Context, artifactHash, contentType, internalName, originClusterID, tenantID string, peers []*quartermasterpb.TenantClusterPeer) (*CrossClusterArtifactURL, error) {
 	if originClusterID == "" || originClusterID == GetLocalClusterID() || isServedCluster(originClusterID) {
 		// Local or also-served by this Foghorn: bytes are servable locally, so
 		// this is not a cross-cluster federate — fail with the sentinel and let
@@ -148,7 +148,7 @@ func ResolveAndAdoptRemoteArtifact(ctx context.Context, artifactHash, contentTyp
 // ResolveCrossClusterArtifactURL needs. *federation.FederationClient
 // satisfies it.
 type PrepareArtifactCaller interface {
-	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
+	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error)
 }
 
 // CrossClusterPeerResolver is the peer-address lookup surface. The
@@ -214,7 +214,7 @@ func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, co
 	if addr == "" {
 		return nil, ErrCrossClusterArtifactUnavailable
 	}
-	resp, err := d.FedClient.PrepareArtifact(ctx, originClusterID, addr, &pb.PrepareArtifactRequest{
+	resp, err := d.FedClient.PrepareArtifact(ctx, originClusterID, addr, &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId:        artifactHash,
 		RequestingCluster: d.LocalClusterID,
 		ArtifactType:      contentType,
@@ -238,7 +238,7 @@ func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, co
 		if redirectAddr == "" {
 			return nil, ErrCrossClusterArtifactUnavailable
 		}
-		resp, err = d.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &pb.PrepareArtifactRequest{
+		resp, err = d.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &foghornfederationpb.PrepareArtifactRequest{
 			ArtifactId:        artifactHash,
 			RequestingCluster: d.LocalClusterID,
 			ArtifactType:      contentType,

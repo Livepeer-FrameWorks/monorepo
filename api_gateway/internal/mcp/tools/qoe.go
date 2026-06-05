@@ -14,7 +14,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -748,7 +748,7 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 	return toolSuccessJSON(result)
 }
 
-func summarizeTrackInventory(metrics []*pb.StreamHealthMetric) map[string]interface{} {
+func summarizeTrackInventory(metrics []*periscopepb.StreamHealthMetric) map[string]interface{} {
 	if len(metrics) == 0 {
 		return nil
 	}
@@ -835,7 +835,7 @@ type healthTrack struct {
 	Codec string
 }
 
-func tracksFromHealthMetric(metric *pb.StreamHealthMetric) []healthTrack {
+func tracksFromHealthMetric(metric *periscopepb.StreamHealthMetric) []healthTrack {
 	tracks := make([]healthTrack, 0, len(metric.GetTracks()))
 	for _, track := range metric.GetTracks() {
 		if track == nil {

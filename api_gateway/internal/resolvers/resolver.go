@@ -15,7 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetrytoken"
 
 	"github.com/gin-gonic/gin"
@@ -122,7 +122,7 @@ func (r *Resolver) Shutdown() error {
 }
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*sharedpb.ViewerEndpointResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateViewerEndpointResponse(contentID), nil
 	}
@@ -182,7 +182,7 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 // the player can echo it on its boot telemetry beacon and Bridge can trust
 // cluster attribution. No-op when no signing secret is configured or no primary
 // endpoint was resolved.
-func (r *Resolver) stampTelemetryToken(contentID string, resp *pb.ViewerEndpointResponse) {
+func (r *Resolver) stampTelemetryToken(contentID string, resp *sharedpb.ViewerEndpointResponse) {
 	if len(r.TelemetrySecret) == 0 || resp == nil || resp.GetMetadata() == nil {
 		return
 	}
@@ -229,7 +229,7 @@ func playbackViewerTokenFromRequest(req *http.Request) string {
 	return ""
 }
 
-func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {
+func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*sharedpb.IngestEndpointResponse, error) {
 	if r == nil {
 		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
 	}

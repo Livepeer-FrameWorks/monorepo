@@ -10,7 +10,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -264,8 +264,8 @@ func (j *RetentionJob) emitClipDeleted(
 		}
 	}
 
-	clipData := &pb.ClipLifecycleData{
-		Stage:    pb.ClipLifecycleData_STAGE_DELETED,
+	clipData := &ipcpb.ClipLifecycleData{
+		Stage:    ipcpb.ClipLifecycleData_STAGE_DELETED,
 		ClipHash: clipHash,
 	}
 	if tenantIDStr != "" {
@@ -346,8 +346,8 @@ func (j *RetentionJob) emitDVRDeleted(
 		}
 	}
 
-	dvrData := &pb.DVRLifecycleData{
-		Status:  pb.DVRLifecycleData_STATUS_DELETED,
+	dvrData := &ipcpb.DVRLifecycleData{
+		Status:  ipcpb.DVRLifecycleData_STATUS_DELETED,
 		DvrHash: dvrHash,
 	}
 	if tenantIDStr != "" {
@@ -415,8 +415,8 @@ func (j *RetentionJob) emitVodDeleted(
 		}
 	}
 
-	vodData := &pb.VodLifecycleData{
-		Status:      pb.VodLifecycleData_STATUS_DELETED,
+	vodData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_DELETED,
 		VodHash:     vodHash,
 		CompletedAt: proto.Int64(time.Now().Unix()),
 	}

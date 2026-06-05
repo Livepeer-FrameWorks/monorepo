@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 )
 
@@ -17,11 +16,11 @@ func TestReconcileNodeCluster(t *testing.T) {
 	logger := logrus.New()
 
 	t.Run("uses quartermaster cluster when present", func(t *testing.T) {
-		getNodeOwnerFn = func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+		getNodeOwnerFn = func(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
 			if nodeID != "node-1" {
 				t.Fatalf("unexpected node id %q", nodeID)
 			}
-			return &pb.NodeOwnerResponse{OwnerTenantId: strPtr("tenant-new"), ClusterId: "cluster-new"}, nil
+			return &quartermasterpb.NodeOwnerResponse{OwnerTenantId: strPtr("tenant-new"), ClusterId: "cluster-new"}, nil
 		}
 
 		clusterID := reconcileNodeCluster(context.Background(), "node-1", "cluster-old", logger)
@@ -31,7 +30,7 @@ func TestReconcileNodeCluster(t *testing.T) {
 	})
 
 	t.Run("keeps existing cluster when lookup fails", func(t *testing.T) {
-		getNodeOwnerFn = func(context.Context, string) (*pb.NodeOwnerResponse, error) {
+		getNodeOwnerFn = func(context.Context, string) (*quartermasterpb.NodeOwnerResponse, error) {
 			return nil, errors.New("qm unavailable")
 		}
 
@@ -42,8 +41,8 @@ func TestReconcileNodeCluster(t *testing.T) {
 	})
 
 	t.Run("fills missing cluster when quartermaster has it", func(t *testing.T) {
-		getNodeOwnerFn = func(context.Context, string) (*pb.NodeOwnerResponse, error) {
-			return &pb.NodeOwnerResponse{OwnerTenantId: strPtr("tenant-1"), ClusterId: "cluster-1"}, nil
+		getNodeOwnerFn = func(context.Context, string) (*quartermasterpb.NodeOwnerResponse, error) {
+			return &quartermasterpb.NodeOwnerResponse{OwnerTenantId: strPtr("tenant-1"), ClusterId: "cluster-1"}, nil
 		}
 
 		clusterID := reconcileNodeCluster(context.Background(), "node-1", "", logger)

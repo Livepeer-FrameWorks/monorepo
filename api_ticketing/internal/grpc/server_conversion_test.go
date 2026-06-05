@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/api_ticketing/internal/chatwoot"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 )
 
 func newTestServer() *Server {
@@ -33,7 +33,7 @@ func TestChatwootConvToProto_FullMapping(t *testing.T) {
 	if result.Id != "42" {
 		t.Fatalf("ID: got %q, want %q", result.Id, "42")
 	}
-	if result.Status != pb.ConversationStatus_CONVERSATION_STATUS_OPEN {
+	if result.Status != deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN {
 		t.Fatalf("Status: got %v, want OPEN", result.Status)
 	}
 	if result.UnreadCount != 3 {
@@ -60,13 +60,13 @@ func TestChatwootConvToProto_StatusMapping(t *testing.T) {
 	s := newTestServer()
 	tests := []struct {
 		status string
-		want   pb.ConversationStatus
+		want   deckhandpb.ConversationStatus
 	}{
-		{"open", pb.ConversationStatus_CONVERSATION_STATUS_OPEN},
-		{"resolved", pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED},
-		{"pending", pb.ConversationStatus_CONVERSATION_STATUS_PENDING},
-		{"unknown", pb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED},
-		{"", pb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED},
+		{"open", deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN},
+		{"resolved", deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED},
+		{"pending", deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING},
+		{"unknown", deckhandpb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED},
+		{"", deckhandpb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		t.Run(tc.status, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestChatwootMsgToProto_AgentMessage(t *testing.T) {
 	if result.ConversationId != "42" {
 		t.Fatalf("ConversationId: got %q, want %q", result.ConversationId, "42")
 	}
-	if result.Sender != pb.MessageSender_MESSAGE_SENDER_AGENT {
+	if result.Sender != deckhandpb.MessageSender_MESSAGE_SENDER_AGENT {
 		t.Fatalf("Sender: got %v, want AGENT", result.Sender)
 	}
 	if result.CreatedAt == nil {
@@ -143,7 +143,7 @@ func TestChatwootMsgToProto_CustomerMessage(t *testing.T) {
 	}
 
 	result := s.chatwootMsgToProto(msg)
-	if result.Sender != pb.MessageSender_MESSAGE_SENDER_USER {
+	if result.Sender != deckhandpb.MessageSender_MESSAGE_SENDER_USER {
 		t.Fatalf("Sender: got %v, want USER", result.Sender)
 	}
 }
@@ -157,7 +157,7 @@ func TestChatwootMsgToProto_SystemActivity(t *testing.T) {
 	}
 
 	result := s.chatwootMsgToProto(msg)
-	if result.Sender != pb.MessageSender_MESSAGE_SENDER_SYSTEM {
+	if result.Sender != deckhandpb.MessageSender_MESSAGE_SENDER_SYSTEM {
 		t.Fatalf("Sender: got %v, want SYSTEM", result.Sender)
 	}
 }
@@ -171,7 +171,7 @@ func TestChatwootMsgToProto_NoSender(t *testing.T) {
 	}
 
 	result := s.chatwootMsgToProto(msg)
-	if result.Sender != pb.MessageSender_MESSAGE_SENDER_AGENT {
+	if result.Sender != deckhandpb.MessageSender_MESSAGE_SENDER_AGENT {
 		t.Fatalf("Sender: got %v, want AGENT (fallback for outgoing without sender)", result.Sender)
 	}
 }

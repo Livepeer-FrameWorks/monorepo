@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc"
 )
 
@@ -97,7 +97,7 @@ func TestStartGRPCServers_ServiceSurfaceSplit(t *testing.T) {
 	if _, ok := internal["test.InternalOnly"]; !ok {
 		t.Fatal("expected internal listener to expose internal registrars")
 	}
-	if _, ok := internal[pb.HelmsmanControl_ServiceDesc.ServiceName]; ok {
+	if _, ok := internal[ipcpb.HelmsmanControl_ServiceDesc.ServiceName]; ok {
 		t.Fatal("internal listener must not expose HelmsmanControl")
 	}
 	if _, ok := internal["foghorn.EdgeProvisioningService"]; ok {
@@ -105,7 +105,7 @@ func TestStartGRPCServers_ServiceSurfaceSplit(t *testing.T) {
 	}
 
 	external := servers.External.GetServiceInfo()
-	if _, ok := external[pb.HelmsmanControl_ServiceDesc.ServiceName]; !ok {
+	if _, ok := external[ipcpb.HelmsmanControl_ServiceDesc.ServiceName]; !ok {
 		t.Fatal("expected external listener to expose HelmsmanControl")
 	}
 	if _, ok := external["foghorn.EdgeProvisioningService"]; !ok {

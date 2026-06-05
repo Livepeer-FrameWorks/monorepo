@@ -265,7 +265,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 	if resolver == nil {
 		for cid := range perClusterUsage {
 			if cid != "" {
-				return nil, errors.New("rateInvoiceForTenant: pricing resolver not configured (qmClient missing) but per-cluster usage requires it")
+				return nil, errors.New("rateInvoiceForTenant: pricing resolver not configured (jm.billing.qmClient missing) but per-cluster usage requires it")
 			}
 		}
 	}
@@ -576,8 +576,8 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 			continue
 		}
 		name := r.ClusterID
-		if qmClient != nil {
-			if resp, qmErr := qmClient.GetCluster(ctx, r.ClusterID); qmErr == nil {
+		if jm.billing.qmClient != nil {
+			if resp, qmErr := jm.billing.qmClient.GetCluster(ctx, r.ClusterID); qmErr == nil {
 				if c := resp.GetCluster(); c != nil && c.GetClusterName() != "" {
 					name = c.GetClusterName()
 				}
@@ -638,10 +638,10 @@ func emailPricingLabel(pricingSource, clusterKind string) string {
 // resolver's interface. Returns nil when handlers.Init has not been called
 // with a quartermaster client (test paths and tools that don't need rating).
 func (jm *JobManager) pricingResolver() pricing.QuartermasterClient {
-	if qmClient == nil {
+	if jm.billing.qmClient == nil {
 		return nil
 	}
-	return qmClient
+	return jm.billing.qmClient
 }
 
 // persistManualReviewDraft writes a held draft invoice for ops visibility

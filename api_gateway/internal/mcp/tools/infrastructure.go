@@ -13,7 +13,8 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -404,10 +405,10 @@ func handleSubscribeToCluster(ctx context.Context, args SubscribeToClusterInput,
 	}
 
 	switch v := result.(type) {
-	case *pb.ClusterSubscription:
+	case *quartermasterpb.ClusterSubscription:
 		status := v.SubscriptionStatus.String()
 		msg := "Subscription active"
-		if v.SubscriptionStatus == pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL {
+		if v.SubscriptionStatus == quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL {
 			msg = "Subscription request submitted. Waiting for cluster operator approval."
 		}
 		return infraToolSuccessJSON(SubscriptionResult{
@@ -464,7 +465,7 @@ func handleSetPreferredCluster(ctx context.Context, args SetPreferredClusterInpu
 	}
 
 	switch v := result.(type) {
-	case *pb.InfrastructureCluster:
+	case *quartermasterpb.InfrastructureCluster:
 		return infraToolSuccessJSON(PreferredClusterResult{
 			ClusterID:   v.ClusterId,
 			ClusterName: v.ClusterName,
@@ -519,7 +520,7 @@ func handleUpdateClusterMarketplace(ctx context.Context, args UpdateClusterMarke
 		return toolError(fmt.Sprintf("Failed to update cluster marketplace: %v", err))
 	}
 	switch v := result.(type) {
-	case *pb.InfrastructureCluster:
+	case *quartermasterpb.InfrastructureCluster:
 		return infraToolSuccessJSON(clusterMarketplaceUpdateToResult(v))
 	case *model.ValidationError:
 		return toolError(v.Message)
@@ -585,7 +586,7 @@ func handleCreateEnrollmentToken(ctx context.Context, args CreateEnrollmentToken
 		return toolError("Authentication required")
 	}
 
-	req := &pb.CreateEnrollmentTokenRequest{
+	req := &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: args.ClusterID,
 		TenantId:  &tenantID,
 	}
@@ -745,7 +746,7 @@ func handleSetNodeMode(ctx context.Context, args SetNodeModeInput, serviceClient
 		reason = "mcp_tool"
 	}
 
-	resp, err := serviceClients.Commodore.SetNodeMode(ctx, &pb.SetNodeModeRequest{
+	resp, err := serviceClients.Commodore.SetNodeMode(ctx, &foghornpb.SetNodeModeRequest{
 		NodeId: args.NodeID,
 		Mode:   mode,
 		SetBy:  reason,
@@ -767,7 +768,7 @@ func handleGetNodeHealth(ctx context.Context, args GetNodeHealthInput, serviceCl
 		return toolError("Authentication required")
 	}
 
-	resp, err := serviceClients.Commodore.GetNodeHealth(ctx, &pb.GetNodeHealthRequest{
+	resp, err := serviceClients.Commodore.GetNodeHealth(ctx, &foghornpb.GetNodeHealthRequest{
 		NodeId: args.NodeID,
 	})
 	if err != nil {
@@ -803,37 +804,37 @@ func handleGetNodeHealth(ctx context.Context, args GetNodeHealthInput, serviceCl
 	return infraToolSuccessJSON(result)
 }
 
-func parseClusterVisibility(value string) (pb.ClusterVisibility, error) {
+func parseClusterVisibility(value string) (quartermasterpb.ClusterVisibility, error) {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
 	case "PUBLIC":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC, nil
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC, nil
 	case "UNLISTED":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED, nil
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED, nil
 	case "PRIVATE":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE, nil
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE, nil
 	default:
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNSPECIFIED, fmt.Errorf("invalid visibility %q; expected PUBLIC, UNLISTED, or PRIVATE", value)
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_UNSPECIFIED, fmt.Errorf("invalid visibility %q; expected PUBLIC, UNLISTED, or PRIVATE", value)
 	}
 }
 
-func parseClusterPricingModel(value string) (pb.ClusterPricingModel, error) {
+func parseClusterPricingModel(value string) (quartermasterpb.ClusterPricingModel, error) {
 	switch strings.ToUpper(strings.TrimSpace(value)) {
 	case "FREE_UNMETERED":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED, nil
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED, nil
 	case "METERED":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_METERED, nil
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_METERED, nil
 	case "MONTHLY":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY, nil
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY, nil
 	case "TIER_INHERIT":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT, nil
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT, nil
 	case "CUSTOM":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM, nil
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM, nil
 	default:
-		return pb.ClusterPricingModel_CLUSTER_PRICING_UNSPECIFIED, fmt.Errorf("invalid pricing_model %q; expected FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM", value)
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_UNSPECIFIED, fmt.Errorf("invalid pricing_model %q; expected FREE_UNMETERED, METERED, MONTHLY, TIER_INHERIT, or CUSTOM", value)
 	}
 }
 
-func clusterMarketplaceUpdateToResult(cluster *pb.InfrastructureCluster) ClusterMarketplaceUpdateResult {
+func clusterMarketplaceUpdateToResult(cluster *quartermasterpb.InfrastructureCluster) ClusterMarketplaceUpdateResult {
 	if cluster == nil {
 		return ClusterMarketplaceUpdateResult{}
 	}

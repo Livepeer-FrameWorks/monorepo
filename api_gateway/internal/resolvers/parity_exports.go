@@ -2,20 +2,21 @@ package resolvers
 
 import (
 	"frameworks/api_gateway/graph/model"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // ProtoToVodAssetForParity exposes VOD proto mapping for cross-package parity tests.
-func ProtoToVodAssetForParity(p *pb.VodAssetInfo) *model.VodAsset {
+func ProtoToVodAssetForParity(p *sharedpb.VodAssetInfo) *model.VodAsset {
 	return protoToVodAsset(p)
 }
 
 // ProtoConversationToModelForParity exposes conversation mapping for parity tests.
-func ProtoConversationToModelForParity(conv *pb.DeckhandConversation) *model.Conversation {
+func ProtoConversationToModelForParity(conv *deckhandpb.DeckhandConversation) *model.Conversation {
 	return protoConversationToModel(conv)
 }
 
 // ProtoMessageToModelForParity exposes message mapping for parity tests.
-func ProtoMessageToModelForParity(msg *pb.DeckhandMessage) *model.Message {
+func ProtoMessageToModelForParity(msg *deckhandpb.DeckhandMessage) *model.Message {
 	return protoMessageToModel(msg)
 }

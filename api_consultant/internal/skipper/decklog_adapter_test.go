@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 type fakeServiceEventSender struct {
-	lastEvent *pb.ServiceEvent
+	lastEvent *ipcpb.ServiceEvent
 }
 
-func (f *fakeServiceEventSender) SendServiceEvent(event *pb.ServiceEvent) error {
+func (f *fakeServiceEventSender) SendServiceEvent(event *ipcpb.ServiceEvent) error {
 	f.lastEvent = event
 	return nil
 }

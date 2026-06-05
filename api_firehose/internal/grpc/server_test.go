@@ -9,7 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -87,10 +87,10 @@ func TestSendEventRejectsMissingTenant(t *testing.T) {
 	producer := &fakeProducer{}
 	server := newTestServer(producer)
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{},
 		},
 	}
 
@@ -108,12 +108,12 @@ func TestSendEventPublishesAnalyticsEvent(t *testing.T) {
 	server := newTestServer(producer)
 
 	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		RequestId:   "source-event-push",
 		TenantId:    proto.String(tenantID),
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{},
 		},
 	}
 
@@ -144,12 +144,12 @@ func TestSendEventUsesStableEventIDForDurableTrigger(t *testing.T) {
 	server := newTestServer(producer)
 
 	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "USER_END",
 		RequestId:   "source-event-abc",
 		TenantId:    proto.String(tenantID),
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{},
 		},
 	}
 
@@ -177,12 +177,12 @@ func TestSendEventReturnsPublishError(t *testing.T) {
 	server := newTestServer(producer)
 
 	tenantID := "1d2ed4fd-1f2c-4b02-9531-412bde6c45ab"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		RequestId:   "source-event-nil-metrics",
 		TenantId:    proto.String(tenantID),
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{},
 		},
 	}
 
@@ -201,12 +201,12 @@ func TestSendEventReturnsRawJournalPublishError(t *testing.T) {
 	server := newTestServer(producer)
 
 	tenantID := "1d2ed4fd-1f2c-4b02-9531-412bde6c45ab"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "USER_END",
 		RequestId:   "source-event-raw-error",
 		TenantId:    proto.String(tenantID),
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{},
 		},
 	}
 
@@ -227,7 +227,7 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 	server := newTestServer(producer)
 
 	tenantID := "eaa0a2d3-7b64-4df2-9c36-5c5812f6d908"
-	serviceEvent := &pb.ServiceEvent{
+	serviceEvent := &ipcpb.ServiceEvent{
 		EventId:      "event-123",
 		EventType:    "auth",
 		Source:       "bridge",
@@ -235,8 +235,8 @@ func TestSendServiceEventPublishesToKafka(t *testing.T) {
 		UserId:       "user-456",
 		ResourceType: "session",
 		ResourceId:   "resource-789",
-		Payload: &pb.ServiceEvent_AuthEvent{
-			AuthEvent: &pb.AuthEvent{
+		Payload: &ipcpb.ServiceEvent_AuthEvent{
+			AuthEvent: &ipcpb.AuthEvent{
 				UserId:   "user-456",
 				TenantId: tenantID,
 				AuthType: "token",
@@ -288,7 +288,7 @@ func TestSendServiceEventPartitionKeyAndTimestamp(t *testing.T) {
 	eventID := "event-001"
 	timestamp := time.Date(2024, 5, 6, 12, 30, 0, 0, time.UTC)
 
-	serviceEvent := &pb.ServiceEvent{
+	serviceEvent := &ipcpb.ServiceEvent{
 		EventId:   eventID,
 		EventType: "tenant_update",
 		Timestamp: timestamppb.New(timestamp),
@@ -327,7 +327,7 @@ func TestSendServiceEventOutOfOrderAndDuplicates(t *testing.T) {
 	newer := time.Date(2024, 5, 6, 14, 0, 0, 0, time.UTC)
 	older := time.Date(2024, 5, 6, 13, 0, 0, 0, time.UTC)
 
-	events := []*pb.ServiceEvent{
+	events := []*ipcpb.ServiceEvent{
 		{
 			EventId:   eventID,
 			EventType: "stream_update",
@@ -375,12 +375,12 @@ func TestSendServiceEventRejectsMissingTenant(t *testing.T) {
 	producer := &fakeProducer{}
 	server := newTestServer(producer)
 
-	serviceEvent := &pb.ServiceEvent{
+	serviceEvent := &ipcpb.ServiceEvent{
 		EventId:   "event-123",
 		EventType: "auth",
 		Source:    "bridge",
-		Payload: &pb.ServiceEvent_AuthEvent{
-			AuthEvent: &pb.AuthEvent{
+		Payload: &ipcpb.ServiceEvent_AuthEvent{
+			AuthEvent: &ipcpb.AuthEvent{
 				UserId:   "user-456",
 				TenantId: "",
 				AuthType: "token",
@@ -417,16 +417,16 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		trigger       *pb.MistTrigger
+		trigger       *ipcpb.MistTrigger
 		wantEventType string
 		wantTenantID  string
 	}{
 		{
 			name: "PushRewrite uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_PushRewrite{
-					PushRewrite: &pb.PushRewriteTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+					PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "push_rewrite",
@@ -434,10 +434,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "PlayRewrite uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_PlayRewrite{
-					PlayRewrite: &pb.ViewerResolveTrigger{RequestedStream: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+					PlayRewrite: &ipcpb.ViewerResolveTrigger{RequestedStream: "test"},
 				},
 			},
 			wantEventType: "play_rewrite",
@@ -445,10 +445,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamSource uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StreamSource{
-					StreamSource: &pb.StreamSourceTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+					StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "stream_source",
@@ -456,10 +456,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "PushOutStart uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_PushOutStart{
-					PushOutStart: &pb.PushOutStartTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_PushOutStart{
+					PushOutStart: &ipcpb.PushOutStartTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "push_out_start",
@@ -467,10 +467,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "PushEnd uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_PushEnd{
-					PushEnd: &pb.PushEndTrigger{},
+				TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+					PushEnd: &ipcpb.PushEndTrigger{},
 				},
 			},
 			wantEventType: "push_end",
@@ -478,10 +478,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ViewerConnect uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ViewerConnect{
-					ViewerConnect: &pb.ViewerConnectTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+					ViewerConnect: &ipcpb.ViewerConnectTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "viewer_connect",
@@ -489,10 +489,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ViewerDisconnect uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-					ViewerDisconnect: &pb.ViewerDisconnectTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+					ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "viewer_disconnect",
@@ -500,10 +500,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamBuffer uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StreamBuffer{
-					StreamBuffer: &pb.StreamBufferTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{
+					StreamBuffer: &ipcpb.StreamBufferTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "stream_buffer",
@@ -511,10 +511,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamEnd uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StreamEnd{
-					StreamEnd: &pb.StreamEndTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+					StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "stream_end",
@@ -522,10 +522,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "TrackList uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_TrackList{
-					TrackList: &pb.StreamTrackListTrigger{StreamName: "test"},
+				TriggerPayload: &ipcpb.MistTrigger_TrackList{
+					TrackList: &ipcpb.StreamTrackListTrigger{StreamName: "test"},
 				},
 			},
 			wantEventType: "stream_track_list",
@@ -533,10 +533,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "RecordingComplete uses outer tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_RecordingComplete{
-					RecordingComplete: &pb.RecordingCompleteTrigger{},
+				TriggerPayload: &ipcpb.MistTrigger_RecordingComplete{
+					RecordingComplete: &ipcpb.RecordingCompleteTrigger{},
 				},
 			},
 			wantEventType: "recording_complete",
@@ -544,10 +544,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamLifecycleUpdate overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-					StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+				TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+					StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
@@ -558,10 +558,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamLifecycleUpdate falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-					StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+				TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+					StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 						NodeId: "node-1",
 					},
 				},
@@ -571,10 +571,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ClientLifecycleBatch overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleBatch{
-					ClientLifecycleBatch: &pb.ClientLifecycleBatch{
+				TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleBatch{
+					ClientLifecycleBatch: &ipcpb.ClientLifecycleBatch{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
@@ -585,10 +585,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ClientLifecycleBatch falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleBatch{
-					ClientLifecycleBatch: &pb.ClientLifecycleBatch{
+				TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleBatch{
+					ClientLifecycleBatch: &ipcpb.ClientLifecycleBatch{
 						NodeId: "node-1",
 					},
 				},
@@ -598,10 +598,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "NodeLifecycleUpdate overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-					NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+				TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+					NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
@@ -612,10 +612,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "NodeLifecycleUpdate falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-					NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+				TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+					NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
 						NodeId: "node-1",
 					},
 				},
@@ -625,10 +625,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "LoadBalancingData overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_LoadBalancingData{
-					LoadBalancingData: &pb.LoadBalancingData{
+				TriggerPayload: &ipcpb.MistTrigger_LoadBalancingData{
+					LoadBalancingData: &ipcpb.LoadBalancingData{
 						SelectedNode: "node-1",
 						TenantId:     proto.String(innerTenant),
 					},
@@ -639,10 +639,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "LoadBalancingData falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_LoadBalancingData{
-					LoadBalancingData: &pb.LoadBalancingData{
+				TriggerPayload: &ipcpb.MistTrigger_LoadBalancingData{
+					LoadBalancingData: &ipcpb.LoadBalancingData{
 						SelectedNode: "node-1",
 					},
 				},
@@ -652,10 +652,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ClipLifecycleData overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
-					ClipLifecycleData: &pb.ClipLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{
+					ClipLifecycleData: &ipcpb.ClipLifecycleData{
 						ClipHash: "abc123",
 						TenantId: proto.String(innerTenant),
 					},
@@ -666,10 +666,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ClipLifecycleData falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
-					ClipLifecycleData: &pb.ClipLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{
+					ClipLifecycleData: &ipcpb.ClipLifecycleData{
 						ClipHash: "abc123",
 					},
 				},
@@ -679,10 +679,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "DvrLifecycleData overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-					DvrLifecycleData: &pb.DVRLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+					DvrLifecycleData: &ipcpb.DVRLifecycleData{
 						DvrHash:  "dvr123",
 						TenantId: proto.String(innerTenant),
 					},
@@ -693,10 +693,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "DvrLifecycleData falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-					DvrLifecycleData: &pb.DVRLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+					DvrLifecycleData: &ipcpb.DVRLifecycleData{
 						DvrHash: "dvr123",
 					},
 				},
@@ -706,10 +706,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StorageLifecycleData overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-					StorageLifecycleData: &pb.StorageLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+					StorageLifecycleData: &ipcpb.StorageLifecycleData{
 						AssetHash: "stor123",
 						TenantId:  proto.String(innerTenant),
 					},
@@ -720,10 +720,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StorageLifecycleData falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-					StorageLifecycleData: &pb.StorageLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+					StorageLifecycleData: &ipcpb.StorageLifecycleData{
 						AssetHash: "stor123",
 					},
 				},
@@ -733,10 +733,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ProcessBilling overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
@@ -747,10 +747,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "ProcessBilling falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{
 						NodeId: "node-1",
 					},
 				},
@@ -760,10 +760,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StorageSnapshot overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StorageSnapshot{
-					StorageSnapshot: &pb.StorageSnapshot{
+				TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
+					StorageSnapshot: &ipcpb.StorageSnapshot{
 						NodeId:   "node-1",
 						TenantId: proto.String(innerTenant),
 					},
@@ -774,10 +774,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "StorageSnapshot falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_StorageSnapshot{
-					StorageSnapshot: &pb.StorageSnapshot{
+				TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
+					StorageSnapshot: &ipcpb.StorageSnapshot{
 						NodeId: "node-1",
 					},
 				},
@@ -787,10 +787,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "VodLifecycleData overrides with inner tenant",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_VodLifecycleData{
-					VodLifecycleData: &pb.VodLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{
+					VodLifecycleData: &ipcpb.VodLifecycleData{
 						VodHash:  "vod123",
 						TenantId: proto.String(innerTenant),
 					},
@@ -801,10 +801,10 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "VodLifecycleData falls back to outer when inner is nil",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
-				TriggerPayload: &pb.MistTrigger_VodLifecycleData{
-					VodLifecycleData: &pb.VodLifecycleData{
+				TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{
+					VodLifecycleData: &ipcpb.VodLifecycleData{
 						VodHash: "vod123",
 					},
 				},
@@ -814,9 +814,9 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 		},
 		{
 			name: "outer tenant nil yields empty string for simple payload",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushEnd{
-					PushEnd: &pb.PushEndTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+					PushEnd: &ipcpb.PushEndTrigger{},
 				},
 			},
 			wantEventType: "push_end",
@@ -843,36 +843,36 @@ func TestUnwrapMistTriggerDefaultUnknown(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		trigger *pb.MistTrigger
+		trigger *ipcpb.MistTrigger
 	}{
 		{
 			name:    "nil payload",
-			trigger: &pb.MistTrigger{TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
+			trigger: &ipcpb.MistTrigger{TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
 		},
 		{
 			name: "unhandled payload type RecordingSegment",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-				TriggerPayload: &pb.MistTrigger_RecordingSegment{
-					RecordingSegment: &pb.RecordingSegmentTrigger{},
+				TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
+					RecordingSegment: &ipcpb.RecordingSegmentTrigger{},
 				},
 			},
 		},
 		{
 			name: "unhandled payload type ApiRequestBatch",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-				TriggerPayload: &pb.MistTrigger_ApiRequestBatch{
-					ApiRequestBatch: &pb.APIRequestBatch{},
+				TriggerPayload: &ipcpb.MistTrigger_ApiRequestBatch{
+					ApiRequestBatch: &ipcpb.APIRequestBatch{},
 				},
 			},
 		},
 		{
 			name: "unhandled payload type MessageLifecycleData",
-			trigger: &pb.MistTrigger{
+			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-				TriggerPayload: &pb.MistTrigger_MessageLifecycleData{
-					MessageLifecycleData: &pb.MessageLifecycleData{},
+				TriggerPayload: &ipcpb.MistTrigger_MessageLifecycleData{
+					MessageLifecycleData: &ipcpb.MessageLifecycleData{},
 				},
 			},
 		},
@@ -893,16 +893,16 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		event   *pb.ServiceEvent
+		event   *ipcpb.ServiceEvent
 		wantKey string
 	}{
 		{
 			name: "ApiRequestBatch",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "api_request",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_ApiRequestBatch{
-					ApiRequestBatch: &pb.APIRequestBatch{
+				Payload: &ipcpb.ServiceEvent_ApiRequestBatch{
+					ApiRequestBatch: &ipcpb.APIRequestBatch{
 						SourceNode: "gw-1",
 						Timestamp:  1000,
 					},
@@ -912,11 +912,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "AuthEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "auth",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_AuthEvent{
-					AuthEvent: &pb.AuthEvent{
+				Payload: &ipcpb.ServiceEvent_AuthEvent{
+					AuthEvent: &ipcpb.AuthEvent{
 						UserId:   "user-1",
 						TenantId: tenantID,
 						AuthType: "token",
@@ -927,11 +927,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "TenantEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "tenant",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_TenantEvent{
-					TenantEvent: &pb.TenantEvent{
+				Payload: &ipcpb.ServiceEvent_TenantEvent{
+					TenantEvent: &ipcpb.TenantEvent{
 						TenantId:      tenantID,
 						ChangedFields: []string{"name"},
 					},
@@ -941,11 +941,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "ClusterEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "cluster",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_ClusterEvent{
-					ClusterEvent: &pb.ClusterEvent{
+				Payload: &ipcpb.ServiceEvent_ClusterEvent{
+					ClusterEvent: &ipcpb.ClusterEvent{
 						ClusterId: "cluster-1",
 						TenantId:  tenantID,
 					},
@@ -955,11 +955,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamChangeEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "stream_change",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_StreamChangeEvent{
-					StreamChangeEvent: &pb.StreamChangeEvent{
+				Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+					StreamChangeEvent: &ipcpb.StreamChangeEvent{
 						StreamId:      "stream-1",
 						ChangedFields: []string{"title"},
 					},
@@ -969,11 +969,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "StreamKeyEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "stream_key",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_StreamKeyEvent{
-					StreamKeyEvent: &pb.StreamKeyEvent{
+				Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
+					StreamKeyEvent: &ipcpb.StreamKeyEvent{
 						StreamId: "stream-1",
 						KeyId:    "key-1",
 					},
@@ -983,11 +983,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "BillingEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "billing",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_BillingEvent{
-					BillingEvent: &pb.BillingEvent{
+				Payload: &ipcpb.ServiceEvent_BillingEvent{
+					BillingEvent: &ipcpb.BillingEvent{
 						TenantId:  tenantID,
 						PaymentId: "pay-1",
 						Amount:    9.99,
@@ -999,11 +999,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "SupportEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "support",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_SupportEvent{
-					SupportEvent: &pb.MessageLifecycleData{
+				Payload: &ipcpb.ServiceEvent_SupportEvent{
+					SupportEvent: &ipcpb.MessageLifecycleData{
 						ConversationId: "conv-1",
 						Timestamp:      1000,
 					},
@@ -1013,11 +1013,11 @@ func TestServiceEventPayloadToMapAllTypes(t *testing.T) {
 		},
 		{
 			name: "ArtifactEvent",
-			event: &pb.ServiceEvent{
+			event: &ipcpb.ServiceEvent{
 				EventType: "artifact",
 				TenantId:  tenantID,
-				Payload: &pb.ServiceEvent_ArtifactEvent{
-					ArtifactEvent: &pb.ArtifactEvent{
+				Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+					ArtifactEvent: &ipcpb.ArtifactEvent{
 						ArtifactId: "art-1",
 						StreamId:   "stream-1",
 						Status:     "completed",
@@ -1055,7 +1055,7 @@ func TestServiceEventPayloadToMapNilEvent(t *testing.T) {
 }
 
 func TestServiceEventPayloadToMapNoPayload(t *testing.T) {
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType: "test",
 		TenantId:  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 	}
@@ -1074,12 +1074,12 @@ func TestSendEventNilMetrics(t *testing.T) {
 	server := NewDecklogServer(producer, logger, nil, "test_topic")
 
 	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		RequestId:   "source-event-nil-metrics",
 		TenantId:    proto.String(tenantID),
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{},
 		},
 	}
 
@@ -1099,13 +1099,13 @@ func TestSendServiceEventNilTimestamp(t *testing.T) {
 	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	before := time.Now()
 
-	serviceEvent := &pb.ServiceEvent{
+	serviceEvent := &ipcpb.ServiceEvent{
 		EventId:   "event-nil-ts",
 		EventType: "auth",
 		Source:    "bridge",
 		TenantId:  tenantID,
-		Payload: &pb.ServiceEvent_AuthEvent{
-			AuthEvent: &pb.AuthEvent{
+		Payload: &ipcpb.ServiceEvent_AuthEvent{
+			AuthEvent: &ipcpb.AuthEvent{
 				UserId:   "user-1",
 				TenantId: tenantID,
 				AuthType: "token",
@@ -1139,13 +1139,13 @@ func TestSendGatewayTelemetryUsesClusterOwnerForDiscovery(t *testing.T) {
 	server := newTestServer(producer)
 	clusterOwnerTenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
 
-	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+	_, err := server.SendGatewayTelemetry(context.Background(), &ipcpb.GatewayTelemetryEvent{
 		GatewayId:            "gw-eu-1",
 		GatewayRegion:        "eu",
 		ClusterId:            "cluster-eu-1",
 		ClusterOwnerTenantId: clusterOwnerTenantID,
-		Payload: &pb.GatewayTelemetryEvent_Discovery{
-			Discovery: &pb.OrchestratorDiscoveryObserved{
+		Payload: &ipcpb.GatewayTelemetryEvent_Discovery{
+			Discovery: &ipcpb.OrchestratorDiscoveryObserved{
 				OrchAddr:  "0xabc",
 				OrchUrl:   "https://orch.example",
 				Reachable: true,
@@ -1174,13 +1174,13 @@ func TestSendGatewayTelemetryRejectsOutcomeMissingStreamTenant(t *testing.T) {
 	producer := &fakeProducer{}
 	server := newTestServer(producer)
 
-	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+	_, err := server.SendGatewayTelemetry(context.Background(), &ipcpb.GatewayTelemetryEvent{
 		GatewayId:            "gw-eu-1",
 		GatewayRegion:        "eu",
 		ClusterId:            "cluster-eu-1",
 		ClusterOwnerTenantId: "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2",
-		Payload: &pb.GatewayTelemetryEvent_Transcode{
-			Transcode: &pb.OrchestratorTranscodeOutcome{
+		Payload: &ipcpb.GatewayTelemetryEvent_Transcode{
+			Transcode: &ipcpb.OrchestratorTranscodeOutcome{
 				OrchAddr: "0xabc",
 				OrchUrl:  "https://orch.example",
 				Success:  true,
@@ -1201,14 +1201,14 @@ func TestSendGatewayTelemetryUsesStreamTenantForOutcome(t *testing.T) {
 	clusterOwnerTenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
 	streamTenantID := "eaa0a2d3-7b64-4df2-9c36-5c5812f6d908"
 
-	_, err := server.SendGatewayTelemetry(context.Background(), &pb.GatewayTelemetryEvent{
+	_, err := server.SendGatewayTelemetry(context.Background(), &ipcpb.GatewayTelemetryEvent{
 		GatewayId:            "gw-eu-1",
 		GatewayRegion:        "eu",
 		ClusterId:            "cluster-eu-1",
 		ClusterOwnerTenantId: clusterOwnerTenantID,
 		StreamTenantId:       streamTenantID,
-		Payload: &pb.GatewayTelemetryEvent_Ai{
-			Ai: &pb.OrchestratorAIOutcome{
+		Payload: &ipcpb.GatewayTelemetryEvent_Ai{
+			Ai: &ipcpb.OrchestratorAIOutcome{
 				OrchAddr: "0xabc",
 				OrchUrl:  "https://orch.example",
 				Success:  true,

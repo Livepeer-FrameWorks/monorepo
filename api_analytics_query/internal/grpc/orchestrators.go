@@ -7,8 +7,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -27,7 +26,7 @@ type orchestratorPerformanceKey struct {
 // or GetOrchestrator. Splitting these reflects the underlying reality that
 // one orch eth address can front N independently-configured instances behind
 // a load-balanced DNS hostname.
-func (s *PeriscopeServer) ListOrchestrators(ctx context.Context, req *pb.ListOrchestratorsRequest) (*pb.ListOrchestratorsResponse, error) {
+func (s *PeriscopeServer) ListOrchestrators(ctx context.Context, req *periscopepb.ListOrchestratorsRequest) (*periscopepb.ListOrchestratorsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -63,9 +62,9 @@ func (s *PeriscopeServer) ListOrchestrators(ctx context.Context, req *pb.ListOrc
 	}
 	defer func() { _ = rows.Close() }()
 
-	var orchestrators []*pb.Orchestrator
+	var orchestrators []*periscopepb.Orchestrator
 	for rows.Next() {
-		var o pb.Orchestrator
+		var o periscopepb.Orchestrator
 		var lastSeen, updatedAt time.Time
 		if scanErr := rows.Scan(&o.TenantId, &o.OrchAddr, &lastSeen, &updatedAt); scanErr != nil {
 			s.logger.WithError(scanErr).Warn("Failed to scan orchestrator_state_current row")
@@ -76,14 +75,14 @@ func (s *PeriscopeServer) ListOrchestrators(ctx context.Context, req *pb.ListOrc
 		orchestrators = append(orchestrators, &o)
 	}
 
-	return &pb.ListOrchestratorsResponse{
+	return &periscopepb.ListOrchestratorsResponse{
 		Orchestrators: orchestrators,
 	}, nil
 }
 
 // GetOrchestrator returns one orchestrator's identity row plus every known
 // instance and vantage for it. Side-panel data source.
-func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *pb.GetOrchestratorRequest) (*pb.GetOrchestratorResponse, error) {
+func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *periscopepb.GetOrchestratorRequest) (*periscopepb.GetOrchestratorResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -104,9 +103,9 @@ func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *pb.GetOrches
 	}
 	defer func() { _ = stateRows.Close() }()
 
-	var orch *pb.Orchestrator
+	var orch *periscopepb.Orchestrator
 	if stateRows.Next() {
-		var o pb.Orchestrator
+		var o periscopepb.Orchestrator
 		var lastSeen, updatedAt time.Time
 		if scanErr := stateRows.Scan(&o.TenantId, &o.OrchAddr, &lastSeen, &updatedAt); scanErr != nil {
 			return nil, wrapClickhouseError(scanErr, "scan orchestrator state")
@@ -128,7 +127,7 @@ func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *pb.GetOrches
 		return nil, err
 	}
 
-	return &pb.GetOrchestratorResponse{
+	return &periscopepb.GetOrchestratorResponse{
 		Orchestrator: orch,
 		Instances:    instances,
 		Vantages:     vantages,
@@ -139,7 +138,7 @@ func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *pb.GetOrches
 // (optionally filtered to one orch). Each row carries that instance's own
 // price/capabilities/hardware. These are usually consistent within an orch's
 // pool but not guaranteed.
-func (s *PeriscopeServer) ListOrchestratorInstances(ctx context.Context, req *pb.ListOrchestratorInstancesRequest) (*pb.ListOrchestratorInstancesResponse, error) {
+func (s *PeriscopeServer) ListOrchestratorInstances(ctx context.Context, req *periscopepb.ListOrchestratorInstancesRequest) (*periscopepb.ListOrchestratorInstancesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -148,13 +147,13 @@ func (s *PeriscopeServer) ListOrchestratorInstances(ctx context.Context, req *pb
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ListOrchestratorInstancesResponse{Instances: instances}, nil
+	return &periscopepb.ListOrchestratorInstancesResponse{Instances: instances}, nil
 }
 
 // ListOrchestratorVantages returns every per-(gateway, instance) row for
 // the tenant. Federation map calls this without a filter to render every
 // observation; side panel calls with a filter for the per-region table.
-func (s *PeriscopeServer) ListOrchestratorVantages(ctx context.Context, req *pb.ListOrchestratorVantagesRequest) (*pb.ListOrchestratorVantagesResponse, error) {
+func (s *PeriscopeServer) ListOrchestratorVantages(ctx context.Context, req *periscopepb.ListOrchestratorVantagesRequest) (*periscopepb.ListOrchestratorVantagesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -164,12 +163,12 @@ func (s *PeriscopeServer) ListOrchestratorVantages(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ListOrchestratorVantagesResponse{Vantages: vantages}, nil
+	return &periscopepb.ListOrchestratorVantagesResponse{Vantages: vantages}, nil
 }
 
 // GetOrchestratorPerformanceSeries combines discovery reachability with
 // transcode/AI outcome rollups by gateway and resolved orchestrator instance IP.
-func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, req *pb.GetOrchestratorPerformanceSeriesRequest) (*pb.GetOrchestratorPerformanceSeriesResponse, error) {
+func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, req *periscopepb.GetOrchestratorPerformanceSeriesRequest) (*periscopepb.GetOrchestratorPerformanceSeriesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -228,7 +227,7 @@ func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, 
 	}
 	defer func() { _ = rows.Close() }()
 
-	pointsByKey := make(map[orchestratorPerformanceKey]*pb.OrchestratorPerformancePoint)
+	pointsByKey := make(map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint)
 	for rows.Next() {
 		var (
 			ts                            time.Time
@@ -246,7 +245,7 @@ func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, 
 			meanLatency = float32(latencySum) / float32(latencyCount)
 		}
 		key := orchestratorPerformanceKey{ts: ts, gatewayID: gwID, gatewayRegion: gwRegion, resolvedIP: resolvedIP}
-		pointsByKey[key] = &pb.OrchestratorPerformancePoint{
+		pointsByKey[key] = &periscopepb.OrchestratorPerformancePoint{
 			Timestamp:     timestamppb.New(ts),
 			GatewayId:     gwID,
 			GatewayRegion: gwRegion,
@@ -284,18 +283,18 @@ func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, 
 		}
 		return keys[i].resolvedIP < keys[j].resolvedIP
 	})
-	points := make([]*pb.OrchestratorPerformancePoint, 0, len(keys))
+	points := make([]*periscopepb.OrchestratorPerformancePoint, 0, len(keys))
 	for _, key := range keys {
 		points = append(points, pointsByKey[key])
 	}
-	return &pb.GetOrchestratorPerformanceSeriesResponse{Points: points}, nil
+	return &periscopepb.GetOrchestratorPerformanceSeriesResponse{Points: points}, nil
 }
 
-func (s *PeriscopeServer) performancePoint(points map[orchestratorPerformanceKey]*pb.OrchestratorPerformancePoint, key orchestratorPerformanceKey) *pb.OrchestratorPerformancePoint {
+func (s *PeriscopeServer) performancePoint(points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, key orchestratorPerformanceKey) *periscopepb.OrchestratorPerformancePoint {
 	if point := points[key]; point != nil {
 		return point
 	}
-	point := &pb.OrchestratorPerformancePoint{
+	point := &periscopepb.OrchestratorPerformancePoint{
 		Timestamp:     timestamppb.New(key.ts),
 		GatewayId:     key.gatewayID,
 		GatewayRegion: key.gatewayRegion,
@@ -305,7 +304,7 @@ func (s *PeriscopeServer) performancePoint(points map[orchestratorPerformanceKey
 	return point
 }
 
-func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*pb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
+func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
 	var query string
 	args := []any{tenantID, orchAddr, startTime, endTime}
 	switch interval {
@@ -376,7 +375,7 @@ func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context
 	return nil
 }
 
-func (s *PeriscopeServer) mergeOrchestratorAIOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*pb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
+func (s *PeriscopeServer) mergeOrchestratorAIOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
 	var query string
 	args := []any{tenantID, orchAddr, startTime, endTime}
 	switch interval {
@@ -448,7 +447,7 @@ func (s *PeriscopeServer) mergeOrchestratorAIOutcomes(ctx context.Context, point
 // for a tenant, optionally filtered to one orch. Used by both
 // GetOrchestrator and ListOrchestratorInstances so per-instance reads have
 // one query path.
-func (s *PeriscopeServer) queryOrchestratorInstances(ctx context.Context, tenantID, orchAddr string) ([]*pb.OrchestratorInstance, error) {
+func (s *PeriscopeServer) queryOrchestratorInstances(ctx context.Context, tenantID, orchAddr string) ([]*periscopepb.OrchestratorInstance, error) {
 	query := `
 		SELECT tenant_id, orch_addr, resolved_ip,
 		       canonical_url, advertised_node_urls, capabilities,
@@ -473,9 +472,9 @@ func (s *PeriscopeServer) queryOrchestratorInstances(ctx context.Context, tenant
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []*pb.OrchestratorInstance
+	var out []*periscopepb.OrchestratorInstance
 	for rows.Next() {
-		var inst pb.OrchestratorInstance
+		var inst periscopepb.OrchestratorInstance
 		var lastSeen, updatedAt time.Time
 		var (
 			priceCapabilities []string
@@ -502,7 +501,7 @@ func (s *PeriscopeServer) queryOrchestratorInstances(ctx context.Context, tenant
 	return out, nil
 }
 
-func capabilityPricesFromArrays(capabilities []string, positions []uint32, pricePerUnits []int64, pixelsPerUnits []int64) []*pb.OrchestratorCapabilityPrice {
+func capabilityPricesFromArrays(capabilities []string, positions []uint32, pricePerUnits []int64, pixelsPerUnits []int64) []*periscopepb.OrchestratorCapabilityPrice {
 	count := len(capabilities)
 	if len(positions) < count {
 		count = len(positions)
@@ -513,9 +512,9 @@ func capabilityPricesFromArrays(capabilities []string, positions []uint32, price
 	if len(pixelsPerUnits) < count {
 		count = len(pixelsPerUnits)
 	}
-	out := make([]*pb.OrchestratorCapabilityPrice, 0, count)
+	out := make([]*periscopepb.OrchestratorCapabilityPrice, 0, count)
 	for i := 0; i < count; i++ {
-		out = append(out, &pb.OrchestratorCapabilityPrice{
+		out = append(out, &periscopepb.OrchestratorCapabilityPrice{
 			Capability:    capabilities[i],
 			Position:      positions[i],
 			PricePerUnit:  pricePerUnits[i],
@@ -527,7 +526,7 @@ func capabilityPricesFromArrays(capabilities []string, positions []uint32, price
 
 // queryOrchestratorVantages reads orchestrator_vantage_current rows for a
 // tenant, optionally filtered to one orch.
-func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantID, orchAddr string) ([]*pb.OrchestratorVantage, error) {
+func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantID, orchAddr string) ([]*periscopepb.OrchestratorVantage, error) {
 	query, args := buildOrchestratorVantagesQuery(tenantID, orchAddr)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -536,9 +535,9 @@ func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantI
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []*pb.OrchestratorVantage
+	var out []*periscopepb.OrchestratorVantage
 	for rows.Next() {
-		var v pb.OrchestratorVantage
+		var v periscopepb.OrchestratorVantage
 		var geoResolvedAt, lastSeen time.Time
 		var dialedRecently uint8
 		if scanErr := rows.Scan(

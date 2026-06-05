@@ -27,7 +27,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,25 +67,25 @@ type Metrics struct {
 }
 
 type meshClient interface {
-	SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error)
-	CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error)
-	CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error)
+	SyncMesh(ctx context.Context, req *quartermasterpb.InfrastructureSyncRequest) (*quartermasterpb.InfrastructureSyncResponse, error)
+	CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error)
+	CreateBootstrapToken(ctx context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
 }
 
 type serviceRegistryClient interface {
-	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error)
+	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
 }
 
 type certificateClient interface {
-	GetCABundle(ctx context.Context, req *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error)
-	IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error)
-	GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error)
+	GetCABundle(ctx context.Context, req *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error)
+	IssueInternalCert(ctx context.Context, req *dnspb.IssueInternalCertRequest) (*dnspb.IssueInternalCertResponse, error)
+	GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error)
 }
 
 // ingressClient lists ingress sites scoped to this Privateer's node so the
 // agent can discover which Navigator-issued TLS bundles to sync onto disk.
 type ingressClient interface {
-	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error)
+	ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error)
 }
 
 type dnsService interface {
@@ -92,6 +94,10 @@ type dnsService interface {
 	UpdateRecords(records map[string][]string) error
 	SetQueriesMetric(vec *prometheus.CounterVec)
 }
+
+type resourceSnapshotCollector func(context.Context, string) *quartermasterpb.NodeResourceSnapshot
+
+const resourceSnapshotTimeout = time.Second
 
 type Agent struct {
 	logger            logging.Logger
@@ -142,6 +148,7 @@ type Agent struct {
 	privateKeyFile  string
 	wireguardIP     string
 	lastKnownPath   string
+	snapshot        resourceSnapshotCollector
 }
 
 type Config struct {
@@ -331,6 +338,7 @@ func New(cfg Config) (*Agent, error) {
 		privateKeyFile:    cfg.PrivateKeyFile,
 		wireguardIP:       cfg.WireguardIP,
 		lastKnownPath:     cfg.LastKnownPath,
+		snapshot:          collectResourceSnapshot,
 	}, nil
 }
 
@@ -683,7 +691,7 @@ func (a *Agent) sync() {
 		return
 	}
 
-	req := &pb.InfrastructureSyncRequest{
+	req := &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     a.nodeID,
 		PublicKey:  pubKey,
 		ListenPort: safeInt32(a.listenPort),
@@ -692,11 +700,12 @@ func (a *Agent) sync() {
 		req.AppliedMeshRevision = *rev
 	}
 
-	syncStarted := time.Now()
-	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
-	if snap := collectResourceSnapshot(syncCtx, ""); snap != nil {
+	if snap := a.collectResourceSnapshot(); snap != nil {
 		req.ResourceSnapshot = snap
 	}
+
+	syncStarted := time.Now()
+	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 	resp, err := a.client.SyncMesh(syncCtx, req)
 	cancel()
 	if err != nil {
@@ -827,7 +836,7 @@ func (a *Agent) sync() {
 	a.logger.Info("Successfully applied wireguard config")
 }
 
-func (a *Agent) validateManagedSelfIdentity(resp *pb.InfrastructureSyncResponse) error {
+func (a *Agent) validateManagedSelfIdentity(resp *quartermasterpb.InfrastructureSyncResponse) error {
 	if resp == nil {
 		return fmt.Errorf("empty sync response")
 	}
@@ -871,7 +880,7 @@ func parseWireGuardIdentityIP(value string) (netip.Addr, error) {
 	return netip.ParseAddr(value)
 }
 
-func dynamicPeersToLastKnown(peers []*pb.InfrastructurePeer) []lastKnownPeer {
+func dynamicPeersToLastKnown(peers []*quartermasterpb.InfrastructurePeer) []lastKnownPeer {
 	out := make([]lastKnownPeer, len(peers))
 	for i, p := range peers {
 		out[i] = lastKnownPeer{
@@ -885,7 +894,7 @@ func dynamicPeersToLastKnown(peers []*pb.InfrastructurePeer) []lastKnownPeer {
 	return out
 }
 
-func dynamicDNSRecords(resp *pb.InfrastructureSyncResponse) map[string][]string {
+func dynamicDNSRecords(resp *quartermasterpb.InfrastructureSyncResponse) map[string][]string {
 	records := make(map[string][]string)
 	if resp == nil {
 		return records
@@ -910,7 +919,7 @@ func (a *Agent) registerNode(ctx context.Context, publicKey string) error {
 	if strings.TrimSpace(a.clusterID) == "" {
 		return fmt.Errorf("cluster_id is required for node registration")
 	}
-	req := &pb.CreateNodeRequest{
+	req := &quartermasterpb.CreateNodeRequest{
 		NodeId:    a.nodeID,
 		ClusterId: a.clusterID,
 		NodeName:  a.nodeName,
@@ -959,7 +968,7 @@ func (a *Agent) ensureCertIssueToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("build cert token metadata: %w", err)
 	}
-	resp, err := a.client.CreateBootstrapToken(ctx, &pb.CreateBootstrapTokenRequest{
+	resp, err := a.client.CreateBootstrapToken(ctx, &quartermasterpb.CreateBootstrapTokenRequest{
 		Name:      fmt.Sprintf("Internal Cert Sync Token for %s", a.nodeID),
 		Kind:      "infrastructure_node",
 		ClusterId: &a.clusterID,
@@ -1001,7 +1010,7 @@ func (a *Agent) syncInternalCertificates() error {
 		return issueTokenErr
 	}
 
-	bundleResp, err := a.navigatorClient.GetCABundle(ctx, &pb.GetCABundleRequest{})
+	bundleResp, err := a.navigatorClient.GetCABundle(ctx, &dnspb.GetCABundleRequest{})
 	if err != nil {
 		return fmt.Errorf("get ca bundle: %w", err)
 	}
@@ -1020,7 +1029,7 @@ func (a *Agent) syncInternalCertificates() error {
 	for _, serviceType := range serviceTypes {
 		_, isRegistered := registeredServiceTypes[serviceType]
 		issueFailureIsFatal := isRegistered || !registryAvailable
-		resp, issueErr := a.navigatorClient.IssueInternalCert(ctx, &pb.IssueInternalCertRequest{
+		resp, issueErr := a.navigatorClient.IssueInternalCert(ctx, &dnspb.IssueInternalCertRequest{
 			NodeId:      a.nodeID,
 			ServiceType: serviceType,
 			IssueToken:  a.certIssueToken,
@@ -1092,6 +1101,32 @@ func (a *Agent) clearCertDenyLog(serviceType string) {
 	defer a.certDenyLogMu.Unlock()
 	if a.certDenyLogTimes != nil {
 		delete(a.certDenyLogTimes, serviceType)
+	}
+}
+
+func (a *Agent) collectResourceSnapshot() *quartermasterpb.NodeResourceSnapshot {
+	collector := a.snapshot
+	if collector == nil {
+		collector = collectResourceSnapshot
+	}
+	timeout := resourceSnapshotTimeout
+	if a.syncTimeout > 0 && a.syncTimeout/2 < timeout {
+		timeout = a.syncTimeout / 2
+	}
+	if timeout <= 0 {
+		timeout = resourceSnapshotTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ch := make(chan *quartermasterpb.NodeResourceSnapshot, 1)
+	go func() {
+		ch <- collector(ctx, "")
+	}()
+	select {
+	case snap := <-ch:
+		return snap
+	case <-ctx.Done():
+		return nil
 	}
 }
 
@@ -1174,7 +1209,7 @@ func (a *Agent) resolvedServiceTypes(ctx context.Context) ([]string, map[string]
 }
 
 func (a *Agent) listNodeServiceTypes(ctx context.Context) ([]string, error) {
-	pagination := &pb.CursorPaginationRequest{First: 200}
+	pagination := &commonpb.CursorPaginationRequest{First: 200}
 	seen := make(map[string]struct{})
 	var services []string
 
@@ -1200,7 +1235,7 @@ func (a *Agent) listNodeServiceTypes(ctx context.Context) ([]string, error) {
 			break
 		}
 		endCursor := page.GetEndCursor()
-		pagination = &pb.CursorPaginationRequest{
+		pagination = &commonpb.CursorPaginationRequest{
 			First: 200,
 			After: &endCursor,
 		}
@@ -1256,7 +1291,7 @@ func (a *Agent) syncIngressCertificates() error {
 
 	changed := false
 	for _, bundleID := range bundleIDs {
-		resp, err := a.navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{BundleId: bundleID})
+		resp, err := a.navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 		if err != nil {
 			a.logger.WithError(err).WithField("bundle_id", bundleID).Warn("Ingress sync: GetTLSBundle failed")
 			continue
@@ -1287,7 +1322,7 @@ func (a *Agent) syncIngressCertificates() error {
 
 func (a *Agent) collectIngressBundleIDs(ctx context.Context) ([]string, error) {
 	seen := make(map[string]struct{})
-	var pagination *pb.CursorPaginationRequest
+	var pagination *commonpb.CursorPaginationRequest
 	for {
 		resp, err := a.ingressClient.ListIngressSites(ctx, a.clusterID, a.nodeID, pagination)
 		if err != nil {
@@ -1313,7 +1348,7 @@ func (a *Agent) collectIngressBundleIDs(ctx context.Context) ([]string, error) {
 			break
 		}
 		endCursor := page.GetEndCursor()
-		pagination = &pb.CursorPaginationRequest{First: 200, After: &endCursor}
+		pagination = &commonpb.CursorPaginationRequest{First: 200, After: &endCursor}
 	}
 	out := make([]string, 0, len(seen))
 	for id := range seen {
@@ -1344,7 +1379,7 @@ func (a *Agent) missingIngressBundleMaterials(bundleIDs []string) bool {
 // ingressBundleMarker returns a stable marker for change detection. Prefers
 // the Navigator-supplied version field; falls back to expires_at. Empty
 // marker means "always rewrite" (best-effort, no caching).
-func ingressBundleMarker(resp *pb.GetTLSBundleResponse) string {
+func ingressBundleMarker(resp *dnspb.GetTLSBundleResponse) string {
 	if v := strings.TrimSpace(resp.GetVersion()); v != "" {
 		return "v:" + v
 	}

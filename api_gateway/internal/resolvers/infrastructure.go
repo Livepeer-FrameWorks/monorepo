@@ -20,7 +20,13 @@ import (
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // Infrastructure pagination constants
@@ -30,8 +36,8 @@ const (
 )
 
 // buildCursorPagination creates bidirectional cursor pagination from Relay-style params
-func buildCursorPagination(first *int, after *string, last *int, before *string) *pb.CursorPaginationRequest {
-	req := &pb.CursorPaginationRequest{}
+func buildCursorPagination(first *int, after *string, last *int, before *string) *commonpb.CursorPaginationRequest {
+	req := &commonpb.CursorPaginationRequest{}
 
 	// Forward pagination (first/after)
 	if first != nil {
@@ -87,7 +93,7 @@ func normalizeFilterID(id *string, expectedType string) (string, error) {
 }
 
 // DoGetTenant returns tenant information
-func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
+func (r *Resolver) DoGetTenant(ctx context.Context) (*quartermasterpb.Tenant, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo tenant data")
 		return demo.GenerateTenant(), nil
@@ -118,7 +124,7 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
 // the tenant in context. Returns nil when the tenant has not configured a
 // custom domain or when Navigator reports `found=false` (so the field resolver
 // can map to GraphQL null without surfacing an error to the dashboard).
-func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (*pb.GetCustomDomainStatusResponse, error) {
+func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (*dnspb.GetCustomDomainStatusResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, nil
@@ -129,7 +135,7 @@ func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (
 	if r.Clients == nil || r.Clients.Navigator == nil {
 		return nil, nil
 	}
-	resp, err := r.Clients.Navigator.GetCustomDomainStatus(ctx, &pb.GetCustomDomainStatusRequest{
+	resp, err := r.Clients.Navigator.GetCustomDomainStatus(ctx, &dnspb.GetCustomDomainStatusRequest{
 		TenantId: tenantID,
 		Domain:   domain,
 	})
@@ -143,7 +149,7 @@ func (r *Resolver) DoGetCustomDomainStatus(ctx context.Context, domain string) (
 }
 
 // DoGetClusters returns clusters owned by the current tenant.
-func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string) ([]*pb.InfrastructureCluster, error) {
+func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string) ([]*quartermasterpb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data")
 		return demo.GenerateInfrastructureClusters(), nil
@@ -166,7 +172,7 @@ func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string)
 }
 
 // DoGetCluster returns a specific cluster by ID
-func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*pb.InfrastructureCluster, error) {
+func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*quartermasterpb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data for ID", id)
 		clusters, _ := r.DoGetClusters(ctx, nil, nil)
@@ -193,7 +199,7 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*pb.Infrastruct
 }
 
 // DoGetNodes returns infrastructure nodes
-func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string, first *int, after *string) ([]*pb.InfrastructureNode, error) {
+func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string, first *int, after *string) ([]*quartermasterpb.InfrastructureNode, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo node data")
 		return demo.GenerateInfrastructureNodes(), nil
@@ -233,9 +239,9 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 	if err != nil {
 		return nil, err
 	}
-	nodes := make([]*pb.InfrastructureNode, 0)
+	nodes := make([]*quartermasterpb.InfrastructureNode, 0)
 	for ownedClusterID := range owned {
-		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, ownedClusterID, typeFilter, "", &pb.CursorPaginationRequest{First: infraMaxLimit})
+		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, ownedClusterID, typeFilter, "", &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 		if listErr != nil {
 			r.Logger.WithError(listErr).WithField("cluster_id", ownedClusterID).Error("Failed to get nodes")
 			return nil, fmt.Errorf("failed to get nodes: %w", listErr)
@@ -246,7 +252,7 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 }
 
 // DoGetServiceInstances returns service instances
-func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string) ([]*pb.ServiceInstance, error) {
+func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string) ([]*quartermasterpb.ServiceInstance, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo service instances")
 		return demo.GenerateServiceInstances(), nil
@@ -289,9 +295,9 @@ func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string,
 	if err != nil {
 		return nil, err
 	}
-	instances := make([]*pb.ServiceInstance, 0)
+	instances := make([]*quartermasterpb.ServiceInstance, 0)
 	for ownedClusterID := range owned {
-		resp, listErr := r.Clients.Quartermaster.ListServiceInstances(ctx, ownedClusterID, "", "", &pb.CursorPaginationRequest{First: infraMaxLimit})
+		resp, listErr := r.Clients.Quartermaster.ListServiceInstances(ctx, ownedClusterID, "", "", &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 		if listErr != nil {
 			return nil, fmt.Errorf("failed to get service instances: %w", listErr)
 		}
@@ -301,7 +307,7 @@ func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string,
 }
 
 // DoGetNode returns a specific node by ID
-func (r *Resolver) DoGetNode(ctx context.Context, id string) (*pb.InfrastructureNode, error) {
+func (r *Resolver) DoGetNode(ctx context.Context, id string) (*quartermasterpb.InfrastructureNode, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo node data for ID", id)
 		nodes, _ := r.DoGetNodes(ctx, nil, nil, nil, nil, nil, nil)
@@ -325,12 +331,12 @@ func (r *Resolver) DoGetNode(ctx context.Context, id string) (*pb.Infrastructure
 }
 
 // DoDiscoverServices discovers running service instances by service type and optional cluster
-func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, clusterID *string, first *int, after *string) ([]*pb.ServiceInstance, error) {
+func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, clusterID *string, first *int, after *string) ([]*quartermasterpb.ServiceInstance, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo discovered services for type", serviceType)
 		// Filter demo service instances by service type
 		allInstances := demo.GenerateServiceInstances()
-		var filtered []*pb.ServiceInstance
+		var filtered []*quartermasterpb.ServiceInstance
 		for _, inst := range allInstances {
 			if inst.ServiceId == serviceType || inst.InstanceId == serviceType || serviceType == "" {
 				filtered = append(filtered, inst)
@@ -357,7 +363,7 @@ func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, c
 			return nil, fmt.Errorf("failed to discover services: %w", err)
 		}
 		if resp == nil {
-			return []*pb.ServiceInstance{}, nil
+			return []*quartermasterpb.ServiceInstance{}, nil
 		}
 		return resp.Instances, nil
 	}
@@ -366,9 +372,9 @@ func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, c
 	if err != nil {
 		return nil, err
 	}
-	instances := make([]*pb.ServiceInstance, 0)
+	instances := make([]*quartermasterpb.ServiceInstance, 0)
 	for ownedClusterID := range owned {
-		resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, ownedClusterID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+		resp, err := r.Clients.Quartermaster.DiscoverServices(ctx, serviceType, ownedClusterID, &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 		if err != nil {
 			return nil, fmt.Errorf("failed to discover services: %w", err)
 		}
@@ -383,7 +389,7 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo discover services connection for type", serviceType)
 		allInstances := demo.GenerateServiceInstances()
-		var filtered []*pb.ServiceInstance
+		var filtered []*quartermasterpb.ServiceInstance
 		for _, inst := range allInstances {
 			if inst.ServiceId == serviceType || inst.InstanceId == serviceType || serviceType == "" {
 				filtered = append(filtered, inst)
@@ -410,7 +416,7 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 			pageInfo.StartCursor = &edges[0].Cursor
 			pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 		}
-		edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+		edgeNodes := make([]*quartermasterpb.ServiceInstance, 0, len(edges))
 		for _, edge := range edges {
 			if edge != nil {
 				edgeNodes = append(edgeNodes, edge.Node)
@@ -457,7 +463,7 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 	}
 	instances := resp.Instances
 	if instances == nil {
-		instances = []*pb.ServiceInstance{}
+		instances = []*quartermasterpb.ServiceInstance{}
 	}
 
 	// Build edges with keyset cursors
@@ -486,7 +492,7 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.ServiceInstance, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -520,7 +526,7 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 		return nil, fmt.Errorf("failed to get clusters access: %w", err)
 	}
 	if resp == nil {
-		resp = &pb.ClustersAccessResponse{}
+		resp = &quartermasterpb.ClustersAccessResponse{}
 	}
 
 	out := make([]*model.ClusterAccess, 0, len(resp.Clusters))
@@ -545,7 +551,7 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 		}
 	}
 
-	ownedResp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+	ownedResp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get owned clusters: %w", err)
 	}
@@ -601,7 +607,7 @@ func (r *Resolver) DoGetClustersAvailable(ctx context.Context, first *int, after
 }
 
 // DoUpdateTenant updates tenant settings
-func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*pb.Tenant, error) {
+func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*quartermasterpb.Tenant, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo tenant update")
 		tenant := demo.GenerateTenant()
@@ -620,7 +626,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	r.Logger.WithField("tenant_id", tenantID).Info("Updating tenant")
 
 	// Build gRPC update request
-	updateReq := &pb.UpdateTenantRequest{
+	updateReq := &quartermasterpb.UpdateTenantRequest{
 		TenantId: tenantID,
 	}
 	updates := 0
@@ -693,12 +699,12 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		return nil, fmt.Errorf("failed to update tenant: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTenantUpdated,
 		ResourceType: "tenant",
 		ResourceId:   tenantID,
-		Payload: &pb.ServiceEvent_TenantEvent{
-			TenantEvent: &pb.TenantEvent{
+		Payload: &ipcpb.ServiceEvent_TenantEvent{
+			TenantEvent: &ipcpb.TenantEvent{
 				TenantId:      tenantID,
 				ChangedFields: changedFields,
 			},
@@ -709,7 +715,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 }
 
 // DoUpdateStream updates stream settings
-func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*pb.Stream, error) {
+func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -741,7 +747,7 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		Info("Updating stream")
 
 	// Build gRPC request
-	req := &pb.UpdateStreamRequest{
+	req := &commodorepb.UpdateStreamRequest{
 		StreamId: id,
 	}
 
@@ -793,12 +799,12 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	if input.PullSource != nil {
 		changedFields = append(changedFields, "pull_source")
 	}
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamUpdated,
 		ResourceType: "stream",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId:      id,
 				ChangedFields: changedFields,
 			},
@@ -833,7 +839,7 @@ func (r *Resolver) DoGetClustersConnection(ctx context.Context, first *int, afte
 }
 
 // buildClustersConnectionFromResponse constructs a connection from gRPC response
-func (r *Resolver) buildClustersConnectionFromResponse(resp *pb.ListClustersResponse) *model.ClustersConnection {
+func (r *Resolver) buildClustersConnectionFromResponse(resp *quartermasterpb.ListClustersResponse) *model.ClustersConnection {
 	clusters := resp.GetClusters()
 	edges := make([]*model.ClusterEdge, len(clusters))
 	for i, cluster := range clusters {
@@ -858,7 +864,7 @@ func (r *Resolver) buildClustersConnectionFromResponse(resp *pb.ListClustersResp
 		pageInfo.EndCursor = &ec
 	}
 
-	edgeNodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.InfrastructureCluster, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -874,7 +880,7 @@ func (r *Resolver) buildClustersConnectionFromResponse(resp *pb.ListClustersResp
 }
 
 // buildClustersConnectionFromSlice constructs a connection from a slice (demo mode)
-func (r *Resolver) buildClustersConnectionFromSlice(clusters []*pb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.ClustersConnection {
+func (r *Resolver) buildClustersConnectionFromSlice(clusters []*quartermasterpb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.ClustersConnection {
 	total := len(clusters)
 
 	limit := infraDefaultLimit
@@ -917,7 +923,7 @@ func (r *Resolver) buildClustersConnectionFromSlice(clusters []*pb.Infrastructur
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.InfrastructureCluster, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -949,49 +955,8 @@ func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, 
 	return r.buildNodesConnectionFromSlice(nodes, first, after, last, before), nil
 }
 
-// buildNodesConnectionFromResponse constructs a connection from gRPC response
-func (r *Resolver) buildNodesConnectionFromResponse(resp *pb.ListNodesResponse) *model.NodesConnection {
-	nodes := resp.GetNodes()
-	edges := make([]*model.NodeEdge, len(nodes))
-	for i, node := range nodes {
-		cursor := pagination.EncodeCursor(node.CreatedAt.AsTime(), node.Id)
-		edges[i] = &model.NodeEdge{
-			Cursor: cursor,
-			Node:   node,
-		}
-	}
-
-	pag := resp.GetPagination()
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: pag.GetHasPreviousPage(),
-		HasNextPage:     pag.GetHasNextPage(),
-	}
-	if pag.GetStartCursor() != "" {
-		sc := pag.GetStartCursor()
-		pageInfo.StartCursor = &sc
-	}
-	if pag.GetEndCursor() != "" {
-		ec := pag.GetEndCursor()
-		pageInfo.EndCursor = &ec
-	}
-
-	edgeNodes := make([]*pb.InfrastructureNode, 0, len(edges))
-	for _, edge := range edges {
-		if edge != nil {
-			edgeNodes = append(edgeNodes, edge.Node)
-		}
-	}
-
-	return &model.NodesConnection{
-		Edges:      edges,
-		Nodes:      edgeNodes,
-		PageInfo:   pageInfo,
-		TotalCount: int(pag.GetTotalCount()),
-	}
-}
-
 // buildNodesConnectionFromSlice constructs a connection from a slice (demo mode)
-func (r *Resolver) buildNodesConnectionFromSlice(nodes []*pb.InfrastructureNode, first *int, after *string, last *int, before *string) *model.NodesConnection {
+func (r *Resolver) buildNodesConnectionFromSlice(nodes []*quartermasterpb.InfrastructureNode, first *int, after *string, last *int, before *string) *model.NodesConnection {
 	total := len(nodes)
 
 	limit := infraDefaultLimit
@@ -1034,7 +999,7 @@ func (r *Resolver) buildNodesConnectionFromSlice(nodes []*pb.InfrastructureNode,
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.InfrastructureNode, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.InfrastructureNode, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1066,53 +1031,8 @@ func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterI
 	return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
 }
 
-// buildServiceInstancesConnectionFromResponse constructs a connection from gRPC response
-func (r *Resolver) buildServiceInstancesConnectionFromResponse(resp *pb.ListServiceInstancesResponse) *model.ServiceInstancesConnection {
-	instances := resp.GetInstances()
-	edges := make([]*model.ServiceInstanceEdge, len(instances))
-	for i, instance := range instances {
-		ts := time.Time{}
-		if instance.StartedAt != nil {
-			ts = instance.StartedAt.AsTime()
-		}
-		cursor := pagination.EncodeCursor(ts, instance.InstanceId)
-		edges[i] = &model.ServiceInstanceEdge{
-			Cursor: cursor,
-			Node:   instance,
-		}
-	}
-
-	pag := resp.GetPagination()
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: pag.GetHasPreviousPage(),
-		HasNextPage:     pag.GetHasNextPage(),
-	}
-	if pag.GetStartCursor() != "" {
-		sc := pag.GetStartCursor()
-		pageInfo.StartCursor = &sc
-	}
-	if pag.GetEndCursor() != "" {
-		ec := pag.GetEndCursor()
-		pageInfo.EndCursor = &ec
-	}
-
-	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
-	for _, edge := range edges {
-		if edge != nil {
-			edgeNodes = append(edgeNodes, edge.Node)
-		}
-	}
-
-	return &model.ServiceInstancesConnection{
-		Edges:      edges,
-		Nodes:      edgeNodes,
-		PageInfo:   pageInfo,
-		TotalCount: int(pag.GetTotalCount()),
-	}
-}
-
 // buildServiceInstancesConnectionFromSlice constructs a connection from a slice (demo mode)
-func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*pb.ServiceInstance, first *int, after *string, last *int, before *string) *model.ServiceInstancesConnection {
+func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*quartermasterpb.ServiceInstance, first *int, after *string, last *int, before *string) *model.ServiceInstancesConnection {
 	total := len(instances)
 
 	limit := infraDefaultLimit
@@ -1159,7 +1079,7 @@ func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*pb.Serv
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.ServiceInstance, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1208,12 +1128,12 @@ func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (
 		return false, fmt.Errorf("status:pending_approval")
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTenantClusterAssigned,
 		ResourceType: "cluster",
 		ResourceId:   clusterID,
-		Payload: &pb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &pb.ClusterEvent{
+		Payload: &ipcpb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &ipcpb.ClusterEvent{
 				ClusterId: clusterID,
 				TenantId:  tenantID,
 			},
@@ -1232,7 +1152,7 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 		return false, fmt.Errorf("tenant context required")
 	}
 
-	_, err := r.Clients.Quartermaster.UnsubscribeFromCluster(ctx, &pb.UnsubscribeFromClusterRequest{
+	_, err := r.Clients.Quartermaster.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{
 		TenantId:  tenantID,
 		ClusterId: clusterID,
 	})
@@ -1240,12 +1160,12 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 		return false, fmt.Errorf("failed to unsubscribe: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTenantClusterUnassigned,
 		ResourceType: "cluster",
 		ResourceId:   clusterID,
-		Payload: &pb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &pb.ClusterEvent{
+		Payload: &ipcpb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &ipcpb.ClusterEvent{
 				ClusterId: clusterID,
 				TenantId:  tenantID,
 			},
@@ -1255,7 +1175,7 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 }
 
 // DoListMySubscriptions lists clusters the tenant is subscribed to
-func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after *string) ([]*pb.InfrastructureCluster, error) {
+func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after *string) ([]*quartermasterpb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning demo subscribed clusters")
 		return demo.GenerateMySubscriptions(), nil
@@ -1269,7 +1189,7 @@ func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after 
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 		TenantId:   tenantID,
 		Pagination: buildCursorPagination(first, after, nil, nil),
 	})
@@ -1280,7 +1200,7 @@ func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after 
 }
 
 // DoCheckIsSubscribed checks if the current tenant is subscribed to the cluster
-func (r *Resolver) DoCheckIsSubscribed(ctx context.Context, cluster *pb.InfrastructureCluster) (bool, error) {
+func (r *Resolver) DoCheckIsSubscribed(ctx context.Context, cluster *quartermasterpb.InfrastructureCluster) (bool, error) {
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
@@ -1304,7 +1224,7 @@ func (r *Resolver) DoCheckIsSubscribed(ctx context.Context, cluster *pb.Infrastr
 
 // DoListMarketplaceClusters lists clusters in the marketplace.
 // Delegates to DoGetMarketplaceClustersConnection and extracts nodes.
-func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, after *string) ([]*pb.MarketplaceClusterEntry, error) {
+func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, after *string) ([]*quartermasterpb.MarketplaceClusterEntry, error) {
 	conn, err := r.DoGetMarketplaceClustersConnection(ctx, first, after, nil, nil)
 	if err != nil {
 		return nil, err
@@ -1314,7 +1234,7 @@ func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, af
 
 // DoGetMarketplaceCluster gets a marketplace cluster.
 // Uses Purser for pricing and Quartermaster for metadata (consistent with connection method).
-func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string, inviteToken *string) (*pb.MarketplaceClusterEntry, error) {
+func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string, inviteToken *string) (*quartermasterpb.MarketplaceClusterEntry, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo marketplace cluster")
 		clusters := demo.GenerateMarketplaceClusters()
@@ -1332,7 +1252,7 @@ func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string
 	}
 
 	// 1. Get visibility-filtered cluster from Quartermaster
-	cluster, err := r.Clients.Quartermaster.GetMarketplaceCluster(ctx, &pb.GetMarketplaceClusterRequest{
+	cluster, err := r.Clients.Quartermaster.GetMarketplaceCluster(ctx, &quartermasterpb.GetMarketplaceClusterRequest{
 		ClusterId: clusterID,
 		TenantId:  tenantID,
 	})
@@ -1376,35 +1296,35 @@ func parsePriceToCents(price string) int {
 }
 
 // pricingModelStringToProto converts Purser pricing model string to proto enum
-func pricingModelStringToProto(s string) pb.ClusterPricingModel {
+func pricingModelStringToProto(s string) quartermasterpb.ClusterPricingModel {
 	switch s {
 	case "free_unmetered":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
 	case "metered":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_METERED
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_METERED
 	case "monthly":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY
 	case "tier_inherit":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT
 	case "custom":
-		return pb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM
 	default:
-		return pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
+		return quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
 	}
 }
 
 // pricingModelProtoToString converts proto enum to Purser string
-func pricingModelProtoToString(p pb.ClusterPricingModel) string {
+func pricingModelProtoToString(p quartermasterpb.ClusterPricingModel) string {
 	switch p {
-	case pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED:
+	case quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED:
 		return "free_unmetered"
-	case pb.ClusterPricingModel_CLUSTER_PRICING_METERED:
+	case quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_METERED:
 		return "metered"
-	case pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY:
+	case quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY:
 		return "monthly"
-	case pb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT:
+	case quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_TIER_INHERIT:
 		return "tier_inherit"
-	case pb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM:
+	case quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM:
 		return "custom"
 	default:
 		return "tier_inherit"
@@ -1429,7 +1349,7 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	req := &pb.EnableSelfHostingRequest{
+	req := &quartermasterpb.EnableSelfHostingRequest{
 		TenantId:         tenantID,
 		ClusterName:      input.ClusterName,
 		ClientIp:         requestClientIP(ctx),
@@ -1456,12 +1376,12 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 		if clusterID == "" {
 			clusterID = resp.Cluster.Id
 		}
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterCreated,
 			ResourceType: "cluster",
 			ResourceId:   clusterID,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId: clusterID,
 					TenantId:  tenantID,
 				},
@@ -1538,7 +1458,7 @@ func (r *Resolver) DoCreateEnrollmentToken(ctx context.Context, clusterID string
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	req := &pb.CreateEnrollmentTokenRequest{
+	req := &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: clusterID,
 		TenantId:  &tenantID,
 	}
@@ -1612,7 +1532,7 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 	}
 	defer func() { _ = fh.Close() }()
 
-	preReq := &pb.PreRegisterEdgeRequest{EnrollmentToken: token}
+	preReq := &foghornpb.PreRegisterEdgeRequest{EnrollmentToken: token}
 	if input.ExternalIP != nil {
 		preReq.ExternalIp = *input.ExternalIP
 	}
@@ -1674,7 +1594,7 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 	// Update pricing in Purser if any pricing fields are set
 	hasPricingUpdate := input.PricingModel != nil || input.MonthlyPriceCents != nil
 	if hasPricingUpdate {
-		pricingReq := &pb.SetClusterPricingRequest{
+		pricingReq := &purserpb.SetClusterPricingRequest{
 			ClusterId: clusterID,
 		}
 		if input.PricingModel != nil {
@@ -1695,7 +1615,7 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 	}
 
 	// Update operational settings in Quartermaster
-	req := &pb.UpdateClusterMarketplaceRequest{
+	req := &quartermasterpb.UpdateClusterMarketplaceRequest{
 		ClusterId: clusterID,
 		TenantId:  tenantID,
 	}
@@ -1717,12 +1637,12 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 		}, nil
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventClusterUpdated,
 		ResourceType: "cluster",
 		ResourceId:   clusterID,
-		Payload: &pb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &pb.ClusterEvent{
+		Payload: &ipcpb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &ipcpb.ClusterEvent{
 				ClusterId: clusterID,
 				TenantId:  tenantID,
 			},
@@ -1763,7 +1683,7 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	req := &pb.CreateClusterInviteRequest{
+	req := &quartermasterpb.CreateClusterInviteRequest{
 		ClusterId:       input.ClusterID,
 		OwnerTenantId:   tenantID,
 		InvitedTenantId: input.InvitedTenantID,
@@ -1784,12 +1704,12 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 	}
 
 	if invite != nil {
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterInviteCreated,
 			ResourceType: "cluster_invite",
 			ResourceId:   invite.Id,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId: invite.ClusterId,
 					TenantId:  tenantID,
 					InviteId:  invite.Id,
@@ -1817,7 +1737,7 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	err := r.Clients.Quartermaster.RevokeClusterInvite(ctx, &pb.RevokeClusterInviteRequest{
+	err := r.Clients.Quartermaster.RevokeClusterInvite(ctx, &quartermasterpb.RevokeClusterInviteRequest{
 		InviteId:      inviteID,
 		OwnerTenantId: tenantID,
 	})
@@ -1828,12 +1748,12 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 		}, nil
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventClusterInviteRevoked,
 		ResourceType: "cluster_invite",
 		ResourceId:   inviteID,
-		Payload: &pb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &pb.ClusterEvent{
+		Payload: &ipcpb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &ipcpb.ClusterEvent{
 				TenantId: tenantID,
 				InviteId: inviteID,
 			},
@@ -1844,7 +1764,7 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 }
 
 // DoListClusterInvites lists invites for a cluster
-func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) ([]*pb.ClusterInvite, error) {
+func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) ([]*quartermasterpb.ClusterInvite, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster invites")
 		return demo.GenerateClusterInvites(), nil
@@ -1855,7 +1775,7 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 		tenantID = user.TenantID
 	}
 
-	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &pb.ListClusterInvitesRequest{
+	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &quartermasterpb.ListClusterInvitesRequest{
 		ClusterId:     clusterID,
 		OwnerTenantId: tenantID,
 	})
@@ -1868,7 +1788,7 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 }
 
 // DoListMyClusterInvites lists pending invites for the current tenant
-func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*pb.ClusterInvite, error) {
+func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*quartermasterpb.ClusterInvite, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo pending invites")
 		return demo.GenerateMyClusterInvites(), nil
@@ -1882,7 +1802,7 @@ func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*pb.ClusterInv
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &pb.ListMyClusterInvitesRequest{
+	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &quartermasterpb.ListMyClusterInvitesRequest{
 		TenantId: tenantID,
 	})
 	if err != nil {
@@ -1918,7 +1838,7 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 		return gate, nil
 	}
 
-	req := &pb.RequestClusterSubscriptionRequest{
+	req := &quartermasterpb.RequestClusterSubscriptionRequest{
 		ClusterId:   clusterID,
 		TenantId:    tenantID,
 		InviteToken: inviteToken, // Already *string
@@ -1933,12 +1853,12 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 	}
 
 	if sub != nil {
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterSubscriptionRequested,
 			ResourceType: "cluster_subscription",
 			ResourceId:   sub.Id,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId:      sub.ClusterId,
 					TenantId:       tenantID,
 					SubscriptionId: sub.Id,
@@ -1974,7 +1894,7 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 		return gate, nil
 	}
 
-	sub, err := r.Clients.Quartermaster.AcceptClusterInvite(ctx, &pb.AcceptClusterInviteRequest{
+	sub, err := r.Clients.Quartermaster.AcceptClusterInvite(ctx, &quartermasterpb.AcceptClusterInviteRequest{
 		InviteToken: inviteToken,
 		TenantId:    tenantID,
 	})
@@ -1986,12 +1906,12 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 	}
 
 	if sub != nil {
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterSubscriptionApproved,
 			ResourceType: "cluster_subscription",
 			ResourceId:   sub.Id,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId:      sub.ClusterId,
 					TenantId:       tenantID,
 					SubscriptionId: sub.Id,
@@ -2004,7 +1924,7 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 }
 
 // DoListPendingSubscriptions lists pending subscription requests for a cluster
-func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID string) ([]*pb.ClusterSubscription, error) {
+func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID string) ([]*quartermasterpb.ClusterSubscription, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo pending subscriptions")
 		return demo.GeneratePendingSubscriptions(), nil
@@ -2015,7 +1935,7 @@ func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID str
 		tenantID = user.TenantID
 	}
 
-	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &pb.ListPendingSubscriptionsRequest{
+	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &quartermasterpb.ListPendingSubscriptionsRequest{
 		ClusterId:     clusterID,
 		OwnerTenantId: tenantID,
 	})
@@ -2043,7 +1963,7 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	sub, err := r.Clients.Quartermaster.ApproveClusterSubscription(ctx, &pb.ApproveClusterSubscriptionRequest{
+	sub, err := r.Clients.Quartermaster.ApproveClusterSubscription(ctx, &quartermasterpb.ApproveClusterSubscriptionRequest{
 		SubscriptionId: subscriptionID,
 		OwnerTenantId:  tenantID,
 	})
@@ -2055,12 +1975,12 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 	}
 
 	if sub != nil {
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterSubscriptionApproved,
 			ResourceType: "cluster_subscription",
 			ResourceId:   sub.Id,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId:      sub.ClusterId,
 					TenantId:       tenantID,
 					SubscriptionId: sub.Id,
@@ -2076,7 +1996,7 @@ func (r *Resolver) clusterIDForInviteToken(ctx context.Context, tenantID, invite
 	if r.Clients.Quartermaster == nil {
 		return "", "cluster service unavailable"
 	}
-	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &pb.ListMyClusterInvitesRequest{TenantId: tenantID})
+	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &quartermasterpb.ListMyClusterInvitesRequest{TenantId: tenantID})
 	if err != nil {
 		return "", fmt.Sprintf("failed to verify invite pricing: %v", err)
 	}
@@ -2129,7 +2049,7 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	req := &pb.RejectClusterSubscriptionRequest{
+	req := &quartermasterpb.RejectClusterSubscriptionRequest{
 		SubscriptionId: subscriptionID,
 		OwnerTenantId:  tenantID,
 		Reason:         reason, // Already *string
@@ -2145,18 +2065,18 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 
 	if sub != nil {
 		eventReason := ""
-		reasonCode := pb.ClusterRejectReason_CLUSTER_REJECT_REASON_UNSPECIFIED
+		reasonCode := ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_UNSPECIFIED
 		if reason != nil {
 			eventReason = truncateReason(*reason)
 			reasonCode = parseRejectReasonCode(*reason)
 		}
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventClusterSubscriptionRejected,
 			ResourceType: "cluster_subscription",
 			ResourceId:   sub.Id,
 			TenantId:     tenantID,
-			Payload: &pb.ServiceEvent_ClusterEvent{
-				ClusterEvent: &pb.ClusterEvent{
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
 					ClusterId:        sub.ClusterId,
 					TenantId:         tenantID,
 					SubscriptionId:   sub.Id,
@@ -2194,46 +2114,6 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 		return nil, err
 	}
 	return buildClustersAccessConnectionFromSlice(items, first, after, last, before), nil
-}
-
-// buildClustersAccessConnectionFromResponse builds a connection from a ClustersAccessResponse.
-func buildClustersAccessConnectionFromResponse(resp *pb.ClustersAccessResponse) *model.ClusterAccessConnection {
-	edges := make([]*model.ClusterAccessEdge, len(resp.Clusters))
-	nodes := make([]*model.ClusterAccess, len(resp.Clusters))
-	for i, c := range resp.Clusters {
-		item := &model.ClusterAccess{
-			ClusterID:   c.ClusterId,
-			ClusterName: c.ClusterName,
-			AccessLevel: c.AccessLevel,
-		}
-		cursor := pagination.EncodeCursor(time.Now(), c.ClusterId) // Backend doesn't expose created_at for this type
-		edges[i] = &model.ClusterAccessEdge{
-			Cursor: cursor,
-			Node:   item,
-		}
-		nodes[i] = item
-	}
-
-	pag := resp.GetPagination()
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: pag.GetHasPreviousPage(),
-		HasNextPage:     pag.GetHasNextPage(),
-	}
-	if pag.GetStartCursor() != "" {
-		sc := pag.GetStartCursor()
-		pageInfo.StartCursor = &sc
-	}
-	if pag.GetEndCursor() != "" {
-		ec := pag.GetEndCursor()
-		pageInfo.EndCursor = &ec
-	}
-
-	return &model.ClusterAccessConnection{
-		Edges:      edges,
-		Nodes:      nodes,
-		PageInfo:   pageInfo,
-		TotalCount: int(pag.GetTotalCount()),
-	}
 }
 
 // buildClustersAccessConnectionFromSlice builds a connection from a slice (for demo mode).
@@ -2290,7 +2170,7 @@ func (r *Resolver) DoGetClustersAvailableConnection(ctx context.Context, first *
 }
 
 // buildClustersAvailableConnectionFromResponse builds a connection from a ClustersAvailableResponse.
-func buildClustersAvailableConnectionFromResponse(resp *pb.ClustersAvailableResponse) *model.AvailableClusterConnection {
+func buildClustersAvailableConnectionFromResponse(resp *quartermasterpb.ClustersAvailableResponse) *model.AvailableClusterConnection {
 	edges := make([]*model.AvailableClusterEdge, len(resp.Clusters))
 	nodes := make([]*model.AvailableCluster, len(resp.Clusters))
 	for i, c := range resp.Clusters {
@@ -2374,7 +2254,7 @@ func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *in
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 		TenantId:   tenantID,
 		Pagination: buildCursorPagination(first, after, last, before),
 	})
@@ -2386,7 +2266,7 @@ func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *in
 }
 
 // buildMySubscriptionsConnectionFromResponse builds a connection from a ListClustersResponse.
-func buildMySubscriptionsConnectionFromResponse(resp *pb.ListClustersResponse) *model.MySubscriptionsConnection {
+func buildMySubscriptionsConnectionFromResponse(resp *quartermasterpb.ListClustersResponse) *model.MySubscriptionsConnection {
 	edges := make([]*model.MySubscriptionEdge, len(resp.Clusters))
 	for i, item := range resp.Clusters {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.ClusterId)
@@ -2410,7 +2290,7 @@ func buildMySubscriptionsConnectionFromResponse(resp *pb.ListClustersResponse) *
 		pageInfo.EndCursor = &ec
 	}
 
-	nodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	nodes := make([]*quartermasterpb.InfrastructureCluster, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			nodes = append(nodes, edge.Node)
@@ -2426,7 +2306,7 @@ func buildMySubscriptionsConnectionFromResponse(resp *pb.ListClustersResponse) *
 }
 
 // buildMySubscriptionsConnectionFromSlice builds a connection from a slice (for demo mode).
-func buildMySubscriptionsConnectionFromSlice(items []*pb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.MySubscriptionsConnection {
+func buildMySubscriptionsConnectionFromSlice(items []*quartermasterpb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.MySubscriptionsConnection {
 	edges := make([]*model.MySubscriptionEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.ClusterId)
@@ -2445,7 +2325,7 @@ func buildMySubscriptionsConnectionFromSlice(items []*pb.InfrastructureCluster, 
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	nodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	nodes := make([]*quartermasterpb.InfrastructureCluster, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			nodes = append(nodes, edge.Node)
@@ -2475,7 +2355,7 @@ func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first
 	}
 
 	// 1. Get paginated clusters from Quartermaster (visibility/access)
-	qmResp, err := r.Clients.Quartermaster.ListMarketplaceClusters(ctx, &pb.ListMarketplaceClustersRequest{
+	qmResp, err := r.Clients.Quartermaster.ListMarketplaceClusters(ctx, &quartermasterpb.ListMarketplaceClustersRequest{
 		TenantId:   tenantID,
 		Pagination: buildCursorPagination(first, after, last, before),
 	})
@@ -2487,7 +2367,7 @@ func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first
 	if len(clusters) == 0 {
 		return &model.MarketplaceClusterConnection{
 			Edges:      []*model.MarketplaceClusterEdge{},
-			Nodes:      []*pb.MarketplaceClusterEntry{},
+			Nodes:      []*quartermasterpb.MarketplaceClusterEntry{},
 			PageInfo:   &model.PageInfo{HasPreviousPage: false, HasNextPage: false},
 			TotalCount: int(qmResp.GetPagination().GetTotalCount()),
 		}, nil
@@ -2505,7 +2385,7 @@ func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first
 	}
 
 	edges := make([]*model.MarketplaceClusterEdge, 0, len(clusters))
-	nodes := make([]*pb.MarketplaceClusterEntry, 0, len(clusters))
+	nodes := make([]*quartermasterpb.MarketplaceClusterEntry, 0, len(clusters))
 
 	for _, cluster := range clusters {
 		cluster.IsEligible = true
@@ -2556,7 +2436,7 @@ func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first
 }
 
 // buildMarketplaceClustersConnectionFromSlice builds a connection from a slice (demo mode).
-func buildMarketplaceClustersConnectionFromSlice(items []*pb.MarketplaceClusterEntry, first *int, after *string, last *int, before *string) *model.MarketplaceClusterConnection {
+func buildMarketplaceClustersConnectionFromSlice(items []*quartermasterpb.MarketplaceClusterEntry, first *int, after *string, last *int, before *string) *model.MarketplaceClusterConnection {
 	edges := make([]*model.MarketplaceClusterEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(time.Now(), item.ClusterId)
@@ -2595,7 +2475,7 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 		tenantID = user.TenantID
 	}
 
-	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &pb.ListPendingSubscriptionsRequest{
+	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &quartermasterpb.ListPendingSubscriptionsRequest{
 		ClusterId:     clusterID,
 		OwnerTenantId: tenantID,
 		Pagination:    buildCursorPagination(first, after, last, before),
@@ -2609,9 +2489,9 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 }
 
 // buildPendingSubscriptionsConnectionFromResponse builds a connection from a ListPendingSubscriptionsResponse.
-func buildPendingSubscriptionsConnectionFromResponse(resp *pb.ListPendingSubscriptionsResponse) *model.ClusterSubscriptionConnection {
+func buildPendingSubscriptionsConnectionFromResponse(resp *quartermasterpb.ListPendingSubscriptionsResponse) *model.ClusterSubscriptionConnection {
 	edges := make([]*model.ClusterSubscriptionEdge, len(resp.Subscriptions))
-	nodes := make([]*pb.ClusterSubscription, len(resp.Subscriptions))
+	nodes := make([]*quartermasterpb.ClusterSubscription, len(resp.Subscriptions))
 	for i, item := range resp.Subscriptions {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
 		edges[i] = &model.ClusterSubscriptionEdge{
@@ -2644,7 +2524,7 @@ func buildPendingSubscriptionsConnectionFromResponse(resp *pb.ListPendingSubscri
 }
 
 // buildPendingSubscriptionsConnectionFromSlice builds a connection from a slice (for demo mode).
-func buildPendingSubscriptionsConnectionFromSlice(items []*pb.ClusterSubscription, first *int, after *string, last *int, before *string) *model.ClusterSubscriptionConnection {
+func buildPendingSubscriptionsConnectionFromSlice(items []*quartermasterpb.ClusterSubscription, first *int, after *string, last *int, before *string) *model.ClusterSubscriptionConnection {
 	edges := make([]*model.ClusterSubscriptionEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
@@ -2683,7 +2563,7 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 		tenantID = user.TenantID
 	}
 
-	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &pb.ListClusterInvitesRequest{
+	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &quartermasterpb.ListClusterInvitesRequest{
 		ClusterId:     clusterID,
 		OwnerTenantId: tenantID,
 		Pagination:    buildCursorPagination(first, after, last, before),
@@ -2697,9 +2577,9 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 }
 
 // buildClusterInvitesConnectionFromResponse builds a connection from a ListClusterInvitesResponse.
-func buildClusterInvitesConnectionFromResponse(resp *pb.ListClusterInvitesResponse) *model.ClusterInviteConnection {
+func buildClusterInvitesConnectionFromResponse(resp *quartermasterpb.ListClusterInvitesResponse) *model.ClusterInviteConnection {
 	edges := make([]*model.ClusterInviteEdge, len(resp.Invites))
-	nodes := make([]*pb.ClusterInvite, len(resp.Invites))
+	nodes := make([]*quartermasterpb.ClusterInvite, len(resp.Invites))
 	for i, item := range resp.Invites {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
 		edges[i] = &model.ClusterInviteEdge{
@@ -2732,7 +2612,7 @@ func buildClusterInvitesConnectionFromResponse(resp *pb.ListClusterInvitesRespon
 }
 
 // buildClusterInvitesConnectionFromSlice builds a connection from a slice (for demo mode).
-func buildClusterInvitesConnectionFromSlice(items []*pb.ClusterInvite, first *int, after *string, last *int, before *string) *model.ClusterInviteConnection {
+func buildClusterInvitesConnectionFromSlice(items []*quartermasterpb.ClusterInvite, first *int, after *string, last *int, before *string) *model.ClusterInviteConnection {
 	edges := make([]*model.ClusterInviteEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
@@ -2777,7 +2657,7 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
-	err := r.Clients.Quartermaster.UpdateTenantCluster(ctx, &pb.UpdateTenantClusterRequest{
+	err := r.Clients.Quartermaster.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 		TenantId:         tenantID,
 		PrimaryClusterId: &clusterID,
 	})
@@ -2797,12 +2677,12 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 		}, nil
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTenantUpdated,
 		ResourceType: "tenant",
 		ResourceId:   tenantID,
-		Payload: &pb.ServiceEvent_TenantEvent{
-			TenantEvent: &pb.TenantEvent{
+		Payload: &ipcpb.ServiceEvent_TenantEvent{
+			TenantEvent: &ipcpb.TenantEvent{
 				TenantId:      tenantID,
 				ChangedFields: []string{"primary_cluster_id"},
 			},
@@ -2824,7 +2704,7 @@ func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *i
 		tenantID = user.TenantID
 	}
 
-	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &pb.ListMyClusterInvitesRequest{
+	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &quartermasterpb.ListMyClusterInvitesRequest{
 		TenantId:   tenantID,
 		Pagination: buildCursorPagination(first, after, last, before),
 	})
@@ -2849,7 +2729,7 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 		return nil, nil
 	}
 
-	resp, err := r.Clients.Quartermaster.GetClusterRouting(ctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+	resp, err := r.Clients.Quartermaster.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil {
 		r.Logger.WithError(err).Debug("streamingConfig: cluster routing unavailable, returning nil")
 		return nil, nil
@@ -2917,7 +2797,7 @@ func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *mode
 	}
 	aliasCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	alias, err := r.Clients.Navigator.GetTenantAliasStatus(aliasCtx, &pb.GetTenantAliasStatusRequest{TenantId: tenantID})
+	alias, err := r.Clients.Navigator.GetTenantAliasStatus(aliasCtx, &dnspb.GetTenantAliasStatusRequest{TenantId: tenantID})
 	if err != nil || alias == nil || !alias.GetFound() || alias.GetStatus() != "cert_issued" || !alias.GetDnsReady() {
 		return
 	}

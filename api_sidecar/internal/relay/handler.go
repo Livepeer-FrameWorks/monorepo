@@ -12,9 +12,8 @@ import (
 	"strings"
 	"time"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // kindDir maps the URL kind to the on-disk directory name. "clip" → "clips"
@@ -165,7 +164,7 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		AssetKind: kind,
 		AssetHash: hash,
 		Ext:       ext,
-		Hint:      pb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
+		Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
@@ -173,7 +172,7 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 		return
 	}
 	source = upstreamSourceLabel(res.PeerRelayGrantID)
-	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
+	if res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
 		status = "not_playable"
 		s.notPlayable(c, res)
 		return
@@ -253,14 +252,14 @@ func (s *Server) serveUpload(c *gin.Context) {
 		AssetKind: "upload",
 		AssetHash: hash,
 		Ext:       ext,
-		Hint:      pb.RelayResolveRequest_RELAY_HINT_SEQUENTIAL_ONESHOT,
+		Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_SEQUENTIAL_ONESHOT,
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
 		s.serverError(c, "relay resolve upload", err)
 		return
 	}
-	if res.State != pb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
+	if res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
 		s.notPlayable(c, res)
 		return
 	}
@@ -412,9 +411,9 @@ func totalFromContentRange(v string) (int64, bool) {
 
 func (s *Server) notPlayable(c *gin.Context, res *ResolveResult) {
 	switch res.State {
-	case pb.AssetState_ASSET_STATE_SOURCE_MISSING:
+	case ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING:
 		c.String(http.StatusNotFound, "source missing")
-	case pb.AssetState_ASSET_STATE_ACTIVE_DVR:
+	case ipcpb.AssetState_ASSET_STATE_ACTIVE_DVR:
 		c.Writer.Header().Set("Retry-After", "5")
 		c.String(http.StatusServiceUnavailable, "active dvr — segment not yet uploaded")
 	default:

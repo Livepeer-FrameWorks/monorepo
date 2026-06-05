@@ -6,7 +6,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 )
 
@@ -32,7 +32,7 @@ func TestValidateTenantRetriesRetryablePostgresErrors(t *testing.T) {
 		}).AddRow("Tenant", true, int32(60), int32(120)))
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
-	resp, err := server.ValidateTenant(context.Background(), &pb.ValidateTenantRequest{TenantId: tenantID})
+	resp, err := server.ValidateTenant(context.Background(), &quartermasterpb.ValidateTenantRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("ValidateTenant: %v", err)
 	}

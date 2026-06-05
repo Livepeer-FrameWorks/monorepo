@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -13,44 +13,44 @@ import (
 func TestProtoToVODAssetInfo_StatusMapping(t *testing.T) {
 	tests := []struct {
 		name   string
-		status pb.VodStatus
+		status sharedpb.VodStatus
 		want   string
 	}{
 		{
 			name:   "uploading",
-			status: pb.VodStatus_VOD_STATUS_UPLOADING,
+			status: sharedpb.VodStatus_VOD_STATUS_UPLOADING,
 			want:   "UPLOADING",
 		},
 		{
 			name:   "processing",
-			status: pb.VodStatus_VOD_STATUS_PROCESSING,
+			status: sharedpb.VodStatus_VOD_STATUS_PROCESSING,
 			want:   "PROCESSING",
 		},
 		{
 			name:   "ready",
-			status: pb.VodStatus_VOD_STATUS_READY,
+			status: sharedpb.VodStatus_VOD_STATUS_READY,
 			want:   "READY",
 		},
 		{
 			name:   "failed",
-			status: pb.VodStatus_VOD_STATUS_FAILED,
+			status: sharedpb.VodStatus_VOD_STATUS_FAILED,
 			want:   "FAILED",
 		},
 		{
 			name:   "deleted",
-			status: pb.VodStatus_VOD_STATUS_DELETED,
+			status: sharedpb.VodStatus_VOD_STATUS_DELETED,
 			want:   "DELETED",
 		},
 		{
 			name:   "unknown fallback",
-			status: pb.VodStatus(999),
+			status: sharedpb.VodStatus(999),
 			want:   "UNKNOWN",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := protoToVODAssetInfo(&pb.VodAssetInfo{
+			got := protoToVODAssetInfo(&sharedpb.VodAssetInfo{
 				ArtifactHash: "artifact-hash-1",
 				Status:       tc.status,
 			})
@@ -74,13 +74,13 @@ func TestProtoToVODAssetInfo_FieldMappingAndIDFallback(t *testing.T) {
 	createdAt := time.Date(2026, 2, 10, 6, 7, 8, 0, time.UTC)
 	updatedAt := time.Date(2026, 2, 11, 9, 10, 11, 0, time.UTC)
 
-	p := &pb.VodAssetInfo{
+	p := &sharedpb.VodAssetInfo{
 		Id:              "vod-uuid-1",
 		ArtifactHash:    "",
 		Title:           "Launch Stream",
 		Description:     "Product launch recording",
 		Filename:        "launch.mp4",
-		Status:          pb.VodStatus_VOD_STATUS_READY,
+		Status:          sharedpb.VodStatus_VOD_STATUS_READY,
 		StorageLocation: "s3",
 		SizeBytes:       &sizeBytes,
 		DurationMs:      &durationMs,
@@ -154,10 +154,10 @@ func TestProtoToVODAssetInfo_FieldMappingAndIDFallback(t *testing.T) {
 func TestProtoToVODAssetInfo_OmitsEmptyOptionalFields(t *testing.T) {
 	emptyPlaybackID := ""
 
-	p := &pb.VodAssetInfo{
+	p := &sharedpb.VodAssetInfo{
 		Id:           "vod-uuid-2",
 		ArtifactHash: "artifact-2",
-		Status:       pb.VodStatus_VOD_STATUS_UPLOADING,
+		Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING,
 		PlaybackId:   &emptyPlaybackID,
 	}
 

@@ -10,7 +10,8 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // Bridge exposes a GraphQL enum while the control plane stores node mode as a
@@ -37,7 +38,7 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 		reason = callerIdentity(ctx)
 	}
 
-	resp, err := r.Clients.Commodore.SetNodeMode(ctx, &pb.SetNodeModeRequest{
+	resp, err := r.Clients.Commodore.SetNodeMode(ctx, &foghornpb.SetNodeModeRequest{
 		NodeId: nodeID,
 		Mode:   wire,
 		SetBy:  reason,
@@ -54,9 +55,9 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	}
 
 	switch resp.GetStatus() {
-	case pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_NOT_FOUND:
+	case foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_NOT_FOUND:
 		return &model.NotFoundError{Message: resp.GetMessage()}, nil
-	case pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_INVALID_MODE:
+	case foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_INVALID_MODE:
 		return &model.ValidationError{Message: resp.GetMessage(), Field: strPtr("mode")}, nil
 	}
 
@@ -64,13 +65,13 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	// routingImpactPreview on the result get fresh values via the field
 	// resolvers below (GetNodeHealth). Static fields aren't repopulated
 	// here — clients that need them refetch via the `node(id:)` query.
-	return &pb.InfrastructureNode{NodeId: resp.GetNodeId()}, nil
+	return &quartermasterpb.InfrastructureNode{NodeId: resp.GetNodeId()}, nil
 }
 
 // DoNodeEffectiveMode is the field resolver for InfrastructureNode.effectiveMode.
 // Always reads through GetNodeHealth so the answer reflects Foghorn's live
 // view rather than a stale cached column.
-func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *pb.InfrastructureNode) (model.NodeOperationalMode, error) {
+func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (model.NodeOperationalMode, error) {
 	if nodeSkipsOperationalMode(obj) {
 		return model.NodeOperationalModeNormal, nil
 	}
@@ -93,7 +94,7 @@ func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *pb.Infrastructu
 
 // DoNodeRoutingImpactPreview returns the node's current active streams and
 // viewers. Same single-fetch path as effectiveMode.
-func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *pb.InfrastructureNode) (*model.RoutingImpactPreview, error) {
+func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *quartermasterpb.InfrastructureNode) (*model.RoutingImpactPreview, error) {
 	if nodeSkipsOperationalMode(obj) {
 		return &model.RoutingImpactPreview{}, nil
 	}
@@ -111,7 +112,7 @@ func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *pb.Infra
 	}, nil
 }
 
-func nodeSkipsOperationalMode(obj *pb.InfrastructureNode) bool {
+func nodeSkipsOperationalMode(obj *quartermasterpb.InfrastructureNode) bool {
 	nodeType := strings.TrimSpace(obj.GetNodeType())
 	return nodeType != "" && !strings.EqualFold(nodeType, "edge")
 }
@@ -119,7 +120,7 @@ func nodeSkipsOperationalMode(obj *pb.InfrastructureNode) bool {
 // nodeHealthFor returns the GetNodeHealth response for a node, memoised on
 // the request's context so concurrent field resolvers within a single
 // query share one RPC.
-func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*pb.GetNodeHealthResponse, error) {
+func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghornpb.GetNodeHealthResponse, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("node id is required")
 	}
@@ -135,7 +136,7 @@ func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*pb.GetNod
 	if len(cache.entries) >= maxNodeHealthCacheEntries {
 		return nil, fmt.Errorf("node health cache limit exceeded")
 	}
-	resp, err := r.Clients.Commodore.GetNodeHealth(ctx, &pb.GetNodeHealthRequest{NodeId: nodeID})
+	resp, err := r.Clients.Commodore.GetNodeHealth(ctx, &foghornpb.GetNodeHealthRequest{NodeId: nodeID})
 	cache.entries[nodeID] = nodeHealthEntry{resp: resp, err: err}
 	return resp, err
 }
@@ -143,7 +144,7 @@ func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*pb.GetNod
 // ---- per-request memoisation ----
 
 type nodeHealthEntry struct {
-	resp *pb.GetNodeHealthResponse
+	resp *foghornpb.GetNodeHealthResponse
 	err  error
 }
 

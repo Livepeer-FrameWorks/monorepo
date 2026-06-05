@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/lib/pq"
 )
 
@@ -60,7 +60,7 @@ func TestGetTenantBillingStatusRetriesRetryablePostgresErrors(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 
 	server := &PurserServer{db: mockDB, logger: logging.NewLogger()}
-	resp, err := server.GetTenantBillingStatus(context.Background(), &pb.GetTenantBillingStatusRequest{TenantId: tenantID})
+	resp, err := server.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("GetTenantBillingStatus: %v", err)
 	}

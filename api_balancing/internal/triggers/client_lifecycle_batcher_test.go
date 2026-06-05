@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,10 +23,10 @@ type devNull struct{}
 
 func (devNull) Write(p []byte) (int, error) { return len(p), nil }
 
-func sampleClu(tenantID, streamID, nodeID, sessionID string) *pb.ClientLifecycleUpdate {
+func sampleClu(tenantID, streamID, nodeID, sessionID string) *ipcpb.ClientLifecycleUpdate {
 	t := tenantID
 	s := streamID
-	clu := &pb.ClientLifecycleUpdate{NodeId: nodeID}
+	clu := &ipcpb.ClientLifecycleUpdate{NodeId: nodeID}
 	if tenantID != "" {
 		clu.TenantId = &t
 	}
@@ -42,16 +42,16 @@ func sampleClu(tenantID, streamID, nodeID, sessionID string) *pb.ClientLifecycle
 // recordingSender captures every batch the batcher tries to send.
 type recordingSender struct {
 	mu       sync.Mutex
-	batches  []*pb.ClientLifecycleBatch
+	batches  []*ipcpb.ClientLifecycleBatch
 	failNext atomic.Int32 // each call decrements; when > 0 the call returns an error
 }
 
-func (r *recordingSender) send(trigger *pb.MistTrigger) error {
+func (r *recordingSender) send(trigger *ipcpb.MistTrigger) error {
 	if r.failNext.Load() > 0 {
 		r.failNext.Add(-1)
 		return fmt.Errorf("synthetic send failure")
 	}
-	clb, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleBatch)
+	clb, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ClientLifecycleBatch)
 	if !ok {
 		return fmt.Errorf("not a ClientLifecycleBatch trigger: %T", trigger.GetTriggerPayload())
 	}
@@ -61,10 +61,10 @@ func (r *recordingSender) send(trigger *pb.MistTrigger) error {
 	return nil
 }
 
-func (r *recordingSender) snapshot() []*pb.ClientLifecycleBatch {
+func (r *recordingSender) snapshot() []*ipcpb.ClientLifecycleBatch {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*pb.ClientLifecycleBatch, len(r.batches))
+	out := make([]*ipcpb.ClientLifecycleBatch, len(r.batches))
 	copy(out, r.batches)
 	return out
 }
@@ -227,7 +227,7 @@ func TestBatcherAddNeverBlocks(t *testing.T) {
 	hang := make(chan struct{})
 	defer close(hang)
 
-	hangingSender := func(*pb.MistTrigger) error {
+	hangingSender := func(*ipcpb.MistTrigger) error {
 		<-hang
 		return nil
 	}

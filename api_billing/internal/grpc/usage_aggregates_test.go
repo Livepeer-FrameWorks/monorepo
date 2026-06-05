@@ -7,7 +7,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -31,9 +32,9 @@ func TestGetUsageAggregatesBucketsMinuteFiveDeltaRows(t *testing.T) {
 			AddRow("egress_gb", bucketStart, bucketEnd, 12.5, "hourly").
 			AddRow("max_viewers", bucketStart, bucketEnd, 42.0, "hourly"))
 
-	resp, err := server.GetUsageAggregates(context.Background(), &pb.GetUsageAggregatesRequest{
+	resp, err := server.GetUsageAggregates(context.Background(), &purserpb.GetUsageAggregatesRequest{
 		TenantId:    tenantID,
-		TimeRange:   &pb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+		TimeRange:   &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
 		Granularity: "hourly",
 	})
 	if err != nil {

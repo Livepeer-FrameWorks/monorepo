@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func TestBuildThumbnailAssetsUsesPublicChandlerBaseOverride(t *testing.T) {
@@ -46,7 +46,7 @@ func TestBuildThumbnailAssetsUsesClusterSnapshotWithoutOverride(t *testing.T) {
 func TestChandlerBaseForNormalizesClusterBaseURL(t *testing.T) {
 	t.Setenv("CHANDLER_BASE_URL", "")
 
-	got := chandlerBaseFor(&pb.InfrastructureCluster{
+	got := chandlerBaseFor(&quartermasterpb.InfrastructureCluster{
 		ClusterId:   "media-eu-1",
 		ClusterName: "Media EU 1",
 		BaseUrl:     "https://frameworks.network/",

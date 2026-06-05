@@ -8,7 +8,8 @@ import (
 	"frameworks/api_balancing/internal/control"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // managedDVRStartSuppression caps how often the materializer dispatches
@@ -50,7 +51,7 @@ func (p *Processor) ManagedStreamMaterializer() *ManagedStreamMaterializer {
 // and (when processes_json is non-empty) "process:internalName" → policy.
 // TTL: 1m for prepaid tenants, 10m for postpaid (same selection as
 // PUSH_REWRITE so balance-change enforcement timing matches).
-func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *pb.ResolveStreamContextResponse) {
+func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *commodorepb.ResolveStreamContextResponse) {
 	if m == nil || m.p == nil || m.p.streamCache == nil || streamCtx == nil {
 		return
 	}
@@ -137,7 +138,7 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *pb.ResolveS
 // handled by the natural STREAM_END → control.StopDVRByInternalName path
 // (processor.go:2487) when Foghorn sends RetractManagedStream and Mist
 // emits STREAM_END for the bare name.
-func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, streamCtx *pb.ResolveStreamContextResponse, sourceNodeID string) {
+func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, streamCtx *commodorepb.ResolveStreamContextResponse, sourceNodeID string) {
 	if m == nil || m.p == nil || m.p.dvrService == nil || streamCtx == nil {
 		return
 	}
@@ -159,7 +160,7 @@ func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, 
 	managedDVRStarts.Unlock()
 
 	userID := streamCtx.GetUserId()
-	req := &pb.StartDVRRequest{
+	req := &sharedpb.StartDVRRequest{
 		TenantId:      streamCtx.GetTenantId(),
 		InternalName:  streamCtx.GetInternalName(),
 		UserId:        &userID,

@@ -5,7 +5,7 @@ import (
 
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // RoutingEvent captures all context for a viewer routing decision.
@@ -52,7 +52,7 @@ type RoutingEvent struct {
 // BuildLoadBalancingData converts a RoutingEvent into a proto-ready
 // LoadBalancingData with geo-bucketed coordinates, haversine distance,
 // and dual-tenant attribution.
-func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
+func BuildLoadBalancingData(e *RoutingEvent) *ipcpb.LoadBalancingData {
 	EnrichRoutingEventNodeFromState(e)
 
 	// Geo-bucket coordinates for privacy
@@ -82,7 +82,7 @@ func BuildLoadBalancingData(e *RoutingEvent) *pb.LoadBalancingData {
 		oTenantID = e.TenantID
 	}
 
-	data := &pb.LoadBalancingData{
+	data := &ipcpb.LoadBalancingData{
 		SelectedNode:  e.SelectedNode,
 		Status:        e.Status,
 		Details:       e.Details,

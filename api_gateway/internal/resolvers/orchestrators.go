@@ -8,7 +8,9 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,9 +36,9 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 			return nil, err
 		}
 
-		clusterByID := make(map[string]*pb.InfrastructureCluster)
+		clusterByID := make(map[string]*quartermasterpb.InfrastructureCluster)
 		publicClusterIDs := make(map[string]struct{}, len(clustersResp.GetClusters()))
-		addClusters := func(clusters []*pb.InfrastructureCluster, publicTopology bool) {
+		addClusters := func(clusters []*quartermasterpb.InfrastructureCluster, publicTopology bool) {
 			for _, cluster := range clusters {
 				if cluster == nil || !cluster.GetIsActive() || cluster.GetClusterId() == "" {
 					continue
@@ -53,9 +55,9 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 		addClusters(clustersResp.GetClusters(), true)
 
 		if tenantID != "" {
-			accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+			accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 				TenantId:   tenantID,
-				Pagination: &pb.CursorPaginationRequest{First: 500},
+				Pagination: &commonpb.CursorPaginationRequest{First: 500},
 			})
 			if accessErr != nil {
 				r.Logger.WithError(accessErr).Warn("orchestrator scope: failed to load tenant cluster access")
@@ -63,7 +65,7 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 				addClusters(accessResp.GetClusters(), false)
 			}
 
-			ownedResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
+			ownedResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: 500})
 			if ownedErr != nil {
 				r.Logger.WithError(ownedErr).Warn("orchestrator scope: failed to load owned clusters")
 			} else {
@@ -77,7 +79,7 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 			if _, publicCluster := publicClusterIDs[clusterID]; publicCluster {
 				readCtx = publicCtx
 			}
-			instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+			instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 2000})
 			if instanceErr != nil {
 				r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("orchestrator scope: failed to load cluster service instances")
 				continue
@@ -131,7 +133,7 @@ func (r *Resolver) DoListOrchestrators(ctx context.Context, first *int, after *s
 		cacheKey = *orchAddr
 	}
 	val, err := r.fetchPeriscope(ctx, "orchestrators_list", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
-		var out []*pb.Orchestrator
+		var out []*periscopepb.Orchestrator
 		for _, tenantID := range tenantIDs {
 			periscopeResp, callErr := r.Clients.Periscope.ListOrchestrators(ctx, tenantID, orchAddr, &periscope.CursorPaginationOpts{
 				First: deref32(first),
@@ -142,12 +144,12 @@ func (r *Resolver) DoListOrchestrators(ctx context.Context, first *int, after *s
 			}
 			out = append(out, periscopeResp.GetOrchestrators()...)
 		}
-		return &pb.ListOrchestratorsResponse{Orchestrators: out}, nil
+		return &periscopepb.ListOrchestratorsResponse{Orchestrators: out}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.ListOrchestratorsResponse)
+	resp, ok := val.(*periscopepb.ListOrchestratorsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for ListOrchestrators: %T", val)
 	}
@@ -190,7 +192,7 @@ func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*mod
 		}
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetOrchestratorResponse)
+	resp, ok := val.(*periscopepb.GetOrchestratorResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetOrchestrator: %T", val)
 	}
@@ -205,7 +207,7 @@ func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*mod
 }
 
 // DoListOrchestratorInstances returns public network per-instance rows.
-func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *string) ([]*pb.OrchestratorInstance, error) {
+func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *string) ([]*periscopepb.OrchestratorInstance, error) {
 	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
 	if err != nil {
 		return nil, err
@@ -215,7 +217,7 @@ func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *st
 		cacheKey = *orchAddr
 	}
 	val, err := r.fetchPeriscope(ctx, "orchestrator_instances", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
-		var out []*pb.OrchestratorInstance
+		var out []*periscopepb.OrchestratorInstance
 		for _, tenantID := range tenantIDs {
 			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorInstances(ctx, tenantID, orchAddr)
 			if callErr != nil {
@@ -223,12 +225,12 @@ func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *st
 			}
 			out = append(out, periscopeResp.GetInstances()...)
 		}
-		return &pb.ListOrchestratorInstancesResponse{Instances: out}, nil
+		return &periscopepb.ListOrchestratorInstancesResponse{Instances: out}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.ListOrchestratorInstancesResponse)
+	resp, ok := val.(*periscopepb.ListOrchestratorInstancesResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for ListOrchestratorInstances: %T", val)
 	}
@@ -237,7 +239,7 @@ func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *st
 
 // DoListOrchestratorVantages returns public per-(gateway, instance)
 // observations for the federation map's orchestrator layer.
-func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *string) ([]*pb.OrchestratorVantage, error) {
+func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *string) ([]*periscopepb.OrchestratorVantage, error) {
 	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
 	if err != nil {
 		return nil, err
@@ -247,7 +249,7 @@ func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *str
 		cacheKey = *orchAddr
 	}
 	val, err := r.fetchPeriscope(ctx, "orchestrator_vantages", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
-		var out []*pb.OrchestratorVantage
+		var out []*periscopepb.OrchestratorVantage
 		for _, tenantID := range tenantIDs {
 			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorVantages(ctx, tenantID, orchAddr)
 			if callErr != nil {
@@ -255,12 +257,12 @@ func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *str
 			}
 			out = append(out, periscopeResp.GetVantages()...)
 		}
-		return &pb.ListOrchestratorVantagesResponse{Vantages: out}, nil
+		return &periscopepb.ListOrchestratorVantagesResponse{Vantages: out}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.ListOrchestratorVantagesResponse)
+	resp, ok := val.(*periscopepb.ListOrchestratorVantagesResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for ListOrchestratorVantages: %T", val)
 	}
@@ -269,7 +271,7 @@ func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *str
 
 // DoGetOrchestratorPerformanceSeries returns discovery, transcode, and AI
 // performance points from Periscope's orchestrator rollups.
-func (r *Resolver) DoGetOrchestratorPerformanceSeries(ctx context.Context, orchAddr string, timeRange model.TimeRangeInput, interval *string, gatewayID *string, resolvedIP *string) ([]*pb.OrchestratorPerformancePoint, error) {
+func (r *Resolver) DoGetOrchestratorPerformanceSeries(ctx context.Context, orchAddr string, timeRange model.TimeRangeInput, interval *string, gatewayID *string, resolvedIP *string) ([]*periscopepb.OrchestratorPerformancePoint, error) {
 	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
 	if err != nil {
 		return nil, err
@@ -288,7 +290,7 @@ func (r *Resolver) DoGetOrchestratorPerformanceSeries(ctx context.Context, orchA
 	}
 
 	val, err := r.fetchPeriscope(ctx, "orchestrator_performance", cacheParts, func(ctx context.Context) (any, error) {
-		var out []*pb.OrchestratorPerformancePoint
+		var out []*periscopepb.OrchestratorPerformancePoint
 		for _, tenantID := range tenantIDs {
 			periscopeResp, callErr := r.Clients.Periscope.GetOrchestratorPerformanceSeries(
 				ctx, tenantID, orchAddr,
@@ -299,12 +301,12 @@ func (r *Resolver) DoGetOrchestratorPerformanceSeries(ctx context.Context, orchA
 			}
 			out = append(out, periscopeResp.GetPoints()...)
 		}
-		return &pb.GetOrchestratorPerformanceSeriesResponse{Points: out}, nil
+		return &periscopepb.GetOrchestratorPerformanceSeriesResponse{Points: out}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetOrchestratorPerformanceSeriesResponse)
+	resp, ok := val.(*periscopepb.GetOrchestratorPerformanceSeriesResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetOrchestratorPerformanceSeries: %T", val)
 	}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -14,7 +14,7 @@ import (
 const websocketEventType = "skipper_investigation"
 
 type ServiceEventPublisher interface {
-	SendServiceEvent(event *pb.ServiceEvent) error
+	SendServiceEvent(event *ipcpb.ServiceEvent) error
 }
 
 type WebsocketNotifier struct {
@@ -39,7 +39,7 @@ func (n *WebsocketNotifier) Notify(ctx context.Context, report Report) error {
 	}
 
 	eventID := uuid.NewString()
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventId:   eventID,
 		EventType: n.eventType,
 		Timestamp: timestamppb.Now(),

@@ -1,15 +1,14 @@
 package grpc
 
 import (
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestStreamOriginRegionForRouteUsesActiveClusterRegion(t *testing.T) {
 	route := &clusterRoute{
 		clusterID: "media-eu-1",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "media-eu-1", RegionId: "eu-west"},
 			{ClusterId: "media-us-1", RegionId: "us-east"},
 		},
@@ -22,7 +21,7 @@ func TestStreamOriginRegionForRouteUsesActiveClusterRegion(t *testing.T) {
 func TestStreamOriginRegionForRouteFallsBackToPreferredCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID: "media-eu-1",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "media-eu-1", RegionId: "eu-west"},
 			{ClusterId: "media-us-1", RegionId: "us-east"},
 		},

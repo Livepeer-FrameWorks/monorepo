@@ -10,11 +10,13 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 )
 
 func TestProtoPayloadJSONRedactsInternalFields(t *testing.T) {
-	msg := &pb.StreamLifecycleUpdate{
+	msg := &ipcpb.StreamLifecycleUpdate{
 		NodeId:       "node-1",
 		InternalName: "secret-name",
 	}
@@ -46,7 +48,7 @@ func TestRedactInternalJSONMalformedPayload(t *testing.T) {
 
 func TestMapPeriscopeStreamEventMalformedDetails(t *testing.T) {
 	badDetails := "{not-json"
-	event := &pb.StreamEvent{
+	event := &periscopepb.StreamEvent{
 		EventId:   "evt-1",
 		StreamId:  "stream-1",
 		EventType: "STREAM_LIFECYCLE",
@@ -66,14 +68,14 @@ func TestMapPeriscopeStreamEventMalformedDetails(t *testing.T) {
 }
 
 func TestMapSignalmanStreamEventNilData(t *testing.T) {
-	event := &pb.SignalmanEvent{EventType: pb.EventType_EVENT_TYPE_STREAM_END}
+	event := &signalmanpb.SignalmanEvent{EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_END}
 	if got := mapSignalmanStreamEvent(event); got != nil {
 		t.Fatalf("expected nil when event data missing, got %#v", got)
 	}
 
-	event = &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
-		Data:      &pb.EventData{},
+	event = &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
+		Data:      &signalmanpb.EventData{},
 	}
 	if got := mapSignalmanStreamEvent(event); got != nil {
 		t.Fatalf("expected nil when payload missing, got %#v", got)

@@ -15,7 +15,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/gin-gonic/gin"
@@ -180,13 +181,13 @@ type BillingChecker interface {
 
 // X402Provider provides x402 payment requirements for 402 responses
 type X402Provider interface {
-	GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*pb.PaymentRequirements, error)
+	GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
 }
 
 // X402Settler handles x402 payment settlement
 type X402Settler interface {
-	VerifyX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error)
-	SettleX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error)
+	VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 }
 
 type AccessRequest struct {
@@ -642,7 +643,7 @@ func isPublicTenant(tenantID string) bool {
 
 // TenantValidator is the interface for validating tenants and fetching rate limits
 type TenantValidator interface {
-	ValidateTenant(ctx context.Context, tenantID, userID string) (*pb.ValidateTenantResponse, error)
+	ValidateTenant(ctx context.Context, tenantID, userID string) (*quartermasterpb.ValidateTenantResponse, error)
 }
 
 // TenantRateLimits holds cached rate limit and billing info for a tenant

@@ -1,9 +1,8 @@
 package handlers
 
 import (
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestAppendManifestPath(t *testing.T) {
@@ -131,7 +130,7 @@ func TestNormalizeProtocol(t *testing.T) {
 }
 
 func TestFindProtocolURL(t *testing.T) {
-	outputs := map[string]*pb.OutputEndpoint{
+	outputs := map[string]*sharedpb.OutputEndpoint{
 		"HLS":      {Url: "https://edge/view/hls/s/index.m3u8"},
 		"DASH":     {Url: "https://edge/view/dash/s/index.mpd"},
 		"HLS_CMAF": {Url: "https://edge/view/cmaf/s/"},
@@ -154,7 +153,7 @@ func TestFindProtocolURL(t *testing.T) {
 
 	// With no literal DASH output (Mist's default), "dash" falls back to the CMAF
 	// container, which serves the .mpd manifest.
-	cmafOnly := map[string]*pb.OutputEndpoint{
+	cmafOnly := map[string]*sharedpb.OutputEndpoint{
 		"HLS":      {Url: "https://edge/view/hls/s/index.m3u8"},
 		"HLS_CMAF": {Url: "https://edge/view/cmaf/s/"},
 	}

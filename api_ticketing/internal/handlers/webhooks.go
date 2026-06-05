@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"frameworks/api_ticketing/internal/chatwoot"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -251,8 +251,8 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 
 	// Broadcast conversation creation via service_events
 	if deps.Quartermaster != nil {
-		ml := &pb.MessageLifecycleData{
-			EventType:      pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
+		ml := &ipcpb.MessageLifecycleData{
+			EventType:      ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
 			Timestamp:      time.Now().Unix(),
 		}
@@ -260,12 +260,12 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 			ml.TenantId = &tenantID
 		}
 
-		event := &pb.ServiceEvent{
+		event := &ipcpb.ServiceEvent{
 			EventType: "conversation_created",
 			Timestamp: timestamppb.Now(),
 			Source:    "deckhand",
 			TenantId:  tenantID,
-			Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
 		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
 			deps.Logger.WithError(err).Warn("Failed to broadcast conversation_created via Decklog")
@@ -337,8 +337,8 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
 
-		ml := &pb.MessageLifecycleData{
-			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
+		ml := &ipcpb.MessageLifecycleData{
+			EventType:      ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
 			MessageId:      &msgID,
 			Sender:         &sender,
@@ -346,12 +346,12 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 		}
 		ml.TenantId = &tenantID
 
-		event := &pb.ServiceEvent{
+		event := &ipcpb.ServiceEvent{
 			EventType: "message_received",
 			Timestamp: timestamppb.Now(),
 			Source:    "deckhand",
 			TenantId:  tenantID,
-			Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
 
 		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
@@ -380,20 +380,20 @@ func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 
 	conversationID := payload.GetConversationID()
 	status := payload.Status
-	ml := &pb.MessageLifecycleData{
-		EventType:      pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
+	ml := &ipcpb.MessageLifecycleData{
+		EventType:      ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
 		ConversationId: strconv.FormatInt(conversationID, 10),
 		Status:         &status,
 		Timestamp:      time.Now().Unix(),
 	}
 	ml.TenantId = &tenantID
 
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType: "conversation_updated",
 		Timestamp: timestamppb.Now(),
 		Source:    "deckhand",
 		TenantId:  tenantID,
-		Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+		Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 	}
 
 	if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
@@ -428,8 +428,8 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
 
-		ml := &pb.MessageLifecycleData{
-			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED,
+		ml := &ipcpb.MessageLifecycleData{
+			EventType:      ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
 			MessageId:      &msgID,
 			Sender:         &sender,
@@ -437,12 +437,12 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 		}
 		ml.TenantId = &tenantID
 
-		event := &pb.ServiceEvent{
+		event := &ipcpb.ServiceEvent{
 			EventType: "message_updated",
 			Timestamp: timestamppb.Now(),
 			Source:    "deckhand",
 			TenantId:  tenantID,
-			Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
 
 		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {

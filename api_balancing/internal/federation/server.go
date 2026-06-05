@@ -15,7 +15,9 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -26,21 +28,21 @@ import (
 
 // ClipCreator creates clips on the local cluster. Implemented by FoghornGRPCServer.
 type ClipCreator interface {
-	CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error)
+	CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error)
 }
 
 // DVRCreator starts DVR recordings on the local cluster. Implemented by FoghornGRPCServer.
 type DVRCreator interface {
-	StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error)
+	StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)
 }
 
 // ArtifactCommandHandler dispatches artifact lifecycle commands locally.
 // Implemented by FoghornGRPCServer; used by ForwardArtifactCommand.
 type ArtifactCommandHandler interface {
-	DeleteClip(ctx context.Context, req *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error)
-	StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error)
-	DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error)
-	DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error)
+	DeleteClip(ctx context.Context, req *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error)
+	StopDVR(ctx context.Context, req *sharedpb.StopDVRRequest) (*sharedpb.StopDVRResponse, error)
+	DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error)
+	DeleteVodAsset(ctx context.Context, req *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error)
 }
 
 // FederationS3Client abstracts S3 operations used by federation so tests
@@ -59,7 +61,7 @@ type FederationS3Client interface {
 // It handles cross-cluster stream queries, origin-pull notifications,
 // artifact preparation, and bidirectional telemetry via PeerChannel.
 type FederationServer struct {
-	pb.UnimplementedFoghornFederationServer
+	foghornfederationpb.UnimplementedFoghornFederationServer
 	logger          logging.Logger
 	lb              *balancer.LoadBalancer
 	clusterID       string
@@ -124,10 +126,10 @@ type AdvertisedBackingFunc func(ctx context.Context, tenantID, clusterID string)
 // tests can pass a stub or leave it nil to skip the Commodore fallback
 // (callee then accepts only locally-cached rows).
 type MintArtifactResolver interface {
-	ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error)
-	ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error)
-	ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error)
-	ResolveVodHash(ctx context.Context, vodHash string) (*pb.ResolveVodHashResponse, error)
+	ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error)
+	ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
+	ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
+	ResolveVodHash(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error)
 }
 
 // S3Backing is the federation server's view of an S3 backing tuple.
@@ -239,13 +241,13 @@ func (s *FederationServer) SetArtifactCommandHandler(h ArtifactCommandHandler) {
 
 // RegisterServices registers the FoghornFederation service on the gRPC server.
 func (s *FederationServer) RegisterServices(srv *grpc.Server) {
-	pb.RegisterFoghornFederationServer(srv, s)
+	foghornfederationpb.RegisterFoghornFederationServer(srv, s)
 }
 
 // QueryStream handles a peer cluster asking whether we have a stream and
 // returns scored local edge candidates. Reuses the existing load balancer
 // scoring algorithm and enriches results with DTSC URLs for origin-pull.
-func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -267,7 +269,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 	if sm != nil {
 		ss := sm.GetStreamState(req.StreamName)
 		if ss != nil && ss.TenantID != "" && ss.TenantID != req.TenantId {
-			return &pb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
+			return &foghornfederationpb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
 		}
 	}
 
@@ -284,10 +286,10 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 	nodes, err := s.lb.GetTopNodesWithScores(lbctx, req.StreamName, req.ViewerLat, req.ViewerLon, nil, "", 10, req.IsSourceSelection)
 	if err != nil {
 		log.WithError(err).Debug("No local candidates for federated query")
-		return &pb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
+		return &foghornfederationpb.QueryStreamResponse{OriginClusterId: s.clusterID}, nil
 	}
 
-	candidates := make([]*pb.EdgeCandidate, 0, len(nodes))
+	candidates := make([]*foghornfederationpb.EdgeCandidate, 0, len(nodes))
 	sm = state.DefaultManager()
 
 	for _, n := range nodes {
@@ -325,7 +327,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 			isOrigin = ss.Status == "live" && ss.Inputs > 0
 		}
 
-		candidate := &pb.EdgeCandidate{
+		candidate := &foghornfederationpb.EdgeCandidate{
 			NodeId:      n.NodeID,
 			BaseUrl:     ns.BaseURL,
 			DtscUrl:     dtscURL,
@@ -345,7 +347,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 	}
 
 	log.WithField("candidates", len(candidates)).Info("Federated QueryStream responded")
-	return &pb.QueryStreamResponse{
+	return &foghornfederationpb.QueryStreamResponse{
 		Candidates:      candidates,
 		OriginClusterId: s.clusterID,
 	}, nil
@@ -354,7 +356,7 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *pb.QueryStreamR
 // NotifyOriginPull handles a peer telling us they intend to pull a stream.
 // We validate the stream exists locally, select the best source node,
 // build a DTSC URL, and store an active replication record.
-func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginPullNotification) (*pb.OriginPullAck, error) {
+func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -374,7 +376,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		"dest_node":    req.DestNodeId,
 	})
 	if s.cache == nil {
-		return &pb.OriginPullAck{Accepted: false, Reason: "origin-pull cache unavailable"}, nil
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "origin-pull cache unavailable"}, nil
 	}
 
 	// Find best source node for the stream
@@ -386,14 +388,14 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		bestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(lbCtx, req.StreamName, 0, 0, nil, "", true)
 		if err != nil {
 			log.WithError(err).Warn("No source node available for origin-pull")
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "no source node available: " + err.Error(),
 			}, nil
 		}
 		sourceNodeID = s.lb.GetNodeIDByHost(bestHost)
 		if sourceNodeID == "" {
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "could not resolve source node ID",
 			}, nil
@@ -412,13 +414,13 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	if strings.HasPrefix(req.StreamName, "dvr+") {
 		tenantID, recording := s.dvrRecordingTenant(ctx, strings.TrimPrefix(req.StreamName, "dvr+"))
 		if !recording {
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "dvr not recording locally",
 			}, nil
 		}
 		if req.TenantId != "" && tenantID != "" && tenantID != req.TenantId {
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "stream tenant mismatch",
 			}, nil
@@ -428,13 +430,13 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	} else {
 		ss := sm.GetStreamState(req.StreamName)
 		if ss == nil {
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "stream not found locally",
 			}, nil
 		}
 		if req.TenantId != "" && ss.TenantID != "" && ss.TenantID != req.TenantId {
-			return &pb.OriginPullAck{
+			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "stream tenant mismatch",
 			}, nil
@@ -451,7 +453,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	}
 	dtscURL := control.BuildDTSCURI(sourceNodeID, sourceStreamName, s.logger)
 	if dtscURL == "" {
-		return &pb.OriginPullAck{
+		return &foghornfederationpb.OriginPullAck{
 			Accepted: false,
 			Reason:   "could not build DTSC URI for source node",
 		}, nil
@@ -463,7 +465,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	// observe.
 	if control.StreamRegistryInstance == nil {
 		log.Error("Cannot track outbound pull: stream registry unavailable")
-		return &pb.OriginPullAck{
+		return &foghornfederationpb.OriginPullAck{
 			Accepted: false,
 			Reason:   "origin-pull temporarily unavailable",
 		}, nil
@@ -480,7 +482,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		"dtsc_url":    dtscURL,
 	}).Info("Origin-pull accepted")
 
-	return &pb.OriginPullAck{
+	return &foghornfederationpb.OriginPullAck{
 		Accepted: true,
 		DtscUrl:  dtscURL,
 	}, nil
@@ -521,7 +523,7 @@ func (s *FederationServer) dvrRecordingTenant(ctx context.Context, token string)
 // (c) Ready=false when neither applies, so the requesting cluster
 // surfaces 503 (no polling).
 // S3 credentials never leave the origin cluster in either case.
-func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -537,7 +539,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	if s.db == nil {
-		return &pb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
+		return &foghornfederationpb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
 	}
 	// s.s3Client is checked at the call sites that need to mint
 	// presigned URLs — the peer-relay fallback path doesn't need it.
@@ -566,7 +568,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes, &authoritativeCluster)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &pb.PrepareArtifactResponse{Error: "artifact not found"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact not found"}, nil
 		}
 		log.WithError(err).Error("PrepareArtifact DB query failed")
 		return nil, status.Error(codes.Internal, "failed to query artifact")
@@ -584,7 +586,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		// signing against the wrong endpoint.
 		if !s.canLocallyMintFor(ctx, tenantID, authoritativeCluster.String) {
 			log.Info("PrepareArtifact: storage owned elsewhere — redirecting")
-			return &pb.PrepareArtifactResponse{
+			return &foghornfederationpb.PrepareArtifactResponse{
 				RedirectClusterId: authoritativeCluster.String,
 			}, nil
 		}
@@ -605,7 +607,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 			// peer's peer URL.
 			if pr, ok := s.maybePeerRelay(ctx, hash, format, artifactType, streamInternalName, req.GetRequestingCluster(), log); ok {
 				log.Info("PrepareArtifact: returning peer-relay URL for hot-but-unsynced artifact")
-				resp := &pb.PrepareArtifactResponse{
+				resp := &foghornfederationpb.PrepareArtifactResponse{
 					Ready:              true,
 					Format:             format,
 					InternalName:       internalName,
@@ -620,12 +622,12 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 				return resp, nil
 			}
 			log.Info("PrepareArtifact: no hot peer-relay node and not yet on S3; refusing")
-			return &pb.PrepareArtifactResponse{Ready: false}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Ready: false}, nil
 		case "s3":
 			log.WithFields(logging.Fields{"storage_location": location, "sync_status": syncSt}).Warn("PrepareArtifact: metadata drift detected")
-			return &pb.PrepareArtifactResponse{Error: "artifact metadata inconsistent: s3 location without synced status"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact metadata inconsistent: s3 location without synced status"}, nil
 		default:
-			return &pb.PrepareArtifactResponse{Error: "artifact in unexpected state: " + location}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact in unexpected state: " + location}, nil
 		}
 	}
 
@@ -633,7 +635,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	if req.GetArtifactType() != "" {
 		requestedType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
 		if requestedType != artType {
-			return &pb.PrepareArtifactResponse{Error: "artifact type mismatch"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact type mismatch"}, nil
 		}
 		artType = requestedType
 	}
@@ -641,20 +643,20 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 	switch artType {
 	case "clip", "vod":
 		if s.s3Client == nil {
-			return &pb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "origin storage not configured"}, nil
 		}
 		s3Key := s.buildArtifactS3Key(artType, tenantID, streamInternalName, hash, format)
 		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, 15*time.Minute)
 		if err != nil {
 			log.WithError(err).Error("Failed to generate presigned GET for artifact")
-			return &pb.PrepareArtifactResponse{Error: "failed to generate download URL"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "failed to generate download URL"}, nil
 		}
 		var size uint64
 		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 			size = uint64(sizeBytes.Int64)
 		}
 		log.WithField("artifact_type", artType).Info("PrepareArtifact: presigned URL generated")
-		return &pb.PrepareArtifactResponse{
+		return &foghornfederationpb.PrepareArtifactResponse{
 			Url:                presignedURL,
 			SizeBytes:          size,
 			Ready:              true,
@@ -669,10 +671,10 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *pb.PrepareA
 		// (cross-cluster federation for those goes through the
 		// normal VOD/clip case above; chapter playback IDs resolve
 		// to artifact_hash via commodore.dvr_chapter_playback).
-		return &pb.PrepareArtifactResponse{Error: "DVR playback is per-chapter; query dvrChapters and PrepareArtifact each chapter's VOD artifact_hash"}, nil
+		return &foghornfederationpb.PrepareArtifactResponse{Error: "DVR playback is per-chapter; query dvrChapters and PrepareArtifact each chapter's VOD artifact_hash"}, nil
 
 	default:
-		return &pb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil
+		return &foghornfederationpb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil
 	}
 }
 
@@ -810,7 +812,7 @@ func (s *FederationServer) buildArtifactS3Key(artType, tenantID, internalName, h
 // target storage cluster (served + S3 backing tuple match) and the artifact
 // MUST belong to the requesting tenant. VOD multipart create/complete/abort
 // is not exposed via this RPC; callers requesting that flow are rejected.
-func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -826,7 +828,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	if req.GetArtifactKey() == "" {
 		return nil, status.Error(codes.InvalidArgument, "artifact_key required")
 	}
-	if req.GetOp() == pb.MintStorageURLsRequest_OPERATION_UNSPECIFIED {
+	if req.GetOp() == foghornfederationpb.MintStorageURLsRequest_OPERATION_UNSPECIFIED {
 		return nil, status.Error(codes.InvalidArgument, "op required")
 	}
 
@@ -842,12 +844,12 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	if !s.canLocallyMintFor(ctx, req.GetTenantId(), req.GetTargetClusterId()) {
 		log.Warn("MintStorageURLs: this Foghorn does not own the target storage cluster for this tenant")
 		s.recordStorageMint("storage_not_owned_here")
-		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
 	}
 	if s.s3Client == nil {
 		log.Warn("MintStorageURLs: ownership claim accepted but s3 client is nil (configuration race)")
 		s.recordStorageMint("s3_error")
-		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 	}
 
 	// Operation / artifact-type compatibility.
@@ -858,22 +860,22 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		// vod here is the single-PUT freeze of an existing VOD asset.
 		// Federated VOD multipart create flows through CreateVodUpload,
 		// which rejects with storage_delegation_unsupported_for_vod.
-		if op != pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
+		if op != foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE {
 			s.recordStorageMint("unsupported_operation")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 	case "dvr":
-		if op != pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET {
+		if op != foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET {
 			s.recordStorageMint("unsupported_operation")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 		if len(req.GetSegmentFilenames()) == 0 {
 			s.recordStorageMint("unsupported_operation")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 	default:
 		s.recordStorageMint("unsupported_artifact_type")
-		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
 	}
 
 	// Tenant ownership + asset context: try local foghorn.artifacts first,
@@ -883,7 +885,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	mctx, ok := s.resolveMintArtifactContext(ctx, req, artType)
 	if !ok {
 		s.recordStorageMint("tenant_mismatch")
-		return &pb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 	}
 
 	// Build the S3 key per artifact type, mirroring the local-mint code
@@ -904,10 +906,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		if err != nil {
 			log.WithError(err).Error("GeneratePresignedPUT failed")
 			s.recordStorageMint("s3_error")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
 		s.recordStorageMint("accepted")
-		return &pb.MintStorageURLsResponse{
+		return &foghornfederationpb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
 			PresignedPutUrl:  url,
@@ -929,10 +931,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		if err != nil {
 			log.WithError(err).Error("clip GeneratePresignedPUT failed")
 			s.recordStorageMint("s3_error")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
 		s.recordStorageMint("accepted")
-		return &pb.MintStorageURLsResponse{
+		return &foghornfederationpb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
 			PresignedPutUrl:  url,
@@ -952,12 +954,12 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 			if err != nil {
 				log.WithError(err).WithField("segment", fn).Error("dvr segment GeneratePresignedPUT failed")
 				s.recordStorageMint("s3_error")
-				return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+				return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 			}
 			segmentURLs[fn] = url
 		}
 		s.recordStorageMint("accepted")
-		return &pb.MintStorageURLsResponse{
+		return &foghornfederationpb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            dvrPrefix,
 			SegmentUrls:      segmentURLs,
@@ -982,10 +984,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		if err != nil {
 			log.WithError(err).Error("vod GeneratePresignedPUT failed")
 			s.recordStorageMint("s3_error")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
 		s.recordStorageMint("accepted")
-		return &pb.MintStorageURLsResponse{
+		return &foghornfederationpb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
 			PresignedPutUrl:  url,
@@ -999,7 +1001,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		parentHash, fileName, ok := strings.Cut(req.GetArtifactKey(), "/")
 		if !ok || parentHash == "" || fileName == "" {
 			s.recordStorageMint("unsupported_operation")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_operation"}, nil
 		}
 		dvrPrefix := s.s3Client.BuildDVRS3Key(req.GetTenantId(), mctx.streamName, parentHash)
 		s3Key := dvrPrefix + "/" + fileName
@@ -1007,10 +1009,10 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 		if err != nil {
 			log.WithError(err).Error("dvr incremental GeneratePresignedPUT failed")
 			s.recordStorageMint("s3_error")
-			return &pb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
 		s.recordStorageMint("accepted")
-		return &pb.MintStorageURLsResponse{
+		return &foghornfederationpb.MintStorageURLsResponse{
 			Accepted:         true,
 			S3Key:            s3Key,
 			PresignedPutUrl:  url,
@@ -1019,7 +1021,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 	}
 
 	// Unreachable — switch above is exhaustive given the artifact-type guard.
-	return &pb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+	return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
 }
 
 // DeleteStorageObjects handles a peer Foghorn pool asking us to delete an
@@ -1036,7 +1038,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *pb.MintStor
 // NotFound on the supplied target → accepted=true (idempotent retries).
 // Auth, ownership, and shape failures are NEVER collapsed into not-found
 // success.
-func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -1063,11 +1065,11 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *pb.Del
 
 	if !s.canLocallyMintFor(ctx, req.GetTenantId(), req.GetTargetClusterId()) {
 		log.Warn("DeleteStorageObjects: this Foghorn does not own the target storage cluster for this tenant")
-		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "storage_not_owned_here"}, nil
 	}
 	if s.s3Client == nil {
 		log.Warn("DeleteStorageObjects: ownership claim accepted but s3 client is nil (configuration race)")
-		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
 	}
 
 	artType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
@@ -1081,7 +1083,7 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *pb.Del
 	case "clip":
 		key := strings.TrimSpace(req.GetS3Key())
 		if key == "" {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
 		}
 		// Defense-in-depth: refuse keys outside the caller's tenant
 		// namespace AND keys whose basename doesn't bind to artifact_hash.
@@ -1089,55 +1091,55 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *pb.Del
 		// delete clip c2's bytes by submitting c2's key.
 		if !strings.HasPrefix(key, "clips/") || !strings.HasPrefix(key, tenantPrefix("clips")) || !clipKeyMatchesHash(key, hash) {
 			log.WithField("supplied_key", key).Warn("DeleteStorageObjects: supplied clip s3_key doesn't bind to expected tenant+hash")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
 		}
 		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		if err := s.s3Client.Delete(ctx, key); err != nil {
 			log.WithError(err).WithField("key", key).Error("DeleteStorageObjects: s3 delete failed")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 
 	case "vod":
 		key := strings.TrimSpace(req.GetS3Key())
 		if key == "" {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
 		}
 		if !strings.HasPrefix(key, "vod/") || !strings.HasPrefix(key, tenantPrefix("vod")) || !vodKeyMatchesHash(key, req.GetTenantId(), hash) {
 			log.WithField("supplied_key", key).Warn("DeleteStorageObjects: supplied vod s3_key doesn't bind to expected tenant+hash")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
 		}
 		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		if err := s.s3Client.Delete(ctx, key); err != nil {
 			log.WithError(err).WithField("key", key).Error("DeleteStorageObjects: s3 delete failed")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 
 	case "dvr":
 		prefix := strings.TrimSpace(req.GetS3Prefix())
 		if prefix == "" {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "missing_target"}, nil
 		}
 		if !strings.HasPrefix(prefix, "dvr/") || !strings.HasPrefix(prefix, tenantPrefix("dvr")) || !dvrPrefixMatchesHash(prefix, hash) {
 			log.WithField("supplied_prefix", prefix).Warn("DeleteStorageObjects: supplied dvr s3_prefix doesn't bind to expected tenant+hash")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
 		}
 		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 		}
 		if _, err := s.s3Client.DeletePrefix(ctx, prefix); err != nil {
 			log.WithError(err).WithField("prefix", prefix).Error("DeleteStorageObjects: s3 delete-prefix failed")
-			return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 
 	default:
-		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "unsupported_artifact_type"}, nil
 	}
 }
 
@@ -1267,7 +1269,7 @@ func mintArtifactTypeCompatible(rowType, requestedType string) bool {
 // inserted so subsequent delegated mints fast-path locally; healing
 // failures are logged but never block the response. Live thumbnails do
 // NOT heal (no DB row exists by design).
-func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *pb.MintStorageURLsRequest, artType string) (mintArtifactContext, bool) {
+func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest, artType string) (mintArtifactContext, bool) {
 	if artType == "thumbnail" && req.GetStreamInternalName() != "" {
 		return s.resolveLiveThumbnailContext(ctx, req)
 	}
@@ -1440,7 +1442,7 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 // request another stream's thumbnail key by setting artifact_key to that
 // stream's UUID while still passing their own tenant's
 // stream_internal_name in the request.
-func (s *FederationServer) resolveLiveThumbnailContext(ctx context.Context, req *pb.MintStorageURLsRequest) (mintArtifactContext, bool) {
+func (s *FederationServer) resolveLiveThumbnailContext(ctx context.Context, req *foghornfederationpb.MintStorageURLsRequest) (mintArtifactContext, bool) {
 	wantStreamID, _, ok := strings.Cut(req.GetArtifactKey(), "/")
 	if !ok || wantStreamID == "" {
 		s.logger.WithField("artifact_key", req.GetArtifactKey()).Warn("live thumbnail artifact_key missing <streamID>/<file> shape")
@@ -1522,7 +1524,7 @@ func (s *FederationServer) healMintArtifactRow(ctx context.Context, artifactHash
 
 // CreateRemoteClip handles a peer cluster requesting clip creation on the origin.
 // The origin has the live stream locally and can create the clip directly.
-func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
+func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *foghornfederationpb.RemoteClipRequest) (*foghornfederationpb.RemoteClipResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -1533,7 +1535,7 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	if s.clipCreator == nil {
-		return &pb.RemoteClipResponse{Accepted: false, Reason: "clip creation not available"}, nil
+		return &foghornfederationpb.RemoteClipResponse{Accepted: false, Reason: "clip creation not available"}, nil
 	}
 
 	log := s.logger.WithFields(logging.Fields{
@@ -1546,14 +1548,14 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	sm := state.DefaultManager()
 	ss := sm.GetStreamState(req.GetStreamInternalName())
 	if ss == nil || ss.Status != "live" {
-		return &pb.RemoteClipResponse{Accepted: false, Reason: "stream not live on origin"}, nil
+		return &foghornfederationpb.RemoteClipResponse{Accepted: false, Reason: "stream not live on origin"}, nil
 	}
 	if ss.TenantID != "" && ss.TenantID != req.GetTenantId() {
-		return &pb.RemoteClipResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
+		return &foghornfederationpb.RemoteClipResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
 	}
 
 	// Delegate to local clip creation — convert plain fields to optional pointers
-	clipReq := &pb.CreateClipRequest{
+	clipReq := &sharedpb.CreateClipRequest{
 		StreamInternalName: req.GetStreamInternalName(),
 		TenantId:           req.GetTenantId(),
 		Format:             req.GetFormat(),
@@ -1582,11 +1584,11 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 	clipResp, err := s.clipCreator.CreateClip(ctx, clipReq)
 	if err != nil {
 		log.WithError(err).Warn("Remote clip creation failed")
-		return &pb.RemoteClipResponse{Accepted: false, Reason: err.Error()}, nil
+		return &foghornfederationpb.RemoteClipResponse{Accepted: false, Reason: err.Error()}, nil
 	}
 
 	log.WithField("clip_hash", clipResp.GetClipHash()).Info("Remote clip created on origin")
-	return &pb.RemoteClipResponse{
+	return &foghornfederationpb.RemoteClipResponse{
 		Accepted:      true,
 		ClipHash:      clipResp.GetClipHash(),
 		StorageNodeId: clipResp.GetNodeId(),
@@ -1595,7 +1597,7 @@ func (s *FederationServer) CreateRemoteClip(ctx context.Context, req *pb.RemoteC
 
 // CreateRemoteDVR handles a peer cluster requesting DVR recording on the origin.
 // DVR must record on the origin cluster (co-located with ingest source).
-func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDVRRequest) (*pb.RemoteDVRResponse, error) {
+func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *foghornfederationpb.RemoteDVRRequest) (*foghornfederationpb.RemoteDVRResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -1606,7 +1608,7 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	if s.dvrCreator == nil {
-		return &pb.RemoteDVRResponse{Accepted: false, Reason: "DVR not available"}, nil
+		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "DVR not available"}, nil
 	}
 
 	log := s.logger.WithFields(logging.Fields{
@@ -1619,14 +1621,14 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	sm := state.DefaultManager()
 	ss := sm.GetStreamState(req.GetStreamInternalName())
 	if ss == nil || ss.Status != "live" {
-		return &pb.RemoteDVRResponse{Accepted: false, Reason: "stream not live on origin"}, nil
+		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "stream not live on origin"}, nil
 	}
 	if ss.TenantID != "" && ss.TenantID != req.GetTenantId() {
-		return &pb.RemoteDVRResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
+		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: "stream tenant mismatch"}, nil
 	}
 
 	// Delegate to local DVR start
-	dvrReq := &pb.StartDVRRequest{
+	dvrReq := &sharedpb.StartDVRRequest{
 		InternalName: req.GetStreamInternalName(),
 		TenantId:     req.GetTenantId(),
 	}
@@ -1636,11 +1638,11 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 	dvrResp, err := s.dvrCreator.StartDVR(ctx, dvrReq)
 	if err != nil {
 		log.WithError(err).Warn("Remote DVR creation failed")
-		return &pb.RemoteDVRResponse{Accepted: false, Reason: err.Error()}, nil
+		return &foghornfederationpb.RemoteDVRResponse{Accepted: false, Reason: err.Error()}, nil
 	}
 
 	log.WithField("dvr_hash", dvrResp.GetDvrHash()).Info("Remote DVR started on origin")
-	return &pb.RemoteDVRResponse{
+	return &foghornfederationpb.RemoteDVRResponse{
 		Accepted: true,
 		DvrHash:  dvrResp.GetDvrHash(),
 	}, nil
@@ -1649,7 +1651,7 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *pb.RemoteDV
 // PeerChannel is a bidirectional stream for real-time telemetry exchange.
 // The receiving side writes EdgeTelemetry and ReplicationEvents to Redis;
 // the sending side pushes telemetry for locally active replicated streams.
-func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelServer) error {
+func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederation_PeerChannelServer) error {
 	ctx := stream.Context()
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return err
@@ -1689,28 +1691,28 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 		}
 
 		switch payload := msg.Payload.(type) {
-		case *pb.PeerMessage_EdgeTelemetry:
+		case *foghornfederationpb.PeerMessage_EdgeTelemetry:
 			s.handleEdgeTelemetry(ctx, peerClusterID, payload.EdgeTelemetry)
 
-		case *pb.PeerMessage_ReplicationEvent:
+		case *foghornfederationpb.PeerMessage_ReplicationEvent:
 			s.handleReplicationEvent(ctx, peerClusterID, payload.ReplicationEvent)
 
-		case *pb.PeerMessage_ClusterSummary:
+		case *foghornfederationpb.PeerMessage_ClusterSummary:
 			s.handleClusterSummary(ctx, peerClusterID, payload.ClusterSummary)
 
-		case *pb.PeerMessage_StreamLifecycle:
+		case *foghornfederationpb.PeerMessage_StreamLifecycle:
 			s.handleStreamLifecycle(ctx, peerClusterID, payload.StreamLifecycle)
 
-		case *pb.PeerMessage_StreamAd:
+		case *foghornfederationpb.PeerMessage_StreamAd:
 			s.handleStreamAdvertisement(ctx, peerClusterID, payload.StreamAd)
 
-		case *pb.PeerMessage_ArtifactAd:
+		case *foghornfederationpb.PeerMessage_ArtifactAd:
 			s.handleArtifactAdvertisement(ctx, peerClusterID, payload.ArtifactAd)
 
-		case *pb.PeerMessage_PeerHeartbeat:
+		case *foghornfederationpb.PeerMessage_PeerHeartbeat:
 			s.handlePeerHeartbeat(ctx, peerClusterID, payload.PeerHeartbeat)
 
-		case *pb.PeerMessage_CapacitySummary:
+		case *foghornfederationpb.PeerMessage_CapacitySummary:
 			// CapacitySummary is accepted on the wire but no consumer is wired.
 
 		default:
@@ -1719,7 +1721,7 @@ func (s *FederationServer) PeerChannel(stream pb.FoghornFederation_PeerChannelSe
 	}
 }
 
-func (s *FederationServer) handleEdgeTelemetry(ctx context.Context, peerClusterID string, t *pb.EdgeTelemetry) {
+func (s *FederationServer) handleEdgeTelemetry(ctx context.Context, peerClusterID string, t *foghornfederationpb.EdgeTelemetry) {
 	entry := &RemoteEdgeEntry{
 		StreamName:  t.StreamName,
 		NodeID:      t.NodeId,
@@ -1741,7 +1743,7 @@ func (s *FederationServer) handleEdgeTelemetry(ctx context.Context, peerClusterI
 	}
 }
 
-func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClusterID string, r *pb.ReplicationEvent) {
+func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClusterID string, r *foghornfederationpb.ReplicationEvent) {
 	entry := &RemoteReplicationEntry{
 		StreamName: r.StreamName,
 		NodeID:     r.NodeId,
@@ -1760,7 +1762,7 @@ func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClust
 	}
 }
 
-func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerClusterID string, ev *pb.StreamLifecycleEvent) {
+func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerClusterID string, ev *foghornfederationpb.StreamLifecycleEvent) {
 	if ev.GetIsLive() {
 		clusterID := peerClusterID
 		if clusterID == "" {
@@ -1786,7 +1788,7 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 	}
 }
 
-func (s *FederationServer) handleClusterSummary(ctx context.Context, peerClusterID string, summary *pb.ClusterEdgeSummary) {
+func (s *FederationServer) handleClusterSummary(ctx context.Context, peerClusterID string, summary *foghornfederationpb.ClusterEdgeSummary) {
 	edges := make([]*EdgeSummaryEntry, 0, len(summary.Edges))
 	for _, e := range summary.Edges {
 		edges = append(edges, &EdgeSummaryEntry{
@@ -1814,7 +1816,7 @@ func (s *FederationServer) handleClusterSummary(ctx context.Context, peerCluster
 	}
 }
 
-func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peerClusterID string, ad *pb.ArtifactAdvertisement) {
+func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peerClusterID string, ad *foghornfederationpb.ArtifactAdvertisement) {
 	if ad == nil {
 		return
 	}
@@ -1855,7 +1857,7 @@ func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peer
 	}
 }
 
-func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClusterID string, ad *pb.StreamAdvertisement) {
+func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClusterID string, ad *foghornfederationpb.StreamAdvertisement) {
 	if ad == nil {
 		return
 	}
@@ -1903,7 +1905,7 @@ func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClus
 	}
 }
 
-func (s *FederationServer) handlePeerHeartbeat(ctx context.Context, peerClusterID string, hb *pb.PeerHeartbeat) {
+func (s *FederationServer) handlePeerHeartbeat(ctx context.Context, peerClusterID string, hb *foghornfederationpb.PeerHeartbeat) {
 	if hb == nil {
 		return
 	}
@@ -1923,7 +1925,7 @@ func (s *FederationServer) handlePeerHeartbeat(ctx context.Context, peerClusterI
 }
 
 // ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.
-func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.ListTenantArtifactsRequest) (*pb.ListTenantArtifactsResponse, error) {
+func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *foghornfederationpb.ListTenantArtifactsRequest) (*foghornfederationpb.ListTenantArtifactsResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -1952,9 +1954,9 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.List
 	}
 	defer rows.Close()
 
-	var artifacts []*pb.ArtifactMetadata
+	var artifacts []*foghornfederationpb.ArtifactMetadata
 	for rows.Next() {
-		var a pb.ArtifactMetadata
+		var a foghornfederationpb.ArtifactMetadata
 		if err := rows.Scan(&a.ArtifactHash, &a.ArtifactType, &a.InternalName,
 			&a.Format, &a.StorageLocation, &a.SyncStatus, &a.S3Url,
 			&a.SizeBytes, &a.CreatedAt, &a.FrozenAt, &a.StreamInternalName); err != nil {
@@ -1972,11 +1974,11 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *pb.List
 		"artifact_count":     len(artifacts),
 	}).Info("ListTenantArtifacts served")
 
-	return &pb.ListTenantArtifactsResponse{Artifacts: artifacts}, nil
+	return &foghornfederationpb.ListTenantArtifactsResponse{Artifacts: artifacts}, nil
 }
 
 // MigrateArtifactMetadata fetches artifact records from a source cluster and inserts them locally.
-func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.MigrateArtifactMetadataRequest) (*pb.MigrateArtifactMetadataResponse, error) {
+func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *foghornfederationpb.MigrateArtifactMetadataRequest) (*foghornfederationpb.MigrateArtifactMetadataResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -1999,15 +2001,15 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 
 	peerAddr := s.peerManager.GetPeerAddr(sourceClusterID)
 	if peerAddr == "" {
-		return &pb.MigrateArtifactMetadataResponse{Error: "source cluster address unknown"}, nil
+		return &foghornfederationpb.MigrateArtifactMetadataResponse{Error: "source cluster address unknown"}, nil
 	}
 
-	listResp, err := s.fedClient.ListTenantArtifacts(ctx, sourceClusterID, peerAddr, &pb.ListTenantArtifactsRequest{
+	listResp, err := s.fedClient.ListTenantArtifacts(ctx, sourceClusterID, peerAddr, &foghornfederationpb.ListTenantArtifactsRequest{
 		TenantId:          tenantID,
 		RequestingCluster: s.clusterID,
 	})
 	if err != nil {
-		return &pb.MigrateArtifactMetadataResponse{Error: "failed to list artifacts from source: " + err.Error()}, nil //nolint:nilerr // error encoded in response message
+		return &foghornfederationpb.MigrateArtifactMetadataResponse{Error: "failed to list artifacts from source: " + err.Error()}, nil //nolint:nilerr // error encoded in response message
 	}
 
 	var migrated, exists int32
@@ -2030,13 +2032,13 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *pb.
 		"total_source":   len(listResp.Artifacts),
 	}).Info("Artifact metadata migration complete")
 
-	return &pb.MigrateArtifactMetadataResponse{
+	return &foghornfederationpb.MigrateArtifactMetadataResponse{
 		MigratedCount: migrated,
 		AlreadyExists: exists,
 	}, nil
 }
 
-func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *pb.ArtifactMetadata) (bool, error) {
+func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *foghornfederationpb.ArtifactMetadata) (bool, error) {
 	result, err := db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
 		VALUES ($1, $2, $3, $4, $11, $5, 'active', $6, $7, $8, $9, $10)
@@ -2097,7 +2099,7 @@ func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, s
 
 // ForwardArtifactCommand handles a peer forwarding an artifact command it couldn't
 // handle locally. Dispatches to the local handler based on the command field.
-func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error) {
+func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -2112,15 +2114,15 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 	}
 	if err := s.revalidateForwardedArtifact(ctx, req); err != nil {
 		if status.Code(err) == codes.NotFound {
-			return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
 		}
 		if status.Code(err) == codes.FailedPrecondition {
-			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
 		}
 		return nil, err
 	}
 	if s.artifactHandler == nil {
-		return &pb.ForwardArtifactCommandResponse{Handled: false, Error: "artifact handler not available"}, nil
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: "artifact handler not available"}, nil
 	}
 
 	log := s.logger.WithFields(logging.Fields{
@@ -2134,21 +2136,21 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 
 	switch req.GetCommand() {
 	case "delete_clip":
-		resp, err := s.artifactHandler.DeleteClip(ctx, &pb.DeleteClipRequest{
+		resp, err := s.artifactHandler.DeleteClip(ctx, &sharedpb.DeleteClipRequest{
 			ClipHash: req.GetArtifactHash(),
 			TenantId: req.GetTenantId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+				return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
 			}
-			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
 		}
 		log.Info("Forwarded delete_clip handled locally")
-		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
 
 	case "stop_dvr":
-		stopReq := &pb.StopDVRRequest{
+		stopReq := &sharedpb.StopDVRRequest{
 			DvrHash:  req.GetArtifactHash(),
 			TenantId: req.GetTenantId(),
 		}
@@ -2159,50 +2161,50 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *pb.F
 		resp, err := s.artifactHandler.StopDVR(ctx, stopReq)
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+				return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
 			}
-			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
 		}
 		log.Info("Forwarded stop_dvr handled locally")
-		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
 
 	case "delete_dvr":
-		resp, err := s.artifactHandler.DeleteDVR(ctx, &pb.DeleteDVRRequest{
+		resp, err := s.artifactHandler.DeleteDVR(ctx, &sharedpb.DeleteDVRRequest{
 			DvrHash:  req.GetArtifactHash(),
 			TenantId: req.GetTenantId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+				return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
 			}
-			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
 		}
 		log.Info("Forwarded delete_dvr handled locally")
-		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
 
 	case "delete_vod":
-		resp, err := s.artifactHandler.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+		resp, err := s.artifactHandler.DeleteVodAsset(ctx, &sharedpb.DeleteVodAssetRequest{
 			ArtifactHash: req.GetArtifactHash(),
 			TenantId:     req.GetTenantId(),
 		})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return &pb.ForwardArtifactCommandResponse{Handled: false}, nil
+				return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
 			}
-			return &pb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
+			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false, Error: err.Error()}, nil
 		}
 		log.Info("Forwarded delete_vod handled locally")
-		return &pb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: resp.GetSuccess()}, nil
 
 	default:
-		return &pb.ForwardArtifactCommandResponse{
+		return &foghornfederationpb.ForwardArtifactCommandResponse{
 			Handled: false,
 			Error:   "unknown command: " + req.GetCommand(),
 		}, nil
 	}
 }
 
-func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req *pb.ForwardArtifactCommandRequest) error {
+func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req *foghornfederationpb.ForwardArtifactCommandRequest) error {
 	if s.db == nil {
 		s.logger.WithFields(logging.Fields{
 			"command":       req.GetCommand(),

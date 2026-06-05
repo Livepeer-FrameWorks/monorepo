@@ -3,9 +3,9 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"strings"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, error) {
@@ -14,7 +14,7 @@ func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, er
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: infraMaxLimit})
+	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load owned clusters: %w", err)
 	}
@@ -69,7 +69,7 @@ func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) er
 	return nil
 }
 
-func (r *Resolver) requireOwnedNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+func (r *Resolver) requireOwnedNode(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {
 		return nil, fmt.Errorf("node_id required")

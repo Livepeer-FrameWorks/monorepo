@@ -3,10 +3,10 @@ package jobs
 import (
 	"context"
 	"fmt"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"sync"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // mockReconcilerS3Client implements ReconcilerS3Client for testing.
@@ -82,9 +82,9 @@ func (m *mockReconcilerS3Client) BuildVodS3Key(tenantID, artifactHash, filename 
 type mockCommodoreClient struct {
 	mu sync.Mutex
 
-	resolveClipHashFn func(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error)
-	resolveDVRHashFn  func(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error)
-	resolveVodHashFn  func(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
+	resolveClipHashFn func(ctx context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error)
+	resolveDVRHashFn  func(ctx context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error)
+	resolveVodHashFn  func(ctx context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error)
 
 	clipCalls           []string
 	dvrCalls            []string
@@ -97,64 +97,64 @@ type mockCommodoreClient struct {
 	markThumbnailsErr   error
 }
 
-func (m *mockCommodoreClient) ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error) {
+func (m *mockCommodoreClient) ResolveClipHash(ctx context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error) {
 	m.mu.Lock()
 	m.clipCalls = append(m.clipCalls, hash)
 	m.mu.Unlock()
 	if m.resolveClipHashFn != nil {
 		return m.resolveClipHashFn(ctx, hash)
 	}
-	return &pb.ResolveClipHashResponse{Found: false}, nil
+	return &commodorepb.ResolveClipHashResponse{Found: false}, nil
 }
 
-func (m *mockCommodoreClient) ResolveDVRHash(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error) {
+func (m *mockCommodoreClient) ResolveDVRHash(ctx context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error) {
 	m.mu.Lock()
 	m.dvrCalls = append(m.dvrCalls, hash)
 	m.mu.Unlock()
 	if m.resolveDVRHashFn != nil {
 		return m.resolveDVRHashFn(ctx, hash)
 	}
-	return &pb.ResolveDVRHashResponse{Found: false}, nil
+	return &commodorepb.ResolveDVRHashResponse{Found: false}, nil
 }
 
-func (m *mockCommodoreClient) ResolveVodHash(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error) {
+func (m *mockCommodoreClient) ResolveVodHash(ctx context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error) {
 	m.mu.Lock()
 	m.vodCalls = append(m.vodCalls, hash)
 	m.mu.Unlock()
 	if m.resolveVodHashFn != nil {
 		return m.resolveVodHashFn(ctx, hash)
 	}
-	return &pb.ResolveVodHashResponse{Found: false}, nil
+	return &commodorepb.ResolveVodHashResponse{Found: false}, nil
 }
 
-func (m *mockCommodoreClient) UpdateArtifactStorageCluster(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error) {
+func (m *mockCommodoreClient) UpdateArtifactStorageCluster(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error) {
 	m.mu.Lock()
 	m.storageProjection = append(m.storageProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
 	m.mu.Unlock()
 	if m.updateStorageErr != nil {
 		return nil, m.updateStorageErr
 	}
-	return &pb.UpdateArtifactStorageClusterResponse{Updated: true}, nil
+	return &commodorepb.UpdateArtifactStorageClusterResponse{Updated: true}, nil
 }
 
-func (m *mockCommodoreClient) UpdateArtifactSize(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error) {
+func (m *mockCommodoreClient) UpdateArtifactSize(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
 	m.mu.Lock()
 	m.sizeProjection = append(m.sizeProjection, fmt.Sprintf("%s|%s|%s|%d", tenantID, assetType.String(), assetKey, sizeBytes))
 	m.mu.Unlock()
 	if m.updateSizeErr != nil {
 		return nil, m.updateSizeErr
 	}
-	return &pb.UpdateArtifactSizeResponse{Updated: true}, nil
+	return &commodorepb.UpdateArtifactSizeResponse{Updated: true}, nil
 }
 
-func (m *mockCommodoreClient) MarkArtifactThumbnailsReady(_ context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
+func (m *mockCommodoreClient) MarkArtifactThumbnailsReady(_ context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error) {
 	m.mu.Lock()
 	m.thumbnailProjection = append(m.thumbnailProjection, tenantID+"|"+assetType.String()+"|"+assetKey+"|"+storageClusterID)
 	m.mu.Unlock()
 	if m.markThumbnailsErr != nil {
 		return nil, m.markThumbnailsErr
 	}
-	return &pb.MarkArtifactThumbnailsReadyResponse{Updated: true}, nil
+	return &commodorepb.MarkArtifactThumbnailsReadyResponse{Updated: true}, nil
 }
 
 // freezeCapture records calls to SendFreeze for assertion.
@@ -166,10 +166,10 @@ type freezeCapture struct {
 
 type freezeCall struct {
 	NodeID string
-	Req    *pb.FreezeRequest
+	Req    *ipcpb.FreezeRequest
 }
 
-func (fc *freezeCapture) send(nodeID string, req *pb.FreezeRequest) error {
+func (fc *freezeCapture) send(nodeID string, req *ipcpb.FreezeRequest) error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.calls = append(fc.calls, freezeCall{nodeID, req})

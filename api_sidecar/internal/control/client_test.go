@@ -16,7 +16,7 @@ import (
 
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc/metadata"
@@ -24,12 +24,12 @@ import (
 
 type fakeControlStream struct {
 	sendMu  sync.Mutex
-	sent    []*pb.ControlMessage
+	sent    []*ipcpb.ControlMessage
 	sendErr error
-	sendCh  chan *pb.ControlMessage
+	sendCh  chan *ipcpb.ControlMessage
 }
 
-func (f *fakeControlStream) Send(msg *pb.ControlMessage) error {
+func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 	f.sendMu.Lock()
 	f.sent = append(f.sent, msg)
 	if f.sendCh != nil {
@@ -40,7 +40,7 @@ func (f *fakeControlStream) Send(msg *pb.ControlMessage) error {
 	return err
 }
 
-func (f *fakeControlStream) Recv() (*pb.ControlMessage, error) {
+func (f *fakeControlStream) Recv() (*ipcpb.ControlMessage, error) {
 	return nil, io.EOF
 }
 
@@ -78,7 +78,7 @@ func waitForTestDone(t *testing.T, ch <-chan struct{}, reason string) {
 	}
 }
 
-func waitForControlMessage(t *testing.T, ch <-chan *pb.ControlMessage, reason string) *pb.ControlMessage {
+func waitForControlMessage(t *testing.T, ch <-chan *ipcpb.ControlMessage, reason string) *ipcpb.ControlMessage {
 	t.Helper()
 
 	select {
@@ -118,13 +118,13 @@ func TestSendDesiredStateResultPersistsBeforeSelfRestart(t *testing.T) {
 	resetTestOutbox(t)
 	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: "self-update-1",
-		Payload: &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &pb.UpdateApplyResult{
+		Payload: &ipcpb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &ipcpb.UpdateApplyResult{
 			NodeId: "node-1",
 		}},
 	}
-	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*pb.ControlMessage) error {
+	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*ipcpb.ControlMessage) error {
 		return fmt.Errorf("stream closed")
 	})
 	if !shouldRestart {
@@ -166,13 +166,13 @@ func TestSendDesiredStateResultDoesNotRestartWithoutDurableOutbox(t *testing.T) 
 	}
 	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxFile)
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: "self-update-2",
-		Payload: &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &pb.UpdateApplyResult{
+		Payload: &ipcpb.ControlMessage_UpdateApplyResult{UpdateApplyResult: &ipcpb.UpdateApplyResult{
 			NodeId: "node-1",
 		}},
 	}
-	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*pb.ControlMessage) error {
+	shouldRestart := sendDesiredStateResult(msg, true, nil, func(*ipcpb.ControlMessage) error {
 		return fmt.Errorf("stream closed")
 	})
 	if shouldRestart {
@@ -204,7 +204,7 @@ func TestSendMistTriggerOnceStreamDisconnected(t *testing.T) {
 	triggerType := "test_disconnect"
 	before := testutil.ToFloat64(TriggersSent.WithLabelValues(triggerType, "stream_disconnected"))
 
-	err := sendMistTriggerOnce(triggerType, &pb.MistTrigger{TriggerType: triggerType})
+	err := sendMistTriggerOnce(triggerType, &ipcpb.MistTrigger{TriggerType: triggerType})
 	if err == nil {
 		t.Fatal("expected error for disconnected stream")
 	}
@@ -221,7 +221,7 @@ func TestSendMistTriggerOnceSendError(t *testing.T) {
 	triggerType := "test_send_error"
 	before := testutil.ToFloat64(TriggersSent.WithLabelValues(triggerType, "send_error"))
 
-	err := sendMistTriggerOnce(triggerType, &pb.MistTrigger{TriggerType: triggerType})
+	err := sendMistTriggerOnce(triggerType, &ipcpb.MistTrigger{TriggerType: triggerType})
 	if err == nil {
 		t.Fatal("expected error from send")
 	}
@@ -233,7 +233,7 @@ func TestSendMistTriggerOnceSendError(t *testing.T) {
 }
 
 func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
-	ch := make(chan *pb.MistTriggerResponse, 1)
+	ch := make(chan *ipcpb.MistTriggerResponse, 1)
 	pendingMutex <- struct{}{}
 	pendingMistTriggers["timeout-test"] = ch
 	<-pendingMutex
@@ -242,7 +242,7 @@ func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if result == nil || !result.Abort || result.ErrorCode != pb.IngestErrorCode_INGEST_ERROR_TIMEOUT {
+	if result == nil || !result.Abort || result.ErrorCode != ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 
@@ -257,7 +257,7 @@ func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
 func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 	resetControlState(t)
 
-	ch := make(chan *pb.MistTriggerResponse, 1)
+	ch := make(chan *ipcpb.MistTriggerResponse, 1)
 	pendingMutex <- struct{}{}
 	pendingMistTriggers["disconnect-test"] = ch
 	<-pendingMutex
@@ -273,7 +273,7 @@ func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 	if err == nil || !errors.Is(err, errStreamDisconnected) {
 		t.Fatalf("expected disconnect error, got %v", err)
 	}
-	if result == nil || !result.Abort || result.ErrorCode != pb.IngestErrorCode_INGEST_ERROR_INTERNAL {
+	if result == nil || !result.Abort || result.ErrorCode != ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	<-done
@@ -341,7 +341,7 @@ type controlState struct {
 	blockingGraceMs     int
 	streamReconnected   chan struct{}
 	disconnectNotify    chan struct{}
-	pendingMistTriggers map[string]chan *pb.MistTriggerResponse
+	pendingMistTriggers map[string]chan *ipcpb.MistTriggerResponse
 	pendingMutex        chan struct{}
 }
 
@@ -377,7 +377,7 @@ func resetControlState(t *testing.T) {
 	disconnectNotifyMu.Lock()
 	disconnectNotify = make(chan struct{})
 	disconnectNotifyMu.Unlock()
-	pendingMistTriggers = make(map[string]chan *pb.MistTriggerResponse)
+	pendingMistTriggers = make(map[string]chan *ipcpb.MistTriggerResponse)
 	pendingMutex = make(chan struct{}, 1)
 }
 
@@ -433,9 +433,9 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 	resetControlState(t)
 	blockingGraceMs = 200
 
-	stream := &fakeControlStream{sendCh: make(chan *pb.ControlMessage, 1)}
+	stream := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 1)}
 	logger := logging.NewLogger()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "stream_start",
 		RequestId:   "req-reconnect",
 		Blocking:    true,
@@ -457,7 +457,7 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 
 	waitForControlMessage(t, stream.sendCh, "reconnected Mist trigger send")
 	waitForPendingTrigger(t, trigger.RequestId)
-	handleMistTriggerResponse(&pb.MistTriggerResponse{
+	handleMistTriggerResponse(&ipcpb.MistTriggerResponse{
 		RequestId: "req-reconnect",
 		Response:  "ok",
 	})
@@ -523,7 +523,7 @@ func TestSendFreezeProgressDisconnected(t *testing.T) {
 
 func TestSendStorageLifecycleDisconnected(t *testing.T) {
 	clearConn()
-	err := SendStorageLifecycle(&pb.StorageLifecycleData{})
+	err := SendStorageLifecycle(&ipcpb.StorageLifecycleData{})
 	if err == nil {
 		t.Fatal("expected error for disconnected stream")
 	}
@@ -531,7 +531,7 @@ func TestSendStorageLifecycleDisconnected(t *testing.T) {
 
 func TestSendProcessBillingEventDisconnected(t *testing.T) {
 	clearConn()
-	err := SendProcessBillingEvent(&pb.ProcessBillingEvent{ProcessType: "test_disconnect"})
+	err := SendProcessBillingEvent(&ipcpb.ProcessBillingEvent{ProcessType: "test_disconnect"})
 	if err == nil {
 		t.Fatal("expected error for disconnected stream")
 	}
@@ -540,12 +540,12 @@ func TestSendProcessBillingEventDisconnected(t *testing.T) {
 func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 	resetControlState(t)
 
-	stream1 := &fakeControlStream{sendCh: make(chan *pb.ControlMessage, 1)}
-	stream2 := &fakeControlStream{sendCh: make(chan *pb.ControlMessage, 1)}
+	stream1 := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 1)}
+	stream2 := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 1)}
 	storeConn(stream1, "")
 	logger := logging.NewLogger()
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "stream_stop",
 		RequestId:   "req-retry",
 		Blocking:    true,
@@ -579,7 +579,7 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 	signalReconnect()
 
 	waitForControlMessage(t, stream2.sendCh, "retried Mist trigger send after reconnect")
-	handleMistTriggerResponse(&pb.MistTriggerResponse{
+	handleMistTriggerResponse(&ipcpb.MistTriggerResponse{
 		RequestId: trigger.RequestId,
 		Response:  "ack",
 	})

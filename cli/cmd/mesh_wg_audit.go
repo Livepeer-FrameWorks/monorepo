@@ -11,8 +11,8 @@ import (
 	"frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/spf13/cobra"
 )
 
@@ -213,7 +213,7 @@ type qmKey struct {
 // relative to (now - window). nil last_heartbeat is treated as unknown,
 // not stale, since "never seen" and "haven't seen recently" are
 // operationally distinct.
-func classifyLiveness(node *pb.InfrastructureNode, now time.Time, window time.Duration) auditLiveness {
+func classifyLiveness(node *quartermasterpb.InfrastructureNode, now time.Time, window time.Duration) auditLiveness {
 	if node == nil || node.LastHeartbeat == nil {
 		return livenessUnknown
 	}
@@ -230,8 +230,8 @@ func classifyLiveness(node *pb.InfrastructureNode, now time.Time, window time.Du
 // in other clusters are ignored entirely. now and livenessWindow drive the
 // per-row LIVE column without touching identity-comparison severity — a
 // stale heartbeat does not turn an otherwise clean row into an error.
-func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes []*pb.InfrastructureNode, manifestClusters map[string]bool, now time.Time, livenessWindow time.Duration) auditFindings {
-	qmByKey := make(map[qmKey]*pb.InfrastructureNode, len(qmNodes))
+func auditMeshIdentity(manifest *inventory.Manifest, hostNames []string, qmNodes []*quartermasterpb.InfrastructureNode, manifestClusters map[string]bool, now time.Time, livenessWindow time.Duration) auditFindings {
+	qmByKey := make(map[qmKey]*quartermasterpb.InfrastructureNode, len(qmNodes))
 	for _, n := range qmNodes {
 		qmByKey[qmKey{nodeName: n.GetNodeName(), clusterID: n.GetClusterId()}] = n
 	}

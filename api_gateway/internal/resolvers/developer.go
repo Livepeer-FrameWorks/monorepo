@@ -10,20 +10,22 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoCreateDeveloperToken creates a new developer token
-func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*pb.APITokenInfo, error) {
+func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*commodorepb.APITokenInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer token creation")
 		// Return a demo token creation response
 		now := time.Now()
 		exp := now.AddDate(0, 6, 0)
 		demoTokenValue := "fwk_demo_" + fmt.Sprintf("%d", now.UnixNano())[:16]
-		return &pb.APITokenInfo{
+		return &commodorepb.APITokenInfo{
 			Id:          "demo_dev_token_001",
 			TokenName:   input.Name,
 			TokenValue:  &demoTokenValue,
@@ -38,7 +40,7 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 	// No need to pass userToken explicitly
 
 	// Convert GraphQL input to Commodore request
-	req := &pb.CreateAPITokenRequest{
+	req := &commodorepb.CreateAPITokenRequest{
 		TokenName: input.Name,
 	}
 
@@ -68,12 +70,12 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 
 	tenantID := tenantIDFromContext(ctx)
 	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTokenCreated,
 		ResourceType: "api_token",
 		ResourceId:   tokenResp.Id,
-		Payload: &pb.ServiceEvent_AuthEvent{
-			AuthEvent: &pb.AuthEvent{
+		Payload: &ipcpb.ServiceEvent_AuthEvent{
+			AuthEvent: &ipcpb.AuthEvent{
 				UserId:   userID,
 				TenantId: tenantID,
 				AuthType: "api_token",
@@ -84,7 +86,7 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 
 	// Convert response to APITokenInfo (matching gqlgen binding)
 	// Include TokenValue for creation response - it's only available on creation
-	return &pb.APITokenInfo{
+	return &commodorepb.APITokenInfo{
 		Id:          tokenResp.Id,
 		TokenName:   tokenResp.TokenName,
 		TokenValue:  &tokenResp.TokenValue,
@@ -119,12 +121,12 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 
 	tenantID := tenantIDFromContext(ctx)
 	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventTokenRevoked,
 		ResourceType: "api_token",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_AuthEvent{
-			AuthEvent: &pb.AuthEvent{
+		Payload: &ipcpb.ServiceEvent_AuthEvent{
+			AuthEvent: &ipcpb.AuthEvent{
 				UserId:   userID,
 				TenantId: tenantID,
 				AuthType: "api_token",
@@ -137,7 +139,7 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 }
 
 // DoGetDeveloperTokens retrieves all developer tokens for the authenticated user
-func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*pb.APITokenInfo, error) {
+func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*commodorepb.APITokenInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer tokens")
 		return demo.GenerateDeveloperTokens(), nil
@@ -175,8 +177,8 @@ func (r *Resolver) DoGetDeveloperTokensConnection(ctx context.Context, first *in
 }
 
 // buildDeveloperTokensPaginationRequest creates a proto pagination request from GraphQL params
-func buildDeveloperTokensPaginationRequest(first *int, after *string, last *int, before *string) *pb.CursorPaginationRequest {
-	req := &pb.CursorPaginationRequest{}
+func buildDeveloperTokensPaginationRequest(first *int, after *string, last *int, before *string) *commonpb.CursorPaginationRequest {
+	req := &commonpb.CursorPaginationRequest{}
 
 	if first != nil {
 		req.First = int32(pagination.ClampLimit(*first))
@@ -200,7 +202,7 @@ func buildDeveloperTokensPaginationRequest(first *int, after *string, last *int,
 }
 
 // buildDeveloperTokensConnectionFromResponse constructs a connection from gRPC response
-func (r *Resolver) buildDeveloperTokensConnectionFromResponse(resp *pb.ListAPITokensResponse) *model.DeveloperTokensConnection {
+func (r *Resolver) buildDeveloperTokensConnectionFromResponse(resp *commodorepb.ListAPITokensResponse) *model.DeveloperTokensConnection {
 	tokens := resp.GetTokens()
 	edges := make([]*model.DeveloperTokenEdge, len(tokens))
 	for i, token := range tokens {
@@ -225,7 +227,7 @@ func (r *Resolver) buildDeveloperTokensConnectionFromResponse(resp *pb.ListAPITo
 		pageInfo.EndCursor = &ec
 	}
 
-	edgeNodes := make([]*pb.APITokenInfo, 0, len(edges))
+	edgeNodes := make([]*commodorepb.APITokenInfo, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -241,7 +243,7 @@ func (r *Resolver) buildDeveloperTokensConnectionFromResponse(resp *pb.ListAPITo
 }
 
 // buildDeveloperTokensConnectionFromSlice constructs a connection from a slice (demo mode)
-func (r *Resolver) buildDeveloperTokensConnectionFromSlice(tokens []*pb.APITokenInfo, first *int, after *string, last *int, before *string) *model.DeveloperTokensConnection {
+func (r *Resolver) buildDeveloperTokensConnectionFromSlice(tokens []*commodorepb.APITokenInfo, first *int, after *string, last *int, before *string) *model.DeveloperTokensConnection {
 	total := len(tokens)
 
 	limit := pagination.DefaultLimit
@@ -278,7 +280,7 @@ func (r *Resolver) buildDeveloperTokensConnectionFromSlice(tokens []*pb.APIToken
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.APITokenInfo, 0, len(edges))
+	edgeNodes := make([]*commodorepb.APITokenInfo, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)

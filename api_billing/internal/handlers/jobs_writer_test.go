@@ -86,7 +86,7 @@ func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
@@ -139,7 +139,7 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 	defer mockDB.Close()
 	mock.MatchExpectationsInOrder(false)
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
@@ -179,7 +179,7 @@ func TestProcessUsageSummaryQuarantinesMissingClusterID(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	summary := models.UsageSummary{
@@ -239,7 +239,7 @@ func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
@@ -277,7 +277,7 @@ func TestCollectInvoiceUsageRowsErrorFailsClosed(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
@@ -306,7 +306,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	tenantID := "tenant-1"
 	tierID := "tier-1"
 	subscriptionID := "sub-1"
@@ -399,7 +399,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	tenantID := "tenant-1"
 	tierID := "tier-1"
 	subscriptionID := "sub-1"
@@ -483,13 +483,12 @@ func TestChargeMollieOverageCreatesLocalPaymentBeforeProviderCharge(t *testing.T
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	mc, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_unused", Logger: logging.NewLogger()})
 	if err != nil {
 		t.Fatalf("mollie client: %v", err)
 	}
-	mollieClient = mc
-	t.Cleanup(func() { mollieClient = nil })
+	jm.billing = &Service{logger: logging.NewLogger(), mollieClient: mc}
 
 	var inserted bool
 	var localPaymentID string

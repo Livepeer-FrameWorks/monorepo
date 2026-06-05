@@ -18,14 +18,16 @@ type ThresholdEnforcer struct {
 	logger          logging.Logger
 	commodoreClient CommodoreClient
 	emailService    *EmailService
+	billing         *Service
 }
 
-func NewThresholdEnforcer(db *sql.DB, logger logging.Logger, commodoreClient CommodoreClient, emailService *EmailService) *ThresholdEnforcer {
+func NewThresholdEnforcer(db *sql.DB, logger logging.Logger, commodoreClient CommodoreClient, emailService *EmailService, billing *Service) *ThresholdEnforcer {
 	return &ThresholdEnforcer{
 		db:              db,
 		logger:          logger,
 		commodoreClient: commodoreClient,
 		emailService:    emailService,
+		billing:         billing,
 	}
 }
 
@@ -159,7 +161,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 	}
 
 	tenantName := ""
-	if tenantInfo, err := getTenantInfo(tenantID); err == nil && tenantInfo != nil {
+	if tenantInfo, err := e.billing.getTenantInfo(tenantID); err == nil && tenantInfo != nil {
 		tenantName = tenantInfo.Name
 	}
 

@@ -12,7 +12,7 @@ import (
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // TestMistEntryToSnapshot_ParsesStreamIDTag locks the parse half of the
@@ -76,7 +76,7 @@ func TestHandleApplyManagedStream_WritesStreamIDTag(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	handleApplyManagedStream(logger, &pb.ApplyManagedStream{
+	handleApplyManagedStream(logger, &ipcpb.ApplyManagedStream{
 		Name:       "frameworks-demo",
 		Source:     "ts-exec:cat /dev/null",
 		AlwaysOn:   true,
@@ -211,7 +211,7 @@ func TestHandleApplyManagedStream_FirstApplyAddsStream(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	handleApplyManagedStream(logger, &pb.ApplyManagedStream{
+	handleApplyManagedStream(logger, &ipcpb.ApplyManagedStream{
 		Name:       "frameworks-demo",
 		Source:     "ts-exec:ffmpeg -re -i /var/lib/frameworks/demo/clip.mp4 -c copy -f mpegts -",
 		AlwaysOn:   true,
@@ -238,7 +238,7 @@ func TestHandleApplyManagedStream_IdempotentRepeat(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	req := &pb.ApplyManagedStream{
+	req := &ipcpb.ApplyManagedStream{
 		Name:       "frameworks-demo",
 		Source:     "ts-exec:ffmpeg -re -i clip.mp4 -c copy -f mpegts -",
 		AlwaysOn:   true,
@@ -261,8 +261,8 @@ func TestHandleApplyManagedStream_FieldChangeReAdds(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	mkReq := func(source string) *pb.ApplyManagedStream {
-		return &pb.ApplyManagedStream{
+	mkReq := func(source string) *ipcpb.ApplyManagedStream {
+		return &ipcpb.ApplyManagedStream{
 			Name:       "frameworks-demo",
 			Source:     source,
 			AlwaysOn:   true,
@@ -286,7 +286,7 @@ func TestHandleRetractManagedStream_UnknownNameIsNoop(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	handleRetractManagedStream(logger, &pb.RetractManagedStream{
+	handleRetractManagedStream(logger, &ipcpb.RetractManagedStream{
 		Name:     "tenant-rtmp-pushed-stream",
 		StreamId: "spoofed-id",
 	})
@@ -394,7 +394,7 @@ func TestHydrateAppliedManagedStreams_RecoversAfterRestart(t *testing.T) {
 	}
 
 	// Now Retract: must call deletestream because the map contains the entry.
-	handleRetractManagedStream(logger, &pb.RetractManagedStream{
+	handleRetractManagedStream(logger, &ipcpb.RetractManagedStream{
 		Name:     "frameworks-demo",
 		StreamId: "stream-uuid",
 	})
@@ -407,7 +407,7 @@ func TestHandleRetractManagedStream_KnownNameDeletes(t *testing.T) {
 	mock := withMockMistAndCleanState(t)
 	logger := logging.NewLogger()
 
-	apply := &pb.ApplyManagedStream{
+	apply := &ipcpb.ApplyManagedStream{
 		Name:       "frameworks-demo",
 		Source:     "ts-exec:cat /dev/null",
 		AlwaysOn:   true,
@@ -416,7 +416,7 @@ func TestHandleRetractManagedStream_KnownNameDeletes(t *testing.T) {
 	}
 	handleApplyManagedStream(logger, apply)
 
-	handleRetractManagedStream(logger, &pb.RetractManagedStream{
+	handleRetractManagedStream(logger, &ipcpb.RetractManagedStream{
 		Name:     "frameworks-demo",
 		StreamId: "stream-uuid",
 	})

@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -65,12 +65,12 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 	}
 
 	// Map asset string to proto enum
-	var assetEnum pb.CryptoAsset
+	var assetEnum purserpb.CryptoAsset
 	switch strings.ToUpper(args.Asset) {
 	case "ETH":
-		assetEnum = pb.CryptoAsset_CRYPTO_ASSET_ETH
+		assetEnum = purserpb.CryptoAsset_CRYPTO_ASSET_ETH
 	case "USDC":
-		assetEnum = pb.CryptoAsset_CRYPTO_ASSET_USDC
+		assetEnum = purserpb.CryptoAsset_CRYPTO_ASSET_USDC
 	case "LPT":
 		return toolError("LPT prepaid top-ups are not yet supported. Use ETH or USDC.")
 	default:
@@ -78,7 +78,7 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 	}
 
 	// Call Purser to create crypto top-up
-	resp, err := clients.Purser.CreateCryptoTopup(ctx, &pb.CreateCryptoTopupRequest{
+	resp, err := clients.Purser.CreateCryptoTopup(ctx, &purserpb.CreateCryptoTopupRequest{
 		TenantId:            tenantID,
 		ExpectedAmountCents: args.AmountCents,
 		Asset:               assetEnum,

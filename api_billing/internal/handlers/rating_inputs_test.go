@@ -190,7 +190,7 @@ func TestMarketplaceLineSplitCents_UsesPlatformFeePolicy(t *testing.T) {
 	defer mockDB.Close()
 
 	owner := uuid.New()
-	jm := &JobManager{db: mockDB}
+	jm := &JobManager{db: mockDB, billing: &Service{}}
 	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
 		WithArgs(owner, "cluster_metered").
 		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))
@@ -219,7 +219,7 @@ func TestMarketplaceLineSplitCents_HandlesNegativeCorrection(t *testing.T) {
 	defer mockDB.Close()
 
 	owner := uuid.New()
-	jm := &JobManager{db: mockDB}
+	jm := &JobManager{db: mockDB, billing: &Service{}}
 	mock.ExpectQuery(`FROM purser\.platform_fee_policy`).
 		WithArgs(owner, "cluster_metered").
 		WillReturnRows(sqlmock.NewRows([]string{"fee_basis_points"}).AddRow(2000))

@@ -7,12 +7,11 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func strPtr(s string) *string { return &s }
@@ -21,27 +20,27 @@ func TestUpdateTenantCluster(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name      string
-		req       *pb.UpdateTenantClusterRequest
+		req       *quartermasterpb.UpdateTenantClusterRequest
 		setupMock func(sqlmock.Sqlmock)
 		assert    func(*testing.T, error)
 	}{
 		{
 			name: "missing_tenant_id",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: ""},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: ""},
 			assert: func(t *testing.T, err error) {
 				assertGRPCCode(t, err, codes.InvalidArgument)
 			},
 		},
 		{
 			name: "no_fields_to_update",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1"},
 			assert: func(t *testing.T, err error) {
 				assertGRPCCode(t, err, codes.InvalidArgument)
 			},
 		},
 		{
 			name: "active_subscription_allowed",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
 					WithArgs("tenant-1").
@@ -68,7 +67,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "pending_subscription_denied",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-pending")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-pending")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
 					WithArgs("tenant-1").
@@ -83,7 +82,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "tenant_not_found_on_update",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-gone", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-gone", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
 					WithArgs("tenant-gone").
@@ -106,7 +105,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "db_error_on_access_check",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
 					WithArgs("tenant-1").
@@ -121,7 +120,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "db_error_on_update",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", PrimaryClusterId: strPtr("cluster-new")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("SELECT primary_cluster_id FROM quartermaster.tenants").
 					WithArgs("tenant-1").
@@ -144,7 +143,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 		},
 		{
 			name: "update_deployment_model_only",
-			req:  &pb.UpdateTenantClusterRequest{TenantId: "tenant-1", DeploymentModel: strPtr("dedicated")},
+			req:  &quartermasterpb.UpdateTenantClusterRequest{TenantId: "tenant-1", DeploymentModel: strPtr("dedicated")},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectBegin()
 				mock.ExpectExec("UPDATE quartermaster.tenants SET").
@@ -208,44 +207,44 @@ func TestGetClusterRouting(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		req       *pb.GetClusterRoutingRequest
+		req       *quartermasterpb.GetClusterRoutingRequest
 		setupMock func(sqlmock.Sqlmock)
-		assert    func(*testing.T, *pb.ClusterRoutingResponse, error)
+		assert    func(*testing.T, *quartermasterpb.ClusterRoutingResponse, error)
 	}{
 		{
 			name: "missing_tenant_id",
-			req:  &pb.GetClusterRoutingRequest{TenantId: ""},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: ""},
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				assertGRPCCode(t, err, codes.InvalidArgument)
 			},
 		},
 		{
 			name: "tenant_not_found",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-gone"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-gone"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
 					WithArgs("tenant-gone").
 					WillReturnError(sql.ErrNoRows)
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				assertGRPCCode(t, err, codes.NotFound)
 			},
 		},
 		{
 			name: "db_error_on_tenant",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
 					WithArgs("tenant-1").
 					WillReturnError(fmt.Errorf("connection refused"))
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				assertGRPCCode(t, err, codes.Internal)
 			},
 		},
 		{
 			name: "capacity_exceeded",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM quartermaster.tenants").
 					WithArgs("tenant-1").
@@ -255,13 +254,13 @@ func TestGetClusterRouting(t *testing.T) {
 					WithArgs("cluster-full", "tenant-1").
 					WillReturnError(sql.ErrNoRows)
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				assertGRPCCode(t, err, codes.NotFound)
 			},
 		},
 		{
 			name: "happy_path",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup
 				mock.ExpectQuery("FROM quartermaster.tenants").
@@ -290,7 +289,7 @@ func TestGetClusterRouting(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows(peerCols).
 						AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", "", "", "", "foghorn.cluster-1", int32(50051)))
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -316,7 +315,7 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "official_cluster_populated",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup — official differs from primary
 				mock.ExpectQuery("FROM quartermaster.tenants").
@@ -354,7 +353,7 @@ func TestGetClusterRouting(t *testing.T) {
 						AddRow("cluster-eu", "EU Cluster", "shared-community", "eu.frameworks.cloud", "", "", "", "", "", "", "", "foghorn.eu", int32(50051)).
 						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", "", "", "", "foghorn.us", int32(50051)))
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -380,7 +379,7 @@ func TestGetClusterRouting(t *testing.T) {
 		},
 		{
 			name: "cluster_peers_roles",
-			req:  &pb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+			req:  &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				// 1. Tenant lookup — has both primary and official
 				mock.ExpectQuery("FROM quartermaster.tenants").
@@ -419,7 +418,7 @@ func TestGetClusterRouting(t *testing.T) {
 						AddRow("cluster-us", "US Cluster", "shared-community", "us.frameworks.cloud", "", "", "", "", "", "", "", "foghorn.us", int32(50051)).
 						AddRow("cluster-ap", "AP Cluster", "shared-community", "ap.frameworks.cloud", "", "", "", "", "", "", "", "foghorn.ap", int32(50051)))
 			},
-			assert: func(t *testing.T, resp *pb.ClusterRoutingResponse, err error) {
+			assert: func(t *testing.T, resp *quartermasterpb.ClusterRoutingResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -513,7 +512,7 @@ func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
 			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", "", "", "", "10.88.158.227", int32(18019)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(context.Background(), &pb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(context.Background(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}
@@ -560,7 +559,7 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 		WillReturnRows(rows)
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.ListPeers(context.Background(), &pb.ListPeersRequest{ClusterId: "local-cluster"})
+	resp, err := server.ListPeers(context.Background(), &quartermasterpb.ListPeersRequest{ClusterId: "local-cluster"})
 	if err != nil {
 		t.Fatalf("ListPeers returned error: %v", err)
 	}
@@ -616,7 +615,7 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "", "", "", "", "2001:db8::10", int32(50051)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(context.Background(), &pb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(context.Background(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}

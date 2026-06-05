@@ -13,7 +13,10 @@ import (
 	pkgconfig "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 )
 
 // SubscriptionManager manages gRPC streaming connections to Signalman for GraphQL subscriptions.
@@ -295,7 +298,7 @@ func waitSignalmanRetry(ctx context.Context) bool {
 	}
 }
 
-func (sm *SubscriptionManager) runSignalmanSubscription(ctx context.Context, operation string, config ConnectionConfig, addrs []string, initial *signalmanclient.GRPCClient, closeOutput func(), subscribe func(*signalmanclient.GRPCClient) error, handle func(*pb.SignalmanEvent) bool) {
+func (sm *SubscriptionManager) runSignalmanSubscription(ctx context.Context, operation string, config ConnectionConfig, addrs []string, initial *signalmanclient.GRPCClient, closeOutput func(), subscribe func(*signalmanclient.GRPCClient) error, handle func(*signalmanpb.SignalmanEvent) bool) {
 	sm.trackSubscriptionStart(operation)
 	defer sm.trackSubscriptionEnd(operation)
 	defer closeOutput()
@@ -340,7 +343,7 @@ func (sm *SubscriptionManager) runSignalmanSubscription(ctx context.Context, ope
 	}
 }
 
-func (sm *SubscriptionManager) drainSignalmanEvents(ctx context.Context, client *signalmanclient.GRPCClient, handle func(*pb.SignalmanEvent) bool) bool {
+func (sm *SubscriptionManager) drainSignalmanEvents(ctx context.Context, client *signalmanclient.GRPCClient, handle func(*signalmanpb.SignalmanEvent) bool) bool {
 	events := client.Events()
 	errors := client.Errors()
 	for {
@@ -594,14 +597,14 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 	updates := make(chan *model.StreamEvent, 10)
 	go sm.runSignalmanSubscription(ctx, "streams", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToStreams()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE &&
-			event.EventType != pb.EventType_EVENT_TYPE_STREAM_END &&
-			event.EventType != pb.EventType_EVENT_TYPE_STREAM_BUFFER &&
-			event.EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST &&
-			event.EventType != pb.EventType_EVENT_TYPE_PUSH_REWRITE &&
-			event.EventType != pb.EventType_EVENT_TYPE_STREAM_SOURCE &&
-			event.EventType != pb.EventType_EVENT_TYPE_PLAY_REWRITE {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_END &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE {
 			return true
 		}
 		if tenantMismatch(config.TenantID, event) {
@@ -623,8 +626,7 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 }
 
 // SubscribeToAnalytics subscribes to analytics events and returns a channel of updates
-// Returns proto.ClientLifecycleUpdate directly (bound to GraphQL ViewerMetrics)
-func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ClientLifecycleUpdate, error) {
+func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *ipcpb.ClientLifecycleUpdate, error) {
 	addrs := sm.streamScopedAddrs(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -635,11 +637,11 @@ func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config 
 		return nil, fmt.Errorf("failed to subscribe to analytics: %w", err)
 	}
 
-	updates := make(chan *pb.ClientLifecycleUpdate, 10)
+	updates := make(chan *ipcpb.ClientLifecycleUpdate, 10)
 	go sm.runSignalmanSubscription(ctx, "analytics", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if streamID != nil {
@@ -661,8 +663,7 @@ func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config 
 }
 
 // SubscribeToConnections subscribes to viewer connection events and returns a channel of updates
-// Returns proto.ConnectionEvent directly (bound to GraphQL ConnectionEvent)
-func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ConnectionEvent, error) {
+func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *periscopepb.ConnectionEvent, error) {
 	addrs := sm.streamScopedAddrs(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -673,12 +674,12 @@ func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, confi
 		return nil, fmt.Errorf("failed to subscribe to analytics: %w", err)
 	}
 
-	updates := make(chan *pb.ConnectionEvent, 10)
+	updates := make(chan *periscopepb.ConnectionEvent, 10)
 	go sm.runSignalmanSubscription(ctx, "connections", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_VIEWER_CONNECT &&
-			event.EventType != pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT &&
+			event.EventType != signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT {
 			return true
 		}
 		if tenantMismatch(config.TenantID, event) {
@@ -700,8 +701,7 @@ func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, confi
 }
 
 // SubscribeToStorageEvents subscribes to storage lifecycle events and returns a channel of updates
-// Returns proto.StorageEvent (mapped from StorageLifecycleData)
-func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.StorageEvent, error) {
+func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *periscopepb.StorageEvent, error) {
 	addrs := sm.streamScopedAddrs(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -712,11 +712,11 @@ func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, con
 		return nil, fmt.Errorf("failed to subscribe to analytics: %w", err)
 	}
 
-	updates := make(chan *pb.StorageEvent, 10)
+	updates := make(chan *periscopepb.StorageEvent, 10)
 	go sm.runSignalmanSubscription(ctx, "storage_events", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if streamID != nil {
@@ -735,8 +735,7 @@ func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, con
 }
 
 // SubscribeToProcessingEvents subscribes to processing/transcoding events and returns a channel of updates
-// Returns proto.ProcessingUsageRecord (mapped from ProcessBillingEvent)
-func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.ProcessingUsageRecord, error) {
+func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *periscopepb.ProcessingUsageRecord, error) {
 	addrs := sm.streamScopedAddrs(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -747,11 +746,11 @@ func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, 
 		return nil, fmt.Errorf("failed to subscribe to analytics: %w", err)
 	}
 
-	updates := make(chan *pb.ProcessingUsageRecord, 10)
+	updates := make(chan *periscopepb.ProcessingUsageRecord, 10)
 	go sm.runSignalmanSubscription(ctx, "processing_events", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_PROCESS_BILLING || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if streamID != nil {
@@ -770,8 +769,7 @@ func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, 
 }
 
 // SubscribeToSystem subscribes to system events and returns a channel of updates
-// Returns proto.NodeLifecycleUpdate directly (bound to GraphQL SystemHealthEvent)
-func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config ConnectionConfig) (<-chan *pb.NodeLifecycleUpdate, error) {
+func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config ConnectionConfig) (<-chan *ipcpb.NodeLifecycleUpdate, error) {
 	addrs := sm.addrsForRegion("", config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -782,11 +780,11 @@ func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config Con
 		return nil, fmt.Errorf("failed to subscribe to system: %w", err)
 	}
 
-	updates := make(chan *pb.NodeLifecycleUpdate, 10)
+	updates := make(chan *ipcpb.NodeLifecycleUpdate, 10)
 	go sm.runSignalmanSubscription(ctx, "system", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToSystem()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if event.Data == nil {
@@ -802,8 +800,7 @@ func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config Con
 }
 
 // SubscribeToTrackList subscribes to track list events and returns a channel of updates
-// Returns proto.StreamTrackListTrigger directly (bound to GraphQL TrackListEvent)
-func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.StreamTrackListTrigger, error) {
+func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *ipcpb.StreamTrackListTrigger, error) {
 	addrs := sm.connectionAddrsForStream(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -814,11 +811,11 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 		return nil, fmt.Errorf("failed to subscribe to track list updates: %w", err)
 	}
 
-	updates := make(chan *pb.StreamTrackListTrigger, 10)
+	updates := make(chan *ipcpb.StreamTrackListTrigger, 10)
 	go sm.runSignalmanSubscription(ctx, "track_list", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToStreams()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if msgStreamID := getStreamIDFromProtoEvent(event); msgStreamID == "" || msgStreamID != streamID {
@@ -837,8 +834,7 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 }
 
 // SubscribeToLifecycle subscribes to lifecycle events (clip) and returns a channel
-// Returns proto.ClipLifecycleData directly (bound to GraphQL ClipLifecycle)
-func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.ClipLifecycleData, error) {
+func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *ipcpb.ClipLifecycleData, error) {
 	addrs := sm.connectionAddrsForStream(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -847,11 +843,11 @@ func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config 
 	if err := client.SubscribeToAnalytics(); err != nil {
 		return nil, fmt.Errorf("failed to subscribe to lifecycle: %w", err)
 	}
-	updates := make(chan *pb.ClipLifecycleData, 10)
+	updates := make(chan *ipcpb.ClipLifecycleData, 10)
 	go sm.runSignalmanSubscription(ctx, "lifecycle", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if event.Data == nil {
@@ -867,8 +863,7 @@ func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config 
 }
 
 // SubscribeToDVRLifecycle subscribes to DVR lifecycle events and returns a channel
-// Returns proto.DVRLifecycleData directly (bound to GraphQL DVREvent)
-func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *pb.DVRLifecycleData, error) {
+func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *ipcpb.DVRLifecycleData, error) {
 	addrs := sm.connectionAddrsForStream(ctx, streamID, config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -877,11 +872,11 @@ func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, conf
 	if err := client.SubscribeToAnalytics(); err != nil {
 		return nil, fmt.Errorf("failed to subscribe to DVR lifecycle: %w", err)
 	}
-	updates := make(chan *pb.DVRLifecycleData, 10)
+	updates := make(chan *ipcpb.DVRLifecycleData, 10)
 	go sm.runSignalmanSubscription(ctx, "dvr_lifecycle", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_DVR_LIFECYCLE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if event.Data == nil {
@@ -897,8 +892,7 @@ func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, conf
 }
 
 // SubscribeToVodLifecycle subscribes to VOD lifecycle events and returns a channel
-// Returns proto.VodLifecycleData directly (bound via gqlgen.yml)
-func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, config ConnectionConfig) (<-chan *pb.VodLifecycleData, error) {
+func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, config ConnectionConfig) (<-chan *ipcpb.VodLifecycleData, error) {
 	addrs := sm.addrsForRegion("", config.TenantID)
 	client, err := sm.getOrCreateConnectionFromList(ctx, config, addrs)
 	if err != nil {
@@ -908,11 +902,11 @@ func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, conf
 	if err := client.SubscribeToAnalytics(); err != nil {
 		return nil, fmt.Errorf("failed to subscribe to VOD lifecycle: %w", err)
 	}
-	updates := make(chan *pb.VodLifecycleData, 10)
+	updates := make(chan *ipcpb.VodLifecycleData, 10)
 	go sm.runSignalmanSubscription(ctx, "vod_lifecycle", config, addrs, client, func() { close(updates) }, func(c *signalmanclient.GRPCClient) error {
 		return c.SubscribeToAnalytics()
-	}, func(event *pb.SignalmanEvent) bool {
-		if event.EventType != pb.EventType_EVENT_TYPE_VOD_LIFECYCLE || tenantMismatch(config.TenantID, event) {
+	}, func(event *signalmanpb.SignalmanEvent) bool {
+		if event.EventType != signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE || tenantMismatch(config.TenantID, event) {
 			return true
 		}
 		if event.Data == nil {
@@ -1019,7 +1013,7 @@ func (sm *SubscriptionManager) processFirehoseMessages(ctx context.Context, clie
 // convertProtoToTenantEvent converts any Signalman proto event to a unified TenantEvent
 // Uses proto enum strings for event type (e.g., EVENT_TYPE_STREAM_LIFECYCLE_UPDATE)
 // Passes proto types directly where possible via gqlgen.yml bindings
-func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEvent) *model.TenantEvent {
+func (sm *SubscriptionManager) convertProtoToTenantEvent(event *signalmanpb.SignalmanEvent) *model.TenantEvent {
 	if event == nil {
 		return nil
 	}
@@ -1032,7 +1026,7 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 	// Use proto enum string directly (EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, etc.)
 	eventType := event.EventType.String()
 	channel := sm.getChannelForEventType(event.EventType)
-	if event.Channel != pb.Channel_CHANNEL_UNSPECIFIED {
+	if event.Channel != signalmanpb.Channel_CHANNEL_UNSPECIFIED {
 		channel = channelToTenantChannel(event.Channel)
 	}
 
@@ -1049,54 +1043,54 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 	// Populate the appropriate event type based on the channel/event type
 	// Pass proto types directly where possible via gqlgen.yml bindings
 	switch event.EventType {
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
-		pb.EventType_EVENT_TYPE_STREAM_END,
-		pb.EventType_EVENT_TYPE_STREAM_BUFFER,
-		pb.EventType_EVENT_TYPE_PUSH_REWRITE,
-		pb.EventType_EVENT_TYPE_STREAM_SOURCE,
-		pb.EventType_EVENT_TYPE_PLAY_REWRITE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_END,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER,
+		signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE,
+		signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE:
 		tenantEvent.StreamEvent = mapSignalmanStreamEvent(event)
 
-	case pb.EventType_EVENT_TYPE_VIEWER_CONNECT,
-		pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
+	case signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT,
+		signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
 		tenantEvent.ConnectionEvent = mapSignalmanConnectionEvent(event)
 
-	case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
 		// Pass proto ClientLifecycleUpdate directly (bound to ViewerMetrics)
 		tenantEvent.ViewerMetrics = event.Data.GetClientLifecycle()
 
-	case pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
 		// Pass proto StreamTrackListTrigger directly (bound to TrackListUpdate)
 		tenantEvent.TrackListUpdate = event.Data.GetTrackList()
 
-	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
 		// Pass proto ClipLifecycleData directly (bound to ClipLifecycle)
 		tenantEvent.ClipLifecycle = event.Data.GetClipLifecycle()
 
-	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
 		// Pass proto DVRLifecycleData directly (bound to DVREvent)
 		tenantEvent.DvrEvent = event.Data.GetDvrLifecycle()
 
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
 		// Pass proto NodeLifecycleUpdate directly (bound to SystemHealthEvent)
 		tenantEvent.SystemHealthEvent = event.Data.GetNodeLifecycle()
 
-	case pb.EventType_EVENT_TYPE_LOAD_BALANCING:
+	case signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING:
 		tenantEvent.RoutingEvent = mapSignalmanRoutingEvent(event)
 
-	case pb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
 		// Pass proto VodLifecycleData directly (bound via gqlgen.yml)
 		tenantEvent.VodLifecycle = event.Data.GetVodLifecycle()
 
-	case pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
 		tenantEvent.StorageEvent = mapSignalmanStorageEvent(event)
 
-	case pb.EventType_EVENT_TYPE_PROCESS_BILLING:
+	case signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING:
 		tenantEvent.ProcessingEvent = mapSignalmanProcessingEvent(event)
-	case pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
+	case signalmanpb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		tenantEvent.StorageSnapshot = event.Data.GetStorageSnapshot()
 
-	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+	case signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
 		tenantEvent.SkipperInvestigation = &model.SkipperInvestigationEvent{
 			ReportID:     "",
 			ResourceType: "skipper_investigation",
@@ -1107,28 +1101,28 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 }
 
 // getChannelForEventType returns the channel name for a given event type
-func (sm *SubscriptionManager) getChannelForEventType(eventType pb.EventType) string {
+func (sm *SubscriptionManager) getChannelForEventType(eventType signalmanpb.EventType) string {
 	switch eventType {
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
-		pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST,
-		pb.EventType_EVENT_TYPE_STREAM_BUFFER,
-		pb.EventType_EVENT_TYPE_STREAM_END,
-		pb.EventType_EVENT_TYPE_PUSH_REWRITE,
-		pb.EventType_EVENT_TYPE_STREAM_SOURCE,
-		pb.EventType_EVENT_TYPE_PLAY_REWRITE,
-		pb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_END,
+		signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE,
+		signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE,
+		signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE,
+		signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
 		return "STREAMS"
 
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
-		pb.EventType_EVENT_TYPE_LOAD_BALANCING:
+	case signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING:
 		return "SYSTEM"
-	case pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE,
-		pb.EventType_EVENT_TYPE_PROCESS_BILLING,
-		pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
+	case signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE,
+		signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING,
+		signalmanpb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		return "ANALYTICS"
-	case pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
+	case signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
 		return "MESSAGING"
-	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+	case signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
 		return "AI"
 
 	default:
@@ -1136,26 +1130,26 @@ func (sm *SubscriptionManager) getChannelForEventType(eventType pb.EventType) st
 	}
 }
 
-func channelToTenantChannel(channel pb.Channel) string {
+func channelToTenantChannel(channel signalmanpb.Channel) string {
 	switch channel {
-	case pb.Channel_CHANNEL_STREAMS:
+	case signalmanpb.Channel_CHANNEL_STREAMS:
 		return "STREAMS"
-	case pb.Channel_CHANNEL_ANALYTICS:
+	case signalmanpb.Channel_CHANNEL_ANALYTICS:
 		return "ANALYTICS"
-	case pb.Channel_CHANNEL_SYSTEM:
+	case signalmanpb.Channel_CHANNEL_SYSTEM:
 		return "SYSTEM"
-	case pb.Channel_CHANNEL_ALL:
+	case signalmanpb.Channel_CHANNEL_ALL:
 		return "ALL"
-	case pb.Channel_CHANNEL_MESSAGING:
+	case signalmanpb.Channel_CHANNEL_MESSAGING:
 		return "MESSAGING"
-	case pb.Channel_CHANNEL_AI:
+	case signalmanpb.Channel_CHANNEL_AI:
 		return "AI"
 	default:
 		return "ANALYTICS"
 	}
 }
 
-func tenantMismatch(tenantID string, event *pb.SignalmanEvent) bool {
+func tenantMismatch(tenantID string, event *signalmanpb.SignalmanEvent) bool {
 	if tenantID == "" || event == nil {
 		return false
 	}
@@ -1183,13 +1177,13 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 			}
 
 			// Filter by event type - handle lifecycle, start, end, buffer, track list
-			if event.EventType != pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE &&
-				event.EventType != pb.EventType_EVENT_TYPE_STREAM_END &&
-				event.EventType != pb.EventType_EVENT_TYPE_STREAM_BUFFER &&
-				event.EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST &&
-				event.EventType != pb.EventType_EVENT_TYPE_PUSH_REWRITE &&
-				event.EventType != pb.EventType_EVENT_TYPE_STREAM_SOURCE &&
-				event.EventType != pb.EventType_EVENT_TYPE_PLAY_REWRITE {
+			if event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_END &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE &&
+				event.EventType != signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE {
 				continue
 			}
 
@@ -1219,388 +1213,7 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 	}
 }
 
-// processAnalyticsMessages processes analytics messages from Signalman gRPC
-// Passes proto.ClientLifecycleUpdate directly without conversion
-func (sm *SubscriptionManager) processAnalyticsMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClientLifecycleUpdate, streamID *string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			// Filter for client lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Extract ClientLifecycleUpdate directly from proto
-			if event.Data != nil {
-				if cl := event.Data.GetClientLifecycle(); cl != nil {
-					if streamID != nil {
-						msgStreamID := getStreamIDFromProtoEvent(event)
-						if msgStreamID == "" || msgStreamID != *streamID {
-							continue
-						}
-					}
-					select {
-					case output <- cl:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
-// processConnectionMessages processes viewer connect/disconnect messages from Signalman gRPC
-// Maps proto viewer events into ConnectionEvent for GraphQL consumption
-func (sm *SubscriptionManager) processConnectionMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ConnectionEvent, streamID *string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			if event.EventType != pb.EventType_EVENT_TYPE_VIEWER_CONNECT &&
-				event.EventType != pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			if streamID != nil {
-				msgStreamID := getStreamIDFromProtoEvent(event)
-				if msgStreamID == "" || msgStreamID != *streamID {
-					continue
-				}
-			}
-
-			ce := mapSignalmanConnectionEvent(event)
-			if ce == nil {
-				continue
-			}
-
-			select {
-			case output <- ce:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-// processStorageMessages processes storage lifecycle messages from Signalman gRPC
-// Maps proto storage lifecycle data into StorageEvent for GraphQL consumption
-func (sm *SubscriptionManager) processStorageMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StorageEvent, streamID *string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			if event.EventType != pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			if streamID != nil {
-				msgStreamID := getStreamIDFromProtoEvent(event)
-				if msgStreamID == "" || msgStreamID != *streamID {
-					continue
-				}
-			}
-
-			update := mapSignalmanStorageEvent(event)
-			if update == nil {
-				continue
-			}
-
-			select {
-			case output <- update:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-// processProcessingMessages processes process billing messages from Signalman gRPC
-// Maps proto process billing data into ProcessingUsageRecord for GraphQL consumption
-func (sm *SubscriptionManager) processProcessingMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ProcessingUsageRecord, streamID *string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			if event.EventType != pb.EventType_EVENT_TYPE_PROCESS_BILLING {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			if streamID != nil {
-				msgStreamID := getStreamIDFromProtoEvent(event)
-				if msgStreamID == "" || msgStreamID != *streamID {
-					continue
-				}
-			}
-
-			update := mapSignalmanProcessingEvent(event)
-			if update == nil {
-				continue
-			}
-
-			select {
-			case output <- update:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-// processSystemMessages processes system messages from Signalman gRPC
-// Passes proto.NodeLifecycleUpdate directly without conversion
-func (sm *SubscriptionManager) processSystemMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.NodeLifecycleUpdate, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			// Filter for node lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Extract NodeLifecycleUpdate directly from proto
-			if event.Data != nil {
-				if nl := event.Data.GetNodeLifecycle(); nl != nil {
-					select {
-					case output <- nl:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
-// processTrackListMessages processes track list messages from Signalman gRPC
-// Passes proto.StreamTrackListTrigger directly without conversion
-func (sm *SubscriptionManager) processTrackListMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StreamTrackListTrigger, streamID string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			if event.EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Filter by stream ID if specified
-			if streamID != "" {
-				msgStreamID := getStreamIDFromProtoEvent(event)
-				if msgStreamID == "" || msgStreamID != streamID {
-					continue
-				}
-			}
-
-			// Extract StreamTrackListTrigger directly from proto
-			if event.Data != nil {
-				if tl := event.Data.GetTrackList(); tl != nil {
-					select {
-					case output <- tl:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
-// processLifecycleMessages processes clip/dvr lifecycle messages from Signalman gRPC
-// Passes proto.ClipLifecycleData directly without conversion
-func (sm *SubscriptionManager) processLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClipLifecycleData, streamID string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			// Filter for clip lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Extract ClipLifecycleData directly from proto
-			if event.Data != nil {
-				if cl := event.Data.GetClipLifecycle(); cl != nil {
-					// Filter by stream ID if specified
-					if streamID != "" && cl.GetStreamId() != streamID {
-						continue
-					}
-					select {
-					case output <- cl:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
-func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.DVRLifecycleData, streamID string, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			// Filter for DVR lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_DVR_LIFECYCLE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Extract DVRLifecycleData directly from proto
-			if event.Data != nil {
-				if dvr := event.Data.GetDvrLifecycle(); dvr != nil {
-					// Filter by stream ID if specified
-					if streamID != "" && dvr.GetStreamId() != streamID {
-						continue
-					}
-					select {
-					case output <- dvr:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
-// processVodLifecycleMessages processes VOD lifecycle messages from Signalman gRPC
-// Passes proto.VodLifecycleData directly (bound via gqlgen.yml, no conversion needed)
-func (sm *SubscriptionManager) processVodLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.VodLifecycleData, tenantID string) {
-	defer close(output)
-
-	events := client.Events()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-events:
-			if !ok {
-				return
-			}
-
-			// Filter for VOD lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_VOD_LIFECYCLE {
-				continue
-			}
-
-			if tenantMismatch(tenantID, event) {
-				continue
-			}
-
-			// Pass proto directly - no conversion needed (bound via gqlgen.yml)
-			if event.Data != nil {
-				if vod := event.Data.GetVodLifecycle(); vod != nil {
-					select {
-					case output <- vod:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		}
-	}
-}
-
 // processMessageMessages processes messaging events from Signalman gRPC
-// Maps proto.MessageLifecycleData to model.Message for GraphQL consumption
 func (sm *SubscriptionManager) processMessageMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.Message, conversationID string, tenantID string) {
 	sm.trackSubscriptionStart("messages")
 	defer sm.trackSubscriptionEnd("messages")
@@ -1617,7 +1230,7 @@ func (sm *SubscriptionManager) processMessageMessages(ctx context.Context, clien
 			}
 
 			// Filter for message lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE {
+			if event.EventType != signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE {
 				continue
 			}
 
@@ -1643,7 +1256,7 @@ func (sm *SubscriptionManager) processMessageMessages(ctx context.Context, clien
 			}
 
 			// Only forward message_created events (new messages)
-			if ml.EventType != pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED {
+			if ml.EventType != ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED {
 				continue
 			}
 
@@ -1663,7 +1276,7 @@ func (sm *SubscriptionManager) processMessageMessages(ctx context.Context, clien
 }
 
 // mapMessageLifecycleToMessage converts proto MessageLifecycleData to GraphQL Message
-func mapMessageLifecycleToMessage(ml *pb.MessageLifecycleData) *model.Message {
+func mapMessageLifecycleToMessage(ml *ipcpb.MessageLifecycleData) *model.Message {
 	if ml == nil {
 		return nil
 	}
@@ -1674,13 +1287,13 @@ func mapMessageLifecycleToMessage(ml *pb.MessageLifecycleData) *model.Message {
 	}
 
 	// Parse sender - default to AGENT if unknown
-	sender := pb.MessageSender_MESSAGE_SENDER_AGENT
+	sender := deckhandpb.MessageSender_MESSAGE_SENDER_AGENT
 	if ml.Sender != nil {
 		switch *ml.Sender {
 		case "USER":
-			sender = pb.MessageSender_MESSAGE_SENDER_USER
+			sender = deckhandpb.MessageSender_MESSAGE_SENDER_USER
 		case "AGENT":
-			sender = pb.MessageSender_MESSAGE_SENDER_AGENT
+			sender = deckhandpb.MessageSender_MESSAGE_SENDER_AGENT
 		}
 	}
 
@@ -1722,7 +1335,7 @@ func (sm *SubscriptionManager) processConversationMessages(ctx context.Context, 
 			}
 
 			// Filter for message lifecycle events
-			if event.EventType != pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE {
+			if event.EventType != signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE {
 				continue
 			}
 
@@ -1749,10 +1362,10 @@ func (sm *SubscriptionManager) processConversationMessages(ctx context.Context, 
 
 			// Conversation lifecycle events and message updates that affect conversation summary
 			switch ml.EventType {
-			case pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
-				pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
-				pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
-				pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED:
+			case ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
+				ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
+				ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
+				ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED:
 			default:
 				continue
 			}
@@ -1771,7 +1384,7 @@ func (sm *SubscriptionManager) processConversationMessages(ctx context.Context, 
 	}
 }
 
-func mapMessageLifecycleToConversation(ml *pb.MessageLifecycleData) *model.Conversation {
+func mapMessageLifecycleToConversation(ml *ipcpb.MessageLifecycleData) *model.Conversation {
 	if ml == nil {
 		return nil
 	}
@@ -1797,8 +1410,8 @@ func mapMessageLifecycleToConversation(ml *pb.MessageLifecycleData) *model.Conve
 
 	var lastMessage *model.Message
 	switch ml.EventType {
-	case pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
-		pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED:
+	case ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
+		ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED:
 		lastMessage = mapMessageLifecycleToMessage(ml)
 	}
 
@@ -1813,20 +1426,20 @@ func mapMessageLifecycleToConversation(ml *pb.MessageLifecycleData) *model.Conve
 	}
 }
 
-func parseConversationStatus(status *string) pb.ConversationStatus {
+func parseConversationStatus(status *string) deckhandpb.ConversationStatus {
 	if status == nil || *status == "" {
-		return pb.ConversationStatus_CONVERSATION_STATUS_OPEN
+		return deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN
 	}
 
 	switch strings.ToUpper(*status) {
 	case "OPEN":
-		return pb.ConversationStatus_CONVERSATION_STATUS_OPEN
+		return deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN
 	case "RESOLVED":
-		return pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED
+		return deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED
 	case "PENDING":
-		return pb.ConversationStatus_CONVERSATION_STATUS_PENDING
+		return deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING
 	default:
-		return pb.ConversationStatus_CONVERSATION_STATUS_OPEN
+		return deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN
 	}
 }
 
@@ -1920,7 +1533,7 @@ func (sm *SubscriptionManager) Shutdown() error {
 }
 
 // getStreamIDFromProtoEvent extracts stream ID from a proto SignalmanEvent
-func getStreamIDFromProtoEvent(event *pb.SignalmanEvent) string {
+func getStreamIDFromProtoEvent(event *signalmanpb.SignalmanEvent) string {
 	if event.Data == nil {
 		return ""
 	}

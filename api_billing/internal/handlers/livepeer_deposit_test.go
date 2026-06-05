@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func TestEthToWei_OneETH(t *testing.T) {
@@ -46,11 +47,11 @@ func TestWeiToETH_Roundtrip(t *testing.T) {
 }
 
 type fakeLivepeerServiceDiscoveryClient struct {
-	resp *pb.ServiceDiscoveryResponse
+	resp *quartermasterpb.ServiceDiscoveryResponse
 	err  error
 }
 
-func (f *fakeLivepeerServiceDiscoveryClient) DiscoverServices(_ context.Context, _, _ string, _ *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error) {
+func (f *fakeLivepeerServiceDiscoveryClient) DiscoverServices(_ context.Context, _, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
 	return f.resp, f.err
 }
 
@@ -58,8 +59,8 @@ func TestDiscoverGatewayAddressesUsesMetadataAndDeduplicatesWallets(t *testing.T
 	monitor := &LivepeerDepositMonitor{
 		logger: logging.NewLogger(),
 		qm: &fakeLivepeerServiceDiscoveryClient{
-			resp: &pb.ServiceDiscoveryResponse{
-				Instances: []*pb.ServiceInstance{
+			resp: &quartermasterpb.ServiceDiscoveryResponse{
+				Instances: []*quartermasterpb.ServiceInstance{
 					{
 						Status:   "running",
 						Host:     stringPtr("10.0.0.1"),
@@ -99,8 +100,8 @@ func TestDiscoverGatewayAddressesSkipsMissingWalletMetadata(t *testing.T) {
 	monitor := &LivepeerDepositMonitor{
 		logger: logging.NewLogger(),
 		qm: &fakeLivepeerServiceDiscoveryClient{
-			resp: &pb.ServiceDiscoveryResponse{
-				Instances: []*pb.ServiceInstance{
+			resp: &quartermasterpb.ServiceDiscoveryResponse{
+				Instances: []*quartermasterpb.ServiceInstance{
 					{
 						Status: "running",
 						Host:   stringPtr("10.0.0.1"),

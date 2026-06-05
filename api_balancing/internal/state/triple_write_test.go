@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
@@ -112,13 +111,13 @@ func setupTripleWriteTest(t *testing.T) (*StreamStateManager, *RedisStateStore, 
 func TestTripleWrite_RoundTrip(t *testing.T) {
 	sm, _, mr, _ := setupTripleWriteTest(t)
 
-	artifacts := []*pb.StoredArtifact{
+	artifacts := []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "hash-1",
 			FilePath:     "/data/clips/hash-1.mp4",
 			SizeBytes:    1024,
 			StreamName:   "vod+my-stream",
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 			Format:       "mp4",
 		},
 	}
@@ -175,13 +174,13 @@ func TestTripleWrite_RoundTrip(t *testing.T) {
 func TestTripleWrite_PostgresReceivesRecords(t *testing.T) {
 	sm, _, _, repo := setupTripleWriteTest(t)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "hash-1",
 			FilePath:     "/data/clips/hash-1.mp4",
 			SizeBytes:    2048,
 			StreamName:   "vod+stream-a",
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		},
 	})
 
@@ -217,7 +216,7 @@ func TestTripleWrite_EmptyArtifactsOrphansDB(t *testing.T) {
 	sm, _, mr, repo := setupTripleWriteTest(t)
 
 	// First add something, then clear
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "hash-1", FilePath: "/data/h1.mp4"},
 	})
 	time.Sleep(50 * time.Millisecond)
@@ -267,13 +266,13 @@ func TestTripleWrite_Rehydration(t *testing.T) {
 		t.Fatalf("EnableRedisSync A: %v", err)
 	}
 
-	smA.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	smA.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "hash-r1",
 			FilePath:     "/data/r1.mp4",
 			SizeBytes:    512,
 			StreamName:   "live+rehydrate",
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 			Format:       "mkv",
 		},
 		{
@@ -281,7 +280,7 @@ func TestTripleWrite_Rehydration(t *testing.T) {
 			FilePath:     "/data/dvr/r2",
 			SizeBytes:    4096,
 			StreamName:   "dvr+recording",
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 		},
 	})
 
@@ -315,14 +314,14 @@ func TestTripleWrite_Rehydration(t *testing.T) {
 					if a.Format != "mkv" {
 						t.Fatalf("expected mkv, got %s", a.Format)
 					}
-					if a.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+					if a.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
 						t.Fatalf("expected VOD type, got %d", a.ArtifactType)
 					}
 					if a.StreamName != "live+rehydrate" {
 						t.Fatalf("expected stream name, got %s", a.StreamName)
 					}
 				case "hash-r2":
-					if a.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_DVR {
+					if a.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR {
 						t.Fatalf("expected DVR type, got %d", a.ArtifactType)
 					}
 				default:
@@ -351,7 +350,7 @@ func TestTripleWrite_RehydrationLossy(t *testing.T) {
 	}
 
 	// Set artifact with fields that don't survive Redis round-trip
-	smA.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	smA.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "hash-lossy",
 			FilePath:     "/data/clip.mp4",
@@ -444,13 +443,13 @@ func TestTripleWrite_PubSubCrossInstance(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// A writes artifacts
-	smA.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	smA.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "pubsub-hash",
 			FilePath:     "/data/pubsub.mp4",
 			SizeBytes:    777,
 			StreamName:   "vod+pubsub-test",
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 			Format:       "mp4",
 		},
 	})
@@ -484,7 +483,7 @@ func TestTripleWrite_PubSubSelfFilter(t *testing.T) {
 	// Give subscription time to establish
 	time.Sleep(50 * time.Millisecond)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "self-hash", FilePath: "/data/self.mp4", SizeBytes: 100},
 	})
 
@@ -508,13 +507,13 @@ func TestTripleWrite_AddRemoveCycle(t *testing.T) {
 	sm, _, mr, _ := setupTripleWriteTest(t)
 
 	// Set 2 artifacts
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4", SizeBytes: 100},
 		{ClipHash: "h2", FilePath: "/data/h2.mp4", SizeBytes: 200},
 	})
 
 	// Add 3rd
-	sm.AddNodeArtifact("node-1", &pb.StoredArtifact{
+	sm.AddNodeArtifact("node-1", &ipcpb.StoredArtifact{
 		ClipHash: "h3", FilePath: "/data/h3.mp4", SizeBytes: 300,
 	})
 
@@ -567,12 +566,12 @@ func TestTripleWrite_TypeInference(t *testing.T) {
 	sm, _, mr, _ := setupTripleWriteTest(t)
 
 	// Artifact with UNSPECIFIED type but DVR-like path
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{
 			ClipHash:     "dvr-inferred",
 			FilePath:     "/recordings/dvr/somehash",
 			SizeBytes:    5000,
-			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED,
+			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED,
 		},
 	})
 

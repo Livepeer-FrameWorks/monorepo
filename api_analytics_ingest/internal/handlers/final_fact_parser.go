@@ -10,7 +10,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -54,7 +54,7 @@ var triggerTypesWithFinalProjection = map[string]struct{}{
 // failures that should retry the Kafka message; JSON/proto parse errors
 // are logged and swallowed because the audit row is already in
 // raw_mist_triggers for forensic replay.
-func (h *AnalyticsHandler) projectFinalFact(ctx context.Context, trigger *pb.MistTrigger, sourceEventID string, edgeReceivedAtMS int64) error {
+func (h *AnalyticsHandler) projectFinalFact(ctx context.Context, trigger *ipcpb.MistTrigger, sourceEventID string, edgeReceivedAtMS int64) error {
 	if trigger == nil || sourceEventID == "" {
 		return nil
 	}
@@ -80,7 +80,7 @@ func (h *AnalyticsHandler) projectFinalFact(ctx context.Context, trigger *pb.Mis
 // Multi-stream/connector/host sessions land with their per-element
 // breakdown arrays preserved (stream_times / connector_times / host_times)
 // so per-stream and marketplace attribution can split a single session.
-func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigger *pb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
+func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigger *ipcpb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
 	vd := trigger.GetViewerDisconnect()
 	if vd == nil {
 		return nil
@@ -204,7 +204,7 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 }
 
 // projectStreamSessionFinal writes a stream_sessions_final projection row.
-func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigger *pb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
+func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigger *ipcpb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
 	se := trigger.GetStreamEnd()
 	if se == nil {
 		return nil
@@ -320,7 +320,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 // projectProcessingSegmentFinal handles both LIVEPEER_SEGMENT_COMPLETE
 // and PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE. Empty output_codec triggers a
 // quarantine; no row written here, audit row in raw_mist_triggers stands.
-func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, trigger *pb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
+func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, trigger *ipcpb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
 	pb_ := trigger.GetProcessBilling()
 	if pb_ == nil {
 		return nil
@@ -1026,7 +1026,7 @@ func absDeltaFloat64(a, b float64) float64 {
 // the [][]any shape the ClickHouse driver writes into
 // Array(Tuple(name LowCardinality(String), seconds UInt32)). Returns nil if
 // the input is empty so the column default ([]) applies.
-func sessionTimeSharesToTuples(shares []*pb.SessionTimeShare) [][]any {
+func sessionTimeSharesToTuples(shares []*ipcpb.SessionTimeShare) [][]any {
 	if len(shares) == 0 {
 		return nil
 	}

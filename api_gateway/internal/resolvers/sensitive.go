@@ -6,7 +6,7 @@ import (
 
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func isPrivilegedRole(role string) bool {
@@ -75,7 +75,7 @@ func (r *Resolver) CanViewSensitiveNodeData(ctx context.Context, nodeID string) 
 	return r.CanViewSensitiveInfraData(ctx, node.ClusterId)
 }
 
-func (r *Resolver) loadCluster(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+func (r *Resolver) loadCluster(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 	if clusterID == "" {
 		return nil, nil
 	}
@@ -89,7 +89,7 @@ func (r *Resolver) loadCluster(ctx context.Context, clusterID string) (*pb.Infra
 	return resp.Cluster, nil
 }
 
-func (r *Resolver) loadNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+func (r *Resolver) loadNode(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
 	if nodeID == "" {
 		return nil, nil
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -421,15 +421,15 @@ func recommendedActionForVodUpload(state pbVodStatusEnum, missingCount int, last
 
 // pbVodStatusEnum / vodStatus* constants alias the proto enum so the recommendation function
 // stays readable. The aliasing keeps the proto import scoped to the implementation.
-type pbVodStatusEnum = pb.VodStatus
+type pbVodStatusEnum = sharedpb.VodStatus
 
 const (
-	vodStatusUploading  = pb.VodStatus_VOD_STATUS_UPLOADING
-	vodStatusProcessing = pb.VodStatus_VOD_STATUS_PROCESSING
-	vodStatusReady      = pb.VodStatus_VOD_STATUS_READY
-	vodStatusFailed     = pb.VodStatus_VOD_STATUS_FAILED
-	vodStatusDeleted    = pb.VodStatus_VOD_STATUS_DELETED
-	vodStatusExpired    = pb.VodStatus_VOD_STATUS_EXPIRED
+	vodStatusUploading  = sharedpb.VodStatus_VOD_STATUS_UPLOADING
+	vodStatusProcessing = sharedpb.VodStatus_VOD_STATUS_PROCESSING
+	vodStatusReady      = sharedpb.VodStatus_VOD_STATUS_READY
+	vodStatusFailed     = sharedpb.VodStatus_VOD_STATUS_FAILED
+	vodStatusDeleted    = sharedpb.VodStatus_VOD_STATUS_DELETED
+	vodStatusExpired    = sharedpb.VodStatus_VOD_STATUS_EXPIRED
 )
 
 func handleGetVodUploadStatus(ctx context.Context, args GetVodUploadStatusInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {

@@ -27,7 +27,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 )
 
 type canonicalUsageDelta struct {
@@ -139,10 +140,10 @@ func (jm *JobManager) enrichInvoiceFromPeriscope(ctx context.Context, tenantID s
 
 // CommodoreClient is the interface for Commodore gRPC client used by JobManager and PurserServer
 type CommodoreClient interface {
-	TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error)
-	InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error)
-	GetTenantUserCount(ctx context.Context, tenantID string) (*pb.GetTenantUserCountResponse, error)
-	GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error)
+	TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, error)
+	InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, error)
+	GetTenantUserCount(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
+	GetTenantPrimaryUser(ctx context.Context, tenantID string) (*commodorepb.GetTenantPrimaryUserResponse, error)
 }
 
 // JobManager handles background billing jobs
@@ -160,6 +161,7 @@ type JobManager struct {
 	periscopeClient   *periscope.GRPCClient
 	thresholdEnforcer *ThresholdEnforcer
 	tierReconciler    TierReconciler
+	billing           *Service
 }
 
 // TierReconciler is the subset of tieraccess.Reconciler used by the downgrade
@@ -170,7 +172,7 @@ type TierReconciler interface {
 }
 
 // NewJobManager creates a new job manager
-func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient, tierReconciler TierReconciler) *JobManager {
+func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient, tierReconciler TierReconciler, billing *Service) *JobManager {
 	// Initialize Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
 	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
@@ -203,8 +205,9 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		billingTopic:      billingTopic,
 		commodoreClient:   commodoreClient,
 		periscopeClient:   periscopeSvc,
-		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc),
+		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc, billing),
 		tierReconciler:    tierReconciler,
+		billing:           billing,
 	}
 }
 
@@ -322,7 +325,7 @@ func (jm *JobManager) drainMollieObservationsBackstop(ctx context.Context) error
 		if err := rows.Scan(&invoiceID); err != nil {
 			return fmt.Errorf("scan Mollie observation invoice: %w", err)
 		}
-		if err := drainMolliePaymentObservationsForInvoice(ctx, invoiceID); err != nil {
+		if err := jm.billing.drainMolliePaymentObservationsForInvoice(ctx, invoiceID); err != nil {
 			jm.logger.WithError(err).WithField("invoice_id", invoiceID).Warn("Failed to drain Mollie observations for invoice")
 		}
 	}
@@ -584,13 +587,13 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 			})
 			switch {
 			case errors.Is(resolveErr, pricing.ErrCustomPricingMissingForCluster):
-				if metrics != nil {
-					metrics.BillingCalculations.WithLabelValues("prepaid", "custom_pricing_missing").Inc()
+				if jm.billing.metrics != nil {
+					jm.billing.metrics.BillingCalculations.WithLabelValues("prepaid", "custom_pricing_missing").Inc()
 				}
 				return fmt.Errorf("prepaid usage on cluster %s has unconfigured custom pricing", summary.ClusterID)
 			case errors.Is(resolveErr, pricing.ErrAmbiguousClusterOwnership):
-				if metrics != nil {
-					metrics.BillingCalculations.WithLabelValues("prepaid", "ambiguous_cluster_ownership").Inc()
+				if jm.billing.metrics != nil {
+					jm.billing.metrics.BillingCalculations.WithLabelValues("prepaid", "ambiguous_cluster_ownership").Inc()
 				}
 				return fmt.Errorf("prepaid usage on cluster %s has ambiguous ownership", summary.ClusterID)
 			case resolveErr != nil:
@@ -1552,7 +1555,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// that the invoice is finalized, attach them and settle through
 		// the partial-payment-aware path.
 		if status == "pending" {
-			if drainErr := drainMolliePaymentObservationsForInvoice(ctx, invoiceID); drainErr != nil {
+			if drainErr := jm.billing.drainMolliePaymentObservationsForInvoice(ctx, invoiceID); drainErr != nil {
 				jm.logger.WithError(drainErr).WithFields(logging.Fields{
 					"tenant_id":  tenantID,
 					"invoice_id": invoiceID,
@@ -1728,7 +1731,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	if !stripeCustomerID.Valid || stripeCustomerID.String == "" {
 		return nil
 	}
-	if stripeClient == nil {
+	if jm.billing.stripeClient == nil {
 		return fmt.Errorf("stripe client not configured for active Stripe subscription")
 	}
 
@@ -1809,7 +1812,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		return fmt.Errorf("prepare billing_payment_attempt retry: %w", attemptErr)
 	}
 
-	result, chargeErr := stripeClient.ChargeOffSession(ctx, billingstripe.OffSessionChargeParams{
+	result, chargeErr := jm.billing.stripeClient.ChargeOffSession(ctx, billingstripe.OffSessionChargeParams{
 		CustomerID:       stripeCustomerID.String,
 		TenantID:         tenantID,
 		InvoiceID:        invoiceID,
@@ -1923,7 +1926,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 			"payment_intent_id": result.PaymentIntentID,
 			"action_url":        actionURL,
 		}).Warn("Stripe off-session overage requires customer authentication (SCA); directing customer to on-session invoice payment")
-		go sendTenantActionRequiredEmail(tenantID, invoiceID, float64(amountCents)/100, currency, actionURL)
+		go jm.billing.sendTenantActionRequiredEmail(tenantID, invoiceID, float64(amountCents)/100, currency, actionURL)
 		return nil
 
 	case result.Status == "failed":
@@ -2100,7 +2103,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		}
 		return nil
 	}
-	if mollieClient == nil {
+	if jm.billing.mollieClient == nil {
 		return fmt.Errorf("mollie client not configured for active Mollie subscription")
 	}
 
@@ -2179,7 +2182,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 		webhookURL = base + "/webhooks/billing/mollie"
 	}
 
-	payment, err := mollieClient.ChargeOnMandate(ctx, billingmollie.OnDemandChargeParams{
+	payment, err := jm.billing.mollieClient.ChargeOnMandate(ctx, billingmollie.OnDemandChargeParams{
 		CustomerID:     mollieCustomerID,
 		MandateID:      mandateID.String,
 		TenantID:       tenantID,
@@ -2738,8 +2741,8 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 					"usage_type": usageType,
 				}).Warn("Failed to write usage_records_quarantine row")
 			}
-			if metrics != nil && metrics.UsageQuarantine != nil {
-				metrics.UsageQuarantine.WithLabelValues(usageType, rejection).Inc()
+			if jm.billing.metrics != nil && jm.billing.metrics.UsageQuarantine != nil {
+				jm.billing.metrics.UsageQuarantine.WithLabelValues(usageType, rejection).Inc()
 			}
 			continue
 		}
@@ -2758,8 +2761,8 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		if err != nil {
 			return nil, fmt.Errorf("failed to upsert %s: %w", usageType, err)
 		}
-		if metrics != nil && metrics.UsageRecords != nil {
-			metrics.UsageRecords.WithLabelValues(usageType).Inc()
+		if jm.billing.metrics != nil && jm.billing.metrics.UsageRecords != nil {
+			jm.billing.metrics.UsageRecords.WithLabelValues(usageType).Inc()
 		}
 		acceptedUsage = append(acceptedUsage, canonicalUsageDelta{
 			clusterID:    summary.ClusterID,

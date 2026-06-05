@@ -9,36 +9,37 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetrytoken"
 
 	"github.com/gin-gonic/gin"
 )
 
 type fakeResolver struct {
-	artifact *pb.ResolveArtifactPlaybackIDResponse
-	stream   *pb.ResolvePlaybackIDResponse
+	artifact *commodorepb.ResolveArtifactPlaybackIDResponse
+	stream   *commodorepb.ResolvePlaybackIDResponse
 }
 
-func (f *fakeResolver) ResolveArtifactPlaybackID(_ context.Context, _ string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+func (f *fakeResolver) ResolveArtifactPlaybackID(_ context.Context, _ string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	if f.artifact == nil {
-		return &pb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
+		return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
 	}
 	return f.artifact, nil
 }
 
-func (f *fakeResolver) ResolvePlaybackID(_ context.Context, _ string) (*pb.ResolvePlaybackIDResponse, error) {
+func (f *fakeResolver) ResolvePlaybackID(_ context.Context, _ string) (*commodorepb.ResolvePlaybackIDResponse, error) {
 	if f.stream == nil {
-		return &pb.ResolvePlaybackIDResponse{}, nil
+		return &commodorepb.ResolvePlaybackIDResponse{}, nil
 	}
 	return f.stream, nil
 }
 
 type fakeSink struct {
-	triggers []*pb.MistTrigger
+	triggers []*ipcpb.MistTrigger
 }
 
-func (f *fakeSink) SendTriggerContext(_ context.Context, trigger *pb.MistTrigger) error {
+func (f *fakeSink) SendTriggerContext(_ context.Context, trigger *ipcpb.MistTrigger) error {
 	f.triggers = append(f.triggers, trigger)
 	return nil
 }
@@ -73,7 +74,7 @@ func postBoot(h *PlaybackTelemetryHandler, body string) *httptest.ResponseRecord
 
 func TestPlaybackTelemetry_LiveStreamServerDerivedAttribution(t *testing.T) {
 	resolver := &fakeResolver{
-		stream: &pb.ResolvePlaybackIDResponse{
+		stream: &commodorepb.ResolvePlaybackIDResponse{
 			TenantId:     "11111111-1111-1111-1111-111111111111",
 			StreamId:     "22222222-2222-2222-2222-222222222222",
 			InternalName: "live+demo",
@@ -139,7 +140,7 @@ func TestPlaybackTelemetry_LiveStreamServerDerivedAttribution(t *testing.T) {
 
 func TestPlaybackTelemetry_ArtifactPreferredOverStream(t *testing.T) {
 	resolver := &fakeResolver{
-		artifact: &pb.ResolveArtifactPlaybackIDResponse{
+		artifact: &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
 			TenantId:        "11111111-1111-1111-1111-111111111111",
 			ArtifactHash:    "abc123",
@@ -179,7 +180,7 @@ func TestPlaybackTelemetry_UnresolvableContentDropped(t *testing.T) {
 }
 
 func TestPlaybackTelemetry_RateLimitedDropped(t *testing.T) {
-	resolver := &fakeResolver{stream: &pb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
+	resolver := &fakeResolver{stream: &commodorepb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
 	sink := &fakeSink{}
 	h := newTestBootHandler(resolver, sink, false) // limiter denies
 
@@ -194,7 +195,7 @@ func TestPlaybackTelemetry_RateLimitedDropped(t *testing.T) {
 
 func TestPlaybackTelemetry_ValidTokenAttributesCluster(t *testing.T) {
 	secret := []byte("platform-telemetry-secret")
-	resolver := &fakeResolver{stream: &pb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
+	resolver := &fakeResolver{stream: &commodorepb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
 	sink := &fakeSink{}
 	h := newTestBootHandlerWithSecret(resolver, sink, true, secret)
 
@@ -222,7 +223,7 @@ func TestPlaybackTelemetry_ValidTokenAttributesCluster(t *testing.T) {
 
 func TestPlaybackTelemetry_TokenContentMismatchIgnored(t *testing.T) {
 	secret := []byte("platform-telemetry-secret")
-	resolver := &fakeResolver{stream: &pb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
+	resolver := &fakeResolver{stream: &commodorepb.ResolvePlaybackIDResponse{TenantId: "11111111-1111-1111-1111-111111111111"}}
 	sink := &fakeSink{}
 	h := newTestBootHandlerWithSecret(resolver, sink, true, secret)
 

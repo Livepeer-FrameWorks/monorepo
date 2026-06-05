@@ -11,7 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -76,7 +76,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 	}
 
 	// Build pagination request
-	pagination := &pb.CursorPaginationRequest{
+	pagination := &commonpb.CursorPaginationRequest{
 		First: 50,
 	}
 

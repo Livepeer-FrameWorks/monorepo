@@ -8,7 +8,8 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/provisioner"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"github.com/spf13/cobra"
 )
 
@@ -105,8 +106,8 @@ func TestRenderEdgeDeployResult_noOutputInJSONMode(t *testing.T) {
 
 func TestApplyEdgeDeployTelemetryConfigCopiesPreRegistrationTelemetry(t *testing.T) {
 	cfg := &provisioner.EdgeProvisionConfig{}
-	resp := &pb.PreRegisterEdgeResponse{
-		Telemetry: &pb.EdgeTelemetryConfig{
+	resp := &foghornpb.PreRegisterEdgeResponse{
+		Telemetry: &commonpb.EdgeTelemetryConfig{
 			Enabled:     true,
 			WriteUrl:    "https://telemetry.example.com/api/v1/write",
 			BearerToken: "token",
@@ -126,8 +127,8 @@ func TestApplyEdgeDeployTelemetryConfigCopiesPreRegistrationTelemetry(t *testing
 
 func TestApplyEdgeDeployTelemetryConfigRequiresTokenForTelemetryURL(t *testing.T) {
 	cfg := &provisioner.EdgeProvisionConfig{}
-	resp := &pb.PreRegisterEdgeResponse{
-		Telemetry: &pb.EdgeTelemetryConfig{
+	resp := &foghornpb.PreRegisterEdgeResponse{
+		Telemetry: &commonpb.EdgeTelemetryConfig{
 			Enabled:  true,
 			WriteUrl: "https://telemetry.example.com/api/v1/write",
 		},

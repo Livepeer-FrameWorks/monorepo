@@ -9,7 +9,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 )
 
 type AbortVodUploadResult interface {
@@ -223,41 +229,41 @@ type WalletLoginResult interface {
 }
 
 type APIUsageConnection struct {
-	Edges              []*APIUsageEdge                   `json:"edges"`
-	Nodes              []*proto.APIUsageRecord           `json:"nodes"`
-	PageInfo           *PageInfo                         `json:"pageInfo"`
-	TotalCount         int                               `json:"totalCount"`
-	Summaries          []*proto.APIUsageSummary          `json:"summaries"`
-	OperationSummaries []*proto.APIUsageOperationSummary `json:"operationSummaries"`
+	Edges              []*APIUsageEdge                         `json:"edges"`
+	Nodes              []*periscopepb.APIUsageRecord           `json:"nodes"`
+	PageInfo           *PageInfo                               `json:"pageInfo"`
+	TotalCount         int                                     `json:"totalCount"`
+	Summaries          []*periscopepb.APIUsageSummary          `json:"summaries"`
+	OperationSummaries []*periscopepb.APIUsageOperationSummary `json:"operationSummaries"`
 }
 
 type APIUsageEdge struct {
-	Cursor string                `json:"cursor"`
-	Node   *proto.APIUsageRecord `json:"node"`
+	Cursor string                      `json:"cursor"`
+	Node   *periscopepb.APIUsageRecord `json:"node"`
 }
 
 type ArtifactEventEdge struct {
-	Cursor string           `json:"cursor"`
-	Node   *proto.ClipEvent `json:"node"`
+	Cursor string                 `json:"cursor"`
+	Node   *periscopepb.ClipEvent `json:"node"`
 }
 
 type ArtifactEventsConnection struct {
-	Edges      []*ArtifactEventEdge `json:"edges"`
-	Nodes      []*proto.ClipEvent   `json:"nodes"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*ArtifactEventEdge     `json:"edges"`
+	Nodes      []*periscopepb.ClipEvent `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 type ArtifactStateEdge struct {
-	Cursor string               `json:"cursor"`
-	Node   *proto.ArtifactState `json:"node"`
+	Cursor string                     `json:"cursor"`
+	Node   *periscopepb.ArtifactState `json:"node"`
 }
 
 type ArtifactStatesConnection struct {
-	Edges      []*ArtifactStateEdge   `json:"edges"`
-	Nodes      []*proto.ArtifactState `json:"nodes"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ArtifactStateEdge         `json:"edges"`
+	Nodes      []*periscopepb.ArtifactState `json:"nodes"`
+	PageInfo   *PageInfo                    `json:"pageInfo"`
+	TotalCount int                          `json:"totalCount"`
 }
 
 type AuthError struct {
@@ -460,27 +466,27 @@ type BootstrapEdgeResponse struct {
 func (BootstrapEdgeResponse) IsBootstrapEdgeResult() {}
 
 type BootstrapTokenConnection struct {
-	Edges      []*BootstrapTokenEdge   `json:"edges"`
-	Nodes      []*proto.BootstrapToken `json:"nodes"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*BootstrapTokenEdge             `json:"edges"`
+	Nodes      []*quartermasterpb.BootstrapToken `json:"nodes"`
+	PageInfo   *PageInfo                         `json:"pageInfo"`
+	TotalCount int                               `json:"totalCount"`
 }
 
 type BootstrapTokenEdge struct {
-	Cursor string                `json:"cursor"`
-	Node   *proto.BootstrapToken `json:"node"`
+	Cursor string                          `json:"cursor"`
+	Node   *quartermasterpb.BootstrapToken `json:"node"`
 }
 
 type BufferEventEdge struct {
-	Cursor string             `json:"cursor"`
-	Node   *proto.BufferEvent `json:"node"`
+	Cursor string                   `json:"cursor"`
+	Node   *periscopepb.BufferEvent `json:"node"`
 }
 
 type BufferEventsConnection struct {
-	Edges      []*BufferEventEdge   `json:"edges"`
-	Nodes      []*proto.BufferEvent `json:"nodes"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*BufferEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.BufferEvent `json:"nodes"`
+	PageInfo   *PageInfo                  `json:"pageInfo"`
+	TotalCount int                        `json:"totalCount"`
 }
 
 // Result from creating a card top-up checkout session.
@@ -501,9 +507,9 @@ type ChangeBillingTierPayload struct {
 	// Human-readable status message.
 	Message string `json:"message"`
 	// Set on immediate upgrade — the new active tier.
-	AppliedTier *proto.BillingTier `json:"appliedTier,omitempty"`
+	AppliedTier *purserpb.BillingTier `json:"appliedTier,omitempty"`
 	// Set on scheduled downgrade — the staged target tier.
-	PendingTier *proto.BillingTier `json:"pendingTier,omitempty"`
+	PendingTier *purserpb.BillingTier `json:"pendingTier,omitempty"`
 	// When a scheduled downgrade will take effect.
 	EffectiveAt *time.Time `json:"effectiveAt,omitempty"`
 }
@@ -511,27 +517,27 @@ type ChangeBillingTierPayload struct {
 func (ChangeBillingTierPayload) IsChangeBillingTierResult() {}
 
 type ClientMetrics5mConnection struct {
-	Edges      []*ClientMetrics5mEdge   `json:"edges"`
-	Nodes      []*proto.ClientMetrics5M `json:"nodes"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ClientMetrics5mEdge         `json:"edges"`
+	Nodes      []*periscopepb.ClientMetrics5M `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
 type ClientMetrics5mEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.ClientMetrics5M `json:"node"`
+	Cursor string                       `json:"cursor"`
+	Node   *periscopepb.ClientMetrics5M `json:"node"`
 }
 
 type ClipEdge struct {
-	Cursor string          `json:"cursor"`
-	Node   *proto.ClipInfo `json:"node"`
+	Cursor string             `json:"cursor"`
+	Node   *sharedpb.ClipInfo `json:"node"`
 }
 
 type ClipsConnection struct {
-	Edges      []*ClipEdge       `json:"edges"`
-	Nodes      []*proto.ClipInfo `json:"nodes"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int               `json:"totalCount"`
+	Edges      []*ClipEdge          `json:"edges"`
+	Nodes      []*sharedpb.ClipInfo `json:"nodes"`
+	PageInfo   *PageInfo            `json:"pageInfo"`
+	TotalCount int                  `json:"totalCount"`
 }
 
 type ClusterAccess struct {
@@ -554,39 +560,39 @@ type ClusterAccessEdge struct {
 }
 
 type ClusterEdge struct {
-	Cursor string                       `json:"cursor"`
-	Node   *proto.InfrastructureCluster `json:"node"`
+	Cursor string                                 `json:"cursor"`
+	Node   *quartermasterpb.InfrastructureCluster `json:"node"`
 }
 
 type ClusterInviteConnection struct {
-	Edges      []*ClusterInviteEdge   `json:"edges"`
-	Nodes      []*proto.ClusterInvite `json:"nodes"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ClusterInviteEdge             `json:"edges"`
+	Nodes      []*quartermasterpb.ClusterInvite `json:"nodes"`
+	PageInfo   *PageInfo                        `json:"pageInfo"`
+	TotalCount int                              `json:"totalCount"`
 }
 
 type ClusterInviteEdge struct {
-	Cursor string               `json:"cursor"`
-	Node   *proto.ClusterInvite `json:"node"`
+	Cursor string                         `json:"cursor"`
+	Node   *quartermasterpb.ClusterInvite `json:"node"`
 }
 
 type ClusterSubscriptionConnection struct {
-	Edges      []*ClusterSubscriptionEdge   `json:"edges"`
-	Nodes      []*proto.ClusterSubscription `json:"nodes"`
-	PageInfo   *PageInfo                    `json:"pageInfo"`
-	TotalCount int                          `json:"totalCount"`
+	Edges      []*ClusterSubscriptionEdge             `json:"edges"`
+	Nodes      []*quartermasterpb.ClusterSubscription `json:"nodes"`
+	PageInfo   *PageInfo                              `json:"pageInfo"`
+	TotalCount int                                    `json:"totalCount"`
 }
 
 type ClusterSubscriptionEdge struct {
-	Cursor string                     `json:"cursor"`
-	Node   *proto.ClusterSubscription `json:"node"`
+	Cursor string                               `json:"cursor"`
+	Node   *quartermasterpb.ClusterSubscription `json:"node"`
 }
 
 type ClustersConnection struct {
-	Edges      []*ClusterEdge                 `json:"edges"`
-	Nodes      []*proto.InfrastructureCluster `json:"nodes"`
-	PageInfo   *PageInfo                      `json:"pageInfo"`
-	TotalCount int                            `json:"totalCount"`
+	Edges      []*ClusterEdge                           `json:"edges"`
+	Nodes      []*quartermasterpb.InfrastructureCluster `json:"nodes"`
+	PageInfo   *PageInfo                                `json:"pageInfo"`
+	TotalCount int                                      `json:"totalCount"`
 }
 
 // Input for completing a multipart VOD upload.
@@ -599,15 +605,15 @@ type CompleteVodUploadInput struct {
 }
 
 type ConnectionEventEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.ConnectionEvent `json:"node"`
+	Cursor string                       `json:"cursor"`
+	Node   *periscopepb.ConnectionEvent `json:"node"`
 }
 
 type ConnectionEventsConnection struct {
-	Edges      []*ConnectionEventEdge   `json:"edges"`
-	Nodes      []*proto.ConnectionEvent `json:"nodes"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ConnectionEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.ConnectionEvent `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
 // Standard cursor-based pagination input for all connections.
@@ -643,7 +649,7 @@ type Conversation struct {
 	// Optional subject line for the conversation.
 	Subject *string `json:"subject,omitempty"`
 	// Current status of the conversation.
-	Status proto.ConversationStatus `json:"status"`
+	Status deckhandpb.ConversationStatus `json:"status"`
 	// The last message in this conversation.
 	LastMessage *Message `json:"lastMessage,omitempty"`
 	// Number of unread messages.
@@ -781,7 +787,7 @@ type CreateCryptoTopupInput struct {
 	// Target credit amount in `currency` cents. Must be positive.
 	AmountCents int `json:"amountCents"`
 	// Crypto asset to receive (ETH or USDC; LPT not yet supported).
-	Asset proto.CryptoAsset `json:"asset"`
+	Asset purserpb.CryptoAsset `json:"asset"`
 	// Currency the prepaid balance is denominated in. USD or EUR; defaults to EUR.
 	Currency *string `json:"currency,omitempty"`
 }
@@ -806,15 +812,15 @@ type CreateEdgeClusterInput struct {
 }
 
 type CreateEdgeClusterResponse struct {
-	Cluster        *proto.InfrastructureCluster `json:"cluster"`
-	BootstrapToken *proto.BootstrapToken        `json:"bootstrapToken"`
-	FoghornAddr    string                       `json:"foghornAddr"`
+	Cluster        *quartermasterpb.InfrastructureCluster `json:"cluster"`
+	BootstrapToken *quartermasterpb.BootstrapToken        `json:"bootstrapToken"`
+	FoghornAddr    string                                 `json:"foghornAddr"`
 }
 
 func (CreateEdgeClusterResponse) IsCreateEdgeClusterResult() {}
 
 type CreateEnrollmentTokenResponse struct {
-	BootstrapToken *proto.BootstrapToken `json:"bootstrapToken"`
+	BootstrapToken *quartermasterpb.BootstrapToken `json:"bootstrapToken"`
 }
 
 func (CreateEnrollmentTokenResponse) IsCreateEnrollmentTokenResult() {}
@@ -843,7 +849,7 @@ type CreateSigningKeyInput struct {
 // response is discarded — FrameWorks does not store it and cannot return it
 // again. Lose the private key, revoke and create a new one.
 type CreateSigningKeySuccess struct {
-	SigningKey *proto.SigningKey `json:"signingKey"`
+	SigningKey *commodorepb.SigningKey `json:"signingKey"`
 	// ES256 private key in PEM format. Shown ONCE; never stored, never logged.
 	PrivateKeyPem string `json:"privateKeyPem"`
 }
@@ -861,7 +867,7 @@ type CreateStreamInput struct {
 	// Source ingest model. Defaults to PUSH.
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Pull-source configuration. Required when ingestMode is PULL.
-	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
+	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
 }
 
 // Input for creating an additional stream key.
@@ -896,7 +902,7 @@ type CryptoTopupResult struct {
 	// HD-derived Ethereum address to send funds to.
 	DepositAddress string `json:"depositAddress"`
 	// Asset to send (ETH or USDC).
-	Asset proto.CryptoAsset `json:"asset"`
+	Asset purserpb.CryptoAsset `json:"asset"`
 	// Human-readable asset symbol ("ETH" | "USDC").
 	AssetSymbol string `json:"assetSymbol"`
 	// Echo of input amountCents (USD or EUR cents per the request).
@@ -926,7 +932,7 @@ type CryptoTopupStatus struct {
 	// Deposit address.
 	DepositAddress string `json:"depositAddress"`
 	// Asset being received.
-	Asset proto.CryptoAsset `json:"asset"`
+	Asset purserpb.CryptoAsset `json:"asset"`
 	// Current status: pending, confirming, completed, expired.
 	Status string `json:"status"`
 	// Blockchain transaction hash (when detected).
@@ -1025,13 +1031,13 @@ type DVRChaptersPage struct {
 }
 
 type DVRRecordingEdge struct {
-	Cursor string         `json:"cursor"`
-	Node   *proto.DVRInfo `json:"node"`
+	Cursor string            `json:"cursor"`
+	Node   *sharedpb.DVRInfo `json:"node"`
 }
 
 type DVRRecordingsConnection struct {
 	Edges      []*DVRRecordingEdge `json:"edges"`
-	Nodes      []*proto.DVRInfo    `json:"nodes"`
+	Nodes      []*sharedpb.DVRInfo `json:"nodes"`
 	PageInfo   *PageInfo           `json:"pageInfo"`
 	TotalCount int                 `json:"totalCount"`
 }
@@ -1064,15 +1070,15 @@ func (DeleteSuccess) IsRevokeClusterInviteResult() {}
 func (DeleteSuccess) IsUnlinkWalletResult() {}
 
 type DeveloperTokenEdge struct {
-	Cursor string              `json:"cursor"`
-	Node   *proto.APITokenInfo `json:"node"`
+	Cursor string                    `json:"cursor"`
+	Node   *commodorepb.APITokenInfo `json:"node"`
 }
 
 type DeveloperTokensConnection struct {
-	Edges      []*DeveloperTokenEdge `json:"edges"`
-	Nodes      []*proto.APITokenInfo `json:"nodes"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*DeveloperTokenEdge       `json:"edges"`
+	Nodes      []*commodorepb.APITokenInfo `json:"nodes"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 type EdgeTelemetrySetup struct {
@@ -1107,8 +1113,8 @@ type EntitlementEntryInput struct {
 }
 
 type FederationEventEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.FederationEvent `json:"node"`
+	Cursor string                       `json:"cursor"`
+	Node   *periscopepb.FederationEvent `json:"node"`
 }
 
 type FederationEventsConnection struct {
@@ -1118,15 +1124,15 @@ type FederationEventsConnection struct {
 }
 
 type InvoiceEdge struct {
-	Cursor string         `json:"cursor"`
-	Node   *proto.Invoice `json:"node"`
+	Cursor string            `json:"cursor"`
+	Node   *purserpb.Invoice `json:"node"`
 }
 
 type InvoicesConnection struct {
-	Edges      []*InvoiceEdge   `json:"edges"`
-	Nodes      []*proto.Invoice `json:"nodes"`
-	PageInfo   *PageInfo        `json:"pageInfo"`
-	TotalCount int              `json:"totalCount"`
+	Edges      []*InvoiceEdge      `json:"edges"`
+	Nodes      []*purserpb.Invoice `json:"nodes"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
 }
 
 // Input for linking email to a wallet-only account.
@@ -1150,15 +1156,15 @@ type LinkEmailPayload struct {
 func (LinkEmailPayload) IsLinkEmailResult() {}
 
 type MarketplaceClusterConnection struct {
-	Edges      []*MarketplaceClusterEdge        `json:"edges"`
-	Nodes      []*proto.MarketplaceClusterEntry `json:"nodes"`
-	PageInfo   *PageInfo                        `json:"pageInfo"`
-	TotalCount int                              `json:"totalCount"`
+	Edges      []*MarketplaceClusterEdge                  `json:"edges"`
+	Nodes      []*quartermasterpb.MarketplaceClusterEntry `json:"nodes"`
+	PageInfo   *PageInfo                                  `json:"pageInfo"`
+	TotalCount int                                        `json:"totalCount"`
 }
 
 type MarketplaceClusterEdge struct {
-	Cursor string                         `json:"cursor"`
-	Node   *proto.MarketplaceClusterEntry `json:"node"`
+	Cursor string                                   `json:"cursor"`
+	Node   *quartermasterpb.MarketplaceClusterEntry `json:"node"`
 }
 
 type MediaArtifactConnectionInput struct {
@@ -1172,7 +1178,7 @@ type MediaArtifactConnectionInput struct {
 // cascade would resolve to today for a hypothetical new artifact of each
 // class (no per-stream context).
 type MediaRetentionPolicy struct {
-	Bounds *proto.MediaRetentionBounds `json:"bounds"`
+	Bounds *commodorepb.MediaRetentionBounds `json:"bounds"`
 	// User who last touched the policy. Null when no tenant override is set.
 	UpdatedBy *string    `json:"updatedBy,omitempty"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
@@ -1205,7 +1211,7 @@ type Message struct {
 	// The message content.
 	Content string `json:"content"`
 	// Who sent this message.
-	Sender proto.MessageSender `json:"sender"`
+	Sender deckhandpb.MessageSender `json:"sender"`
 	// When the message was sent.
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -1285,15 +1291,15 @@ type Mutation struct {
 }
 
 type MySubscriptionEdge struct {
-	Cursor string                       `json:"cursor"`
-	Node   *proto.InfrastructureCluster `json:"node"`
+	Cursor string                                 `json:"cursor"`
+	Node   *quartermasterpb.InfrastructureCluster `json:"node"`
 }
 
 type MySubscriptionsConnection struct {
-	Edges      []*MySubscriptionEdge          `json:"edges"`
-	Nodes      []*proto.InfrastructureCluster `json:"nodes"`
-	PageInfo   *PageInfo                      `json:"pageInfo"`
-	TotalCount int                            `json:"totalCount"`
+	Edges      []*MySubscriptionEdge                    `json:"edges"`
+	Nodes      []*quartermasterpb.InfrastructureCluster `json:"nodes"`
+	PageInfo   *PageInfo                                `json:"pageInfo"`
+	TotalCount int                                      `json:"totalCount"`
 }
 
 type NetworkClusterStatus struct {
@@ -1353,51 +1359,51 @@ type NetworkStatus struct {
 }
 
 type NodeEdge struct {
-	Cursor string                    `json:"cursor"`
-	Node   *proto.InfrastructureNode `json:"node"`
+	Cursor string                              `json:"cursor"`
+	Node   *quartermasterpb.InfrastructureNode `json:"node"`
 }
 
 type NodeMetricEdge struct {
-	Cursor string            `json:"cursor"`
-	Node   *proto.NodeMetric `json:"node"`
+	Cursor string                  `json:"cursor"`
+	Node   *periscopepb.NodeMetric `json:"node"`
 }
 
 type NodeMetricHourlyEdge struct {
-	Cursor string                  `json:"cursor"`
-	Node   *proto.NodeMetricHourly `json:"node"`
+	Cursor string                        `json:"cursor"`
+	Node   *periscopepb.NodeMetricHourly `json:"node"`
 }
 
 type NodeMetrics1hConnection struct {
-	Edges      []*NodeMetricHourlyEdge   `json:"edges"`
-	Nodes      []*proto.NodeMetricHourly `json:"nodes"`
+	Edges      []*NodeMetricHourlyEdge         `json:"edges"`
+	Nodes      []*periscopepb.NodeMetricHourly `json:"nodes"`
+	PageInfo   *PageInfo                       `json:"pageInfo"`
+	TotalCount int                             `json:"totalCount"`
+}
+
+type NodeMetricsConnection struct {
+	Edges      []*NodeMetricEdge         `json:"edges"`
+	Nodes      []*periscopepb.NodeMetric `json:"nodes"`
 	PageInfo   *PageInfo                 `json:"pageInfo"`
 	TotalCount int                       `json:"totalCount"`
 }
 
-type NodeMetricsConnection struct {
-	Edges      []*NodeMetricEdge   `json:"edges"`
-	Nodes      []*proto.NodeMetric `json:"nodes"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
-}
-
 type NodePerformance5mConnection struct {
-	Edges      []*NodePerformance5mEdge   `json:"edges"`
-	Nodes      []*proto.NodePerformance5M `json:"nodes"`
-	PageInfo   *PageInfo                  `json:"pageInfo"`
-	TotalCount int                        `json:"totalCount"`
+	Edges      []*NodePerformance5mEdge         `json:"edges"`
+	Nodes      []*periscopepb.NodePerformance5M `json:"nodes"`
+	PageInfo   *PageInfo                        `json:"pageInfo"`
+	TotalCount int                              `json:"totalCount"`
 }
 
 type NodePerformance5mEdge struct {
-	Cursor string                   `json:"cursor"`
-	Node   *proto.NodePerformance5M `json:"node"`
+	Cursor string                         `json:"cursor"`
+	Node   *periscopepb.NodePerformance5M `json:"node"`
 }
 
 type NodesConnection struct {
-	Edges      []*NodeEdge                 `json:"edges"`
-	Nodes      []*proto.InfrastructureNode `json:"nodes"`
-	PageInfo   *PageInfo                   `json:"pageInfo"`
-	TotalCount int                         `json:"totalCount"`
+	Edges      []*NodeEdge                           `json:"edges"`
+	Nodes      []*quartermasterpb.InfrastructureNode `json:"nodes"`
+	PageInfo   *PageInfo                             `json:"pageInfo"`
+	TotalCount int                                   `json:"totalCount"`
 }
 
 type NotFoundError struct {
@@ -1488,15 +1494,15 @@ type OpenMistAdminSessionInput struct {
 // own price/capabilities/hardware) + every per-(gateway, instance) vantage.
 // Used by the federation map's side panel.
 type OrchestratorWithDetails struct {
-	Orchestrator *proto.Orchestrator           `json:"orchestrator"`
-	Instances    []*proto.OrchestratorInstance `json:"instances"`
-	Vantages     []*proto.OrchestratorVantage  `json:"vantages"`
+	Orchestrator *periscopepb.Orchestrator           `json:"orchestrator"`
+	Instances    []*periscopepb.OrchestratorInstance `json:"instances"`
+	Vantages     []*periscopepb.OrchestratorVantage  `json:"vantages"`
 }
 
 // Pagination wrapper for orchestrator listing.
 type OrchestratorsConnection struct {
-	Nodes      []*proto.Orchestrator `json:"nodes"`
-	TotalCount int                   `json:"totalCount"`
+	Nodes      []*periscopepb.Orchestrator `json:"nodes"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 type PageInfo struct {
@@ -1560,9 +1566,9 @@ type PlaybackJwtPolicyInput struct {
 type PlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
 	// JWT-policy details, populated when type == JWT.
-	Jwt *proto.PlaybackJwtPolicy `json:"jwt,omitempty"`
+	Jwt *commodorepb.PlaybackJwtPolicy `json:"jwt,omitempty"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
-	Webhook *proto.PlaybackWebhookPolicy `json:"webhook,omitempty"`
+	Webhook *commodorepb.PlaybackWebhookPolicy `json:"webhook,omitempty"`
 }
 
 type PlaybackPolicyInput struct {
@@ -1596,16 +1602,16 @@ type PricingRuleInput struct {
 }
 
 type ProcessingUsageConnection struct {
-	Edges      []*ProcessingUsageEdge          `json:"edges"`
-	Nodes      []*proto.ProcessingUsageRecord  `json:"nodes"`
-	PageInfo   *PageInfo                       `json:"pageInfo"`
-	TotalCount int                             `json:"totalCount"`
-	Summaries  []*proto.ProcessingUsageSummary `json:"summaries"`
+	Edges      []*ProcessingUsageEdge                `json:"edges"`
+	Nodes      []*periscopepb.ProcessingUsageRecord  `json:"nodes"`
+	PageInfo   *PageInfo                             `json:"pageInfo"`
+	TotalCount int                                   `json:"totalCount"`
+	Summaries  []*periscopepb.ProcessingUsageSummary `json:"summaries"`
 }
 
 type ProcessingUsageEdge struct {
-	Cursor string                       `json:"cursor"`
-	Node   *proto.ProcessingUsageRecord `json:"node"`
+	Cursor string                             `json:"cursor"`
+	Node   *periscopepb.ProcessingUsageRecord `json:"node"`
 }
 
 // Successful promotion to postpaid billing.
@@ -1625,15 +1631,15 @@ type PromoteToPaidPayload struct {
 func (PromoteToPaidPayload) IsPromoteToPaidResult() {}
 
 type QualityTierDailyConnection struct {
-	Edges      []*QualityTierDailyEdge   `json:"edges"`
-	Nodes      []*proto.QualityTierDaily `json:"nodes"`
-	PageInfo   *PageInfo                 `json:"pageInfo"`
-	TotalCount int                       `json:"totalCount"`
+	Edges      []*QualityTierDailyEdge         `json:"edges"`
+	Nodes      []*periscopepb.QualityTierDaily `json:"nodes"`
+	PageInfo   *PageInfo                       `json:"pageInfo"`
+	TotalCount int                             `json:"totalCount"`
 }
 
 type QualityTierDailyEdge struct {
-	Cursor string                  `json:"cursor"`
-	Node   *proto.QualityTierDaily `json:"node"`
+	Cursor string                        `json:"cursor"`
+	Node   *periscopepb.QualityTierDaily `json:"node"`
 }
 
 // Root Query type - the entry point for all read operations.
@@ -1659,15 +1665,15 @@ func (RateLimitError) IsCreateDeveloperTokenResult() {}
 func (RateLimitError) IsCreateSigningKeyResult() {}
 
 type RebufferingEventEdge struct {
-	Cursor string                  `json:"cursor"`
-	Node   *proto.RebufferingEvent `json:"node"`
+	Cursor string                        `json:"cursor"`
+	Node   *periscopepb.RebufferingEvent `json:"node"`
 }
 
 type RebufferingEventsConnection struct {
-	Edges      []*RebufferingEventEdge   `json:"edges"`
-	Nodes      []*proto.RebufferingEvent `json:"nodes"`
-	PageInfo   *PageInfo                 `json:"pageInfo"`
-	TotalCount int                       `json:"totalCount"`
+	Edges      []*RebufferingEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.RebufferingEvent `json:"nodes"`
+	PageInfo   *PageInfo                       `json:"pageInfo"`
+	TotalCount int                             `json:"totalCount"`
 }
 
 type ResetMediaRetentionOverrideInput struct {
@@ -1676,15 +1682,15 @@ type ResetMediaRetentionOverrideInput struct {
 }
 
 type RoutingEventEdge struct {
-	Cursor string              `json:"cursor"`
-	Node   *proto.RoutingEvent `json:"node"`
+	Cursor string                    `json:"cursor"`
+	Node   *periscopepb.RoutingEvent `json:"node"`
 }
 
 type RoutingEventsConnection struct {
-	Edges      []*RoutingEventEdge   `json:"edges"`
-	Nodes      []*proto.RoutingEvent `json:"nodes"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*RoutingEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.RoutingEvent `json:"nodes"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 // Snapshot of how much traffic a node is currently serving.
@@ -1702,15 +1708,15 @@ type SendMessageInput struct {
 }
 
 type ServiceInstanceEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.ServiceInstance `json:"node"`
+	Cursor string                           `json:"cursor"`
+	Node   *quartermasterpb.ServiceInstance `json:"node"`
 }
 
 type ServiceInstancesConnection struct {
-	Edges      []*ServiceInstanceEdge   `json:"edges"`
-	Nodes      []*proto.ServiceInstance `json:"nodes"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ServiceInstanceEdge             `json:"edges"`
+	Nodes      []*quartermasterpb.ServiceInstance `json:"nodes"`
+	PageInfo   *PageInfo                          `json:"pageInfo"`
+	TotalCount int                                `json:"totalCount"`
 }
 
 type SetMediaRetentionPolicyInput struct {
@@ -1755,21 +1761,21 @@ type SetStreamRetentionOverridesInput struct {
 }
 
 type SigningKeyEdge struct {
-	Cursor string            `json:"cursor"`
-	Node   *proto.SigningKey `json:"node"`
+	Cursor string                  `json:"cursor"`
+	Node   *commodorepb.SigningKey `json:"node"`
 }
 
 type SigningKeysConnection struct {
-	Edges      []*SigningKeyEdge   `json:"edges"`
-	Nodes      []*proto.SigningKey `json:"nodes"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
+	Edges      []*SigningKeyEdge         `json:"edges"`
+	Nodes      []*commodorepb.SigningKey `json:"nodes"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
 }
 
 type SkipperReportsConnection struct {
-	Nodes       []*proto.SkipperReport `json:"nodes"`
-	TotalCount  int                    `json:"totalCount"`
-	UnreadCount int                    `json:"unreadCount"`
+	Nodes       []*skipperpb.SkipperReport `json:"nodes"`
+	TotalCount  int                        `json:"totalCount"`
+	UnreadCount int                        `json:"unreadCount"`
 }
 
 type StorageArtifact struct {
@@ -1829,71 +1835,71 @@ type StorageCostProjection struct {
 }
 
 type StorageEventEdge struct {
-	Cursor string              `json:"cursor"`
-	Node   *proto.StorageEvent `json:"node"`
+	Cursor string                    `json:"cursor"`
+	Node   *periscopepb.StorageEvent `json:"node"`
 }
 
 type StorageEventsConnection struct {
-	Edges      []*StorageEventEdge   `json:"edges"`
-	Nodes      []*proto.StorageEvent `json:"nodes"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
-}
-
-type StorageUsageConnection struct {
-	Edges      []*StorageUsageEdge         `json:"edges"`
-	Nodes      []*proto.StorageUsageRecord `json:"nodes"`
+	Edges      []*StorageEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.StorageEvent `json:"nodes"`
 	PageInfo   *PageInfo                   `json:"pageInfo"`
 	TotalCount int                         `json:"totalCount"`
 }
 
+type StorageUsageConnection struct {
+	Edges      []*StorageUsageEdge               `json:"edges"`
+	Nodes      []*periscopepb.StorageUsageRecord `json:"nodes"`
+	PageInfo   *PageInfo                         `json:"pageInfo"`
+	TotalCount int                               `json:"totalCount"`
+}
+
 type StorageUsageEdge struct {
-	Cursor string                    `json:"cursor"`
-	Node   *proto.StorageUsageRecord `json:"node"`
+	Cursor string                          `json:"cursor"`
+	Node   *periscopepb.StorageUsageRecord `json:"node"`
 }
 
 type StreamAnalyticsDailyConnection struct {
-	Edges      []*StreamAnalyticsDailyEdge   `json:"edges"`
-	Nodes      []*proto.StreamAnalyticsDaily `json:"nodes"`
-	PageInfo   *PageInfo                     `json:"pageInfo"`
-	TotalCount int                           `json:"totalCount"`
+	Edges      []*StreamAnalyticsDailyEdge         `json:"edges"`
+	Nodes      []*periscopepb.StreamAnalyticsDaily `json:"nodes"`
+	PageInfo   *PageInfo                           `json:"pageInfo"`
+	TotalCount int                                 `json:"totalCount"`
 }
 
 type StreamAnalyticsDailyEdge struct {
-	Cursor string                      `json:"cursor"`
-	Node   *proto.StreamAnalyticsDaily `json:"node"`
+	Cursor string                            `json:"cursor"`
+	Node   *periscopepb.StreamAnalyticsDaily `json:"node"`
 }
 
 // Connection for paginated stream analytics summaries.
 // Returns pre-aggregated summaries for multiple streams with share percentages.
 type StreamAnalyticsSummaryConnection struct {
-	Edges      []*StreamAnalyticsSummaryEdge   `json:"edges"`
-	Nodes      []*proto.StreamAnalyticsSummary `json:"nodes"`
-	PageInfo   *PageInfo                       `json:"pageInfo"`
-	TotalCount int                             `json:"totalCount"`
+	Edges      []*StreamAnalyticsSummaryEdge         `json:"edges"`
+	Nodes      []*periscopepb.StreamAnalyticsSummary `json:"nodes"`
+	PageInfo   *PageInfo                             `json:"pageInfo"`
+	TotalCount int                                   `json:"totalCount"`
 }
 
 // Edge for StreamAnalyticsSummary connection.
 type StreamAnalyticsSummaryEdge struct {
-	Cursor string                        `json:"cursor"`
-	Node   *proto.StreamAnalyticsSummary `json:"node"`
+	Cursor string                              `json:"cursor"`
+	Node   *periscopepb.StreamAnalyticsSummary `json:"node"`
 }
 
 type StreamConnectionHourlyConnection struct {
-	Edges      []*StreamConnectionHourlyEdge   `json:"edges"`
-	Nodes      []*proto.StreamConnectionHourly `json:"nodes"`
-	PageInfo   *PageInfo                       `json:"pageInfo"`
-	TotalCount int                             `json:"totalCount"`
+	Edges      []*StreamConnectionHourlyEdge         `json:"edges"`
+	Nodes      []*periscopepb.StreamConnectionHourly `json:"nodes"`
+	PageInfo   *PageInfo                             `json:"pageInfo"`
+	TotalCount int                                   `json:"totalCount"`
 }
 
 type StreamConnectionHourlyEdge struct {
-	Cursor string                        `json:"cursor"`
-	Node   *proto.StreamConnectionHourly `json:"node"`
+	Cursor string                              `json:"cursor"`
+	Node   *periscopepb.StreamConnectionHourly `json:"node"`
 }
 
 type StreamEdge struct {
-	Cursor string        `json:"cursor"`
-	Node   *proto.Stream `json:"node"`
+	Cursor string              `json:"cursor"`
+	Node   *commodorepb.Stream `json:"node"`
 }
 
 type StreamEventEdge struct {
@@ -1909,39 +1915,39 @@ type StreamEventsConnection struct {
 }
 
 type StreamHealth5mConnection struct {
-	Edges      []*StreamHealth5mEdge   `json:"edges"`
-	Nodes      []*proto.StreamHealth5M `json:"nodes"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*StreamHealth5mEdge         `json:"edges"`
+	Nodes      []*periscopepb.StreamHealth5M `json:"nodes"`
+	PageInfo   *PageInfo                     `json:"pageInfo"`
+	TotalCount int                           `json:"totalCount"`
 }
 
 type StreamHealth5mEdge struct {
-	Cursor string                `json:"cursor"`
-	Node   *proto.StreamHealth5M `json:"node"`
+	Cursor string                      `json:"cursor"`
+	Node   *periscopepb.StreamHealth5M `json:"node"`
 }
 
 type StreamHealthMetricEdge struct {
-	Cursor string                    `json:"cursor"`
-	Node   *proto.StreamHealthMetric `json:"node"`
+	Cursor string                          `json:"cursor"`
+	Node   *periscopepb.StreamHealthMetric `json:"node"`
 }
 
 type StreamHealthMetricsConnection struct {
-	Edges      []*StreamHealthMetricEdge   `json:"edges"`
-	Nodes      []*proto.StreamHealthMetric `json:"nodes"`
-	PageInfo   *PageInfo                   `json:"pageInfo"`
-	TotalCount int                         `json:"totalCount"`
+	Edges      []*StreamHealthMetricEdge         `json:"edges"`
+	Nodes      []*periscopepb.StreamHealthMetric `json:"nodes"`
+	PageInfo   *PageInfo                         `json:"pageInfo"`
+	TotalCount int                               `json:"totalCount"`
 }
 
 type StreamKeyEdge struct {
-	Cursor string           `json:"cursor"`
-	Node   *proto.StreamKey `json:"node"`
+	Cursor string                 `json:"cursor"`
+	Node   *commodorepb.StreamKey `json:"node"`
 }
 
 type StreamKeysConnection struct {
-	Edges      []*StreamKeyEdge   `json:"edges"`
-	Nodes      []*proto.StreamKey `json:"nodes"`
-	PageInfo   *PageInfo          `json:"pageInfo"`
-	TotalCount int                `json:"totalCount"`
+	Edges      []*StreamKeyEdge         `json:"edges"`
+	Nodes      []*commodorepb.StreamKey `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 // Per-stream retention overrides for DVR and clips. VOD uploads aren't
@@ -1987,10 +1993,10 @@ type StreamingConfig struct {
 }
 
 type StreamsConnection struct {
-	Edges      []*StreamEdge   `json:"edges"`
-	Nodes      []*proto.Stream `json:"nodes"`
-	PageInfo   *PageInfo       `json:"pageInfo"`
-	TotalCount int             `json:"totalCount"`
+	Edges      []*StreamEdge         `json:"edges"`
+	Nodes      []*commodorepb.Stream `json:"nodes"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
 }
 
 // Stripe Billing Portal Session - redirect URL for subscription management.
@@ -2018,15 +2024,15 @@ type Subscription struct {
 }
 
 type TenantAnalyticsDailyConnection struct {
-	Edges      []*TenantAnalyticsDailyEdge   `json:"edges"`
-	Nodes      []*proto.TenantAnalyticsDaily `json:"nodes"`
-	PageInfo   *PageInfo                     `json:"pageInfo"`
-	TotalCount int                           `json:"totalCount"`
+	Edges      []*TenantAnalyticsDailyEdge         `json:"edges"`
+	Nodes      []*periscopepb.TenantAnalyticsDaily `json:"nodes"`
+	PageInfo   *PageInfo                           `json:"pageInfo"`
+	TotalCount int                                 `json:"totalCount"`
 }
 
 type TenantAnalyticsDailyEdge struct {
-	Cursor string                      `json:"cursor"`
-	Node   *proto.TenantAnalyticsDaily `json:"node"`
+	Cursor string                            `json:"cursor"`
+	Node   *periscopepb.TenantAnalyticsDaily `json:"node"`
 }
 
 type TenantUsage struct {
@@ -2036,7 +2042,7 @@ type TenantUsage struct {
 	TotalCost     float64       `json:"totalCost"`
 	Currency      string        `json:"currency"`
 	// Rated line items for the period (rating engine output).
-	LineItems []*proto.LineItem `json:"lineItems"`
+	LineItems []*purserpb.LineItem `json:"lineItems"`
 	// Decimal-string base subscription portion.
 	BaseAmount string `json:"baseAmount"`
 	// Decimal-string metered portion.
@@ -2078,15 +2084,15 @@ type TimeRangeInput struct {
 }
 
 type TrackListEventEdge struct {
-	Cursor string                `json:"cursor"`
-	Node   *proto.TrackListEvent `json:"node"`
+	Cursor string                      `json:"cursor"`
+	Node   *periscopepb.TrackListEvent `json:"node"`
 }
 
 type TrackListEventsConnection struct {
-	Edges      []*TrackListEventEdge   `json:"edges"`
-	Nodes      []*proto.TrackListEvent `json:"nodes"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*TrackListEventEdge         `json:"edges"`
+	Nodes      []*periscopepb.TrackListEvent `json:"nodes"`
+	PageInfo   *PageInfo                     `json:"pageInfo"`
+	TotalCount int                           `json:"totalCount"`
 }
 
 // Input for updating billing details.
@@ -2104,9 +2110,9 @@ type UpdateBillingDetailsInput struct {
 // Input for updating cluster marketplace settings.
 type UpdateClusterMarketplaceInput struct {
 	// Marketplace visibility (PUBLIC, UNLISTED, PRIVATE).
-	Visibility *proto.ClusterVisibility `json:"visibility,omitempty"`
+	Visibility *quartermasterpb.ClusterVisibility `json:"visibility,omitempty"`
 	// Pricing model for subscriptions.
-	PricingModel *proto.ClusterPricingModel `json:"pricingModel,omitempty"`
+	PricingModel *quartermasterpb.ClusterPricingModel `json:"pricingModel,omitempty"`
 	// Monthly subscription price in cents.
 	MonthlyPriceCents *int `json:"monthlyPriceCents,omitempty"`
 	// Whether access requires owner approval.
@@ -2145,7 +2151,7 @@ type UpdateStreamInput struct {
 	// Ingest model cannot be changed after create; sending a different value returns a validation error.
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Update the pull-source configuration for an existing pull stream.
-	PullSource *proto.PullSourceInput `json:"pullSource,omitempty"`
+	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
 	// Historical chapter rotation mode. Snapshotted onto the DVR artifact
 	// at StartDVR; changes take effect on the next recording, not in-flight.
 	// NONE means rolling DVR playback only: recording still runs, but no
@@ -2184,15 +2190,15 @@ type UsageEntry struct {
 }
 
 type UsageRecordEdge struct {
-	Cursor string             `json:"cursor"`
-	Node   *proto.UsageRecord `json:"node"`
+	Cursor string                `json:"cursor"`
+	Node   *purserpb.UsageRecord `json:"node"`
 }
 
 type UsageRecordsConnection struct {
-	Edges      []*UsageRecordEdge   `json:"edges"`
-	Nodes      []*proto.UsageRecord `json:"nodes"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*UsageRecordEdge      `json:"edges"`
+	Nodes      []*purserpb.UsageRecord `json:"nodes"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
 }
 
 type ValidationError struct {
@@ -2285,63 +2291,63 @@ func (ValidationError) IsCreateConversationResult() {}
 func (ValidationError) IsSendMessageResult() {}
 
 type ViewerCountBucketEdge struct {
-	Cursor string                   `json:"cursor"`
-	Node   *proto.ViewerCountBucket `json:"node"`
+	Cursor string                         `json:"cursor"`
+	Node   *periscopepb.ViewerCountBucket `json:"node"`
 }
 
 type ViewerGeoHourlyConnection struct {
-	Edges      []*ViewerGeoHourlyEdge   `json:"edges"`
-	Nodes      []*proto.ViewerGeoHourly `json:"nodes"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ViewerGeoHourlyEdge         `json:"edges"`
+	Nodes      []*periscopepb.ViewerGeoHourly `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
 type ViewerGeoHourlyEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.ViewerGeoHourly `json:"node"`
+	Cursor string                       `json:"cursor"`
+	Node   *periscopepb.ViewerGeoHourly `json:"node"`
 }
 
 type ViewerGeographicEdge struct {
-	Cursor string                 `json:"cursor"`
-	Node   *proto.ConnectionEvent `json:"node"`
+	Cursor string                       `json:"cursor"`
+	Node   *periscopepb.ConnectionEvent `json:"node"`
 }
 
 type ViewerGeographicsConnection struct {
-	Edges      []*ViewerGeographicEdge  `json:"edges"`
-	Nodes      []*proto.ConnectionEvent `json:"nodes"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ViewerGeographicEdge        `json:"edges"`
+	Nodes      []*periscopepb.ConnectionEvent `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
 type ViewerHoursHourlyConnection struct {
-	Edges      []*ViewerHoursHourlyEdge   `json:"edges"`
-	Nodes      []*proto.ViewerHoursHourly `json:"nodes"`
-	PageInfo   *PageInfo                  `json:"pageInfo"`
-	TotalCount int                        `json:"totalCount"`
+	Edges      []*ViewerHoursHourlyEdge         `json:"edges"`
+	Nodes      []*periscopepb.ViewerHoursHourly `json:"nodes"`
+	PageInfo   *PageInfo                        `json:"pageInfo"`
+	TotalCount int                              `json:"totalCount"`
 }
 
 type ViewerHoursHourlyEdge struct {
-	Cursor string                   `json:"cursor"`
-	Node   *proto.ViewerHoursHourly `json:"node"`
+	Cursor string                         `json:"cursor"`
+	Node   *periscopepb.ViewerHoursHourly `json:"node"`
 }
 
 type ViewerSessionEdge struct {
-	Cursor string               `json:"cursor"`
-	Node   *proto.ViewerSession `json:"node"`
+	Cursor string                     `json:"cursor"`
+	Node   *periscopepb.ViewerSession `json:"node"`
 }
 
 type ViewerSessionsConnection struct {
-	Edges      []*ViewerSessionEdge   `json:"edges"`
-	Nodes      []*proto.ViewerSession `json:"nodes"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ViewerSessionEdge         `json:"edges"`
+	Nodes      []*periscopepb.ViewerSession `json:"nodes"`
+	PageInfo   *PageInfo                    `json:"pageInfo"`
+	TotalCount int                          `json:"totalCount"`
 }
 
 type ViewerTimeSeriesConnection struct {
-	Edges      []*ViewerCountBucketEdge   `json:"edges"`
-	Nodes      []*proto.ViewerCountBucket `json:"nodes"`
-	PageInfo   *PageInfo                  `json:"pageInfo"`
-	TotalCount int                        `json:"totalCount"`
+	Edges      []*ViewerCountBucketEdge         `json:"edges"`
+	Nodes      []*periscopepb.ViewerCountBucket `json:"nodes"`
+	PageInfo   *PageInfo                        `json:"pageInfo"`
+	TotalCount int                              `json:"totalCount"`
 }
 
 // A Video-on-Demand asset uploaded by the tenant.
@@ -2403,7 +2409,7 @@ type VodAsset struct {
 	PlaybackPolicy *PlaybackPolicy `json:"playbackPolicy,omitempty"`
 	// Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails.
 	// Null until Foghorn confirms the thumbnail upload.
-	ThumbnailAssets *proto.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
+	ThumbnailAssets *sharedpb.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
 	// Resolved retention horizon with the source of the decision (per-asset
 	// override → per-stream override → tenant default → tier entitlement).
 	// Null while the asset's retention_until column is unset (infinite).
@@ -2454,7 +2460,7 @@ type VodUploadSession struct {
 	// Recommended part size in bytes.
 	PartSize float64 `json:"partSize"`
 	// Presigned URLs for each part.
-	Parts []*proto.VodUploadPart `json:"parts"`
+	Parts []*sharedpb.VodUploadPart `json:"parts"`
 	// When presigned URLs expire (typically 2 hours).
 	ExpiresAt time.Time `json:"expiresAt"`
 }
@@ -2474,7 +2480,7 @@ type VodUploadStatus struct {
 	// Asset retention deadline (informational; distinct from upload-session expiry).
 	RetentionUntil *time.Time `json:"retentionUntil,omitempty"`
 	// Parts S3 has already received.
-	UploadedParts []*proto.VodUploadedPart `json:"uploadedParts"`
+	UploadedParts []*sharedpb.VodUploadedPart `json:"uploadedParts"`
 	// Part numbers still missing for completion (1-indexed).
 	MissingParts []int `json:"missingParts"`
 	// Last error code emitted by the pipeline, if any.

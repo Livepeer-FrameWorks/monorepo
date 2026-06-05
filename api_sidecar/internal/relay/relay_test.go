@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/admission"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // fakeAdmitter returns whatever decision the test wants.
@@ -46,7 +46,7 @@ func (f *fakeResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 	if r, ok := f.out[key]; ok {
 		return r, nil
 	}
-	return &ResolveResult{State: pb.AssetState_ASSET_STATE_SOURCE_MISSING}, nil
+	return &ResolveResult{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}, nil
 }
 
 type fakeFreeze struct {
@@ -239,7 +239,7 @@ func TestServeColdFileWritesBlocksToDisk(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/object",
 		ExpectedSizeBytes: uint64(len(body)),
 		ContentType:       "video/x-matroska",
@@ -301,7 +301,7 @@ func TestServeColdFilePropagatesUpstreamNotFoundBeforeMediaHeaders(t *testing.T)
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/object",
 		ExpectedSizeBytes: 1024,
 		ContentType:       "video/x-matroska",
@@ -350,7 +350,7 @@ func TestServeColdMemoryOnlyDoesNotWriteDisk(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/object",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -540,7 +540,7 @@ func TestUploadDtshGetUsesGenericSidecarResolve(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
-		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:            ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		DtshPresignedGet: up.URL,
 	}}}
 	s := newTestServer(t, dir, admission.CacheToDisk, resolver, nil)
@@ -621,7 +621,7 @@ func TestClipDtshGetDoesNotUseFlatSidecarForStreamScopedClip(t *testing.T) {
 
 	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{
 		out: map[string]*ResolveResult{"clip/" + hash: {
-			State:         pb.AssetState_ASSET_STATE_PLAYABLE,
+			State:         ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 			URLTTLSeconds: 60,
 		}},
 	}, nil)
@@ -753,7 +753,7 @@ func TestDtshGetCold404ForwardsToMistGeneration(t *testing.T) {
 	file := hash + ".mkv.dtsh"
 	// Resolver returns playable media but no dtsh sidecar.
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: "http://unused",
 		URLTTLSeconds:     60,
 	}
@@ -788,7 +788,7 @@ func TestDtshGetLocalMediaStillChecksResolvedSidecar(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
-		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:            ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		DtshPresignedGet: up.URL,
 		URLTTLSeconds:    60,
 	}}}
@@ -824,7 +824,7 @@ func TestDtshGetRejectsInvalidResolvedSidecar(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
-		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:            ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		DtshPresignedGet: up.URL,
 		URLTTLSeconds:    60,
 	}}}
@@ -878,7 +878,7 @@ func TestDtshGetUpstreamErrorReturns404GenerationSignal(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"vod/" + hash: {
-		State:            pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:            ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		DtshPresignedGet: up.URL,
 		URLTTLSeconds:    60,
 	}}}
@@ -909,7 +909,7 @@ func TestColdHEADDoesNotTriggerFullDownload(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -970,7 +970,7 @@ func TestColdHEADUsesRangeGetWhenUpstreamRejectsHEAD(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		URLTTLSeconds:     60,
 	}
@@ -1026,7 +1026,7 @@ func TestUploadRangedGETRetriesFullOn416(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL,
 	}}}
 	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
@@ -1073,7 +1073,7 @@ func TestUploadIgnoresZeroByteLocalPlaceholder(t *testing.T) {
 	defer up.Close()
 
 	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL,
 	}}}
 	s := newTestServer(t, dir, admission.CacheMemoryOnly, resolver, nil)
@@ -1115,7 +1115,7 @@ func TestColdRangedGETServesAndCachesBlock(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -1220,7 +1220,7 @@ func TestBlockServeRangeFromWarmBlocks(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -1315,7 +1315,7 @@ func TestColdRangedGETStreamsFirstByteBeforeFullBlock(t *testing.T) {
 	defer up.Close()
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -1383,7 +1383,7 @@ func TestColdFetchDiskWriteFailureKeepsServingClient(t *testing.T) {
 	}
 
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,
@@ -1434,7 +1434,7 @@ func TestBlockCacheInvalidatesOnAssetHashMismatch(t *testing.T) {
 	defer up.Close()
 	newHash := "abc"
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/o",
 		ExpectedSizeBytes: uint64(len(body)),
 		URLTTLSeconds:     60,

@@ -2,6 +2,7 @@ package config
 
 import (
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
@@ -20,7 +21,7 @@ func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
 	t.Setenv("HELMSMAN_TLS_KEY_PATH", keyPath)
 
 	m := &Manager{logger: logging.NewLogger()}
-	if !m.applyTLSBundle(&pb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
+	if !m.applyTLSBundle(&ipcpb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
 		t.Fatal("first applyTLSBundle returned false")
 	}
 	if got := readFileString(t, certPath); got != "cert-a" {
@@ -39,14 +40,14 @@ func TestApplyTLSBundleWritesReplaceableFiles(t *testing.T) {
 	if err := os.Chmod(keyPath, 0o600); err != nil {
 		t.Fatalf("chmod stale key mode: %v", err)
 	}
-	if !m.applyTLSBundle(&pb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
+	if !m.applyTLSBundle(&ipcpb.TLSCertBundle{CertPem: "cert-a", KeyPem: "key-a", Domain: "*.edge.example"}) {
 		t.Fatal("metadata repair applyTLSBundle returned false")
 	}
 	if mode := fileMode(t, keyPath); mode != 0o640 {
 		t.Fatalf("repaired key mode = %o, want 0640", mode)
 	}
 
-	if !m.applyTLSBundle(&pb.TLSCertBundle{CertPem: "cert-b", KeyPem: "key-b", Domain: "*.edge.example"}) {
+	if !m.applyTLSBundle(&ipcpb.TLSCertBundle{CertPem: "cert-b", KeyPem: "key-b", Domain: "*.edge.example"}) {
 		t.Fatal("rotated applyTLSBundle returned false")
 	}
 	if got := readFileString(t, certPath); got != "cert-b" {
@@ -75,12 +76,21 @@ func fileMode(t *testing.T, path string) os.FileMode {
 	return info.Mode().Perm()
 }
 
+func fullFileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Mode()
+}
+
 func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HELMSMAN_TLS_BUNDLE_DIR", dir)
 
 	m := &Manager{logger: logging.NewLogger()}
-	bundles := []*pb.TLSCertBundle{
+	bundles := []*ipcpb.TLSCertBundle{
 		{
 			BundleId:      "cluster:media-us-1",
 			CertPem:       "cluster-cert",
@@ -132,6 +142,9 @@ func TestApplyTLSBundlesWritesPerBundleFiles(t *testing.T) {
 	if mode := fileMode(t, keyPath); mode != 0o640 {
 		t.Fatalf("repaired bundle key mode = %o, want 0640", mode)
 	}
+	if mode := fullFileMode(t, dir); mode&fs.ModeSetgid == 0 || mode.Perm() != 0o770 {
+		t.Fatalf("bundle dir mode = %s (%o), want setgid 0770", mode, mode.Perm())
+	}
 }
 
 func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
@@ -141,7 +154,7 @@ func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
 	m := &Manager{logger: logging.NewLogger()}
 
 	// Seed two bundles.
-	first := []*pb.TLSCertBundle{
+	first := []*ipcpb.TLSCertBundle{
 		{BundleId: "cluster:media-us-1", CertPem: "c1", KeyPem: "k1", SiteAddresses: []string{"*.media-us-1.frameworks.network"}},
 		{BundleId: "tenant:acme", CertPem: "c2", KeyPem: "k2", SiteAddresses: []string{"acme.cdn.frameworks.network"}},
 	}
@@ -151,7 +164,7 @@ func TestApplyTLSBundlesRemovesStaleFiles(t *testing.T) {
 	}
 
 	// Re-apply only the cluster bundle — tenant files should be cleaned up.
-	second := []*pb.TLSCertBundle{first[0]}
+	second := []*ipcpb.TLSCertBundle{first[0]}
 	m.applyTLSBundles(second)
 	if _, err := os.Stat(filepath.Join(dir, "tenant_acme.crt")); !os.IsNotExist(err) {
 		t.Fatalf("expected tenant cert removed, got err=%v", err)
@@ -212,11 +225,11 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 }
 
 func TestComposeCaddyBundlesKeepsEdgeDomainWhenClusterBundleMissing(t *testing.T) {
-	bundles := composeCaddyBundles(&pb.ConfigSeed{
-		Site: &pb.SiteConfig{
+	bundles := composeCaddyBundles(&ipcpb.ConfigSeed{
+		Site: &ipcpb.SiteConfig{
 			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
 		},
-		TlsBundles: []*pb.TLSCertBundle{
+		TlsBundles: []*ipcpb.TLSCertBundle{
 			{
 				BundleId:      "platform:edge-multi",
 				SiteAddresses: []string{"edge.frameworks.network", "edge-ingest.frameworks.network"},
@@ -236,11 +249,11 @@ func TestComposeCaddyBundlesKeepsEdgeDomainWhenClusterBundleMissing(t *testing.T
 }
 
 func TestComposeCaddyBundlesDoesNotDuplicateCoveredEdgeDomain(t *testing.T) {
-	bundles := composeCaddyBundles(&pb.ConfigSeed{
-		Site: &pb.SiteConfig{
+	bundles := composeCaddyBundles(&ipcpb.ConfigSeed{
+		Site: &ipcpb.SiteConfig{
 			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
 		},
-		TlsBundles: []*pb.TLSCertBundle{
+		TlsBundles: []*ipcpb.TLSCertBundle{
 			{
 				BundleId:      "cluster:media-eu-1",
 				SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
@@ -333,11 +346,11 @@ func TestActivateCaddyReloadsEvenWhenRenderedConfigHashIsUnchanged(t *testing.T)
 	defer srv.Close()
 	t.Setenv("CADDY_ADMIN_URL", srv.URL)
 
-	seed := &pb.ConfigSeed{
-		Site: &pb.SiteConfig{
+	seed := &ipcpb.ConfigSeed{
+		Site: &ipcpb.SiteConfig{
 			EdgeDomain: "edge-eu-1.media-eu-1.frameworks.network",
 		},
-		TlsBundles: []*pb.TLSCertBundle{{
+		TlsBundles: []*ipcpb.TLSCertBundle{{
 			BundleId:      "cluster:media-eu-1",
 			SiteAddresses: []string{"*.media-eu-1.frameworks.network"},
 		}},

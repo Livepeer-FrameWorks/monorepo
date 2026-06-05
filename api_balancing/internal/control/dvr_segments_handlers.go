@@ -10,7 +10,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -34,9 +34,9 @@ const presignTTL = 15 * time.Minute
 // inserts a 'pending' ledger row (Foghorn-assigned sequence), mints a
 // presigned PUT URL, and replies with the URL + s3_key + sequence.
 func processRecordDVRSegment(
-	req *pb.RecordDVRSegmentRequest,
+	req *ipcpb.RecordDVRSegmentRequest,
 	nodeID string,
-	stream pb.HelmsmanControl_ConnectServer,
+	stream ipcpb.HelmsmanControl_ConnectServer,
 	logger logging.Logger,
 ) {
 	requestID := req.GetRequestId()
@@ -44,7 +44,7 @@ func processRecordDVRSegment(
 	segmentName := req.GetSegmentName()
 
 	if dvrHash == "" || segmentName == "" {
-		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+		sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 			RequestId:   requestID,
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -59,7 +59,7 @@ func processRecordDVRSegment(
 
 	tenantID, streamName, ok := resolveDVRTenantAndStream(ctx, dvrHash, logger)
 	if !ok {
-		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+		sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 			RequestId:   requestID,
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -87,7 +87,7 @@ func processRecordDVRSegment(
 	}
 
 	if s3Client == nil {
-		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+		sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 			RequestId:   requestID,
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -134,7 +134,7 @@ func processRecordDVRSegment(
 				"node_id":      nodeID,
 			}).Error("Failed to insert DVR segment ledger row")
 		}
-		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+		sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 			RequestId:   requestID,
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -151,7 +151,7 @@ func processRecordDVRSegment(
 			"dvr_hash":     dvrHash,
 			"segment_name": segmentName,
 		}).Error("Failed to generate presigned PUT URL for DVR segment")
-		sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+		sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 			RequestId:   requestID,
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -161,7 +161,7 @@ func processRecordDVRSegment(
 		return
 	}
 
-	sendRecordDVRSegmentResponse(stream, &pb.RecordDVRSegmentResponse{
+	sendRecordDVRSegmentResponse(stream, &ipcpb.RecordDVRSegmentResponse{
 		RequestId:        requestID,
 		DvrHash:          dvrHash,
 		SegmentName:      segmentName,
@@ -175,7 +175,7 @@ func processRecordDVRSegment(
 
 // processMarkDVRSegmentUploaded transitions a ledger row to 'uploaded' after
 // the sidecar's S3 PUT confirmed.
-func processMarkDVRSegmentUploaded(req *pb.MarkDVRSegmentUploaded, nodeID string, logger logging.Logger) {
+func processMarkDVRSegmentUploaded(req *ipcpb.MarkDVRSegmentUploaded, nodeID string, logger logging.Logger) {
 	dvrHash := req.GetDvrHash()
 	segmentName := req.GetSegmentName()
 	if dvrHash == "" || segmentName == "" {
@@ -203,7 +203,7 @@ func processMarkDVRSegmentUploaded(req *pb.MarkDVRSegmentUploaded, nodeID string
 // distinguishes safe local cleanup (deleted_local; chapter finalization
 // recovers from S3) from data loss (lost_local; chapters overlapping the
 // row transition to failed_source_missing).
-func processDVRSegmentDropped(req *pb.DVRSegmentDropped, nodeID string, logger logging.Logger) {
+func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logger logging.Logger) {
 	dvrHash := req.GetDvrHash()
 	segmentName := req.GetSegmentName()
 	if dvrHash == "" || segmentName == "" {
@@ -245,15 +245,15 @@ func processDVRSegmentDropped(req *pb.DVRSegmentDropped, nodeID string, logger l
 // processEvictableSegmentsRequest answers an authoritative "which segments
 // are safe to evict" query during sidecar storage-pressure passes.
 func processEvictableSegmentsRequest(
-	req *pb.EvictableSegmentsRequest,
+	req *ipcpb.EvictableSegmentsRequest,
 	nodeID string,
-	stream pb.HelmsmanControl_ConnectServer,
+	stream ipcpb.HelmsmanControl_ConnectServer,
 	logger logging.Logger,
 ) {
 	requestID := req.GetRequestId()
 	dvrHash := req.GetDvrHash()
 	if dvrHash == "" {
-		sendEvictableSegmentsResponse(stream, &pb.EvictableSegmentsResponse{
+		sendEvictableSegmentsResponse(stream, &ipcpb.EvictableSegmentsResponse{
 			RequestId: requestID,
 			DvrHash:   dvrHash,
 		}, logger)
@@ -278,13 +278,13 @@ func processEvictableSegmentsRequest(
 			"dvr_hash": dvrHash,
 			"node_id":  nodeID,
 		}).Error("Failed to list evictable DVR segments")
-		sendEvictableSegmentsResponse(stream, &pb.EvictableSegmentsResponse{
+		sendEvictableSegmentsResponse(stream, &ipcpb.EvictableSegmentsResponse{
 			RequestId: requestID,
 			DvrHash:   dvrHash,
 		}, logger)
 		return
 	}
-	sendEvictableSegmentsResponse(stream, &pb.EvictableSegmentsResponse{
+	sendEvictableSegmentsResponse(stream, &ipcpb.EvictableSegmentsResponse{
 		RequestId:    requestID,
 		DvrHash:      dvrHash,
 		SegmentNames: names,
@@ -356,10 +356,10 @@ func dvrEffectiveWindowSeconds(ctx context.Context, dvrHash string) int {
 	return int(window.Int32)
 }
 
-func sendRecordDVRSegmentResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.RecordDVRSegmentResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendRecordDVRSegmentResponse(stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.RecordDVRSegmentResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_RecordDvrSegmentResponse{RecordDvrSegmentResponse: resp},
+		Payload: &ipcpb.ControlMessage_RecordDvrSegmentResponse{RecordDvrSegmentResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).WithFields(logging.Fields{
@@ -378,16 +378,16 @@ func sendRecordDVRSegmentResponse(stream pb.HelmsmanControl_ConnectServer, resp 
 // as "this local file isn't tracked; treat as orphan and consider for
 // cleanup").
 func processRestoreLocalSegmentIndexRequest(
-	req *pb.RestoreLocalSegmentIndexRequest,
+	req *ipcpb.RestoreLocalSegmentIndexRequest,
 	nodeID string,
-	stream pb.HelmsmanControl_ConnectServer,
+	stream ipcpb.HelmsmanControl_ConnectServer,
 	logger logging.Logger,
 ) {
 	requestID := req.GetRequestId()
 	dvrHash := req.GetDvrHash()
 	names := req.GetSegmentNames()
 
-	resp := &pb.RestoreLocalSegmentIndexResponse{
+	resp := &ipcpb.RestoreLocalSegmentIndexResponse{
 		RequestId: requestID,
 		DvrHash:   dvrHash,
 	}
@@ -411,13 +411,13 @@ func processRestoreLocalSegmentIndexRequest(
 		return
 	}
 
-	resp.Segments = make([]*pb.DVRSegmentRef, 0, len(rows))
+	resp.Segments = make([]*ipcpb.DVRSegmentRef, 0, len(rows))
 	for _, r := range rows {
 		var size int64
 		if r.SizeBytes.Valid {
 			size = r.SizeBytes.Int64
 		}
-		resp.Segments = append(resp.Segments, &pb.DVRSegmentRef{
+		resp.Segments = append(resp.Segments, &ipcpb.DVRSegmentRef{
 			SegmentName:  r.SegmentName,
 			S3Key:        r.S3Key,
 			MediaStartMs: r.MediaStartMs,
@@ -436,10 +436,10 @@ func processRestoreLocalSegmentIndexRequest(
 	sendRestoreLocalSegmentIndexResponse(stream, resp, logger)
 }
 
-func sendRestoreLocalSegmentIndexResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.RestoreLocalSegmentIndexResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendRestoreLocalSegmentIndexResponse(stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.RestoreLocalSegmentIndexResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_RestoreLocalSegmentIndexResponse{RestoreLocalSegmentIndexResponse: resp},
+		Payload: &ipcpb.ControlMessage_RestoreLocalSegmentIndexResponse{RestoreLocalSegmentIndexResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).WithField("dvr_hash", resp.GetDvrHash()).Error("Failed to send RestoreLocalSegmentIndexResponse")
@@ -450,7 +450,7 @@ func sendRestoreLocalSegmentIndexResponse(stream pb.HelmsmanControl_ConnectServe
 // node_id. Best-effort: if the node isn't connected the call returns
 // ErrNotConnected and the caller should treat the segment as still pending
 // (FinalizeDVR will time it out into lost_local).
-func SendRetryDVRSegmentUpload(nodeID string, req *pb.RetryDVRSegmentUpload) error {
+func SendRetryDVRSegmentUpload(nodeID string, req *ipcpb.RetryDVRSegmentUpload) error {
 	if nodeID == "" {
 		return ErrNotConnected
 	}
@@ -460,9 +460,9 @@ func SendRetryDVRSegmentUpload(nodeID string, req *pb.RetryDVRSegmentUpload) err
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_RetryDvrSegmentUpload{RetryDvrSegmentUpload: req},
+		Payload: &ipcpb.ControlMessage_RetryDvrSegmentUpload{RetryDvrSegmentUpload: req},
 	}
 	return c.stream.Send(msg)
 }
@@ -470,7 +470,7 @@ func SendRetryDVRSegmentUpload(nodeID string, req *pb.RetryDVRSegmentUpload) err
 // SendReclaimDVRSegment asks the recording-origin Helmsman to delete
 // local TS segment files after every overlapping chapter has reached
 // state='frozen'. Idempotent on the sidecar side.
-func SendReclaimDVRSegment(nodeID string, req *pb.ReclaimDVRSegment) error {
+func SendReclaimDVRSegment(nodeID string, req *ipcpb.ReclaimDVRSegment) error {
 	if nodeID == "" {
 		return ErrNotConnected
 	}
@@ -480,17 +480,17 @@ func SendReclaimDVRSegment(nodeID string, req *pb.ReclaimDVRSegment) error {
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_ReclaimDvrSegment{ReclaimDvrSegment: req},
+		Payload: &ipcpb.ControlMessage_ReclaimDvrSegment{ReclaimDvrSegment: req},
 	}
 	return c.stream.Send(msg)
 }
 
-func sendEvictableSegmentsResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.EvictableSegmentsResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendEvictableSegmentsResponse(stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.EvictableSegmentsResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_EvictableSegmentsResponse{EvictableSegmentsResponse: resp},
+		Payload: &ipcpb.ControlMessage_EvictableSegmentsResponse{EvictableSegmentsResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).WithField("dvr_hash", resp.GetDvrHash()).Error("Failed to send EvictableSegmentsResponse")

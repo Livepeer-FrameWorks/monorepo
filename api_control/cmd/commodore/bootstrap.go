@@ -16,7 +16,7 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"gopkg.in/yaml.v3"
@@ -231,7 +231,7 @@ func (r *grpcClusterResolver) MediaClusterCapabilities(ctx context.Context) ([]p
 		after *string
 	)
 	for {
-		resp, err := r.client.ListClusters(ctx, &pb.CursorPaginationRequest{
+		resp, err := r.client.ListClusters(ctx, &commonpb.CursorPaginationRequest{
 			First: 500,
 			After: after,
 		})

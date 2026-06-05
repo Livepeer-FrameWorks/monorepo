@@ -12,7 +12,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
@@ -68,7 +69,7 @@ func TestValidateTimeRangeProto(t *testing.T) {
 	})
 
 	t.Run("zero timestamps default", func(t *testing.T) {
-		rangeProto := &pb.TimeRange{
+		rangeProto := &commonpb.TimeRange{
 			Start: timestamppb.New(time.Time{}),
 			End:   timestamppb.New(time.Time{}),
 		}
@@ -87,7 +88,7 @@ func TestValidateTimeRangeProto(t *testing.T) {
 	t.Run("explicit timestamps", func(t *testing.T) {
 		startTime := time.Now().Add(-2 * time.Hour).UTC()
 		endTime := time.Now().Add(-time.Hour).UTC()
-		rangeProto := &pb.TimeRange{
+		rangeProto := &commonpb.TimeRange{
 			Start: timestamppb.New(startTime),
 			End:   timestamppb.New(endTime),
 		}
@@ -106,7 +107,7 @@ func TestValidateTimeRangeProto(t *testing.T) {
 	t.Run("end before start", func(t *testing.T) {
 		startTime := time.Now().Add(-time.Hour).UTC()
 		endTime := time.Now().Add(-2 * time.Hour).UTC()
-		rangeProto := &pb.TimeRange{
+		rangeProto := &commonpb.TimeRange{
 			Start: timestamppb.New(startTime),
 			End:   timestamppb.New(endTime),
 		}
@@ -187,9 +188,9 @@ func TestGetLiveUsageSummaryPartialFailureFailsClosed(t *testing.T) {
 		liveViewerUsagePattern: errors.New("query failed"),
 	})
 
-	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
+	_, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
@@ -209,9 +210,9 @@ func TestGetLiveUsageSummaryTimeoutFailsClosed(t *testing.T) {
 		"FROM client_qoe_5m": context.DeadlineExceeded,
 	})
 
-	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
+	_, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
@@ -241,9 +242,9 @@ func TestGetLiveUsageSummaryAllQueriesFail(t *testing.T) {
 		"FROM storage_events":          sql.ErrConnDone,
 	})
 
-	_, err := server.GetLiveUsageSummary(context.Background(), &pb.GetLiveUsageSummaryRequest{
+	_, err := server.GetLiveUsageSummary(context.Background(), &periscopepb.GetLiveUsageSummaryRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
@@ -294,12 +295,12 @@ func TestGetNetworkLiveStatsEgressCapacity(t *testing.T) {
 			AddRow("edge-b", int32(1), int32(40)),
 	)
 
-	resp, err := server.GetNetworkLiveStats(context.Background(), &pb.GetNetworkLiveStatsRequest{})
+	resp, err := server.GetNetworkLiveStats(context.Background(), &periscopepb.GetNetworkLiveStatsRequest{})
 	if err != nil {
 		t.Fatalf("GetNetworkLiveStats: %v", err)
 	}
 
-	got := map[string]*pb.NetworkClusterLiveStats{}
+	got := map[string]*periscopepb.NetworkClusterLiveStats{}
 	for _, c := range resp.Clusters {
 		got[c.ClusterId] = c
 	}
@@ -346,9 +347,9 @@ func TestGetGeographicDistributionEmptyKnownGeo(t *testing.T) {
 	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(0), uint64(0)))
 
-	resp, err := server.GetGeographicDistribution(context.Background(), &pb.GetGeographicDistributionRequest{
+	resp, err := server.GetGeographicDistribution(context.Background(), &periscopepb.GetGeographicDistributionRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
@@ -387,9 +388,9 @@ func TestGetGeographicDistributionUsesCurrentSessionOverlap(t *testing.T) {
 	mock.ExpectQuery(`SELECT uniqExact\(country_code\), uniqExact\(node_id, session_id\)[\s\S]*FROM periscope\.viewer_sessions_current FINAL`).
 		WillReturnRows(sqlmock.NewRows([]string{"unique_countries", "total_viewers"}).AddRow(uint64(2), uint64(4)))
 
-	resp, err := server.GetGeographicDistribution(context.Background(), &pb.GetGeographicDistributionRequest{
+	resp, err := server.GetGeographicDistribution(context.Background(), &periscopepb.GetGeographicDistributionRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(time.Now().Add(-24 * time.Hour)),
 			End:   timestamppb.New(time.Now()),
 		},
@@ -517,14 +518,14 @@ func TestGetAPIUsageCursorPredicateStaysInWhere(t *testing.T) {
 			"unique_users", "unique_tokens",
 		}))
 
-	_, err = server.GetAPIUsage(context.Background(), &pb.GetAPIUsageRequest{
+	_, err = server.GetAPIUsage(context.Background(), &periscopepb.GetAPIUsageRequest{
 		TenantId:      "tenant-1",
 		OperationName: &operationName,
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(start),
 			End:   timestamppb.New(end),
 		},
-		Pagination: &pb.CursorPaginationRequest{
+		Pagination: &commonpb.CursorPaginationRequest{
 			First: 1,
 			After: &after,
 		},
@@ -561,10 +562,10 @@ func TestGetProcessingUsageSummariesCountDistinctSegments(t *testing.T) {
 			"native_av_aac", "native_av_opus", "audio_seconds", "video_seconds",
 		}))
 
-	_, err = server.GetProcessingUsage(context.Background(), &pb.GetProcessingUsageRequest{
+	_, err = server.GetProcessingUsage(context.Background(), &periscopepb.GetProcessingUsageRequest{
 		TenantId:    "tenant-1",
 		SummaryOnly: true,
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(start),
 			End:   timestamppb.New(end),
 		},
@@ -608,9 +609,9 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"stream_hours", "peak_concurrent", "total_streams"}).AddRow(float64(9), int32(8), int32(2)))
 
-	resp, err := server.GetPlatformOverview(context.Background(), &pb.GetPlatformOverviewRequest{
+	resp, err := server.GetPlatformOverview(context.Background(), &periscopepb.GetPlatformOverviewRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(start),
 			End:   timestamppb.New(end),
 		},
@@ -654,13 +655,13 @@ func TestGetStreamAnalyticsSummariesUsesViewerUsageLedger(t *testing.T) {
 		WithArgs("tenant-1", start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
-	resp, err := server.GetStreamAnalyticsSummaries(context.Background(), &pb.GetStreamAnalyticsSummariesRequest{
+	resp, err := server.GetStreamAnalyticsSummaries(context.Background(), &periscopepb.GetStreamAnalyticsSummariesRequest{
 		TenantId: "tenant-1",
-		TimeRange: &pb.TimeRange{
+		TimeRange: &commonpb.TimeRange{
 			Start: timestamppb.New(start),
 			End:   timestamppb.New(end),
 		},
-		Pagination: &pb.CursorPaginationRequest{First: 1},
+		Pagination: &commonpb.CursorPaginationRequest{First: 1},
 	})
 	if err != nil {
 		t.Fatalf("GetStreamAnalyticsSummaries: %v", err)
@@ -800,7 +801,7 @@ func TestGetCursorPagination(t *testing.T) {
 	})
 
 	t.Run("forward request parses first and after", func(t *testing.T) {
-		params, err := getCursorPagination(&pb.CursorPaginationRequest{
+		params, err := getCursorPagination(&commonpb.CursorPaginationRequest{
 			First: 25,
 			After: &after,
 		})
@@ -825,7 +826,7 @@ func TestGetCursorPagination(t *testing.T) {
 	})
 
 	t.Run("backward request takes precedence over forward fields", func(t *testing.T) {
-		params, err := getCursorPagination(&pb.CursorPaginationRequest{
+		params, err := getCursorPagination(&commonpb.CursorPaginationRequest{
 			First:  100,
 			After:  &after,
 			Last:   5,
@@ -847,7 +848,7 @@ func TestGetCursorPagination(t *testing.T) {
 
 	t.Run("invalid after cursor returns parse error", func(t *testing.T) {
 		invalid := "not-base64"
-		_, err := getCursorPagination(&pb.CursorPaginationRequest{
+		_, err := getCursorPagination(&commonpb.CursorPaginationRequest{
 			First: 10,
 			After: &invalid,
 		})
@@ -1199,8 +1200,8 @@ func TestGetFederationEvents_IncludesGeoCoordinates(t *testing.T) {
 			47.6062, -122.3321, 37.7749, -122.4194,
 		))
 
-	resp, err := server.GetFederationEvents(ctx, &pb.GetFederationEventsRequest{
-		TimeRange: &pb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	resp, err := server.GetFederationEvents(ctx, &periscopepb.GetFederationEventsRequest{
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
 	})
 	if err != nil {
 		t.Fatalf("GetFederationEvents returned error: %v", err)
@@ -1305,7 +1306,7 @@ func TestSanitizeFloat64(t *testing.T) {
 }
 
 func TestSanitizePlatformOverviewResponse(t *testing.T) {
-	resp := &pb.GetPlatformOverviewResponse{
+	resp := &periscopepb.GetPlatformOverviewResponse{
 		AverageViewers:   math.NaN(),
 		PeakBandwidth:    math.Inf(1),
 		StreamHours:      math.Inf(-1),

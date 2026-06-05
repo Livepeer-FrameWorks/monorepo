@@ -1,10 +1,9 @@
 package federation
 
 import (
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	"reflect"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // wireTestWriters gives every connected mock peer a mailbox (so enqueue has
@@ -17,7 +16,7 @@ func (pm *PeerManager) wireTestWriters() func() {
 	pm.mu.Lock()
 	for _, ps := range pm.peers {
 		if ps.connected && ps.stream != nil && ps.sendCh == nil {
-			ps.sendCh = make(chan *pb.PeerMessage, peerSendQueueSize)
+			ps.sendCh = make(chan *foghornfederationpb.PeerMessage, peerSendQueueSize)
 		}
 	}
 	pm.mu.Unlock()
@@ -51,9 +50,11 @@ func drainPeerMailbox(ps *peerState) {
 // safe; dropping the newest would deliver stale summaries/heartbeats late.
 func TestEnqueue_DropOldestUnderBackpressure(t *testing.T) {
 	pm := newTestPeerManager(t, "local", nil, false)
-	ps := &peerState{connected: true, stream: &capturePeerChannelStream{}, sendCh: make(chan *pb.PeerMessage, 2)}
+	ps := &peerState{connected: true, stream: &capturePeerChannelStream{}, sendCh: make(chan *foghornfederationpb.PeerMessage, 2)}
 
-	mk := func(label string) *pb.PeerMessage { return &pb.PeerMessage{ClusterId: label} }
+	mk := func(label string) *foghornfederationpb.PeerMessage {
+		return &foghornfederationpb.PeerMessage{ClusterId: label}
+	}
 	pm.enqueue("p", ps, mk("a")) // [a]
 	pm.enqueue("p", ps, mk("b")) // [a,b] — full
 	pm.enqueue("p", ps, mk("c")) // full → evict a → [b,c]

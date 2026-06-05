@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -13,8 +13,8 @@ func TestBuildBootstrapEdgeNodeRequest_IncludesTargetClusterAndFingerprint(t *te
 	macs := "macs-hash"
 	machine := "machine-hash"
 
-	req := buildBootstrapEdgeNodeRequest(ctx, &pb.Register{
-		Fingerprint: &pb.NodeFingerprint{
+	req := buildBootstrapEdgeNodeRequest(ctx, &ipcpb.Register{
+		Fingerprint: &ipcpb.NodeFingerprint{
 			LocalIpv4:       []string{"10.0.0.2"},
 			LocalIpv6:       []string{"2001:db8::2"},
 			MacsSha256:      &macs,

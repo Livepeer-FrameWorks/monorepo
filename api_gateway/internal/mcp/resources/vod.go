@@ -12,7 +12,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -76,7 +77,7 @@ func handleVODList(ctx context.Context, clients *clients.ServiceClients, logger 
 	}
 
 	// Build pagination request
-	pagination := &pb.CursorPaginationRequest{
+	pagination := &commonpb.CursorPaginationRequest{
 		First: 50,
 	}
 
@@ -133,7 +134,7 @@ func handleVODByID(ctx context.Context, uri string, clients *clients.ServiceClie
 	return marshalResourceResult(uri, info)
 }
 
-func protoToVODAssetInfo(p *pb.VodAssetInfo) VODAssetInfo {
+func protoToVODAssetInfo(p *sharedpb.VodAssetInfo) VODAssetInfo {
 	vodID := p.ArtifactHash
 	if vodID == "" {
 		vodID = p.Id
@@ -146,15 +147,15 @@ func protoToVODAssetInfo(p *pb.VodAssetInfo) VODAssetInfo {
 
 	// Map status
 	switch p.Status {
-	case pb.VodStatus_VOD_STATUS_UPLOADING:
+	case sharedpb.VodStatus_VOD_STATUS_UPLOADING:
 		info.Status = "UPLOADING"
-	case pb.VodStatus_VOD_STATUS_PROCESSING:
+	case sharedpb.VodStatus_VOD_STATUS_PROCESSING:
 		info.Status = "PROCESSING"
-	case pb.VodStatus_VOD_STATUS_READY:
+	case sharedpb.VodStatus_VOD_STATUS_READY:
 		info.Status = "READY"
-	case pb.VodStatus_VOD_STATUS_FAILED:
+	case sharedpb.VodStatus_VOD_STATUS_FAILED:
 		info.Status = "FAILED"
-	case pb.VodStatus_VOD_STATUS_DELETED:
+	case sharedpb.VodStatus_VOD_STATUS_DELETED:
 		info.Status = "DELETED"
 	default:
 		info.Status = "UNKNOWN"

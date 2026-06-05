@@ -15,7 +15,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
 	"github.com/gin-gonic/gin"
 )
@@ -136,13 +137,13 @@ func incLivepeerAuthRejected(reason string) {
 // commodoreInternalNameResolver is the minimum surface the auth resolver needs
 // from Commodore — narrow so tests can substitute an in-memory stub.
 type commodoreInternalNameResolver interface {
-	ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error)
+	ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error)
 }
 
 // federationStreamQuerier is the minimum federation surface the auth resolver
 // needs to confirm a stream is live on a peer cluster.
 type federationStreamQuerier interface {
-	QueryStream(ctx context.Context, clusterID, addr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error)
+	QueryStream(ctx context.Context, clusterID, addr string, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error)
 }
 
 // LivepeerAuthResolver answers "is this manifestID a real, live stream owned by
@@ -287,7 +288,7 @@ func (r *LivepeerAuthResolver) AuthorizeRequest(ctx context.Context, manifestID 
 		if addr == "" {
 			continue
 		}
-		peerResp, qerr := r.Federation.QueryStream(queryCtx, peerCluster, addr, &pb.QueryStreamRequest{
+		peerResp, qerr := r.Federation.QueryStream(queryCtx, peerCluster, addr, &foghornfederationpb.QueryStreamRequest{
 			StreamName:        manifestID,
 			RequestingCluster: r.LocalCluster,
 			TenantId:          authCtx.TenantID,
@@ -490,7 +491,7 @@ type commodoreAdapter struct {
 	client *commodore.GRPCClient
 }
 
-func (a commodoreAdapter) ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error) {
+func (a commodoreAdapter) ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error) {
 	if a.client == nil {
 		return nil, errCommodoreUnavailable
 	}
@@ -501,7 +502,7 @@ type federationAdapter struct {
 	client *federation.FederationClient
 }
 
-func (a federationAdapter) QueryStream(ctx context.Context, clusterID, addr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (a federationAdapter) QueryStream(ctx context.Context, clusterID, addr string, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	if a.client == nil {
 		return nil, errFederationUnavailable
 	}

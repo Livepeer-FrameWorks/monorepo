@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
@@ -57,7 +56,7 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "bridge",
 		Token:          strPtr("token-1"),
 		Port:           18000,
@@ -93,7 +92,7 @@ func TestBootstrapServiceRollbackDoesNotConsumeTokenOnValidationFailure(t *testi
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "cluster_id", "expires_at"}).AddRow("service", "cluster-a", expiresAt))
 	mock.ExpectRollback()
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:      "bridge",
 		Token:     strPtr("token-1"),
 		ClusterId: strPtr("cluster-b"),
@@ -148,7 +147,7 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:     "bridge",
 		Token:    strPtr("token-1"),
 		Port:     18000,
@@ -180,7 +179,7 @@ func TestBootstrapServiceRejectsMissingNodeReference(t *testing.T) {
 		WithArgs("node-missing").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:      "bridge",
 		ClusterId: strPtr("cluster-1"),
 		NodeId:    strPtr("node-missing"),
@@ -229,7 +228,7 @@ func TestBootstrapServiceClearMetadataReplacesExistingMetadataWithEmptyObject(t 
 		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:          "bridge",
 		ClusterId:     strPtr("cluster-1"),
 		Port:          18000,
@@ -287,7 +286,7 @@ func TestBootstrapServicePoolServiceRegistersInPhysicalNodeCluster(t *testing.T)
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "foghorn",
 		ClusterId:      strPtr("media-eu-1"),
 		NodeId:         strPtr("node-1"),
@@ -350,7 +349,7 @@ func TestBootstrapServiceFoghornControlListenerKeysByAdvertiseHost(t *testing.T)
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:          "foghorn",
 		ClusterId:     strPtr("media-eu-1"),
 		NodeId:        strPtr("node-1"),
@@ -416,7 +415,7 @@ func TestBootstrapServiceFoghornControlListenerClaimsStableInstanceID(t *testing
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:          "foghorn",
 		ClusterId:     strPtr("media-eu-1"),
 		NodeId:        strPtr("node-1"),
@@ -456,7 +455,7 @@ func TestBootstrapServiceRejectsPoolServiceWithoutNodeID(t *testing.T) {
 		WithArgs("media-eu-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:      "foghorn",
 		ClusterId: strPtr("media-eu-1"),
 		Port:      18008,
@@ -489,7 +488,7 @@ func TestBootstrapServiceRejectsNonPoolServiceOnDifferentPhysicalNodeCluster(t *
 		WithArgs("regional-eu-1").
 		WillReturnRows(sqlmock.NewRows([]string{"is_active"}).AddRow(true))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:      "bridge",
 		ClusterId: strPtr("core-eu-1"),
 		NodeId:    strPtr("regional-eu-2"),
@@ -544,7 +543,7 @@ func TestBootstrapServiceDerivesAdvertiseHostFromNodeID(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "commodore",
 		ClusterId:      strPtr("cluster-1"),
 		NodeId:         strPtr("node-1"),
@@ -605,7 +604,7 @@ func TestBootstrapServiceUsesAdvertiseHostWhenNodeAddressIsLoopback(t *testing.T
 		WithArgs("node-1").
 		WillReturnError(sql.ErrNoRows)
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "commodore",
 		ClusterId:      strPtr("cluster-1"),
 		NodeId:         strPtr("node-1"),
@@ -663,7 +662,7 @@ func TestBootstrapServiceFormatsIPv6AdvertiseAddr(t *testing.T) {
 		WithArgs("bridge", "cluster-1", sqlmock.AnyArg(), "2001:db8::10", "http", int32(443)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:      "bridge",
 		ClusterId: strPtr("cluster-1"),
 		Port:      443,
@@ -716,7 +715,7 @@ func TestBootstrapServiceReRegistrationClearsStoppedAt(t *testing.T) {
 		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "bridge",
 		Port:           18000,
 		Host:           "10.0.0.1",
@@ -765,7 +764,7 @@ func TestBootstrapServiceSkipsIPLookupForHostname(t *testing.T) {
 		WithArgs("quartermaster", "cluster-1", sqlmock.AnyArg(), "quartermaster", "http", int32(18002)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	resp, err := server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "quartermaster",
 		Port:           18002,
 		AdvertiseHost:  strPtr("quartermaster"),
@@ -796,7 +795,7 @@ func TestBootstrapServicePoolServiceRequiresNodeIDBeforeLogicalAssignment(t *tes
 	mock.ExpectQuery("SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "foghorn",
 		Port:           9000,
 		Host:           "10.0.0.2",
@@ -856,7 +855,7 @@ func TestBootstrapServiceStoresMetadataOnInsert(t *testing.T) {
 		WithArgs("bridge", "cluster-1", sqlmock.AnyArg(), "10.0.0.9", "http", int32(8935)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
+	_, err = server.BootstrapService(context.Background(), &quartermasterpb.BootstrapServiceRequest{
 		Type:           "bridge",
 		Port:           8935,
 		Host:           "10.0.0.9",

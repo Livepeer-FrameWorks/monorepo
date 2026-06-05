@@ -16,7 +16,9 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 const (
@@ -106,7 +108,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 	var after *string
 	for {
 		pageCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		resp, err := r.qm.ListClusters(pageCtx, &pb.CursorPaginationRequest{
+		resp, err := r.qm.ListClusters(pageCtx, &commonpb.CursorPaginationRequest{
 			First: listPageLimit,
 			After: after,
 		})
@@ -143,7 +145,7 @@ func (r *Resolver) refresh(ctx context.Context) error {
 // resolved Chandler base for the given cluster and the artifact's asset key.
 // Returns nil when the cluster has no Chandler base in the snapshot or the
 // asset key is empty.
-func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.ThumbnailAssets {
+func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *sharedpb.ThumbnailAssets {
 	if assetKey == "" {
 		return nil
 	}
@@ -152,7 +154,7 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.Thumbnai
 		return nil
 	}
 	prefix := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
-	return &pb.ThumbnailAssets{
+	return &sharedpb.ThumbnailAssets{
 		PosterUrl:    prefix + "/poster.jpg",
 		SpriteVttUrl: prefix + "/sprite.vtt",
 		SpriteJpgUrl: prefix + "/sprite.jpg",
@@ -164,7 +166,7 @@ func (r *Resolver) BuildThumbnailAssets(clusterID, assetKey string) *pb.Thumbnai
 // api_balancing/internal/control/server.go. Local/single-node deployments use
 // CHANDLER_BASE_URL because Chandler is exposed by the same public nginx
 // surface as the app, under /assets.
-func chandlerBaseFor(c *pb.InfrastructureCluster) string {
+func chandlerBaseFor(c *quartermasterpb.InfrastructureCluster) string {
 	baseDomain := pkgdns.NormalizeDomainScope(c.GetBaseUrl())
 	if baseDomain == "" {
 		return ""

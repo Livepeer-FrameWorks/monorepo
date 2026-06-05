@@ -10,13 +10,14 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoCreateBootstrapToken creates a new bootstrap token (service token auth required)
-func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (*pb.BootstrapToken, error) {
+func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (*quartermasterpb.BootstrapToken, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic bootstrap token")
 		now := time.Now()
@@ -29,7 +30,7 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 			limit := int32(*input.UsageLimit)
 			usageLimit = &limit
 		}
-		return &pb.BootstrapToken{
+		return &quartermasterpb.BootstrapToken{
 			Id:         "demo_bootstrap_token_001",
 			Name:       input.Name,
 			Token:      "bt_demo_12345678901234567890123456789012",
@@ -48,7 +49,7 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 	}
 
 	// Convert GraphQL input to Quartermaster request
-	req := &pb.CreateBootstrapTokenRequest{
+	req := &quartermasterpb.CreateBootstrapTokenRequest{
 		Name: input.Name,
 		Kind: string(input.Type),
 	}
@@ -113,7 +114,7 @@ func (r *Resolver) DoRevokeBootstrapToken(ctx context.Context, id string) (model
 }
 
 // DoGetBootstrapTokens retrieves all bootstrap tokens (service token auth required)
-func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*pb.BootstrapToken, error) {
+func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*quartermasterpb.BootstrapToken, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic bootstrap tokens")
 		return demo.GenerateBootstrapTokens(), nil
@@ -125,7 +126,7 @@ func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*pb.BootstrapTok
 	}
 
 	// Call Quartermaster to get tokens (get all types with pagination)
-	tokensResp, err := r.Clients.Quartermaster.ListBootstrapTokens(ctx, "", "", &pb.CursorPaginationRequest{First: 100})
+	tokensResp, err := r.Clients.Quartermaster.ListBootstrapTokens(ctx, "", "", &commonpb.CursorPaginationRequest{First: 100})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get bootstrap tokens")
 		return nil, fmt.Errorf("failed to get bootstrap tokens: %w", err)
@@ -147,7 +148,7 @@ func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *str
 				Node:   token,
 			}
 		}
-		edgeNodes := make([]*pb.BootstrapToken, 0, len(edges))
+		edgeNodes := make([]*quartermasterpb.BootstrapToken, 0, len(edges))
 		for _, edge := range edges {
 			if edge != nil {
 				edgeNodes = append(edgeNodes, edge.Node)
@@ -167,7 +168,7 @@ func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *str
 	}
 
 	// Build pagination request
-	paginationReq := &pb.CursorPaginationRequest{First: 50}
+	paginationReq := &commonpb.CursorPaginationRequest{First: 50}
 	if first != nil {
 		paginationReq.First = int32(*first)
 	}
@@ -217,7 +218,7 @@ func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *str
 		pageInfo.EndCursor = &ec
 	}
 
-	edgeNodes := make([]*pb.BootstrapToken, 0, len(edges))
+	edgeNodes := make([]*quartermasterpb.BootstrapToken, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)

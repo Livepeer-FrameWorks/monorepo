@@ -13,10 +13,9 @@ import (
 	"sync"
 	"time"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // TriggerWAL durably stores MistTrigger payloads for non-blocking final
@@ -77,7 +76,7 @@ func ComputeTypedEventID(sourceEventID string) string {
 // already exists (idempotent re-delivery). The on-disk write and directory
 // entry are fsynced so a crash between Mist's 200 OK and the next forwarder
 // tick still surfaces the trigger on restart.
-func (w *TriggerWAL) Append(trigger *pb.MistTrigger) (bool, error) {
+func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 	if trigger == nil {
 		return false, errors.New("trigger wal: nil trigger")
 	}
@@ -181,7 +180,7 @@ func (w *TriggerWAL) DeadLetter(sourceEventID string) error {
 // Pending returns every persisted trigger in oldest-first order (by the
 // received_at_ms prefix embedded in the filename). Used by the forwarder
 // to drain in order and on restart to replay.
-func (w *TriggerWAL) Pending() ([]*pb.MistTrigger, error) {
+func (w *TriggerWAL) Pending() ([]*ipcpb.MistTrigger, error) {
 	w.mu.Lock()
 	files, err := filepath.Glob(filepath.Join(w.dir, "*.pb"))
 	w.mu.Unlock()
@@ -190,13 +189,13 @@ func (w *TriggerWAL) Pending() ([]*pb.MistTrigger, error) {
 	}
 	sort.Strings(files)
 
-	out := make([]*pb.MistTrigger, 0, len(files))
+	out := make([]*ipcpb.MistTrigger, 0, len(files))
 	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("trigger wal read %s: %w", filepath.Base(path), err)
 		}
-		var t pb.MistTrigger
+		var t ipcpb.MistTrigger
 		if err := proto.Unmarshal(data, &t); err != nil {
 			return nil, fmt.Errorf("trigger wal unmarshal %s: %w", filepath.Base(path), err)
 		}

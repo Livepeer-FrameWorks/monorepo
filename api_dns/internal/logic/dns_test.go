@@ -12,7 +12,8 @@ import (
 	"frameworks/api_dns/internal/provider/cloudflare"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/sirupsen/logrus"
@@ -182,11 +183,11 @@ type fakeQuartermasterClient struct {
 	clusterID        string
 	clusterIDs       []string
 	staleAge         int
-	response         *proto.ListHealthyNodesForDNSResponse
+	response         *quartermasterpb.ListHealthyNodesForDNSResponse
 	err              error
 	callCount        int
 	getClusterID     string
-	clustersResponse *proto.ListClustersResponse
+	clustersResponse *quartermasterpb.ListClustersResponse
 	clustersErr      error
 }
 
@@ -222,11 +223,11 @@ func (f *fakeBunnyClient) ReconcileRecordSet(ctx context.Context, zoneID int64, 
 	return nil
 }
 
-func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	return f.ListHealthyNodesForDNSForCluster(ctx, staleThresholdSeconds, serviceType, "")
 }
 
-func (f *fakeQuartermasterClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (f *fakeQuartermasterClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	f.callCount++
 	f.serviceType = serviceType
 	f.serviceTypes = append(f.serviceTypes, serviceType)
@@ -236,24 +237,24 @@ func (f *fakeQuartermasterClient) ListHealthyNodesForDNSForCluster(ctx context.C
 	return f.response, f.err
 }
 
-func (f *fakeQuartermasterClient) ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error) {
+func (f *fakeQuartermasterClient) ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
 	if f.clustersResponse == nil {
-		return &proto.ListClustersResponse{}, f.clustersErr
+		return &quartermasterpb.ListClustersResponse{}, f.clustersErr
 	}
 	return f.clustersResponse, f.clustersErr
 }
 
-func (f *fakeQuartermasterClient) GetCluster(ctx context.Context, clusterID string) (*proto.ClusterResponse, error) {
+func (f *fakeQuartermasterClient) GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
 	f.getClusterID = clusterID
 	if f.clustersErr != nil {
 		return nil, f.clustersErr
 	}
 	for _, cluster := range f.clustersResponse.GetClusters() {
 		if cluster.GetClusterId() == clusterID {
-			return &proto.ClusterResponse{Cluster: cluster}, nil
+			return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 		}
 	}
-	return &proto.ClusterResponse{}, nil
+	return &quartermasterpb.ClusterResponse{}, nil
 }
 
 func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
@@ -276,7 +277,7 @@ func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {
 
 func TestSyncService_NoActiveNodesPreservesDNS(t *testing.T) {
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
 	}
 	cf := &fakeCloudflareClient{
 		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
@@ -401,8 +402,8 @@ func TestSyncService_RootLoadBalancerCreatesSharedIngressProximityPools(t *testi
 	latUS2, lonUS2 := 42.0, -72.0
 
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "eu-1", ClusterId: "cluster-eu", ExternalIp: strPtr(ip1), Latitude: &latEU1, Longitude: &lonEU1},
 				{NodeId: "eu-2", ClusterId: "cluster-eu", ExternalIp: strPtr(ip2), Latitude: &latEU2, Longitude: &lonEU2},
 				{NodeId: "us-1", ClusterId: "cluster-us", ExternalIp: strPtr(ip3), Latitude: &latUS1, Longitude: &lonUS1},
@@ -485,8 +486,8 @@ func TestSyncService_RootLoadBalancersReuseSharedIngressPools(t *testing.T) {
 	lat1, lon1 := 52.0, 4.0
 	lat2, lon2 := 40.0, -74.0
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "regional-eu-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip1), Latitude: &lat1, Longitude: &lon1},
 				{NodeId: "regional-us-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip2), Latitude: &lat2, Longitude: &lon2},
 			},
@@ -557,8 +558,8 @@ func TestSyncService_RootLoadBalancerReplacesLegacyMixedPool(t *testing.T) {
 	lat1, lon1 := 52.0, 4.0
 	lat2, lon2 := 40.0, -74.0
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "regional-eu-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip1), Latitude: &lat1, Longitude: &lon1},
 				{NodeId: "regional-us-1", ClusterId: "core-central-primary", ExternalIp: strPtr(ip2), Latitude: &lat2, Longitude: &lon2},
 			},
@@ -643,8 +644,8 @@ func TestSyncService_SingleNodeDeletesManagedPools(t *testing.T) {
 	ip := "10.0.0.1"
 	var deletedPools []string
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	cf := &fakeCloudflareClient{
@@ -864,11 +865,11 @@ func TestSyncServiceByCluster_EdgeEgressCleanupSkipsServiceRecord(t *testing.T) 
 	}
 
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{
-			Clusters: []*proto.InfrastructureCluster{{ClusterId: "cluster-a", ClusterName: "Cluster A", IsActive: true}},
+		clustersResponse: &quartermasterpb.ListClustersResponse{
+			Clusters: []*quartermasterpb.InfrastructureCluster{{ClusterId: "cluster-a", ClusterName: "Cluster A", IsActive: true}},
 		},
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{NodeId: "node-1", ClusterId: "cluster-a", ExternalIp: &edgeIP}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{NodeId: "node-1", ClusterId: "cluster-a", ExternalIp: &edgeIP}},
 		},
 	}
 
@@ -891,13 +892,13 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 	latEU, lonEU := 52.3676, 4.9041
 	latUS, lonUS := 40.7128, -74.0060
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:   "media-eu",
 			ClusterName: "Media EU",
 			ClusterType: "edge",
 			IsActive:    true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{
 			{
 				NodeId:     "edge-ams-1",
 				ClusterId:  "media-eu",
@@ -999,12 +1000,12 @@ func TestSyncServiceByCluster_UsesBunnyForMediaClusterService(t *testing.T) {
 func TestSyncBunnyRootServicePreservesDNSWhenNoPlatformNodes(t *testing.T) {
 	reconciled := false
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:          "media-eu-1",
 			IsActive:           true,
 			IsPlatformOfficial: true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
 	}
 	cf := &fakeCloudflareClient{}
 	manager := newTestManager(cf)
@@ -1027,12 +1028,12 @@ func TestSyncBunnyRootServicePreservesDNSWhenNoPlatformNodes(t *testing.T) {
 func TestSyncBunnyRootServiceAuthoritativeClearsWhenNoPlatformNodes(t *testing.T) {
 	var cleared bool
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:          "media-eu-1",
 			IsActive:           true,
 			IsPlatformOfficial: true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
 	}
 	manager := newTestManager(&fakeCloudflareClient{})
 	manager.qmClient = qm
@@ -1060,11 +1061,11 @@ func TestSyncBunnyRootServiceAuthoritativeClearsWhenNoPlatformNodes(t *testing.T
 func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
 	var got []bunny.Record
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{
 			{ClusterId: "media-eu-1", IsActive: true, IsPlatformOfficial: true},
 			{ClusterId: "tenant-private-1", IsActive: true, IsPlatformOfficial: false},
 		}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{
 			{NodeId: "edge-eu-1", ClusterId: "media-eu-1", ExternalIp: strPtr("198.51.100.10")},
 			{NodeId: "edge-private-1", ClusterId: "tenant-private-1", ExternalIp: strPtr("203.0.113.50")},
 		}},
@@ -1095,12 +1096,12 @@ func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
 
 func TestSyncServiceForClusterUsesScopedQuartermasterRead(t *testing.T) {
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:   "media-eu-1",
 			ClusterType: "edge",
 			IsActive:    true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{{
 			NodeId:     "edge-eu-1",
 			ClusterId:  "media-eu-1",
 			ExternalIp: strPtr("198.51.100.10"),
@@ -1128,13 +1129,13 @@ func TestSyncServiceForClusterUsesScopedQuartermasterRead(t *testing.T) {
 
 func TestSyncServiceForClusterRefreshesRootForPlatformOfficialBunnyCluster(t *testing.T) {
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:          "media-eu-1",
 			ClusterType:        "edge",
 			IsActive:           true,
 			IsPlatformOfficial: true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{{
 			NodeId:     "edge-eu-1",
 			ClusterId:  "media-eu-1",
 			ExternalIp: strPtr("198.51.100.10"),
@@ -1175,13 +1176,13 @@ func TestSyncServiceForClusterRefreshesRootForPlatformOfficialBunnyCluster(t *te
 
 func TestSyncServiceByCluster_PublishesBunnyEdgeNodeRecords(t *testing.T) {
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:   "media-eu",
 			ClusterName: "Media EU",
 			ClusterType: "edge",
 			IsActive:    true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{{
 			NodeId:     "edge-eu-1",
 			ClusterId:  "media-eu",
 			ExternalIp: strPtr("198.51.100.10"),
@@ -1242,13 +1243,13 @@ func TestSyncServiceByCluster_PublishesBunnyEdgeNodeRecords(t *testing.T) {
 func TestSyncServiceByCluster_PublishesFoghornAtClusterApex(t *testing.T) {
 	lat, lon := 52.3676, 4.9041
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:   "media-eu",
 			ClusterName: "Media EU",
 			ClusterType: "edge",
 			IsActive:    true,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{Nodes: []*proto.InfrastructureNode{{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{{
 			NodeId:     "foghorn-core-1",
 			ClusterId:  "media-eu",
 			ExternalIp: strPtr("198.51.100.10"),
@@ -1346,13 +1347,13 @@ func TestEnsureBunnyClusterZoneCreatesZoneAndDelegates(t *testing.T) {
 
 func TestSyncServiceByCluster_ClearsBunnyForInactiveCluster(t *testing.T) {
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{Clusters: []*proto.InfrastructureCluster{{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
 			ClusterId:   "media-eu",
 			ClusterName: "Media EU",
 			ClusterType: "edge",
 			IsActive:    false,
 		}}},
-		response: &proto.ListHealthyNodesForDNSResponse{},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
 	}
 
 	var clearedBunny bool
@@ -2193,8 +2194,8 @@ func TestEnsurePool_ContinuesWithoutMonitor(t *testing.T) {
 func TestSyncService_UnknownServiceType(t *testing.T) {
 	ip := "1.2.3.4"
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	m := newTestManager(&fakeCloudflareClient{})
@@ -2213,8 +2214,8 @@ func TestSyncService_SingleNode(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdFQDN string
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	cf := &fakeCloudflareClient{
@@ -2242,8 +2243,8 @@ func TestSyncService_CustomRootDomain(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdFQDN string
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	cf := &fakeCloudflareClient{
@@ -2271,8 +2272,8 @@ func TestSyncService_ForedeckUsesRootDomain(t *testing.T) {
 	ip := "10.0.0.1"
 	var createdFQDN string
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	cf := &fakeCloudflareClient{
@@ -2314,8 +2315,8 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 			ip := "10.0.0.1"
 			var createdFQDN string
 			qm := &fakeQuartermasterClient{
-				response: &proto.ListHealthyNodesForDNSResponse{
-					Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+				response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+					Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 				},
 			}
 			cf := &fakeCloudflareClient{
@@ -2344,8 +2345,8 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 func TestSyncService_RejectsRootMediaServices(t *testing.T) {
 	ip := "10.0.0.1"
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	m := newTestManager(&fakeCloudflareClient{})
@@ -2360,8 +2361,8 @@ func TestSyncService_ProxiedServices(t *testing.T) {
 	ip := "10.0.0.1"
 	var proxiedValue bool
 	qm := &fakeQuartermasterClient{
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{{ExternalIp: &ip}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{{ExternalIp: &ip}},
 		},
 	}
 	cf := &fakeCloudflareClient{
@@ -2463,13 +2464,13 @@ func TestSyncServiceByCluster_EdgeEgressDoesNotCreateNodeRecords(t *testing.T) {
 	var createdRecords []string
 
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{
-			Clusters: []*proto.InfrastructureCluster{
+		clustersResponse: &quartermasterpb.ListClustersResponse{
+			Clusters: []*quartermasterpb.InfrastructureCluster{
 				{ClusterId: "cluster-abc", ClusterName: "test-cluster", IsActive: true},
 			},
 		},
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "node-1", ClusterId: "cluster-abc", ExternalIp: strPtr(ip)},
 			},
 		},
@@ -2519,13 +2520,13 @@ func TestSyncServiceByCluster_EdgeEgressSkipsEdgePrefixedNodeIDs(t *testing.T) {
 	var createdRecords []string
 
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{
-			Clusters: []*proto.InfrastructureCluster{
+		clustersResponse: &quartermasterpb.ListClustersResponse{
+			Clusters: []*quartermasterpb.InfrastructureCluster{
 				{ClusterId: "cluster-abc", ClusterName: "test-cluster", IsActive: true},
 			},
 		},
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "edge-eu-1", ClusterId: "cluster-abc", ExternalIp: strPtr(ip)},
 			},
 		},
@@ -2575,13 +2576,13 @@ func TestSyncServiceByCluster_NonEdgeSkipsNodeRecords(t *testing.T) {
 	var createdRecords []string
 
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{
-			Clusters: []*proto.InfrastructureCluster{
+		clustersResponse: &quartermasterpb.ListClustersResponse{
+			Clusters: []*quartermasterpb.InfrastructureCluster{
 				{ClusterId: "cluster-abc", ClusterName: "test", IsActive: true},
 			},
 		},
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "node-1", ClusterId: "cluster-abc", ExternalIp: strPtr(ip)},
 			},
 		},
@@ -2626,14 +2627,14 @@ func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
 	ip4 := "10.0.1.2"
 
 	qm := &fakeQuartermasterClient{
-		clustersResponse: &proto.ListClustersResponse{
-			Clusters: []*proto.InfrastructureCluster{
+		clustersResponse: &quartermasterpb.ListClustersResponse{
+			Clusters: []*quartermasterpb.InfrastructureCluster{
 				{ClusterId: "cluster-1", ClusterName: "one", IsActive: true},
 				{ClusterId: "cluster-2", ClusterName: "two", IsActive: true},
 			},
 		},
-		response: &proto.ListHealthyNodesForDNSResponse{
-			Nodes: []*proto.InfrastructureNode{
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{
+			Nodes: []*quartermasterpb.InfrastructureNode{
 				{NodeId: "n1", ClusterId: "cluster-1", ExternalIp: strPtr(ip1)},
 				{NodeId: "n2", ClusterId: "cluster-1", ExternalIp: strPtr(ip2)},
 				{NodeId: "n3", ClusterId: "cluster-2", ExternalIp: strPtr(ip3)},

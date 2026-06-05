@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/admission"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const (
@@ -77,7 +77,7 @@ func newAuthTestServer(t *testing.T, authz RelayPullAuthorizer) *Server {
 		Admitter: &fakeAdmitter{decision: admission.CacheToDisk},
 		Resolver: &fakeResolver{out: map[string]*ResolveResult{
 			"vod/" + testPeerHash: {
-				State:             pb.AssetState_ASSET_STATE_SOURCE_MISSING,
+				State:             ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING,
 				ExpectedSizeBytes: 0,
 			},
 		}},
@@ -253,7 +253,7 @@ func TestPeerAuthMiddleware_TrustedCIDRBypass(t *testing.T) {
 		BasePath: t.TempDir(),
 		Admitter: &fakeAdmitter{decision: admission.CacheToDisk},
 		Resolver: &fakeResolver{out: map[string]*ResolveResult{
-			"vod/" + testPeerHash: {State: pb.AssetState_ASSET_STATE_SOURCE_MISSING},
+			"vod/" + testPeerHash: {State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING},
 		}},
 		NodeID:           testPeerNode,
 		Authorizer:       authz,
@@ -300,7 +300,7 @@ func TestBlockServeGrantHeaderAttachedForPeerURL(t *testing.T) {
 	defer up.Close()
 	dir := t.TempDir()
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		PeerRelayURL:      up.URL + "/object",
 		PeerRelayGrantID:  "TEST-GRANT",
 		ExpectedSizeBytes: 16,
@@ -342,7 +342,7 @@ func TestBlockServeNoAuthHeaderForS3URL(t *testing.T) {
 	defer up.Close()
 	dir := t.TempDir()
 	res := &ResolveResult{
-		State:             pb.AssetState_ASSET_STATE_PLAYABLE,
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: up.URL + "/object?X-Amz-Algorithm=test",
 		ExpectedSizeBytes: 18,
 		ContentType:       "video/mp4",

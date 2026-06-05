@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // ArtifactLifecycleLoader loads artifact lifecycle data with request-scoped caching.
@@ -13,19 +13,19 @@ import (
 type ArtifactLifecycleLoader struct {
 	client *periscope.GRPCClient
 	mu     sync.Mutex
-	cache  map[string]*pb.ArtifactState // key: "tenantID:requestID"
+	cache  map[string]*periscopepb.ArtifactState // key: "tenantID:requestID"
 }
 
 // NewArtifactLifecycleLoader creates a new artifact lifecycle loader
 func NewArtifactLifecycleLoader(client *periscope.GRPCClient) *ArtifactLifecycleLoader {
 	return &ArtifactLifecycleLoader{
 		client: client,
-		cache:  make(map[string]*pb.ArtifactState),
+		cache:  make(map[string]*periscopepb.ArtifactState),
 	}
 }
 
 // Load fetches lifecycle data for a single artifact, using cache if available
-func (l *ArtifactLifecycleLoader) Load(ctx context.Context, tenantID, requestID string) (*pb.ArtifactState, error) {
+func (l *ArtifactLifecycleLoader) Load(ctx context.Context, tenantID, requestID string) (*periscopepb.ArtifactState, error) {
 	key := tenantID + ":" + requestID
 
 	l.mu.Lock()
@@ -57,8 +57,8 @@ func (l *ArtifactLifecycleLoader) Load(ctx context.Context, tenantID, requestID 
 }
 
 // LoadMany fetches lifecycle data for multiple artifacts in a single batch call
-func (l *ArtifactLifecycleLoader) LoadMany(ctx context.Context, tenantID string, requestIDs []string) (map[string]*pb.ArtifactState, error) {
-	results := make(map[string]*pb.ArtifactState)
+func (l *ArtifactLifecycleLoader) LoadMany(ctx context.Context, tenantID string, requestIDs []string) (map[string]*periscopepb.ArtifactState, error) {
+	results := make(map[string]*periscopepb.ArtifactState)
 	var toFetch []string
 
 	l.mu.Lock()
@@ -86,7 +86,7 @@ func (l *ArtifactLifecycleLoader) LoadMany(ctx context.Context, tenantID string,
 	defer l.mu.Unlock()
 
 	// Index response by request_id
-	statesByID := make(map[string]*pb.ArtifactState)
+	statesByID := make(map[string]*periscopepb.ArtifactState)
 	for _, state := range resp.Artifacts {
 		statesByID[state.RequestId] = state
 	}
@@ -103,7 +103,7 @@ func (l *ArtifactLifecycleLoader) LoadMany(ctx context.Context, tenantID string,
 }
 
 // Prime adds an artifact state to the cache (used when parent resolver pre-fetches)
-func (l *ArtifactLifecycleLoader) Prime(tenantID string, state *pb.ArtifactState) {
+func (l *ArtifactLifecycleLoader) Prime(tenantID string, state *periscopepb.ArtifactState) {
 	if state == nil || state.RequestId == "" {
 		return
 	}
@@ -114,7 +114,7 @@ func (l *ArtifactLifecycleLoader) Prime(tenantID string, state *pb.ArtifactState
 }
 
 // PrimeMany adds multiple artifact states to the cache
-func (l *ArtifactLifecycleLoader) PrimeMany(tenantID string, states []*pb.ArtifactState) {
+func (l *ArtifactLifecycleLoader) PrimeMany(tenantID string, states []*periscopepb.ArtifactState) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, state := range states {

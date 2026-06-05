@@ -1,10 +1,9 @@
 package control
 
 import (
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"maps"
 	"sync"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // managedState holds the reconciler-side bookkeeping for managed
@@ -156,7 +155,7 @@ func (r *StreamRegistry) ManagedForgetNode(nodeID string) {
 
 // ManagedSetVerifiedFromHeartbeat replaces this node's verified-applied
 // set with the snapshot the sidecar just reported.
-func (r *StreamRegistry) ManagedSetVerifiedFromHeartbeat(nodeID string, applied []*pb.AppliedManagedStream) {
+func (r *StreamRegistry) ManagedSetVerifiedFromHeartbeat(nodeID string, applied []*ipcpb.AppliedManagedStream) {
 	if nodeID == "" {
 		return
 	}
@@ -215,7 +214,7 @@ func (r *StreamRegistry) ManagedVerifiedPresent(nodeID, streamID string) bool {
 // ManagedHydrateForNode seeds lastSent with the sidecar's reported
 // applied set on (re)connect, parked under a pending-cluster sentinel
 // until the next reconciler tick promotes it to the real cluster bucket.
-func (r *StreamRegistry) ManagedHydrateForNode(nodeID string, applied []*pb.AppliedManagedStream) {
+func (r *StreamRegistry) ManagedHydrateForNode(nodeID string, applied []*ipcpb.AppliedManagedStream) {
 	if len(applied) == 0 {
 		return
 	}

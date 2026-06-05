@@ -13,7 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -84,7 +84,7 @@ func TestAuthenticateRequestJWT(t *testing.T) {
 }
 
 func TestAuthenticateRequestAPIToken(t *testing.T) {
-	server := newFakeInternalService(&pb.ValidateAPITokenResponse{
+	server := newFakeInternalService(&commodorepb.ValidateAPITokenResponse{
 		Valid:       true,
 		UserId:      "user-2",
 		TenantId:    "tenant-2",
@@ -130,9 +130,9 @@ func TestAuthenticateRequestAPIToken(t *testing.T) {
 }
 
 func TestAuthenticateRequestWalletSuccess(t *testing.T) {
-	server := newFakeCommodoreService(nil, &pb.AuthResponse{
+	server := newFakeCommodoreService(nil, &commodorepb.AuthResponse{
 		Token: "wallet-token",
-		User: &pb.User{
+		User: &commodorepb.User{
 			Id:       "user-wallet",
 			TenantId: "tenant-wallet",
 			Role:     "viewer",
@@ -178,10 +178,10 @@ func TestAuthenticateRequestWalletSuccess(t *testing.T) {
 
 func TestAuthenticateRequestX402Success(t *testing.T) {
 	expiresAt := time.Now().Add(10 * time.Minute)
-	server := newFakeCommodoreService(&pb.WalletLoginWithX402Response{
-		Auth: &pb.AuthResponse{
+	server := newFakeCommodoreService(&commodorepb.WalletLoginWithX402Response{
+		Auth: &commodorepb.AuthResponse{
 			Token: "x402-token",
-			User: &pb.User{
+			User: &commodorepb.User{
 				Id:       "user-x402",
 				TenantId: "tenant-x402",
 				Role:     "viewer",
@@ -282,23 +282,23 @@ func TestApplyAuthToContextX402(t *testing.T) {
 }
 
 type fakeInternalService struct {
-	pb.UnimplementedInternalServiceServer
-	validateResponse *pb.ValidateAPITokenResponse
+	commodorepb.UnimplementedInternalServiceServer
+	validateResponse *commodorepb.ValidateAPITokenResponse
 	validateError    error
 }
 
-func newFakeInternalService(resp *pb.ValidateAPITokenResponse, err error) *fakeInternalService {
+func newFakeInternalService(resp *commodorepb.ValidateAPITokenResponse, err error) *fakeInternalService {
 	return &fakeInternalService{
 		validateResponse: resp,
 		validateError:    err,
 	}
 }
 
-func (f *fakeInternalService) ValidateAPIToken(ctx context.Context, _ *pb.ValidateAPITokenRequest) (*pb.ValidateAPITokenResponse, error) {
+func (f *fakeInternalService) ValidateAPIToken(ctx context.Context, _ *commodorepb.ValidateAPITokenRequest) (*commodorepb.ValidateAPITokenResponse, error) {
 	return f.validateResponse, f.validateError
 }
 
-func startInternalService(t *testing.T, server pb.InternalServiceServer) (string, func()) {
+func startInternalService(t *testing.T, server commodorepb.InternalServiceServer) (string, func()) {
 	t.Helper()
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -307,7 +307,7 @@ func startInternalService(t *testing.T, server pb.InternalServiceServer) (string
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterInternalServiceServer(grpcServer, server)
+	commodorepb.RegisterInternalServiceServer(grpcServer, server)
 
 	go func() {
 		_ = grpcServer.Serve(listener)
@@ -320,30 +320,30 @@ func startInternalService(t *testing.T, server pb.InternalServiceServer) (string
 }
 
 type fakeCommodoreService struct {
-	pb.UnimplementedInternalServiceServer
-	pb.UnimplementedUserServiceServer
-	x402Response *pb.WalletLoginWithX402Response
+	commodorepb.UnimplementedInternalServiceServer
+	commodorepb.UnimplementedUserServiceServer
+	x402Response *commodorepb.WalletLoginWithX402Response
 	x402Error    error
-	walletResp   *pb.AuthResponse
+	walletResp   *commodorepb.AuthResponse
 	walletErr    error
 }
 
-func newFakeCommodoreService(x402Resp *pb.WalletLoginWithX402Response, walletResp *pb.AuthResponse) *fakeCommodoreService {
+func newFakeCommodoreService(x402Resp *commodorepb.WalletLoginWithX402Response, walletResp *commodorepb.AuthResponse) *fakeCommodoreService {
 	return &fakeCommodoreService{
 		x402Response: x402Resp,
 		walletResp:   walletResp,
 	}
 }
 
-func (f *fakeCommodoreService) WalletLoginWithX402(ctx context.Context, _ *pb.WalletLoginWithX402Request) (*pb.WalletLoginWithX402Response, error) {
+func (f *fakeCommodoreService) WalletLoginWithX402(ctx context.Context, _ *commodorepb.WalletLoginWithX402Request) (*commodorepb.WalletLoginWithX402Response, error) {
 	return f.x402Response, f.x402Error
 }
 
-func (f *fakeCommodoreService) WalletLogin(ctx context.Context, _ *pb.WalletLoginRequest) (*pb.AuthResponse, error) {
+func (f *fakeCommodoreService) WalletLogin(ctx context.Context, _ *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) {
 	return f.walletResp, f.walletErr
 }
 
-func startCommodoreService(t *testing.T, internalServer pb.InternalServiceServer, userServer pb.UserServiceServer) (string, func()) {
+func startCommodoreService(t *testing.T, internalServer commodorepb.InternalServiceServer, userServer commodorepb.UserServiceServer) (string, func()) {
 	t.Helper()
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -353,10 +353,10 @@ func startCommodoreService(t *testing.T, internalServer pb.InternalServiceServer
 
 	grpcServer := grpc.NewServer()
 	if internalServer != nil {
-		pb.RegisterInternalServiceServer(grpcServer, internalServer)
+		commodorepb.RegisterInternalServiceServer(grpcServer, internalServer)
 	}
 	if userServer != nil {
-		pb.RegisterUserServiceServer(grpcServer, userServer)
+		commodorepb.RegisterUserServiceServer(grpcServer, userServer)
 	}
 
 	go func() {

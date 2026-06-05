@@ -18,7 +18,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
@@ -95,7 +95,7 @@ func newClusterReleasesListCmd() *cobra.Command {
 			defer func() { _ = qm.Close() }()
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 			defer cancel()
-			resp, err := qm.ListEdgeReleases(cctx, &pb.ListEdgeReleasesRequest{
+			resp, err := qm.ListEdgeReleases(cctx, &quartermasterpb.ListEdgeReleasesRequest{
 				Channel: strings.TrimSpace(channel),
 				Version: strings.TrimSpace(version),
 			})
@@ -204,7 +204,7 @@ func newClusterReleaseTargetSetCmd() *cobra.Command {
 			}
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, edgeReleaseSyncRPCTimeout)
 			defer cancel()
-			resp, err := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
+			resp, err := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
 				Channel:         channel,
 				TargetVersion:   targetVersion,
@@ -254,12 +254,12 @@ func normalizeReleaseTargetChannel(channel string) (string, error) {
 }
 
 func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, version string) error {
-	var resp *pb.ListEdgeReleasesResponse
+	var resp *quartermasterpb.ListEdgeReleasesResponse
 	err := retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
-		resp, rpcErr = qm.ListEdgeReleases(cctx, &pb.ListEdgeReleasesRequest{
+		resp, rpcErr = qm.ListEdgeReleases(cctx, &quartermasterpb.ListEdgeReleasesRequest{
 			Channel: channel,
 			Version: version,
 		})
@@ -277,7 +277,7 @@ func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 	return fmt.Errorf("edge release %s/%s is not published; a provider context must publish the GitOps release before this owner context can target it", channel, version)
 }
 
-func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, repos []string, channel, resolved, remoteOS, remoteArch string) (*pb.EdgeReleaseResponse, error) {
+func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, repos []string, channel, resolved, remoteOS, remoteArch string) (*quartermasterpb.EdgeReleaseResponse, error) {
 	manifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, repos, channel, resolved)
 	if err != nil {
 		return nil, err
@@ -285,7 +285,7 @@ func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.
 	return upsertEdgeReleaseManifest(cmd, qm, ctxCfg, manifest, channel, remoteOS, remoteArch)
 }
 
-func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, manifest *gitops.Manifest, channel, remoteOS, remoteArch string) (*pb.EdgeReleaseResponse, error) {
+func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, manifest *gitops.Manifest, channel, remoteOS, remoteArch string) (*quartermasterpb.EdgeReleaseResponse, error) {
 	components, err := edgeReleaseComponentsFromManifest(manifest, remoteOS, remoteArch)
 	if err != nil {
 		return nil, err
@@ -294,12 +294,12 @@ func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 	if err != nil {
 		return nil, err
 	}
-	var resp *pb.EdgeReleaseResponse
+	var resp *quartermasterpb.EdgeReleaseResponse
 	err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
-		resp, rpcErr = qm.UpsertEdgeRelease(cctx, &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
+		resp, rpcErr = qm.UpsertEdgeRelease(cctx, &quartermasterpb.UpsertEdgeReleaseRequest{Release: &quartermasterpb.EdgeRelease{
 			Channel:        channel,
 			Version:        manifest.PlatformVersion,
 			ComponentsJson: string(componentsJSON),
@@ -348,7 +348,7 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 		err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
 			defer cancel()
-			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
+			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
 				Channel:         channel,
 				TargetVersion:   targetVersion,
@@ -412,7 +412,7 @@ func existingReleaseTargetControlsWithRetry(cmd *cobra.Command, qm *qmclient.GRP
 }
 
 func existingReleaseTargetControls(ctx context.Context, qm *qmclient.GRPCClient, clusterID string) (string, bool, error) {
-	resp, err := qm.GetClusterReleaseTarget(ctx, &pb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
+	resp, err := qm.GetClusterReleaseTarget(ctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return "{}", false, nil
@@ -560,7 +560,7 @@ func newClusterReleaseTargetGetCmd() *cobra.Command {
 			defer func() { _ = qm.Close() }()
 			cctx, cancel := clusterNodesRPCContext(cmd.Context(), rpcCtxCfg, 15*time.Second)
 			defer cancel()
-			resp, err := qm.GetClusterReleaseTarget(cctx, &pb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
+			resp, err := qm.GetClusterReleaseTarget(cctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 			if err != nil {
 				return err
 			}

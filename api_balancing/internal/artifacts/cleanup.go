@@ -16,9 +16,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	"strings"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // BuildClipS3Key formats a clip's deterministic S3 key. Pure string
@@ -72,7 +71,7 @@ type S3Client interface {
 // DeleteDelegate sends a federation DeleteStorageObjects request to the
 // Foghorn pool that owns targetClusterID's S3. Wired from main.go.
 // Cleaner falls back to a typed error when the delegate is nil.
-type DeleteDelegate func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error)
+type DeleteDelegate func(ctx context.Context, targetClusterID string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error)
 
 // Cleaner resolves and executes artifact byte deletion. Construct once
 // and reuse; methods are safe for concurrent use.
@@ -219,7 +218,7 @@ func (c *Cleaner) deleteRemote(ctx context.Context, ref ArtifactRef, target dele
 	if owner == "" {
 		owner = strings.TrimSpace(ref.OriginClusterID)
 	}
-	req := &pb.DeleteStorageObjectsRequest{
+	req := &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:          ref.TenantID,
 		RequestingCluster: c.LocalCluster,
 		TargetClusterId:   owner,
@@ -227,9 +226,9 @@ func (c *Cleaner) deleteRemote(ctx context.Context, ref ArtifactRef, target dele
 		ArtifactType:      strings.ToLower(strings.TrimSpace(ref.Type)),
 	}
 	if target.S3Key != "" {
-		req.Target = &pb.DeleteStorageObjectsRequest_S3Key{S3Key: target.S3Key}
+		req.Target = &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: target.S3Key}
 	} else {
-		req.Target = &pb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: target.S3Prefix}
+		req.Target = &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: target.S3Prefix}
 	}
 
 	resp, err := c.Delegate(ctx, owner, req)

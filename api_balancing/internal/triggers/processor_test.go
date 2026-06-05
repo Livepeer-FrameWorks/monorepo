@@ -17,7 +17,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -45,22 +48,22 @@ func TestPayloadTypeAssertions(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		handler        func(*pb.MistTrigger) (string, bool, error)
-		validTrigger   *pb.MistTrigger
-		invalidTrigger *pb.MistTrigger
+		handler        func(*ipcpb.MistTrigger) (string, bool, error)
+		validTrigger   *ipcpb.MistTrigger
+		invalidTrigger *ipcpb.MistTrigger
 		expectedErr    string
 	}{
 		{
 			name:    "handleProcessBilling",
 			handler: p.handleProcessBilling,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushRewrite{
-					PushRewrite: &pb.PushRewriteTrigger{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+					PushRewrite: &ipcpb.PushRewriteTrigger{},
 				},
 			},
 			expectedErr: "unexpected payload type for ProcessBilling",
@@ -68,14 +71,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleStorageLifecycleData",
 			handler: p.handleStorageLifecycleData,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-					StorageLifecycleData: &pb.StorageLifecycleData{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+					StorageLifecycleData: &ipcpb.StorageLifecycleData{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for StorageLifecycleData",
@@ -83,14 +86,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleDVRLifecycleData",
 			handler: p.handleDVRLifecycleData,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-					DvrLifecycleData: &pb.DVRLifecycleData{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+					DvrLifecycleData: &ipcpb.DVRLifecycleData{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for DVRLifecycleData",
@@ -98,14 +101,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handlePushRewrite",
 			handler: p.handlePushRewrite,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushRewrite{
-					PushRewrite: &pb.PushRewriteTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+					PushRewrite: &ipcpb.PushRewriteTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for PushRewrite",
@@ -113,14 +116,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handlePlayRewrite",
 			handler: p.handlePlayRewrite,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PlayRewrite{
-					PlayRewrite: &pb.ViewerResolveTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+					PlayRewrite: &ipcpb.ViewerResolveTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for PlayRewrite",
@@ -128,14 +131,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleStreamSource",
 			handler: p.handleStreamSource,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamSource{
-					StreamSource: &pb.StreamSourceTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+					StreamSource: &ipcpb.StreamSourceTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for StreamSource",
@@ -143,14 +146,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handlePushEnd",
 			handler: p.handlePushEnd,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushEnd{
-					PushEnd: &pb.PushEndTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+					PushEnd: &ipcpb.PushEndTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for PushEnd",
@@ -158,14 +161,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handlePushOutStart",
 			handler: p.handlePushOutStart,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushOutStart{
-					PushOutStart: &pb.PushOutStartTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushOutStart{
+					PushOutStart: &ipcpb.PushOutStartTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for PushOutStart",
@@ -173,14 +176,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleUserNew",
 			handler: p.handleUserNew,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ViewerConnect{
-					ViewerConnect: &pb.ViewerConnectTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+					ViewerConnect: &ipcpb.ViewerConnectTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for ViewerConnect",
@@ -188,14 +191,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleStreamBuffer",
 			handler: p.handleStreamBuffer,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamBuffer{
-					StreamBuffer: &pb.StreamBufferTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{
+					StreamBuffer: &ipcpb.StreamBufferTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for StreamBuffer",
@@ -203,14 +206,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleStreamEnd",
 			handler: p.handleStreamEnd,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamEnd{
-					StreamEnd: &pb.StreamEndTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+					StreamEnd: &ipcpb.StreamEndTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for StreamEnd",
@@ -218,14 +221,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleUserEnd",
 			handler: p.handleUserEnd,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-					ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+					ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for ViewerDisconnect",
@@ -233,14 +236,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleLiveTrackList",
 			handler: p.handleLiveTrackList,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_TrackList{
-					TrackList: &pb.StreamTrackListTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_TrackList{
+					TrackList: &ipcpb.StreamTrackListTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for TrackList",
@@ -248,14 +251,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleRecordingEnd",
 			handler: p.handleRecordingEnd,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_RecordingComplete{
-					RecordingComplete: &pb.RecordingCompleteTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_RecordingComplete{
+					RecordingComplete: &ipcpb.RecordingCompleteTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for RecordingComplete",
@@ -263,14 +266,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleRecordingSegment",
 			handler: p.handleRecordingSegment,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_RecordingSegment{
-					RecordingSegment: &pb.RecordingSegmentTrigger{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
+					RecordingSegment: &ipcpb.RecordingSegmentTrigger{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for RecordingSegment",
@@ -278,14 +281,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleStreamLifecycleUpdate",
 			handler: p.handleStreamLifecycleUpdate,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-					StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+					StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for StreamLifecycleUpdate",
@@ -293,14 +296,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleClientLifecycleUpdate",
 			handler: p.handleClientLifecycleUpdate,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
-					ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleUpdate{
+					ClientLifecycleUpdate: &ipcpb.ClientLifecycleUpdate{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for ClientLifecycleUpdate",
@@ -308,14 +311,14 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		{
 			name:    "handleNodeLifecycleUpdate",
 			handler: p.handleNodeLifecycleUpdate,
-			validTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-					NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{},
+			validTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+					NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{},
 				},
 			},
-			invalidTrigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			invalidTrigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 			expectedErr: "unexpected payload type for NodeLifecycleUpdate",
@@ -334,7 +337,7 @@ func TestPayloadTypeAssertions(t *testing.T) {
 		})
 
 		t.Run(tc.name+"_nil_payload", func(t *testing.T) {
-			nilTrigger := &pb.MistTrigger{TriggerPayload: nil}
+			nilTrigger := &ipcpb.MistTrigger{TriggerPayload: nil}
 			_, _, err := tc.handler(nilTrigger)
 			if err == nil {
 				t.Fatalf("expected error for nil payload, got nil")
@@ -350,10 +353,10 @@ func TestHandleClientLifecycleDropsMissingStreamID(t *testing.T) {
 	tenantID := "tenant-1"
 	p := &Processor{logger: logging.NewLogger()}
 
-	_, _, err := p.handleClientLifecycleUpdate(&pb.MistTrigger{
+	_, _, err := p.handleClientLifecycleUpdate(&ipcpb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_UPDATE",
-		TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
-			ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleUpdate{
+			ClientLifecycleUpdate: &ipcpb.ClientLifecycleUpdate{
 				TenantId: &tenantID,
 			},
 		},
@@ -374,10 +377,10 @@ func TestHandleStreamLifecycleDropsMissingStreamID(t *testing.T) {
 	inputs := uint32(1)
 	p := &Processor{logger: logging.NewLogger()}
 
-	_, _, err := p.handleStreamLifecycleUpdate(&pb.MistTrigger{
+	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
-		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				TenantId:     &tenantID,
 				InternalName: "processing+artifact-1",
 				Status:       "live",
@@ -407,10 +410,10 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 
 	p := &Processor{logger: logging.NewLogger()}
 
-	newTrigger := func(artifacts ...*pb.StoredArtifact) *pb.MistTrigger {
-		return &pb.MistTrigger{
-			TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-				NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+	newTrigger := func(artifacts ...*ipcpb.StoredArtifact) *ipcpb.MistTrigger {
+		return &ipcpb.MistTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+				NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
 					NodeId:    "node-1",
 					Artifacts: artifacts,
 				},
@@ -418,36 +421,36 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 		}
 	}
 
-	artifactA := &pb.StoredArtifact{
+	artifactA := &ipcpb.StoredArtifact{
 		ClipHash:     "hash-a",
 		StreamName:   "stream-a",
 		FilePath:     "/data/hash-a.mp4",
 		SizeBytes:    100,
 		CreatedAt:    1700000000,
 		Format:       "mp4",
-		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		AccessCount:  1,
 		LastAccessed: 1700000001,
 	}
-	artifactASamePlacement := &pb.StoredArtifact{
+	artifactASamePlacement := &ipcpb.StoredArtifact{
 		ClipHash:     "hash-a",
 		StreamName:   "stream-a",
 		FilePath:     "/data/hash-a.mp4",
 		SizeBytes:    100,
 		CreatedAt:    1700000000,
 		Format:       "mp4",
-		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		AccessCount:  99,
 		LastAccessed: 1700000900,
 	}
-	artifactB := &pb.StoredArtifact{
+	artifactB := &ipcpb.StoredArtifact{
 		ClipHash:     "hash-b",
 		StreamName:   "stream-b",
 		FilePath:     "/data/hash-b.mp4",
 		SizeBytes:    200,
 		CreatedAt:    1700000100,
 		Format:       "mp4",
-		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 	}
 
 	if _, _, err := p.handleNodeLifecycleUpdate(newTrigger(artifactA, artifactB)); err != nil {
@@ -464,7 +467,7 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 		t.Fatalf("expected reordered/noisy artifact map to avoid callback, got %d", got)
 	}
 
-	artifactAWithDtsh := &pb.StoredArtifact{
+	artifactAWithDtsh := &ipcpb.StoredArtifact{
 		ClipHash:     "hash-a",
 		StreamName:   "stream-a",
 		FilePath:     "/data/hash-a.mp4",
@@ -472,7 +475,7 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 		CreatedAt:    1700000000,
 		Format:       "mp4",
 		HasDtsh:      true,
-		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 	}
 	if _, _, err := p.handleNodeLifecycleUpdate(newTrigger(artifactAWithDtsh, artifactB)); err != nil {
 		t.Fatalf("dtsh lifecycle update failed: %v", err)
@@ -487,149 +490,149 @@ func TestHandleNodeLifecycleUpdate_TriggersImmediateReconcileOnlyOnArtifactMapCh
 func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 	tests := []struct {
 		name    string
-		trigger *pb.MistTrigger
+		trigger *ipcpb.MistTrigger
 	}{
 		{
 			name: "ProcessBilling",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ProcessBilling{
-					ProcessBilling: &pb.ProcessBillingEvent{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+					ProcessBilling: &ipcpb.ProcessBillingEvent{},
 				},
 			},
 		},
 		{
 			name: "StorageLifecycleData",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-					StorageLifecycleData: &pb.StorageLifecycleData{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+					StorageLifecycleData: &ipcpb.StorageLifecycleData{},
 				},
 			},
 		},
 		{
 			name: "DvrLifecycleData",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-					DvrLifecycleData: &pb.DVRLifecycleData{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+					DvrLifecycleData: &ipcpb.DVRLifecycleData{},
 				},
 			},
 		},
 		{
 			name: "PushRewrite",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushRewrite{
-					PushRewrite: &pb.PushRewriteTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+					PushRewrite: &ipcpb.PushRewriteTrigger{},
 				},
 			},
 		},
 		{
 			name: "PlayRewrite",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PlayRewrite{
-					PlayRewrite: &pb.ViewerResolveTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+					PlayRewrite: &ipcpb.ViewerResolveTrigger{},
 				},
 			},
 		},
 		{
 			name: "StreamSource",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamSource{
-					StreamSource: &pb.StreamSourceTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+					StreamSource: &ipcpb.StreamSourceTrigger{},
 				},
 			},
 		},
 		{
 			name: "PushEnd",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushEnd{
-					PushEnd: &pb.PushEndTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+					PushEnd: &ipcpb.PushEndTrigger{},
 				},
 			},
 		},
 		{
 			name: "PushOutStart",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_PushOutStart{
-					PushOutStart: &pb.PushOutStartTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_PushOutStart{
+					PushOutStart: &ipcpb.PushOutStartTrigger{},
 				},
 			},
 		},
 		{
 			name: "ViewerConnect",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ViewerConnect{
-					ViewerConnect: &pb.ViewerConnectTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+					ViewerConnect: &ipcpb.ViewerConnectTrigger{},
 				},
 			},
 		},
 		{
 			name: "StreamBuffer",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamBuffer{
-					StreamBuffer: &pb.StreamBufferTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{
+					StreamBuffer: &ipcpb.StreamBufferTrigger{},
 				},
 			},
 		},
 		{
 			name: "StreamEnd",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamEnd{
-					StreamEnd: &pb.StreamEndTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+					StreamEnd: &ipcpb.StreamEndTrigger{},
 				},
 			},
 		},
 		{
 			name: "ViewerDisconnect",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-					ViewerDisconnect: &pb.ViewerDisconnectTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+					ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{},
 				},
 			},
 		},
 		{
 			name: "TrackList",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_TrackList{
-					TrackList: &pb.StreamTrackListTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_TrackList{
+					TrackList: &ipcpb.StreamTrackListTrigger{},
 				},
 			},
 		},
 		{
 			name: "RecordingComplete",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_RecordingComplete{
-					RecordingComplete: &pb.RecordingCompleteTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_RecordingComplete{
+					RecordingComplete: &ipcpb.RecordingCompleteTrigger{},
 				},
 			},
 		},
 		{
 			name: "RecordingSegment",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_RecordingSegment{
-					RecordingSegment: &pb.RecordingSegmentTrigger{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
+					RecordingSegment: &ipcpb.RecordingSegmentTrigger{},
 				},
 			},
 		},
 		{
 			name: "StreamLifecycleUpdate",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-					StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+					StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{},
 				},
 			},
 		},
 		{
 			name: "ClientLifecycleUpdate",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_ClientLifecycleUpdate{
-					ClientLifecycleUpdate: &pb.ClientLifecycleUpdate{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleUpdate{
+					ClientLifecycleUpdate: &ipcpb.ClientLifecycleUpdate{},
 				},
 			},
 		},
 		{
 			name: "NodeLifecycleUpdate",
-			trigger: &pb.MistTrigger{
-				TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-					NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{},
+			trigger: &ipcpb.MistTrigger{
+				TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+					NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{},
 				},
 			},
 		},
@@ -650,7 +653,7 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
-	stub.resolveStreamContextByKey = map[string]*pb.ResolveStreamContextResponse{
+	stub.resolveStreamContextByKey = map[string]*commodorepb.ResolveStreamContextResponse{
 		"playback_id:frameworks-demo": {
 			Admitted:   true,
 			IngestMode: "mist_native",
@@ -667,10 +670,10 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "media-eu-1"
 
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "frameworks-demo"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "frameworks-demo"},
 		},
 	})
 	if err != nil {
@@ -705,10 +708,10 @@ func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 	)
 
 	processor := newTestProcessor(t)
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-1"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "live+stream-1"},
 		},
 	})
 	if err != nil {
@@ -738,10 +741,10 @@ func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T)
 
 	processor := newTestProcessor(t)
 	processor.clusterID = "media-eu-1"
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-1"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "live+stream-1"},
 		},
 	})
 	if err != nil {
@@ -776,10 +779,10 @@ func TestHandleStreamSource_PullOriginPullReturnsDTSC(t *testing.T) {
 	)
 
 	processor := newTestProcessor(t)
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "pull+stream-pull-1"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "pull+stream-pull-1"},
 		},
 	})
 	if err != nil {
@@ -816,10 +819,10 @@ func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
 	)
 
 	processor := newTestProcessor(t)
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "dvr+abc123"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "dvr+abc123"},
 		},
 	})
 	if err != nil {
@@ -853,10 +856,10 @@ func TestHandleStreamSource_MistNativeOriginPullReturnsDTSC(t *testing.T) {
 	)
 
 	processor := newTestProcessor(t)
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "frameworks-demo"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "frameworks-demo"},
 		},
 	})
 	if err != nil {
@@ -890,10 +893,10 @@ func TestHandleStreamSource_OfflineReasonsLockedIn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+			resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 				NodeId: "edge-local-1",
-				TriggerPayload: &pb.MistTrigger_StreamSource{
-					StreamSource: &pb.StreamSourceTrigger{StreamName: tc.stream},
+				TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+					StreamSource: &ipcpb.StreamSourceTrigger{StreamName: tc.stream},
 				},
 			})
 			if err != nil {
@@ -932,10 +935,10 @@ func TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty(t *testing.T
 
 	processor := newTestProcessor(t)
 	// Different edge (edge-local-B) fires STREAM_SOURCE — must NOT pull.
-	resp, abort, err := processor.handleStreamSource(&pb.MistTrigger{
+	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-B",
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{StreamName: "live+stream-pinned"},
+		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{StreamName: "live+stream-pinned"},
 		},
 	})
 	if err != nil {
@@ -956,7 +959,7 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 
 	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
-	stub.resolveStreamContextByKey = map[string]*pb.ResolveStreamContextResponse{
+	stub.resolveStreamContextByKey = map[string]*commodorepb.ResolveStreamContextResponse{
 		"internal_name:60546679b497415db2338cd5cae54992": {
 			Admitted:     true,
 			IngestMode:   "mist_native",
@@ -971,10 +974,10 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "media-eu-1"
 
-	resp, abort, err := processor.handlePlayRewrite(&pb.MistTrigger{
+	resp, abort, err := processor.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId: "edge-eu-1",
-		TriggerPayload: &pb.MistTrigger_PlayRewrite{
-			PlayRewrite: &pb.ViewerResolveTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+			PlayRewrite: &ipcpb.ViewerResolveTrigger{
 				RequestedStream: "60546679b497415db2338cd5cae54992",
 				ViewerHost:      "192.0.2.10",
 				OutputType:      "HTTP",
@@ -999,19 +1002,19 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 }
 
 type stubCommodoreInternalService struct {
-	pb.UnimplementedInternalServiceServer
-	validateResponse          *pb.ValidateStreamKeyResponse
+	commodorepb.UnimplementedInternalServiceServer
+	validateResponse          *commodorepb.ValidateStreamKeyResponse
 	validateErr               error
 	mu                        sync.Mutex
 	validateClusterIDs        []string
-	resolveIdentifierResponse *pb.ResolveIdentifierResponse
+	resolveIdentifierResponse *commodorepb.ResolveIdentifierResponse
 	resolveIdentifierErr      error
-	resolveStreamContextByKey map[string]*pb.ResolveStreamContextResponse
+	resolveStreamContextByKey map[string]*commodorepb.ResolveStreamContextResponse
 	resolveStreamContextErr   error
 	resolveStreamContextKeys  []string
 }
 
-func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
+func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
 	s.mu.Lock()
 	s.validateClusterIDs = append(s.validateClusterIDs, req.GetClusterId())
 	s.mu.Unlock()
@@ -1027,18 +1030,18 @@ func (s *stubCommodoreInternalService) LastValidateClusterID() string {
 	return s.validateClusterIDs[len(s.validateClusterIDs)-1]
 }
 
-func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *commodorepb.ResolveIdentifierRequest) (*commodorepb.ResolveIdentifierResponse, error) {
 	return s.resolveIdentifierResponse, s.resolveIdentifierErr
 }
 
-func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context, req *pb.ResolveStreamContextRequest) (*pb.ResolveStreamContextResponse, error) {
+func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 	key := ""
 	switch id := req.GetIdentifier().(type) {
-	case *pb.ResolveStreamContextRequest_StreamId:
+	case *commodorepb.ResolveStreamContextRequest_StreamId:
 		key = "stream_id:" + id.StreamId
-	case *pb.ResolveStreamContextRequest_PlaybackId:
+	case *commodorepb.ResolveStreamContextRequest_PlaybackId:
 		key = "playback_id:" + id.PlaybackId
-	case *pb.ResolveStreamContextRequest_InternalName:
+	case *commodorepb.ResolveStreamContextRequest_InternalName:
 		key = "internal_name:" + id.InternalName
 	}
 	s.mu.Lock()
@@ -1050,10 +1053,10 @@ func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context,
 		return nil, err
 	}
 	if resp == nil {
-		return &pb.ResolveStreamContextResponse{
+		return &commodorepb.ResolveStreamContextResponse{
 			Admitted:        false,
 			AdmissionReason: "stream not found",
-			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, nil
 	}
 	return resp, nil
@@ -1178,11 +1181,11 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 
 	viewerID := sm.CreateVirtualViewer(nodeID, internalName, clientIP)
 
-	resp, abort, err := processor.handlePlayRewrite(&pb.MistTrigger{
+	resp, abort, err := processor.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_PlayRewrite{
-			PlayRewrite: &pb.ViewerResolveTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+			PlayRewrite: &ipcpb.ViewerResolveTrigger{
 				RequestedStream: "live+" + internalName,
 				ViewerHost:      clientIP,
 				OutputType:      "HLS",
@@ -1200,11 +1203,11 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 		t.Fatalf("expected 1 viewer after PLAY_REWRITE, got %d", got)
 	}
 
-	_, _, err = processor.handleUserNew(&pb.MistTrigger{
+	_, _, err = processor.handleUserNew(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internalName,
 				Host:       clientIP,
 				Connector:  "HLS",
@@ -1220,11 +1223,11 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 		t.Fatalf("expected USER_NEW session attachment not to increment viewers, got %d", got)
 	}
 
-	_, _, err = processor.handlePlayRewrite(&pb.MistTrigger{
+	_, _, err = processor.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_PlayRewrite{
-			PlayRewrite: &pb.ViewerResolveTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
+			PlayRewrite: &ipcpb.ViewerResolveTrigger{
 				RequestedStream: "live+" + internalName,
 				ViewerHost:      clientIP,
 				OutputType:      "HLS",
@@ -1239,11 +1242,11 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 		t.Fatalf("expected duplicate PLAY_REWRITE not to increment viewers, got %d", got)
 	}
 
-	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+	_, _, err = processor.handleUserEnd(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				SessionId:  "mist-session-1",
 				StreamName: "live+" + internalName,
 				Connector:  "HTTP",
@@ -1275,11 +1278,11 @@ func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 		RequiresAuthKnown: true,
 	}, time.Minute)
 
-	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+	resp, abort, err := processor.handleUserNew(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internalName,
 				Host:       clientIP,
 				Connector:  "HLS",
@@ -1316,11 +1319,11 @@ func TestHandleUserEndCountsOnlyConfirmedPlaybackDisconnect(t *testing.T) {
 	}
 	sm.UpdateUserConnection(internalName, nodeID, tenantID, 1)
 
-	_, _, err := processor.handleUserEnd(&pb.MistTrigger{
+	_, _, err := processor.handleUserEnd(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				SessionId:  "mist-session-1",
 				StreamName: "live+" + internalName,
 				Connector:  "HLS",
@@ -1336,11 +1339,11 @@ func TestHandleUserEndCountsOnlyConfirmedPlaybackDisconnect(t *testing.T) {
 		t.Fatalf("expected viewer count to decrement after confirmed disconnect, got %d", got)
 	}
 
-	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+	_, _, err = processor.handleUserEnd(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				SessionId:  "missing-session",
 				StreamName: "live+" + internalName,
 				Connector:  "HLS",
@@ -1366,11 +1369,11 @@ func TestHandleUserTriggersIgnoreNonPlaybackConnectors(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-thumb"
 
-	resp, abort, err := processor.handleUserNew(&pb.MistTrigger{
+	resp, abort, err := processor.handleUserNew(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internalName,
 				Host:       "192.0.2.12",
 				Connector:  "ThumbVTT",
@@ -1386,11 +1389,11 @@ func TestHandleUserTriggersIgnoreNonPlaybackConnectors(t *testing.T) {
 		t.Fatalf("expected non-playback USER_NEW to be allowed without counting, got response=%q abort=%v", resp, abort)
 	}
 
-	_, _, err = processor.handleUserEnd(&pb.MistTrigger{
+	_, _, err = processor.handleUserEnd(&ipcpb.MistTrigger{
 		NodeId:   nodeID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				SessionId:  "thumb-session",
 				StreamName: "live+" + internalName,
 				Connector:  "Raw/WS,info_json",
@@ -1406,12 +1409,12 @@ func TestHandleUserTriggersIgnoreNonPlaybackConnectors(t *testing.T) {
 	}
 }
 
-func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
+func setupCommodoreClient(t *testing.T, response *commodorepb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
 	client, cleanup, _ := setupCommodoreClientWithStub(t, response, responseErr)
 	return client, cleanup
 }
 
-func setupCommodoreClientWithStub(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func(), *stubCommodoreInternalService) {
+func setupCommodoreClientWithStub(t *testing.T, response *commodorepb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func(), *stubCommodoreInternalService) {
 	t.Helper()
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -1424,7 +1427,7 @@ func setupCommodoreClientWithStub(t *testing.T, response *pb.ValidateStreamKeyRe
 		validateResponse: response,
 		validateErr:      responseErr,
 	}
-	pb.RegisterInternalServiceServer(server, stub)
+	commodorepb.RegisterInternalServiceServer(server, stub)
 
 	go func() {
 		_ = server.Serve(listener)
@@ -1450,7 +1453,7 @@ func setupCommodoreClientWithStub(t *testing.T, response *pb.ValidateStreamKeyRe
 	return client, cleanup, stub
 }
 
-func setupCommodoreResolveIdentifierClient(t *testing.T, response *pb.ResolveIdentifierResponse, responseErr error) (*commodore.GRPCClient, func()) {
+func setupCommodoreResolveIdentifierClient(t *testing.T, response *commodorepb.ResolveIdentifierResponse, responseErr error) (*commodore.GRPCClient, func()) {
 	t.Helper()
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -1459,7 +1462,7 @@ func setupCommodoreResolveIdentifierClient(t *testing.T, response *pb.ResolveIde
 	}
 
 	server := grpc.NewServer()
-	pb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
+	commodorepb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
 		resolveIdentifierResponse: response,
 		resolveIdentifierErr:      responseErr,
 	})
@@ -1501,11 +1504,11 @@ func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
 	}, time.Minute)
 
 	streamID := "stream-id"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		StreamId: &streamID,
 		TenantId: &tenantID,
-		TriggerPayload: &pb.MistTrigger_ProcessBilling{
-			ProcessBilling: &pb.ProcessBillingEvent{
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+			ProcessBilling: &ipcpb.ProcessBillingEvent{
 				StreamName: "live+" + internalName,
 			},
 		},
@@ -1541,10 +1544,10 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	}, time.Minute)
 
 	streamID := "stream-2"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-			StorageLifecycleData: &pb.StorageLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &ipcpb.StorageLifecycleData{
 				TenantId:     &tenantID,
 				InternalName: &internalName,
 			},
@@ -1569,7 +1572,7 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 }
 
 func TestHandleStorageLifecycleData_UsesAssetHashFallback(t *testing.T) {
-	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &pb.ResolveIdentifierResponse{
+	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &commodorepb.ResolveIdentifierResponse{
 		Found:          true,
 		TenantId:       "tenant-storage",
 		UserId:         "user-storage",
@@ -1581,9 +1584,9 @@ func TestHandleStorageLifecycleData_UsesAssetHashFallback(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
-			StorageLifecycleData: &pb.StorageLifecycleData{
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &ipcpb.StorageLifecycleData{
 				AssetHash: "clip-hash-1",
 			},
 		},
@@ -1621,10 +1624,10 @@ func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 
 	streamID := "stream-3"
 	wildcardName := "live+" + internalName
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		StreamId: &streamID,
-		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-			DvrLifecycleData: &pb.DVRLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &ipcpb.DVRLifecycleData{
 				TenantId:           &tenantID,
 				StreamInternalName: &wildcardName,
 			},
@@ -1649,7 +1652,7 @@ func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
 }
 
 func TestHandleDVRLifecycleData_UsesDVRHashFallback(t *testing.T) {
-	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &pb.ResolveIdentifierResponse{
+	commodoreClient, cleanup := setupCommodoreResolveIdentifierClient(t, &commodorepb.ResolveIdentifierResponse{
 		Found:          true,
 		TenantId:       "tenant-dvr",
 		UserId:         "user-dvr",
@@ -1661,9 +1664,9 @@ func TestHandleDVRLifecycleData_UsesDVRHashFallback(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
-			DvrLifecycleData: &pb.DVRLifecycleData{
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &ipcpb.DVRLifecycleData{
 				DvrHash: "dvr-hash-1",
 			},
 		},
@@ -1695,7 +1698,7 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
-	response := &pb.ValidateStreamKeyResponse{
+	response := &commodorepb.ValidateStreamKeyResponse{
 		Valid:             true,
 		UserId:            "user-4",
 		TenantId:          "tenant-4",
@@ -1711,10 +1714,10 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
 				StreamName: "push-stream",
 				PushUrl:    "rtmp://example.com/live",
 			},
@@ -1764,7 +1767,7 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 }
 
 func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
-	response := &pb.ValidateStreamKeyResponse{
+	response := &commodorepb.ValidateStreamKeyResponse{
 		Valid:        true,
 		TenantId:     "tenant-5",
 		InternalName: "suspended-stream",
@@ -1776,9 +1779,9 @@ func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
 				StreamName: "suspended-stream",
 			},
 		},
@@ -1795,13 +1798,13 @@ func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
 	if !errors.As(err, &ingestErr) {
 		t.Fatalf("expected ingest error type, got %T", err)
 	}
-	if ingestErr.Code != pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED {
+	if ingestErr.Code != ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED {
 		t.Fatalf("expected suspended error code, got %v", ingestErr.Code)
 	}
 }
 
 func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
-	response := &pb.ValidateStreamKeyResponse{
+	response := &commodorepb.ValidateStreamKeyResponse{
 		Valid:             true,
 		TenantId:          "tenant-6",
 		InternalName:      "negative-balance-stream",
@@ -1813,9 +1816,9 @@ func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
 				StreamName: "negative-balance-stream",
 			},
 		},
@@ -1832,7 +1835,7 @@ func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
 	if !errors.As(err, &ingestErr) {
 		t.Fatalf("expected ingest error type, got %T", err)
 	}
-	if ingestErr.Code != pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED {
+	if ingestErr.Code != ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED {
 		t.Fatalf("expected payment required error code, got %v", ingestErr.Code)
 	}
 }
@@ -1895,7 +1898,7 @@ func TestApplyStreamContext_SeparatesClusterAndOrigin(t *testing.T) {
 		OriginClusterID: "cluster-origin",
 	}, time.Minute)
 
-	trigger := &pb.MistTrigger{TenantId: func() *string { s := "tenant-1"; return &s }()}
+	trigger := &ipcpb.MistTrigger{TenantId: func() *string { s := "tenant-1"; return &s }()}
 	info := processor.applyStreamContext(trigger, "stream-a")
 
 	if info.OriginClusterID != "cluster-origin" {
@@ -1922,7 +1925,7 @@ func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T)
 		OriginClusterID: "cluster-b",
 	}, time.Minute)
 
-	trigger := &pb.MistTrigger{TenantId: func() *string { s := "tenant-b"; return &s }()}
+	trigger := &ipcpb.MistTrigger{TenantId: func() *string { s := "tenant-b"; return &s }()}
 	processor.applyStreamContext(trigger, "shared-stream")
 
 	if trigger.GetOriginClusterId() != "cluster-b" {
@@ -1938,7 +1941,7 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-origin", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
-	response := &pb.ValidateStreamKeyResponse{
+	response := &commodorepb.ValidateStreamKeyResponse{
 		Valid:           true,
 		TenantId:        "tenant-1",
 		UserId:          "user-1",
@@ -1953,9 +1956,9 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "cluster-local"
 
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
 		},
 	}
 
@@ -1979,7 +1982,7 @@ func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "demo-media", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
-	response := &pb.ValidateStreamKeyResponse{
+	response := &commodorepb.ValidateStreamKeyResponse{
 		Valid:           true,
 		TenantId:        "tenant-1",
 		UserId:          "user-1",
@@ -1995,11 +1998,11 @@ func TestHandlePushRewrite_ValidatesUsingTriggerMediaCluster(t *testing.T) {
 	processor.clusterID = "central-primary"
 
 	mediaClusterID := "demo-media"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:    "edge-node-1",
 		ClusterId: &mediaClusterID,
-		TriggerPayload: &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
 		},
 	}
 
@@ -2037,7 +2040,7 @@ func newFakeGatewayDiscoverer(hosts map[string][]string) *fakeGatewayDiscoverer 
 	}
 }
 
-func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType, clusterID string, _ *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error) {
+func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType, clusterID string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[clusterID]++
@@ -2048,10 +2051,10 @@ func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType,
 	}
 
 	if serviceType != "livepeer-gateway" {
-		return &pb.ServiceDiscoveryResponse{}, nil
+		return &quartermasterpb.ServiceDiscoveryResponse{}, nil
 	}
 
-	resp := &pb.ServiceDiscoveryResponse{}
+	resp := &quartermasterpb.ServiceDiscoveryResponse{}
 	port := int32(443)
 	for _, host := range f.hosts[clusterID] {
 		if host == "" {
@@ -2059,7 +2062,7 @@ func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType,
 		}
 		// public_instance_host carries the physical per-instance endpoint that
 		// the broadcaster fanout prefers; mirror Quartermaster's metadata.
-		resp.Instances = append(resp.Instances, &pb.ServiceInstance{
+		resp.Instances = append(resp.Instances, &quartermasterpb.ServiceInstance{
 			Host:         &host,
 			Port:         &port,
 			Protocol:     "https",
@@ -2174,20 +2177,22 @@ func TestApplyLivepeerBroadcasters_FansOutAllInstances(t *testing.T) {
 }
 
 // staticDiscoverer returns a fixed instance set so a test can mix health states.
-type staticDiscoverer struct{ instances []*pb.ServiceInstance }
+type staticDiscoverer struct {
+	instances []*quartermasterpb.ServiceInstance
+}
 
-func (d *staticDiscoverer) DiscoverServices(_ context.Context, serviceType, _ string, _ *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error) {
+func (d *staticDiscoverer) DiscoverServices(_ context.Context, serviceType, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
 	if serviceType != "livepeer-gateway" {
-		return &pb.ServiceDiscoveryResponse{}, nil
+		return &quartermasterpb.ServiceDiscoveryResponse{}, nil
 	}
-	return &pb.ServiceDiscoveryResponse{Instances: d.instances}, nil
+	return &quartermasterpb.ServiceDiscoveryResponse{Instances: d.instances}, nil
 }
 
 func TestApplyLivepeerBroadcasters_ExcludesUnhealthyInstances(t *testing.T) {
 	healthy := "gw-healthy.example.com"
 	unhealthy := "gw-unhealthy.example.com"
 	port := int32(443)
-	disc := &staticDiscoverer{instances: []*pb.ServiceInstance{
+	disc := &staticDiscoverer{instances: []*quartermasterpb.ServiceInstance{
 		{Host: &healthy, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: healthy}},
 		{Host: &unhealthy, Port: &port, Protocol: "https", HealthStatus: "unhealthy", Metadata: map[string]string{servicedefs.LivepeerGatewayMetadataPublicInstanceHost: unhealthy}},
 	}}
@@ -2207,7 +2212,7 @@ func TestApplyLivepeerBroadcasters_PooledOnlyInstanceFallsBackToLocalAV(t *testi
 	// physical endpoints, processing falls back to local MistProcAV.
 	pooled := "10.0.0.5"
 	port := int32(443)
-	disc := &staticDiscoverer{instances: []*pb.ServiceInstance{
+	disc := &staticDiscoverer{instances: []*quartermasterpb.ServiceInstance{
 		{Host: &pooled, Port: &port, Protocol: "https", HealthStatus: "healthy", Metadata: map[string]string{
 			servicedefs.LivepeerGatewayMetadataPublicHost: "livepeer.media-eu.frameworks.network",
 		}},

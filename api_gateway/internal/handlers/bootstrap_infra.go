@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 
@@ -84,7 +84,7 @@ func (h *InfrastructureBootstrapHandler) Handle(c *gin.Context) {
 		body.NodeType = "core"
 	}
 
-	req := &pb.BootstrapInfrastructureNodeRequest{
+	req := &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:              body.Token,
 		NodeType:           body.NodeType,
 		WireguardPublicKey: &body.WireguardPublicKey,

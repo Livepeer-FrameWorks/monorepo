@@ -9,7 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/rating"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 // buildRatingInputForUsage constructs a rating.Input for GetTenantUsage.
@@ -74,8 +74,8 @@ func clusterScopedLineKey(baseKey, clusterID, periodSuffix string) string {
 
 // lineItemToProto serializes a rating.LineItem into the proto wire shape.
 // Decimal fields are encoded as strings to preserve precision.
-func lineItemToProto(li rating.LineItem) *pb.LineItem {
-	return &pb.LineItem{
+func lineItemToProto(li rating.LineItem) *purserpb.LineItem {
+	return &purserpb.LineItem{
 		LineKey:          li.LineKey,
 		Meter:            string(li.Meter),
 		Description:      li.Description,

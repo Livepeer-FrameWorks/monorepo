@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 type TenantContactClient interface {
-	GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error)
+	GetTenantPrimaryUser(ctx context.Context, tenantID string) (*commodorepb.GetTenantPrimaryUserResponse, error)
 }
 
 func resolveTenantNotificationContact(ctx context.Context, tenantID string, billing BillingClient, contacts TenantContactClient, defaultRecipient string, logger logging.Logger) (string, string) {

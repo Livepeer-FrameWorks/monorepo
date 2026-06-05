@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
 	"github.com/DATA-DOG/go-sqlmock"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/sirupsen/logrus"
 )
 
@@ -32,7 +32,7 @@ func newDispatchServer(t *testing.T) (*FoghornGRPCServer, sqlmock.Sqlmock) {
 // liveCandidate / dvrCandidate / chapterCandidate build covered-interval
 // candidates for the pure chooser tests.
 func liveCandidate(start, end int64) clipCoverage {
-	c := clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_LIVE, covStart: start, covEnd: end}
+	c := clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE, covStart: start, covEnd: end}
 	if end > start {
 		c.streamName = "stream-1"
 	}
@@ -40,7 +40,7 @@ func liveCandidate(start, end int64) clipCoverage {
 }
 
 func dvrCandidate(start, end int64) clipCoverage {
-	c := clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, covStart: start, covEnd: end, dvrHash: "dvr-h", sourceNodeID: "node-1"}
+	c := clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, covStart: start, covEnd: end, dvrHash: "dvr-h", sourceNodeID: "node-1"}
 	if end > start {
 		c.streamName = "dvr+dvr-internal"
 	}
@@ -48,7 +48,7 @@ func dvrCandidate(start, end int64) clipCoverage {
 }
 
 func chapterCandidate(start, end int64) clipCoverage {
-	c := clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER, covStart: start, covEnd: end, chapterArtifactHash: "chap-h"}
+	c := clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER, covStart: start, covEnd: end, chapterArtifactHash: "chap-h"}
 	if end > start {
 		c.streamName = "vod+chap-h"
 	}
@@ -58,8 +58,8 @@ func chapterCandidate(start, end int64) clipCoverage {
 func TestResolveClipAbsoluteRangeMs_ClipNowUsesNegativeStartAsStartOffset(t *testing.T) {
 	durationSec := int64(30)
 	startUnix := -durationSec
-	req := &pb.CreateClipRequest{
-		Mode:        pb.ClipMode_CLIP_MODE_CLIP_NOW,
+	req := &sharedpb.CreateClipRequest{
+		Mode:        sharedpb.ClipMode_CLIP_MODE_CLIP_NOW,
 		StartUnix:   &startUnix,
 		DurationSec: &durationSec,
 	}
@@ -139,7 +139,7 @@ func TestChooseClipSource(t *testing.T) {
 		live        clipCoverage
 		dvr         clipCoverage
 		chap        clipCoverage
-		wantKind    pb.ClipPullRequest_SourceKind
+		wantKind    ipcpb.ClipPullRequest_SourceKind
 		wantPartial bool
 		wantStart   int64
 		wantEnd     int64
@@ -150,49 +150,49 @@ func TestChooseClipSource(t *testing.T) {
 			live:     liveCandidate(s, e),
 			dvr:      dvrCandidate(s, e),
 			chap:     chapterCandidate(s, e),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_LIVE, wantStart: s, wantEnd: e,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE, wantStart: s, wantEnd: e,
 		},
 		{
 			name:     "full dvr beats full chapter, live partial",
 			live:     liveCandidate(35_000, e), // partial
 			dvr:      dvrCandidate(s, e),       // full
 			chap:     chapterCandidate(s, e),   // full
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantStart: s, wantEnd: e,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantStart: s, wantEnd: e,
 		},
 		{
 			name:     "full chapter when no live/dvr",
 			live:     liveCandidate(0, 0),
 			dvr:      dvrCandidate(0, 0),
 			chap:     chapterCandidate(s, e),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantStart: s, wantEnd: e,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantStart: s, wantEnd: e,
 		},
 		{
 			name:     "live partial when no dvr/chapter",
 			live:     liveCandidate(35_000, e), // 25s
 			dvr:      dvrCandidate(0, 0),
 			chap:     chapterCandidate(0, 0),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_LIVE, wantPartial: true, wantStart: 35_000, wantEnd: e,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE, wantPartial: true, wantStart: 35_000, wantEnd: e,
 		},
 		{
 			name:     "dvr partial beats tiny live partial",
 			live:     liveCandidate(58_000, e), // 2s
 			dvr:      dvrCandidate(s, 48_000),  // 48s
 			chap:     chapterCandidate(0, 0),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantPartial: true, wantStart: s, wantEnd: 48_000,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantPartial: true, wantStart: s, wantEnd: 48_000,
 		},
 		{
 			name:     "equal partial coverage breaks toward live",
 			live:     liveCandidate(s, 30_000), // 30s
 			dvr:      dvrCandidate(30_000, e),  // 30s
 			chap:     chapterCandidate(0, 0),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_LIVE, wantPartial: true, wantStart: s, wantEnd: 30_000,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE, wantPartial: true, wantStart: s, wantEnd: 30_000,
 		},
 		{
 			name:     "chapter partial when no live/dvr",
 			live:     liveCandidate(0, 0),
 			dvr:      dvrCandidate(0, 0),
 			chap:     chapterCandidate(12_000, 48_000),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantPartial: true, wantStart: 12_000, wantEnd: 48_000,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantPartial: true, wantStart: 12_000, wantEnd: 48_000,
 		},
 		{
 			// A larger raw overlap that collapses below 1s after hard-boundary
@@ -201,7 +201,7 @@ func TestChooseClipSource(t *testing.T) {
 			live:     liveCandidate(0, 0),
 			dvr:      dvrCandidate(58_100, 59_950),     // 1.85s raw, hard -> ceil59,floor59 collapses
 			chap:     chapterCandidate(10_000, 12_000), // 2s, viable
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantPartial: true, wantStart: 10_000, wantEnd: 12_000,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantPartial: true, wantStart: 10_000, wantEnd: 12_000,
 		},
 		{
 			name:    "zero overlap fails",
@@ -219,17 +219,17 @@ func TestChooseClipSource(t *testing.T) {
 		},
 		{
 			name:     "live zeroed for fallback falls to dvr",
-			live:     clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_LIVE}, // dropped
+			live:     clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE}, // dropped
 			dvr:      dvrCandidate(s, 48_000),
 			chap:     chapterCandidate(0, 0),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantPartial: true, wantStart: s, wantEnd: 48_000,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING, wantPartial: true, wantStart: s, wantEnd: 48_000,
 		},
 		{
 			name:     "dvr zeroed for fallback (unroutable node) falls to chapter",
 			live:     liveCandidate(0, 0),
-			dvr:      clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}, // dropped
+			dvr:      clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}, // dropped
 			chap:     chapterCandidate(s, e),
-			wantKind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantStart: s, wantEnd: e,
+			wantKind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER, wantStart: s, wantEnd: e,
 		},
 	}
 	for _, tc := range cases {
@@ -316,7 +316,7 @@ func TestPickClipSource_DVRFullCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
 		t.Fatalf("expected DVR_ROLLING, got %v", dec.kind)
 	}
 	if dec.partial {
@@ -339,7 +339,7 @@ func TestPickClipSource_ChapterFullWhenNoDVR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_CHAPTER {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER {
 		t.Fatalf("expected CHAPTER, got %v", dec.kind)
 	}
 	if dec.partial {
@@ -362,7 +362,7 @@ func TestPickClipSource_DVRFullBeatsChapterFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
 		t.Fatalf("expected DVR to win over chapter, got %v", dec.kind)
 	}
 }
@@ -383,7 +383,7 @@ func TestPickClipSource_DVRPartialTailStartsBeforeDVR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING {
 		t.Fatalf("expected DVR_ROLLING tail, got %v", dec.kind)
 	}
 	if !dec.partial {
@@ -408,7 +408,7 @@ func TestPickClipSource_ChapterPartialOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_CHAPTER || !dec.partial {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER || !dec.partial {
 		t.Fatalf("expected partial CHAPTER, got kind=%v partial=%v", dec.kind, dec.partial)
 	}
 	if dec.effectiveStartMs != ovStart || dec.effectiveEndMs != ovEnd {
@@ -451,7 +451,7 @@ func TestPickClipSource_AmbiguousDVRFallsToChapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_CHAPTER {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER {
 		t.Fatalf("expected CHAPTER fallback, got %v", dec.kind)
 	}
 }
@@ -476,7 +476,7 @@ func TestPickClipSource_NodelessDVRFallsToChapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dec.kind != pb.ClipPullRequest_SOURCE_KIND_CHAPTER {
+	if dec.kind != ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER {
 		t.Fatalf("expected CHAPTER fallback, got %v", dec.kind)
 	}
 }

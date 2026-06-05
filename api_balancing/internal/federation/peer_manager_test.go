@@ -16,7 +16,9 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func TestRecordAndAverage_SingleSample(t *testing.T) {
@@ -112,8 +114,8 @@ func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
 	}
 
 	peerCluster := "peer-1"
-	data := &pb.FederationEventData{
-		EventType:   pb.FederationEventType_PEER_CONNECTED,
+	data := &ipcpb.FederationEventData{
+		EventType:   ipcpb.FederationEventType_PEER_CONNECTED,
 		PeerCluster: &peerCluster,
 	}
 
@@ -145,7 +147,7 @@ func TestEnrichFederationEventGeo_LeavesTenantUnsetWithoutOwner(t *testing.T) {
 		metricHistory: make(map[string][]metricSample),
 	}
 
-	data := &pb.FederationEventData{EventType: pb.FederationEventType_LEADER_ACQUIRED}
+	data := &ipcpb.FederationEventData{EventType: ipcpb.FederationEventType_LEADER_ACQUIRED}
 	pm.enrichFederationEventGeo(data)
 
 	if data.TenantId != nil {
@@ -163,7 +165,7 @@ func TestSetOwnerTenantIDUpdatesFederationEventEnrichment(t *testing.T) {
 	}
 	pm.SetOwnerTenantID("tenant-real")
 
-	data := &pb.FederationEventData{EventType: pb.FederationEventType_LEADER_ACQUIRED}
+	data := &ipcpb.FederationEventData{EventType: ipcpb.FederationEventType_LEADER_ACQUIRED}
 	pm.enrichFederationEventGeo(data)
 
 	if data.GetTenantId() != "tenant-real" {
@@ -200,7 +202,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
 		{
 			ClusterId:       "remote-cluster",
 			ClusterSlug:     "remote",
@@ -227,7 +229,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	peers := []*pb.TenantClusterPeer{
+	peers := []*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "local-cluster", ClusterSlug: "local", BaseUrl: "example.com"},
 		{ClusterId: "", ClusterSlug: "empty", BaseUrl: "example.com"},
 		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.11:18019", Role: "preferred"},
@@ -254,7 +256,7 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 	pm := newTestPeerManager(t, "central-primary-test", nil, false)
 	control.AddServedCluster("demo-media-test")
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "demo-media-test", ClusterSlug: "demo", BaseUrl: "example.com"},
 		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.12:18019"},
 	}, "tenant-a")
@@ -270,7 +272,7 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 func TestNotifyPeers_SkipsPeerWithoutInternalFoghornAddress(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com"},
 	}, "tenant-a")
 
@@ -287,7 +289,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 	// (we have no real FoghornPool in tests)
 	close(pm.done)
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.13:18019", Role: "official"},
 	}, "tenant-a")
 
@@ -408,13 +410,13 @@ func TestLoadPeerAddressesFromRedis_RemovesStaleRedisPeers(t *testing.T) {
 
 func TestArtifactTypeToString(t *testing.T) {
 	tests := []struct {
-		input pb.ArtifactEvent_ArtifactType
+		input ipcpb.ArtifactEvent_ArtifactType
 		want  string
 	}{
-		{pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
-		{pb.ArtifactEvent_ArtifactType(99), "clip"}, // unknown defaults to clip
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
+		{ipcpb.ArtifactEvent_ArtifactType(99), "clip"}, // unknown defaults to clip
 	}
 	for _, tt := range tests {
 		got := artifactTypeToString(tt.input)
@@ -449,13 +451,13 @@ func TestSyncPeerAddressesToRedis(t *testing.T) {
 }
 
 type testPeerChannelStream struct {
-	messages []*pb.PeerMessage
+	messages []*foghornfederationpb.PeerMessage
 	idx      int
 }
 
-func (s *testPeerChannelStream) Send(*pb.PeerMessage) error { return nil }
+func (s *testPeerChannelStream) Send(*foghornfederationpb.PeerMessage) error { return nil }
 
-func (s *testPeerChannelStream) Recv() (*pb.PeerMessage, error) {
+func (s *testPeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {
 	if s.idx >= len(s.messages) {
 		return nil, io.EOF
 	}
@@ -542,9 +544,9 @@ func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testi
 func TestRecvLoop_NoCache_DropsMessagesWithoutPanic(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 	stream := &testPeerChannelStream{
-		messages: []*pb.PeerMessage{{
+		messages: []*foghornfederationpb.PeerMessage{{
 			ClusterId: "remote",
-			Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
+			Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
 				StreamName: "live+abc",
 				NodeId:     "node-1",
 			}},
@@ -555,26 +557,28 @@ func TestRecvLoop_NoCache_DropsMessagesWithoutPanic(t *testing.T) {
 }
 
 type capturePeerChannelStream struct {
-	sent []*pb.PeerMessage
+	sent []*foghornfederationpb.PeerMessage
 }
 
-func (s *capturePeerChannelStream) Send(msg *pb.PeerMessage) error {
+func (s *capturePeerChannelStream) Send(msg *foghornfederationpb.PeerMessage) error {
 	s.sent = append(s.sent, msg)
 	return nil
 }
 
-func (s *capturePeerChannelStream) Recv() (*pb.PeerMessage, error) { return nil, io.EOF }
-func (s *capturePeerChannelStream) CloseSend() error               { return nil }
-func (s *capturePeerChannelStream) Context() context.Context       { return context.Background() }
-func (s *capturePeerChannelStream) Header() (metadata.MD, error)   { return metadata.MD{}, nil }
-func (s *capturePeerChannelStream) Trailer() metadata.MD           { return metadata.MD{} }
-func (s *capturePeerChannelStream) SendMsg(any) error              { return nil }
-func (s *capturePeerChannelStream) RecvMsg(any) error              { return io.EOF }
+func (s *capturePeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {
+	return nil, io.EOF
+}
+func (s *capturePeerChannelStream) CloseSend() error             { return nil }
+func (s *capturePeerChannelStream) Context() context.Context     { return context.Background() }
+func (s *capturePeerChannelStream) Header() (metadata.MD, error) { return metadata.MD{}, nil }
+func (s *capturePeerChannelStream) Trailer() metadata.MD         { return metadata.MD{} }
+func (s *capturePeerChannelStream) SendMsg(any) error            { return nil }
+func (s *capturePeerChannelStream) RecvMsg(any) error            { return io.EOF }
 
 func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
 		ClusterId:       "remote-cluster",
 		ClusterSlug:     "remote-old",
 		BaseUrl:         "example.com",
@@ -582,7 +586,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 		Role:            "subscribed",
 	}}, "tenant-a")
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
 		ClusterId:       "remote-cluster",
 		ClusterSlug:     "remote-new",
 		BaseUrl:         "example.net",
@@ -617,7 +621,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	// Close done so connectPeer goroutines exit immediately
 	close(pm.done)
 
-	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
 		ClusterId:       "remote-1",
 		ClusterSlug:     "r1",
 		BaseUrl:         "old.example.com",
@@ -626,7 +630,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	}}, "tenant-a")
 
 	// Update address for the same peer
-	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
 		ClusterId:       "remote-1",
 		ClusterSlug:     "r1",
 		BaseUrl:         "new.example.com",
@@ -917,12 +921,12 @@ func newNoopPool(t *testing.T) *foghorn.FoghornPool {
 }
 
 type fakeClusterPeerDiscovery struct {
-	resp  *pb.ListPeersResponse
+	resp  *quartermasterpb.ListPeersResponse
 	err   error
 	calls int
 }
 
-func (f *fakeClusterPeerDiscovery) ListPeers(_ context.Context, _ string) (*pb.ListPeersResponse, error) {
+func (f *fakeClusterPeerDiscovery) ListPeers(_ context.Context, _ string) (*quartermasterpb.ListPeersResponse, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
@@ -957,11 +961,11 @@ func (f *fakeFederationPool) callCount() int {
 
 type fakeFederationClient struct {
 	mu       sync.Mutex
-	openFunc func(ctx context.Context) (pb.FoghornFederation_PeerChannelClient, error)
+	openFunc func(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error)
 	opens    int
 }
 
-func (f *fakeFederationClient) OpenPeerChannel(ctx context.Context) (pb.FoghornFederation_PeerChannelClient, error) {
+func (f *fakeFederationClient) OpenPeerChannel(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
 	f.mu.Lock()
 	f.opens++
 	fn := f.openFunc
@@ -1146,10 +1150,10 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 	}, control.Location{IsLiveNow: true, AdTimestamp: time.Now().Unix()})
 
 	stream := &testPeerChannelStream{
-		messages: []*pb.PeerMessage{
+		messages: []*foghornfederationpb.PeerMessage{
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
+				Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
 					StreamName:  "live+edge",
 					NodeId:      "node-edge",
 					BaseUrl:     "edge.remote.example.com",
@@ -1164,7 +1168,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_ReplicationEvent{ReplicationEvent: &pb.ReplicationEvent{
+				Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{ReplicationEvent: &foghornfederationpb.ReplicationEvent{
 					StreamName: "live+rep",
 					NodeId:     "node-rep",
 					ClusterId:  peerID,
@@ -1175,8 +1179,8 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_ClusterSummary{ClusterSummary: &pb.ClusterEdgeSummary{
-					Edges: []*pb.EdgeSnapshot{{
+				Payload: &foghornfederationpb.PeerMessage_ClusterSummary{ClusterSummary: &foghornfederationpb.ClusterEdgeSummary{
+					Edges: []*foghornfederationpb.EdgeSnapshot{{
 						NodeId:         "node-sum",
 						BaseUrl:        "edge.sum.example.com",
 						GeoLat:         1,
@@ -1192,7 +1196,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_StreamLifecycle{StreamLifecycle: &pb.StreamLifecycleEvent{
+				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
 					InternalName: "live+stream",
 					TenantId:     "tenant-a",
 					ClusterId:    peerID,
@@ -1201,7 +1205,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_StreamLifecycle{StreamLifecycle: &pb.StreamLifecycleEvent{
+				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
 					InternalName: "dead+stream",
 					TenantId:     "tenant-a",
 					ClusterId:    peerID,
@@ -1210,13 +1214,13 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_StreamAd{StreamAd: &pb.StreamAdvertisement{
+				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
 					InternalName:    "live+ad2",
 					TenantId:        "tenant-a",
 					PlaybackId:      "play-2",
 					OriginClusterId: peerID,
 					IsLive:          true,
-					Edges: []*pb.PeerStreamEdge{{
+					Edges: []*foghornfederationpb.PeerStreamEdge{{
 						NodeId:      "node-ad",
 						BaseUrl:     "edge.ad.example.com",
 						DtscUrl:     "dtsc://edge.ad.example.com/live+ad2",
@@ -1233,7 +1237,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_StreamAd{StreamAd: &pb.StreamAdvertisement{
+				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
 					InternalName: "live+ad",
 					TenantId:     "tenant-a",
 					IsLive:       false,
@@ -1242,8 +1246,8 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_ArtifactAd{ArtifactAd: &pb.ArtifactAdvertisement{
-					Artifacts: []*pb.ArtifactLocation{{
+				Payload: &foghornfederationpb.PeerMessage_ArtifactAd{ArtifactAd: &foghornfederationpb.ArtifactAdvertisement{
+					Artifacts: []*foghornfederationpb.ArtifactLocation{{
 						ArtifactHash: "artifact-1",
 						ArtifactType: "clip",
 						NodeId:       "node-art",
@@ -1259,7 +1263,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{
+				Payload: &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &foghornfederationpb.PeerHeartbeat{
 					ProtocolVersion:  protocolVersion,
 					StreamCount:      7,
 					TotalBwAvailable: 9999,
@@ -1270,7 +1274,7 @@ func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
 			},
 			{
 				ClusterId: peerID,
-				Payload: &pb.PeerMessage_CapacitySummary{CapacitySummary: &pb.CapacitySummary{
+				Payload: &foghornfederationpb.PeerMessage_CapacitySummary{CapacitySummary: &foghornfederationpb.CapacitySummary{
 					TotalBandwidth:     1000,
 					AvailableBandwidth: 900,
 					TotalEdges:         2,
@@ -1408,7 +1412,7 @@ func TestPushSummary_SendsClusterSummary(t *testing.T) {
 		t.Fatalf("expected 1 summary message, got %d", len(out.sent))
 	}
 	msg := out.sent[0]
-	payload, ok := msg.Payload.(*pb.PeerMessage_ClusterSummary)
+	payload, ok := msg.Payload.(*foghornfederationpb.PeerMessage_ClusterSummary)
 	if !ok || payload.ClusterSummary == nil {
 		t.Fatalf("expected cluster summary payload, got %#v", msg.Payload)
 	}
@@ -1421,14 +1425,14 @@ func TestPushArtifacts_SendsArtifactAdvertisement(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	seedFederationNodeAndStream(t, sm, "node-a", "stream-a", "tenant-a")
-	sm.SetNodeArtifacts("node-a", []*pb.StoredArtifact{{
+	sm.SetNodeArtifacts("node-a", []*ipcpb.StoredArtifact{{
 		ClipHash:     "clip-1",
 		StreamName:   "stream-a",
 		FilePath:     "/tmp/clip-1.mp4",
 		SizeBytes:    123,
 		AccessCount:  5,
 		LastAccessed: time.Now().Unix(),
-		ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 	}})
 
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
@@ -1446,7 +1450,7 @@ func TestPushArtifacts_SendsArtifactAdvertisement(t *testing.T) {
 	if len(out.sent) != 1 {
 		t.Fatalf("expected 1 artifact advertisement, got %d", len(out.sent))
 	}
-	payload, ok := out.sent[0].Payload.(*pb.PeerMessage_ArtifactAd)
+	payload, ok := out.sent[0].Payload.(*foghornfederationpb.PeerMessage_ArtifactAd)
 	if !ok || payload.ArtifactAd == nil || len(payload.ArtifactAd.Artifacts) != 1 {
 		t.Fatalf("unexpected artifact payload: %#v", out.sent[0].Payload)
 	}
@@ -1492,7 +1496,7 @@ func TestPushStreamAds_SendsAndFiltersByPeerAuthorization(t *testing.T) {
 	if len(blocked.sent) != 0 {
 		t.Fatalf("expected blocked peer to receive zero stream ads, got %d", len(blocked.sent))
 	}
-	payload, ok := allowed.sent[0].Payload.(*pb.PeerMessage_StreamAd)
+	payload, ok := allowed.sent[0].Payload.(*foghornfederationpb.PeerMessage_StreamAd)
 	if !ok || payload.StreamAd == nil {
 		t.Fatalf("expected stream ad payload, got %#v", allowed.sent[0].Payload)
 	}
@@ -1524,7 +1528,7 @@ func TestPushHeartbeat_SendsClusterHeartbeat(t *testing.T) {
 	if len(out.sent) != 1 {
 		t.Fatalf("expected 1 heartbeat message, got %d", len(out.sent))
 	}
-	payload, ok := out.sent[0].Payload.(*pb.PeerMessage_PeerHeartbeat)
+	payload, ok := out.sent[0].Payload.(*foghornfederationpb.PeerMessage_PeerHeartbeat)
 	if !ok || payload.PeerHeartbeat == nil {
 		t.Fatalf("expected heartbeat payload, got %#v", out.sent[0].Payload)
 	}
@@ -1634,8 +1638,8 @@ func TestRefreshPeers_ReconcilesAddUpdateAndRemove(t *testing.T) {
 	pm.peers["stale"] = stale
 	pm.mu.Unlock()
 	pm.peerDiscovery = &fakeClusterPeerDiscovery{
-		resp: &pb.ListPeersResponse{
-			Peers: []*pb.PeerCluster{
+		resp: &quartermasterpb.ListPeersResponse{
+			Peers: []*quartermasterpb.PeerCluster{
 				{ClusterId: "same", FoghornAddr: "same:18029", SharedTenantIds: []string{"tenant-a"}},
 				{ClusterId: "changed", FoghornAddr: "new:18029", SharedTenantIds: []string{"tenant-b"}},
 				{ClusterId: "new-peer", FoghornAddr: "new-peer:18029", SharedTenantIds: []string{"tenant-c"}},
@@ -1695,7 +1699,7 @@ func TestConnectPeer_ExitsWhenPeerEntryMissing(t *testing.T) {
 	pool := &fakeFederationPool{
 		getOrCreate: func(_, _ string) (federationPeerClient, error) {
 			return &fakeFederationClient{
-				openFunc: func(context.Context) (pb.FoghornFederation_PeerChannelClient, error) {
+				openFunc: func(context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
 					return &capturePeerChannelStream{}, nil
 				},
 			}, nil
@@ -1749,7 +1753,7 @@ func TestConnectPeer_RetriesOnOpenPeerChannelErrorUntilDone(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 	pm.reconnectBackoff = time.Millisecond
 	client := &fakeFederationClient{
-		openFunc: func(context.Context) (pb.FoghornFederation_PeerChannelClient, error) {
+		openFunc: func(context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
 			return nil, errors.New("open failed")
 		},
 	}
@@ -1784,7 +1788,7 @@ func TestConnectPeer_ConnectsThenMarksDisconnectedOnEOF(t *testing.T) {
 	pm := newTestPeerManager(t, "cluster-a", nil, false)
 	pm.reconnectBackoff = 50 * time.Millisecond
 	client := &fakeFederationClient{
-		openFunc: func(context.Context) (pb.FoghornFederation_PeerChannelClient, error) {
+		openFunc: func(context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
 			return &capturePeerChannelStream{}, nil
 		},
 	}

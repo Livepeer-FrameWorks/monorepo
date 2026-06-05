@@ -15,7 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -91,7 +91,7 @@ func RunWorker(ctx context.Context) {
 // drain worker dispatches to Decklog with exponential backoff. Use
 // EnqueueClipLifecycleTx when the caller already holds a transaction —
 // the INSERT then rolls back with the caller's tx on failure.
-func EnqueueClipLifecycle(data *pb.ClipLifecycleData) error {
+func EnqueueClipLifecycle(data *ipcpb.ClipLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -99,7 +99,7 @@ func EnqueueClipLifecycle(data *pb.ClipLifecycleData) error {
 		data.GetStreamId(), data.GetClipHash(), data)
 }
 
-func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *pb.ClipLifecycleData) error {
+func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.ClipLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -107,7 +107,7 @@ func EnqueueClipLifecycleTx(ctx context.Context, tx execContext, data *pb.ClipLi
 		data.GetStreamId(), data.GetClipHash(), data)
 }
 
-func EnqueueDVRLifecycle(data *pb.DVRLifecycleData) error {
+func EnqueueDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -115,7 +115,7 @@ func EnqueueDVRLifecycle(data *pb.DVRLifecycleData) error {
 		data.GetStreamId(), data.GetDvrHash(), data)
 }
 
-func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *pb.DVRLifecycleData) error {
+func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.DVRLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func EnqueueDVRLifecycleTx(ctx context.Context, tx execContext, data *pb.DVRLife
 
 // EnqueueVodLifecycle leaves stream_id blank — VOD uploads aren't always
 // associated with a live stream.
-func EnqueueVodLifecycle(data *pb.VodLifecycleData) error {
+func EnqueueVodLifecycle(data *ipcpb.VodLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -133,7 +133,7 @@ func EnqueueVodLifecycle(data *pb.VodLifecycleData) error {
 		"", data.GetVodHash(), data)
 }
 
-func EnqueueVodLifecycleTx(ctx context.Context, tx execContext, data *pb.VodLifecycleData) error {
+func EnqueueVodLifecycleTx(ctx context.Context, tx execContext, data *ipcpb.VodLifecycleData) error {
 	if data == nil {
 		return nil
 	}
@@ -141,7 +141,7 @@ func EnqueueVodLifecycleTx(ctx context.Context, tx execContext, data *pb.VodLife
 		"", data.GetVodHash(), data)
 }
 
-func EnqueueFederationEvent(data *pb.FederationEventData) error {
+func EnqueueFederationEvent(data *ipcpb.FederationEventData) error {
 	if data == nil {
 		return nil
 	}
@@ -149,7 +149,7 @@ func EnqueueFederationEvent(data *pb.FederationEventData) error {
 		data.GetStreamId(), "", data)
 }
 
-func EnqueueFederationEventTx(ctx context.Context, tx execContext, data *pb.FederationEventData) error {
+func EnqueueFederationEventTx(ctx context.Context, tx execContext, data *ipcpb.FederationEventData) error {
 	if data == nil {
 		return nil
 	}
@@ -160,19 +160,19 @@ func EnqueueFederationEventTx(ctx context.Context, tx execContext, data *pb.Fede
 // EnqueueClipLifecycleLogged is the fire-and-forget variant used from
 // background goroutines. Enqueue failures land on the package logger so
 // the outbox-bypass case (Init never wired, DB outage) is observable.
-func EnqueueClipLifecycleLogged(data *pb.ClipLifecycleData) {
+func EnqueueClipLifecycleLogged(data *ipcpb.ClipLifecycleData) {
 	if err := EnqueueClipLifecycle(data); err != nil && logger != nil {
 		logger.WithError(err).Warn("artifactoutbox: enqueue clip lifecycle")
 	}
 }
 
-func EnqueueDVRLifecycleLogged(data *pb.DVRLifecycleData) {
+func EnqueueDVRLifecycleLogged(data *ipcpb.DVRLifecycleData) {
 	if err := EnqueueDVRLifecycle(data); err != nil && logger != nil {
 		logger.WithError(err).Warn("artifactoutbox: enqueue dvr lifecycle")
 	}
 }
 
-func EnqueueVodLifecycleLogged(data *pb.VodLifecycleData) {
+func EnqueueVodLifecycleLogged(data *ipcpb.VodLifecycleData) {
 	if err := EnqueueVodLifecycle(data); err != nil && logger != nil {
 		logger.WithError(err).Warn("artifactoutbox: enqueue vod lifecycle")
 	}
@@ -215,13 +215,13 @@ func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, arti
 // other type is a programmer error and surfaces explicitly.
 func marshalPayload(payload any) ([]byte, error) {
 	switch m := payload.(type) {
-	case *pb.ClipLifecycleData:
+	case *ipcpb.ClipLifecycleData:
 		return protojson.Marshal(m)
-	case *pb.DVRLifecycleData:
+	case *ipcpb.DVRLifecycleData:
 		return protojson.Marshal(m)
-	case *pb.VodLifecycleData:
+	case *ipcpb.VodLifecycleData:
 		return protojson.Marshal(m)
-	case *pb.FederationEventData:
+	case *ipcpb.FederationEventData:
 		return protojson.Marshal(m)
 	default:
 		return nil, fmt.Errorf("unsupported artifact event payload type %T", payload)
@@ -388,7 +388,7 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 	}
 	switch row.eventKind {
 	case kindClipLifecycle:
-		data := &pb.ClipLifecycleData{}
+		data := &ipcpb.ClipLifecycleData{}
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal ClipLifecycleData: %w", err)
 		}
@@ -396,7 +396,7 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 			return []string{"decklog"}, err
 		}
 	case kindDVRLifecycle:
-		data := &pb.DVRLifecycleData{}
+		data := &ipcpb.DVRLifecycleData{}
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal DVRLifecycleData: %w", err)
 		}
@@ -404,7 +404,7 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 			return []string{"decklog"}, err
 		}
 	case kindVodLifecycle:
-		data := &pb.VodLifecycleData{}
+		data := &ipcpb.VodLifecycleData{}
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal VodLifecycleData: %w", err)
 		}
@@ -412,7 +412,7 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 			return []string{"decklog"}, err
 		}
 	case kindFederationEvent:
-		data := &pb.FederationEventData{}
+		data := &ipcpb.FederationEventData{}
 		if err := protojson.Unmarshal(row.payload, data); err != nil {
 			return nil, fmt.Errorf("unmarshal FederationEventData: %w", err)
 		}

@@ -6,7 +6,7 @@ import (
 
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -71,25 +71,25 @@ func truncateReason(reason string) string {
 	return reason
 }
 
-func parseRejectReasonCode(reason string) pb.ClusterRejectReason {
+func parseRejectReasonCode(reason string) ipcpb.ClusterRejectReason {
 	lower := strings.ToLower(reason)
 	switch {
 	case strings.Contains(lower, "capacity") || strings.Contains(lower, "full"):
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_CAPACITY
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_CAPACITY
 	case strings.Contains(lower, "policy") || strings.Contains(lower, "terms") || strings.Contains(lower, "violation"):
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_POLICY
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_POLICY
 	case strings.Contains(lower, "eligib") || strings.Contains(lower, "qualify"):
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_ELIGIBILITY
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_ELIGIBILITY
 	case strings.Contains(lower, "duplicate") || strings.Contains(lower, "already"):
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_DUPLICATE
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_DUPLICATE
 	case strings.Contains(lower, "withdraw") || strings.Contains(lower, "cancel"):
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_WITHDRAWN
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_WITHDRAWN
 	default:
-		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_OTHER
+		return ipcpb.ClusterRejectReason_CLUSTER_REJECT_REASON_OTHER
 	}
 }
 
-func (r *Resolver) sendServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
+func (r *Resolver) sendServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
 	if r == nil || event == nil {
 		return
 	}

@@ -6,11 +6,10 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestResolveNodeFingerprint(t *testing.T) {
@@ -29,7 +28,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 			WithArgs("203.0.113.10", "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		resp, err := server.ResolveNodeFingerprint(context.Background(), &pb.ResolveNodeFingerprintRequest{
+		resp, err := server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp:          "203.0.113.10",
 			MachineIdSha256: strPtr("machine-hash"),
 		})
@@ -60,7 +59,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 			WithArgs("198.51.100.4").
 			WillReturnError(sql.ErrNoRows)
 
-		_, err = server.ResolveNodeFingerprint(context.Background(), &pb.ResolveNodeFingerprintRequest{
+		_, err = server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp:          "198.51.100.4",
 			MachineIdSha256: strPtr("machine-stale"),
 		})

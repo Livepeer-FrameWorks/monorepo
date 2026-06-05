@@ -13,8 +13,8 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -24,7 +24,7 @@ type MistUpdateRequest struct {
 	NodeID        string
 	ClusterID     string
 	TargetRelease string
-	Components    []*pb.DesiredComponent
+	Components    []*ipcpb.DesiredComponent
 	DrainDeadline time.Duration
 	Force         bool
 }
@@ -33,7 +33,7 @@ type DirectUpdateRequest struct {
 	NodeID        string
 	ClusterID     string
 	TargetRelease string
-	Components    []*pb.DesiredComponent
+	Components    []*ipcpb.DesiredComponent
 }
 
 func ApplyDirectUpdate(ctx context.Context, req DirectUpdateRequest) error {
@@ -60,7 +60,7 @@ func ApplyDirectUpdate(ctx context.Context, req DirectUpdateRequest) error {
 	if err := persistPhase(ctx, req.NodeID, req.TargetRelease, "updating", "", deadline); err != nil {
 		return err
 	}
-	if err := control.SendDesiredStateUpdate(req.NodeID, &pb.DesiredStateUpdate{
+	if err := control.SendDesiredStateUpdate(req.NodeID, &ipcpb.DesiredStateUpdate{
 		ClusterId:     req.ClusterID,
 		NodeId:        req.NodeID,
 		TargetRelease: req.TargetRelease,
@@ -132,7 +132,7 @@ func ApplyMistUpdate(ctx context.Context, req MistUpdateRequest) error {
 		if err := persistPhaseWithExpected(ctx, req.NodeID, req.TargetRelease, "updating_restore", "", applyDeadline, expectedComponentVersions(req.Components)); err != nil {
 			return err
 		}
-		if err := control.SendDesiredStateUpdate(req.NodeID, &pb.DesiredStateUpdate{
+		if err := control.SendDesiredStateUpdate(req.NodeID, &ipcpb.DesiredStateUpdate{
 			ClusterId:            req.ClusterID,
 			NodeId:               req.NodeID,
 			TargetRelease:        req.TargetRelease,
@@ -185,14 +185,14 @@ func cordonNodeForUpdate(ctx context.Context, nodeID string) error {
 	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeDraining, "update-orchestrator"); err != nil {
 		return err
 	}
-	return control.PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING)
+	return control.PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING)
 }
 
 func fenceNodeAfterUpdateFailure(ctx context.Context, nodeID string) error {
 	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeMaintenance, "update-orchestrator"); err != nil {
 		return err
 	}
-	return control.PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE)
+	return control.PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE)
 }
 
 func persistFailure(ctx context.Context, nodeID, targetRelease string, cause error, deadline time.Time) error {
@@ -295,7 +295,7 @@ func newCordonToken() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-func expectedComponentVersions(components []*pb.DesiredComponent) map[string]string {
+func expectedComponentVersions(components []*ipcpb.DesiredComponent) map[string]string {
 	expected := make(map[string]string)
 	for _, component := range components {
 		if component == nil {

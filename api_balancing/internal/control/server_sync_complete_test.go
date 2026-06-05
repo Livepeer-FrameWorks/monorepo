@@ -6,7 +6,7 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -16,7 +16,7 @@ func TestProcessSyncComplete_NilRepo_EarlyReturn(t *testing.T) {
 	artifactRepo = nil // override
 	logger := logging.NewLogger()
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "hash-1",
 		Status:    "success",
 	}, "node-1", logger)
@@ -44,7 +44,7 @@ func TestProcessSyncComplete_Success_WithS3URL(t *testing.T) {
 		WithArgs("hash-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash:    "hash-1",
 		Status:       "success",
 		S3Url:        "s3://bucket/key",
@@ -85,7 +85,7 @@ func TestProcessSyncComplete_Success_RebuildsClipURL(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), false, "clip-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "clip-hash",
 		Status:    "success",
 	}, "node-1", logger)
@@ -114,7 +114,7 @@ func TestProcessSyncComplete_Success_RebuildsDVRURL(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), false, "dvr-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "dvr-hash",
 		Status:    "success",
 	}, "node-1", logger)
@@ -140,7 +140,7 @@ func TestProcessSyncComplete_Success_RebuildsVodURL(t *testing.T) {
 		WithArgs("vod-hash", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "vod-hash",
 		Status:    "success",
 	}, "node-1", logger)
@@ -162,7 +162,7 @@ func TestProcessSyncComplete_Success_UsesReportingNodeID(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), false, "hash-1", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "hash-1",
 		Status:    "success",
 		S3Url:     "s3://pre-set",
@@ -191,7 +191,7 @@ func TestProcessSyncComplete_Success_DeletesReplacedVodSource(t *testing.T) {
 		WithArgs("vod-hash", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "vod-hash",
 		Status:    "success",
 		S3Url:     "s3://bucket/processed.mp4",
@@ -213,7 +213,7 @@ func TestProcessSyncComplete_EvictedRemote(t *testing.T) {
 	logger := logging.NewLogger()
 
 	sm := state.DefaultManager()
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "remote-hash", FilePath: "/data/remote.mp4"},
 	})
 
@@ -224,7 +224,7 @@ func TestProcessSyncComplete_EvictedRemote(t *testing.T) {
 		WithArgs("remote-hash", "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "remote-hash",
 		Status:    "evicted_remote",
 	}, "node-1", logger)
@@ -260,7 +260,7 @@ func TestProcessSyncComplete_Failed(t *testing.T) {
 		WithArgs("connection reset", "hash-fail", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processSyncComplete(&pb.SyncComplete{
+	processSyncComplete(&ipcpb.SyncComplete{
 		AssetHash: "hash-fail",
 		Status:    "failed",
 		Error:     "connection reset",

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -23,7 +23,7 @@ func TestBootstrapInfrastructureNode_MissingToken(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		NodeType: "core",
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -40,7 +40,7 @@ func TestBootstrapInfrastructureNode_MissingNodeType(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token: "my-token",
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -63,7 +63,7 @@ func TestBootstrapInfrastructureNode_InvalidToken(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:    "bad-token",
 		NodeType: "core",
 	})
@@ -94,7 +94,7 @@ func TestBootstrapInfrastructureNode_ExpiredToken(t *testing.T) {
 			AddRow("tok-1", "tenant-1", "cluster-1", nil, int32(0), expiredAt, nil, "{}"))
 	mock.ExpectRollback()
 
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:    "expired-token",
 		NodeType: "core",
 	})
@@ -126,7 +126,7 @@ func TestBootstrapInfrastructureNode_ClusterMismatch(t *testing.T) {
 	mock.ExpectRollback()
 
 	targetCluster := "cluster-b"
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:           "bound-token",
 		NodeType:        "core",
 		TargetClusterId: &targetCluster,
@@ -173,7 +173,7 @@ func TestBootstrapInfrastructureNode_IdempotentReturnsExisting(t *testing.T) {
 	expectMeshEndpoints(mock, "cluster-1", "node-existing", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
 	expectMeshPeers(mock, "node-existing", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 
-	resp, err := server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	resp, err := server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:    "my-token",
 		NodeType: "core",
 		NodeId:   strPtr("node-existing"),
@@ -217,7 +217,7 @@ func TestBootstrapInfrastructureNode_ExistingNodeDifferentCluster(t *testing.T) 
 			AddRow("cluster-other", nil, nil))
 	mock.ExpectRollback()
 
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:    "my-token",
 		NodeType: "core",
 		NodeId:   strPtr("node-1"),
@@ -295,7 +295,7 @@ func TestBootstrapInfrastructureNode_FallbackCluster(t *testing.T) {
 
 	wgPub := "pub-key"
 	nodeID := "node-fallback"
-	resp, err := server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	resp, err := server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:              "my-token",
 		NodeType:           "core",
 		NodeId:             &nodeID,
@@ -357,7 +357,7 @@ func TestBootstrapInfrastructureNode_ReplayWithSpentToken(t *testing.T) {
 	mock.ExpectRollback()
 
 	wgPub := "pub-matches"
-	resp, err := server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	resp, err := server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:              "spent-token",
 		NodeType:           "core",
 		NodeId:             strPtr("node-existing"),
@@ -407,7 +407,7 @@ func TestBootstrapInfrastructureNode_ReplayPubkeyMismatch(t *testing.T) {
 	mock.ExpectRollback()
 
 	wgPub := "different-pub"
-	_, err = server.BootstrapInfrastructureNode(context.Background(), &pb.BootstrapInfrastructureNodeRequest{
+	_, err = server.BootstrapInfrastructureNode(context.Background(), &quartermasterpb.BootstrapInfrastructureNodeRequest{
 		Token:              "tok",
 		NodeType:           "core",
 		NodeId:             strPtr("node-existing"),

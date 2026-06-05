@@ -18,11 +18,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() {
-		db = nil
-	})
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
@@ -30,7 +26,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "pi-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe, true); err == nil {
+	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "pi-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe, true); err == nil {
 		t.Fatal("expected error")
 	}
 
@@ -46,11 +42,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() {
-		db = nil
-	})
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
@@ -58,7 +50,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("completed", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe, true); err != nil {
+	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe, true); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 
@@ -74,11 +66,7 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() {
-		db = nil
-	})
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
@@ -106,7 +94,7 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true); err != nil {
+	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -116,9 +104,9 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 }
 
 func TestHandlePrepaidCheckoutCompletedRequiresTenantAndTopup(t *testing.T) {
-	logger = logrus.New()
+	s := &Service{logger: logrus.New()}
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "", "", "", 1500, "USD", ProviderStripe, true); err != nil {
+	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "", "", "", 1500, "USD", ProviderStripe, true); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 }
@@ -168,7 +156,8 @@ func TestMakeMollieAPICall_MapsInlineResponse(t *testing.T) {
 }
 
 func TestDispatchStripeCheckoutCompleted_MalformedJSON(t *testing.T) {
-	err := DispatchStripeCheckoutCompleted(context.Background(), []byte(`{"id":`))
+	s := &Service{logger: logrus.New()}
+	err := s.DispatchStripeCheckoutCompleted(context.Background(), []byte(`{"id":`))
 	if err == nil || !strings.Contains(err.Error(), "failed to parse checkout session") {
 		t.Fatalf("expected checkout session parse error, got %v", err)
 	}
@@ -181,9 +170,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-a", nil, nil).
@@ -192,7 +179,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 		WithArgs("sub_456", "cs_test_session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleSubscriptionCheckoutCompleted(
+	if err := s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"tenant-a",
@@ -216,15 +203,13 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-missing", nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err = handleSubscriptionCheckoutCompleted(
+	err = s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"tenant-missing",
@@ -243,9 +228,9 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 }
 
 func TestHandleSubscriptionCheckoutCompletedSkipsWhenTenantMissing(t *testing.T) {
-	logger = logrus.New()
+	s := &Service{logger: logrus.New()}
 
-	if err := handleSubscriptionCheckoutCompleted(
+	if err := s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"",
@@ -268,9 +253,7 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectExec(`(?s)UPDATE purser\.tenant_subscriptions.*stripe_subscription_status = CASE.*WHERE tenant_id = \$3`).
 		WithArgs("cus_123", "sub_456", "tenant-a").
@@ -281,7 +264,7 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 		WithArgs("sub_456", "cs_test_session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleSubscriptionCheckoutCompleted(
+	if err := s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"tenant-a",
@@ -308,16 +291,14 @@ func TestHandleInvoiceCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	// Only the payment_intent attach runs; no updateInvoicePaymentStatus.
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
 		WithArgs("pi_1", "inv-1", "cs_test_session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleInvoiceCheckoutCompleted(
+	if err := s.handleInvoiceCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"pi_1",
@@ -343,9 +324,7 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
@@ -356,7 +335,7 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	if err := handlePrepaidCheckoutCompleted(
+	if err := s.handlePrepaidCheckoutCompleted(
 		context.Background(),
 		"cs_test_session",
 		"pi_1",

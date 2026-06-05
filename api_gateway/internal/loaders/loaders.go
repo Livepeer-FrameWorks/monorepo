@@ -7,7 +7,9 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // Loaders bundles per-request loaders. These provide simple de-dup and caching.
@@ -96,14 +98,14 @@ func (m *Memoizer) GetOrLoad(key string, loader func() (interface{}, error)) (in
 type NodeLoader struct {
 	sc    *clients.ServiceClients
 	mu    sync.Mutex
-	cache map[string]*pb.InfrastructureNode
+	cache map[string]*quartermasterpb.InfrastructureNode
 }
 
 func NewNodeLoader(sc *clients.ServiceClients) *NodeLoader {
-	return &NodeLoader{sc: sc, cache: make(map[string]*pb.InfrastructureNode)}
+	return &NodeLoader{sc: sc, cache: make(map[string]*quartermasterpb.InfrastructureNode)}
 }
 
-func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
 	l.mu.Lock()
 	if n, ok := l.cache[nodeID]; ok {
 		l.mu.Unlock()
@@ -124,14 +126,14 @@ func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*pb.Infrastructur
 type ClusterLoader struct {
 	sc    *clients.ServiceClients
 	mu    sync.Mutex
-	cache map[string]*pb.InfrastructureCluster
+	cache map[string]*quartermasterpb.InfrastructureCluster
 }
 
 func NewClusterLoader(sc *clients.ServiceClients) *ClusterLoader {
-	return &ClusterLoader{sc: sc, cache: make(map[string]*pb.InfrastructureCluster)}
+	return &ClusterLoader{sc: sc, cache: make(map[string]*quartermasterpb.InfrastructureCluster)}
 }
 
-func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 	l.mu.Lock()
 	if c, ok := l.cache[clusterID]; ok {
 		l.mu.Unlock()
@@ -152,21 +154,21 @@ func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*pb.Infrast
 type NodesByClusterLoader struct {
 	sc    *clients.ServiceClients
 	mu    sync.Mutex
-	cache map[string][]*pb.InfrastructureNode
+	cache map[string][]*quartermasterpb.InfrastructureNode
 }
 
 func NewNodesByClusterLoader(sc *clients.ServiceClients) *NodesByClusterLoader {
-	return &NodesByClusterLoader{sc: sc, cache: make(map[string][]*pb.InfrastructureNode)}
+	return &NodesByClusterLoader{sc: sc, cache: make(map[string][]*quartermasterpb.InfrastructureNode)}
 }
 
-func (l *NodesByClusterLoader) Load(ctx context.Context, clusterID string) ([]*pb.InfrastructureNode, error) {
+func (l *NodesByClusterLoader) Load(ctx context.Context, clusterID string) ([]*quartermasterpb.InfrastructureNode, error) {
 	l.mu.Lock()
 	if ns, ok := l.cache[clusterID]; ok {
 		l.mu.Unlock()
 		return ns, nil
 	}
 	l.mu.Unlock()
-	resp, err := l.sc.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 500})
+	resp, err := l.sc.Quartermaster.ListNodes(ctx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 500})
 	if err != nil {
 		return nil, err
 	}
@@ -180,21 +182,21 @@ func (l *NodesByClusterLoader) Load(ctx context.Context, clusterID string) ([]*p
 type ServiceInstancesByClusterLoader struct {
 	sc    *clients.ServiceClients
 	mu    sync.Mutex
-	cache map[string][]*pb.ServiceInstance
+	cache map[string][]*quartermasterpb.ServiceInstance
 }
 
 func NewServiceInstancesByClusterLoader(sc *clients.ServiceClients) *ServiceInstancesByClusterLoader {
-	return &ServiceInstancesByClusterLoader{sc: sc, cache: make(map[string][]*pb.ServiceInstance)}
+	return &ServiceInstancesByClusterLoader{sc: sc, cache: make(map[string][]*quartermasterpb.ServiceInstance)}
 }
 
-func (l *ServiceInstancesByClusterLoader) Load(ctx context.Context, clusterID string) ([]*pb.ServiceInstance, error) {
+func (l *ServiceInstancesByClusterLoader) Load(ctx context.Context, clusterID string) ([]*quartermasterpb.ServiceInstance, error) {
 	l.mu.Lock()
 	if list, ok := l.cache[clusterID]; ok {
 		l.mu.Unlock()
 		return list, nil
 	}
 	l.mu.Unlock()
-	resp, err := l.sc.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 500})
+	resp, err := l.sc.Quartermaster.ListServiceInstances(ctx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 500})
 	if err != nil {
 		return nil, err
 	}
@@ -208,14 +210,14 @@ func (l *ServiceInstancesByClusterLoader) Load(ctx context.Context, clusterID st
 type ServiceInstancesByNodeLoader struct {
 	sc    *clients.ServiceClients
 	mu    sync.Mutex
-	cache map[string][]*pb.ServiceInstance
+	cache map[string][]*quartermasterpb.ServiceInstance
 }
 
 func NewServiceInstancesByNodeLoader(sc *clients.ServiceClients) *ServiceInstancesByNodeLoader {
-	return &ServiceInstancesByNodeLoader{sc: sc, cache: make(map[string][]*pb.ServiceInstance)}
+	return &ServiceInstancesByNodeLoader{sc: sc, cache: make(map[string][]*quartermasterpb.ServiceInstance)}
 }
 
-func (l *ServiceInstancesByNodeLoader) Load(ctx context.Context, nodeID string) ([]*pb.ServiceInstance, error) {
+func (l *ServiceInstancesByNodeLoader) Load(ctx context.Context, nodeID string) ([]*quartermasterpb.ServiceInstance, error) {
 	l.mu.Lock()
 	if list, ok := l.cache[nodeID]; ok {
 		l.mu.Unlock()
@@ -223,7 +225,7 @@ func (l *ServiceInstancesByNodeLoader) Load(ctx context.Context, nodeID string) 
 	}
 	l.mu.Unlock()
 	// Use nodeID filter in the ListServiceInstances call
-	resp, err := l.sc.Quartermaster.ListServiceInstances(ctx, "", "", nodeID, &pb.CursorPaginationRequest{First: 500})
+	resp, err := l.sc.Quartermaster.ListServiceInstances(ctx, "", "", nodeID, &commonpb.CursorPaginationRequest{First: 500})
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +241,7 @@ func (l *ServiceInstancesByNodeLoader) Load(ctx context.Context, nodeID string) 
 type LiveNodeStateLoader struct {
 	sc      *clients.ServiceClients
 	once    sync.Once
-	nodes   map[string]*pb.LiveNode
+	nodes   map[string]*periscopepb.LiveNode
 	loadErr error
 }
 
@@ -247,7 +249,7 @@ func NewLiveNodeStateLoader(sc *clients.ServiceClients) *LiveNodeStateLoader {
 	return &LiveNodeStateLoader{sc: sc}
 }
 
-func (l *LiveNodeStateLoader) Load(ctx context.Context, nodeID string) (*pb.LiveNode, error) {
+func (l *LiveNodeStateLoader) Load(ctx context.Context, nodeID string) (*periscopepb.LiveNode, error) {
 	l.once.Do(func() {
 		l.loadAll(ctx)
 	})
@@ -265,7 +267,7 @@ func (l *LiveNodeStateLoader) loadAll(ctx context.Context) {
 	}
 
 	var relatedTenantIDs []string
-	subs, err := l.sc.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+	subs, err := l.sc.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 		TenantId: tenantID,
 	})
 	if err == nil && subs != nil {
@@ -282,7 +284,7 @@ func (l *LiveNodeStateLoader) loadAll(ctx context.Context) {
 		return
 	}
 
-	l.nodes = make(map[string]*pb.LiveNode, len(response.Nodes))
+	l.nodes = make(map[string]*periscopepb.LiveNode, len(response.Nodes))
 	for _, node := range response.Nodes {
 		l.nodes[node.NodeId] = node
 	}

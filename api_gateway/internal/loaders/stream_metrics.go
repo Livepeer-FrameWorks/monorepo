@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // StreamMetricsLoader loads stream metrics with request-scoped caching.
@@ -13,19 +13,19 @@ import (
 type StreamMetricsLoader struct {
 	client *periscope.GRPCClient
 	mu     sync.Mutex
-	cache  map[string]*pb.StreamStatusResponse // key: "tenantID:internalName"
+	cache  map[string]*periscopepb.StreamStatusResponse // key: "tenantID:internalName"
 }
 
 // NewStreamMetricsLoader creates a new stream metrics loader
 func NewStreamMetricsLoader(client *periscope.GRPCClient) *StreamMetricsLoader {
 	return &StreamMetricsLoader{
 		client: client,
-		cache:  make(map[string]*pb.StreamStatusResponse),
+		cache:  make(map[string]*periscopepb.StreamStatusResponse),
 	}
 }
 
 // Load fetches metrics for a single stream, using cache if available
-func (l *StreamMetricsLoader) Load(ctx context.Context, tenantID, internalName string) (*pb.StreamStatusResponse, error) {
+func (l *StreamMetricsLoader) Load(ctx context.Context, tenantID, internalName string) (*periscopepb.StreamStatusResponse, error) {
 	key := tenantID + ":" + internalName
 
 	l.mu.Lock()
@@ -49,8 +49,8 @@ func (l *StreamMetricsLoader) Load(ctx context.Context, tenantID, internalName s
 }
 
 // LoadMany fetches metrics for multiple streams in a single batch call
-func (l *StreamMetricsLoader) LoadMany(ctx context.Context, tenantID string, internalNames []string) (map[string]*pb.StreamStatusResponse, error) {
-	results := make(map[string]*pb.StreamStatusResponse)
+func (l *StreamMetricsLoader) LoadMany(ctx context.Context, tenantID string, internalNames []string) (map[string]*periscopepb.StreamStatusResponse, error) {
+	results := make(map[string]*periscopepb.StreamStatusResponse)
 	var toFetch []string
 
 	l.mu.Lock()

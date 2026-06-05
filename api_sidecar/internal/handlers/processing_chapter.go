@@ -20,7 +20,7 @@ import (
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // DVR chapter finalization. Given a range of TS segments on disk
@@ -39,7 +39,7 @@ import (
 // shape of the normal processing job: build a local input, register the
 // STREAM_SOURCE override, push the new MKV, wait for PUSH_END. Returns
 // nil to indicate the job result has already been sent.
-func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobRequest, send func(*pb.ControlMessage)) {
+func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 	log := h.logger.WithFields(logging.Fields{
 		"job_id":            req.GetJobId(),
 		"chapter_id":        req.GetSourceChapterId(),
@@ -550,7 +550,7 @@ func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistC
 func (h *ProcessingJobHandler) buildChapterHLS(
 	ctx context.Context,
 	log *logrus.Entry,
-	req *pb.ProcessingJobRequest,
+	req *ipcpb.ProcessingJobRequest,
 	manifestPath, recoveryDir string,
 ) (int32, bool, int64, int64, string, error) {
 	segs := req.GetSourceSegments()
@@ -565,7 +565,7 @@ func (h *ProcessingJobHandler) buildChapterHLS(
 	// would otherwise produce a shorter MKV. Chapter-range endpoints
 	// (start_ms / end_ms) may differ from the segment span when the
 	// recording begins/ends mid-bucket; that's expected, not a fault.
-	ordered := make([]*pb.DVRChapterSegmentRef, len(segs))
+	ordered := make([]*ipcpb.DVRChapterSegmentRef, len(segs))
 	copy(ordered, segs)
 	sort.Slice(ordered, func(i, j int) bool {
 		return ordered[i].GetMediaStartMs() < ordered[j].GetMediaStartMs()
@@ -725,7 +725,7 @@ func fetchToFile(ctx context.Context, url, dest string) error {
 	return os.Rename(tmp, dest)
 }
 
-func chapterFinalizeDeadline(req *pb.ProcessingJobRequest) time.Duration {
+func chapterFinalizeDeadline(req *ipcpb.ProcessingJobRequest) time.Duration {
 	if dl := req.GetDeadlineUnixMs(); dl > 0 {
 		remaining := time.Until(time.UnixMilli(dl))
 		if remaining > 0 {

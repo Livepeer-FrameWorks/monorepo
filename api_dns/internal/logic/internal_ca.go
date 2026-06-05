@@ -21,7 +21,8 @@ import (
 	"frameworks/api_dns/internal/store"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 const (
@@ -41,8 +42,8 @@ type internalCAStore interface {
 }
 
 type internalCAQuartermaster interface {
-	ValidateBootstrapTokenEx(ctx context.Context, req *pb.ValidateBootstrapTokenRequest) (*pb.ValidateBootstrapTokenResponse, error)
-	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error)
+	ValidateBootstrapTokenEx(ctx context.Context, req *quartermasterpb.ValidateBootstrapTokenRequest) (*quartermasterpb.ValidateBootstrapTokenResponse, error)
+	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
 }
 
 type InternalCAManager struct {
@@ -378,7 +379,7 @@ func (m *InternalCAManager) authorizeIssue(ctx context.Context, nodeID, serviceT
 		return "", fmt.Errorf("quartermaster client is required for internal certificate authorization")
 	}
 
-	resp, err := m.qm.ValidateBootstrapTokenEx(ctx, &pb.ValidateBootstrapTokenRequest{Token: issueToken})
+	resp, err := m.qm.ValidateBootstrapTokenEx(ctx, &quartermasterpb.ValidateBootstrapTokenRequest{Token: issueToken})
 	if err != nil {
 		return "", fmt.Errorf("validate issue token: %w", err)
 	}
@@ -411,7 +412,7 @@ func (m *InternalCAManager) authorizeIssue(ctx context.Context, nodeID, serviceT
 }
 
 func (m *InternalCAManager) ensureServiceAllowedOnNode(ctx context.Context, clusterID, nodeID, serviceType string) error {
-	pagination := &pb.CursorPaginationRequest{First: 200}
+	pagination := &commonpb.CursorPaginationRequest{First: 200}
 	for {
 		resp, err := m.qm.ListServiceInstances(ctx, clusterID, "", nodeID, pagination)
 		if err != nil {
@@ -432,7 +433,7 @@ func (m *InternalCAManager) ensureServiceAllowedOnNode(ctx context.Context, clus
 			break
 		}
 		endCursor := p.GetEndCursor()
-		pagination = &pb.CursorPaginationRequest{
+		pagination = &commonpb.CursorPaginationRequest{
 			First: 200,
 			After: &endCursor,
 		}

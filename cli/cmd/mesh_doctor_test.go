@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -39,7 +39,7 @@ func TestDoctor_ValidPair(t *testing.T) {
 			},
 		},
 	}
-	qm := []*pb.InfrastructureNode{
+	qm := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "n1", NodeName: "core-1", ClusterId: testCluster, ExternalIp: strPtr("1.2.3.4"), WireguardIp: strPtr("10.88.0.2"), WireguardPublicKey: strPtr(host1Pub), WireguardPort: i32Ptr(51820), Status: "active"},
 		{NodeId: "n2", NodeName: "core-2", ClusterId: testCluster, ExternalIp: strPtr("1.2.3.5"), WireguardIp: strPtr("10.88.0.3"), WireguardPublicKey: strPtr(host2Pub), WireguardPort: i32Ptr(51820), Status: "active"},
 	}
@@ -77,7 +77,7 @@ func TestDoctor_PeerSelfPeerDetectedFromManifestPubKey(t *testing.T) {
 	}
 	// QM has a *different* node that somehow shares the same public key —
 	// from the host's perspective this looks like a self-peer.
-	qm := []*pb.InfrastructureNode{
+	qm := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "self", NodeName: "core-1", ClusterId: testCluster, ExternalIp: strPtr("1.2.3.4"), WireguardIp: strPtr("10.88.0.2"), WireguardPublicKey: strPtr(sharedPub), WireguardPort: i32Ptr(51820), Status: "active"},
 		{NodeId: "ghost", NodeName: "ghost", ClusterId: testCluster, ExternalIp: strPtr("1.2.3.5"), WireguardIp: strPtr("10.88.0.3"), WireguardPublicKey: strPtr(sharedPub), WireguardPort: i32Ptr(51820), Status: "active"},
 	}
@@ -136,7 +136,7 @@ func TestDoctor_BadManifestPublicKey(t *testing.T) {
 	}
 	// Provide a QM row that matches everything except the (unparseable) key
 	// so doctor reaches the manifest pub-key parse step.
-	qm := []*pb.InfrastructureNode{{
+	qm := []*quartermasterpb.InfrastructureNode{{
 		NodeId: "n1", NodeName: "core-1", ClusterId: testCluster,
 		ExternalIp: strPtr("1.2.3.4"), WireguardIp: strPtr("10.88.0.2"),
 		WireguardPublicKey: strPtr("garbage"), WireguardPort: i32Ptr(51820),
@@ -199,7 +199,7 @@ func TestDoctor_ManifestVsQMSelfDivergence(t *testing.T) {
 			},
 		},
 	}
-	qm := []*pb.InfrastructureNode{{
+	qm := []*quartermasterpb.InfrastructureNode{{
 		NodeId: "n1", NodeName: "core-1", ClusterId: testCluster,
 		ExternalIp:         strPtr("1.2.3.4"),
 		WireguardIp:        strPtr("10.88.0.2"),
@@ -223,7 +223,7 @@ func TestDoctor_ManifestVsQMSelfDivergence(t *testing.T) {
 // fallback Quartermaster's SyncMesh applies.
 func TestBuildPeerSet_PrefersExternalIP(t *testing.T) {
 	_, pub := mustGenWgKeys(t)
-	cluster := []*pb.InfrastructureNode{
+	cluster := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "self", NodeName: "self", ClusterId: testCluster},
 		{NodeId: "peer", NodeName: "peer", ClusterId: testCluster, ExternalIp: strPtr("203.0.113.7"), InternalIp: strPtr("10.0.0.7"), WireguardIp: strPtr("10.88.0.7"), WireguardPublicKey: strPtr(pub), WireguardPort: i32Ptr(51820), Status: "active"},
 	}
@@ -243,7 +243,7 @@ func TestBuildPeerSet_PrefersExternalIP(t *testing.T) {
 
 func TestBuildPeerSet_FallsBackToInternalIP(t *testing.T) {
 	_, pub := mustGenWgKeys(t)
-	cluster := []*pb.InfrastructureNode{
+	cluster := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "self", NodeName: "self", ClusterId: testCluster},
 		{NodeId: "peer", NodeName: "peer", ClusterId: testCluster, InternalIp: strPtr("10.0.0.7"), WireguardIp: strPtr("10.88.0.7"), WireguardPublicKey: strPtr(pub), WireguardPort: i32Ptr(51820), Status: "active"},
 	}
@@ -265,7 +265,7 @@ func TestBuildPeerSet_SkipsInactivePeers(t *testing.T) {
 	// SyncMesh's SQL filters peers to status='active'; doctor must match
 	// or it would simulate apply for peers Privateer would never receive.
 	_, pub := mustGenWgKeys(t)
-	cluster := []*pb.InfrastructureNode{
+	cluster := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "self", NodeName: "self", ClusterId: testCluster},
 		{NodeId: "decommissioned", NodeName: "decommissioned", ClusterId: testCluster, ExternalIp: strPtr("203.0.113.7"), WireguardIp: strPtr("10.88.0.7"), WireguardPublicKey: strPtr(pub), WireguardPort: i32Ptr(51820), Status: "offline"},
 	}
@@ -282,7 +282,7 @@ func TestBuildPeerSet_SkipsInactivePeers(t *testing.T) {
 
 func TestBuildPeerSet_SkipsPeerWithNoIP(t *testing.T) {
 	_, pub := mustGenWgKeys(t)
-	cluster := []*pb.InfrastructureNode{
+	cluster := []*quartermasterpb.InfrastructureNode{
 		{NodeId: "self", NodeName: "self", ClusterId: testCluster},
 		{NodeId: "ghost", NodeName: "ghost", ClusterId: testCluster, WireguardIp: strPtr("10.88.0.7"), WireguardPublicKey: strPtr(pub), WireguardPort: i32Ptr(51820), Status: "active"},
 		// no external_ip, no internal_ip — Quartermaster also excludes.

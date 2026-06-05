@@ -40,7 +40,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/search"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
@@ -459,7 +461,7 @@ func main() {
 			SMTP:             notifyConfig.SMTP,
 			Logger:           logger,
 			DefaultRecipient: notifyConfig.DefaultRecipient,
-			OnNetworkStats: func(stats *pb.GetNetworkLiveStatsResponse) {
+			OnNetworkStats: func(stats *periscopepb.GetNetworkLiveStatsResponse) {
 				if socialCollector == nil {
 					return
 				}
@@ -484,7 +486,7 @@ func main() {
 					Score: 0.5,
 				})
 			},
-			OnFederationSummary: func(ownerTenantID string, summary *pb.GetFederationSummaryResponse) {
+			OnFederationSummary: func(ownerTenantID string, summary *periscopepb.GetFederationSummaryResponse) {
 				if socialCollector == nil {
 					return
 				}
@@ -597,7 +599,7 @@ func main() {
 			serverOpts = append(serverOpts, tlsOpt)
 		}
 		grpcSrv := grpc.NewServer(serverOpts...)
-		pb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
+		skipperpb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
 		hs := health.NewServer()
 		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
 		reflection.Register(grpcSrv)
@@ -806,7 +808,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("SKIPPER_HOST", "skipper")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "skipper",
 			Version:        version.Version,
 			Protocol:       "http",

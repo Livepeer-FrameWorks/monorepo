@@ -5,7 +5,7 @@ import (
 
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Re-fire idempotency for PUSH_REWRITE: a second PUSH_REWRITE for the same
@@ -144,13 +144,13 @@ func TestViewerLifecycleDecrement(t *testing.T) {
 // upgrade-prompt UX.
 func TestIngestErrorCodeForTenantStreamCap(t *testing.T) {
 	err := ingesterrors.New(
-		pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
+		ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
 		"concurrent stream cap reached (3/3) — close another stream or upgrade",
 	)
 	if err == nil {
 		t.Fatal("expected non-nil error")
 	}
-	if err.Code != pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP {
+	if err.Code != ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP {
 		t.Errorf("error code: got %v want INGEST_ERROR_TENANT_STREAM_CAP", err.Code)
 	}
 }

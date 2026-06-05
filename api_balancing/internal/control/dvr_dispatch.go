@@ -5,9 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"path/filepath"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // DVRArtifactDispatch is the bundled state STREAM_SOURCE needs to route a
@@ -32,7 +31,7 @@ type DVRArtifactDispatch struct {
 	// Commodore. A cross-cluster DVR arrange must gate the recording peer
 	// against this so a revoked peer can't keep serving rolling DVR off stale
 	// registry state.
-	ClusterPeers []*pb.TenantClusterPeer
+	ClusterPeers []*quartermasterpb.TenantClusterPeer
 }
 
 // ResolveDVRArtifactDispatch maps a DVR artifact internal_name (the token

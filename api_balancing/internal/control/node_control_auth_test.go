@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -19,7 +19,7 @@ func TestNodeControlAuthInterceptorAcceptsTenantJWT(t *testing.T) {
 	}
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
 	interceptor := nodeControlAuthInterceptor("service-token", string(secret), nil)
-	info := &grpc.UnaryServerInfo{FullMethod: pb.NodeControlService_GetNodeHealth_FullMethodName}
+	info := &grpc.UnaryServerInfo{FullMethod: foghornpb.NodeControlService_GetNodeHealth_FullMethodName}
 
 	called := false
 	_, err = interceptor(ctx, nil, info, func(context.Context, any) (any, error) {

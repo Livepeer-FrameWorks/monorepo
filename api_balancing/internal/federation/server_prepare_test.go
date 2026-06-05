@@ -13,7 +13,7 @@ import (
 
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 type fakeS3Client struct {
@@ -60,7 +60,7 @@ func TestPrepareArtifact_LocalState_NotReady(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-2",
 		TenantId:   "tenant-a",
 	})
@@ -81,7 +81,7 @@ func TestPrepareArtifact_RequiresAuth(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	_, err := srv.PrepareArtifact(context.Background(), &pb.PrepareArtifactRequest{
+	_, err := srv.PrepareArtifact(context.Background(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-1",
 		TenantId:   "tenant-a",
 	})
@@ -105,7 +105,7 @@ func TestPrepareArtifact_ArtifactNotFound(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-1",
 		TenantId:   "tenant-a",
 	})
@@ -126,7 +126,7 @@ func TestPrepareArtifact_MissingArtifactID(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	_, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	_, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "",
 		ClipHash:   "",
 		TenantId:   "tenant-a",
@@ -142,7 +142,7 @@ func TestPrepareArtifact_MissingTenantID(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	_, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	_, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-1",
 		TenantId:   "",
 	})
@@ -170,7 +170,7 @@ func TestPrepareArtifact_ClipSynced_HappyPath(t *testing.T) {
 		S3Client: fake,
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-3",
 		TenantId:   "tenant-a",
 	})
@@ -213,7 +213,7 @@ func TestPrepareArtifact_VodSynced_HappyPath(t *testing.T) {
 		S3Client: fake,
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-vod",
 		TenantId:   "tenant-a",
 	})
@@ -256,7 +256,7 @@ func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
 		S3Client: fake,
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-vod-err",
 		TenantId:   "tenant-a",
 	})
@@ -285,7 +285,7 @@ func TestPrepareArtifact_DVRRejected(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-dvr-ok",
 		TenantId:   "tenant-a",
 	})
@@ -317,7 +317,7 @@ func TestPrepareArtifact_FreezingState(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-freezing",
 		TenantId:   "tenant-a",
 	})
@@ -348,7 +348,7 @@ func TestPrepareArtifact_ClipHashFallback(t *testing.T) {
 		S3Client: fake,
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ClipHash: "hash-fallback",
 		TenantId: "tenant-a",
 	})
@@ -375,7 +375,7 @@ func TestPrepareArtifact_DBError(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	_, err = srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	_, err = srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-db-err",
 		TenantId:   "tenant-a",
 	})
@@ -401,7 +401,7 @@ func TestPrepareArtifact_SyncingState(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-syncing",
 		TenantId:   "tenant-a",
 	})
@@ -430,7 +430,7 @@ func TestPrepareArtifact_UnknownArtifactType(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-unknown",
 		TenantId:   "tenant-a",
 	})
@@ -460,7 +460,7 @@ func TestPrepareArtifact_MetadataDrift(t *testing.T) {
 		S3Client: &fakeS3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-drift",
 		TenantId:   "tenant-a",
 	})
@@ -477,7 +477,7 @@ func TestPrepareArtifact_NilDBAndS3(t *testing.T) {
 		Logger: logging.NewLogger(),
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-no-storage",
 		TenantId:   "tenant-a",
 	})

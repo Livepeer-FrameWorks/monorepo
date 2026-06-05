@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
@@ -38,13 +38,13 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("22222222-2222-2222-2222-222222222222"))
 	mock.ExpectCommit()
 
-	resp, err := server.CreateSubscription(context.Background(), &pb.CreateSubscriptionRequest{
+	resp, err := server.CreateSubscription(context.Background(), &purserpb.CreateSubscriptionRequest{
 		TenantId:      tenantID,
 		TierId:        tierID,
 		BillingEmail:  "billing@example.com",
 		PaymentMethod: "card",
 		BillingModel:  "prepaid",
-		CustomFeatures: &pb.BillingFeatures{
+		CustomFeatures: &purserpb.BillingFeatures{
 			Recording: true,
 		},
 	})
@@ -66,7 +66,7 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 }
 
 func TestValidatePricingOverrideRule(t *testing.T) {
-	valid := &pb.PricingRule{
+	valid := &purserpb.PricingRule{
 		Meter:            "delivered_minutes",
 		Model:            "tiered_graduated",
 		Currency:         "EUR",
@@ -77,14 +77,14 @@ func TestValidatePricingOverrideRule(t *testing.T) {
 	if err := validatePricingOverrideRule(valid); err != nil {
 		t.Fatalf("valid rule rejected: %v", err)
 	}
-	if err := validatePricingOverrideRule(&pb.PricingRule{Meter: "delivered_minutes", UnitPrice: "0.00042"}); err != nil {
+	if err := validatePricingOverrideRule(&purserpb.PricingRule{Meter: "delivered_minutes", UnitPrice: "0.00042"}); err != nil {
 		t.Fatalf("partial override rejected: %v", err)
 	}
-	if err := validatePricingOverrideRule(&pb.PricingRule{Meter: "egress_gb", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"}); err != nil {
+	if err := validatePricingOverrideRule(&purserpb.PricingRule{Meter: "egress_gb", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"}); err != nil {
 		t.Fatalf("priceable egress rule rejected: %v", err)
 	}
 
-	cases := []*pb.PricingRule{
+	cases := []*purserpb.PricingRule{
 		{Meter: "Bad-Meter", Model: "tiered_graduated", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"},
 		{Meter: "delivered_minutes", Model: "mystery", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"},
 		{Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "EURO", IncludedQuantity: "0", UnitPrice: "1", ConfigJson: "{}"},

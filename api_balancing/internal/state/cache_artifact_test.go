@@ -2,9 +2,8 @@ package state
 
 import (
 	"encoding/json"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestApplyRedisChange_Artifact_Upsert(t *testing.T) {
@@ -40,7 +39,7 @@ func TestApplyRedisChange_Artifact_Upsert(t *testing.T) {
 			if a.StreamName != "vod+stream1" {
 				t.Fatalf("expected StreamName, got %s", a.StreamName)
 			}
-			if a.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
+			if a.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
 				t.Fatalf("expected CLIP type, got %d", a.ArtifactType)
 			}
 			if a.Format != "mp4" {
@@ -58,7 +57,7 @@ func TestApplyRedisChange_Artifact_Delete(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 	})
 
@@ -82,7 +81,7 @@ func TestApplyRedisChange_Artifact_BadJSON(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 	})
 
@@ -155,11 +154,11 @@ func TestApplyRedisChange_Artifact_PreservesAllFields(t *testing.T) {
 				t.Fatalf("expected 2 artifacts, got %d", len(n.Artifacts))
 			}
 			dvr := n.Artifacts[0]
-			if dvr.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_DVR {
+			if dvr.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR {
 				t.Fatalf("expected DVR type, got %d", dvr.ArtifactType)
 			}
 			vod := n.Artifacts[1]
-			if vod.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+			if vod.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
 				t.Fatalf("expected VOD type, got %d", vod.ArtifactType)
 			}
 			if vod.Format != "mkv" {

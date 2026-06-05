@@ -28,7 +28,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
@@ -644,7 +644,7 @@ func main() {
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "bridge",
 			Version:        version.Version,
 			Protocol:       "http",

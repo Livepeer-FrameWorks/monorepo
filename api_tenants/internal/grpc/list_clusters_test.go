@@ -8,7 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
@@ -71,7 +71,7 @@ func TestListClusters_PlatformOfficialFilterIgnoresTenantVisibility(t *testing.T
 			AddRow(newClusterRow("uuid-1", "core-eu-1", "Core EU", "core", false, true)...).
 			AddRow(newClusterRow("uuid-2", "media-eu-1", "Media EU", "edge", false, true)...))
 
-	resp, err := server.ListClusters(ctx, &pb.ListClustersRequest{
+	resp, err := server.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
 		IsPlatformOfficial: &isPlatformOfficial,
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestListMySubscriptionsMarksPrimaryClusterPreferred(t *testing.T) {
 			AddRow(newClusterRow("uuid-1", "cluster-default", "Platform Default", "edge", false, true)...).
 			AddRow(newClusterRow("uuid-2", "cluster-preferred", "Tenant Preferred", "edge", true, true)...))
 
-	resp, err := server.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{TenantId: tenantID})
+	resp, err := server.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

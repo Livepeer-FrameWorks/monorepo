@@ -17,7 +17,11 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -31,9 +35,9 @@ type ContentResolution struct {
 	FixedNodeID  string // Storage node ID for VOD content
 	TenantId     string
 	StreamId     string
-	InternalName string                  // Original stream internal name (for clips/DVR: the source stream)
-	IngestMode   string                  // "push" or "pull" for live streams
-	ClusterPeers []*pb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
+	InternalName string                               // Original stream internal name (for clips/DVR: the source stream)
+	IngestMode   string                               // "push" or "pull" for live streams
+	ClusterPeers []*quartermasterpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
 	RequiresAuth bool
 }
 
@@ -270,7 +274,7 @@ func isArtifactHashCandidate(input string) bool {
 
 // ArtifactFederationClient is the subset of federation.FederationClient needed for cross-cluster artifact resolution.
 type ArtifactFederationClient interface {
-	PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
+	PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error)
 }
 
 // PeerAddressResolver resolves gRPC addresses for peer clusters.
@@ -491,7 +495,7 @@ func MistSourceNameFromObservedStream(streamName string) string {
 }
 
 // ResolveArtifactPlayback resolves playback endpoints for any artifact (clip/dvr/vod) using playback ID
-func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, playbackID string) (*pb.ViewerEndpointResponse, error) {
+func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, playbackID string) (*sharedpb.ViewerEndpointResponse, error) {
 	if deps.DB == nil {
 		return nil, fmt.Errorf("database not available")
 	}
@@ -519,7 +523,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 // resolveArtifactPlaybackWithResp completes the artifact playback
 // resolution from a pre-resolved artifactResp (Commodore-backed or
 // chapter-synthesized).
-func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *pb.ResolveArtifactPlaybackIDResponse) (*pb.ViewerEndpointResponse, error) {
+func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
 	if artifactResp == nil {
 		return nil, fmt.Errorf("content not found")
 	}
@@ -681,7 +685,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
-	var endpoints []*pb.ViewerEndpoint
+	var endpoints []*sharedpb.ViewerEndpoint
 	for _, node := range rankedNodes {
 		nodeOutputs, exists := GetNodeOutputs(node.NodeID)
 		if !exists || nodeOutputs.Outputs == nil {
@@ -705,7 +709,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
 		}
 
-		endpoints = append(endpoints, &pb.ViewerEndpoint{
+		endpoints = append(endpoints, &sharedpb.ViewerEndpoint{
 			NodeId:      node.NodeID,
 			BaseUrl:     nodeOutputs.BaseURL,
 			Protocol:    protocol,
@@ -720,7 +724,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
-	metadata := &pb.PlaybackMetadata{
+	metadata := &sharedpb.PlaybackMetadata{
 		Status:      status,
 		IsLive:      contentType == "dvr" && status == "recording",
 		TenantId:    tenantID,
@@ -781,7 +785,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		metadata.ThumbnailAssets = buildPosterThumbnailAssets(chandlerBase, streamID)
 	}
 
-	return &pb.ViewerEndpointResponse{
+	return &sharedpb.ViewerEndpointResponse{
 		Primary:   endpoints[0],
 		Fallbacks: endpoints[1:],
 		Metadata:  metadata,
@@ -847,7 +851,7 @@ func artifactNodesFromDB(ctx context.Context, db *sql.DB, artifactHash, artifact
 		nodes = append(nodes, state.ArtifactNodeInfo{
 			NodeID: nodeID,
 			Score:  0,
-			Artifact: &pb.StoredArtifact{
+			Artifact: &ipcpb.StoredArtifact{
 				ClipHash:     artifactHash,
 				StreamName:   streamName,
 				FilePath:     filePath,
@@ -860,16 +864,16 @@ func artifactNodesFromDB(ctx context.Context, db *sql.DB, artifactHash, artifact
 	return nodes, rows.Err()
 }
 
-func playbackArtifactTypeToProto(artifactType string) pb.ArtifactEvent_ArtifactType {
+func playbackArtifactTypeToProto(artifactType string) ipcpb.ArtifactEvent_ArtifactType {
 	switch strings.ToLower(strings.TrimSpace(artifactType)) {
 	case "clip":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP
 	case "dvr":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR
 	case "vod":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD
 	default:
-		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
 }
 
@@ -935,7 +939,7 @@ func preferredArtifactOutputKeys(format string) []string {
 }
 
 // ResolveLivePlayback resolves playback endpoints for a live stream using load balancing
-func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string) (*pb.ViewerEndpointResponse, error) {
+func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string) (*sharedpb.ViewerEndpointResponse, error) {
 	if deps.LB == nil {
 		return nil, fmt.Errorf("load balancer not available")
 	}
@@ -1001,7 +1005,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		nodes = filtered
 	}
 
-	var endpoints []*pb.ViewerEndpoint
+	var endpoints []*sharedpb.ViewerEndpoint
 
 	for _, node := range nodes {
 		// Remote edges: produce a redirect endpoint to the peer cluster's play domain
@@ -1010,7 +1014,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 			if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
 				geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
 			}
-			endpoints = append(endpoints, &pb.ViewerEndpoint{
+			endpoints = append(endpoints, &sharedpb.ViewerEndpoint{
 				NodeId:      node.NodeID,
 				BaseUrl:     node.Host,
 				Protocol:    "redirect",
@@ -1047,7 +1051,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	}
 
 	// Build metadata from stream state
-	metadata := &pb.PlaybackMetadata{
+	metadata := &sharedpb.PlaybackMetadata{
 		Status:      "live",
 		IsLive:      true,
 		TenantId:    tenantID,
@@ -1079,7 +1083,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		}
 	}
 
-	return &pb.ViewerEndpointResponse{
+	return &sharedpb.ViewerEndpointResponse{
 		Primary:   endpoints[0],
 		Fallbacks: endpoints[1:],
 		Metadata:  metadata,
@@ -1115,12 +1119,12 @@ func resolveLiveThumbnailChandlerBase(ctx context.Context, tenantID, internalNam
 	return getChandlerBaseURL()
 }
 
-func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
+func buildThumbnailAssets(chandlerBase, assetKey string) *sharedpb.ThumbnailAssets {
 	if chandlerBase == "" || assetKey == "" {
 		return nil
 	}
 	base := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
-	return &pb.ThumbnailAssets{
+	return &sharedpb.ThumbnailAssets{
 		PosterUrl:    base + "/poster.jpg",
 		SpriteVttUrl: base + "/sprite.vtt",
 		SpriteJpgUrl: base + "/sprite.jpg",
@@ -1128,12 +1132,12 @@ func buildThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
 	}
 }
 
-func buildPosterThumbnailAssets(chandlerBase, assetKey string) *pb.ThumbnailAssets {
+func buildPosterThumbnailAssets(chandlerBase, assetKey string) *sharedpb.ThumbnailAssets {
 	if chandlerBase == "" || assetKey == "" {
 		return nil
 	}
 	base := strings.TrimRight(chandlerBase, "/") + "/assets/" + assetKey
-	return &pb.ThumbnailAssets{
+	return &sharedpb.ThumbnailAssets{
 		PosterUrl: base + "/poster.jpg",
 		AssetKey:  assetKey,
 	}
@@ -1180,11 +1184,11 @@ func resolveDVRThumbnailTarget(ctx context.Context, conn queryRower, token strin
 }
 
 // AppendViewerCorrelationID adds the virtual viewer ID to every playback URL in a response.
-func AppendViewerCorrelationID(resp *pb.ViewerEndpointResponse, viewerID string) {
+func AppendViewerCorrelationID(resp *sharedpb.ViewerEndpointResponse, viewerID string) {
 	if resp == nil || viewerID == "" {
 		return
 	}
-	appendToEndpoint := func(endpoint *pb.ViewerEndpoint) {
+	appendToEndpoint := func(endpoint *sharedpb.ViewerEndpoint) {
 		if endpoint == nil {
 			return
 		}
@@ -1365,7 +1369,7 @@ func toWebSocketURL(rawURL string, secureDefault bool) string {
 	return rawURL
 }
 
-func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, isLive bool, keys ...string) bool {
+func addResolvedOutput(outputs map[string]*sharedpb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, isLive bool, keys ...string) bool {
 	raw, ok := findOutputRaw(rawOutputs, keys...)
 	if !ok {
 		return false
@@ -1374,11 +1378,11 @@ func addResolvedOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[str
 	if u == "" {
 		return false
 	}
-	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: u, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	outputs[protocol] = &sharedpb.OutputEndpoint{Protocol: protocol, Url: u, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 	return true
 }
 
-func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, secureDefault bool, isLive bool, keys ...string) bool {
+func addWebSocketOutput(outputs map[string]*sharedpb.OutputEndpoint, rawOutputs map[string]any, protocol string, base string, streamName string, secureDefault bool, isLive bool, keys ...string) bool {
 	raw, ok := findOutputRaw(rawOutputs, keys...)
 	if !ok {
 		return false
@@ -1391,18 +1395,18 @@ func addWebSocketOutput(outputs map[string]*pb.OutputEndpoint, rawOutputs map[st
 	if wsURL == "" {
 		return false
 	}
-	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsURL, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	outputs[protocol] = &sharedpb.OutputEndpoint{Protocol: protocol, Url: wsURL, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 	return true
 }
 
-func addDerivedOutput(outputs map[string]*pb.OutputEndpoint, protocol string, base string, streamName string, isLive bool, path string) {
+func addDerivedOutput(outputs map[string]*sharedpb.OutputEndpoint, protocol string, base string, streamName string, isLive bool, path string) {
 	if _, exists := outputs[protocol]; exists {
 		return
 	}
-	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: base + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	outputs[protocol] = &sharedpb.OutputEndpoint{Protocol: protocol, Url: base + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 }
 
-func addDerivedWebSocketOutput(outputs map[string]*pb.OutputEndpoint, protocol string, base string, streamName string, secureDefault bool, isLive bool, path string) {
+func addDerivedWebSocketOutput(outputs map[string]*sharedpb.OutputEndpoint, protocol string, base string, streamName string, secureDefault bool, isLive bool, path string) {
 	if _, exists := outputs[protocol]; exists {
 		return
 	}
@@ -1410,14 +1414,14 @@ func addDerivedWebSocketOutput(outputs map[string]*pb.OutputEndpoint, protocol s
 	if wsBase == "" {
 		return
 	}
-	outputs[protocol] = &pb.OutputEndpoint{Protocol: protocol, Url: wsBase + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
+	outputs[protocol] = &sharedpb.OutputEndpoint{Protocol: protocol, Url: wsBase + streamName + path, Capabilities: BuildOutputCapabilities(protocol, isLive)}
 }
 
 // BuildViewerEndpointFromOutputs selects the preferred browser-facing output
 // from a node's raw Mist outputs. Raw Mist names are display labels
 // ("HLS (TS)", "WebRTC with WebSocket signalling"); the returned Outputs map
 // uses FrameWorks' canonical protocol keys ("HLS", "MIST_WEBRTC", ...).
-func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, streamName string, isLive bool) *pb.ViewerEndpoint {
+func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, streamName string, isLive bool) *sharedpb.ViewerEndpoint {
 	if nodeOutputs == nil || nodeOutputs.Outputs == nil {
 		return nil
 	}
@@ -1433,7 +1437,7 @@ func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, str
 	if endpointURL == "" {
 		return nil
 	}
-	return &pb.ViewerEndpoint{
+	return &sharedpb.ViewerEndpoint{
 		NodeId:   nodeID,
 		BaseUrl:  nodeOutputs.BaseURL,
 		Protocol: protocol,
@@ -1443,13 +1447,13 @@ func BuildViewerEndpointFromOutputs(nodeID string, nodeOutputs *NodeOutputs, str
 }
 
 // BuildOutputsMap constructs the per-protocol outputs for a node/stream
-func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
-	outputs := make(map[string]*pb.OutputEndpoint)
+func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName string, isLive bool) map[string]*sharedpb.OutputEndpoint {
+	outputs := make(map[string]*sharedpb.OutputEndpoint)
 
 	base := EnsureTrailingSlash(baseURL)
 	html := base + streamName + ".html"
-	outputs["MIST_HTML"] = &pb.OutputEndpoint{Protocol: "MIST_HTML", Url: html, Capabilities: BuildOutputCapabilities("MIST_HTML", isLive)}
-	outputs["PLAYER_JS"] = &pb.OutputEndpoint{Protocol: "PLAYER_JS", Url: base + "player.js", Capabilities: BuildOutputCapabilities("PLAYER_JS", isLive)}
+	outputs["MIST_HTML"] = &sharedpb.OutputEndpoint{Protocol: "MIST_HTML", Url: html, Capabilities: BuildOutputCapabilities("MIST_HTML", isLive)}
+	outputs["PLAYER_JS"] = &sharedpb.OutputEndpoint{Protocol: "PLAYER_JS", Url: base + "player.js", Capabilities: BuildOutputCapabilities("PLAYER_JS", isLive)}
 
 	// Extract public host from HTTP outputs for HOST replacement in direct protocols
 	publicHost := ExtractPublicHostFromOutputs(rawOutputs)
@@ -1458,13 +1462,13 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 	addResolvedOutput(outputs, rawOutputs, "WHEP", base, streamName, isLive, "WHEP", "WebRTC with WHEP signalling")
 	if _, ok := outputs["WHEP"]; !ok {
 		if u := DeriveWHEPFromHTML(html); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: BuildOutputCapabilities("WHEP", isLive)}
+			outputs["WHEP"] = &sharedpb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: BuildOutputCapabilities("WHEP", isLive)}
 		}
 	}
 
 	if raw, ok := findOutputRaw(rawOutputs, "WebRTC", "WebRTC with WebSocket signalling"); ok {
 		if u := ResolveTemplateURLWithHost(raw, base, streamName, publicHost); u != "" {
-			outputs["MIST_WEBRTC"] = &pb.OutputEndpoint{Protocol: "MIST_WEBRTC", Url: u, Capabilities: BuildOutputCapabilities("MIST_WEBRTC", isLive)}
+			outputs["MIST_WEBRTC"] = &sharedpb.OutputEndpoint{Protocol: "MIST_WEBRTC", Url: u, Capabilities: BuildOutputCapabilities("MIST_WEBRTC", isLive)}
 		}
 	}
 	addResolvedOutput(outputs, rawOutputs, "HLS", base, streamName, isLive, "HLS", "HLS (TS)")
@@ -1509,7 +1513,7 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 			continue
 		}
 		if u := ResolveTemplateURLWithHost(raw, base, streamName, publicHost); u != "" {
-			outputs[direct.protocol] = &pb.OutputEndpoint{Protocol: direct.protocol, Url: u, Capabilities: BuildOutputCapabilities(direct.protocol, isLive)}
+			outputs[direct.protocol] = &sharedpb.OutputEndpoint{Protocol: direct.protocol, Url: u, Capabilities: BuildOutputCapabilities(direct.protocol, isLive)}
 		}
 	}
 
@@ -1517,8 +1521,8 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]any, streamName strin
 }
 
 // BuildOutputCapabilities returns default capabilities for a given protocol and content type
-func BuildOutputCapabilities(protocol string, isLive bool) *pb.OutputCapability {
-	caps := &pb.OutputCapability{
+func BuildOutputCapabilities(protocol string, isLive bool) *sharedpb.OutputCapability {
+	caps := &sharedpb.OutputCapability{
 		SupportsSeek:          !isLive,
 		SupportsQualitySwitch: true,
 		HasAudio:              true,
@@ -1605,7 +1609,7 @@ func DeriveMistHTTPBase(base string) string {
 	return u.Scheme + "://" + hostname + ":" + port
 }
 
-func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bool {
+func isAuthorizedPeerCluster(clusterID string, peers []*quartermasterpb.TenantClusterPeer) bool {
 	if clusterID == "" {
 		return false
 	}
@@ -1630,7 +1634,7 @@ func isAuthorizedPeerCluster(clusterID string, peers []*pb.TenantClusterPeer) bo
 // STREAM_SOURCE) gate on this before returning any viewer/relay URL, so a
 // peer-allowlist change takes effect on the next resolve — no reconciliation
 // and no per-block policy lookups.
-func AuthoritativeClusterServable(authoritativeCluster string, peers []*pb.TenantClusterPeer) bool {
+func AuthoritativeClusterServable(authoritativeCluster string, peers []*quartermasterpb.TenantClusterPeer) bool {
 	auth := strings.TrimSpace(authoritativeCluster)
 	if auth == "" || auth == GetLocalClusterID() || isServedCluster(auth) {
 		return true
@@ -1668,7 +1672,7 @@ func PlaybackEdgeRedirectURL(baseURL, playbackID string) string {
 // (synced) or the origin node's Helmsman directly via an opaque
 // peer-relay grant the origin Foghorn authorizes online
 // (hot-but-unsynced). No local copy is created.
-func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*pb.TenantClusterPeer, artifactResp *pb.ResolveArtifactPlaybackIDResponse) (*pb.ViewerEndpointResponse, error) {
+func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*quartermasterpb.TenantClusterPeer, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
 	if strings.EqualFold(contentType, "dvr") {
 		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
 	}
@@ -1683,7 +1687,7 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, play
 		return nil, fmt.Errorf("origin cluster %s address unknown", originClusterID)
 	}
 
-	resp, err := deps.FedClient.PrepareArtifact(ctx, originClusterID, addr, &pb.PrepareArtifactRequest{
+	resp, err := deps.FedClient.PrepareArtifact(ctx, originClusterID, addr, &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId:        artifactHash,
 		RequestingCluster: deps.LocalClusterID,
 		ArtifactType:      contentType,
@@ -1711,7 +1715,7 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, play
 		if redirectAddr == "" {
 			return nil, fmt.Errorf("storage redirect cluster %s address unknown", redirect)
 		}
-		resp, err = deps.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &pb.PrepareArtifactRequest{
+		resp, err = deps.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &foghornfederationpb.PrepareArtifactRequest{
 			ArtifactId:        artifactHash,
 			RequestingCluster: deps.LocalClusterID,
 			ArtifactType:      contentType,

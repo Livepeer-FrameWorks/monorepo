@@ -11,7 +11,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -102,7 +102,7 @@ func TestListHealthyNodesForDNS_ServiceAuthUsesAllActiveClusters(t *testing.T) {
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "private-cluster", "node-1", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(ctx, &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(ctx, &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	})
 	if err != nil {
@@ -143,7 +143,7 @@ func TestListHealthyNodesForDNS_AnonymousUsesPlatformOfficialClusters(t *testing
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "platform-cluster", "node-1", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	})
 	if err != nil {
@@ -187,7 +187,7 @@ func TestListHealthyNodesForDNS_ServiceTypeReturnsMatchingNodes(t *testing.T) {
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
 		WithArgs(lookupType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "regional-eu-1", "media-eu-1", "regional-eu-1", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &publicType,
 	})
 	if err != nil {
@@ -280,7 +280,7 @@ func TestListHealthyNodesForDNS_ServiceTypeExcludesOtherServices(t *testing.T) {
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "bridge-node", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	})
 	if err != nil {
@@ -321,7 +321,7 @@ func TestListHealthyNodesForDNS_UnhealthyExcludedFromResultsButCountedInTotal(t 
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "healthy-bridge", "core", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	})
 	if err != nil {
@@ -368,7 +368,7 @@ func TestListHealthyNodesForDNS_CustomStaleThreshold(t *testing.T) {
 		WithArgs(svcType, int32(60)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType:           &svcType,
 		StaleThresholdSeconds: 60,
 	})
@@ -424,7 +424,7 @@ func TestListHealthyNodesForDNS_EdgeAggregateUsesServiceInstancePath(t *testing.
 		WithArgs("edge", int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "1.2.3.4")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &edgeSvc,
 	})
 	if err != nil {
@@ -475,7 +475,7 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 		WithArgs(edgeEgress, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "5.6.7.8")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &edgeEgress,
 	})
 	if err != nil {
@@ -511,7 +511,7 @@ func TestListHealthyNodesForDNS_FiltersByClusterID(t *testing.T) {
 		WithArgs(clusterID, serviceType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-node-1", "edge", "5.6.7.8")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &serviceType,
 		ClusterId:   &clusterID,
 	})
@@ -575,13 +575,13 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 	}
 	mock.ExpectCommit()
 
-	_, err = server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
-		Nodes: []*pb.NodeAliveness{{
+	_, err = server.ReportAliveNodes(context.Background(), &quartermasterpb.ReportAliveNodesRequest{
+		Nodes: []*quartermasterpb.NodeAliveness{{
 			NodeId:     "edge-eu-1",
 			IsHealthy:  true,
 			ClusterId:  "cluster-eu",
 			ExternalIp: "203.0.113.10",
-			Capabilities: &pb.EdgeCapabilities{
+			Capabilities: &quartermasterpb.EdgeCapabilities{
 				Ingest: true,
 				Egress: true,
 			},
@@ -641,13 +641,13 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	_, err = server.ReportAliveNodes(context.Background(), &pb.ReportAliveNodesRequest{
-		Nodes: []*pb.NodeAliveness{{
+	_, err = server.ReportAliveNodes(context.Background(), &quartermasterpb.ReportAliveNodesRequest{
+		Nodes: []*quartermasterpb.NodeAliveness{{
 			NodeId:       "edge-eu-1",
 			IsHealthy:    true,
 			ClusterId:    "cluster-eu",
 			ExternalIp:   "203.0.113.10",
-			Capabilities: &pb.EdgeCapabilities{}, // all caps off
+			Capabilities: &quartermasterpb.EdgeCapabilities{}, // all caps off
 		}},
 	})
 	if err != nil {
@@ -693,7 +693,7 @@ func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testin
 					AddRow(newNodeRow("uuid-1", "core-node-1", "media-central-primary", "core-node-1", "core", "1.2.3.4")...))
 
 			svc := svcType
-			resp, err := server.ListHealthyNodesForDNS(ctx, &pb.ListHealthyNodesForDNSRequest{
+			resp, err := server.ListHealthyNodesForDNS(ctx, &quartermasterpb.ListHealthyNodesForDNSRequest{
 				ServiceType: &svc,
 			})
 			if err != nil {
@@ -736,7 +736,7 @@ func TestListHealthyNodesForDNS_NoFilterReturnsAllHealthyNodes(t *testing.T) {
 			AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...).
 			AddRow(newNodeRow("uuid-2", "node-2", "cluster-1", "node-2", "edge", "5.6.7.8")...))
 
-	resp, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{})
+	resp, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestListHealthyNodesForDNS_QueriesCastInetAddressesForAdvertiseHost(t *test
 		WithArgs(svcType, int32(300)).
 		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
-	if _, err := server.ListHealthyNodesForDNS(context.Background(), &pb.ListHealthyNodesForDNSRequest{
+	if _, err := server.ListHealthyNodesForDNS(context.Background(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)

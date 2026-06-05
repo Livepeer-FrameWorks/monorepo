@@ -4,21 +4,21 @@ import (
 	"testing"
 	"time"
 
-	proto "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	structpb "google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func snapshotNode(snapshotAge time.Duration, heartbeatAge time.Duration) *proto.InfrastructureNode {
+func snapshotNode(snapshotAge time.Duration, heartbeatAge time.Duration) *quartermasterpb.InfrastructureNode {
 	tenantID := "tenant-1"
 	region := "eu-west"
 	now := time.Now()
-	node := &proto.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:        "core-1",
 		Region:        &region,
 		OwnerTenantId: &tenantID,
-		ResourceSnapshot: &proto.NodeResourceSnapshot{
+		ResourceSnapshot: &quartermasterpb.NodeResourceSnapshot{
 			CpuPercent:     12.5,
 			RamUsedBytes:   1024,
 			RamTotalBytes:  2048,
@@ -34,7 +34,7 @@ func snapshotNode(snapshotAge time.Duration, heartbeatAge time.Duration) *proto.
 	return node
 }
 
-func metaString(t *testing.T, live *proto.LiveNode, key string) string {
+func metaString(t *testing.T, live *periscopepb.LiveNode, key string) string {
 	t.Helper()
 	if live == nil || live.GetMetadata() == nil {
 		t.Fatalf("metadata missing")
@@ -46,7 +46,7 @@ func metaString(t *testing.T, live *proto.LiveNode, key string) string {
 	return v.GetStringValue()
 }
 
-func metaHas(live *proto.LiveNode, key string) bool {
+func metaHas(live *periscopepb.LiveNode, key string) bool {
 	if live == nil || live.GetMetadata() == nil {
 		return false
 	}
@@ -121,10 +121,10 @@ func TestLiveNodeFromSnapshot_StaleSnapshotMissingHeartbeat(t *testing.T) {
 
 func TestLiveNodeFromSnapshot_FutureTimestamp(t *testing.T) {
 	tenantID := "tenant-1"
-	node := &proto.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:        "core-1",
 		OwnerTenantId: &tenantID,
-		ResourceSnapshot: &proto.NodeResourceSnapshot{
+		ResourceSnapshot: &quartermasterpb.NodeResourceSnapshot{
 			RamTotalBytes:  2048,
 			DiskTotalBytes: 8192,
 			UptimeSeconds:  60,
@@ -149,10 +149,10 @@ func TestLiveNodeFromSnapshot_FutureTimestamp(t *testing.T) {
 
 func TestLiveNodeFromSnapshot_MissingTimestamp(t *testing.T) {
 	tenantID := "tenant-1"
-	node := &proto.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:        "core-1",
 		OwnerTenantId: &tenantID,
-		ResourceSnapshot: &proto.NodeResourceSnapshot{
+		ResourceSnapshot: &quartermasterpb.NodeResourceSnapshot{
 			RamTotalBytes:  2048,
 			DiskTotalBytes: 8192,
 			UptimeSeconds:  60,
@@ -173,7 +173,7 @@ func TestLiveNodeFromSnapshot_MissingTimestamp(t *testing.T) {
 
 func TestLiveNodeFromSnapshot_MissingSnapshot(t *testing.T) {
 	tenantID := "tenant-1"
-	node := &proto.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:        "core-1",
 		OwnerTenantId: &tenantID,
 	}
@@ -194,7 +194,7 @@ func TestLiveNodeFromSnapshotCarriesOwnerTenant(t *testing.T) {
 }
 
 func TestLiveNodeWithMetadataSource_PreservesExisting(t *testing.T) {
-	original := &proto.LiveNode{
+	original := &periscopepb.LiveNode{
 		NodeId: "edge-1",
 		Metadata: &structpb.Struct{
 			Fields: map[string]*structpb.Value{
@@ -227,7 +227,7 @@ func TestLiveNodeWithMetadataSource_NilSafe(t *testing.T) {
 	}
 
 	// Nil metadata on a non-nil node is also valid; helper should populate.
-	in := &proto.LiveNode{NodeId: "edge-2"}
+	in := &periscopepb.LiveNode{NodeId: "edge-2"}
 	out := liveNodeWithMetadataSource(in, liveNodeSourcePeriscope)
 	if out == nil || out.GetMetadata() == nil {
 		t.Fatal("helper must materialize metadata when input lacks it")

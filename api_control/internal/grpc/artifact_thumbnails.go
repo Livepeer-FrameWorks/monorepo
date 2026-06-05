@@ -5,7 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -13,7 +13,7 @@ import (
 // MarkArtifactThumbnailsReady flips has_thumbnails to TRUE and stamps
 // storage_cluster_id on the matching artifact row after Foghorn confirms
 // the thumbnail bytes landed. Idempotent at the DB level via the WHERE clause.
-func (s *CommodoreServer) MarkArtifactThumbnailsReady(ctx context.Context, req *pb.MarkArtifactThumbnailsReadyRequest) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
+func (s *CommodoreServer) MarkArtifactThumbnailsReady(ctx context.Context, req *commodorepb.MarkArtifactThumbnailsReadyRequest) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error) {
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()
 	cluster := req.GetStorageClusterId()
@@ -44,13 +44,13 @@ func (s *CommodoreServer) MarkArtifactThumbnailsReady(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
 	}
 	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
-	return &pb.MarkArtifactThumbnailsReadyResponse{Updated: rows > 0}, nil
+	return &commodorepb.MarkArtifactThumbnailsReadyResponse{Updated: rows > 0}, nil
 }
 
 // UpdateArtifactStorageCluster updates storage_cluster_id only. It never
 // flips has_thumbnails — a storage move on a thumbnail-less artifact must
 // not falsely flip readiness.
-func (s *CommodoreServer) UpdateArtifactStorageCluster(ctx context.Context, req *pb.UpdateArtifactStorageClusterRequest) (*pb.UpdateArtifactStorageClusterResponse, error) {
+func (s *CommodoreServer) UpdateArtifactStorageCluster(ctx context.Context, req *commodorepb.UpdateArtifactStorageClusterRequest) (*commodorepb.UpdateArtifactStorageClusterResponse, error) {
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()
 	cluster := req.GetStorageClusterId()
@@ -80,12 +80,12 @@ func (s *CommodoreServer) UpdateArtifactStorageCluster(ctx context.Context, req 
 		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
 	}
 	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
-	return &pb.UpdateArtifactStorageClusterResponse{Updated: rows > 0}, nil
+	return &commodorepb.UpdateArtifactStorageClusterResponse{Updated: rows > 0}, nil
 }
 
 // UpdateArtifactSize projects Foghorn's authoritative artifact byte count into
 // the registry row used by catalog/storage queries.
-func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *pb.UpdateArtifactSizeRequest) (*pb.UpdateArtifactSizeResponse, error) {
+func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *commodorepb.UpdateArtifactSizeRequest) (*commodorepb.UpdateArtifactSizeResponse, error) {
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()
 	sizeBytes := req.GetSizeBytes()
@@ -114,19 +114,19 @@ func (s *CommodoreServer) UpdateArtifactSize(ctx context.Context, req *pb.Update
 		return nil, status.Errorf(codes.Internal, "update failed: %v", execErr)
 	}
 	rows, _ := res.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
-	return &pb.UpdateArtifactSizeResponse{Updated: rows > 0}, nil
+	return &commodorepb.UpdateArtifactSizeResponse{Updated: rows > 0}, nil
 }
 
 // artifactAssetTable maps the proto enum to the registry table and its
 // hash column. clip_hash, dvr_hash, vod_hash are the asset keys used at
 // the Foghorn thumbnail-upload path.
-func artifactAssetTable(t pb.ArtifactAssetType) (table, keyCol string, err error) {
+func artifactAssetTable(t commodorepb.ArtifactAssetType) (table, keyCol string, err error) {
 	switch t {
-	case pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP:
+	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP:
 		return "commodore.clips", "clip_hash", nil
-	case pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR:
+	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR:
 		return "commodore.dvr_recordings", "dvr_hash", nil
-	case pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD:
+	case commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD:
 		return "commodore.vod_assets", "vod_hash", nil
 	default:
 		return "", "", status.Errorf(codes.InvalidArgument, "unsupported asset_type: %s", t.String())

@@ -1,11 +1,10 @@
 package handlers
 
 import (
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"strings"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestExtractVODHash(t *testing.T) {
@@ -42,12 +41,12 @@ func TestIsVideoFile(t *testing.T) {
 func TestDetermineQualityTier(t *testing.T) {
 	tests := []struct {
 		name   string
-		tracks []*pb.StreamTrack
+		tracks []*ipcpb.StreamTrack
 		expect string
 	}{
 		{
 			name: "full data",
-			tracks: []*pb.StreamTrack{
+			tracks: []*ipcpb.StreamTrack{
 				{
 					TrackType:   "video",
 					Height:      int32Ptr(1080),
@@ -60,7 +59,7 @@ func TestDetermineQualityTier(t *testing.T) {
 		},
 		{
 			name: "bps fallback",
-			tracks: []*pb.StreamTrack{
+			tracks: []*ipcpb.StreamTrack{
 				{
 					TrackType:  "video",
 					Height:     int32Ptr(720),
@@ -71,7 +70,7 @@ func TestDetermineQualityTier(t *testing.T) {
 		},
 		{
 			name: "no video tracks",
-			tracks: []*pb.StreamTrack{
+			tracks: []*ipcpb.StreamTrack{
 				{TrackType: "audio"},
 			},
 			expect: "",
@@ -89,9 +88,9 @@ func TestDetermineQualityTier(t *testing.T) {
 }
 
 func TestEnrichStreamBufferTrigger(t *testing.T) {
-	trigger := &pb.StreamBufferTrigger{
+	trigger := &ipcpb.StreamBufferTrigger{
 		MistIssues: stringPtr("VeryLowBuffer"),
-		Tracks: []*pb.StreamTrack{
+		Tracks: []*ipcpb.StreamTrack{
 			{
 				TrackName: "video_1",
 				TrackType: "video",
@@ -120,8 +119,8 @@ func TestEnrichStreamBufferTrigger(t *testing.T) {
 }
 
 func TestEnrichLiveTrackListTrigger(t *testing.T) {
-	trigger := &pb.StreamTrackListTrigger{
-		Tracks: []*pb.StreamTrack{
+	trigger := &ipcpb.StreamTrackListTrigger{
+		Tracks: []*ipcpb.StreamTrack{
 			{
 				TrackType:   "video",
 				Width:       int32Ptr(1920),

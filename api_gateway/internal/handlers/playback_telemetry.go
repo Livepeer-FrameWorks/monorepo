@@ -8,7 +8,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetrytoken"
 
 	"github.com/gin-gonic/gin"
@@ -35,13 +36,13 @@ type rateLimiter interface {
 // playbackContentResolver is the slice of the Commodore client used to map a
 // public content_id to its owning tenant/stream/artifact.
 type playbackContentResolver interface {
-	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error)
-	ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error)
+	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
 }
 
 // triggerSink is the slice of the Decklog client used to forward the trace.
 type triggerSink interface {
-	SendTriggerContext(ctx context.Context, trigger *pb.MistTrigger) error
+	SendTriggerContext(ctx context.Context, trigger *ipcpb.MistTrigger) error
 }
 
 // PlaybackTelemetryHandler ingests browser-originated player boot traces.
@@ -228,13 +229,13 @@ func (h *PlaybackTelemetryHandler) resolveAttribution(ctx context.Context, conte
 	return attr, ok
 }
 
-func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playbackBootBody, attr bootAttribution) *pb.MistTrigger {
+func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playbackBootBody, attr bootAttribution) *ipcpb.MistTrigger {
 	contentType := body.ContentType
 	if contentType == "" {
 		contentType = attr.contentType
 	}
 
-	boot := &pb.PlaybackBootTrace{
+	boot := &ipcpb.PlaybackBootTrace{
 		ArtifactHash:      attr.artifactHash,
 		InternalName:      attr.internalName,
 		OriginClusterId:   attr.originClusterID,
@@ -283,7 +284,7 @@ func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playback
 	}
 
 	for _, r := range body.Resources {
-		res := &pb.PlaybackBootResource{
+		res := &ipcpb.PlaybackBootResource{
 			Kind:            r.Kind,
 			Url:             redactURL(r.URL),
 			TtfbMs:          r.TtfbMs,
@@ -301,11 +302,11 @@ func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playback
 		boot.Resources = append(boot.Resources, res)
 	}
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PLAYBACK_BOOT_TRACE",
 		Timestamp:   time.Now().Unix(),
 		EventId:     newBeaconEventID(), // Bridge mints the canonical dedup key
-		TriggerPayload: &pb.MistTrigger_PlaybackBootTrace{
+		TriggerPayload: &ipcpb.MistTrigger_PlaybackBootTrace{
 			PlaybackBootTrace: boot,
 		},
 	}

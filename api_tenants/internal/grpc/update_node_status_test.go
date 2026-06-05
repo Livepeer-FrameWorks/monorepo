@@ -8,7 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -35,7 +35,7 @@ func TestUpdateNodeStatus_RejectsTenantWithAccessButNotOwnership(t *testing.T) {
 		WithArgs("edge-1", "retired", "00000000-0000-0000-0000-000000000001").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", ""), &pb.UpdateNodeStatusRequest{
+	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", ""), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId: "edge-1",
 		Status: "retired",
 	})
@@ -73,7 +73,7 @@ func TestUpdateNodeStatus_AllowsProviderRoleAcrossActiveClusters(t *testing.T) {
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
 
-	resp, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &pb.UpdateNodeStatusRequest{
+	resp, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            "edge-1",
 		Status:            "maintenance",
 		ExpectedClusterId: &clusterID,
@@ -120,7 +120,7 @@ func TestUpdateNodeStatus_FlipsAggregateEdgeInstanceUnhealthy(t *testing.T) {
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(queryNodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-1", "edge", "203.0.113.10")...))
 
-	if _, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &pb.UpdateNodeStatusRequest{
+	if _, err := server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "provider"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            "edge-1",
 		Status:            "maintenance",
 		ExpectedClusterId: &clusterID,
@@ -145,7 +145,7 @@ func TestUpdateNodeStatus_RejectsTenantAdminAcrossActiveClusters(t *testing.T) {
 		WithArgs("edge-1", "maintenance", clusterID, "00000000-0000-0000-0000-000000000001").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "admin"), &pb.UpdateNodeStatusRequest{
+	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "admin"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            "edge-1",
 		Status:            "maintenance",
 		ExpectedClusterId: &clusterID,

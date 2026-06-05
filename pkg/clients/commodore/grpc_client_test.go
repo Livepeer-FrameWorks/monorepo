@@ -10,7 +10,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"google.golang.org/grpc"
 )
@@ -46,13 +46,13 @@ func TestBuildValidateStreamKeyCacheKey(t *testing.T) {
 }
 
 type validateStreamKeyStub struct {
-	pb.UnimplementedInternalServiceServer
+	commodorepb.UnimplementedInternalServiceServer
 	calls atomic.Int32
-	resp  *pb.ValidateStreamKeyResponse
+	resp  *commodorepb.ValidateStreamKeyResponse
 	err   error
 }
 
-func (s *validateStreamKeyStub) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
+func (s *validateStreamKeyStub) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
 	s.calls.Add(1)
 	if s.err != nil {
 		return nil, s.err
@@ -67,7 +67,7 @@ func TestValidateStreamKeyBypassesCache(t *testing.T) {
 		NegativeTTL:          time.Minute,
 		MaxEntries:           10,
 	}, cache.MetricsHooks{})
-	stale := &pb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: false}
+	stale := &commodorepb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: false}
 	if _, ok, err := c.Get(context.Background(), "commodore:validate:sk_live_abc", func(context.Context, string) (interface{}, bool, error) {
 		return stale, true, nil
 	}); err != nil || !ok {
@@ -80,9 +80,9 @@ func TestValidateStreamKeyBypassesCache(t *testing.T) {
 	}
 	server := grpc.NewServer()
 	stub := &validateStreamKeyStub{
-		resp: &pb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: true},
+		resp: &commodorepb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: true},
 	}
-	pb.RegisterInternalServiceServer(server, stub)
+	commodorepb.RegisterInternalServiceServer(server, stub)
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -121,7 +121,7 @@ func TestValidateStreamKeyFallsBackToCachedAdmissionOnBackendError(t *testing.T)
 		NegativeTTL:          time.Minute,
 		MaxEntries:           10,
 	}, cache.MetricsHooks{})
-	cached := &pb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: true}
+	cached := &commodorepb.ValidateStreamKeyResponse{Valid: true, IsRecordingEnabled: true}
 	c.SetDefault(buildValidateStreamKeyCacheKey("sk_live_abc", "demo-media"), cached)
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -130,7 +130,7 @@ func TestValidateStreamKeyFallsBackToCachedAdmissionOnBackendError(t *testing.T)
 	}
 	server := grpc.NewServer()
 	stub := &validateStreamKeyStub{err: errors.New("commodore unavailable")}
-	pb.RegisterInternalServiceServer(server, stub)
+	commodorepb.RegisterInternalServiceServer(server, stub)
 	go func() {
 		_ = server.Serve(listener)
 	}()

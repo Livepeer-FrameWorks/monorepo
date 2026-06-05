@@ -4,25 +4,25 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestMapSignalmanRoutingEventPreservesZeroCoordinateWithBucket(t *testing.T) {
 	streamID := "stream-1"
-	event := &pb.SignalmanEvent{
+	event := &signalmanpb.SignalmanEvent{
 		Timestamp: timestamppb.New(time.Unix(123, 0)),
-		Data: &pb.EventData{
-			Payload: &pb.EventData_LoadBalancing{
-				LoadBalancing: &pb.LoadBalancingData{
+		Data: &signalmanpb.EventData{
+			Payload: &signalmanpb.EventData_LoadBalancing{
+				LoadBalancing: &ipcpb.LoadBalancingData{
 					StreamId:      &streamID,
 					Latitude:      0,
 					Longitude:     4.9041,
 					NodeLatitude:  52.3676,
 					NodeLongitude: 0,
-					ClientBucket:  &pb.GeoBucket{H3Index: 1, Resolution: 5},
-					NodeBucket:    &pb.GeoBucket{H3Index: 2, Resolution: 5},
+					ClientBucket:  &ipcpb.GeoBucket{H3Index: 1, Resolution: 5},
+					NodeBucket:    &ipcpb.GeoBucket{H3Index: 2, Resolution: 5},
 				},
 			},
 		},

@@ -25,7 +25,8 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -217,7 +218,7 @@ func resolveClusterNodeInstallVersion(cmd *cobra.Command, clusterID, fallbackVer
 
 	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 10*time.Second)
 	defer cancel()
-	resp, err := qm.GetClusterReleaseTarget(cctx, &pb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
+	resp, err := qm.GetClusterReleaseTarget(cctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return fallbackVersion, nil
@@ -249,7 +250,7 @@ func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, t
 	if strings.TrimSpace(nodeName) != "" {
 		tokenName = "cluster nodes add: " + strings.TrimSpace(nodeName)
 	}
-	req := &pb.CreateEnrollmentTokenRequest{
+	req := &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: clusterID,
 		Name:      &tokenName,
 	}
@@ -357,7 +358,7 @@ func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVers
 	if err != nil {
 		return fmt.Errorf("verify existing node registration: %w", err)
 	}
-	var registered *pb.InfrastructureNode
+	var registered *quartermasterpb.InfrastructureNode
 	for _, node := range resp.GetNodes() {
 		if node == nil {
 			continue
@@ -381,7 +382,7 @@ func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVers
 	defer fhCleanup()
 	defer func() { _ = fh.Close() }()
 	hctx, hcancel := clusterNodesRPCContext(cmd.Context(), fhCtxCfg, 5*time.Second)
-	health, _, err := fh.GetNodeHealth(hctx, &pb.GetNodeHealthRequest{NodeId: registered.GetNodeId()})
+	health, _, err := fh.GetNodeHealth(hctx, &foghornpb.GetNodeHealthRequest{NodeId: registered.GetNodeId()})
 	hcancel()
 	if err != nil {
 		return fmt.Errorf("same-cluster node %s is registered but not reporting health through Foghorn: %w", registered.GetNodeId(), err)
@@ -427,7 +428,7 @@ func desiredEdgeComponentVersionsForExistingNode(ctx context.Context, qm *qmclie
 	}
 	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 10*time.Second)
 	defer cancel()
-	targetResp, err := qm.GetClusterReleaseTarget(cctx, &pb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
+	targetResp, err := qm.GetClusterReleaseTarget(cctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			if strings.TrimSpace(fallbackVersion) != "" {
@@ -444,7 +445,7 @@ func desiredEdgeComponentVersionsForExistingNode(ctx context.Context, qm *qmclie
 		return nil, nil
 	}
 	target := targetResp.GetTarget()
-	releaseReq := &pb.ListEdgeReleasesRequest{
+	releaseReq := &quartermasterpb.ListEdgeReleasesRequest{
 		Channel: strings.TrimSpace(target.GetChannel()),
 		Version: strings.TrimSpace(target.GetTargetVersion()),
 	}
@@ -565,7 +566,7 @@ if [ "$found" = 0 ]; then echo "__FRAMEWORKS_ENV_FILE="; fi`
 	return out, nil
 }
 
-func promptSelectCluster(cmd *cobra.Command) (*pb.InfrastructureCluster, error) {
+func promptSelectCluster(cmd *cobra.Command) (*quartermasterpb.InfrastructureCluster, error) {
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		return nil, fmt.Errorf("--cluster-id is required when interactive cluster selection is unavailable")
 	}
@@ -606,7 +607,7 @@ func promptSelectCluster(cmd *cobra.Command) (*pb.InfrastructureCluster, error) 
 	return selected, nil
 }
 
-func clusterDisplayName(cluster *pb.InfrastructureCluster) string {
+func clusterDisplayName(cluster *quartermasterpb.InfrastructureCluster) string {
 	if cluster == nil {
 		return ""
 	}
@@ -670,7 +671,7 @@ func newClusterNodesListCmd() *cobra.Command {
 				return enc.Encode(resp)
 			}
 
-			var health map[string]*pb.GetNodeHealthResponse
+			var health map[string]*foghornpb.GetNodeHealthResponse
 			if withHealth {
 				health = loadNodeHealth(cmd, resp.GetNodes())
 			}
@@ -704,7 +705,7 @@ func newClusterNodesListCmd() *cobra.Command {
 	return cmd
 }
 
-func loadNodeHealth(cmd *cobra.Command, nodes []*pb.InfrastructureNode) map[string]*pb.GetNodeHealthResponse {
+func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghornpb.GetNodeHealthResponse {
 	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", err)
@@ -713,10 +714,10 @@ func loadNodeHealth(cmd *cobra.Command, nodes []*pb.InfrastructureNode) map[stri
 	defer cleanup()
 	defer func() { _ = fh.Close() }()
 
-	out := make(map[string]*pb.GetNodeHealthResponse, len(nodes))
+	out := make(map[string]*foghornpb.GetNodeHealthResponse, len(nodes))
 	for _, n := range nodes {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 5*time.Second)
-		resp, _, err := fh.GetNodeHealth(cctx, &pb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
+		resp, _, err := fh.GetNodeHealth(cctx, &foghornpb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
 		cancel()
 		if err == nil {
 			out[n.GetNodeId()] = resp
@@ -725,7 +726,7 @@ func loadNodeHealth(cmd *cobra.Command, nodes []*pb.InfrastructureNode) map[stri
 	return out
 }
 
-func nodeComponentVersions(versions []*pb.NodeComponentVersion) string {
+func nodeComponentVersions(versions []*foghornpb.NodeComponentVersion) string {
 	if len(versions) == 0 {
 		return "-"
 	}
@@ -742,7 +743,7 @@ func nodeComponentVersions(versions []*pb.NodeComponentVersion) string {
 	return strings.Join(parts, ",")
 }
 
-func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*pb.InfrastructureNode, string, error) {
+func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*quartermasterpb.InfrastructureNode, string, error) {
 	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
 	if err != nil {
 		return nil, "", err
@@ -776,7 +777,7 @@ func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*pb.Inf
 		return selected, clusterID, nil
 	}
 
-	var matches []*pb.InfrastructureNode
+	var matches []*quartermasterpb.InfrastructureNode
 	for _, node := range nodes {
 		if node == nil {
 			continue
@@ -814,7 +815,7 @@ func resolveClusterIDForLifecycle(cmd *cobra.Command, ctxCfg fwcfg.Context, expl
 	return selected.GetClusterId(), nil
 }
 
-func promptSelectNode(cmd *cobra.Command, nodes []*pb.InfrastructureNode) (*pb.InfrastructureNode, error) {
+func promptSelectNode(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) (*quartermasterpb.InfrastructureNode, error) {
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("no edge nodes found in the selected cluster")
 	}
@@ -837,7 +838,7 @@ func promptSelectNode(cmd *cobra.Command, nodes []*pb.InfrastructureNode) (*pb.I
 	return nodes[idx-1], nil
 }
 
-func nodeDisplayName(node *pb.InfrastructureNode) string {
+func nodeDisplayName(node *quartermasterpb.InfrastructureNode) string {
 	if node == nil {
 		return ""
 	}
@@ -974,7 +975,7 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	defer func() { _ = fh.Close() }()
 	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 	defer cancel()
-	resp, _, err := fh.SetNodeMode(cctx, &pb.SetNodeModeRequest{
+	resp, _, err := fh.SetNodeMode(cctx, &foghornpb.SetNodeModeRequest{
 		NodeId: nodeID,
 		Mode:   mode,
 		SetBy:  "frameworks-cli",
@@ -984,7 +985,7 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	}
 	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
 		Key:    "mode",
-		OK:     resp.GetStatus() == pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS || resp.GetStatus() == pb.SetNodeModeStatus_SET_NODE_MODE_STATUS_ALREADY_IN_MODE,
+		OK:     resp.GetStatus() == foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS || resp.GetStatus() == foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_ALREADY_IN_MODE,
 		Detail: fmt.Sprintf("%s: %s", resp.GetMode(), resp.GetMessage()),
 	}})
 	return nil
@@ -1000,7 +1001,7 @@ func waitForNodeStreams(cmd *cobra.Command, nodeID string, timeout time.Duration
 	deadline := time.Now().Add(timeout)
 	for {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 5*time.Second)
-		resp, _, err := fh.GetNodeHealth(cctx, &pb.GetNodeHealthRequest{NodeId: nodeID})
+		resp, _, err := fh.GetNodeHealth(cctx, &foghornpb.GetNodeHealthRequest{NodeId: nodeID})
 		cancel()
 		if err != nil {
 			return err
@@ -1025,7 +1026,7 @@ func updateQuartermasterNodeStatus(cmd *cobra.Command, nodeID, clusterID, status
 	defer func() { _ = qm.Close() }()
 	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 	defer cancel()
-	resp, err := qm.UpdateNodeStatus(cctx, &pb.UpdateNodeStatusRequest{
+	resp, err := qm.UpdateNodeStatus(cctx, &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId:            nodeID,
 		Status:            statusValue,
 		ExpectedClusterId: &clusterID,

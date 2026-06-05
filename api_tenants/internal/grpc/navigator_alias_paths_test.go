@@ -8,7 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -189,7 +189,7 @@ func TestSubscribeToClusterEnqueuesEnsure(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
 	mock.ExpectCommit()
 
-	if _, err := server.SubscribeToCluster(ctx, &pb.SubscribeToClusterRequest{ClusterId: "core-1"}); err != nil {
+	if _, err := server.SubscribeToCluster(ctx, &quartermasterpb.SubscribeToClusterRequest{ClusterId: "core-1"}); err != nil {
 		t.Fatalf("SubscribeToCluster: %v", err)
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
@@ -222,7 +222,7 @@ func TestUnsubscribeFromClusterEnqueuesRemoveClusterThenTeardown(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rm-1"))
 	mock.ExpectCommit()
 
-	if _, err := server.UnsubscribeFromCluster(ctx, &pb.UnsubscribeFromClusterRequest{ClusterId: "core-1"}); err != nil {
+	if _, err := server.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{ClusterId: "core-1"}); err != nil {
 		t.Fatalf("UnsubscribeFromCluster: %v", err)
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
@@ -251,7 +251,7 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
 	mock.ExpectCommit()
 
-	if _, err := server.GrantClusterAccess(context.Background(), &pb.GrantClusterAccessRequest{
+	if _, err := server.GrantClusterAccess(context.Background(), &quartermasterpb.GrantClusterAccessRequest{
 		TenantId: "tenant-1", ClusterId: "core-1",
 	}); err != nil {
 		t.Fatalf("GrantClusterAccess: %v", err)

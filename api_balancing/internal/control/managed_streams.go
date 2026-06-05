@@ -12,7 +12,9 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // ManagedStreamOwnerTag tags every Mist stream Foghorn provisions through
@@ -32,13 +34,13 @@ type ManagedStreamMaterializer interface {
 	// (tenantId:internalName + process:internalName) so STREAM_PROCESS finds
 	// the per-stream process policy. Called each reconciler tick that emits
 	// or refreshes an Apply, so cache TTL stays warm for always_on streams.
-	PopulateStreamContext(streamCtx *pb.ResolveStreamContextResponse)
+	PopulateStreamContext(streamCtx *commodorepb.ResolveStreamContextResponse)
 
 	// EnsureManagedStreamDVR idempotently starts DVR for (stream_id, source_node_id)
 	// when is_recording_enabled is true. Must be a no-op if a live DVR for
 	// (stream_id, source_node_id) already exists; placement-change cleanup
 	// happens via the natural STREAM_END → StopDVRByInternalName path.
-	EnsureManagedStreamDVR(ctx context.Context, streamCtx *pb.ResolveStreamContextResponse, sourceNodeID string)
+	EnsureManagedStreamDVR(ctx context.Context, streamCtx *commodorepb.ResolveStreamContextResponse, sourceNodeID string)
 }
 
 var managedStreamMaterializer ManagedStreamMaterializer
@@ -90,7 +92,7 @@ func ForgetManagedStreamLastSent(nodeID string) {
 // still reports the previous config and presence-only verification would
 // mask the drift. The reconciler treats a stream as verified only when
 // the heartbeat snapshot matches the desired apply key for that tick.
-func UpdateVerifiedAppliedFromHeartbeat(nodeID string, applied []*pb.AppliedManagedStream) {
+func UpdateVerifiedAppliedFromHeartbeat(nodeID string, applied []*ipcpb.AppliedManagedStream) {
 	if StreamRegistryInstance == nil {
 		return
 	}
@@ -138,7 +140,7 @@ func managedStreamVerifiedAppliedPresent(nodeID, streamID string) bool {
 // Retract the bare-name entry as "no longer admitted", taking the live
 // stream down. Sidecar embeds stream_id in the owner tags on Apply so
 // Mist-config hydration recovers it across sidecar restarts too.
-func HydrateManagedStreamLastSentForNode(nodeID string, applied []*pb.AppliedManagedStream) {
+func HydrateManagedStreamLastSentForNode(nodeID string, applied []*ipcpb.AppliedManagedStream) {
 	if StreamRegistryInstance == nil {
 		return
 	}
@@ -218,7 +220,7 @@ func runManagedStreamReconcileOnce(ctx context.Context, log logging.Logger) {
 //     A denied stream stays in elected (placement still picked it) but is
 //     absent from admitted, so the retract loop fires. Transient-error
 //     streams are tracked separately so they neither Apply nor Retract.
-func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clusterID string, rows []*pb.ManagedStreamRow) {
+func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow) {
 	localNodes := connectedNodesInCluster(clusterID)
 	sort.Strings(localNodes)
 	// Migrate any Register-hydrated entries for these nodes into this
@@ -227,7 +229,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 	// never participate in the retract decision for its actual cluster.
 	adoptHydratedManagedStreams(clusterID, localNodes)
 
-	rowByID := make(map[string]*pb.ManagedStreamRow, len(rows))
+	rowByID := make(map[string]*commodorepb.ManagedStreamRow, len(rows))
 	type electedEntry struct {
 		snap             managedStreamSnapshot
 		electedClusterID string
@@ -474,7 +476,7 @@ const (
 // the caller acts on. ResolveStreamContext is cheap and already cached
 // server-side, so running it every tick is fine even when snapshots are
 // stable.
-func materializeManagedStream(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *pb.ManagedStreamRow) (*pb.ResolveStreamContextResponse, materializeStatus) {
+func materializeManagedStream(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow) (*commodorepb.ResolveStreamContextResponse, materializeStatus) {
 	if row == nil {
 		return nil, materializeTransient
 	}
@@ -522,11 +524,11 @@ func shouldRetractManagedStream(streamID string, admitted, transient map[string]
 	return true
 }
 
-func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *pb.ManagedStreamRow, streamCtx *pb.ResolveStreamContextResponse) error {
+func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) error {
 	if streamCtx.GetInternalName() == "" {
 		return errors.New("ResolveStreamContext returned empty internal_name")
 	}
-	req := &pb.ApplyManagedStream{
+	req := &ipcpb.ApplyManagedStream{
 		Name:         streamCtx.GetInternalName(),
 		Source:       row.GetSourceSpec(),
 		AlwaysOn:     row.GetAlwaysOn(),
@@ -583,7 +585,7 @@ func sendRetractManagedStream(log logging.Logger, nodeID, streamID, internalName
 		}).Warn("Retract skipped: lastSent entry missing internal_name (unexpected)")
 		return nil
 	}
-	return SendRetractManagedStream(nodeID, &pb.RetractManagedStream{
+	return SendRetractManagedStream(nodeID, &ipcpb.RetractManagedStream{
 		Name:     internalName,
 		StreamId: streamID,
 	})
@@ -846,21 +848,21 @@ func placementPick(streamID string, sortedNodes []string, count int) []string {
 // command to a Helmsman connected to this Foghorn instance. The relay
 // server dispatches received ForwardCommandRequest_ApplyManagedStream /
 // _RetractManagedStream through these.
-func SendLocalApplyManagedStream(nodeID string, req *pb.ApplyManagedStream) error {
-	return sendLocalManagedStreamMessage(nodeID, &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ApplyManagedStream{ApplyManagedStream: req},
+func SendLocalApplyManagedStream(nodeID string, req *ipcpb.ApplyManagedStream) error {
+	return sendLocalManagedStreamMessage(nodeID, &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ApplyManagedStream{ApplyManagedStream: req},
 		SentAt:  timestamppb.Now(),
 	})
 }
 
-func SendLocalRetractManagedStream(nodeID string, req *pb.RetractManagedStream) error {
-	return sendLocalManagedStreamMessage(nodeID, &pb.ControlMessage{
-		Payload: &pb.ControlMessage_RetractManagedStream{RetractManagedStream: req},
+func SendLocalRetractManagedStream(nodeID string, req *ipcpb.RetractManagedStream) error {
+	return sendLocalManagedStreamMessage(nodeID, &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_RetractManagedStream{RetractManagedStream: req},
 		SentAt:  timestamppb.Now(),
 	})
 }
 
-func sendLocalManagedStreamMessage(nodeID string, msg *pb.ControlMessage) error {
+func sendLocalManagedStreamMessage(nodeID string, msg *ipcpb.ControlMessage) error {
 	if registry == nil {
 		return ErrNotConnected
 	}
@@ -876,7 +878,7 @@ func sendLocalManagedStreamMessage(nodeID string, msg *pb.ControlMessage) error 
 // SendApplyManagedStream tries the local registry first, then forwards
 // via commandRelay if a peer Foghorn owns the connection. Mirrors the
 // SendDVRStart pattern so multi-Foghorn-per-cluster works.
-func SendApplyManagedStream(nodeID string, req *pb.ApplyManagedStream) error {
+func SendApplyManagedStream(nodeID string, req *ipcpb.ApplyManagedStream) error {
 	err := SendLocalApplyManagedStream(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -886,16 +888,16 @@ func SendApplyManagedStream(nodeID string, req *pb.ApplyManagedStream) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendRetractManagedStream(nodeID string, req *pb.RetractManagedStream) error {
+func SendRetractManagedStream(nodeID string, req *ipcpb.RetractManagedStream) error {
 	err := SendLocalRetractManagedStream(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -905,9 +907,9 @@ func SendRetractManagedStream(nodeID string, req *pb.RetractManagedStream) error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}

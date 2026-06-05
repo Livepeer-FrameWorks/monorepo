@@ -10,7 +10,8 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // defaultArrangeDeps holds a process-wide set of dependencies for
@@ -89,7 +90,7 @@ type OriginPullPeerResolver interface {
 // OriginPullFederationClient is the minimum federation-client surface
 // ArrangeOriginPull needs. *FederationClient satisfies it.
 type OriginPullFederationClient interface {
-	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error)
+	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error)
 }
 
 // OriginPullLBPicker selects a local edge to become the puller when the
@@ -114,13 +115,13 @@ type ArrangeOriginPullDeps struct {
 	// EventEmitter receives federation lifecycle events. Optional —
 	// nil-safe. HTTP /source supplies it; gRPC /play arrangement runs
 	// without it.
-	EventEmitter func(*pb.FederationEventData)
+	EventEmitter func(*ipcpb.FederationEventData)
 }
 
 // ArrangeOriginPullRequest is per-call state.
 type ArrangeOriginPullRequest struct {
 	InternalName  string
-	Remote        *pb.EdgeCandidate
+	Remote        *foghornfederationpb.EdgeCandidate
 	RemoteCluster string
 	TenantID      string
 
@@ -195,8 +196,8 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		for _, r := range replications {
 			if r.ClusterID == req.RemoteCluster {
 				if d.EventEmitter != nil {
-					d.EventEmitter(&pb.FederationEventData{
-						EventType:                  pb.FederationEventType_REPLICATION_LOOP_PREVENTED,
+					d.EventEmitter(&ipcpb.FederationEventData{
+						EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
 						RemoteCluster:              req.RemoteCluster,
 						StreamName:                 &req.InternalName,
 						BlockedCluster:             &req.RemoteCluster,
@@ -233,7 +234,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	}
 	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ack, err := d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, &pb.OriginPullNotification{
+	ack, err := d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, &foghornfederationpb.OriginPullNotification{
 		StreamName:    req.InternalName,
 		SourceNodeId:  req.Remote.NodeId,
 		DestClusterId: d.ClusterID,
@@ -248,8 +249,8 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			reason = ack.GetReason()
 		}
 		if d.EventEmitter != nil {
-			d.EventEmitter(&pb.FederationEventData{
-				EventType:     pb.FederationEventType_ORIGIN_PULL_FAILED,
+			d.EventEmitter(&ipcpb.FederationEventData{
+				EventType:     ipcpb.FederationEventType_ORIGIN_PULL_FAILED,
 				RemoteCluster: req.RemoteCluster,
 				StreamName:    &req.InternalName,
 				SourceNode:    &req.Remote.NodeId,
@@ -282,8 +283,8 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	}).Info("Origin-pull arranged")
 
 	if d.EventEmitter != nil {
-		d.EventEmitter(&pb.FederationEventData{
-			EventType:     pb.FederationEventType_ORIGIN_PULL_ARRANGED,
+		d.EventEmitter(&ipcpb.FederationEventData{
+			EventType:     ipcpb.FederationEventType_ORIGIN_PULL_ARRANGED,
 			RemoteCluster: req.RemoteCluster,
 			StreamName:    &req.InternalName,
 			SourceNode:    &req.Remote.NodeId,

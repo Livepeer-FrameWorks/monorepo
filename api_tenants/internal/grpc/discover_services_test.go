@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -25,7 +25,7 @@ func TestDiscoverServices_MissingServiceType(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{})
+	_, err = server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)
 	}
@@ -40,7 +40,7 @@ func TestDiscoverServices_PoolServiceRequiresClusterID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+	_, err = server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -72,7 +72,7 @@ func TestDiscoverServices_ReturnsInstances(t *testing.T) {
 				"http", "10.0.0.1", int32(18000), nil, "running", "healthy", []byte(`{"wallet_address":"0xabc123"}`),
 				now, now, now))
 
-	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "bridge",
 	})
 	if err != nil {
@@ -153,7 +153,7 @@ func TestDiscoverServices_PoolServiceMNPublicHostSynthesis(t *testing.T) {
 						now, now, now,
 						tc.clusterName, tc.baseURL))
 
-			resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+			resp, err := server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{
 				ServiceType: "livepeer-gateway",
 				ClusterId:   tc.clusterID,
 			})
@@ -227,7 +227,7 @@ func TestDiscoverServices_ServiceAuthNonDefaultClusterAndIngressGate(t *testing.
 				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
 				now, now, now, "Media EU 1", "frameworks.network", true))
 
-	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1", // NOT the default cluster
 	})
@@ -274,7 +274,7 @@ func TestDiscoverServices_IngressGateSuppressesUnprovisionedEndpoint(t *testing.
 				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
 				now, now, now, "Media EU 1", "frameworks.network", true))
 
-	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1",
 	})
@@ -322,7 +322,7 @@ func TestDiscoverServices_IngressGateSuppressesIneligibleInstance(t *testing.T) 
 				"http", "203.0.113.10", int32(8935), nil, "running", "healthy", []byte(`{}`),
 				stale, now, now, "Media EU 1", "frameworks.network", false))
 
-	resp, err := server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1",
 	})
@@ -351,7 +351,7 @@ func TestDiscoverServices_FailsClosedOnMalformedGateDomains(t *testing.T) {
 	mock.ExpectQuery(`(?s)ingress_sites si.*n\.status = 'active'`).
 		WillReturnRows(sqlmock.NewRows([]string{"domains"}).AddRow([]byte(`{"not":"an array"}`)))
 
-	_, err = server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+	_, err = server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1",
 	})
@@ -389,7 +389,7 @@ func TestDiscoverServices_FailsClosedOnScanError(t *testing.T) {
 				"http", "203.0.113.10", "NOT_AN_INT", nil, "running", "healthy", []byte(`{}`),
 				now, now, now, "Media EU 1", "frameworks.network", true))
 
-	_, err = server.DiscoverServices(serviceCtx(), &pb.ServiceDiscoveryRequest{
+	_, err = server.DiscoverServices(serviceCtx(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1",
 	})
@@ -418,7 +418,7 @@ func TestListIngressSites_FailsClosedOnMalformedDomains(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(cols).
 			AddRow("id1", "site1", "cl1", "node1", []byte(`{"not":"an array"}`), "bundle1", "physical", "127.0.0.1:8935", []byte(`{}`), now, now))
 
-	_, err = s.ListIngressSites(context.Background(), &pb.ListIngressSitesRequest{NodeId: "node1"})
+	_, err = s.ListIngressSites(context.Background(), &quartermasterpb.ListIngressSitesRequest{NodeId: "node1"})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal on malformed ingress domains, got %v", err)
 	}
@@ -467,7 +467,7 @@ func TestDiscoverServices_EmptyResult(t *testing.T) {
 		WithArgs("nonexistent-service", int32(51)).
 		WillReturnRows(sqlmock.NewRows(instanceCols))
 
-	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "nonexistent-service",
 	})
 	if err != nil {
@@ -556,7 +556,7 @@ func TestDiscoverServices_NonServiceCallerGetsNoPhysicalHost(t *testing.T) {
 
 	// context.Background() carries no auth_type and no tenant → not a service caller.
 	// Pool-assigned discovery requires an explicit cluster_id.
-	resp, err := server.DiscoverServices(context.Background(), &pb.ServiceDiscoveryRequest{
+	resp, err := server.DiscoverServices(context.Background(), &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: "livepeer-gateway",
 		ClusterId:   "media-eu-1",
 	})

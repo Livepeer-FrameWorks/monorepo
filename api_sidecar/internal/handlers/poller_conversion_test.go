@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // --- convertStreamAPIToMistTrigger ---
@@ -790,7 +790,7 @@ func TestScanVODDirectory_WithFiles(t *testing.T) {
 	if info.Format != "mp4" {
 		t.Fatalf("expected format 'mp4', got %q", info.Format)
 	}
-	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+	if info.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
 		t.Fatalf("expected VOD artifact type, got %v", info.ArtifactType)
 	}
 }
@@ -865,7 +865,7 @@ func TestMarkLocalDtshPresentVODUpdatesArtifactIndex(t *testing.T) {
 	if info.FilePath != mediaPath {
 		t.Fatalf("file path = %q, want %q", info.FilePath, mediaPath)
 	}
-	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_VOD {
+	if info.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD {
 		t.Fatalf("artifact type = %v, want VOD", info.ArtifactType)
 	}
 }
@@ -902,7 +902,7 @@ func TestMarkLocalDtshPresentClipInfersStream(t *testing.T) {
 	if !info.HasDtsh {
 		t.Fatal("expected HasDtsh=true")
 	}
-	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
+	if info.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
 		t.Fatalf("artifact type = %v, want CLIP", info.ArtifactType)
 	}
 }
@@ -966,7 +966,7 @@ func TestScanClipsDirectory_NestedStreamDirs(t *testing.T) {
 	if info.StreamName != "my-stream" {
 		t.Fatalf("expected stream name 'my-stream', got %q", info.StreamName)
 	}
-	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
+	if info.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
 		t.Fatalf("expected CLIP type, got %v", info.ArtifactType)
 	}
 }
@@ -1056,7 +1056,7 @@ func TestScanDVRDirectory_NestedStructure(t *testing.T) {
 	if info.SegmentCount != 2 {
 		t.Fatalf("expected 2 segments, got %d", info.SegmentCount)
 	}
-	if info.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_DVR {
+	if info.ArtifactType != ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR {
 		t.Fatalf("expected DVR type, got %v", info.ArtifactType)
 	}
 }
@@ -1185,7 +1185,7 @@ func TestGetStoredArtifacts_WithIndex(t *testing.T) {
 				HasDtsh:      true,
 				AccessCount:  5,
 				LastAccessed: now,
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 			},
 		},
 	}
@@ -1212,9 +1212,9 @@ func TestGetStoredArtifacts_WithIndex(t *testing.T) {
 // --- enrichNodeLifecycleTrigger ---
 
 func TestEnrichNodeLifecycleTrigger_Capabilities(t *testing.T) {
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-			NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+	trigger := &ipcpb.MistTrigger{
+		TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+			NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
 				NodeId: "node-1",
 			},
 		},
@@ -1245,7 +1245,7 @@ func TestEnrichNodeLifecycleTrigger_Capabilities(t *testing.T) {
 }
 
 func TestEnrichNodeLifecycleTrigger_NilPayload(t *testing.T) {
-	trigger := &pb.MistTrigger{}
+	trigger := &ipcpb.MistTrigger{}
 	// Should not panic
 	enrichNodeLifecycleTrigger(trigger, "1", "1", "1", "1", nil)
 }

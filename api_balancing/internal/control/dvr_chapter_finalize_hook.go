@@ -10,7 +10,8 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Chapter-finalize jobs don't share the processing_jobs ledger (which
@@ -38,7 +39,7 @@ func chapterIDFromJobID(jobID string) string {
 func handleChapterFinalizeResult(
 	ctx context.Context,
 	chapterID, jobStatus string,
-	result *pb.ProcessingJobResult,
+	result *ipcpb.ProcessingJobResult,
 	nodeID string,
 	logger logging.Logger,
 ) {
@@ -57,7 +58,7 @@ func handleChapterFinalizeResult(
 			if err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason); err != nil {
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: terminal-fail mark failed")
 			}
-			emitChapterVodLifecycle(ctx, logger, chapterID, pb.VodLifecycleData_STATUS_FAILED, 0, "", reason)
+			emitChapterVodLifecycle(ctx, logger, chapterID, ipcpb.VodLifecycleData_STATUS_FAILED, 0, "", reason)
 			return
 		}
 		if err := RetryChapterFinalize(ctx, chapterID, result.GetError()); err != nil {
@@ -131,13 +132,13 @@ func handleChapterFinalizeResult(
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: origin registration failed")
 			}
 		}
-		state.DefaultManager().AddNodeArtifact(nodeID, &pb.StoredArtifact{
+		state.DefaultManager().AddNodeArtifact(nodeID, &ipcpb.StoredArtifact{
 			ClipHash:   playbackHash,
 			FilePath:   outputPath,
 			SizeBytes:  uint64(sizeBytes),
 			CreatedAt:  time.Now().Unix(),
 			Format:     "mkv",
-			Role:       pb.StoredArtifact_ROLE_ORIGIN,
+			Role:       ipcpb.StoredArtifact_ROLE_ORIGIN,
 			IsComplete: true,
 		})
 	}
@@ -158,7 +159,7 @@ func handleChapterFinalizeResult(
 	// updateVodMetadata without the processing_jobs lookup it does
 	// first (chapter jobs are not in that table).
 	updateChapterVodMetadata(ctx, logger, fields, playbackHash, result.GetOutputs())
-	emitChapterVodLifecycle(ctx, logger, chapterID, pb.VodLifecycleData_STATUS_COMPLETED, sizeBytes, outputPath, "")
+	emitChapterVodLifecycle(ctx, logger, chapterID, ipcpb.VodLifecycleData_STATUS_COMPLETED, sizeBytes, outputPath, "")
 
 	// DTSH generation runs on the Helmsman side immediately after
 	// PUSH_END (api_sidecar/internal/handlers/processing_chapter.go).
@@ -172,7 +173,7 @@ func emitChapterVodLifecycle(
 	ctx context.Context,
 	logger logging.Logger,
 	chapterID string,
-	status pb.VodLifecycleData_Status,
+	status ipcpb.VodLifecycleData_Status,
 	sizeBytes int64,
 	filePath string,
 	errMsg string,
@@ -183,13 +184,13 @@ func emitChapterVodLifecycle(
 		return
 	}
 	now := time.Now().Unix()
-	data := &pb.VodLifecycleData{
+	data := &ipcpb.VodLifecycleData{
 		Status:      status,
 		VodHash:     artifactHash,
 		TenantId:    &tenantID,
 		CompletedAt: &now,
 	}
-	if status == pb.VodLifecycleData_STATUS_PROCESSING {
+	if status == ipcpb.VodLifecycleData_STATUS_PROCESSING {
 		data.StartedAt = &now
 		data.CompletedAt = nil
 	}
@@ -388,7 +389,7 @@ func resolveChapterArtifactContent(ctx context.Context, input string) *ContentRe
 //
 // Returns (nil, false) for any input that isn't a chapter artifact —
 // caller falls through to the normal Commodore-backed resolution.
-func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*pb.ResolveArtifactPlaybackIDResponse, bool) {
+func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*commodorepb.ResolveArtifactPlaybackIDResponse, bool) {
 	if db == nil || CommodoreClient == nil {
 		return nil, false
 	}
@@ -429,7 +430,7 @@ func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*pb.
 	if err != nil || parent == nil || !parent.GetFound() {
 		return nil, false
 	}
-	resp := &pb.ResolveArtifactPlaybackIDResponse{
+	resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 		Found:           true,
 		ArtifactHash:    input,
 		InternalName:    input, // bare hash; ResolveArtifactPlayback adds vod+ prefix elsewhere if needed

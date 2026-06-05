@@ -8,7 +8,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // countingDVRStarter satisfies DVRStarter + DVRStarterWithSourceHint and
@@ -20,18 +21,18 @@ type countingDVRStarter struct {
 	lastSourceNode atomic.Value // string
 }
 
-func (c *countingDVRStarter) StartDVR(_ context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (c *countingDVRStarter) StartDVR(_ context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	c.calls.Add(1)
 	c.lastProcesses.Store(req.GetProcessesJson())
-	return &pb.StartDVRResponse{}, nil
+	return &sharedpb.StartDVRResponse{}, nil
 }
 
-func (c *countingDVRStarter) StartDVRWithSourceHint(_ context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error) {
+func (c *countingDVRStarter) StartDVRWithSourceHint(_ context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (*sharedpb.StartDVRResponse, error) {
 	c.hintedCalls.Add(1)
 	c.calls.Add(1)
 	c.lastProcesses.Store(req.GetProcessesJson())
 	c.lastSourceNode.Store(sourceNodeID)
-	return &pb.StartDVRResponse{}, nil
+	return &sharedpb.StartDVRResponse{}, nil
 }
 
 func resetManagedDVRStarts(t *testing.T) {
@@ -64,7 +65,7 @@ func TestEnsureManagedStreamDVR_SuppressesRepeatWithinCooldown(t *testing.T) {
 	starter := &countingDVRStarter{}
 	m := newMaterializerForTest(t, starter)
 
-	ctx := &pb.ResolveStreamContextResponse{
+	ctx := &commodorepb.ResolveStreamContextResponse{
 		Admitted:           true,
 		StreamId:           "stream-1",
 		InternalName:       "internal-1",
@@ -94,7 +95,7 @@ func TestEnsureManagedStreamDVR_DifferentSourceNodeBypassesCooldown(t *testing.T
 	starter := &countingDVRStarter{}
 	m := newMaterializerForTest(t, starter)
 
-	ctx := &pb.ResolveStreamContextResponse{
+	ctx := &commodorepb.ResolveStreamContextResponse{
 		Admitted:           true,
 		StreamId:           "stream-1",
 		InternalName:       "internal-1",
@@ -114,13 +115,13 @@ func TestEnsureManagedStreamDVR_SkipsWhenNotAdmittedOrNotRecording(t *testing.T)
 	starter := &countingDVRStarter{}
 	m := newMaterializerForTest(t, starter)
 
-	m.EnsureManagedStreamDVR(context.Background(), &pb.ResolveStreamContextResponse{
+	m.EnsureManagedStreamDVR(context.Background(), &commodorepb.ResolveStreamContextResponse{
 		Admitted:           false,
 		StreamId:           "stream-1",
 		InternalName:       "internal-1",
 		IsRecordingEnabled: true,
 	}, "edge-a")
-	m.EnsureManagedStreamDVR(context.Background(), &pb.ResolveStreamContextResponse{
+	m.EnsureManagedStreamDVR(context.Background(), &commodorepb.ResolveStreamContextResponse{
 		Admitted:           true,
 		StreamId:           "stream-2",
 		InternalName:       "internal-2",
@@ -135,7 +136,7 @@ func TestEnsureManagedStreamDVR_SkipsWhenNotAdmittedOrNotRecording(t *testing.T)
 func TestPopulateStreamContext_WritesPushRewriteEquivalentCacheKeys(t *testing.T) {
 	m := newMaterializerForTest(t, &countingDVRStarter{})
 
-	m.PopulateStreamContext(&pb.ResolveStreamContextResponse{
+	m.PopulateStreamContext(&commodorepb.ResolveStreamContextResponse{
 		Admitted:      true,
 		StreamId:      "stream-1",
 		InternalName:  "internal-1",
@@ -159,12 +160,12 @@ type failingDVRStarter struct {
 	calls atomic.Int32
 }
 
-func (f *failingDVRStarter) StartDVR(_ context.Context, _ *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (f *failingDVRStarter) StartDVR(_ context.Context, _ *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	f.calls.Add(1)
 	return nil, errFakeDVR
 }
 
-func (f *failingDVRStarter) StartDVRWithSourceHint(_ context.Context, _ *pb.StartDVRRequest, _ string) (*pb.StartDVRResponse, error) {
+func (f *failingDVRStarter) StartDVRWithSourceHint(_ context.Context, _ *sharedpb.StartDVRRequest, _ string) (*sharedpb.StartDVRResponse, error) {
 	f.calls.Add(1)
 	return nil, errFakeDVR
 }
@@ -180,7 +181,7 @@ func TestEnsureManagedStreamDVR_FailureClearsCooldown(t *testing.T) {
 	starter := &failingDVRStarter{}
 	m := newMaterializerForTest(t, starter)
 
-	ctx := &pb.ResolveStreamContextResponse{
+	ctx := &commodorepb.ResolveStreamContextResponse{
 		Admitted:           true,
 		StreamId:           "stream-1",
 		InternalName:       "internal-1",
@@ -199,7 +200,7 @@ func TestEnsureManagedStreamDVR_FailureClearsCooldown(t *testing.T) {
 func TestPopulateStreamContext_NoOpWhenNotAdmitted(t *testing.T) {
 	m := newMaterializerForTest(t, &countingDVRStarter{})
 
-	m.PopulateStreamContext(&pb.ResolveStreamContextResponse{
+	m.PopulateStreamContext(&commodorepb.ResolveStreamContextResponse{
 		Admitted:     false,
 		StreamId:     "stream-1",
 		InternalName: "internal-1",

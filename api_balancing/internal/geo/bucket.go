@@ -1,9 +1,8 @@
 package geo
 
 import (
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/uber/h3-go/v4"
 )
@@ -42,12 +41,12 @@ func BucketCoords(lat, lon float64, resolution int) *BucketResult {
 
 // Bucket returns an H3 bucket for the provided lat/lon plus the bucket centroid in degrees.
 // Returns false when coordinates are invalid.
-func Bucket(lat, lon float64) (*pb.GeoBucket, float64, float64, bool) {
+func Bucket(lat, lon float64) (*ipcpb.GeoBucket, float64, float64, bool) {
 	b := BucketCoords(lat, lon, geoip.DefaultResolution)
 	if b == nil {
 		return nil, 0, 0, false
 	}
-	return &pb.GeoBucket{
+	return &ipcpb.GeoBucket{
 		H3Index:    b.H3Index,
 		Resolution: uint32(b.Resolution),
 	}, b.Latitude, b.Longitude, true

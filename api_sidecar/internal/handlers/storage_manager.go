@@ -21,7 +21,7 @@ import (
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // PresignedTransfer abstracts presigned-URL upload/download so tests can
@@ -85,11 +85,11 @@ type StorageManager struct {
 	presignedClient PresignedTransfer
 
 	// Control IPC — function fields so tests can inject fakes
-	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error)
+	requestFreezePermission func(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*ipcpb.FreezePermissionResponse, error)
 	sendSyncComplete        func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error
 	sendFreezeComplete      func(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error
 	sendFreezeProgress      func(requestID, assetHash string, percent uint32, bytesUploaded uint64) error
-	sendStorageLifecycle    func(data *pb.StorageLifecycleData) error
+	sendStorageLifecycle    func(data *ipcpb.StorageLifecycleData) error
 	requestCanDelete        func(ctx context.Context, assetHash string) (bool, string, int64, error)
 	sendArtifactDeleted     func(assetHash, filePath, reason, assetType string, sizeBytes uint64) error
 
@@ -171,14 +171,20 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	// Register handlers for cold storage operations from Foghorn.
 	control.SetFreezeRequestHandler(storageManager.HandleFreezeRequest)
 
-	control.SetDtshSyncRequestHandler(func(req *pb.DtshSyncRequest) {
+	control.SetDtshSyncRequestHandler(func(req *ipcpb.DtshSyncRequest) {
 		ctx := context.Background()
-		_ = storageManager.SyncDtshOnly(ctx, req)
+		if err := storageManager.SyncDtshOnly(ctx, req); err != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"request_id": req.GetRequestId(),
+				"asset_type": req.GetAssetType(),
+				"asset_hash": req.GetAssetHash(),
+			}).Warn("Incremental .dtsh sync failed")
+		}
 	})
 
 	// Register processing job handler
 	procHandler := NewProcessingJobHandler(logger, os.Getenv("MISTSERVER_URL"), basePath)
-	control.SetProcessingJobHandler(func(req *pb.ProcessingJobRequest, send func(*pb.ControlMessage)) {
+	control.SetProcessingJobHandler(func(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 		procHandler.Handle(req, send)
 	})
 
@@ -192,7 +198,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	// failed_source_missing at finalization. Transient presign/upload
 	// failures are not classified here; FinalizeDVR owns the retry
 	// deadline and marks remaining pending rows lost after the budget.
-	control.SetRetryDVRSegmentHandler(func(req *pb.RetryDVRSegmentUpload) {
+	control.SetRetryDVRSegmentHandler(func(req *ipcpb.RetryDVRSegmentUpload) {
 		dvrHash := req.GetDvrHash()
 		dm := control.GetDVRManager()
 		if dm == nil {
@@ -267,7 +273,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	// .dtsh durably on S3). The local TS files are now redundant and
 	// can be deleted. Foghorn deletes the recovery-bridge S3 objects
 	// directly; this handler only touches the local filesystem.
-	control.SetReclaimDVRSegmentHandler(func(req *pb.ReclaimDVRSegment) {
+	control.SetReclaimDVRSegmentHandler(func(req *ipcpb.ReclaimDVRSegment) {
 		dm := control.GetDVRManager()
 		if dm == nil {
 			return
@@ -678,7 +684,7 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 
 // HandleFreezeRequest processes a proactive freeze command from Foghorn.
 // For clip/vod, Foghorn already generated presigned URLs so we upload directly.
-func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
+func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 	ctx := context.Background()
 
 	if req.AssetType == "dvr" {
@@ -714,7 +720,7 @@ func (sm *StorageManager) HandleFreezeRequest(req *pb.FreezeRequest) {
 		SizeBytes: sizeBytes,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId:        req.RequestId,
 		AssetHash:        req.AssetHash,
 		Approved:         true,
@@ -795,7 +801,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 // uploadAsset performs the actual S3 upload using presigned URLs from the
 // permission response and reports completion/failure back to Foghorn.
 // Shared by both Helmsman-initiated (freezeAsset) and Foghorn-initiated (HandleFreezeRequest) paths.
-func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate, permResp *pb.FreezePermissionResponse) error {
+func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate, permResp *ipcpb.FreezePermissionResponse) error {
 	if asset.AssetType == AssetTypeDVR {
 		return fmt.Errorf("whole-DVR upload is unsupported; DVR archive playlists are generated by Foghorn chapters")
 	}
@@ -813,8 +819,8 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 
 	requestID := permResp.RequestId
 
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,
+	_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+		Action:    ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED,
 		AssetType: string(asset.AssetType),
 		AssetHash: asset.AssetHash,
 		SizeBytes: asset.SizeBytes,
@@ -877,13 +883,13 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		// local copy, retries cannot recover) from a transient sync failure.
 		// Foghorn maps ACTION_LOCAL_MISSING to sync_status='lost_local' and
 		// stops the retry loop.
-		action := pb.StorageLifecycleData_ACTION_SYNC_FAILED
+		action := ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED
 		localMissing := errors.Is(uploadErr, fs.ErrNotExist)
 		if localMissing {
-			action = pb.StorageLifecycleData_ACTION_LOCAL_MISSING
+			action = ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING
 		}
 		localPath := asset.FilePath
-		_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
+		_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
 			Action:     action,
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
@@ -904,8 +910,8 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	}
 
 	durationMs := duration.Milliseconds()
-	_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:       pb.StorageLifecycleData_ACTION_SYNCED,
+	_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+		Action:       ipcpb.StorageLifecycleData_ACTION_SYNCED,
 		AssetType:    string(asset.AssetType),
 		AssetHash:    asset.AssetHash,
 		SizeBytes:    actualSizeBytes,
@@ -1241,8 +1247,8 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 			if deleteErr != nil {
 				sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
 				errStr := deleteErr.Error()
-				_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-					Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+				_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+					Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
 					AssetType: string(candidate.AssetType),
 					AssetHash: candidate.AssetHash,
 					SizeBytes: candidate.SizeBytes,
@@ -1252,8 +1258,8 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 			}
 
 			// Notify deletion (eviction from local cache) with warm duration metric
-			_ = sm.sendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:         pb.StorageLifecycleData_ACTION_EVICTED,
+			_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+				Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
 				AssetType:      string(candidate.AssetType),
 				AssetHash:      candidate.AssetHash,
 				SizeBytes:      candidate.SizeBytes,
@@ -1308,7 +1314,7 @@ func (sm *StorageManager) ColdStorageAvailable() bool {
 
 // SyncDtshOnly handles incremental .dtsh file sync requests from Foghorn.
 // This is called when .dtsh appeared after the main asset was already synced to S3.
-func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequest) error {
+func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *ipcpb.DtshSyncRequest) error {
 	if sm.presignedClient == nil {
 		return fmt.Errorf("presigned client not configured")
 	}
@@ -1368,20 +1374,20 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *pb.DtshSyncRequ
 		}
 		// On-demand generation: if Foghorn is asking us to sync .dtsh for
 		// a VOD artifact we haven't generated one for yet (chapter
-		// finalization where the inline DTSH boot missed), boot the asset
-		// now so the sidecar lands. Without this, chapter artifacts that
-		// failed inline DTSH gen would never reach frozen — the existing
-		// catch-up path only uploads pre-existing files.
-		if _, err := os.Stat(dtshPath); err != nil {
+		// finalization where the inline DTSH boot missed), or the local
+		// sidecar is corrupt, boot the asset now so Mist rewrites it.
+		if err := dtsh.ValidateFile(dtshPath); err != nil {
+			reason := "missing"
 			if !os.IsNotExist(err) {
-				return fmt.Errorf(".dtsh stat failed at %s: %w", dtshPath, err)
+				reason = "invalid"
+				sm.logger.WithError(err).WithField("dtsh_path", dtshPath).Warn("Removing invalid VOD .dtsh before on-demand regeneration")
+				if removeErr := os.Remove(dtshPath); removeErr != nil && !os.IsNotExist(removeErr) {
+					return fmt.Errorf("remove invalid .dtsh at %s: %w", dtshPath, removeErr)
+				}
 			}
 			vodStreamName := "vod+" + assetHash
 			if genErr := GenerateDTSHForPath(os.Getenv("MISTSERVER_URL"), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
-				return fmt.Errorf("dtsh missing and on-demand generation failed: %w", genErr)
-			}
-			if _, err := os.Stat(dtshPath); err != nil {
-				return fmt.Errorf(".dtsh still missing after generation at %s: %w", dtshPath, err)
+				return fmt.Errorf("dtsh %s and on-demand generation failed: %w", reason, genErr)
 			}
 		}
 		if err := dtsh.ValidateFile(dtshPath); err != nil {

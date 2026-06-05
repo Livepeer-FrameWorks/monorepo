@@ -1,16 +1,15 @@
 package storagecost
 
 import (
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"math"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestProject(t *testing.T) {
 	tests := []struct {
 		name     string
-		pricing  *pb.StoragePricing
+		pricing  *purserpb.StoragePricing
 		bytes    int64
 		wantMo   float64
 		wantDay  float64
@@ -23,19 +22,19 @@ func TestProject(t *testing.T) {
 		},
 		{
 			name:     "zero bytes returns zero (currency preserved)",
-			pricing:  &pb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
+			pricing:  &purserpb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
 			bytes:    0,
 			wantCurr: "EUR",
 		},
 		{
 			name:     "zero unit price returns zero (free meter)",
-			pricing:  &pb.StoragePricing{UnitPricePerGbHour: 0, Currency: "EUR"},
+			pricing:  &purserpb.StoragePricing{UnitPricePerGbHour: 0, Currency: "EUR"},
 			bytes:    5_000_000_000,
 			wantCurr: "EUR",
 		},
 		{
 			name:     "1 GiB @ 0.035/GiB-hour",
-			pricing:  &pb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
+			pricing:  &purserpb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
 			bytes:    1024 * 1024 * 1024,
 			wantMo:   0.035 * 24 * 30,
 			wantDay:  0.035 * 24,
@@ -43,7 +42,7 @@ func TestProject(t *testing.T) {
 		},
 		{
 			name:     "100 MiB @ 0.035/GiB-hour",
-			pricing:  &pb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
+			pricing:  &purserpb.StoragePricing{UnitPricePerGbHour: 0.035, Currency: "EUR"},
 			bytes:    100 * 1024 * 1024,
 			wantMo:   (100.0 / 1024.0) * 0.035 * 24 * 30,
 			wantDay:  (100.0 / 1024.0) * 0.035 * 24,

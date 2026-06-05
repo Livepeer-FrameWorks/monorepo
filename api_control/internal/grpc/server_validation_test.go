@@ -8,23 +8,23 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestValidateStreamKey(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name      string
-		req       *pb.ValidateStreamKeyRequest
+		req       *commodorepb.ValidateStreamKeyRequest
 		setupMock func(sqlmock.Sqlmock)
-		assert    func(*testing.T, *pb.ValidateStreamKeyResponse, error)
+		assert    func(*testing.T, *commodorepb.ValidateStreamKeyResponse, error)
 	}{
 		{
 			name: "empty_stream_key",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: ""},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: ""},
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -38,11 +38,11 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "invalid_stream_key",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "bad-key"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "bad-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("bad-key").WillReturnError(sql.ErrNoRows)
 			},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -56,13 +56,13 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "inactive_user",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "inactive-key"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "inactive-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("inactive-key").WillReturnRows(rows)
 			},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -76,13 +76,13 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "pull_stream_rejects_push_ingest",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "pull-key"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "pull-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "pull")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("pull-key").WillReturnRows(rows)
 			},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -96,14 +96,14 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "active_user",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "good-key", ClusterId: "cluster-us"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-us", "good-key").WillReturnResult(sqlmock.NewResult(0, 1))
 			},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -120,14 +120,14 @@ func TestValidateStreamKey(t *testing.T) {
 		},
 		{
 			name: "active_user_cluster_update_contended",
-			req:  &pb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu"},
+			req:  &commodorepb.ValidateStreamKeyRequest{StreamKey: "contended-key", ClusterId: "cluster-eu"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key").WillReturnResult(sqlmock.NewResult(0, 0))
 			},
-			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -170,49 +170,49 @@ func TestResolveStreamContext(t *testing.T) {
 	cols := []string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}
 	tests := []struct {
 		name      string
-		req       *pb.ResolveStreamContextRequest
+		req       *commodorepb.ResolveStreamContextRequest
 		setupMock func(sqlmock.Sqlmock)
 		wantErr   bool
-		assert    func(*testing.T, *pb.ResolveStreamContextResponse)
+		assert    func(*testing.T, *commodorepb.ResolveStreamContextResponse)
 	}{
 		{
 			name:    "no_identifier",
-			req:     &pb.ResolveStreamContextRequest{},
+			req:     &commodorepb.ResolveStreamContextRequest{},
 			wantErr: true,
 		},
 		{
 			name:    "empty_stream_id",
-			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_StreamId{StreamId: ""}},
+			req:     &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamId{StreamId: ""}},
 			wantErr: true,
 		},
 		{
 			name: "stream_not_found",
-			req:  &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_StreamId{StreamId: "missing"}},
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamId{StreamId: "missing"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(`WHERE s\.id = \$1`).WithArgs("missing").WillReturnError(sql.ErrNoRows)
 			},
-			assert: func(t *testing.T, resp *pb.ResolveStreamContextResponse) {
+			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
 					t.Fatalf("expected admitted=false for missing stream")
 				}
-				if resp.RejectionReason != pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY {
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY {
 					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
 				}
 			},
 		},
 		{
 			name: "inactive_user",
-			req:  &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native")
 				mock.ExpectQuery(`WHERE s\.playback_id = \$1`).WithArgs("pk_inactive").WillReturnRows(rows)
 			},
-			assert: func(t *testing.T, resp *pb.ResolveStreamContextResponse) {
+			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
 					t.Fatalf("expected admitted=false for inactive user")
 				}
-				if resp.RejectionReason != pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE {
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE {
 					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
 				}
 				if resp.StreamId != "stream-id" || resp.TenantId != "tenant-id" {
@@ -227,7 +227,7 @@ func TestResolveStreamContext(t *testing.T) {
 			// must not admit because the caller is the managed-stream
 			// reconciler running every 30s on always-on streams.
 			name:    "nil_purser_fails_closed_as_transient",
-			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-1"}},
+			req:     &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-1"}},
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
@@ -244,7 +244,7 @@ func TestResolveStreamContext(t *testing.T) {
 			// applied state instead of newly Applying onto an unverified
 			// cluster.
 			name:    "cluster_id_with_route_lookup_failure_fails_closed",
-			req:     &pb.ResolveStreamContextRequest{Identifier: &pb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-2"}, ClusterId: "cluster-edge"},
+			req:     &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_InternalName{InternalName: "internal-name-2"}, ClusterId: "cluster-edge"},
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
@@ -300,7 +300,7 @@ func TestListManagedStreams(t *testing.T) {
 
 	t.Run("empty_cluster_id_rejected", func(t *testing.T) {
 		server := &CommodoreServer{logger: logrus.New()}
-		_, err := server.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: ""})
+		_, err := server.ListManagedStreams(ctx, &commodorepb.ListManagedStreamsRequest{ClusterId: ""})
 		if err == nil {
 			t.Fatal("expected InvalidArgument for empty cluster_id")
 		}
@@ -337,7 +337,7 @@ func TestListManagedStreams(t *testing.T) {
 				))
 
 		server := &CommodoreServer{db: db, logger: logrus.New()}
-		resp, err := server.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: "cluster-edge"})
+		resp, err := server.ListManagedStreams(ctx, &commodorepb.ListManagedStreamsRequest{ClusterId: "cluster-edge"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -360,8 +360,8 @@ func TestListManagedStreams(t *testing.T) {
 
 func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *testing.T) {
 	merged := mergeTenantResourceLimits(
-		&pb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},
-		&pb.TenantResourceLimits{MaxStreams: 5},
+		&quartermasterpb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},
+		&quartermasterpb.TenantResourceLimits{MaxStreams: 5},
 	)
 	if merged.GetMaxStreams() != 5 || merged.GetMaxViewers() != 200 {
 		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:5 viewers:200",
@@ -370,7 +370,7 @@ func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *test
 }
 
 func TestMergeTenantResourceLimitsAllowsOverrideOnly(t *testing.T) {
-	merged := mergeTenantResourceLimits(nil, &pb.TenantResourceLimits{MaxViewers: 50})
+	merged := mergeTenantResourceLimits(nil, &quartermasterpb.TenantResourceLimits{MaxViewers: 50})
 	if merged.GetMaxStreams() != 0 || merged.GetMaxViewers() != 50 {
 		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:0 viewers:50",
 			merged.GetMaxStreams(), merged.GetMaxViewers())
@@ -381,14 +381,14 @@ func TestValidateAPIToken(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name      string
-		req       *pb.ValidateAPITokenRequest
+		req       *commodorepb.ValidateAPITokenRequest
 		setupMock func(sqlmock.Sqlmock)
-		assert    func(*testing.T, *pb.ValidateAPITokenResponse, error)
+		assert    func(*testing.T, *commodorepb.ValidateAPITokenResponse, error)
 	}{
 		{
 			name: "empty_token",
-			req:  &pb.ValidateAPITokenRequest{Token: ""},
-			assert: func(t *testing.T, resp *pb.ValidateAPITokenResponse, err error) {
+			req:  &commodorepb.ValidateAPITokenRequest{Token: ""},
+			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -399,11 +399,11 @@ func TestValidateAPIToken(t *testing.T) {
 		},
 		{
 			name: "invalid_token",
-			req:  &pb.ValidateAPITokenRequest{Token: "bad-token"},
+			req:  &commodorepb.ValidateAPITokenRequest{Token: "bad-token"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("bad-token")).WillReturnError(sql.ErrNoRows)
 			},
-			assert: func(t *testing.T, resp *pb.ValidateAPITokenResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -414,7 +414,7 @@ func TestValidateAPIToken(t *testing.T) {
 		},
 		{
 			name: "valid_token",
-			req:  &pb.ValidateAPITokenRequest{Token: "good-token"},
+			req:  &commodorepb.ValidateAPITokenRequest{Token: "good-token"},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "permissions"}).
 					AddRow("token-id", "user-id", "tenant-id", "{read,write}")
@@ -423,7 +423,7 @@ func TestValidateAPIToken(t *testing.T) {
 				userRows := sqlmock.NewRows([]string{"email", "role"}).AddRow("user@example.com", "admin")
 				mock.ExpectQuery("SELECT email, role FROM commodore.users").WithArgs("user-id").WillReturnRows(userRows)
 			},
-			assert: func(t *testing.T, resp *pb.ValidateAPITokenResponse, err error) {
+			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -489,11 +489,11 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 		routeCacheTTL: 5 * time.Minute,
 	}
 	server.routeCache["tenant-1"] = &clusterRoute{
-		clusterPeers: []*pb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
 		resolvedAt:   time.Now(),
 	}
 
-	resp, err := server.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{PlaybackId: "playback-1"})
+	resp, err := server.ResolveArtifactPlaybackID(ctx, &commodorepb.ResolveArtifactPlaybackIDRequest{PlaybackId: "playback-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		routeCache: map[string]*clusterRoute{
 			"tenant-id": {
 				clusterID: "cluster-primary",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "cluster-primary"},
 					{ClusterId: "cluster-ingest"},
 				},
@@ -537,7 +537,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &pb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key",
 		ClusterId: "cluster-ingest",
 	})
@@ -571,7 +571,7 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 		routeCache: map[string]*clusterRoute{
 			"tenant-id": {
 				clusterID: "demo-media",
-				clusterPeers: []*pb.TenantClusterPeer{
+				clusterPeers: []*quartermasterpb.TenantClusterPeer{
 					{ClusterId: "central-primary", ClusterType: "central"},
 					{ClusterId: "demo-media", ClusterType: "edge"},
 				},
@@ -581,7 +581,7 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &pb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key",
 		ClusterId: "central-primary",
 	})

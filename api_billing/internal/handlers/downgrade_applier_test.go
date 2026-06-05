@@ -32,7 +32,7 @@ func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}}
 
 	tenantID := "tenant-1"
 	currentTier := "tier-A"
@@ -62,7 +62,7 @@ func TestApplyPendingDowngrade_NoPending_NoOp(t *testing.T) {
 	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}}
 
 	tenantID := "tenant-1"
 	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level"}).
@@ -89,7 +89,7 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{}
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}}
 
 	tenantID := "tenant-1"
 	pending := "tier-B"
@@ -130,7 +130,7 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 	defer mockDB.Close()
 
 	reconciler := &stubTierReconciler{err: errStubReconcile}
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}}
 
 	tenantID := "tenant-1"
 	pending := "tier-B"

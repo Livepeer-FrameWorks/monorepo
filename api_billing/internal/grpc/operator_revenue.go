@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 // resolveOperatorTenantID enforces the same cross-tenant guard the invoice
@@ -42,7 +42,7 @@ func resolveOperatorTenantID(ctx context.Context, requestedTenantID string) (str
 // calling tenant in the requested time range, returning per-cluster sums plus
 // totals. Held rows are audit-only and stay out of revenue views until the
 // operator is approved for payouts.
-func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperatorRevenueRequest) (*pb.GetOperatorRevenueResponse, error) {
+func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *purserpb.GetOperatorRevenueRequest) (*purserpb.GetOperatorRevenueResponse, error) {
 	tenantID, err := resolveOperatorTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -84,9 +84,9 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperat
 	}
 	defer rows.Close()
 
-	resp := &pb.GetOperatorRevenueResponse{}
+	resp := &purserpb.GetOperatorRevenueResponse{}
 	for rows.Next() {
-		entry := &pb.OperatorRevenueByCluster{}
+		entry := &purserpb.OperatorRevenueByCluster{}
 		if err := rows.Scan(&entry.ClusterId, &entry.Currency,
 			&entry.GrossCents, &entry.PlatformFeeCents, &entry.PayableCents, &entry.LineCount); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan operator revenue row: %v", err)
@@ -109,7 +109,7 @@ func (s *PurserServer) GetOperatorRevenue(ctx context.Context, req *pb.GetOperat
 
 // ListOperatorClusters returns lifetime revenue aggregates for every cluster
 // the tenant owns that has at least one non-held ledger row.
-func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *pb.ListOperatorClustersRequest) (*pb.ListOperatorClustersResponse, error) {
+func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *purserpb.ListOperatorClustersRequest) (*purserpb.ListOperatorClustersResponse, error) {
 	tenantID, err := resolveOperatorTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -131,9 +131,9 @@ func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *pb.ListOpe
 	}
 	defer rows.Close()
 
-	resp := &pb.ListOperatorClustersResponse{}
+	resp := &purserpb.ListOperatorClustersResponse{}
 	for rows.Next() {
-		entry := &pb.OperatorRevenueByCluster{}
+		entry := &purserpb.OperatorRevenueByCluster{}
 		if err := rows.Scan(&entry.ClusterId, &entry.Currency,
 			&entry.GrossCents, &entry.PlatformFeeCents, &entry.PayableCents, &entry.LineCount); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan operator cluster row: %v", err)
@@ -148,7 +148,7 @@ func (s *PurserServer) ListOperatorClusters(ctx context.Context, req *pb.ListOpe
 }
 
 // GetOperatorPayouts lists settlement events recorded by the payout workflow.
-func (s *PurserServer) GetOperatorPayouts(ctx context.Context, req *pb.GetOperatorPayoutsRequest) (*pb.GetOperatorPayoutsResponse, error) {
+func (s *PurserServer) GetOperatorPayouts(ctx context.Context, req *purserpb.GetOperatorPayoutsRequest) (*purserpb.GetOperatorPayoutsResponse, error) {
 	tenantID, err := resolveOperatorTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -178,10 +178,10 @@ func (s *PurserServer) GetOperatorPayouts(ctx context.Context, req *pb.GetOperat
 	}
 	defer rows.Close()
 
-	resp := &pb.GetOperatorPayoutsResponse{}
+	resp := &purserpb.GetOperatorPayoutsResponse{}
 	for rows.Next() {
 		var (
-			payout    pb.OperatorPayout
+			payout    purserpb.OperatorPayout
 			createdAt time.Time
 			paidAt    sql.NullTime
 		)
@@ -205,7 +205,7 @@ func (s *PurserServer) GetOperatorPayouts(ctx context.Context, req *pb.GetOperat
 // Quartermaster. The lookup is one RPC per cluster — fine for the small N
 // expected on an operator dashboard. Failures degrade silently to the
 // cluster ID.
-func enrichOperatorClusterNames(ctx context.Context, s *PurserServer, clusters []*pb.OperatorRevenueByCluster) {
+func enrichOperatorClusterNames(ctx context.Context, s *PurserServer, clusters []*purserpb.OperatorRevenueByCluster) {
 	if s.quartermasterClient == nil {
 		return
 	}

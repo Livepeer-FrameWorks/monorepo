@@ -7,7 +7,7 @@ import (
 
 	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -19,31 +19,31 @@ func TestTenantMismatch(t *testing.T) {
 	tests := []struct {
 		name     string
 		tenantID string
-		event    *pb.SignalmanEvent
+		event    *signalmanpb.SignalmanEvent
 		want     bool
 	}{
 		{
 			name:     "empty tenant skips mismatch",
 			tenantID: "",
-			event:    &pb.SignalmanEvent{TenantId: &tenant},
+			event:    &signalmanpb.SignalmanEvent{TenantId: &tenant},
 			want:     false,
 		},
 		{
 			name:     "missing event tenant allowed (infra/system broadcasts)",
 			tenantID: tenant,
-			event:    &pb.SignalmanEvent{},
+			event:    &signalmanpb.SignalmanEvent{},
 			want:     false,
 		},
 		{
 			name:     "tenant match passes",
 			tenantID: tenant,
-			event:    &pb.SignalmanEvent{TenantId: &tenant},
+			event:    &signalmanpb.SignalmanEvent{TenantId: &tenant},
 			want:     false,
 		},
 		{
 			name:     "tenant mismatch blocks",
 			tenantID: tenant,
-			event:    &pb.SignalmanEvent{TenantId: &otherTenant},
+			event:    &signalmanpb.SignalmanEvent{TenantId: &otherTenant},
 			want:     true,
 		},
 	}
@@ -83,7 +83,7 @@ func TestRunSignalmanSubscriptionTracksActiveGaugeUntilExit(t *testing.T) {
 		nil,
 		func() { close(done) },
 		func(*signalmanclient.GRPCClient) error { return nil },
-		func(*pb.SignalmanEvent) bool { return true },
+		func(*signalmanpb.SignalmanEvent) bool { return true },
 	)
 
 	waitForGauge(t, metrics.SubscriptionsActive.WithLabelValues("streams"), 1)

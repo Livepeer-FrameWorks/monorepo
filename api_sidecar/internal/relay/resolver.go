@@ -9,7 +9,7 @@ import (
 
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/control"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // ResolveContext is what the relay knows about an inbound request at resolve
@@ -19,20 +19,20 @@ type ResolveContext struct {
 	AssetKind string // "vod" | "clip" | "dvr" | "upload"
 	AssetHash string
 	Ext       string // ".mkv" / ".mp4" / ".m3u8" / ...
-	Hint      pb.RelayResolveRequest_RelayHint
+	Hint      ipcpb.RelayResolveRequest_RelayHint
 }
 
 // ResolveResult is the relay's working copy of a RelayResolveResponse.
 // Lowercases proto-typed fields so handlers don't need to import pb.
 type ResolveResult struct {
-	State              pb.AssetState
+	State              ipcpb.AssetState
 	MediaPresignedURL  string
 	DtshPresignedGet   string
 	DtshPresignedPut   string
 	ExpectedSizeBytes  uint64
 	ContentType        string
 	URLTTLSeconds      int64
-	PolicyHint         pb.RelayResolveResponse_CacheDecisionHint
+	PolicyHint         ipcpb.RelayResolveResponse_CacheDecisionHint
 	Error              string
 	StreamInternalName string // for DVR: top dir in storage/dvr/<stream>/<dvr_hash>/
 	// Peer-relay fallback: when the origin cluster holds the canonical full
@@ -90,7 +90,7 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	req := &pb.RelayResolveRequest{
+	req := &ipcpb.RelayResolveRequest{
 		RequestId: id,
 		AssetKind: rc.AssetKind,
 		AssetHash: rc.AssetHash,

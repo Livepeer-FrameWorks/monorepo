@@ -3,12 +3,12 @@ package triggers
 import (
 	"testing"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 func TestLivepeerGatewayURLUsesPhysicalInstanceHost(t *testing.T) {
-	inst := &pb.ServiceInstance{
+	inst := &quartermasterpb.ServiceInstance{
 		Metadata: map[string]string{
 			servicedefs.LivepeerGatewayMetadataPublicInstanceHost: "livepeer-gateway.regional-eu-2.infra.frameworks.network",
 		},
@@ -27,7 +27,7 @@ func TestLivepeerGatewayURLUsesPhysicalInstanceHost(t *testing.T) {
 func TestLivepeerGatewayURLExcludesPooledAndRawOnlyInstances(t *testing.T) {
 	host := "10.0.0.10"
 	port := int32(8935)
-	inst := &pb.ServiceInstance{
+	inst := &quartermasterpb.ServiceInstance{
 		Protocol: "http",
 		Host:     &host,
 		Port:     &port,

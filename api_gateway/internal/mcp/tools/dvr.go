@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -93,7 +93,7 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 	}
 
 	// Call Commodore to start DVR
-	resp, err := clients.Commodore.StartDVR(ctx, &pb.StartDVRRequest{
+	resp, err := clients.Commodore.StartDVR(ctx, &sharedpb.StartDVRRequest{
 		TenantId:     tenantID,
 		InternalName: stream.InternalName,
 		StreamId:     &streamID,

@@ -31,7 +31,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
@@ -81,7 +85,7 @@ func GetClusterInfo() (string, string) {
 
 // ApplyBootstrapMetadata extracts cluster attribution and self-geo from a
 // bootstrap response. Called once from main.go after the single gRPC bootstrap.
-func ApplyBootstrapMetadata(resp *pb.BootstrapServiceResponse) {
+func ApplyBootstrapMetadata(resp *quartermasterpb.BootstrapServiceResponse) {
 	if resp == nil {
 		return
 	}
@@ -195,7 +199,7 @@ func Init(
 	// reconciliation + DELETED lifecycle emission). Clip progress/done
 	// analytics are emitted by the processing pipeline, not here.
 	control.SetArtifactDeletedHandler(
-		func(ctx context.Context, del *pb.ArtifactDeleted) {
+		func(ctx context.Context, del *ipcpb.ArtifactDeleted) {
 			artifactHash := del.GetArtifactHash()
 			nodeID := del.GetNodeId()
 			reason := del.GetReason()
@@ -259,9 +263,9 @@ func Init(
 			return
 		}
 
-		status := pb.DVRLifecycleData_STATUS_STOPPED
+		status := ipcpb.DVRLifecycleData_STATUS_STOPPED
 		if finalStatus == "failed" {
-			status = pb.DVRLifecycleData_STATUS_FAILED
+			status = ipcpb.DVRLifecycleData_STATUS_FAILED
 		}
 
 		var (
@@ -313,7 +317,7 @@ func Init(
 			}
 		}
 
-		dvrData := &pb.DVRLifecycleData{
+		dvrData := &ipcpb.DVRLifecycleData{
 			Status:  status,
 			DvrHash: dvrHash,
 		}
@@ -395,8 +399,8 @@ func Init(
 			  AND COALESCE(tenant_id::text, '') = $2
 		`, dvrHash, tenantIDStr).Scan(&retentionUntil, &startedAt, &endedAt)
 
-		dvrData := &pb.DVRLifecycleData{
-			Status:  pb.DVRLifecycleData_STATUS_DELETED,
+		dvrData := &ipcpb.DVRLifecycleData{
+			Status:  ipcpb.DVRLifecycleData_STATUS_DELETED,
 			DvrHash: dvrHash,
 		}
 		if nodeID != "" {
@@ -914,14 +918,14 @@ type nodeOperationalModeRequest struct {
 }
 
 // StateToProtoMode converts internal state mode to protobuf enum
-func StateToProtoMode(mode state.NodeOperationalMode) pb.NodeOperationalMode {
+func StateToProtoMode(mode state.NodeOperationalMode) ipcpb.NodeOperationalMode {
 	switch mode {
 	case state.NodeModeDraining:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
 	case state.NodeModeMaintenance:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
 	default:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	}
 }
 
@@ -1158,7 +1162,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 // chosen EdgeCandidate. Needed by callers that want to arrange a
 // tracked origin-pull (NotifyOriginPull needs candidate.NodeId).
 // tenantID returned so the arrangement carries it through.
-func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64) (*pb.EdgeCandidate, string, string) {
+func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64) (*foghornfederationpb.EdgeCandidate, string, string) {
 	if federationClient == nil || peerManager == nil {
 		return nil, "", ""
 	}
@@ -1170,7 +1174,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 
 	// Try cached stream context first (populated from PUSH_REWRITE validation)
 	var tenantID, originClusterID string
-	var clusterPeers []*pb.TenantClusterPeer
+	var clusterPeers []*quartermasterpb.TenantClusterPeer
 	if triggerProcessor != nil {
 		tenantID, originClusterID = triggerProcessor.GetStreamOrigin(internalName)
 	}
@@ -1212,7 +1216,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 		return nil, "", ""
 	}
 
-	resp, err := federationClient.QueryStream(ctx, originClusterID, addr, &pb.QueryStreamRequest{
+	resp, err := federationClient.QueryStream(ctx, originClusterID, addr, &foghornfederationpb.QueryStreamRequest{
 		StreamName:        streamName,
 		ViewerLat:         lat,
 		ViewerLon:         lon,
@@ -1240,7 +1244,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 // pull+<internal_name> stream via Commodore. Returns nil on any failure or if
 // the source is disabled. The caller uses both the upstream URI and the
 // allowed_cluster_ids list for placement enforcement.
-func resolvePullSourceForSource(ctx context.Context, streamName string) *pb.ResolvePullSourceByInternalNameResponse {
+func resolvePullSourceForSource(ctx context.Context, streamName string) *commodorepb.ResolvePullSourceByInternalNameResponse {
 	internalName := strings.TrimPrefix(streamName, "pull+")
 	if internalName == "" {
 		return nil
@@ -1880,7 +1884,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 // emitFederationEvent sends a federation lifecycle event to Decklog.
 // Automatically enriches with local/remote geo from cached self-geo and peer geo.
-func emitFederationEvent(data *pb.FederationEventData) {
+func emitFederationEvent(data *ipcpb.FederationEventData) {
 	if decklogClient == nil {
 		return
 	}
@@ -2023,7 +2027,7 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 	var streamTenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
 		bareInternal := mist.ExtractInternalName(streamName)
-		var resolveResp *pb.ResolveInternalNameResponse
+		var resolveResp *commodorepb.ResolveInternalNameResponse
 		var err error
 		for attempt := 0; attempt < 2; attempt++ {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -2069,7 +2073,7 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 
 // emitViewerRoutingEvent posts a routing decision for viewer playback.
 // Extracts node identity from the ViewerEndpoint proto and delegates to sendRoutingEvent.
-func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
+func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
 	}
@@ -2134,7 +2138,7 @@ func viewerPlaybackTokenFromHTTPRequest(req *http.Request) string {
 	return ""
 }
 
-func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpointRequest, internalName string) bool {
+func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, internalName string) bool {
 	if commodoreClient == nil {
 		logger.WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -2155,7 +2159,7 @@ func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *pb.ViewerEndpoin
 	if policyInternalName == "" {
 		policyInternalName = internalName
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, policyInternalName, &pb.ViewerConnectTrigger{
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, policyInternalName, &ipcpb.ViewerConnectTrigger{
 		StreamName:  policyInternalName,
 		SessionId:   "resolve:" + req.GetContentId(),
 		Host:        req.GetViewerIp(),
@@ -2252,7 +2256,7 @@ func toInt64(v interface{}) (int64, bool) {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*quartermasterpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2330,7 +2334,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointReques
 	return response, nil
 }
 
-func collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func collectRemoteEdges(ctx context.Context, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
 		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
@@ -2390,7 +2394,7 @@ func confirmRemoteStream(ctx context.Context, remoteClusterID, internalName, ten
 	}
 	qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := federationClient.QueryStream(qCtx, remoteClusterID, addr, &pb.QueryStreamRequest{
+	resp, err := federationClient.QueryStream(qCtx, remoteClusterID, addr, &foghornfederationpb.QueryStreamRequest{
 		StreamName:        internalName,
 		ViewerLat:         lat,
 		ViewerLon:         lon,
@@ -2409,7 +2413,7 @@ func confirmRemoteStream(ctx context.Context, remoteClusterID, internalName, ten
 //	                  redirect.
 //	(nil, err)     — arrangement infra failure; caller surfaces 5xx to
 //	                  the viewer instead of silently degrading.
-func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func confirmRemoteEndpoint(ctx context.Context, response *sharedpb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
 	if federationClient == nil || peerManager == nil {
 		return nil, nil
 	}
@@ -2439,7 +2443,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 	// Fan out QueryStream to all candidate remote clusters in parallel
 	type queryResult struct {
 		clusterID string
-		resp      *pb.QueryStreamResponse
+		resp      *foghornfederationpb.QueryStreamResponse
 	}
 	ch := make(chan queryResult, len(remotes))
 	var wg sync.WaitGroup
@@ -2454,7 +2458,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 			defer wg.Done()
 			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			resp, err := federationClient.QueryStream(qCtx, cid, caddr, &pb.QueryStreamRequest{
+			resp, err := federationClient.QueryStream(qCtx, cid, caddr, &foghornfederationpb.QueryStreamRequest{
 				StreamName:        internalName,
 				ViewerLat:         lat,
 				ViewerLon:         lon,
@@ -2470,7 +2474,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 	go func() { wg.Wait(); close(ch) }()
 
 	// Pick the best candidate across all QueryStream responses
-	var bestCandidate *pb.EdgeCandidate
+	var bestCandidate *foghornfederationpb.EdgeCandidate
 	var bestCluster string
 	for qr := range ch {
 		for _, c := range qr.resp.Candidates {
@@ -2500,8 +2504,8 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 
 	// No origin-pull possible — redirect viewer to the remote cluster
 	playURL := control.PlaybackEdgeRedirectURL(bestCandidate.BaseUrl, viewKey)
-	confirmed := &pb.ViewerEndpointResponse{
-		Primary: &pb.ViewerEndpoint{
+	confirmed := &sharedpb.ViewerEndpointResponse{
+		Primary: &sharedpb.ViewerEndpoint{
 			NodeId:    bestCandidate.NodeId,
 			BaseUrl:   bestCandidate.BaseUrl,
 			Protocol:  "redirect",
@@ -2542,7 +2546,7 @@ func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointRespo
 // Thin wrapper around federation.ArrangeOriginPull — supplies the LB
 // picker so the helper selects a local edge with capacity, then builds
 // the ViewerEndpoint from the resulting Location.
-func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *pb.PlaybackMetadata) (*pb.ViewerEndpointResponse, error) {
+func arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *sharedpb.PlaybackMetadata) (*sharedpb.ViewerEndpointResponse, error) {
 	deps := &federation.ArrangeOriginPullDeps{
 		Cache:        remoteEdgeCache,
 		PeerResolver: peerManager,
@@ -2586,14 +2590,14 @@ func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteClus
 	}
 	endpoint := buildLocalEndpointFromReplication(result.DestNodeID, viewKey)
 	if endpoint != nil {
-		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
+		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
 	}
 	return nil, nil
 }
 
 // buildLocalEndpointFromReplication constructs a ViewerEndpoint from a local node
 // that has an in-flight or completed origin-pull replication.
-func buildLocalEndpointFromReplication(destNodeID, viewKey string) *pb.ViewerEndpoint {
+func buildLocalEndpointFromReplication(destNodeID, viewKey string) *sharedpb.ViewerEndpoint {
 	nodeOutputs, exists := control.GetNodeOutputs(destNodeID)
 	if !exists || nodeOutputs.Outputs == nil {
 		return nil
@@ -2603,7 +2607,7 @@ func buildLocalEndpointFromReplication(destNodeID, viewKey string) *pb.ViewerEnd
 
 // queryStreamFanOut performs cold-start QueryStream fan-out to peer clusters when
 // no EdgeSummary data is cached. Returns RemoteEdgeCandidates for scoring.
-func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	if federationClient == nil || peerManager == nil {
 		return nil
 	}
@@ -2631,7 +2635,7 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 			defer wg.Done()
 			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			resp, err := federationClient.QueryStream(qCtx, peerID, peerAddr, &pb.QueryStreamRequest{
+			resp, err := federationClient.QueryStream(qCtx, peerID, peerAddr, &foghornfederationpb.QueryStreamRequest{
 				StreamName:        internalName,
 				ViewerLat:         lat,
 				ViewerLon:         lon,
@@ -2673,8 +2677,8 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 	if queriedCount > 0 {
 		latMs := float32(time.Since(fanOutStart).Milliseconds())
 		totalCandidates := uint32(len(all))
-		emitFederationEvent(&pb.FederationEventData{
-			EventType:          pb.FederationEventType_FEDERATION_QUERY,
+		emitFederationEvent(&ipcpb.FederationEventData{
+			EventType:          ipcpb.FederationEventType_FEDERATION_QUERY,
 			StreamName:         &internalName,
 			LatencyMs:          &latMs,
 			QueriedClusters:    &queriedCount,
@@ -2696,7 +2700,7 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 // resolution.InternalName is "dvr+<dvr_internal_name>" out of
 // ResolveContent. Fail-closed for active-DVR ambiguity — never silently
 // reroute live viewers through the archive lane.
-func resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*pb.ViewerEndpointResponse, error) {
+func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
 	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
 	if derr != nil {
@@ -2735,7 +2739,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest
 	return nil, fmt.Errorf("DVR is no longer active; query dvrChapters and play a chapter playbackId")
 }
 
-func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:             db,
@@ -2876,7 +2880,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Build viewer endpoint request (content type is derived, not supplied)
 	viewerIP := c.ClientIP()
-	req := &pb.ViewerEndpointRequest{
+	req := &sharedpb.ViewerEndpointRequest{
 		ContentId: contentID,
 		ViewerIp:  proto.String(viewerIP),
 	}
@@ -2904,7 +2908,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// the recording origin; finalized DVRs and clip/VOD ride the
 	// artifact warm-cache lane. The gRPC server has the same dispatch
 	// in resolveDVRViewerEndpoint — keep them in lockstep.
-	var response *pb.ViewerEndpointResponse
+	var response *sharedpb.ViewerEndpointResponse
 	switch contentType {
 	case "live":
 		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
@@ -3143,7 +3147,7 @@ func normalizeProtocol(proto string) string {
 }
 
 // findProtocolURL searches for a URL matching the requested protocol in outputs
-func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) string {
+func findProtocolURL(outputs map[string]*sharedpb.OutputEndpoint, protocol string) string {
 	// Normalize protocol for comparison
 	protocol = strings.ToLower(protocol)
 

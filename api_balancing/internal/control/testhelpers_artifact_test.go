@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // mockS3Client implements S3ClientInterface for testing.
@@ -347,19 +347,19 @@ func setupArtifactTestDepsWithDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *mockS
 
 // captureStream is a fake HelmsmanControl_ConnectServer that captures sent messages.
 type captureStream struct {
-	pb.HelmsmanControl_ConnectServer
+	ipcpb.HelmsmanControl_ConnectServer
 	mu   sync.Mutex
-	sent []*pb.ControlMessage
+	sent []*ipcpb.ControlMessage
 }
 
-func (cs *captureStream) Send(msg *pb.ControlMessage) error {
+func (cs *captureStream) Send(msg *ipcpb.ControlMessage) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.sent = append(cs.sent, msg)
 	return nil
 }
 
-func (cs *captureStream) lastSent() *pb.ControlMessage {
+func (cs *captureStream) lastSent() *ipcpb.ControlMessage {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if len(cs.sent) == 0 {

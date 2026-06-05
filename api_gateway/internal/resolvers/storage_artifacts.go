@@ -11,7 +11,8 @@ import (
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // DoStorageArtifactsConnection returns one account-level media index across
@@ -64,7 +65,7 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 
 	limit := int32(25)
 	offset := int32(0)
-	req := &pb.ListStorageArtifactsRequest{Limit: limit}
+	req := &commodorepb.ListStorageArtifactsRequest{Limit: limit}
 	if input != nil {
 		if input.First != nil {
 			limit = int32(*input.First)
@@ -148,7 +149,7 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 	}, nil
 }
 
-func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *pb.StorageArtifactInfo) (*model.StorageArtifact, error) {
+func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *commodorepb.StorageArtifactInfo) (*model.StorageArtifact, error) {
 	if artifact == nil {
 		return nil, fmt.Errorf("nil storage artifact")
 	}
@@ -218,7 +219,7 @@ func (r *Resolver) storageArtifactFromProto(ctx context.Context, artifact *pb.St
 	}, nil
 }
 
-func applyArtifactStorageStateToStorageArtifact(artifact *pb.StorageArtifactInfo, state *pb.ArtifactState) {
+func applyArtifactStorageStateToStorageArtifact(artifact *commodorepb.StorageArtifactInfo, state *periscopepb.ArtifactState) {
 	if artifact == nil || state == nil {
 		return
 	}

@@ -13,7 +13,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -34,8 +35,8 @@ const grpcBufSize = 1024 * 1024
 
 type fakeSignalmanStream struct {
 	ctx     context.Context
-	recvCh  chan *pb.ClientMessage
-	sendCh  chan *pb.ServerMessage
+	recvCh  chan *signalmanpb.ClientMessage
+	sendCh  chan *signalmanpb.ServerMessage
 	recvErr error
 	mu      sync.Mutex
 	sendNil bool
@@ -44,8 +45,8 @@ type fakeSignalmanStream struct {
 func newFakeSignalmanStream(ctx context.Context) *fakeSignalmanStream {
 	return &fakeSignalmanStream{
 		ctx:    ctx,
-		recvCh: make(chan *pb.ClientMessage, 8),
-		sendCh: make(chan *pb.ServerMessage, 8),
+		recvCh: make(chan *signalmanpb.ClientMessage, 8),
+		sendCh: make(chan *signalmanpb.ServerMessage, 8),
 	}
 }
 
@@ -53,7 +54,7 @@ func (f *fakeSignalmanStream) Context() context.Context {
 	return f.ctx
 }
 
-func (f *fakeSignalmanStream) Send(msg *pb.ServerMessage) error {
+func (f *fakeSignalmanStream) Send(msg *signalmanpb.ServerMessage) error {
 	if msg == nil {
 		f.mu.Lock()
 		f.sendNil = true
@@ -64,7 +65,7 @@ func (f *fakeSignalmanStream) Send(msg *pb.ServerMessage) error {
 	return nil
 }
 
-func (f *fakeSignalmanStream) Recv() (*pb.ClientMessage, error) {
+func (f *fakeSignalmanStream) Recv() (*signalmanpb.ClientMessage, error) {
 	msg, ok := <-f.recvCh
 	if !ok {
 		if f.recvErr != nil {
@@ -105,12 +106,12 @@ func (f *failingStream) SetHeader(metadata.MD) error  { return nil }
 func (f *failingStream) SendHeader(metadata.MD) error { return nil }
 func (f *failingStream) SetTrailer(metadata.MD)       {}
 func (f *failingStream) Context() context.Context     { return context.Background() }
-func (f *failingStream) Send(*pb.ServerMessage) error {
+func (f *failingStream) Send(*signalmanpb.ServerMessage) error {
 	return errors.New("send failed")
 }
-func (f *failingStream) Recv() (*pb.ClientMessage, error) { return nil, io.EOF }
-func (f *failingStream) SendMsg(interface{}) error        { return nil }
-func (f *failingStream) RecvMsg(interface{}) error        { return nil }
+func (f *failingStream) Recv() (*signalmanpb.ClientMessage, error) { return nil, io.EOF }
+func (f *failingStream) SendMsg(interface{}) error                 { return nil }
+func (f *failingStream) RecvMsg(interface{}) error                 { return nil }
 
 // --- Helpers ---
 
@@ -135,7 +136,7 @@ func waitForClients(t *testing.T, hub *Hub, want int) {
 	t.Fatalf("expected %d clients, got %d", want, got)
 }
 
-func receiveMessage(t *testing.T, stream *fakeSignalmanStream, timeout time.Duration) *pb.ServerMessage {
+func receiveMessage(t *testing.T, stream *fakeSignalmanStream, timeout time.Duration) *signalmanpb.ServerMessage {
 	t.Helper()
 
 	select {
@@ -172,7 +173,7 @@ func newTestMetrics() *metrics.Metrics {
 	}
 }
 
-func newBufConnClient(t *testing.T, server *SignalmanServer, serviceToken string) (pb.SignalmanServiceClient, func()) {
+func newBufConnClient(t *testing.T, server *SignalmanServer, serviceToken string) (signalmanpb.SignalmanServiceClient, func()) {
 	t.Helper()
 
 	lis := bufconn.Listen(grpcBufSize)
@@ -184,7 +185,7 @@ func newBufConnClient(t *testing.T, server *SignalmanServer, serviceToken string
 			}),
 		),
 	)
-	pb.RegisterSignalmanServiceServer(grpcServer, server)
+	signalmanpb.RegisterSignalmanServiceServer(grpcServer, server)
 
 	go func() {
 		_ = grpcServer.Serve(lis)
@@ -207,7 +208,7 @@ func newBufConnClient(t *testing.T, server *SignalmanServer, serviceToken string
 		_ = lis.Close()
 	}
 
-	return pb.NewSignalmanServiceClient(conn), cleanup
+	return signalmanpb.NewSignalmanServiceClient(conn), cleanup
 }
 
 // --- Tests (unit, fake-stream) ---
@@ -226,10 +227,10 @@ func TestSubscribeLifecycleRegistersAndCleansUp(t *testing.T) {
 		errCh <- server.Subscribe(stream)
 	}()
 
-	stream.recvCh <- &pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
-				Channels: []pb.Channel{pb.Channel_CHANNEL_ANALYTICS},
+	stream.recvCh <- &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
+				Channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS},
 			},
 		},
 	}
@@ -268,17 +269,17 @@ func TestTenantIsolationAndSystemBroadcast(t *testing.T) {
 		errCh <- server.Subscribe(noTenantStream)
 	}()
 
-	tenantStream.recvCh <- &pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
-				Channels: []pb.Channel{pb.Channel_CHANNEL_ANALYTICS, pb.Channel_CHANNEL_SYSTEM},
+	tenantStream.recvCh <- &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
+				Channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS, signalmanpb.Channel_CHANNEL_SYSTEM},
 			},
 		},
 	}
-	noTenantStream.recvCh <- &pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
-				Channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+	noTenantStream.recvCh <- &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
+				Channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_SYSTEM},
 			},
 		},
 	}
@@ -287,7 +288,7 @@ func TestTenantIsolationAndSystemBroadcast(t *testing.T) {
 	drainSubscriptionConfirmation(t, tenantStream)
 	drainSubscriptionConfirmation(t, noTenantStream)
 
-	server.hub.BroadcastToTenant("tenant-a", pb.EventType_EVENT_TYPE_VIEWER_CONNECT, pb.Channel_CHANNEL_ANALYTICS, &pb.EventData{})
+	server.hub.BroadcastToTenant("tenant-a", signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT, signalmanpb.Channel_CHANNEL_ANALYTICS, &signalmanpb.EventData{})
 	tenantMsg := receiveMessage(t, tenantStream, 2*time.Second)
 	if tenantMsg.GetEvent() == nil || tenantMsg.GetEvent().GetTenantId() != "tenant-a" {
 		t.Fatalf("expected tenant-scoped event, got %v", tenantMsg.GetMessage())
@@ -299,14 +300,14 @@ func TestTenantIsolationAndSystemBroadcast(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	server.hub.BroadcastInfrastructure(pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, &pb.EventData{})
+	server.hub.BroadcastInfrastructure(signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, &signalmanpb.EventData{})
 	noTenantMsg := receiveMessage(t, noTenantStream, 2*time.Second)
-	if noTenantMsg.GetEvent() == nil || noTenantMsg.GetEvent().Channel != pb.Channel_CHANNEL_SYSTEM {
+	if noTenantMsg.GetEvent() == nil || noTenantMsg.GetEvent().Channel != signalmanpb.Channel_CHANNEL_SYSTEM {
 		t.Fatalf("expected system event, got %v", noTenantMsg.GetMessage())
 	}
 
 	tenantSystemMsg := receiveMessage(t, tenantStream, 2*time.Second)
-	if tenantSystemMsg.GetEvent() == nil || tenantSystemMsg.GetEvent().Channel != pb.Channel_CHANNEL_SYSTEM {
+	if tenantSystemMsg.GetEvent() == nil || tenantSystemMsg.GetEvent().Channel != signalmanpb.Channel_CHANNEL_SYSTEM {
 		t.Fatalf("expected system event for tenant stream, got %v", tenantSystemMsg.GetMessage())
 	}
 
@@ -347,17 +348,17 @@ func TestAbruptCloseCleanupAndReconnect(t *testing.T) {
 		reconnectErrCh <- server.Subscribe(reconnectStream)
 	}()
 
-	reconnectStream.recvCh <- &pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
-				Channels: []pb.Channel{pb.Channel_CHANNEL_ANALYTICS},
+	reconnectStream.recvCh <- &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
+				Channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS},
 			},
 		},
 	}
 	waitForClients(t, server.hub, 1)
 	drainSubscriptionConfirmation(t, reconnectStream)
 
-	server.hub.BroadcastToTenant("tenant-a", pb.EventType_EVENT_TYPE_VIEWER_CONNECT, pb.Channel_CHANNEL_ANALYTICS, &pb.EventData{})
+	server.hub.BroadcastToTenant("tenant-a", signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT, signalmanpb.Channel_CHANNEL_ANALYTICS, &signalmanpb.EventData{})
 	msg := receiveMessage(t, reconnectStream, 2*time.Second)
 	if msg.GetEvent() == nil {
 		t.Fatalf("expected reconnect stream to receive tenant event")
@@ -373,7 +374,7 @@ func TestSendLoopStopsOnClosedChannel(t *testing.T) {
 	stream := newFakeSignalmanStream(context.Background())
 	client := &Client{
 		stream: stream,
-		send:   make(chan *pb.ServerMessage),
+		send:   make(chan *signalmanpb.ServerMessage),
 		done:   make(chan struct{}),
 		logger: logger,
 	}
@@ -410,21 +411,21 @@ func TestHubBroadcastTenantIsolation(t *testing.T) {
 	tenantB := "tenant-b"
 
 	clientA := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: tenantA,
-		send:     make(chan *pb.ServerMessage, 2),
+		send:     make(chan *signalmanpb.ServerMessage, 2),
 		logger:   logger,
 	}
 	clientB := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: tenantB,
-		send:     make(chan *pb.ServerMessage, 2),
+		send:     make(chan *signalmanpb.ServerMessage, 2),
 		logger:   logger,
 	}
 	systemClient := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_SYSTEM},
 		tenantID: tenantA,
-		send:     make(chan *pb.ServerMessage, 2),
+		send:     make(chan *signalmanpb.ServerMessage, 2),
 		logger:   logger,
 	}
 
@@ -432,9 +433,9 @@ func TestHubBroadcastTenantIsolation(t *testing.T) {
 	hub.clients[clientB] = true
 	hub.clients[systemClient] = true
 
-	tenantEvent := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_STREAM_END,
-		Channel:   pb.Channel_CHANNEL_STREAMS,
+	tenantEvent := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_END,
+		Channel:   signalmanpb.Channel_CHANNEL_STREAMS,
 		TenantId:  &tenantA,
 		Timestamp: timestamppb.New(time.Now()),
 	}
@@ -452,9 +453,9 @@ func TestHubBroadcastTenantIsolation(t *testing.T) {
 	default:
 	}
 
-	infraEvent := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
-		Channel:   pb.Channel_CHANNEL_SYSTEM,
+	infraEvent := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		Channel:   signalmanpb.Channel_CHANNEL_SYSTEM,
 		Timestamp: timestamppb.New(time.Now()),
 	}
 	hub.broadcastEvent(infraEvent)
@@ -465,9 +466,9 @@ func TestHubBroadcastTenantIsolation(t *testing.T) {
 		t.Fatal("expected system client to receive infrastructure event")
 	}
 
-	streamInfra := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
-		Channel:   pb.Channel_CHANNEL_STREAMS,
+	streamInfra := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		Channel:   signalmanpb.Channel_CHANNEL_STREAMS,
 		Timestamp: timestamppb.New(time.Now()),
 	}
 	hub.broadcastEvent(streamInfra)
@@ -484,16 +485,16 @@ func TestClientSubscribeSuppressesDuplicates(t *testing.T) {
 
 	logger := logging.NewLogger()
 	client := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
-		send:     make(chan *pb.ServerMessage, 1),
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}
 
-	client.handleSubscribe(&pb.SubscribeRequest{
-		Channels: []pb.Channel{
-			pb.Channel_CHANNEL_STREAMS,
-			pb.Channel_CHANNEL_ANALYTICS,
-			pb.Channel_CHANNEL_STREAMS,
+	client.handleSubscribe(&signalmanpb.SubscribeRequest{
+		Channels: []signalmanpb.Channel{
+			signalmanpb.Channel_CHANNEL_STREAMS,
+			signalmanpb.Channel_CHANNEL_ANALYTICS,
+			signalmanpb.Channel_CHANNEL_STREAMS,
 		},
 	})
 
@@ -501,7 +502,7 @@ func TestClientSubscribeSuppressesDuplicates(t *testing.T) {
 		t.Fatalf("expected 2 unique channels, got %d", len(client.channels))
 	}
 
-	if client.channels[0] != pb.Channel_CHANNEL_STREAMS || client.channels[1] != pb.Channel_CHANNEL_ANALYTICS {
+	if client.channels[0] != signalmanpb.Channel_CHANNEL_STREAMS || client.channels[1] != signalmanpb.Channel_CHANNEL_ANALYTICS {
 		t.Fatalf("unexpected channel order: %#v", client.channels)
 	}
 
@@ -530,22 +531,22 @@ func TestHubBroadcastOrdering(t *testing.T) {
 
 	tenantID := "tenant-order"
 	client := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: tenantID,
-		send:     make(chan *pb.ServerMessage, 2),
+		send:     make(chan *signalmanpb.ServerMessage, 2),
 		logger:   logger,
 	}
 	hub.clients[client] = true
 
-	first := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST,
-		Channel:   pb.Channel_CHANNEL_STREAMS,
+	first := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST,
+		Channel:   signalmanpb.Channel_CHANNEL_STREAMS,
 		TenantId:  &tenantID,
 		Timestamp: timestamppb.New(time.Now()),
 	}
-	second := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_STREAM_END,
-		Channel:   pb.Channel_CHANNEL_STREAMS,
+	second := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_END,
+		Channel:   signalmanpb.Channel_CHANNEL_STREAMS,
 		TenantId:  &tenantID,
 		Timestamp: timestamppb.New(time.Now().Add(time.Second)),
 	}
@@ -556,10 +557,10 @@ func TestHubBroadcastOrdering(t *testing.T) {
 	msg1 := <-client.send
 	msg2 := <-client.send
 
-	if msg1.GetEvent().EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST {
+	if msg1.GetEvent().EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST {
 		t.Fatalf("expected first event to be track list, got %v", msg1.GetEvent().EventType)
 	}
-	if msg2.GetEvent().EventType != pb.EventType_EVENT_TYPE_STREAM_END {
+	if msg2.GetEvent().EventType != signalmanpb.EventType_EVENT_TYPE_STREAM_END {
 		t.Fatalf("expected second event to be stream end, got %v", msg2.GetEvent().EventType)
 	}
 }
@@ -575,22 +576,22 @@ func TestHubBroadcastBackpressureDropsWhenFull(t *testing.T) {
 
 	tenantID := "tenant-backpressure"
 	client := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: tenantID,
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}
 	hub.clients[client] = true
 
-	client.send <- &pb.ServerMessage{
-		Message: &pb.ServerMessage_Pong{
-			Pong: &pb.Pong{TimestampMs: time.Now().UnixMilli()},
+	client.send <- &signalmanpb.ServerMessage{
+		Message: &signalmanpb.ServerMessage_Pong{
+			Pong: &signalmanpb.Pong{TimestampMs: time.Now().UnixMilli()},
 		},
 	}
 
-	event := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_STREAM_BUFFER,
-		Channel:   pb.Channel_CHANNEL_STREAMS,
+	event := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER,
+		Channel:   signalmanpb.Channel_CHANNEL_STREAMS,
 		TenantId:  &tenantID,
 		Timestamp: timestamppb.New(time.Now()),
 	}
@@ -663,10 +664,10 @@ func TestSubscribeTenantLimit(t *testing.T) {
 	}
 
 	// Wait for first connection to be registered by performing a handshake
-	err = stream.Send(&pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
-				Channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+	err = stream.Send(&signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
+				Channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_SYSTEM},
 			},
 		},
 	})
@@ -719,16 +720,16 @@ func TestBroadcastEventRecordsMetrics(t *testing.T) {
 	}
 
 	client := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_ANALYTICS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_ANALYTICS},
 		tenantID: "tenant-1",
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 	}
 	hub.clients[client] = true
 
 	tenantID := "tenant-1"
-	event := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_VIEWER_CONNECT,
-		Channel:   pb.Channel_CHANNEL_ANALYTICS,
+	event := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT,
+		Channel:   signalmanpb.Channel_CHANNEL_ANALYTICS,
 		TenantId:  &tenantID,
 		Timestamp: timestamppb.New(time.Now().Add(-2 * time.Second)),
 	}
@@ -757,14 +758,14 @@ func TestBroadcastEventDefaultsMissingTimestamp(t *testing.T) {
 	}
 
 	client := &Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
-		send:     make(chan *pb.ServerMessage, 1),
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_SYSTEM},
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 	}
 	hub.clients[client] = true
 
-	event := &pb.SignalmanEvent{
-		EventType: pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
-		Channel:   pb.Channel_CHANNEL_SYSTEM,
+	event := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		Channel:   signalmanpb.Channel_CHANNEL_SYSTEM,
 	}
 
 	hub.broadcastEvent(event)
@@ -778,13 +779,13 @@ func TestSendLoopLogsSendFailure(t *testing.T) {
 	logger, hook := logrustest.NewNullLogger()
 	client := &Client{
 		stream: &failingStream{},
-		send:   make(chan *pb.ServerMessage, 1),
+		send:   make(chan *signalmanpb.ServerMessage, 1),
 		done:   make(chan struct{}),
 		logger: logger,
 	}
 
 	go client.sendLoop()
-	client.send <- &pb.ServerMessage{Message: &pb.ServerMessage_Pong{Pong: &pb.Pong{}}}
+	client.send <- &signalmanpb.ServerMessage{Message: &signalmanpb.ServerMessage_Pong{Pong: &signalmanpb.Pong{}}}
 
 	deadline := time.After(500 * time.Millisecond)
 	for hook.LastEntry() == nil {
@@ -822,10 +823,10 @@ func TestRedactSensitiveData(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ViewerConnect", func(t *testing.T) {
-		event := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_ViewerConnect{
-					ViewerConnect: &pb.ViewerConnectTrigger{
+		event := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_ViewerConnect{
+					ViewerConnect: &ipcpb.ViewerConnectTrigger{
 						Host:       "1.2.3.4",
 						StreamName: "test-stream",
 					},
@@ -842,10 +843,10 @@ func TestRedactSensitiveData(t *testing.T) {
 	})
 
 	t.Run("ViewerDisconnect", func(t *testing.T) {
-		event := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_ViewerDisconnect{
-					ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+		event := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_ViewerDisconnect{
+					ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 						Host:      "1.2.3.4",
 						SessionId: "sess-1",
 					},
@@ -862,10 +863,10 @@ func TestRedactSensitiveData(t *testing.T) {
 	})
 
 	t.Run("ClientLifecycle", func(t *testing.T) {
-		event := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_ClientLifecycle{
-					ClientLifecycle: &pb.ClientLifecycleUpdate{
+		event := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_ClientLifecycle{
+					ClientLifecycle: &ipcpb.ClientLifecycleUpdate{
 						Host:   "1.2.3.4",
 						NodeId: "node-1",
 					},
@@ -884,10 +885,10 @@ func TestRedactSensitiveData(t *testing.T) {
 	t.Run("MessageLifecycle", func(t *testing.T) {
 		content := "secret message"
 		subject := "private subject"
-		event := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_MessageLifecycle{
-					MessageLifecycle: &pb.MessageLifecycleData{
+		event := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_MessageLifecycle{
+					MessageLifecycle: &ipcpb.MessageLifecycleData{
 						Content:        &content,
 						Subject:        &subject,
 						ConversationId: "conv-1",
@@ -912,14 +913,14 @@ func TestRedactSensitiveData(t *testing.T) {
 	})
 
 	t.Run("NilData", func(t *testing.T) {
-		redactSensitiveData(&pb.SignalmanEvent{Data: nil})
+		redactSensitiveData(&signalmanpb.SignalmanEvent{Data: nil})
 	})
 
 	t.Run("InfrastructureNotRedacted", func(t *testing.T) {
-		lbEvent := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_LoadBalancing{
-					LoadBalancing: &pb.LoadBalancingData{
+		lbEvent := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_LoadBalancing{
+					LoadBalancing: &ipcpb.LoadBalancingData{
 						SelectedNode: "node-1",
 						ClientIp:     "10.0.0.1",
 					},
@@ -934,10 +935,10 @@ func TestRedactSensitiveData(t *testing.T) {
 			t.Fatal("expected ClientIp to be preserved on infrastructure event")
 		}
 
-		nodeEvent := &pb.SignalmanEvent{
-			Data: &pb.EventData{
-				Payload: &pb.EventData_NodeLifecycle{
-					NodeLifecycle: &pb.NodeLifecycleUpdate{
+		nodeEvent := &signalmanpb.SignalmanEvent{
+			Data: &signalmanpb.EventData{
+				Payload: &signalmanpb.EventData_NodeLifecycle{
+					NodeLifecycle: &ipcpb.NodeLifecycleUpdate{
 						NodeId:  "node-2",
 						BaseUrl: "https://node-2.example.com",
 					},
@@ -958,16 +959,16 @@ func TestChannelToStringAllValues(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		channel pb.Channel
+		channel signalmanpb.Channel
 		want    string
 	}{
-		{pb.Channel_CHANNEL_STREAMS, "streams"},
-		{pb.Channel_CHANNEL_ANALYTICS, "analytics"},
-		{pb.Channel_CHANNEL_SYSTEM, "system"},
-		{pb.Channel_CHANNEL_ALL, "all"},
-		{pb.Channel_CHANNEL_MESSAGING, "messaging"},
-		{pb.Channel_CHANNEL_AI, "ai"},
-		{pb.Channel(9999), "unknown"},
+		{signalmanpb.Channel_CHANNEL_STREAMS, "streams"},
+		{signalmanpb.Channel_CHANNEL_ANALYTICS, "analytics"},
+		{signalmanpb.Channel_CHANNEL_SYSTEM, "system"},
+		{signalmanpb.Channel_CHANNEL_ALL, "all"},
+		{signalmanpb.Channel_CHANNEL_MESSAGING, "messaging"},
+		{signalmanpb.Channel_CHANNEL_AI, "ai"},
+		{signalmanpb.Channel(9999), "unknown"},
 	}
 
 	for _, tt := range tests {
@@ -984,32 +985,32 @@ func TestEventTypeToStringAllValues(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		eventType pb.EventType
+		eventType signalmanpb.EventType
 		want      string
 	}{
-		{pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, "stream_lifecycle_update"},
-		{pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST, "stream_track_list"},
-		{pb.EventType_EVENT_TYPE_STREAM_BUFFER, "stream_buffer"},
-		{pb.EventType_EVENT_TYPE_STREAM_END, "stream_end"},
-		{pb.EventType_EVENT_TYPE_STREAM_SOURCE, "stream_source"},
-		{pb.EventType_EVENT_TYPE_PLAY_REWRITE, "play_rewrite"},
-		{pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, "node_lifecycle_update"},
-		{pb.EventType_EVENT_TYPE_LOAD_BALANCING, "load_balancing"},
-		{pb.EventType_EVENT_TYPE_VIEWER_CONNECT, "viewer_connect"},
-		{pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT, "viewer_disconnect"},
-		{pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, "client_lifecycle_update"},
-		{pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE, "clip_lifecycle"},
-		{pb.EventType_EVENT_TYPE_DVR_LIFECYCLE, "dvr_lifecycle"},
-		{pb.EventType_EVENT_TYPE_PUSH_REWRITE, "push_rewrite"},
-		{pb.EventType_EVENT_TYPE_PUSH_OUT_START, "push_out_start"},
-		{pb.EventType_EVENT_TYPE_PUSH_END, "push_end"},
-		{pb.EventType_EVENT_TYPE_RECORDING_COMPLETE, "recording_complete"},
-		{pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE, "storage_lifecycle"},
-		{pb.EventType_EVENT_TYPE_PROCESS_BILLING, "process_billing"},
-		{pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT, "storage_snapshot"},
-		{pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE, "message_lifecycle"},
-		{pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION, "skipper_investigation"},
-		{pb.EventType(9999), "unknown"},
+		{signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, "stream_lifecycle_update"},
+		{signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST, "stream_track_list"},
+		{signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER, "stream_buffer"},
+		{signalmanpb.EventType_EVENT_TYPE_STREAM_END, "stream_end"},
+		{signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE, "stream_source"},
+		{signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE, "play_rewrite"},
+		{signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, "node_lifecycle_update"},
+		{signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING, "load_balancing"},
+		{signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT, "viewer_connect"},
+		{signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT, "viewer_disconnect"},
+		{signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, "client_lifecycle_update"},
+		{signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE, "clip_lifecycle"},
+		{signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE, "dvr_lifecycle"},
+		{signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE, "push_rewrite"},
+		{signalmanpb.EventType_EVENT_TYPE_PUSH_OUT_START, "push_out_start"},
+		{signalmanpb.EventType_EVENT_TYPE_PUSH_END, "push_end"},
+		{signalmanpb.EventType_EVENT_TYPE_RECORDING_COMPLETE, "recording_complete"},
+		{signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE, "storage_lifecycle"},
+		{signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING, "process_billing"},
+		{signalmanpb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT, "storage_snapshot"},
+		{signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE, "message_lifecycle"},
+		{signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION, "skipper_investigation"},
+		{signalmanpb.EventType(9999), "unknown"},
 	}
 
 	for _, tt := range tests {
@@ -1030,26 +1031,26 @@ func TestGetHubStats(t *testing.T) {
 
 	server.hub.mutex.Lock()
 	server.hub.clients[&Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS, pb.Channel_CHANNEL_ANALYTICS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS, signalmanpb.Channel_CHANNEL_ANALYTICS},
 		tenantID: "tenant-1",
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}] = true
 	server.hub.clients[&Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: "tenant-2",
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}] = true
 	server.hub.clients[&Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_SYSTEM},
 		tenantID: "tenant-1",
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}] = true
 	server.hub.mutex.Unlock()
 
-	stats, err := server.GetHubStats(context.Background(), &pb.GetHubStatsRequest{})
+	stats, err := server.GetHubStats(context.Background(), &signalmanpb.GetHubStatsRequest{})
 	if err != nil {
 		t.Fatalf("GetHubStats returned error: %v", err)
 	}
@@ -1085,9 +1086,9 @@ func TestBroadcastEventNilEvent(t *testing.T) {
 		logger:  logger,
 	}
 	hub.clients[&Client{
-		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		channels: []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_STREAMS},
 		tenantID: "tenant-1",
-		send:     make(chan *pb.ServerMessage, 1),
+		send:     make(chan *signalmanpb.ServerMessage, 1),
 		logger:   logger,
 	}] = true
 

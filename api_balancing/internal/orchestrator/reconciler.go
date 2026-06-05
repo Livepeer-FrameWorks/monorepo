@@ -14,7 +14,8 @@ import (
 	"frameworks/api_balancing/internal/state"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 type releaseComponent struct {
@@ -67,7 +68,7 @@ func StartReleaseReconciler(ctx context.Context, qmProvider func() *qmclient.GRP
 }
 
 func ReconcileReleaseTargets(ctx context.Context, qm *qmclient.GRPCClient) error {
-	targets, err := qm.ListClusterReleaseTargets(ctx, &pb.ListClusterReleaseTargetsRequest{})
+	targets, err := qm.ListClusterReleaseTargets(ctx, &quartermasterpb.ListClusterReleaseTargetsRequest{})
 	if err != nil {
 		return err
 	}
@@ -83,9 +84,9 @@ func ReconcileReleaseTargets(ctx context.Context, qm *qmclient.GRPCClient) error
 	return errors.Join(errs...)
 }
 
-func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.ClusterReleaseTarget) error {
+func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quartermasterpb.ClusterReleaseTarget) error {
 	version := strings.TrimSpace(target.GetTargetVersion())
-	releases, err := qm.ListEdgeReleases(ctx, &pb.ListEdgeReleasesRequest{
+	releases, err := qm.ListEdgeReleases(ctx, &quartermasterpb.ListEdgeReleasesRequest{
 		Channel: strings.TrimSpace(target.GetChannel()),
 		Version: version,
 	})
@@ -147,7 +148,7 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.Cl
 				continue
 			}
 			var (
-				direct        []*pb.DesiredComponent
+				direct        []*ipcpb.DesiredComponent
 				hasComponents bool
 			)
 			direct, hasComponents, err = buildComponentsForNode(ctx, components, nil, node, targetRelease)
@@ -189,7 +190,7 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.Cl
 			return err
 		}
 		var (
-			direct        []*pb.DesiredComponent
+			direct        []*ipcpb.DesiredComponent
 			hasComponents bool
 		)
 		direct, hasComponents, err = buildComponentsForNode(ctx, components, current, node, targetRelease)
@@ -219,8 +220,8 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *pb.Cl
 // for the in-flight rollout, not decide what to update. When platform artifact
 // resolution fails for a component, the node is persisted as `failed` and that
 // component is skipped, mirroring the prior fresh-path behavior.
-func buildComponentsForNode(ctx context.Context, components map[string]releaseComponent, current map[string]string, node *state.NodeState, targetRelease string) ([]*pb.DesiredComponent, bool, error) {
-	var direct []*pb.DesiredComponent
+func buildComponentsForNode(ctx context.Context, components map[string]releaseComponent, current map[string]string, node *state.NodeState, targetRelease string) ([]*ipcpb.DesiredComponent, bool, error) {
+	var direct []*ipcpb.DesiredComponent
 	for component, desired := range components {
 		if component == "config_schema" {
 			continue
@@ -279,15 +280,15 @@ func reconcileWarmups(ctx context.Context, clusterID, targetRelease string, node
 	return nil
 }
 
-func desiredComponentsFromExpected(expected map[string]string) []*pb.DesiredComponent {
-	out := make([]*pb.DesiredComponent, 0, len(expected))
+func desiredComponentsFromExpected(expected map[string]string) []*ipcpb.DesiredComponent {
+	out := make([]*ipcpb.DesiredComponent, 0, len(expected))
 	for component, version := range expected {
 		component = strings.ToLower(strings.TrimSpace(component))
 		version = strings.TrimSpace(version)
 		if component == "" || version == "" {
 			continue
 		}
-		out = append(out, &pb.DesiredComponent{Component: component, Version: version})
+		out = append(out, &ipcpb.DesiredComponent{Component: component, Version: version})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GetComponent() < out[j].GetComponent() })
 	return out
@@ -301,8 +302,8 @@ func parseReleaseComponents(raw string) (map[string]releaseComponent, error) {
 	return components, nil
 }
 
-func desiredComponentsForWarmup(components map[string]releaseComponent) []*pb.DesiredComponent {
-	out := make([]*pb.DesiredComponent, 0, len(components))
+func desiredComponentsForWarmup(components map[string]releaseComponent) []*ipcpb.DesiredComponent {
+	out := make([]*ipcpb.DesiredComponent, 0, len(components))
 	for component, desired := range components {
 		if component == "config_schema" || desired.Version == "" {
 			continue
@@ -313,8 +314,8 @@ func desiredComponentsForWarmup(components map[string]releaseComponent) []*pb.De
 	return out
 }
 
-func desiredComponentMessage(component string, desired releaseComponent) *pb.DesiredComponent {
-	return &pb.DesiredComponent{
+func desiredComponentMessage(component string, desired releaseComponent) *ipcpb.DesiredComponent {
+	return &ipcpb.DesiredComponent{
 		Component:   component,
 		Version:     desired.Version,
 		ArtifactUrl: desired.ArtifactURL,

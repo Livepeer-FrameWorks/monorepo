@@ -16,7 +16,7 @@ import (
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // ClipCleanupInfo holds information about an artifact candidate for cleanup
@@ -498,8 +498,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 				return errCleanupSkip
 			}
 			errStr := err.Error()
-			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+			_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+				Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
 				AssetType: assetType,
 				AssetHash: artifact.ClipHash,
 				SizeBytes: artifact.SizeBytes,
@@ -517,8 +517,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			}
 			if err := os.RemoveAll(artifact.FilePath); err != nil {
 				errStr := err.Error()
-				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-					Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+				_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+					Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
 					AssetType: assetType,
 					AssetHash: artifact.ClipHash,
 					SizeBytes: artifact.SizeBytes,
@@ -532,8 +532,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			// Foghorn doesn't observe a placement change for an asset
 			// that still has a warm copy on disk.
 			if isEviction {
-				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-					Action:         pb.StorageLifecycleData_ACTION_EVICTED,
+				_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+					Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
 					AssetType:      assetType,
 					AssetHash:      artifact.ClipHash,
 					SizeBytes:      artifact.SizeBytes,
@@ -549,8 +549,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 				return errCleanupSkip
 			}
 			errStr := err.Error()
-			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
+			_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+				Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
 				AssetType: assetType,
 				AssetHash: artifact.ClipHash,
 				SizeBytes: artifact.SizeBytes,
@@ -575,8 +575,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 
 	// Notify Foghorn about the deletion
 	if isEviction {
-		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:         pb.StorageLifecycleData_ACTION_EVICTED,
+		_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+			Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
 			AssetType:      assetType,
 			AssetHash:      artifact.ClipHash,
 			SizeBytes:      artifact.SizeBytes,

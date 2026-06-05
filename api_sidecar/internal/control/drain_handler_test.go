@@ -5,7 +5,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // TestHandleDrainStream_EmptyRuntimeName_NoOp covers the cheap guard. An
@@ -17,8 +17,8 @@ func TestHandleDrainStream_EmptyRuntimeName_NoOp(t *testing.T) {
 	currentConfig = nil
 	t.Cleanup(func() { currentConfig = prev })
 
-	var sent []*pb.ControlMessage
-	handleDrainStream(logging.NewLogger(), &pb.DrainStreamRequest{RuntimeName: ""}, func(m *pb.ControlMessage) {
+	var sent []*ipcpb.ControlMessage
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: ""}, func(m *ipcpb.ControlMessage) {
 		sent = append(sent, m)
 	})
 
@@ -37,8 +37,8 @@ func TestHandleDrainStream_ConfigMissing_ReportsError(t *testing.T) {
 	currentConfig = nil
 	t.Cleanup(func() { currentConfig = prev })
 
-	var got *pb.DrainStreamResponse
-	handleDrainStream(logging.NewLogger(), &pb.DrainStreamRequest{RuntimeName: "live+abc"}, func(m *pb.ControlMessage) {
+	var got *ipcpb.DrainStreamResponse
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{RuntimeName: "live+abc"}, func(m *ipcpb.ControlMessage) {
 		got = m.GetDrainStreamResponse()
 	})
 
@@ -73,11 +73,11 @@ func TestHandleDrainStream_HappyPath(t *testing.T) {
 	RegisterDVRSourceOverride("live+drain-target", "dtsc://old-node/live+drain-target")
 	t.Cleanup(func() { ClearDVRSourceOverride("live+drain-target") })
 
-	var got *pb.DrainStreamResponse
-	handleDrainStream(logging.NewLogger(), &pb.DrainStreamRequest{
+	var got *ipcpb.DrainStreamResponse
+	handleDrainStream(logging.NewLogger(), &ipcpb.DrainStreamRequest{
 		RuntimeName: "live+drain-target",
 		Reason:      "takeover_test",
-	}, func(m *pb.ControlMessage) {
+	}, func(m *ipcpb.ControlMessage) {
 		got = m.GetDrainStreamResponse()
 	})
 
@@ -109,8 +109,8 @@ func TestHandleDrainStream_HappyPath(t *testing.T) {
 // An empty dvr_hash is unaddressable — the response would be keyed by
 // empty string and ambiguate Foghorn's relay table.
 func TestHandleDVRUpdateSource_EmptyHash_NoOp(t *testing.T) {
-	var sent []*pb.ControlMessage
-	handleDVRUpdateSource(logging.NewLogger(), &pb.DVRUpdateSourceRequest{DvrHash: ""}, func(m *pb.ControlMessage) {
+	var sent []*ipcpb.ControlMessage
+	handleDVRUpdateSource(logging.NewLogger(), &ipcpb.DVRUpdateSourceRequest{DvrHash: ""}, func(m *ipcpb.ControlMessage) {
 		sent = append(sent, m)
 	})
 	if len(sent) != 0 {
@@ -132,12 +132,12 @@ func TestHandleDVRUpdateSource_MissingJob_Idempotent(t *testing.T) {
 	dvrManagerOnce.Do(func() {}) // mark Once as done so initDVRManager() inside handler is a no-op
 	t.Cleanup(func() { dvrManager = prevDM })
 
-	var got *pb.DVRUpdateSourceResponse
-	handleDVRUpdateSource(logging.NewLogger(), &pb.DVRUpdateSourceRequest{
+	var got *ipcpb.DVRUpdateSourceResponse
+	handleDVRUpdateSource(logging.NewLogger(), &ipcpb.DVRUpdateSourceRequest{
 		DvrHash:           "unknown-hash",
 		SourceRuntimeName: "live+x",
 		SourceBaseUrl:     "dtsc://new-node/live+x",
-	}, func(m *pb.ControlMessage) {
+	}, func(m *ipcpb.ControlMessage) {
 		got = m.GetDvrUpdateSourceResponse()
 	})
 

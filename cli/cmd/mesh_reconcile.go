@@ -10,8 +10,8 @@ import (
 	"frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/spf13/cobra"
 )
 
@@ -121,7 +121,7 @@ run 'frameworks mesh wg rotate <host>' afterwards.`,
 			// expected_current="runtime_enrolled" to refuse stale flips.
 			flipped := 0
 			for _, h := range append(pending, inProgress...) {
-				if _, err := client.SetNodeEnrollmentOrigin(cmd.Context(), &pb.SetNodeEnrollmentOriginRequest{
+				if _, err := client.SetNodeEnrollmentOrigin(cmd.Context(), &quartermasterpb.SetNodeEnrollmentOriginRequest{
 					NodeId:           h.NodeID,
 					EnrollmentOrigin: "adopted_local",
 					ExpectedCurrent:  "runtime_enrolled",
@@ -163,7 +163,7 @@ type reconcileHost struct {
 //     host but failed to flip origin). Need only the origin flip. This makes
 //     reconcile idempotent across partial failures — a retried run finishes
 //     the work without re-writing the manifest.
-func filterRuntimeEnrolled(qmNodes []*pb.InfrastructureNode, manifestClusters map[string]bool, manifest *inventory.Manifest) (pending, inProgress []reconcileHost) {
+func filterRuntimeEnrolled(qmNodes []*quartermasterpb.InfrastructureNode, manifestClusters map[string]bool, manifest *inventory.Manifest) (pending, inProgress []reconcileHost) {
 	for _, n := range qmNodes {
 		if n.GetEnrollmentOrigin() != "runtime_enrolled" {
 			continue

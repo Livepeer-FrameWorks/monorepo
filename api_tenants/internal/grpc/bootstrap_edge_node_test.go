@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -59,7 +59,7 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	resp, err := srv.BootstrapEdgeNode(t.Context(), &pb.BootstrapEdgeNodeRequest{
+	resp, err := srv.BootstrapEdgeNode(t.Context(), &quartermasterpb.BootstrapEdgeNodeRequest{
 		Token:    "tok-1",
 		Hostname: "edge-abcd1234.example.com",
 	})

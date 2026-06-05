@@ -9,7 +9,9 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestPlacementPick_Deterministic(t *testing.T) {
@@ -94,7 +96,7 @@ func TestManagedStreamVerifiedAppliedMatches_DetectsSourceDrift(t *testing.T) {
 	SetStreamRegistry(NewStreamRegistry(nil, "cluster-a", time.Minute))
 	t.Cleanup(func() { SetStreamRegistry(prior) })
 
-	UpdateVerifiedAppliedFromHeartbeat("edge-1", []*pb.AppliedManagedStream{
+	UpdateVerifiedAppliedFromHeartbeat("edge-1", []*ipcpb.AppliedManagedStream{
 		{
 			Name:       "frameworks-demo",
 			Source:     "ts-exec:cat /dev/null",
@@ -256,7 +258,7 @@ func TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer(t 
 		t.Fatalf("SetConnOwner: %v", err)
 	}
 
-	fakeRelay := &fakeFoghornRelayClient{resp: &pb.ForwardCommandResponse{Delivered: true}}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
 	setCommandRelay(t, buildRelay(t, store, "self-foghorn", "10.0.0.1:9090", &mockRelayPool{
 		client: &mockRelayClient{relay: fakeRelay},
 	}))
@@ -272,11 +274,11 @@ func TestReconcileClusterManagedStreams_SkipsRetractWhenConnectionOwnedByPeer(t 
 		internalName: "frameworks-demo",
 	}
 	StreamRegistryInstance.ManagedSetLastSent("media-eu-1", "edge-eu-1", "stream-1", snap)
-	StreamRegistryInstance.ManagedSetVerifiedFromHeartbeat("edge-eu-1", []*pb.AppliedManagedStream{
+	StreamRegistryInstance.ManagedSetVerifiedFromHeartbeat("edge-eu-1", []*ipcpb.AppliedManagedStream{
 		{StreamId: "stream-1", Name: snap.internalName, Source: snap.sourceSpec, AlwaysOn: snap.alwaysOn, IngestMode: snap.ingestMode},
 	})
 
-	reconcileClusterManagedStreams(ctx, logging.NewLogger(), "media-eu-1", []*pb.ManagedStreamRow{
+	reconcileClusterManagedStreams(ctx, logging.NewLogger(), "media-eu-1", []*commodorepb.ManagedStreamRow{
 		{
 			StreamId:          "stream-1",
 			PlaybackId:        "frameworks-demo",
@@ -407,7 +409,7 @@ func TestHydrateManagedStreamLastSentForNode_KeyedByStreamID(t *testing.T) {
 	SetStreamRegistry(NewStreamRegistry(nil, "cluster-a", time.Minute))
 	t.Cleanup(func() { SetStreamRegistry(prior) })
 
-	HydrateManagedStreamLastSentForNode("edge-a", []*pb.AppliedManagedStream{
+	HydrateManagedStreamLastSentForNode("edge-a", []*ipcpb.AppliedManagedStream{
 		{
 			Name:       "frameworks-demo",
 			Source:     "ts-exec:cat /dev/null",

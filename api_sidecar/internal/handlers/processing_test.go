@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
 )
 
@@ -71,13 +71,13 @@ func TestCleanupProcessingStagePathRemovesDerivedSidecars(t *testing.T) {
 func TestChapterFinalizeCleansProcessingStageOnBuildFailure(t *testing.T) {
 	dir := t.TempDir()
 	h := NewProcessingJobHandler(logrus.New(), "", dir)
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		JobId:        "job-1",
 		ArtifactHash: "chapter-fail",
 	}
-	var result *pb.ProcessingJobResult
+	var result *ipcpb.ProcessingJobResult
 
-	h.handleChapterFinalize(req, func(msg *pb.ControlMessage) {
+	h.handleChapterFinalize(req, func(msg *ipcpb.ControlMessage) {
 		if payload := msg.GetProcessingJobResult(); payload != nil {
 			result = payload
 		}
@@ -344,7 +344,7 @@ func TestProcessingTracksFromProtoCarriesRecordingEndSpan(t *testing.T) {
 	height := int32(720)
 	firstMs := int64(0)
 	lastMs := int64(30000)
-	tracks := processingTracksFromProto([]*pb.StreamTrack{{
+	tracks := processingTracksFromProto([]*ipcpb.StreamTrack{{
 		TrackType: "video",
 		Codec:     "H264",
 		Width:     &width,
@@ -736,7 +736,7 @@ func TestValidateProcessingRecordingEnd(t *testing.T) {
 
 func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
-	req := &pb.ProcessingJobRequest{Params: map[string]string{
+	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
 		"source_kind":        "live",
 		"source_stream_name": "live+stream-1",
 		"source_start_unix":  "100",
@@ -764,7 +764,7 @@ func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	h := &ProcessingJobHandler{storagePath: t.TempDir()}
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		ArtifactHash: "cliphash",
 		Params: map[string]string{
 			"source_format": "mkv",
@@ -791,7 +791,7 @@ func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
 func TestProcessingOutputPath_ClipUsesStreamScopedClipDir(t *testing.T) {
 	root := t.TempDir()
 	h := &ProcessingJobHandler{storagePath: root}
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		ArtifactHash: "cliphash",
 		Params: map[string]string{
 			"output_stream_name": "demo_live_stream_001",
@@ -815,7 +815,7 @@ func TestProcessingOutputPath_ClipUsesStreamScopedClipDir(t *testing.T) {
 
 func TestProcessingOutputPath_ClipRequiresOutputStream(t *testing.T) {
 	h := &ProcessingJobHandler{storagePath: t.TempDir()}
-	req := &pb.ProcessingJobRequest{ArtifactHash: "cliphash", Params: map[string]string{}}
+	req := &ipcpb.ProcessingJobRequest{ArtifactHash: "cliphash", Params: map[string]string{}}
 
 	if _, _, err := h.processingOutputPath(req, true); err == nil {
 		t.Fatal("expected missing output_stream_name error")
@@ -862,7 +862,7 @@ func TestShouldIgnoreProcessExitWhenTypeRetiredWithoutBootCount(t *testing.T) {
 
 func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testing.T) {
 	h := &ProcessingJobHandler{}
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		ProcessesJson: `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps"}]`,
 	}
 	processExitCh := make(chan ProcessExitEvent, 1)

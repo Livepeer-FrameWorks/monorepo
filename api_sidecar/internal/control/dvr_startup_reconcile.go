@@ -11,7 +11,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/hls"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // ReconcileDVRDirectoriesAtStartup brings each local DVR directory's segment
@@ -174,7 +174,7 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 	}
 
 	// Ask Foghorn for current ledger state, batched.
-	ledger := make(map[string]*pb.DVRSegmentRef, len(names))
+	ledger := make(map[string]*ipcpb.DVRSegmentRef, len(names))
 	const batchSize = 500
 	for i := 0; i < len(names); i += batchSize {
 		end := i + batchSize
@@ -308,7 +308,7 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 
 // reconcileUploadExisting drives the upload for a ledger row already in
 // pending/failed_upload. Foghorn issues a fresh presigned URL.
-func reconcileUploadExisting(ctx context.Context, dvrHash, segmentName, localPath string, size int64, lr *pb.DVRSegmentRef, logger logging.Logger) {
+func reconcileUploadExisting(ctx context.Context, dvrHash, segmentName, localPath string, size int64, lr *ipcpb.DVRSegmentRef, logger logging.Logger) {
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	dm := GetDVRManager()

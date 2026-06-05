@@ -29,7 +29,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +37,7 @@ import (
 // ServiceHandler defines the interface for services that can receive webhooks.
 // Services implement this by exposing a WebhookService gRPC endpoint.
 type ServiceHandler interface {
-	ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error)
+	ProcessWebhook(ctx context.Context, req *sharedpb.WebhookRequest) (*sharedpb.WebhookResponse, error)
 }
 
 // Router routes incoming webhooks to the appropriate internal service via gRPC.
@@ -143,7 +143,7 @@ func (r *Router) Handle(c *gin.Context) {
 	}
 
 	// Build gRPC request
-	req := &pb.WebhookRequest{
+	req := &sharedpb.WebhookRequest{
 		Provider:   provider,
 		Body:       body,
 		Headers:    headers,

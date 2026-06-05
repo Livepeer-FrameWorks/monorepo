@@ -8,18 +8,18 @@ import (
 	"fmt"
 	"time"
 
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // QuartermasterClient is the subset of the Quartermaster gRPC client the
 // resolver depends on. Tests inject a fake; production wires
 // pkg/clients/quartermaster.GRPCClient.
 type QuartermasterClient interface {
-	GetCluster(ctx context.Context, clusterID string) (*pb.ClusterResponse, error)
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 }
 
 // ResolveInputs is the read-only input to ResolveClusterPricing. Bundling the

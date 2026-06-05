@@ -7,7 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 )
 
 type mockCommodoreClient struct {
@@ -15,22 +16,22 @@ type mockCommodoreClient struct {
 	terminations  int
 }
 
-func (m *mockCommodoreClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error) {
+func (m *mockCommodoreClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, error) {
 	m.terminations++
-	return &pb.TerminateTenantStreamsResponse{}, nil
+	return &foghornpb.TerminateTenantStreamsResponse{}, nil
 }
 
-func (m *mockCommodoreClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error) {
+func (m *mockCommodoreClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, error) {
 	m.invalidations++
-	return &pb.InvalidateTenantCacheResponse{}, nil
+	return &foghornpb.InvalidateTenantCacheResponse{}, nil
 }
 
-func (m *mockCommodoreClient) GetTenantUserCount(ctx context.Context, tenantID string) (*pb.GetTenantUserCountResponse, error) {
-	return &pb.GetTenantUserCountResponse{}, nil
+func (m *mockCommodoreClient) GetTenantUserCount(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error) {
+	return &commodorepb.GetTenantUserCountResponse{}, nil
 }
 
-func (m *mockCommodoreClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error) {
-	return &pb.GetTenantPrimaryUserResponse{}, nil
+func (m *mockCommodoreClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*commodorepb.GetTenantPrimaryUserResponse, error) {
+	return &commodorepb.GetTenantPrimaryUserResponse{}, nil
 }
 
 func TestEnforcePrepaidThresholds_ZeroCrossingInvalidatesCache(t *testing.T) {
@@ -41,7 +42,7 @@ func TestEnforcePrepaidThresholds_ZeroCrossingInvalidatesCache(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{}
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), commodore, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), commodore, nil, nil)
 	tenantID := "tenant-123"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -71,7 +72,7 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil)
 	tenantID := "tenant-456"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -98,7 +99,7 @@ func TestEnforcePrepaidThresholds_DoesNotSuspendAtThreshold(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil)
 	tenantID := "tenant-789"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).

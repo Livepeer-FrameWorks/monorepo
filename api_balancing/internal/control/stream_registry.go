@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // IngestMode is a typed source stream ingest mode. The zero value is
@@ -266,7 +266,7 @@ func SetStreamRegistry(r *StreamRegistry) {
 // needs. Keeping it as an interface lets tests substitute a fake without
 // pulling in the whole grpc client.
 type streamRegistryCommodore interface {
-	ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*pb.ResolveStreamContextResponse, error)
+	ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*commodorepb.ResolveStreamContextResponse, error)
 }
 
 // LivePresence is the minimal StreamStateManager surface the registry uses

@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
@@ -42,7 +41,7 @@ func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 		Token:           "tok-idempotent",
 		Hostname:        "edge-existing.example.com",
 		Ips:             []string{"203.0.113.10"},
@@ -98,7 +97,7 @@ func TestBootstrapEdgeNode_RetriesSchemaVersionMismatch(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 		Token:           "tok-retry",
 		Hostname:        "edge-retry.example.com",
 		MachineIdSha256: ptr("machine-sha"),
@@ -139,7 +138,7 @@ func TestBootstrapEdgeNode_RejectsWhenExistingNodeInOtherCluster(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-2"))
 	mock.ExpectRollback()
 
-	_, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+	_, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 		Token:    "tok-conflict",
 		Hostname: "edge-existing.example.com",
 	})
@@ -198,7 +197,7 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	resp, err := srv.BootstrapEdgeNode(context.Background(), &pb.BootstrapEdgeNodeRequest{
+	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
 		Token:    "tok-fallback",
 		Hostname: "edge-fallback.example.com",
 	})

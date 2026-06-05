@@ -19,8 +19,9 @@ func TestDeductPrepaidBalanceForUsage_AppliesAndLocksBalance(t *testing.T) {
 	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     mockDB,
-		logger: logging.NewLogger(),
+		db:      mockDB,
+		logger:  logging.NewLogger(),
+		billing: &Service{},
 	}
 
 	ctx := context.Background()
@@ -74,8 +75,9 @@ func TestDeductPrepaidBalanceForUsage_DuplicateSummaryNoOp(t *testing.T) {
 	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     mockDB,
-		logger: logging.NewLogger(),
+		db:      mockDB,
+		logger:  logging.NewLogger(),
+		billing: &Service{},
 	}
 
 	ctx := context.Background()

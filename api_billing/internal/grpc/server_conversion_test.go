@@ -1,10 +1,9 @@
 package grpc
 
 import (
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"strings"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestScanBillingFeatures(t *testing.T) {
@@ -72,7 +71,7 @@ func TestInvoicePaymentReturnURLs(t *testing.T) {
 }
 
 func TestMarshalBillingFeaturesRoundTrip(t *testing.T) {
-	bf := &pb.BillingFeatures{
+	bf := &purserpb.BillingFeatures{
 		Recording:      true,
 		Analytics:      true,
 		CustomBranding: true,

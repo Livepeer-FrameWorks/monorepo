@@ -14,7 +14,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -25,7 +26,7 @@ const activeSigningKeyCap = 10
 
 // CreateSigningKey generates a new ES256 keypair, stores the public key, and
 // returns the private PEM exactly once. The private key is never persisted.
-func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSigningKeyRequest) (*pb.CreateSigningKeyResponse, error) {
+func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *commodorepb.CreateSigningKeyRequest) (*commodorepb.CreateSigningKeyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -91,8 +92,8 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSi
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
-	return &pb.CreateSigningKeyResponse{
-		SigningKey: &pb.SigningKey{
+	return &commodorepb.CreateSigningKeyResponse{
+		SigningKey: &commodorepb.SigningKey{
 			Id:           id,
 			Kid:          kid,
 			Name:         name,
@@ -106,7 +107,7 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *pb.CreateSi
 }
 
 // GetSigningKey fetches a single signing key, tenant-scoped.
-func (s *CommodoreServer) GetSigningKey(ctx context.Context, req *pb.GetSigningKeyRequest) (*pb.SigningKey, error) {
+func (s *CommodoreServer) GetSigningKey(ctx context.Context, req *commodorepb.GetSigningKeyRequest) (*commodorepb.SigningKey, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -133,7 +134,7 @@ func (s *CommodoreServer) GetSigningKey(ctx context.Context, req *pb.GetSigningK
 }
 
 // ListSigningKeys returns the tenant's signing keys with optional status filter.
-func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *pb.ListSigningKeysRequest) (*pb.ListSigningKeysResponse, error) {
+func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *commodorepb.ListSigningKeysRequest) (*commodorepb.ListSigningKeysResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -180,7 +181,7 @@ func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *pb.ListSigni
 	}
 	defer rows.Close()
 
-	var out []*pb.SigningKey
+	var out []*commodorepb.SigningKey
 	for rows.Next() {
 		sk, err := scanSigningKey(rows)
 		if err != nil {
@@ -193,7 +194,7 @@ func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *pb.ListSigni
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ListSigningKeysResponse{}
+	resp := &commodorepb.ListSigningKeysResponse{}
 	if len(out) > limit {
 		resp.NextAfterId = out[limit-1].Id
 		out = out[:limit]
@@ -206,7 +207,7 @@ func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *pb.ListSigni
 // outbox row in the same transaction so the mutation cannot succeed without a
 // retry record. After commit, attempts a synchronous fanout; partial failure
 // leaves the row pending for the worker to replay.
-func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSigningKeyRequest) (*pb.SigningKey, error) {
+func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *commodorepb.RevokeSigningKeyRequest) (*commodorepb.SigningKey, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -262,7 +263,7 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *pb.RevokeSi
 	return sk, nil
 }
 
-func (s *CommodoreServer) RecordSigningKeyUse(ctx context.Context, req *pb.RecordSigningKeyUseRequest) (*emptypb.Empty, error) {
+func (s *CommodoreServer) RecordSigningKeyUse(ctx context.Context, req *commodorepb.RecordSigningKeyUseRequest) (*emptypb.Empty, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	kid := strings.TrimSpace(req.GetKid())
 	if tenantID == "" || kid == "" {
@@ -285,7 +286,7 @@ func (s *CommodoreServer) RecordSigningKeyUse(ctx context.Context, req *pb.Recor
 // SetPlaybackPolicy persists a per-object playback policy and triggers the
 // cache-invalidate + invalidate_sessions fanout. Validates exactly one of
 // stream_id / vod_asset_id / clip_id.
-func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlaybackPolicyRequest) (*pb.SetPlaybackPolicyResponse, error) {
+func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorepb.SetPlaybackPolicyRequest) (*commodorepb.SetPlaybackPolicyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -394,17 +395,17 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 		return nil, err
 	}
 
-	resp := &pb.SetPlaybackPolicyResponse{RequiresAuth: requiresAuth}
+	resp := &commodorepb.SetPlaybackPolicyResponse{RequiresAuth: requiresAuth}
 	switch target.kind {
 	case "stream":
 		resp.StreamId = responseID
 		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, responseID, []string{"playback_policy"})
 	case "vod_asset":
 		resp.VodAssetId = responseID
-		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, responseID, "", policyType, nil)
+		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, responseID, "", policyType, nil)
 	case "clip":
 		resp.ClipId = responseID
-		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, responseID, "", policyType, nil)
+		s.emitArtifactEvent(ctx, eventPlaybackPolicyChanged, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, responseID, "", policyType, nil)
 	}
 	return resp, nil
 }
@@ -415,7 +416,7 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlay
 // Caller provides exactly one of playback_id or internal_name:
 //   - GraphQL field resolvers have playback_id (public identifier).
 //   - Foghorn USER_NEW handler has the MistServer internal_name only.
-func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *pb.ResolvePlaybackPolicyRequest) (*pb.ResolvePlaybackPolicyResponse, error) {
+func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commodorepb.ResolvePlaybackPolicyRequest) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
 	playbackID := strings.TrimSpace(req.GetPlaybackId())
 	internalName := strings.TrimSpace(req.GetInternalName())
 	if (playbackID == "") == (internalName == "") {
@@ -437,7 +438,7 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *pb.Res
 		return nil, err
 	}
 
-	resp := &pb.ResolvePlaybackPolicyResponse{TenantId: tenantID}
+	resp := &commodorepb.ResolvePlaybackPolicyResponse{TenantId: tenantID}
 	if len(policyJSON) == 0 {
 		resp.Type = "public"
 		return resp, nil
@@ -452,7 +453,7 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *pb.Res
 
 	switch parsed.Type {
 	case "jwt":
-		jwtPolicy := &pb.PlaybackJwtPolicy{}
+		jwtPolicy := &commodorepb.PlaybackJwtPolicy{}
 		if parsed.JWT != nil {
 			jwtPolicy.AllowedKids = parsed.JWT.AllowedKids
 			jwtPolicy.RequiredAudience = parsed.JWT.RequiredAudience
@@ -483,7 +484,7 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *pb.Res
 			}
 			secret = decrypted
 		}
-		resp.WebhookPolicy = &pb.PlaybackWebhookPolicy{
+		resp.WebhookPolicy = &commodorepb.PlaybackWebhookPolicy{
 			Url:       parsed.Webhook.URL,
 			TimeoutMs: int32(parsed.Webhook.TimeoutMs),
 			SecretPt:  secret,
@@ -596,7 +597,7 @@ func (s *CommodoreServer) canonicalPlaybackPolicyTargetID(ctx context.Context, t
 	return "", status.Error(codes.InvalidArgument, "unknown playback policy target")
 }
 
-func pickPolicyTarget(req *pb.SetPlaybackPolicyRequest) (policyTarget, error) {
+func pickPolicyTarget(req *commodorepb.SetPlaybackPolicyRequest) (policyTarget, error) {
 	count := 0
 	var t policyTarget
 	if id := strings.TrimSpace(req.GetStreamId()); id != "" {
@@ -642,7 +643,7 @@ type policyWebhookField struct {
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 }
 
-func buildPolicyJSON(policyType string, req *pb.SetPlaybackPolicyRequest) ([]byte, error) {
+func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyRequest) ([]byte, error) {
 	doc := policyDoc{Type: policyType}
 	switch policyType {
 	case "public":
@@ -755,7 +756,7 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanSigningKey(r rowScanner) (*pb.SigningKey, error) {
+func scanSigningKey(r rowScanner) (*commodorepb.SigningKey, error) {
 	var (
 		id, kid, name, alg, pubPEM, st string
 		createdAt                      time.Time
@@ -764,7 +765,7 @@ func scanSigningKey(r rowScanner) (*pb.SigningKey, error) {
 	if err := r.Scan(&id, &kid, &name, &alg, &pubPEM, &st, &createdAt, &lastUsedAt, &revokedAt); err != nil {
 		return nil, err
 	}
-	sk := &pb.SigningKey{
+	sk := &commodorepb.SigningKey{
 		Id:           id,
 		Kid:          kid,
 		Name:         name,
@@ -918,7 +919,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 	return nil, secret, "", status.Errorf(codes.NotFound, "internal name not found")
 }
 
-func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID string) ([]*pb.PlaybackSigningKey, error) {
+func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID string) ([]*commodorepb.PlaybackSigningKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT kid, algorithm, public_key_pem
 		FROM commodore.signing_keys
@@ -928,13 +929,13 @@ func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID s
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*pb.PlaybackSigningKey
+	var out []*commodorepb.PlaybackSigningKey
 	for rows.Next() {
 		var kid, alg, pem string
 		if err := rows.Scan(&kid, &alg, &pem); err != nil {
 			return nil, err
 		}
-		out = append(out, &pb.PlaybackSigningKey{
+		out = append(out, &commodorepb.PlaybackSigningKey{
 			Kid:          kid,
 			Algorithm:    alg,
 			PublicKeyPem: pem,

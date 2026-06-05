@@ -12,7 +12,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mesh/wgpolicy"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/spf13/cobra"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -117,10 +117,10 @@ type doctorResult struct {
 // same dependency shape from service_instances; doctor uses the manifest so it
 // remains read-only. Self public key comes from the manifest — no private-key
 // material is touched.
-func diagnoseManifest(manifest *inventory.Manifest, hostNames []string, qmNodes []*pb.InfrastructureNode) []doctorResult {
+func diagnoseManifest(manifest *inventory.Manifest, hostNames []string, qmNodes []*quartermasterpb.InfrastructureNode) []doctorResult {
 	// Index QM rows by (cluster, node_name) for self identity lookup.
 	type qmKeyInner struct{ cluster, name string }
-	byKey := make(map[qmKeyInner]*pb.InfrastructureNode, len(qmNodes))
+	byKey := make(map[qmKeyInner]*quartermasterpb.InfrastructureNode, len(qmNodes))
 	for _, n := range qmNodes {
 		byKey[qmKeyInner{cluster: n.GetClusterId(), name: n.GetNodeName()}] = n
 	}
@@ -226,7 +226,7 @@ func diagnoseManifest(manifest *inventory.Manifest, hostNames []string, qmNodes 
 // manifest's wireguard_ip, wireguard_public_key, or wireguard_port not
 // matching the row Quartermaster stored. Returns "" if everything
 // matches.
-func selfIdentityMismatch(host inventory.Host, qm *pb.InfrastructureNode) string {
+func selfIdentityMismatch(host inventory.Host, qm *quartermasterpb.InfrastructureNode) string {
 	qmIP := ""
 	if qm.WireguardIp != nil {
 		qmIP = *qm.WireguardIp
@@ -261,7 +261,7 @@ func selfIdentityMismatch(host inventory.Host, qm *pb.InfrastructureNode) string
 // Nodes with missing required fields are skipped silently here — those
 // exclusions are surfaced by 'mesh wg audit' and Quartermaster's own SyncMesh
 // logging, not by doctor.
-func buildPeerSetForHost(nodes []*pb.InfrastructureNode, self *pb.InfrastructureNode, clusterID string, crossClusterHosts map[string]struct{}) ([]wgpolicy.Peer, error) {
+func buildPeerSetForHost(nodes []*quartermasterpb.InfrastructureNode, self *quartermasterpb.InfrastructureNode, clusterID string, crossClusterHosts map[string]struct{}) ([]wgpolicy.Peer, error) {
 	selfNodeID := ""
 	if self != nil {
 		selfNodeID = self.GetNodeId()

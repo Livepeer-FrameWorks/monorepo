@@ -18,7 +18,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -193,12 +195,12 @@ func main() {
 			if event.TenantID == "" {
 				logger.WithFields(logging.Fields{
 					"event_type": event.EventType,
-					"channel":    pb.Channel_CHANNEL_ANALYTICS,
+					"channel":    signalmanpb.Channel_CHANNEL_ANALYTICS,
 				}).Warn("Dropping event without tenant_id for non-system channel")
 				return nil
 			}
 			for _, data := range clientLifecycleBatchToProtoData(event.Data, logger) {
-				grpcHub.BroadcastToTenant(event.TenantID, pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, pb.Channel_CHANNEL_ANALYTICS, data)
+				grpcHub.BroadcastToTenant(event.TenantID, signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, signalmanpb.Channel_CHANNEL_ANALYTICS, data)
 			}
 			return nil
 		}
@@ -207,7 +209,7 @@ func main() {
 		channel := mapEventTypeToChannel(event.EventType)
 		eventType := mapEventTypeToProto(event.EventType)
 
-		if channel == pb.Channel_CHANNEL_SYSTEM {
+		if channel == signalmanpb.Channel_CHANNEL_SYSTEM {
 			if event.TenantID != "" {
 				grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, eventToProtoData(event.Data, logger))
 			} else {
@@ -252,7 +254,7 @@ func main() {
 
 		channel := mapEventTypeToChannel(event.EventType)
 		eventType := mapEventTypeToProto(event.EventType)
-		if eventType == pb.EventType_EVENT_TYPE_UNSPECIFIED {
+		if eventType == signalmanpb.EventType_EVENT_TYPE_UNSPECIFIED {
 			return nil
 		}
 
@@ -261,7 +263,7 @@ func main() {
 			return fmt.Errorf("service event payload missing required data")
 		}
 
-		if channel == pb.Channel_CHANNEL_SYSTEM {
+		if channel == signalmanpb.Channel_CHANNEL_SYSTEM {
 			if event.TenantID != "" {
 				grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, data)
 			} else {
@@ -373,12 +375,12 @@ func main() {
 			serverOpts = append(serverOpts, tlsOpt)
 		}
 		grpcSrv := grpc.NewServer(serverOpts...)
-		pb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
+		signalmanpb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
 
 		// gRPC health service so Quartermaster's gRPC probe passes
 		hs := health.NewServer()
 		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-		hs.SetServingStatus(pb.SignalmanService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+		hs.SetServingStatus(signalmanpb.SignalmanService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
 		reflection.Register(grpcSrv)
 
@@ -418,7 +420,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("SIGNALMAN_HOST", "signalman")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:          "signalman",
 			Version:       version.Version,
 			Protocol:      "grpc",
@@ -448,86 +450,86 @@ func main() {
 }
 
 // mapEventTypeToChannel maps Kafka event types to gRPC channels
-func mapEventTypeToChannel(eventType string) pb.Channel {
+func mapEventTypeToChannel(eventType string) signalmanpb.Channel {
 	switch eventType {
 	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite", "push_rewrite":
-		return pb.Channel_CHANNEL_STREAMS
+		return signalmanpb.Channel_CHANNEL_STREAMS
 	case "node_lifecycle_update", "load_balancing":
-		return pb.Channel_CHANNEL_SYSTEM
+		return signalmanpb.Channel_CHANNEL_SYSTEM
 	case "storage_lifecycle", "storage_snapshot", "process_billing":
-		return pb.Channel_CHANNEL_ANALYTICS
+		return signalmanpb.Channel_CHANNEL_ANALYTICS
 	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
-		return pb.Channel_CHANNEL_MESSAGING
+		return signalmanpb.Channel_CHANNEL_MESSAGING
 	case "skipper_investigation":
-		return pb.Channel_CHANNEL_AI
+		return signalmanpb.Channel_CHANNEL_AI
 	default:
-		return pb.Channel_CHANNEL_ANALYTICS
+		return signalmanpb.Channel_CHANNEL_ANALYTICS
 	}
 }
 
 // mapEventTypeToProto maps Kafka event type strings to proto EventType
-func mapEventTypeToProto(eventType string) pb.EventType {
+func mapEventTypeToProto(eventType string) signalmanpb.EventType {
 	switch eventType {
 	// Stream events
 	case "stream_lifecycle_update":
-		return pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE
 	case "stream_track_list":
-		return pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST
 	case "stream_buffer":
-		return pb.EventType_EVENT_TYPE_STREAM_BUFFER
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER
 	case "stream_end":
-		return pb.EventType_EVENT_TYPE_STREAM_END
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_END
 	case "stream_source":
-		return pb.EventType_EVENT_TYPE_STREAM_SOURCE
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE
 	case "play_rewrite":
-		return pb.EventType_EVENT_TYPE_PLAY_REWRITE
+		return signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE
 	// System events
 	case "node_lifecycle_update":
-		return pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE
+		return signalmanpb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE
 	case "load_balancing":
-		return pb.EventType_EVENT_TYPE_LOAD_BALANCING
+		return signalmanpb.EventType_EVENT_TYPE_LOAD_BALANCING
 	// Analytics events
 	case "viewer_connect":
-		return pb.EventType_EVENT_TYPE_VIEWER_CONNECT
+		return signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT
 	case "viewer_disconnect":
-		return pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT
+		return signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT
 	case "client_lifecycle_update", "client_lifecycle_batch":
-		return pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE
+		return signalmanpb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE
 	case "clip_lifecycle":
-		return pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE
+		return signalmanpb.EventType_EVENT_TYPE_CLIP_LIFECYCLE
 	case "dvr_lifecycle":
-		return pb.EventType_EVENT_TYPE_DVR_LIFECYCLE
+		return signalmanpb.EventType_EVENT_TYPE_DVR_LIFECYCLE
 	case "vod_lifecycle":
-		return pb.EventType_EVENT_TYPE_VOD_LIFECYCLE
+		return signalmanpb.EventType_EVENT_TYPE_VOD_LIFECYCLE
 	case "push_rewrite":
-		return pb.EventType_EVENT_TYPE_PUSH_REWRITE
+		return signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE
 	case "push_out_start":
-		return pb.EventType_EVENT_TYPE_PUSH_OUT_START
+		return signalmanpb.EventType_EVENT_TYPE_PUSH_OUT_START
 	case "push_end":
-		return pb.EventType_EVENT_TYPE_PUSH_END
+		return signalmanpb.EventType_EVENT_TYPE_PUSH_END
 	case "recording_complete":
-		return pb.EventType_EVENT_TYPE_RECORDING_COMPLETE
+		return signalmanpb.EventType_EVENT_TYPE_RECORDING_COMPLETE
 	case "storage_lifecycle":
-		return pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE
+		return signalmanpb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE
 	case "process_billing":
-		return pb.EventType_EVENT_TYPE_PROCESS_BILLING
+		return signalmanpb.EventType_EVENT_TYPE_PROCESS_BILLING
 	case "storage_snapshot":
-		return pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT
+		return signalmanpb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT
 	// Messaging events
 	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
-		return pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
+		return signalmanpb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
 	// AI events
 	case "skipper_investigation":
-		return pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION
+		return signalmanpb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION
 	default:
-		return pb.EventType_EVENT_TYPE_UNSPECIFIED
+		return signalmanpb.EventType_EVENT_TYPE_UNSPECIFIED
 	}
 }
 
 // eventToProtoData converts Kafka event data to proto EventData
 // Data comes as a MistTrigger envelope from Kafka
-func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.EventData {
-	eventData := &pb.EventData{}
+func eventToProtoData(data map[string]interface{}, logger logging.Logger) *signalmanpb.EventData {
+	eventData := &signalmanpb.EventData{}
 	mt, ok := mistTriggerFromEventData(data, logger)
 	if !ok {
 		return eventData
@@ -535,56 +537,56 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 
 	// Extract typed payload from MistTrigger oneof
 	switch p := mt.GetTriggerPayload().(type) {
-	case *pb.MistTrigger_ClientLifecycleUpdate:
-		eventData.Payload = &pb.EventData_ClientLifecycle{ClientLifecycle: p.ClientLifecycleUpdate}
-	case *pb.MistTrigger_NodeLifecycleUpdate:
-		eventData.Payload = &pb.EventData_NodeLifecycle{NodeLifecycle: p.NodeLifecycleUpdate}
-	case *pb.MistTrigger_TrackList:
-		eventData.Payload = &pb.EventData_TrackList{TrackList: p.TrackList}
-	case *pb.MistTrigger_ClipLifecycleData:
-		eventData.Payload = &pb.EventData_ClipLifecycle{ClipLifecycle: p.ClipLifecycleData}
-	case *pb.MistTrigger_DvrLifecycleData:
-		eventData.Payload = &pb.EventData_DvrLifecycle{DvrLifecycle: p.DvrLifecycleData}
-	case *pb.MistTrigger_VodLifecycleData:
-		eventData.Payload = &pb.EventData_VodLifecycle{VodLifecycle: p.VodLifecycleData}
-	case *pb.MistTrigger_LoadBalancingData:
-		eventData.Payload = &pb.EventData_LoadBalancing{LoadBalancing: p.LoadBalancingData}
-	case *pb.MistTrigger_PushRewrite:
-		eventData.Payload = &pb.EventData_PushRewrite{PushRewrite: p.PushRewrite}
-	case *pb.MistTrigger_PushOutStart:
-		eventData.Payload = &pb.EventData_PushOutStart{PushOutStart: p.PushOutStart}
-	case *pb.MistTrigger_PushEnd:
-		eventData.Payload = &pb.EventData_PushEnd{PushEnd: p.PushEnd}
-	case *pb.MistTrigger_ViewerConnect:
-		eventData.Payload = &pb.EventData_ViewerConnect{ViewerConnect: p.ViewerConnect}
-	case *pb.MistTrigger_ViewerDisconnect:
-		eventData.Payload = &pb.EventData_ViewerDisconnect{ViewerDisconnect: p.ViewerDisconnect}
-	case *pb.MistTrigger_StreamEnd:
-		eventData.Payload = &pb.EventData_StreamEnd{StreamEnd: p.StreamEnd}
-	case *pb.MistTrigger_RecordingComplete:
-		eventData.Payload = &pb.EventData_Recording{Recording: p.RecordingComplete}
-	case *pb.MistTrigger_StreamLifecycleUpdate:
-		eventData.Payload = &pb.EventData_StreamLifecycle{StreamLifecycle: p.StreamLifecycleUpdate}
-	case *pb.MistTrigger_StreamBuffer:
-		eventData.Payload = &pb.EventData_StreamBuffer{StreamBuffer: p.StreamBuffer}
-	case *pb.MistTrigger_StorageLifecycleData:
-		eventData.Payload = &pb.EventData_StorageLifecycle{StorageLifecycle: p.StorageLifecycleData}
-	case *pb.MistTrigger_ProcessBilling:
-		eventData.Payload = &pb.EventData_ProcessBilling{ProcessBilling: p.ProcessBilling}
-	case *pb.MistTrigger_PlayRewrite:
-		eventData.Payload = &pb.EventData_PlayRewrite{PlayRewrite: p.PlayRewrite}
-	case *pb.MistTrigger_StreamSource:
-		eventData.Payload = &pb.EventData_StreamSource{StreamSource: p.StreamSource}
-	case *pb.MistTrigger_StorageSnapshot:
-		eventData.Payload = &pb.EventData_StorageSnapshot{StorageSnapshot: p.StorageSnapshot}
-	case *pb.MistTrigger_MessageLifecycleData:
-		eventData.Payload = &pb.EventData_MessageLifecycle{MessageLifecycle: p.MessageLifecycleData}
+	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
+		eventData.Payload = &signalmanpb.EventData_ClientLifecycle{ClientLifecycle: p.ClientLifecycleUpdate}
+	case *ipcpb.MistTrigger_NodeLifecycleUpdate:
+		eventData.Payload = &signalmanpb.EventData_NodeLifecycle{NodeLifecycle: p.NodeLifecycleUpdate}
+	case *ipcpb.MistTrigger_TrackList:
+		eventData.Payload = &signalmanpb.EventData_TrackList{TrackList: p.TrackList}
+	case *ipcpb.MistTrigger_ClipLifecycleData:
+		eventData.Payload = &signalmanpb.EventData_ClipLifecycle{ClipLifecycle: p.ClipLifecycleData}
+	case *ipcpb.MistTrigger_DvrLifecycleData:
+		eventData.Payload = &signalmanpb.EventData_DvrLifecycle{DvrLifecycle: p.DvrLifecycleData}
+	case *ipcpb.MistTrigger_VodLifecycleData:
+		eventData.Payload = &signalmanpb.EventData_VodLifecycle{VodLifecycle: p.VodLifecycleData}
+	case *ipcpb.MistTrigger_LoadBalancingData:
+		eventData.Payload = &signalmanpb.EventData_LoadBalancing{LoadBalancing: p.LoadBalancingData}
+	case *ipcpb.MistTrigger_PushRewrite:
+		eventData.Payload = &signalmanpb.EventData_PushRewrite{PushRewrite: p.PushRewrite}
+	case *ipcpb.MistTrigger_PushOutStart:
+		eventData.Payload = &signalmanpb.EventData_PushOutStart{PushOutStart: p.PushOutStart}
+	case *ipcpb.MistTrigger_PushEnd:
+		eventData.Payload = &signalmanpb.EventData_PushEnd{PushEnd: p.PushEnd}
+	case *ipcpb.MistTrigger_ViewerConnect:
+		eventData.Payload = &signalmanpb.EventData_ViewerConnect{ViewerConnect: p.ViewerConnect}
+	case *ipcpb.MistTrigger_ViewerDisconnect:
+		eventData.Payload = &signalmanpb.EventData_ViewerDisconnect{ViewerDisconnect: p.ViewerDisconnect}
+	case *ipcpb.MistTrigger_StreamEnd:
+		eventData.Payload = &signalmanpb.EventData_StreamEnd{StreamEnd: p.StreamEnd}
+	case *ipcpb.MistTrigger_RecordingComplete:
+		eventData.Payload = &signalmanpb.EventData_Recording{Recording: p.RecordingComplete}
+	case *ipcpb.MistTrigger_StreamLifecycleUpdate:
+		eventData.Payload = &signalmanpb.EventData_StreamLifecycle{StreamLifecycle: p.StreamLifecycleUpdate}
+	case *ipcpb.MistTrigger_StreamBuffer:
+		eventData.Payload = &signalmanpb.EventData_StreamBuffer{StreamBuffer: p.StreamBuffer}
+	case *ipcpb.MistTrigger_StorageLifecycleData:
+		eventData.Payload = &signalmanpb.EventData_StorageLifecycle{StorageLifecycle: p.StorageLifecycleData}
+	case *ipcpb.MistTrigger_ProcessBilling:
+		eventData.Payload = &signalmanpb.EventData_ProcessBilling{ProcessBilling: p.ProcessBilling}
+	case *ipcpb.MistTrigger_PlayRewrite:
+		eventData.Payload = &signalmanpb.EventData_PlayRewrite{PlayRewrite: p.PlayRewrite}
+	case *ipcpb.MistTrigger_StreamSource:
+		eventData.Payload = &signalmanpb.EventData_StreamSource{StreamSource: p.StreamSource}
+	case *ipcpb.MistTrigger_StorageSnapshot:
+		eventData.Payload = &signalmanpb.EventData_StorageSnapshot{StorageSnapshot: p.StorageSnapshot}
+	case *ipcpb.MistTrigger_MessageLifecycleData:
+		eventData.Payload = &signalmanpb.EventData_MessageLifecycle{MessageLifecycle: p.MessageLifecycleData}
 	}
 
 	return eventData
 }
 
-func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging.Logger) []*pb.EventData {
+func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging.Logger) []*signalmanpb.EventData {
 	mt, ok := mistTriggerFromEventData(data, logger)
 	if !ok {
 		return nil
@@ -593,19 +595,19 @@ func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging
 	if batch == nil {
 		return nil
 	}
-	out := make([]*pb.EventData, 0, len(batch.GetSamples()))
+	out := make([]*signalmanpb.EventData, 0, len(batch.GetSamples()))
 	for _, sample := range batch.GetSamples() {
 		if sample == nil {
 			continue
 		}
-		out = append(out, &pb.EventData{
-			Payload: &pb.EventData_ClientLifecycle{ClientLifecycle: sample},
+		out = append(out, &signalmanpb.EventData{
+			Payload: &signalmanpb.EventData_ClientLifecycle{ClientLifecycle: sample},
 		})
 	}
 	return out
 }
 
-func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger) (*pb.MistTrigger, bool) {
+func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger) (*ipcpb.MistTrigger, bool) {
 	if data == nil {
 		return nil, false
 	}
@@ -616,7 +618,7 @@ func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger
 		return nil, false
 	}
 
-	var mt pb.MistTrigger
+	var mt ipcpb.MistTrigger
 	if err := protojson.Unmarshal(b, &mt); err != nil {
 		logger.WithError(err).Debug("Failed to unmarshal MistTrigger from event data")
 		return nil, false
@@ -625,19 +627,19 @@ func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger
 	return &mt, true
 }
 
-func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *pb.EventData {
+func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *signalmanpb.EventData {
 	switch event.EventType {
 	case "message_received", "message_updated", "conversation_created", "conversation_updated":
-		ml := &pb.MessageLifecycleData{}
+		ml := &ipcpb.MessageLifecycleData{}
 		switch event.EventType {
 		case "message_received":
-			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED
+			ml.EventType = ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED
 		case "message_updated":
-			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED
+			ml.EventType = ipcpb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED
 		case "conversation_created":
-			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED
+			ml.EventType = ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED
 		case "conversation_updated":
-			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED
+			ml.EventType = ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED
 		}
 
 		if event.TenantID != "" {
@@ -672,9 +674,9 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *p
 		}
 		ml.Timestamp = ts.Unix()
 
-		return &pb.EventData{Payload: &pb.EventData_MessageLifecycle{MessageLifecycle: ml}}
+		return &signalmanpb.EventData{Payload: &signalmanpb.EventData_MessageLifecycle{MessageLifecycle: ml}}
 	case "skipper_investigation":
-		return &pb.EventData{}
+		return &signalmanpb.EventData{}
 	default:
 		return nil
 	}

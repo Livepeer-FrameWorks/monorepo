@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -34,15 +34,15 @@ const relayURLTTL = 1 * time.Hour
 // artifacts (their .mkv has its own foghorn.artifacts row); the
 // rolling-DVR surface (dvr+<dvr_internal_name>) plays directly from
 // the recording origin and never goes through RelayResolve.
-func processRelayResolveRequest(req *pb.RelayResolveRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processRelayResolveRequest(req *ipcpb.RelayResolveRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	requestID := req.GetRequestId()
-	resp := &pb.RelayResolveResponse{
+	resp := &ipcpb.RelayResolveResponse{
 		RequestId: requestID,
 		AssetHash: req.GetAssetHash(),
-		State:     pb.AssetState_ASSET_STATE_SOURCE_MISSING,
+		State:     ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING,
 	}
 
 	switch req.GetAssetKind() {
@@ -58,7 +58,7 @@ func processRelayResolveRequest(req *pb.RelayResolveRequest, nodeID string, stre
 	sendRelayResolveResponse(stream, resp, logger)
 }
 
-func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger) {
+func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
 	if db == nil {
 		resp.Error = "foghorn not configured for relay resolve"
 		return
@@ -160,7 +160,7 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 		logger.WithError(err).Warn("RelayResolve mint media presigned failed")
 		return
 	}
-	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
+	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE
 	resp.MediaPresignedUrl = mediaURL
 	resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
 
@@ -192,10 +192,10 @@ func fillFileArtifactResolve(ctx context.Context, req *pb.RelayResolveRequest, r
 		resp.StreamInternalName = streamName.String
 	}
 
-	resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
+	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
 }
 
-func fillUploadResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger) {
+func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
 	if db == nil || s3Client == nil {
 		resp.Error = "foghorn not configured for relay resolve"
 		return
@@ -227,10 +227,10 @@ func fillUploadResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *p
 		logger.WithError(err).Warn("RelayResolve mint upload presigned failed")
 		return
 	}
-	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
+	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE
 	resp.MediaPresignedUrl = mediaURL
 	resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
-	resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_MEM
+	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_MEM
 	if putURL, err := s3Client.GeneratePresignedPUT(s3Key.String+".dtsh", relayURLTTL); err == nil {
 		resp.DtshPresignedPut = putURL
 	}
@@ -251,8 +251,8 @@ func fillUploadResolve(ctx context.Context, req *pb.RelayResolveRequest, resp *p
 // will hit directly; it never delegates to another peer relay.
 func fillPeerRelayFromLocalOrigin(
 	ctx context.Context,
-	req *pb.RelayResolveRequest,
-	resp *pb.RelayResolveResponse,
+	req *ipcpb.RelayResolveRequest,
+	resp *ipcpb.RelayResolveResponse,
 	sizeBytes sql.NullInt64,
 	format sql.NullString,
 	streamName sql.NullString,
@@ -345,7 +345,7 @@ func fillPeerRelayFromLocalOrigin(
 		logger.WithError(grantErr).Warn("RelayResolve mint peer-relay grant failed")
 		return false
 	}
-	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
+	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE
 	resp.PeerRelayUrl = origin + path
 	resp.PeerRelayDtshUrl = origin + dtshPath
 	resp.PeerRelayGrantId = grantID
@@ -362,7 +362,7 @@ func fillPeerRelayFromLocalOrigin(
 	if streamName.Valid {
 		resp.StreamInternalName = streamName.String
 	}
-	resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
+	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
 	return true
 }
 
@@ -380,11 +380,11 @@ func RelayPeerOrigin(base string) (string, bool) {
 	return u.Scheme + "://" + u.Host, true
 }
 
-func sendRelayResolveResponse(stream pb.HelmsmanControl_ConnectServer, resp *pb.RelayResolveResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendRelayResolveResponse(stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		RequestId: resp.GetRequestId(),
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_RelayResolveResponse{RelayResolveResponse: resp},
+		Payload:   &ipcpb.ControlMessage_RelayResolveResponse{RelayResolveResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).WithField("asset_hash", resp.GetAssetHash()).Warn("Failed to send RelayResolveResponse")
@@ -435,7 +435,7 @@ func keyFromMediaS3URL(mediaS3URL string) (string, error) {
 // adopts at the front door) this path CAN enforce the federation allowlist
 // here, on both the origin and any storage redirect. Returns silently (→ 404)
 // when Commodore has no match or the origin is not an authorized peer.
-func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger) {
+func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger) {
 	if CommodoreClient == nil {
 		return
 	}
@@ -466,7 +466,7 @@ func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *pb.RelayRes
 // authorizeRedirect gates the storage-redirect target against the tenant peer
 // allowlist; pass nil only for an already-adopted row (its origin/storage were
 // allowlist-checked at adopt time and RelayResolve has no tenant peer set).
-func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, resp *pb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
+func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
 	result, err := ResolveCrossClusterArtifactURL(ctx, req.GetAssetHash(), artifactType, tenantID, peerClusterID, authorizeRedirect)
 	if err != nil || result == nil {
 		// Includes ErrCrossClusterArtifactUnavailable (deps unwired,
@@ -474,7 +474,7 @@ func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, 
 		// relay falls through to 404, same as today's miss.
 		return
 	}
-	resp.State = pb.AssetState_ASSET_STATE_PLAYABLE
+	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE
 	// Origin may have returned an S3 presigned URL (synced case) OR a
 	// peer-relay URL + grant (hot-but-unsynced case). Forward whichever the
 	// requesting Helmsman should hit; the grant_id is opaque here and is
@@ -499,7 +499,7 @@ func fillCrossClusterArtifact(ctx context.Context, req *pb.RelayResolveRequest, 
 	}
 	if artifactType == "vod" || artifactType == "clip" {
 		// vod/clip implies a single media file — no special hint.
-		resp.PolicyHint = pb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
+		resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
 	}
 	if result.Format != "" {
 		resp.ContentType = contentTypeForFormat(result.Format)

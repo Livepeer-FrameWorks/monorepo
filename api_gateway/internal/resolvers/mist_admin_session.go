@@ -14,7 +14,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // DoOpenMistAdminSession is the Gateway's first wall on Mist-admin-UI
@@ -109,7 +109,7 @@ func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenM
 	}
 
 	// Commodore mints with its own trusted-context ownership check.
-	mintResp, err := r.Clients.Commodore.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{
+	mintResp, err := r.Clients.Commodore.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{
 		NodeId: nodeID,
 	})
 	if err != nil {

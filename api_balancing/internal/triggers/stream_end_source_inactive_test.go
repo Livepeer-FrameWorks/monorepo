@@ -8,7 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // installRegistryForTest swaps a fresh StreamRegistry into the package
@@ -49,10 +49,10 @@ func TestHandleStreamEnd_FlipsSourceInactiveOnMatchingNode(t *testing.T) {
 	}
 
 	p := minimalProcessorForStreamEnd(t)
-	_, _, err := p.handleStreamEnd(&pb.MistTrigger{
+	_, _, err := p.handleStreamEnd(&ipcpb.MistTrigger{
 		NodeId: "node-A",
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{StreamName: "live+" + internal},
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "live+" + internal},
 		},
 	})
 	if err != nil {
@@ -84,10 +84,10 @@ func TestHandleStreamEnd_StaleNodeDoesNotClearLiveOwner(t *testing.T) {
 
 	p := minimalProcessorForStreamEnd(t)
 	// STREAM_END from a DIFFERENT node than the recorded owner.
-	_, _, err := p.handleStreamEnd(&pb.MistTrigger{
+	_, _, err := p.handleStreamEnd(&ipcpb.MistTrigger{
 		NodeId: "node-B",
-		TriggerPayload: &pb.MistTrigger_StreamEnd{
-			StreamEnd: &pb.StreamEndTrigger{StreamName: "live+" + internal},
+		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+			StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "live+" + internal},
 		},
 	})
 	if err != nil {

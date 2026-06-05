@@ -9,25 +9,26 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 type clipCreatorSpy struct {
 	called bool
 }
 
-func (c *clipCreatorSpy) CreateClip(context.Context, *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+func (c *clipCreatorSpy) CreateClip(context.Context, *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	c.called = true
-	return &pb.CreateClipResponse{ClipHash: "cliphash", NodeId: "node-a"}, nil
+	return &sharedpb.CreateClipResponse{ClipHash: "cliphash", NodeId: "node-a"}, nil
 }
 
 type dvrCreatorSpy struct {
 	called bool
 }
 
-func (d *dvrCreatorSpy) StartDVR(context.Context, *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (d *dvrCreatorSpy) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	d.called = true
-	return &pb.StartDVRResponse{DvrHash: "dvrhash"}, nil
+	return &sharedpb.StartDVRResponse{DvrHash: "dvrhash"}, nil
 }
 
 func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
@@ -47,7 +48,7 @@ func TestPrepareArtifactRejectsInconsistentS3Metadata(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "artifact-1",
 		TenantId:   "tenant-a",
 	})
@@ -79,7 +80,7 @@ func TestPrepareArtifactRejectsTypeMismatch(t *testing.T) {
 		S3Client: &storage.S3Client{},
 	})
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId:   "artifact-1",
 		TenantId:     "tenant-a",
 		ArtifactType: "dvr",
@@ -106,7 +107,7 @@ func TestCreateRemoteClipRejectsTenantMismatch(t *testing.T) {
 
 	cc := &clipCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), ClipCreator: cc})
-	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &pb.RemoteClipRequest{
+	resp, err := srv.CreateRemoteClip(serviceAuthContext(), &foghornfederationpb.RemoteClipRequest{
 		StreamInternalName: "stream-a",
 		TenantId:           "tenant-other",
 	})
@@ -132,7 +133,7 @@ func TestCreateRemoteDVRRejectsTenantMismatch(t *testing.T) {
 
 	dc := &dvrCreatorSpy{}
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger(), DVRCreator: dc})
-	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &pb.RemoteDVRRequest{
+	resp, err := srv.CreateRemoteDVR(serviceAuthContext(), &foghornfederationpb.RemoteDVRRequest{
 		StreamInternalName: "stream-a",
 		TenantId:           "tenant-other",
 	})

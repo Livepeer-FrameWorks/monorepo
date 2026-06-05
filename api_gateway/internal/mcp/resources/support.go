@@ -11,7 +11,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -136,7 +136,7 @@ func handleGetConversation(ctx context.Context, conversationID string, serviceCl
 	return marshalResourceResult(uri, result)
 }
 
-func convertConversation(conv *pb.DeckhandConversation) SupportConversation {
+func convertConversation(conv *deckhandpb.DeckhandConversation) SupportConversation {
 	sc := SupportConversation{
 		ID:          conv.Id,
 		Subject:     conv.Subject,
@@ -144,11 +144,11 @@ func convertConversation(conv *pb.DeckhandConversation) SupportConversation {
 	}
 
 	switch conv.Status {
-	case pb.ConversationStatus_CONVERSATION_STATUS_OPEN:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN:
 		sc.Status = "open"
-	case pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
 		sc.Status = "resolved"
-	case pb.ConversationStatus_CONVERSATION_STATUS_PENDING:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING:
 		sc.Status = "pending"
 	default:
 		sc.Status = "unknown"
@@ -168,7 +168,7 @@ func convertConversation(conv *pb.DeckhandConversation) SupportConversation {
 	return sc
 }
 
-func convertMessage(msg *pb.DeckhandMessage) SupportMessage {
+func convertMessage(msg *deckhandpb.DeckhandMessage) SupportMessage {
 	sm := SupportMessage{
 		ID:      msg.Id,
 		Content: msg.Content,
@@ -182,11 +182,11 @@ func convertMessage(msg *pb.DeckhandMessage) SupportMessage {
 	return sm
 }
 
-func convertSender(sender pb.MessageSender) string {
+func convertSender(sender deckhandpb.MessageSender) string {
 	switch sender {
-	case pb.MessageSender_MESSAGE_SENDER_USER:
+	case deckhandpb.MessageSender_MESSAGE_SENDER_USER:
 		return "user"
-	case pb.MessageSender_MESSAGE_SENDER_AGENT:
+	case deckhandpb.MessageSender_MESSAGE_SENDER_AGENT:
 		return "agent"
 	default:
 		return "unknown"

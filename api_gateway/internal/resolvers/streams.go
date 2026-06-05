@@ -13,7 +13,11 @@ import (
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -22,7 +26,7 @@ import (
 )
 
 // DoGetStreams retrieves all streams for the authenticated user
-func (r *Resolver) DoGetStreams(ctx context.Context) ([]*pb.Stream, error) {
+func (r *Resolver) DoGetStreams(ctx context.Context) ([]*commodorepb.Stream, error) {
 	start := time.Now()
 
 	// Record metrics
@@ -64,7 +68,7 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*pb.Stream, error) {
 }
 
 // DoGetStream retrieves a specific stream by ID
-func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, error) {
+func (r *Resolver) DoGetStream(ctx context.Context, id string) (*commodorepb.Stream, error) {
 	start := time.Now()
 
 	// Record metrics
@@ -93,7 +97,7 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, erro
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	l := loaders.FromContext(ctx)
-	var stream *pb.Stream
+	var stream *commodorepb.Stream
 	var err error
 	if l != nil && l.Stream != nil && tenantID != "" {
 		stream, err = l.Stream.Load(ctx, tenantID, id)
@@ -115,7 +119,7 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, erro
 }
 
 // DoCreateStream creates a new stream
-func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*pb.Stream, error) {
+func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -131,7 +135,7 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 			isRecording = *input.Record
 		}
 		streamID := uuid.NewString()
-		return &pb.Stream{
+		return &commodorepb.Stream{
 			StreamId:     streamID,
 			InternalName: "demo_stream_" + now.Format("20060102150405"),
 			Title:        input.Name,
@@ -146,7 +150,7 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	}
 
 	// Build gRPC request
-	req := &pb.CreateStreamRequest{
+	req := &commodorepb.CreateStreamRequest{
 		Title: input.Name,
 	}
 
@@ -191,12 +195,12 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	if input.PullSource != nil {
 		changedFields = append(changedFields, "pull_source")
 	}
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamCreated,
 		ResourceType: "stream",
 		ResourceId:   stream.StreamId,
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId:      stream.StreamId,
 				ChangedFields: changedFields,
 			},
@@ -232,12 +236,12 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 		return nil, fmt.Errorf("failed to delete stream: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamDeleted,
 		ResourceType: "stream",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId: id,
 			},
 		},
@@ -247,7 +251,7 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 }
 
 // DoRefreshStreamKey refreshes the stream key for a stream
-func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*pb.Stream, error) {
+func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -277,12 +281,12 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*pb.Strea
 		return nil, err
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamKeyRotated,
 		ResourceType: "stream",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId:      id,
 				ChangedFields: []string{"stream_key"},
 			},
@@ -355,15 +359,15 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		return nil, fmt.Errorf("streamId required")
 	}
 
-	mode := pb.ClipMode_CLIP_MODE_ABSOLUTE
+	mode := sharedpb.ClipMode_CLIP_MODE_ABSOLUTE
 	if input.Mode != nil {
 		switch *input.Mode {
 		case model.ClipCreationModeRelative:
-			mode = pb.ClipMode_CLIP_MODE_RELATIVE
+			mode = sharedpb.ClipMode_CLIP_MODE_RELATIVE
 		case model.ClipCreationModeDuration:
-			mode = pb.ClipMode_CLIP_MODE_DURATION
+			mode = sharedpb.ClipMode_CLIP_MODE_DURATION
 		case model.ClipCreationModeClipNow:
-			mode = pb.ClipMode_CLIP_MODE_CLIP_NOW
+			mode = sharedpb.ClipMode_CLIP_MODE_CLIP_NOW
 		}
 	}
 
@@ -377,7 +381,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		// Calculate demo timing based on mode
 		var startTime, duration int64
 		switch mode {
-		case pb.ClipMode_CLIP_MODE_CLIP_NOW:
+		case sharedpb.ClipMode_CLIP_MODE_CLIP_NOW:
 			if input.Duration != nil {
 				duration = int64(*input.Duration)
 				startTime = now.Unix() - duration
@@ -385,7 +389,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 				duration = 60
 				startTime = now.Unix() - 60
 			}
-		case pb.ClipMode_CLIP_MODE_DURATION:
+		case sharedpb.ClipMode_CLIP_MODE_DURATION:
 			if input.Duration != nil {
 				duration = int64(*input.Duration)
 			}
@@ -407,7 +411,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 			}
 		}
 		modeStr := mode.String()
-		return &pb.ClipInfo{
+		return &sharedpb.ClipInfo{
 			Id:          "clip_demo_" + now.Format("20060102150405"),
 			StreamId:    streamID,
 			Title:       input.Title,
@@ -424,7 +428,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	}
 
 	// Build gRPC request
-	req := &pb.CreateClipRequest{
+	req := &sharedpb.CreateClipRequest{
 		StreamId: &streamID,
 		Title:    input.Title,
 		Mode:     mode,
@@ -436,7 +440,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	}
 
 	switch mode {
-	case pb.ClipMode_CLIP_MODE_ABSOLUTE:
+	case sharedpb.ClipMode_CLIP_MODE_ABSOLUTE:
 		if input.StartUnix != nil {
 			startUnix := int64(*input.StartUnix)
 			req.StartUnix = &startUnix
@@ -457,7 +461,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 			req.DurationSec = &durationSec
 		}
 
-	case pb.ClipMode_CLIP_MODE_RELATIVE:
+	case sharedpb.ClipMode_CLIP_MODE_RELATIVE:
 		if input.StartMedia != nil {
 			startMs := int64(*input.StartMedia)
 			req.StartMs = &startMs
@@ -472,7 +476,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 			req.DurationSec = &durationSec
 		}
 
-	case pb.ClipMode_CLIP_MODE_DURATION:
+	case sharedpb.ClipMode_CLIP_MODE_DURATION:
 		if input.StartUnix != nil {
 			startUnix := int64(*input.StartUnix)
 			req.StartUnix = &startUnix
@@ -485,7 +489,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 			req.DurationSec = &durationSec
 		}
 
-	case pb.ClipMode_CLIP_MODE_CLIP_NOW:
+	case sharedpb.ClipMode_CLIP_MODE_CLIP_NOW:
 		if input.Duration != nil {
 			dur := int64(*input.Duration)
 			negDur := -dur
@@ -539,7 +543,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	}
 
 	modeStr := mode.String()
-	clipInfo := &pb.ClipInfo{
+	clipInfo := &sharedpb.ClipInfo{
 		Id:          clipResp.RequestId,
 		ClipHash:    clipResp.ClipHash,
 		PlaybackId:  clipResp.PlaybackId,
@@ -555,13 +559,13 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		ClipMode:    &modeStr,
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventClipCreated,
 		ResourceType: "clip",
 		ResourceId:   clipResp.RequestId,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 				ArtifactId:   clipResp.RequestId,
 				StreamId:     streamID,
 				Status:       "requested",
@@ -573,7 +577,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 }
 
 // DoGetStreamKeys retrieves all stream keys for a specific stream
-func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*pb.StreamKey, error) {
+func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*commodorepb.StreamKey, error) {
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -585,7 +589,7 @@ func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*pb.
 		now := time.Now()
 		lastUsed1 := now.Add(-1 * time.Hour)
 		lastUsed2 := now.Add(-3 * 24 * time.Hour)
-		return []*pb.StreamKey{
+		return []*commodorepb.StreamKey{
 			{
 				Id:         "sk_demo_1",
 				TenantId:   "tenant_demo_1",
@@ -654,7 +658,7 @@ func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID strin
 }
 
 // buildStreamKeysConnectionFromResponse constructs a connection from gRPC response
-func (r *Resolver) buildStreamKeysConnectionFromResponse(resp *pb.ListStreamKeysResponse) *model.StreamKeysConnection {
+func (r *Resolver) buildStreamKeysConnectionFromResponse(resp *commodorepb.ListStreamKeysResponse) *model.StreamKeysConnection {
 	keys := resp.GetStreamKeys()
 	edges := make([]*model.StreamKeyEdge, len(keys))
 	for i, key := range keys {
@@ -679,7 +683,7 @@ func (r *Resolver) buildStreamKeysConnectionFromResponse(resp *pb.ListStreamKeys
 		pageInfo.EndCursor = &ec
 	}
 
-	edgeNodes := make([]*pb.StreamKey, 0, len(edges))
+	edgeNodes := make([]*commodorepb.StreamKey, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -695,7 +699,7 @@ func (r *Resolver) buildStreamKeysConnectionFromResponse(resp *pb.ListStreamKeys
 }
 
 // buildStreamKeysConnectionFromSlice constructs a connection from a slice (demo mode)
-func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*pb.StreamKey, first *int, after *string, last *int, before *string) *model.StreamKeysConnection {
+func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*commodorepb.StreamKey, first *int, after *string, last *int, before *string) *model.StreamKeysConnection {
 	total := len(keys)
 
 	limit := pagination.DefaultLimit
@@ -732,7 +736,7 @@ func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*pb.StreamKey, firs
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.StreamKey, 0, len(edges))
+	edgeNodes := make([]*commodorepb.StreamKey, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -748,7 +752,7 @@ func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*pb.StreamKey, firs
 }
 
 // DoCreateStreamKey creates a new stream key for a specific stream
-func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*pb.StreamKey, error) {
+func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*commodorepb.StreamKey, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -761,7 +765,7 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream key creation")
 		now := time.Now()
-		return &pb.StreamKey{
+		return &commodorepb.StreamKey{
 			Id:        "sk_demo_new_" + now.Format("20060102150405"),
 			TenantId:  "tenant_demo_1",
 			UserId:    "user_demo_1",
@@ -782,12 +786,12 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 	}
 
 	if keyResp.StreamKey != nil {
-		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 			EventType:    apiEventStreamKeyCreated,
 			ResourceType: "stream_key",
 			ResourceId:   keyResp.StreamKey.Id,
-			Payload: &pb.ServiceEvent_StreamKeyEvent{
-				StreamKeyEvent: &pb.StreamKeyEvent{
+			Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
+				StreamKeyEvent: &ipcpb.StreamKeyEvent{
 					StreamId: streamID,
 					KeyId:    keyResp.StreamKey.Id,
 				},
@@ -829,12 +833,12 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 		return nil, fmt.Errorf("failed to deactivate stream key: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventStreamKeyDeleted,
 		ResourceType: "stream_key",
 		ResourceId:   keyID,
-		Payload: &pb.ServiceEvent_StreamKeyEvent{
-			StreamKeyEvent: &pb.StreamKeyEvent{
+		Payload: &ipcpb.ServiceEvent_StreamKeyEvent{
+			StreamKeyEvent: &ipcpb.StreamKeyEvent{
 				StreamId: streamID,
 				KeyId:    keyID,
 			},
@@ -845,7 +849,7 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 }
 
 // DoGetClips retrieves all clips for the authenticated user
-func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.ClipInfo, error) {
+func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*sharedpb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clips")
 		return demo.GenerateClips(), nil
@@ -873,11 +877,11 @@ func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.Clip
 }
 
 // DoGetClip retrieves a specific clip by ID
-func (r *Resolver) DoGetClip(ctx context.Context, id string) (*pb.ClipInfo, error) {
+func (r *Resolver) DoGetClip(ctx context.Context, id string) (*sharedpb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip")
 		now := time.Now()
-		return &pb.ClipInfo{
+		return &sharedpb.ClipInfo{
 			Id:          id,
 			StreamId:    "stream_demo_1",
 			Title:       "Demo Clip Details",
@@ -949,13 +953,13 @@ func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteCli
 		return nil, fmt.Errorf("failed to delete clip: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventClipDeleted,
 		ResourceType: "clip",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 				ArtifactId:   id,
 				Status:       "deleted",
 			},
@@ -976,7 +980,7 @@ func stringPtr(s string) *string {
 }
 
 // DoStartDVR starts a DVR recording
-func (r *Resolver) DoStartDVR(ctx context.Context, streamID string) (*pb.StartDVRResponse, error) {
+func (r *Resolver) DoStartDVR(ctx context.Context, streamID string) (*sharedpb.StartDVRResponse, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -988,11 +992,11 @@ func (r *Resolver) DoStartDVR(ctx context.Context, streamID string) (*pb.StartDV
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: start DVR")
-		return &pb.StartDVRResponse{Status: "started", DvrHash: "dvr_demo_hash", PlaybackId: "pl_dvr_demo_hash"}, nil
+		return &sharedpb.StartDVRResponse{Status: "started", DvrHash: "dvr_demo_hash", PlaybackId: "pl_dvr_demo_hash"}, nil
 	}
 
 	// Build gRPC request - StreamId is *string in proto
-	req := &pb.StartDVRRequest{StreamId: &streamID}
+	req := &sharedpb.StartDVRRequest{StreamId: &streamID}
 
 	// Call Commodore gRPC (context metadata carries auth)
 	res, err := r.Clients.Commodore.StartDVR(ctx, req)
@@ -1053,13 +1057,13 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 		return nil, fmt.Errorf("failed to delete DVR: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventDVRDeleted,
 		ResourceType: "dvr",
 		ResourceId:   dvrHash,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 				ArtifactId:   dvrHash,
 				Status:       "deleted",
 			},
@@ -1070,7 +1074,7 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 }
 
 // DoListDVRRequests lists DVR recordings with cursor pagination
-func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagination *pb.CursorPaginationRequest, opts ...commodoreclient.MediaListOptions) (*pb.ListDVRRecordingsResponse, error) {
+func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...commodoreclient.MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: list DVR requests")
 		now := time.Now()
@@ -1078,8 +1082,8 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 		duration2 := int32(1800)   // 30 minutes so far
 		size1 := int64(5368709120) // ~5 GB
 		size2 := int64(1073741824) // ~1 GB so far
-		return &pb.ListDVRRecordingsResponse{
-			DvrRecordings: []*pb.DVRInfo{
+		return &sharedpb.ListDVRRecordingsResponse{
+			DvrRecordings: []*sharedpb.DVRInfo{
 				{
 					DvrHash:         "pb_dvr_demo_1",
 					InternalName:    "stream_demo_1",
@@ -1106,7 +1110,7 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 					UpdatedAt:       timestamppb.New(now),
 				},
 			},
-			Pagination: &pb.CursorPaginationResponse{
+			Pagination: &commonpb.CursorPaginationResponse{
 				TotalCount:  2,
 				HasNextPage: false,
 			},
@@ -1176,8 +1180,8 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 }
 
 // buildStreamsPaginationRequest creates a proto pagination request from GraphQL params
-func buildStreamsPaginationRequest(first *int, after *string, last *int, before *string) *pb.CursorPaginationRequest {
-	req := &pb.CursorPaginationRequest{}
+func buildStreamsPaginationRequest(first *int, after *string, last *int, before *string) *commonpb.CursorPaginationRequest {
+	req := &commonpb.CursorPaginationRequest{}
 
 	if first != nil {
 		req.First = int32(pagination.ClampLimit(*first))
@@ -1201,7 +1205,7 @@ func buildStreamsPaginationRequest(first *int, after *string, last *int, before 
 }
 
 // buildStreamsConnectionFromResponse constructs a StreamsConnection from a gRPC response
-func (r *Resolver) buildStreamsConnectionFromResponse(resp *pb.ListStreamsResponse) *model.StreamsConnection {
+func (r *Resolver) buildStreamsConnectionFromResponse(resp *commodorepb.ListStreamsResponse) *model.StreamsConnection {
 	streams := resp.GetStreams()
 	edges := make([]*model.StreamEdge, len(streams))
 	for i, stream := range streams {
@@ -1227,7 +1231,7 @@ func (r *Resolver) buildStreamsConnectionFromResponse(resp *pb.ListStreamsRespon
 		pageInfo.EndCursor = &ec
 	}
 
-	edgeNodes := make([]*pb.Stream, 0, len(edges))
+	edgeNodes := make([]*commodorepb.Stream, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1243,7 +1247,7 @@ func (r *Resolver) buildStreamsConnectionFromResponse(resp *pb.ListStreamsRespon
 }
 
 // buildStreamsConnectionFromSlice constructs a StreamsConnection from a slice (demo mode)
-func (r *Resolver) buildStreamsConnectionFromSlice(streams []*pb.Stream, first *int, after *string, last *int, before *string) *model.StreamsConnection {
+func (r *Resolver) buildStreamsConnectionFromSlice(streams []*commodorepb.Stream, first *int, after *string, last *int, before *string) *model.StreamsConnection {
 	total := len(streams)
 
 	// Apply in-memory pagination for demo mode
@@ -1281,7 +1285,7 @@ func (r *Resolver) buildStreamsConnectionFromSlice(streams []*pb.Stream, first *
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.Stream, 0, len(edges))
+	edgeNodes := make([]*commodorepb.Stream, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1299,7 +1303,7 @@ func (r *Resolver) buildStreamsConnectionFromSlice(streams []*pb.Stream, first *
 // DoGetClipsConnection retrieves clips with Relay-style cursor pagination
 func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.ClipsConnection, error) {
 	// Build cursor pagination request with bidirectional support
-	paginationReq := &pb.CursorPaginationRequest{
+	paginationReq := &commonpb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
 	}
 	if first != nil {
@@ -1387,7 +1391,7 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 }
 
 // buildClipsConnectionFromProto constructs a ClipsConnection from proto response with keyset pagination
-func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginationResp *pb.CursorPaginationResponse) *model.ClipsConnection {
+func (r *Resolver) buildClipsConnectionFromProto(clips []*sharedpb.ClipInfo, paginationResp *commonpb.CursorPaginationResponse) *model.ClipsConnection {
 	edges := make([]*model.ClipEdge, len(clips))
 	for i, clip := range clips {
 		// Use keyset cursor (timestamp + clip_hash) for stable pagination
@@ -1416,7 +1420,7 @@ func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginatio
 		totalCount = len(clips)
 	}
 
-	edgeNodes := make([]*pb.ClipInfo, 0, len(edges))
+	edgeNodes := make([]*sharedpb.ClipInfo, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1431,7 +1435,7 @@ func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginatio
 	}
 }
 
-func applyArtifactStorageStateToClip(clip *pb.ClipInfo, state *pb.ArtifactState) {
+func applyArtifactStorageStateToClip(clip *sharedpb.ClipInfo, state *periscopepb.ArtifactState) {
 	if clip == nil || state == nil {
 		return
 	}
@@ -1448,7 +1452,7 @@ func applyArtifactStorageStateToClip(clip *pb.ClipInfo, state *pb.ArtifactState)
 	clip.IsFrozen = state.IsFrozen
 }
 
-func applyArtifactStorageStateToDVR(dvr *pb.DVRInfo, state *pb.ArtifactState) {
+func applyArtifactStorageStateToDVR(dvr *sharedpb.DVRInfo, state *periscopepb.ArtifactState) {
 	if dvr == nil || state == nil {
 		return
 	}
@@ -1471,7 +1475,7 @@ func applyArtifactStorageStateToDVR(dvr *pb.DVRInfo, state *pb.ArtifactState) {
 // DoGetDVRRecordingsConnection retrieves DVR recordings with Relay-style cursor pagination
 func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.DVRRecordingsConnection, error) {
 	// Build cursor pagination request with bidirectional support
-	paginationReq := &pb.CursorPaginationRequest{
+	paginationReq := &commonpb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
 	}
 	if first != nil {
@@ -1572,7 +1576,7 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 		totalCount = int(response.Pagination.TotalCount)
 	}
 
-	edgeNodes := make([]*pb.DVRInfo, 0, len(edges))
+	edgeNodes := make([]*sharedpb.DVRInfo, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)

@@ -7,13 +7,13 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
 	"google.golang.org/grpc"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -36,7 +36,7 @@ func newEventID() string {
 // Client represents a gRPC client for Decklog
 type Client struct {
 	conn   *grpc.ClientConn
-	client pb.DecklogServiceClient
+	client ipcpb.DecklogServiceClient
 	logger logging.Logger
 }
 
@@ -79,7 +79,7 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 
 	return &Client{
 		conn:   conn,
-		client: pb.NewDecklogServiceClient(conn),
+		client: ipcpb.NewDecklogServiceClient(conn),
 		logger: logger,
 	}, nil
 }
@@ -103,7 +103,7 @@ func (c *Client) Health(ctx context.Context, service string) (grpc_health_v1.Hea
 // BatchedClient provides direct protobuf event sending for services like Foghorn
 type BatchedClient struct {
 	conn         *grpc.ClientConn
-	client       pb.DecklogServiceClient
+	client       ipcpb.DecklogServiceClient
 	logger       logging.Logger
 	source       string
 	serviceToken string
@@ -192,7 +192,7 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 
 	client := &BatchedClient{
 		conn:         conn,
-		client:       pb.NewDecklogServiceClient(conn),
+		client:       ipcpb.NewDecklogServiceClient(conn),
 		logger:       logger,
 		source:       source,
 		serviceToken: cfg.ServiceToken,
@@ -229,7 +229,7 @@ func (c *BatchedClient) authContextFrom(ctx context.Context) context.Context {
 // come from the BatchedClientConfig captured at construction. Decklog still
 // backfills at ingest as a safety net, but producer-side stamping is the
 // preferred path so cross-region failovers don't get the wrong source label.
-func (c *BatchedClient) stampTriggerEnvelope(trigger *pb.MistTrigger) {
+func (c *BatchedClient) stampTriggerEnvelope(trigger *ipcpb.MistTrigger) {
 	if trigger == nil {
 		return
 	}
@@ -251,7 +251,7 @@ func (c *BatchedClient) stampTriggerEnvelope(trigger *pb.MistTrigger) {
 // stampServiceEnvelope fills envelope v2 fields on a ServiceEvent when the
 // caller didn't set them. Mirrors stampTriggerEnvelope but ServiceEvent has
 // the source_cluster_id field directly (no oneof).
-func (c *BatchedClient) stampServiceEnvelope(event *pb.ServiceEvent) {
+func (c *BatchedClient) stampServiceEnvelope(event *ipcpb.ServiceEvent) {
 	if event == nil {
 		return
 	}
@@ -273,7 +273,7 @@ func (c *BatchedClient) stampServiceEnvelope(event *pb.ServiceEvent) {
 // The proto reuses gateway-specific fields (gateway_region, cluster_id) for
 // the source_* roles per the proto's own comment; we still stamp event_id
 // and schema_version + fall back the cluster/region pair where helpful.
-func (c *BatchedClient) stampGatewayEnvelope(event *pb.GatewayTelemetryEvent) {
+func (c *BatchedClient) stampGatewayEnvelope(event *ipcpb.GatewayTelemetryEvent) {
 	if event == nil {
 		return
 	}
@@ -286,14 +286,14 @@ func (c *BatchedClient) stampGatewayEnvelope(event *pb.GatewayTelemetryEvent) {
 }
 
 // SendTrigger sends an enriched MistTrigger to Decklog
-func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
+func (c *BatchedClient) SendTrigger(trigger *ipcpb.MistTrigger) error {
 	return c.SendTriggerContext(context.Background(), trigger)
 }
 
 // SendTriggerContext sends an enriched MistTrigger to Decklog with caller-owned
 // cancellation/deadline. Batch flushers use this so a stuck Decklog call cannot
 // stall their drain loop indefinitely.
-func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *pb.MistTrigger) error {
+func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *ipcpb.MistTrigger) error {
 	c.stampTriggerEnvelope(trigger)
 	ctx = c.authContextFrom(ctx)
 	_, err := c.client.SendEvent(ctx, trigger)
@@ -316,12 +316,12 @@ func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *pb.Mist
 }
 
 // SendLoadBalancing sends load balancing data to Decklog
-func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
+func (c *BatchedClient) SendLoadBalancing(data *ipcpb.LoadBalancingData) error {
 	ctx := c.authContext()
 	// Wrap into unified envelope
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "LOAD_BALANCING",
-		TriggerPayload: &pb.MistTrigger_LoadBalancingData{
+		TriggerPayload: &ipcpb.MistTrigger_LoadBalancingData{
 			LoadBalancingData: data,
 		},
 	}
@@ -356,11 +356,11 @@ func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
 }
 
 // SendClipLifecycle sends clip lifecycle data to Decklog
-func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
+func (c *BatchedClient) SendClipLifecycle(data *ipcpb.ClipLifecycleData) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "CLIP_LIFECYCLE",
-		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{
 			ClipLifecycleData: data,
 		},
 	}
@@ -392,7 +392,7 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 	}).Debug("Clip lifecycle data sent to Decklog")
 
 	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		data.GetClipHash(),
 		data.GetStreamId(),
 		clipStageToStatus(data.GetStage()),
@@ -407,11 +407,11 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 }
 
 // SendDVRLifecycle sends DVR lifecycle data to Decklog
-func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
+func (c *BatchedClient) SendDVRLifecycle(data *ipcpb.DVRLifecycleData) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "DVR_LIFECYCLE",
-		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_DvrLifecycleData{
 			DvrLifecycleData: data,
 		},
 	}
@@ -443,7 +443,7 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 	}).Debug("DVR lifecycle data sent to Decklog")
 
 	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+		ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 		data.GetDvrHash(),
 		data.GetStreamId(),
 		dvrStatusToStatus(data.GetStatus()),
@@ -458,11 +458,11 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 }
 
 // SendVodLifecycle sends VOD lifecycle data to Decklog
-func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
+func (c *BatchedClient) SendVodLifecycle(data *ipcpb.VodLifecycleData) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "VOD_LIFECYCLE",
-		TriggerPayload: &pb.MistTrigger_VodLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{
 			VodLifecycleData: data,
 		},
 	}
@@ -490,7 +490,7 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 	}).Debug("VOD lifecycle data sent to Decklog")
 
 	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
-		pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 		data.GetVodHash(),
 		"",
 		vodStatusToStatus(data.GetStatus()),
@@ -504,7 +504,7 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 	return nil
 }
 
-func (c *BatchedClient) emitArtifactLifecycleEvent(event *pb.ServiceEvent) {
+func (c *BatchedClient) emitArtifactLifecycleEvent(event *ipcpb.ServiceEvent) {
 	if c == nil || event == nil || c.client == nil {
 		return
 	}
@@ -515,7 +515,7 @@ func (c *BatchedClient) emitArtifactLifecycleEvent(event *pb.ServiceEvent) {
 		event.Timestamp = timestamppb.Now()
 	}
 	c.stampServiceEnvelope(event)
-	go func(ev *pb.ServiceEvent) {
+	go func(ev *ipcpb.ServiceEvent) {
 		if _, err := c.client.SendServiceEvent(c.authContext(), ev); err != nil {
 			c.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit artifact lifecycle service event")
 		}
@@ -523,16 +523,16 @@ func (c *BatchedClient) emitArtifactLifecycleEvent(event *pb.ServiceEvent) {
 }
 
 func buildArtifactLifecycleEvent(
-	artifactType pb.ArtifactEvent_ArtifactType,
+	artifactType ipcpb.ArtifactEvent_ArtifactType,
 	artifactID, streamID, status string,
 	startedAt, completedAt, expiresAt *int64,
 	tenantID, userID string,
-) *pb.ServiceEvent {
+) *ipcpb.ServiceEvent {
 	if artifactID == "" || tenantID == "" {
 		return nil
 	}
 
-	payload := &pb.ArtifactEvent{
+	payload := &ipcpb.ArtifactEvent{
 		ArtifactType: artifactType,
 		ArtifactId:   artifactID,
 		StreamId:     streamID,
@@ -548,66 +548,66 @@ func buildArtifactLifecycleEvent(
 		payload.ExpiresAt = expiresAt
 	}
 
-	return &pb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    "artifact_lifecycle",
 		Source:       "foghorn",
 		TenantId:     tenantID,
 		UserId:       userID,
 		ResourceType: "artifact",
 		ResourceId:   artifactID,
-		Payload:      &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
 	}
 }
 
-func clipStageToStatus(stage pb.ClipLifecycleData_Stage) string {
+func clipStageToStatus(stage ipcpb.ClipLifecycleData_Stage) string {
 	switch stage {
-	case pb.ClipLifecycleData_STAGE_REQUESTED:
+	case ipcpb.ClipLifecycleData_STAGE_REQUESTED:
 		return "requested"
-	case pb.ClipLifecycleData_STAGE_QUEUED:
+	case ipcpb.ClipLifecycleData_STAGE_QUEUED:
 		return "queued"
-	case pb.ClipLifecycleData_STAGE_PROGRESS:
+	case ipcpb.ClipLifecycleData_STAGE_PROGRESS:
 		return "processing"
-	case pb.ClipLifecycleData_STAGE_DONE:
+	case ipcpb.ClipLifecycleData_STAGE_DONE:
 		return "completed"
-	case pb.ClipLifecycleData_STAGE_FAILED:
+	case ipcpb.ClipLifecycleData_STAGE_FAILED:
 		return "failed"
-	case pb.ClipLifecycleData_STAGE_DELETED:
+	case ipcpb.ClipLifecycleData_STAGE_DELETED:
 		return "deleted"
 	default:
 		return "unknown"
 	}
 }
 
-func dvrStatusToStatus(status pb.DVRLifecycleData_Status) string {
+func dvrStatusToStatus(status ipcpb.DVRLifecycleData_Status) string {
 	switch status {
-	case pb.DVRLifecycleData_STATUS_STARTED:
+	case ipcpb.DVRLifecycleData_STATUS_STARTED:
 		return "started"
-	case pb.DVRLifecycleData_STATUS_RECORDING:
+	case ipcpb.DVRLifecycleData_STATUS_RECORDING:
 		return "recording"
-	case pb.DVRLifecycleData_STATUS_STOPPED:
+	case ipcpb.DVRLifecycleData_STATUS_STOPPED:
 		return "stopped"
-	case pb.DVRLifecycleData_STATUS_FAILED:
+	case ipcpb.DVRLifecycleData_STATUS_FAILED:
 		return "failed"
-	case pb.DVRLifecycleData_STATUS_DELETED:
+	case ipcpb.DVRLifecycleData_STATUS_DELETED:
 		return "deleted"
 	default:
 		return "unknown"
 	}
 }
 
-func vodStatusToStatus(status pb.VodLifecycleData_Status) string {
+func vodStatusToStatus(status ipcpb.VodLifecycleData_Status) string {
 	switch status {
-	case pb.VodLifecycleData_STATUS_REQUESTED:
+	case ipcpb.VodLifecycleData_STATUS_REQUESTED:
 		return "requested"
-	case pb.VodLifecycleData_STATUS_UPLOADING:
+	case ipcpb.VodLifecycleData_STATUS_UPLOADING:
 		return "uploading"
-	case pb.VodLifecycleData_STATUS_PROCESSING:
+	case ipcpb.VodLifecycleData_STATUS_PROCESSING:
 		return "processing"
-	case pb.VodLifecycleData_STATUS_COMPLETED:
+	case ipcpb.VodLifecycleData_STATUS_COMPLETED:
 		return "completed"
-	case pb.VodLifecycleData_STATUS_FAILED:
+	case ipcpb.VodLifecycleData_STATUS_FAILED:
 		return "failed"
-	case pb.VodLifecycleData_STATUS_DELETED:
+	case ipcpb.VodLifecycleData_STATUS_DELETED:
 		return "deleted"
 	default:
 		return "unknown"
@@ -644,11 +644,11 @@ func (c *BatchedClient) Health(ctx context.Context, service string) (grpc_health
 }
 
 // SendAPIRequestBatch sends aggregated API request metrics to Decklog
-func (c *BatchedClient) SendAPIRequestBatch(data *pb.APIRequestBatch) error {
+func (c *BatchedClient) SendAPIRequestBatch(data *ipcpb.APIRequestBatch) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "API_REQUEST_BATCH",
-		TriggerPayload: &pb.MistTrigger_ApiRequestBatch{
+		TriggerPayload: &ipcpb.MistTrigger_ApiRequestBatch{
 			ApiRequestBatch: data,
 		},
 	}
@@ -672,12 +672,12 @@ func (c *BatchedClient) SendAPIRequestBatch(data *pb.APIRequestBatch) error {
 }
 
 // SendMessageLifecycle sends messaging lifecycle data to Decklog for real-time UI updates
-func (c *BatchedClient) SendMessageLifecycle(data *pb.MessageLifecycleData) error {
+func (c *BatchedClient) SendMessageLifecycle(data *ipcpb.MessageLifecycleData) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "MESSAGE_LIFECYCLE",
 		TenantId:    data.TenantId,
-		TriggerPayload: &pb.MistTrigger_MessageLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_MessageLifecycleData{
 			MessageLifecycleData: data,
 		},
 	}
@@ -701,12 +701,12 @@ func (c *BatchedClient) SendMessageLifecycle(data *pb.MessageLifecycleData) erro
 }
 
 // SendFederationEvent sends a federation operation event to Decklog
-func (c *BatchedClient) SendFederationEvent(data *pb.FederationEventData) error {
+func (c *BatchedClient) SendFederationEvent(data *ipcpb.FederationEventData) error {
 	ctx := c.authContext()
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "FEDERATION_EVENT",
 		TenantId:    data.TenantId,
-		TriggerPayload: &pb.MistTrigger_FederationEventData{
+		TriggerPayload: &ipcpb.MistTrigger_FederationEventData{
 			FederationEventData: data,
 		},
 	}
@@ -746,7 +746,7 @@ func (c *BatchedClient) disabled() bool { return c == nil || c.client == nil }
 // gateway to Decklog. The event must carry at least one tenant id (stream or
 // cluster owner); Decklog rejects the RPC otherwise. When the client was
 // constructed in Optional mode without a target, this is a quiet no-op.
-func (c *BatchedClient) SendGatewayTelemetry(event *pb.GatewayTelemetryEvent) error {
+func (c *BatchedClient) SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent) error {
 	if c.disabled() {
 		return nil
 	}
@@ -765,7 +765,7 @@ func (c *BatchedClient) SendGatewayTelemetry(event *pb.GatewayTelemetryEvent) er
 }
 
 // SendServiceEvent sends a service-plane event to Decklog (service_events topic).
-func (c *BatchedClient) SendServiceEvent(event *pb.ServiceEvent) error {
+func (c *BatchedClient) SendServiceEvent(event *ipcpb.ServiceEvent) error {
 	if c.disabled() {
 		return nil
 	}

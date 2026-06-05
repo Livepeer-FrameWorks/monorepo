@@ -1,9 +1,8 @@
 package model
 
 import (
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // WalletIdentity represents a linked cryptocurrency wallet.
@@ -20,10 +19,10 @@ func (WalletIdentity) IsLinkWalletResult() {}
 
 // WalletLoginPayload represents a successful wallet login response.
 type WalletLoginPayload struct {
-	Token        string    `json:"token"`
-	User         *pb.User  `json:"user"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	IsNewAccount bool      `json:"isNewAccount"`
+	Token        string            `json:"token"`
+	User         *commodorepb.User `json:"user"`
+	ExpiresAt    time.Time         `json:"expiresAt"`
+	IsNewAccount bool              `json:"isNewAccount"`
 }
 
 // IsWalletLoginResult implements the WalletLoginResult union interface.

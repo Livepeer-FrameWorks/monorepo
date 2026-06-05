@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -32,12 +34,12 @@ const (
 // transactionally atomic with the caller's billing state mutation. For
 // strict atomicity, callers should switch to the tx-aware variant on
 // PurserServer.EnqueueBillingEventTx when they hold their own tx.
-func emitBillingEvent(eventType, tenantID, resourceType, resourceID string, payload *pb.BillingEvent) {
+func emitBillingEvent(db *sql.DB, logger logging.Logger, eventType, tenantID, resourceType, resourceID string, payload *ipcpb.BillingEvent) {
 	if db == nil || tenantID == "" {
 		return
 	}
 	if payload == nil {
-		payload = &pb.BillingEvent{}
+		payload = &ipcpb.BillingEvent{}
 	}
 	if payload.TenantId == "" {
 		payload.TenantId = tenantID

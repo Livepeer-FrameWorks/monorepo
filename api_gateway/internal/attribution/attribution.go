@@ -1,11 +1,10 @@
 package attribution
 
 import (
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"net/http"
 	"net/url"
 	"strings"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // IsAgent checks whether the request comes from an AI agent based on the
@@ -24,7 +23,7 @@ func IsAgent(r *http.Request) bool {
 
 // FromRequest builds a SignupAttribution from an HTTP request, extracting UTM
 // parameters, referrer, landing page, referral code, and agent detection.
-func FromRequest(r *http.Request, signupChannel, signupMethod string) *pb.SignupAttribution {
+func FromRequest(r *http.Request, signupChannel, signupMethod string) *commonpb.SignupAttribution {
 	if r == nil {
 		return nil
 	}
@@ -34,7 +33,7 @@ func FromRequest(r *http.Request, signupChannel, signupMethod string) *pb.Signup
 		referralCode = query.Get("ref")
 	}
 	landingPage := sanitizeURL(r.URL.String())
-	return &pb.SignupAttribution{
+	return &commonpb.SignupAttribution{
 		SignupChannel: signupChannel,
 		SignupMethod:  signupMethod,
 		UtmSource:     query.Get("utm_source"),
@@ -51,9 +50,9 @@ func FromRequest(r *http.Request, signupChannel, signupMethod string) *pb.Signup
 
 // Enrich merges HTTP-level signals (referer, landing page, agent detection)
 // into an existing attribution that was partially populated from the request body.
-func Enrich(r *http.Request, attr *pb.SignupAttribution) *pb.SignupAttribution {
+func Enrich(r *http.Request, attr *commonpb.SignupAttribution) *commonpb.SignupAttribution {
 	if attr == nil {
-		attr = &pb.SignupAttribution{}
+		attr = &commonpb.SignupAttribution{}
 	}
 	if r == nil {
 		return attr

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 func TestDemoVodUploadStatusDoesNotRequireTenantContext(t *testing.T) {
@@ -16,7 +16,7 @@ func TestDemoVodUploadStatusDoesNotRequireTenantContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DoGetVodUploadStatusProto: %v", err)
 	}
-	if resp.State != pb.VodStatus_VOD_STATUS_UPLOADING {
+	if resp.State != sharedpb.VodStatus_VOD_STATUS_UPLOADING {
 		t.Fatalf("State = %v, want uploading", resp.State)
 	}
 	if len(resp.UploadedParts) == 0 || len(resp.MissingParts) == 0 {

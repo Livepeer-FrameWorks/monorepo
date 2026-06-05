@@ -7,13 +7,13 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
 )
 
 type captureMistTriggerProcessor struct {
-	last *pb.MistTrigger
+	last *ipcpb.MistTrigger
 	err  error
 }
 
@@ -21,7 +21,7 @@ func (c *captureMistTriggerProcessor) ProcessTrigger(_ string, _ []byte, _ strin
 	return "", false, nil
 }
 
-func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error) {
+func (c *captureMistTriggerProcessor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	c.last = trigger
 	return "", false, c.err
 }
@@ -42,12 +42,12 @@ func TestProcessMistTrigger_PopulatesLocalClusterIDWhenMissing(t *testing.T) {
 	mistTriggerProcessor = capture
 	localClusterID = "cluster-local"
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		Blocking:    false,
 		RequestId:   "req-1",
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
 		},
 	}
 
@@ -73,12 +73,12 @@ func TestProcessMistTrigger_DurableAckReportsProcessorError(t *testing.T) {
 	localClusterID = "cluster-local"
 	stream := &captureStream{}
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "USER_END",
 		Blocking:    false,
 		RequestId:   "req-failed",
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{StreamName: "live+abc"},
 		},
 	}
 
@@ -120,12 +120,12 @@ func TestProcessMistTrigger_DropsStaleControlStream(t *testing.T) {
 	mistTriggerProcessor = capture
 	localClusterID = "cluster-local"
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "USER_END",
 		Blocking:    false,
 		RequestId:   "req-stale",
-		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
-			ViewerDisconnect: &pb.ViewerDisconnectTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{StreamName: "live+abc"},
 		},
 	}
 
@@ -165,12 +165,12 @@ func TestProcessMistTrigger_PrefersNodeRegistryCluster(t *testing.T) {
 	mistTriggerProcessor = capture
 	localClusterID = "cluster-local"
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		Blocking:    false,
 		RequestId:   "req-3",
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
 		},
 	}
 
@@ -197,13 +197,13 @@ func TestProcessMistTrigger_DoesNotOverwriteProvidedClusterID(t *testing.T) {
 	localClusterID = "cluster-local"
 
 	providedCluster := "cluster-from-helmsman"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		Blocking:    false,
 		RequestId:   "req-2",
 		ClusterId:   &providedCluster,
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
 		},
 	}
 
@@ -233,13 +233,13 @@ func TestProcessMistTrigger_NodeRegistryClusterOverridesProvidedClusterID(t *tes
 	localClusterID = "cluster-local"
 
 	providedCluster := "cluster-from-trigger"
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "PUSH_END",
 		Blocking:    false,
 		RequestId:   "req-4",
 		ClusterId:   &providedCluster,
-		TriggerPayload: &pb.MistTrigger_PushEnd{
-			PushEnd: &pb.PushEndTrigger{StreamName: "live+abc"},
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+			PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+abc"},
 		},
 	}
 

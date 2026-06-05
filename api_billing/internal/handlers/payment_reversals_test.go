@@ -11,23 +11,21 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func newReversalMock(t *testing.T) (sqlmock.Sqlmock, func()) {
+func newReversalMock(t *testing.T) (*Service, sqlmock.Sqlmock, func()) {
 	t.Helper()
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	db = mockDB
-	logger = logrus.New()
+	s := &Service{db: mockDB, logger: logrus.New()}
 	cleanup := func() {
 		_ = mockDB.Close()
-		db = nil
 	}
-	return mock, cleanup
+	return s, mock, cleanup
 }
 
 func TestApplyProviderReversal_StripeRefundIdempotentReplay(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -45,7 +43,7 @@ func TestApplyProviderReversal_StripeRefundIdempotentReplay(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectCommit()
 
-	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+	applied, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "refund",
 		providerReversalID: "re_dup",
@@ -67,7 +65,7 @@ func TestApplyProviderReversal_StripeRefundIdempotentReplay(t *testing.T) {
 }
 
 func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -95,7 +93,7 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}))
 	mock.ExpectCommit()
 
-	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+	applied, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "refund",
 		providerReversalID: "re_full",
@@ -117,7 +115,7 @@ func TestApplyProviderReversal_StripeRefundReopensInvoiceWhenNetDropsBelowAmount
 }
 
 func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -144,7 +142,7 @@ func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner", "cluster", "currency", "gross", "fee", "payable", "period_start", "period_end"}))
 	mock.ExpectCommit()
 
-	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+	applied, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "dispute",
 		providerReversalID: "du_pending",
@@ -166,7 +164,7 @@ func TestApplyProviderReversal_TransitionsPendingDisputeToSucceeded(t *testing.T
 }
 
 func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	now := time.Now()
@@ -189,7 +187,7 @@ func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	tx, err := db.BeginTx(context.Background(), nil)
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
@@ -205,7 +203,7 @@ func TestApplyOperatorCreditClawbackLinksReversalAuditRow(t *testing.T) {
 }
 
 func TestApplyProviderReversal_CurrencyMismatchRejected(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -215,7 +213,7 @@ func TestApplyProviderReversal_CurrencyMismatchRejected(t *testing.T) {
 			AddRow("payment-3", "invoice-3", "tenant-3", "EUR"))
 	mock.ExpectRollback()
 
-	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+	applied, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "refund",
 		providerReversalID: "re_curr",
@@ -235,7 +233,7 @@ func TestApplyProviderReversal_CurrencyMismatchRejected(t *testing.T) {
 }
 
 func TestApplyProviderReversal_MissingLocalRefIsBlockedRetryable(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -247,7 +245,7 @@ func TestApplyProviderReversal_MissingLocalRefIsBlockedRetryable(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	_, err := applyProviderReversal(context.Background(), providerReversalInput{
+	_, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "refund",
 		providerReversalID: "re_orphan",
@@ -385,7 +383,7 @@ func TestMoneyConservationSyntheticProviderFlows(t *testing.T) {
 // the prepaid balance below zero, operator_review_required is flipped TRUE
 // so ops can decide whether to recollect or write off.
 func TestApplyProviderReversal_PrepaidTopupRefundFlagsNegativeBalance(t *testing.T) {
-	mock, done := newReversalMock(t)
+	s, mock, done := newReversalMock(t)
 	defer done()
 
 	mock.ExpectBegin()
@@ -413,7 +411,7 @@ func TestApplyProviderReversal_PrepaidTopupRefundFlagsNegativeBalance(t *testing
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	applied, err := applyProviderReversal(context.Background(), providerReversalInput{
+	applied, err := s.applyProviderReversal(context.Background(), providerReversalInput{
 		provider:           "stripe",
 		reversalType:       "refund",
 		providerReversalID: "re_topup",

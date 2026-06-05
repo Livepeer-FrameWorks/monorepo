@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -83,7 +83,7 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 	}
 
 	// Call Commodore to create clip - let API handle default duration
-	resp, err := clients.Commodore.CreateClip(ctx, &pb.CreateClipRequest{
+	resp, err := clients.Commodore.CreateClip(ctx, &sharedpb.CreateClipRequest{
 		TenantId:    tenantID,
 		StreamId:    &streamID,
 		Format:      "mp4",
@@ -91,7 +91,7 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 		Description: args.Description,
 		StartUnix:   args.StartSec,
 		DurationSec: args.DurationSec,
-		Mode:        pb.ClipMode_CLIP_MODE_RELATIVE,
+		Mode:        sharedpb.ClipMode_CLIP_MODE_RELATIVE,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create clip")

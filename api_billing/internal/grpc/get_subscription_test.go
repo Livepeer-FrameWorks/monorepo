@@ -9,7 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 func testTime() time.Time { return time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC) }
@@ -67,7 +67,7 @@ func TestGetSubscription_LoadsOverrides(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).
 			AddRow("recording_retention_days", "180"))
 
-	resp, err := server.GetSubscription(context.Background(), &pb.GetSubscriptionRequest{TenantId: tenantID})
+	resp, err := server.GetSubscription(context.Background(), &purserpb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("GetSubscription: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestGetSubscription_AllowsNullBillingEmail(t *testing.T) {
 		WithArgs(subID).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-	resp, err := server.GetSubscription(context.Background(), &pb.GetSubscriptionRequest{TenantId: tenantID})
+	resp, err := server.GetSubscription(context.Background(), &purserpb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("GetSubscription: %v", err)
 	}

@@ -3,26 +3,25 @@ package control
 import (
 	"context"
 	"errors"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	"strings"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeCrossClusterFedClient struct {
-	responses []*pb.PrepareArtifactResponse
+	responses []*foghornfederationpb.PrepareArtifactResponse
 	errs      []error
 	calls     []struct {
 		clusterID string
-		req       *pb.PrepareArtifactRequest
+		req       *foghornfederationpb.PrepareArtifactRequest
 	}
 }
 
-func (f *fakeCrossClusterFedClient) PrepareArtifact(_ context.Context, clusterID, _ string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+func (f *fakeCrossClusterFedClient) PrepareArtifact(_ context.Context, clusterID, _ string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	idx := len(f.calls)
 	f.calls = append(f.calls, struct {
 		clusterID string
-		req       *pb.PrepareArtifactRequest
+		req       *foghornfederationpb.PrepareArtifactRequest
 	}{clusterID, req})
 	if idx < len(f.errs) && f.errs[idx] != nil {
 		return nil, f.errs[idx]
@@ -30,7 +29,7 @@ func (f *fakeCrossClusterFedClient) PrepareArtifact(_ context.Context, clusterID
 	if idx < len(f.responses) {
 		return f.responses[idx], nil
 	}
-	return &pb.PrepareArtifactResponse{}, nil
+	return &foghornfederationpb.PrepareArtifactResponse{}, nil
 }
 
 type fakeCrossClusterPeerResolver struct {
@@ -51,7 +50,7 @@ func makeCCDeps(fed *fakeCrossClusterFedClient, addrs map[string]string) *CrossC
 
 func TestResolve_HappyPath_ReturnsURL(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{Ready: true, Url: "https://peer/clip.mp4"},
 		},
 	}
@@ -104,7 +103,7 @@ func TestResolve_PrepareArtifactRPCFailure_Wrapped(t *testing.T) {
 
 func TestResolve_OriginErrorString_Surfaced(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{Error: "artifact metadata inconsistent"},
 		},
 	}
@@ -118,7 +117,7 @@ func TestResolve_OriginErrorString_Surfaced(t *testing.T) {
 
 func TestResolve_NotReady_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{Ready: false},
 		},
 	}
@@ -132,7 +131,7 @@ func TestResolve_NotReady_Refused(t *testing.T) {
 
 func TestResolve_StorageRedirect_FollowsToTarget(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-storage"},
 			{Ready: true, Url: "https://storage/clip.mp4"},
 		},
@@ -161,7 +160,7 @@ func TestResolve_StorageRedirect_Unauthorized_AbortsBeforeSecondDial(t *testing.
 	// SSRF gate: a redirect target outside the tenant's allowlist must be
 	// refused BEFORE the second PrepareArtifact dial (which carries tenant_id).
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-evil"},
 			{Ready: true, Url: "https://evil/clip.mp4"}, // must never be reached
 		},
@@ -184,7 +183,7 @@ func TestResolve_StorageRedirect_Unauthorized_AbortsBeforeSecondDial(t *testing.
 func TestResolve_StorageRedirect_Authorized_FollowsToTarget(t *testing.T) {
 	// A redirect the predicate allows proceeds to the second dial.
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-storage"},
 			{Ready: true, Url: "https://storage/clip.mp4"},
 		},
@@ -205,7 +204,7 @@ func TestResolve_StorageRedirect_Authorized_FollowsToTarget(t *testing.T) {
 
 func TestResolve_StorageRedirect_LoopToOrigin_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-origin"},
 		},
 	}
@@ -219,7 +218,7 @@ func TestResolve_StorageRedirect_LoopToOrigin_Refused(t *testing.T) {
 
 func TestResolve_StorageRedirect_LoopToLocal_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-local"},
 		},
 	}
@@ -233,7 +232,7 @@ func TestResolve_StorageRedirect_LoopToLocal_Refused(t *testing.T) {
 
 func TestResolve_StorageRedirect_ChainedRedirect_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-storage"},
 			{RedirectClusterId: "cluster-storage-2"}, // illegal: chained redirect
 		},
@@ -252,7 +251,7 @@ func TestResolve_StorageRedirect_ChainedRedirect_Refused(t *testing.T) {
 
 func TestResolve_StorageRedirect_UnknownTargetAddr_Refused(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
-		responses: []*pb.PrepareArtifactResponse{
+		responses: []*foghornfederationpb.PrepareArtifactResponse{
 			{RedirectClusterId: "cluster-storage"},
 		},
 	}

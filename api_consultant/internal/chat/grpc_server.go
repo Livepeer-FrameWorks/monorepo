@@ -11,7 +11,7 @@ import (
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -60,7 +60,7 @@ type GRPCServerConfig struct {
 
 // GRPCServer implements pb.SkipperChatServiceServer.
 type GRPCServer struct {
-	pb.UnimplementedSkipperChatServiceServer
+	skipperpb.UnimplementedSkipperChatServiceServer
 	conversations      *ConversationStore
 	orchestrator       *Orchestrator
 	usageLogger        skipper.UsageLogger
@@ -87,7 +87,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *GRPCServer {
 	}
 }
 
-func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamingServer[pb.SkipperChatEvent]) error {
+func (s *GRPCServer) Chat(req *skipperpb.SkipperChatRequest, stream grpc.ServerStreamingServer[skipperpb.SkipperChatEvent]) error {
 	startedAt := time.Now()
 	ctx := stream.Context()
 
@@ -163,15 +163,15 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	}
 
 	if metaEvt := buildGRPCMeta(result); metaEvt != nil {
-		if sendErr := stream.Send(&pb.SkipperChatEvent{
-			Event: &pb.SkipperChatEvent_Meta{Meta: metaEvt},
+		if sendErr := stream.Send(&skipperpb.SkipperChatEvent{
+			Event: &skipperpb.SkipperChatEvent_Meta{Meta: metaEvt},
 		}); sendErr != nil {
 			return sendErr
 		}
 	}
 
-	if sendErr := stream.Send(&pb.SkipperChatEvent{
-		Event: &pb.SkipperChatEvent_Done{Done: &pb.SkipperChatDone{
+	if sendErr := stream.Send(&skipperpb.SkipperChatEvent{
+		Event: &skipperpb.SkipperChatEvent_Done{Done: &skipperpb.SkipperChatDone{
 			ConversationId: conversationID,
 			TokensInput:    int32(result.TokenCounts.Input),
 			TokensOutput:   int32(result.TokenCounts.Output),
@@ -208,7 +208,7 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	return nil
 }
 
-func (s *GRPCServer) ListConversations(ctx context.Context, req *pb.ListSkipperConversationsRequest) (*pb.ListSkipperConversationsResponse, error) {
+func (s *GRPCServer) ListConversations(ctx context.Context, req *skipperpb.ListSkipperConversationsRequest) (*skipperpb.ListSkipperConversationsResponse, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -230,19 +230,19 @@ func (s *GRPCServer) ListConversations(ctx context.Context, req *pb.ListSkipperC
 		return nil, status.Errorf(codes.Internal, "failed to list conversations: %v", err)
 	}
 
-	out := make([]*pb.SkipperConversationSummary, 0, len(summaries))
+	out := make([]*skipperpb.SkipperConversationSummary, 0, len(summaries))
 	for _, sum := range summaries {
-		out = append(out, &pb.SkipperConversationSummary{
+		out = append(out, &skipperpb.SkipperConversationSummary{
 			Id:        sum.ID,
 			Title:     sum.Title,
 			CreatedAt: timestamppb.New(sum.CreatedAt),
 			UpdatedAt: timestamppb.New(sum.UpdatedAt),
 		})
 	}
-	return &pb.ListSkipperConversationsResponse{Conversations: out}, nil
+	return &skipperpb.ListSkipperConversationsResponse{Conversations: out}, nil
 }
 
-func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConversationRequest) (*pb.SkipperConversationDetail, error) {
+func (s *GRPCServer) GetConversation(ctx context.Context, req *skipperpb.GetSkipperConversationRequest) (*skipperpb.SkipperConversationDetail, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -265,9 +265,9 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 		return nil, status.Errorf(codes.Internal, "failed to get conversation: %v", err)
 	}
 
-	msgs := make([]*pb.SkipperChatMessage, 0, len(convo.Messages))
+	msgs := make([]*skipperpb.SkipperChatMessage, 0, len(convo.Messages))
 	for _, m := range convo.Messages {
-		msg := &pb.SkipperChatMessage{
+		msg := &skipperpb.SkipperChatMessage{
 			Id:               m.ID,
 			Role:             m.Role,
 			Content:          m.Content,
@@ -284,7 +284,7 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 		msgs = append(msgs, msg)
 	}
 
-	return &pb.SkipperConversationDetail{
+	return &skipperpb.SkipperConversationDetail{
 		Id:        convo.ID,
 		Title:     convo.Title,
 		Messages:  msgs,
@@ -293,7 +293,7 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 	}, nil
 }
 
-func (s *GRPCServer) DeleteConversation(ctx context.Context, req *pb.DeleteSkipperConversationRequest) (*pb.DeleteSkipperConversationResponse, error) {
+func (s *GRPCServer) DeleteConversation(ctx context.Context, req *skipperpb.DeleteSkipperConversationRequest) (*skipperpb.DeleteSkipperConversationResponse, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -315,10 +315,10 @@ func (s *GRPCServer) DeleteConversation(ctx context.Context, req *pb.DeleteSkipp
 		return nil, status.Errorf(codes.Internal, "failed to delete conversation: %v", err)
 	}
 
-	return &pb.DeleteSkipperConversationResponse{}, nil
+	return &skipperpb.DeleteSkipperConversationResponse{}, nil
 }
 
-func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *pb.UpdateSkipperConversationTitleRequest) (*pb.SkipperConversationSummary, error) {
+func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *skipperpb.UpdateSkipperConversationTitleRequest) (*skipperpb.SkipperConversationSummary, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -348,7 +348,7 @@ func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *pb.Update
 	if getErr != nil {
 		return nil, status.Errorf(codes.Internal, "failed to load conversation: %v", getErr)
 	}
-	return &pb.SkipperConversationSummary{
+	return &skipperpb.SkipperConversationSummary{
 		Id:        id,
 		Title:     title,
 		CreatedAt: timestamppb.New(convo.CreatedAt),
@@ -373,29 +373,29 @@ func (s *GRPCServer) logUsage(ctx context.Context, tenantID, userID, conversatio
 
 // grpcStreamer adapts the gRPC server stream to TokenStreamer + ToolEventStreamer.
 type grpcStreamer struct {
-	stream grpc.ServerStreamingServer[pb.SkipperChatEvent]
+	stream grpc.ServerStreamingServer[skipperpb.SkipperChatEvent]
 }
 
 func (s *grpcStreamer) SendToken(token string) error {
-	return s.stream.Send(&pb.SkipperChatEvent{
-		Event: &pb.SkipperChatEvent_Token{
-			Token: &pb.SkipperTokenChunk{Content: token},
+	return s.stream.Send(&skipperpb.SkipperChatEvent{
+		Event: &skipperpb.SkipperChatEvent_Token{
+			Token: &skipperpb.SkipperTokenChunk{Content: token},
 		},
 	})
 }
 
 func (s *grpcStreamer) SendToolStart(toolName string) error {
-	return s.stream.Send(&pb.SkipperChatEvent{
-		Event: &pb.SkipperChatEvent_ToolStart{
-			ToolStart: &pb.SkipperToolStart{ToolName: toolName},
+	return s.stream.Send(&skipperpb.SkipperChatEvent{
+		Event: &skipperpb.SkipperChatEvent_ToolStart{
+			ToolStart: &skipperpb.SkipperToolStart{ToolName: toolName},
 		},
 	})
 }
 
 func (s *grpcStreamer) SendToolEnd(toolName string, errMsg string) error {
-	return s.stream.Send(&pb.SkipperChatEvent{
-		Event: &pb.SkipperChatEvent_ToolEnd{
-			ToolEnd: &pb.SkipperToolEnd{ToolName: toolName, Error: errMsg},
+	return s.stream.Send(&skipperpb.SkipperChatEvent{
+		Event: &skipperpb.SkipperChatEvent_ToolEnd{
+			ToolEnd: &skipperpb.SkipperToolEnd{ToolName: toolName, Error: errMsg},
 		},
 	})
 }
@@ -425,15 +425,15 @@ func bridgeAuthContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
-	citations := make([]*pb.SkipperCitation, 0)
-	external := make([]*pb.SkipperCitation, 0)
+func buildGRPCMeta(result OrchestratorResult) *skipperpb.SkipperChatMeta {
+	citations := make([]*skipperpb.SkipperCitation, 0)
+	external := make([]*skipperpb.SkipperCitation, 0)
 	for _, source := range result.Sources {
 		label, sourceURL, ok := sourceCitationParts(source)
 		if !ok {
 			continue
 		}
-		item := &pb.SkipperCitation{Label: label, Url: sourceURL}
+		item := &skipperpb.SkipperCitation{Label: label, Url: sourceURL}
 		switch source.Type {
 		case SourceTypeKnowledgeBase:
 			citations = append(citations, item)
@@ -448,19 +448,19 @@ func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
 		}
 	}
 
-	details := make([]*pb.SkipperToolDetail, 0, len(result.Details))
+	details := make([]*skipperpb.SkipperToolDetail, 0, len(result.Details))
 	for _, d := range result.Details {
 		payload, err := toStruct(d.Payload)
 		if err != nil {
 			continue
 		}
-		details = append(details, &pb.SkipperToolDetail{
+		details = append(details, &skipperpb.SkipperToolDetail{
 			Title:   d.Title,
 			Payload: payload,
 		})
 	}
 
-	meta := &pb.SkipperChatMeta{
+	meta := &skipperpb.SkipperChatMeta{
 		Confidence:    string(result.Confidence),
 		Citations:     citations,
 		ExternalLinks: external,
@@ -468,14 +468,14 @@ func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
 	}
 	if len(result.Blocks) > 1 {
 		for _, b := range result.Blocks {
-			pbBlock := &pb.SkipperConfidenceBlock{
+			pbBlock := &skipperpb.SkipperConfidenceBlock{
 				Content:    b.Content,
 				Confidence: string(b.Confidence),
 			}
 			for _, s := range b.Sources {
 				label, sourceURL, ok := sourceCitationParts(s)
 				if ok {
-					pbBlock.Sources = append(pbBlock.Sources, &pb.SkipperCitation{
+					pbBlock.Sources = append(pbBlock.Sources, &skipperpb.SkipperCitation{
 						Label: label, Url: sourceURL,
 					})
 				}
@@ -502,7 +502,7 @@ func toStruct(v any) (*structpb.Struct, error) {
 // Investigation reports
 // ---------------------------------------------------------------------------
 
-func (s *GRPCServer) ListReports(ctx context.Context, req *pb.ListSkipperReportsRequest) (*pb.ListSkipperReportsResponse, error) {
+func (s *GRPCServer) ListReports(ctx context.Context, req *skipperpb.ListSkipperReportsRequest) (*skipperpb.ListSkipperReportsResponse, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -531,18 +531,18 @@ func (s *GRPCServer) ListReports(ctx context.Context, req *pb.ListSkipperReports
 		return nil, status.Errorf(codes.Internal, "count unread: %v", err)
 	}
 
-	out := make([]*pb.SkipperReport, 0, len(reports))
+	out := make([]*skipperpb.SkipperReport, 0, len(reports))
 	for _, r := range reports {
 		out = append(out, reportDataToProto(r))
 	}
-	return &pb.ListSkipperReportsResponse{
+	return &skipperpb.ListSkipperReportsResponse{
 		Reports:     out,
 		TotalCount:  int32(total),
 		UnreadCount: int32(unread),
 	}, nil
 }
 
-func (s *GRPCServer) GetReport(ctx context.Context, req *pb.GetSkipperReportRequest) (*pb.SkipperReport, error) {
+func (s *GRPCServer) GetReport(ctx context.Context, req *skipperpb.GetSkipperReportRequest) (*skipperpb.SkipperReport, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -567,7 +567,7 @@ func (s *GRPCServer) GetReport(ctx context.Context, req *pb.GetSkipperReportRequ
 	return reportDataToProto(r), nil
 }
 
-func (s *GRPCServer) MarkReportsRead(ctx context.Context, req *pb.MarkSkipperReportsReadRequest) (*pb.MarkSkipperReportsReadResponse, error) {
+func (s *GRPCServer) MarkReportsRead(ctx context.Context, req *skipperpb.MarkSkipperReportsReadRequest) (*skipperpb.MarkSkipperReportsReadResponse, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -584,10 +584,10 @@ func (s *GRPCServer) MarkReportsRead(ctx context.Context, req *pb.MarkSkipperRep
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "mark read: %v", err)
 	}
-	return &pb.MarkSkipperReportsReadResponse{MarkedCount: int32(n)}, nil
+	return &skipperpb.MarkSkipperReportsReadResponse{MarkedCount: int32(n)}, nil
 }
 
-func (s *GRPCServer) GetUnreadReportCount(ctx context.Context, _ *pb.GetUnreadReportCountRequest) (*pb.GetUnreadReportCountResponse, error) {
+func (s *GRPCServer) GetUnreadReportCount(ctx context.Context, _ *skipperpb.GetUnreadReportCountRequest) (*skipperpb.GetUnreadReportCountResponse, error) {
 	ctx = bridgeAuthContext(ctx)
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
@@ -604,18 +604,18 @@ func (s *GRPCServer) GetUnreadReportCount(ctx context.Context, _ *pb.GetUnreadRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "count unread: %v", err)
 	}
-	return &pb.GetUnreadReportCountResponse{Count: int32(count)}, nil
+	return &skipperpb.GetUnreadReportCountResponse{Count: int32(count)}, nil
 }
 
-func reportDataToProto(r ReportData) *pb.SkipperReport {
-	recs := make([]*pb.SkipperReportRecommendation, 0, len(r.Recommendations))
+func reportDataToProto(r ReportData) *skipperpb.SkipperReport {
+	recs := make([]*skipperpb.SkipperReportRecommendation, 0, len(r.Recommendations))
 	for _, rec := range r.Recommendations {
-		recs = append(recs, &pb.SkipperReportRecommendation{
+		recs = append(recs, &skipperpb.SkipperReportRecommendation{
 			Text:       rec.Text,
 			Confidence: rec.Confidence,
 		})
 	}
-	out := &pb.SkipperReport{
+	out := &skipperpb.SkipperReport{
 		Id:              r.ID,
 		Trigger:         r.Trigger,
 		Summary:         r.Summary,

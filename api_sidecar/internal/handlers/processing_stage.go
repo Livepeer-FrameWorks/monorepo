@@ -14,7 +14,7 @@ import (
 
 	"frameworks/api_sidecar/internal/admission"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
 )
@@ -43,7 +43,7 @@ func unsafeWrapperExt(sourceURL string) string {
 	}
 }
 
-func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJobRequest) string {
+func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.ProcessingJobRequest) string {
 	params := req.GetParams()
 	sourceStream := strings.TrimSpace(params["source_stream_name"])
 	if sourceStream == "" {
@@ -81,7 +81,7 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *pb.ProcessingJ
 	return u.String()
 }
 
-func isClipProcessingSource(req *pb.ProcessingJobRequest) bool {
+func isClipProcessingSource(req *ipcpb.ProcessingJobRequest) bool {
 	params := req.GetParams()
 	switch strings.TrimSpace(params["source_kind"]) {
 	case "live", "dvr_rolling", "chapter":
@@ -91,7 +91,7 @@ func isClipProcessingSource(req *pb.ProcessingJobRequest) bool {
 	}
 }
 
-func (h *ProcessingJobHandler) processingOutputPath(req *pb.ProcessingJobRequest, clipSource bool) (string, string, error) {
+func (h *ProcessingJobHandler) processingOutputPath(req *ipcpb.ProcessingJobRequest, clipSource bool) (string, string, error) {
 	outputDir := filepath.Join(h.storagePath, "vod")
 	if clipSource {
 		outputStreamName := strings.TrimSpace(req.GetParams()["output_stream_name"])
@@ -103,7 +103,7 @@ func (h *ProcessingJobHandler) processingOutputPath(req *pb.ProcessingJobRequest
 	return outputDir, filepath.Join(outputDir, req.GetArtifactHash()+".mkv"), nil
 }
 
-func processingSourceExt(req *pb.ProcessingJobRequest) string {
+func processingSourceExt(req *ipcpb.ProcessingJobRequest) string {
 	format := strings.Trim(strings.ToLower(strings.TrimSpace(req.GetParams()["source_format"])), ".")
 	switch format {
 	case "mp4", "mov", "mkv", "webm", "ts":
@@ -141,11 +141,11 @@ func deriveProcessingMistHTTPBase(base string) string {
 // disk is too tight — Foghorn picks another node, or the job retries later.
 // The staged file is cleanup-eligible once processing completes (no playback
 // lease against it).
-func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *pb.ProcessingJobRequest, ext string) (string, error) {
+func (h *ProcessingJobHandler) stageUnsafeWrapper(log *logrus.Entry, req *ipcpb.ProcessingJobRequest, ext string) (string, error) {
 	return h.stageSourceToProcessingDir(log, req, req.GetSourceUrl(), ext, admission.IntentUnsafeImportStage, "unsafe-wrapper")
 }
 
-func (h *ProcessingJobHandler) stageProcessingSource(log *logrus.Entry, req *pb.ProcessingJobRequest, sourceURL string) (string, error) {
+func (h *ProcessingJobHandler) stageProcessingSource(log *logrus.Entry, req *ipcpb.ProcessingJobRequest, sourceURL string) (string, error) {
 	return h.stageSourceToProcessingDir(log, req, sourceURL, processingSourceExt(req), admission.IntentProcessingSourceStage, "processing-source")
 }
 
@@ -166,7 +166,7 @@ func cleanupProcessingStagePath(log *logrus.Entry, path string) {
 	}
 }
 
-func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req *pb.ProcessingJobRequest, sourceURL, ext string, intent admission.StorageIntent, label string) (string, error) {
+func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req *ipcpb.ProcessingJobRequest, sourceURL, ext string, intent admission.StorageIntent, label string) (string, error) {
 	sourceURL = strings.TrimSpace(sourceURL)
 	if sourceURL == "" {
 		return "", fmt.Errorf("source URL is required")
@@ -247,7 +247,7 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	return target, nil
 }
 
-func processingSourceStageTimeout(req *pb.ProcessingJobRequest) time.Duration {
+func processingSourceStageTimeout(req *ipcpb.ProcessingJobRequest) time.Duration {
 	if isClipProcessingSource(req) {
 		params := req.GetParams()
 		startUnix, startErr := strconv.ParseInt(params["source_start_unix"], 10, 64)

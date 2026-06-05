@@ -8,17 +8,17 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 type fakeNotifyFedClient struct {
 	mu    sync.Mutex
-	calls []*pb.OriginPullNotification
-	acks  []*pb.OriginPullAck
+	calls []*foghornfederationpb.OriginPullNotification
+	acks  []*foghornfederationpb.OriginPullAck
 	errs  []error
 }
 
-func (f *fakeNotifyFedClient) NotifyOriginPull(_ context.Context, _, _ string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error) {
+func (f *fakeNotifyFedClient) NotifyOriginPull(_ context.Context, _, _ string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	idx := len(f.calls)
@@ -29,7 +29,7 @@ func (f *fakeNotifyFedClient) NotifyOriginPull(_ context.Context, _, _ string, r
 	if idx < len(f.acks) {
 		return f.acks[idx], nil
 	}
-	return &pb.OriginPullAck{Accepted: true, DtscUrl: "dtsc://peer/" + req.StreamName}, nil
+	return &foghornfederationpb.OriginPullAck{Accepted: true, DtscUrl: "dtsc://peer/" + req.StreamName}, nil
 }
 
 type fakePeerResolver struct{ addrs map[string]string }
@@ -63,7 +63,7 @@ func makeDeps(t *testing.T, fed *fakeNotifyFedClient, addrs map[string]string) *
 func makeReq() ArrangeOriginPullRequest {
 	return ArrangeOriginPullRequest{
 		InternalName:    "stream-1",
-		Remote:          &pb.EdgeCandidate{NodeId: "remote-node", BaseUrl: "https://peer"},
+		Remote:          &foghornfederationpb.EdgeCandidate{NodeId: "remote-node", BaseUrl: "https://peer"},
 		RemoteCluster:   "cluster-peer",
 		TenantID:        "tenant-1",
 		DestNodeID:      "local-edge",
@@ -148,7 +148,7 @@ func TestArrange_PeerUnreachable_Refused(t *testing.T) {
 func TestArrange_NotifyRejected_Refused(t *testing.T) {
 	freshRegistry(t)
 	fed := &fakeNotifyFedClient{
-		acks: []*pb.OriginPullAck{{Accepted: false, Reason: "peer refused"}},
+		acks: []*foghornfederationpb.OriginPullAck{{Accepted: false, Reason: "peer refused"}},
 	}
 	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
 	_, err := d.ArrangeOriginPull(context.Background(), makeReq())

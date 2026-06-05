@@ -5,7 +5,8 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 // ============================================================================
@@ -82,30 +83,30 @@ func TestApplyLoadGateRedlinePrecedesOverAllowance(t *testing.T) {
 func TestFreeTierAllowanceState(t *testing.T) {
 	cases := []struct {
 		name        string
-		allowances  []*pb.MeterAllowance
+		allowances  []*purserpb.MeterAllowance
 		wantFree    bool
 		wantExhaust bool
 	}{
 		{"nil list", nil, false, false},
-		{"empty list", []*pb.MeterAllowance{}, false, false},
+		{"empty list", []*purserpb.MeterAllowance{}, false, false},
 		{
 			"paid only",
-			[]*pb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: false, Exhausted: true}},
+			[]*purserpb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: false, Exhausted: true}},
 			false, false,
 		},
 		{
 			"free under allowance",
-			[]*pb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: true, Exhausted: false}},
+			[]*purserpb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: true, Exhausted: false}},
 			true, false,
 		},
 		{
 			"free exhausted",
-			[]*pb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: true, Exhausted: true}},
+			[]*purserpb.MeterAllowance{{Meter: "delivered_minutes", IsFreeTier: true, Exhausted: true}},
 			true, true,
 		},
 		{
 			"mixed: free meter exhausted plus paid meter not",
-			[]*pb.MeterAllowance{
+			[]*purserpb.MeterAllowance{
 				{Meter: "delivered_minutes", IsFreeTier: true, Exhausted: true},
 				{Meter: "storage", IsFreeTier: false, Exhausted: false},
 			},
@@ -113,7 +114,7 @@ func TestFreeTierAllowanceState(t *testing.T) {
 		},
 		{
 			"nil entry skipped",
-			[]*pb.MeterAllowance{nil, {Meter: "delivered_minutes", IsFreeTier: true, Exhausted: false}},
+			[]*purserpb.MeterAllowance{nil, {Meter: "delivered_minutes", IsFreeTier: true, Exhausted: false}},
 			true, false,
 		},
 	}
@@ -177,9 +178,9 @@ func TestEvaluateFreeTierAdmissionPaidTenantAlwaysAdmitted(t *testing.T) {
 	seedClusterNode(sm, "n1", "media-cluster-a", 95)
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "paid-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			Meter: "delivered_minutes", IsFreeTier: false, Exhausted: false,
 		}},
 	}
@@ -195,9 +196,9 @@ func TestEvaluateFreeTierAdmissionFreeUnderAllowanceAtMidLoadAdmits(t *testing.T
 	seedClusterNode(sm, "n1", "media-cluster-a", 70)
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: false, Included: 10000, Used: 5000,
 		}},
 	}
@@ -212,9 +213,9 @@ func TestEvaluateFreeTierAdmissionFreeOverAllowanceAtMidLoadRejects(t *testing.T
 	seedClusterNode(sm, "n1", "media-cluster-a", 70) // > 50% over-allowance gate
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: true, Included: 10000, Used: 15000,
 		}},
 	}
@@ -233,9 +234,9 @@ func TestEvaluateFreeTierAdmissionFreeUnderAllowanceAtRedlineRejects(t *testing.
 	seedClusterNode(sm, "n1", "media-cluster-a", 96) // > 95% redline
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: false,
 		}},
 	}
@@ -250,9 +251,9 @@ func TestEvaluateFreeTierAdmissionFreeIdleAdmits(t *testing.T) {
 	seedClusterNode(sm, "n1", "media-cluster-a", 30) // < 50%
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: true, Included: 10000, Used: 15000,
 		}},
 	}
@@ -264,9 +265,9 @@ func TestEvaluateFreeTierAdmissionFreeIdleAdmits(t *testing.T) {
 func TestEvaluateFreeTierAdmissionNoLoadSignalAdmits(t *testing.T) {
 	state.ResetDefaultManagerForTests()
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: true,
 		}},
 	}
@@ -281,9 +282,9 @@ func TestEvaluateFreeTierAdmissionNoClusterContextAdmits(t *testing.T) {
 	seedClusterNode(sm, "n1", "media-cluster-a", 96)
 
 	p := newTestProcessor(t)
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		TenantId: "free-tenant",
-		Allowances: []*pb.MeterAllowance{{
+		Allowances: []*purserpb.MeterAllowance{{
 			IsFreeTier: true, Exhausted: true,
 		}},
 	}

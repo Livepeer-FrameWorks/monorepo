@@ -8,26 +8,26 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // fakeQM is a minimal QuartermasterClient stub for tests. It returns the
 // (owner_tenant_id, is_platform_official) pair the test wants without
 // touching the real gRPC stack.
 type fakeQM struct {
-	clusters map[string]*pb.InfrastructureCluster
+	clusters map[string]*quartermasterpb.InfrastructureCluster
 }
 
-func (f *fakeQM) GetCluster(_ context.Context, clusterID string) (*pb.ClusterResponse, error) {
+func (f *fakeQM) GetCluster(_ context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
 	c, ok := f.clusters[clusterID]
 	if !ok {
 		return nil, errors.New("cluster not found")
 	}
-	return &pb.ClusterResponse{Cluster: c}, nil
+	return &quartermasterpb.ClusterResponse{Cluster: c}, nil
 }
 
 func dec(s string) decimal.Decimal {
@@ -119,7 +119,7 @@ func TestEquivalence_TierInherit_NoHistoryRow(t *testing.T) {
 	tenantID := uuid.New().String()
 	clusterID := "central-primary"
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, IsPlatformOfficial: true},
 	}}
 
@@ -173,7 +173,7 @@ func TestTenantPrivate_NoHistoryRow_DefaultsSelfHosted(t *testing.T) {
 	clusterID := "self-hosted-no-row"
 	ownerStr := tenantID.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	expectNoHistoryRow(mock, clusterID)
@@ -217,7 +217,7 @@ func TestThirdParty_NoHistoryRow_FailsClosed(t *testing.T) {
 	clusterID := "marketplace-no-row"
 	ownerStr := owner.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	expectNoHistoryRow(mock, clusterID)
@@ -250,7 +250,7 @@ func TestEquivalence_TierInherit_RatingMatches(t *testing.T) {
 	clusterID := "central-primary"
 	asOf := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, IsPlatformOfficial: true},
 	}}
 	expectNoHistoryRow(mock, clusterID)
@@ -375,7 +375,7 @@ func TestFreeUnmetered_TenantPrivate(t *testing.T) {
 	clusterID := "self-hosted-edge-1"
 	ownerStr := consumingTenant.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr, IsPlatformOfficial: false},
 	}}
 	expectHistoryRow(mock, clusterID, "free_unmetered", "EUR", "0.00", "{}")
@@ -431,7 +431,7 @@ func TestMetered_ThirdPartyMarketplace(t *testing.T) {
 	clusterID := "operator-edge-eu-1"
 	ownerStr := otherTenant.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	expectHistoryRow(mock, clusterID, "metered", "EUR", "0.00",
@@ -481,7 +481,7 @@ func TestMeteredClusterUsedByOwnerIsSelfHostedZero(t *testing.T) {
 	clusterID := "operator-edge-own-use"
 	ownerStr := ownerTenant.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	versionID := expectHistoryRow(mock, clusterID, "metered", "EUR", "0.00",
@@ -536,7 +536,7 @@ func TestCustom_MissingRates(t *testing.T) {
 	clusterID := "custom-no-rates"
 	ownerStr := otherTenant.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	expectHistoryRow(mock, clusterID, "custom", "EUR", "0.00", "{}")
@@ -573,7 +573,7 @@ func TestMonthly_AccessOnly(t *testing.T) {
 	clusterID := "monthly-cluster"
 	ownerStr := otherTenant.String()
 
-	qm := &fakeQM{clusters: map[string]*pb.InfrastructureCluster{
+	qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{
 		clusterID: {ClusterId: clusterID, OwnerTenantId: &ownerStr},
 	}}
 	expectHistoryRow(mock, clusterID, "monthly", "EUR", "49.00", "{}")

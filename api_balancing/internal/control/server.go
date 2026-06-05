@@ -41,7 +41,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -98,7 +105,7 @@ func normalizePreferredEdgeNodeID(raw string) string {
 	return candidate
 }
 
-func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *pb.BootstrapEdgeNodeRequest {
+func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *ipcpb.Register, nodeID, peerAddr, token, targetClusterID string, servedClusterIDs []string) *quartermasterpb.BootstrapEdgeNodeRequest {
 	host := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
@@ -116,7 +123,7 @@ func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID
 		host = h
 	}
 
-	req := &pb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}, ServedClusterIds: servedClusterIDs}
+	req := &quartermasterpb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}, ServedClusterIds: servedClusterIDs}
 	if strings.TrimSpace(targetClusterID) != "" {
 		targetCluster := strings.TrimSpace(targetClusterID)
 		req.TargetClusterId = &targetCluster
@@ -143,10 +150,10 @@ func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *pb.Register, nodeID
 	return req
 }
 
-func sendControlError(stream pb.HelmsmanControl_ConnectServer, code, message string) error {
-	return stream.Send(&pb.ControlMessage{
+func sendControlError(stream ipcpb.HelmsmanControl_ConnectServer, code, message string) error {
+	return stream.Send(&ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_Error{Error: &pb.ControlError{Code: code, Message: message}},
+		Payload: &ipcpb.ControlMessage_Error{Error: &ipcpb.ControlError{Code: code, Message: message}},
 	})
 }
 
@@ -158,7 +165,7 @@ type Registry struct {
 }
 
 type conn struct {
-	stream       pb.HelmsmanControl_ConnectServer
+	stream       ipcpb.HelmsmanControl_ConnectServer
 	last         time.Time
 	peerAddr     string
 	canonicalID  string // node ID after fingerprint/enrollment resolution (may differ from registry key)
@@ -166,7 +173,7 @@ type conn struct {
 	relayBaseURL string // base URL Mist on this node uses to reach Helmsman's /internal/artifact/* relay
 }
 
-func currentControlConn(nodeID string, stream pb.HelmsmanControl_ConnectServer) (*conn, bool) {
+func currentControlConn(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) (*conn, bool) {
 	if registry == nil {
 		return nil, false
 	}
@@ -179,7 +186,7 @@ func currentControlConn(nodeID string, stream pb.HelmsmanControl_ConnectServer) 
 	return c, true
 }
 
-func controlStreamIsCurrentOrUntracked(nodeID string, stream pb.HelmsmanControl_ConnectServer) bool {
+func controlStreamIsCurrentOrUntracked(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) bool {
 	if registry == nil {
 		return true
 	}
@@ -192,7 +199,7 @@ func controlStreamIsCurrentOrUntracked(nodeID string, stream pb.HelmsmanControl_
 	return c.stream == stream
 }
 
-func removeCurrentControlConn(nodeID, canonicalID string, stream pb.HelmsmanControl_ConnectServer) []string {
+func removeCurrentControlConn(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer) []string {
 	if registry == nil {
 		return nil
 	}
@@ -233,7 +240,7 @@ func releaseConnOwnerForDisconnect(nodeID string, log logging.Logger) bool {
 	return owner.InstanceID == ""
 }
 
-func cleanupControlDisconnect(nodeID, canonicalID string, stream pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+func cleanupControlDisconnect(nodeID, canonicalID string, stream ipcpb.HelmsmanControl_ConnectServer, log logging.Logger) {
 	for _, id := range removeCurrentControlConn(nodeID, canonicalID, stream) {
 		if releaseConnOwnerForDisconnect(id, log) {
 			state.DefaultManager().MarkNodeDisconnected(id)
@@ -252,11 +259,11 @@ func cleanupControlDisconnect(nodeID, canonicalID string, stream pb.HelmsmanCont
 // stream: concurrent Send+Recv is allowed by gRPC, only concurrent Send+Send is
 // not.
 type lockedStream struct {
-	pb.HelmsmanControl_ConnectServer
+	ipcpb.HelmsmanControl_ConnectServer
 	sendMu sync.Mutex
 }
 
-func (s *lockedStream) Send(msg *pb.ControlMessage) error {
+func (s *lockedStream) Send(msg *ipcpb.ControlMessage) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	return s.HelmsmanControl_ConnectServer.Send(msg)
@@ -291,7 +298,7 @@ type serverCertSet struct {
 	byName      map[string]*tls.Certificate
 }
 
-func (h *serverCertHolder) StoreBundles(bundles []*pb.TLSCertBundle) error {
+func (h *serverCertHolder) StoreBundles(bundles []*ipcpb.TLSCertBundle) error {
 	set := &serverCertSet{byName: map[string]*tls.Certificate{}}
 	for _, bundle := range bundles {
 		if bundle == nil || strings.TrimSpace(bundle.GetCertPem()) == "" || strings.TrimSpace(bundle.GetKeyPem()) == "" {
@@ -351,7 +358,7 @@ func (h *serverCertHolder) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Cert
 	return set.defaultCert, nil
 }
 
-func tlsBundleNames(bundle *pb.TLSCertBundle) []string {
+func tlsBundleNames(bundle *ipcpb.TLSCertBundle) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	add := func(value string) {
@@ -409,9 +416,9 @@ func wildcardMatches(pattern, serverName string) bool {
 
 // validateBootstrapTokenFn allows tests to override token validation.
 // In production this calls quartermasterClient.ValidateBootstrapToken.
-var validateBootstrapTokenFn func(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error)
-var getNodeOwnerFn func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
-var getClusterFn func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error)
+var validateBootstrapTokenFn func(ctx context.Context, token string) (*quartermasterpb.ValidateBootstrapTokenResponse, error)
+var getNodeOwnerFn func(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error)
+var getClusterFn func(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error)
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
 var dvrStopRegistry DVRStopRegistry
@@ -482,7 +489,7 @@ func getStreamSourceFromLifecycleDB(internalName string) (nodeID string, baseURL
 		if err := rows.Scan(&id, &raw); err != nil {
 			continue
 		}
-		var update pb.NodeLifecycleUpdate
+		var update ipcpb.NodeLifecycleUpdate
 		if err := json.Unmarshal([]byte(raw), &update); err != nil {
 			continue
 		}
@@ -505,14 +512,14 @@ type NodeOutputs struct {
 }
 
 // Optional analytics callbacks set by handlers package
-var artifactDeletedHandler func(context.Context, *pb.ArtifactDeleted)
+var artifactDeletedHandler func(context.Context, *ipcpb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
 var artifactMapUpdatedHandler func(nodeID string)
 
 // SetArtifactDeletedHandler registers the callback for node-local
 // artifact deletion/eviction reconciliation + DELETED lifecycle emission.
-func SetArtifactDeletedHandler(onDeleted func(context.Context, *pb.ArtifactDeleted)) {
+func SetArtifactDeletedHandler(onDeleted func(context.Context, *ipcpb.ArtifactDeleted)) {
 	artifactDeletedHandler = onDeleted
 }
 
@@ -584,7 +591,7 @@ type CommandRelayPool interface {
 
 // CommandRelayClient is the subset of foghorn.GRPCClient needed by the relay layer.
 type CommandRelayClient interface {
-	Relay() pb.FoghornRelayClient
+	Relay() foghornrelaypb.FoghornRelayClient
 }
 
 var commandRelay *CommandRelay
@@ -630,7 +637,7 @@ func GetAdvertiseAddr() string {
 	return commandRelay.advertiseAddr
 }
 
-func (r *CommandRelay) forward(ctx context.Context, req *pb.ForwardCommandRequest) error {
+func (r *CommandRelay) forward(ctx context.Context, req *foghornrelaypb.ForwardCommandRequest) error {
 	if r == nil || r.store == nil {
 		return fmt.Errorf("relay: not configured")
 	}
@@ -715,62 +722,62 @@ func relayFailure(localErr, relayErr error) error {
 	return fmt.Errorf("%w (relay failed: %w)", localErr, relayErr)
 }
 
-func RelayCommandType(req *pb.ForwardCommandRequest) string {
+func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 	switch req.GetCommand().(type) {
-	case *pb.ForwardCommandRequest_ConfigSeed:
+	case *foghornrelaypb.ForwardCommandRequest_ConfigSeed:
 		return "config_seed"
-	case *pb.ForwardCommandRequest_DvrStart:
+	case *foghornrelaypb.ForwardCommandRequest_DvrStart:
 		return "dvr_start"
-	case *pb.ForwardCommandRequest_DvrStop:
+	case *foghornrelaypb.ForwardCommandRequest_DvrStop:
 		return "dvr_stop"
-	case *pb.ForwardCommandRequest_ClipDelete:
+	case *foghornrelaypb.ForwardCommandRequest_ClipDelete:
 		return "clip_delete"
-	case *pb.ForwardCommandRequest_DvrDelete:
+	case *foghornrelaypb.ForwardCommandRequest_DvrDelete:
 		return "dvr_delete"
-	case *pb.ForwardCommandRequest_VodDelete:
+	case *foghornrelaypb.ForwardCommandRequest_VodDelete:
 		return "vod_delete"
-	case *pb.ForwardCommandRequest_DtshSync:
+	case *foghornrelaypb.ForwardCommandRequest_DtshSync:
 		return "dtsh_sync"
-	case *pb.ForwardCommandRequest_StopSessions:
+	case *foghornrelaypb.ForwardCommandRequest_StopSessions:
 		return "stop_sessions"
-	case *pb.ForwardCommandRequest_InvalidateSessions:
+	case *foghornrelaypb.ForwardCommandRequest_InvalidateSessions:
 		return "invalidate_sessions"
-	case *pb.ForwardCommandRequest_ActivatePushTargets:
+	case *foghornrelaypb.ForwardCommandRequest_ActivatePushTargets:
 		return "activate_push_targets"
-	case *pb.ForwardCommandRequest_DeactivatePushTargets:
+	case *foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets:
 		return "deactivate_push_targets"
-	case *pb.ForwardCommandRequest_ProcessingJob:
+	case *foghornrelaypb.ForwardCommandRequest_ProcessingJob:
 		return "processing_job"
-	case *pb.ForwardCommandRequest_Freeze:
+	case *foghornrelaypb.ForwardCommandRequest_Freeze:
 		return "freeze"
-	case *pb.ForwardCommandRequest_DesiredStateUpdate:
+	case *foghornrelaypb.ForwardCommandRequest_DesiredStateUpdate:
 		return "desired_state_update"
-	case *pb.ForwardCommandRequest_ApplyManagedStream:
+	case *foghornrelaypb.ForwardCommandRequest_ApplyManagedStream:
 		return "apply_managed_stream"
-	case *pb.ForwardCommandRequest_RetractManagedStream:
+	case *foghornrelaypb.ForwardCommandRequest_RetractManagedStream:
 		return "retract_managed_stream"
 	default:
 		return "unknown"
 	}
 }
 
-func RelayRequestID(req *pb.ForwardCommandRequest) string {
+func RelayRequestID(req *foghornrelaypb.ForwardCommandRequest) string {
 	switch cmd := req.GetCommand().(type) {
-	case *pb.ForwardCommandRequest_DvrStart:
+	case *foghornrelaypb.ForwardCommandRequest_DvrStart:
 		return cmd.DvrStart.GetRequestId()
-	case *pb.ForwardCommandRequest_DvrStop:
+	case *foghornrelaypb.ForwardCommandRequest_DvrStop:
 		return cmd.DvrStop.GetRequestId()
-	case *pb.ForwardCommandRequest_ClipDelete:
+	case *foghornrelaypb.ForwardCommandRequest_ClipDelete:
 		return cmd.ClipDelete.GetRequestId()
-	case *pb.ForwardCommandRequest_DvrDelete:
+	case *foghornrelaypb.ForwardCommandRequest_DvrDelete:
 		return cmd.DvrDelete.GetRequestId()
-	case *pb.ForwardCommandRequest_VodDelete:
+	case *foghornrelaypb.ForwardCommandRequest_VodDelete:
 		return cmd.VodDelete.GetRequestId()
-	case *pb.ForwardCommandRequest_DtshSync:
+	case *foghornrelaypb.ForwardCommandRequest_DtshSync:
 		return cmd.DtshSync.GetRequestId()
-	case *pb.ForwardCommandRequest_ProcessingJob:
+	case *foghornrelaypb.ForwardCommandRequest_ProcessingJob:
 		return cmd.ProcessingJob.GetJobId()
-	case *pb.ForwardCommandRequest_Freeze:
+	case *foghornrelaypb.ForwardCommandRequest_Freeze:
 		return cmd.Freeze.GetRequestId()
 	default:
 		return ""
@@ -905,13 +912,13 @@ func SetQuartermasterClient(c *qmclient.GRPCClient) {
 }
 
 func init() {
-	getNodeOwnerFn = func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+	getNodeOwnerFn = func(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
 		if quartermasterClient == nil {
 			return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
 		}
 		return quartermasterClient.GetNodeOwner(ctx, nodeID)
 	}
-	getClusterFn = func(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+	getClusterFn = func(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 		if quartermasterClient == nil {
 			return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
 		}
@@ -1007,10 +1014,10 @@ func SetGeoIPCache(c *cache.Cache) { geoipCache = c }
 
 // Server implements HelmsmanControl
 type Server struct {
-	pb.UnimplementedHelmsmanControlServer
+	ipcpb.UnimplementedHelmsmanControlServer
 }
 
-func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
+func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 	// Serialize Send across the goroutine-dispatched handlers below; gRPC
 	// SendMsg is not concurrency-safe. Reassigning the parameter means every
 	// downstream use (conn.stream storage, stream-identity comparisons, handler
@@ -1030,7 +1037,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			}
 		}
 		switch x := msg.GetPayload().(type) {
-		case *pb.ControlMessage_Register:
+		case *ipcpb.ControlMessage_Register:
 			nodeID = x.Register.GetNodeId()
 			canonicalNodeID := nodeID
 			if nodeID == "" {
@@ -1096,7 +1103,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				// TenantID/ClusterID are resolved below via fingerprint or enrollment.
 				state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, host, tenantID, clusterID, nil)
 
-				fpReq := &pb.ResolveNodeFingerprintRequest{PeerIp: host}
+				fpReq := &quartermasterpb.ResolveNodeFingerprintRequest{PeerIp: host}
 				if x.Register != nil && x.Register.Fingerprint != nil {
 					fp := x.Register.Fingerprint
 					fpReq.LocalIpv4 = append(fpReq.LocalIpv4, fp.GetLocalIpv4()...)
@@ -1270,10 +1277,10 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 
 			// Forward hardware specs to Quartermaster if present
 			if quartermasterClient != nil && (x.Register.CpuCores != nil || x.Register.MemoryGb != nil || x.Register.DiskGb != nil) {
-				go func(reg *pb.Register, nid string) {
+				go func(reg *ipcpb.Register, nid string) {
 					hwCtx, hwCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer hwCancel()
-					err := quartermasterClient.UpdateNodeHardware(hwCtx, &pb.UpdateNodeHardwareRequest{
+					err := quartermasterClient.UpdateNodeHardware(hwCtx, &quartermasterpb.UpdateNodeHardwareRequest{
 						NodeId:   nid,
 						CpuCores: reg.CpuCores,
 						MemoryGb: reg.MemoryGb,
@@ -1297,7 +1304,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 
 			// Register per-capability service instances for DNS routing
 			if quartermasterClient != nil && clusterID != "" {
-				go func(reg *pb.Register, nid, cid, addr string) {
+				go func(reg *ipcpb.Register, nid, cid, addr string) {
 					peerHost, _, _ := net.SplitHostPort(addr)
 					if peerHost == "" {
 						peerHost = addr
@@ -1314,7 +1321,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 							continue
 						}
 						capCtx, capCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						_, err := quartermasterClient.BootstrapService(capCtx, &pb.BootstrapServiceRequest{
+						_, err := quartermasterClient.BootstrapService(capCtx, &quartermasterpb.BootstrapServiceRequest{
 							Type:           svcType,
 							Version:        version.Version,
 							Protocol:       "http",
@@ -1341,12 +1348,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 				}(x.Register, canonicalNodeID, clusterID, peerAddr)
 			}
-		case *pb.ControlMessage_ArtifactDeleted:
+		case *ipcpb.ControlMessage_ArtifactDeleted:
 			if artifactDeletedHandler != nil {
 				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
 			}
 			go handleArtifactDeleted(x.ArtifactDeleted, nodeID, registry.log)
-		case *pb.ControlMessage_Heartbeat:
+		case *ipcpb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				canonicalNodeID := nodeID
 				registry.mu.Lock()
@@ -1392,39 +1399,39 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 				}
 			}
-		case *pb.ControlMessage_DvrStartRequest:
+		case *ipcpb.ControlMessage_DvrStartRequest:
 			registry.log.WithFields(logging.Fields{
 				"node_id":       nodeID,
 				"internal_name": x.DvrStartRequest.GetInternalName(),
 			}).Error("Rejected DVRStartRequest from edge control stream; DVR starts must use Foghorn StartDVR")
-		case *pb.ControlMessage_DvrProgress:
+		case *ipcpb.ControlMessage_DvrProgress:
 			// Handle DVR progress updates from storage Helmsman
 			go processDVRProgress(x.DvrProgress, nodeID, registry.log)
-		case *pb.ControlMessage_DvrStopped:
+		case *ipcpb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
 			go processDVRStopped(x.DvrStopped, nodeID, registry.log)
-		case *pb.ControlMessage_MistTrigger:
+		case *ipcpb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
 			go processMistTrigger(x.MistTrigger, nodeID, stream, registry.log)
-		case *pb.ControlMessage_FreezePermissionRequest:
+		case *ipcpb.ControlMessage_FreezePermissionRequest:
 			// Handle freeze permission request from Helmsman (cold storage)
 			go processFreezePermissionRequest(x.FreezePermissionRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_FreezeProgress:
+		case *ipcpb.ControlMessage_FreezeProgress:
 			// Handle freeze progress updates from Helmsman
 			go processFreezeProgress(x.FreezeProgress, nodeID, registry.log)
-		case *pb.ControlMessage_FreezeComplete:
+		case *ipcpb.ControlMessage_FreezeComplete:
 			// Handle freeze completion from Helmsman
 			go processFreezeComplete(context.Background(), x.FreezeComplete, nodeID, registry.log)
-		case *pb.ControlMessage_CanDeleteRequest:
+		case *ipcpb.ControlMessage_CanDeleteRequest:
 			// Handle can-delete check from Helmsman (dual-storage architecture)
 			go processCanDeleteRequest(x.CanDeleteRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_RelayResolveRequest:
+		case *ipcpb.ControlMessage_RelayResolveRequest:
 			// Read-through relay resolution: sidecar wants presigned URLs +
 			// chapter refs for an asset it's about to serve over
 			// /internal/artifact/*. Same control-stream pattern as CanDelete.
 			go processRelayResolveRequest(x.RelayResolveRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_AuthorizeRelayPullRequest:
+		case *ipcpb.ControlMessage_AuthorizeRelayPullRequest:
 			// Serving edge asks Foghorn to authorize an inbound peer-relay
 			// pull against the grant Foghorn minted at resolve time. nodeID is
 			// the node_id this control connection registered with (the same
@@ -1435,18 +1442,18 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			// (exact path + hash + 5-min TTL + origin-cluster-only validation),
 			// not a standalone trust boundary.
 			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_SyncComplete:
+		case *ipcpb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
-		case *pb.ControlMessage_ModeChangeRequest:
+		case *ipcpb.ControlMessage_ModeChangeRequest:
 			go processModeChangeRequest(x.ModeChangeRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_UpdateApplyResult:
+		case *ipcpb.ControlMessage_UpdateApplyResult:
 			go processUpdateApplyResult(x.UpdateApplyResult, nodeID, registry.log)
-		case *pb.ControlMessage_ValidateEdgeTokenRequest:
+		case *ipcpb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_EdgeMistAdminSessionRequest:
+		case *ipcpb.ControlMessage_EdgeMistAdminSessionRequest:
 			go processEdgeMistAdminSession(msg.GetRequestId(), x.EdgeMistAdminSessionRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_ProcessingJobResult:
+		case *ipcpb.ControlMessage_ProcessingJobResult:
 			if x.ProcessingJobResult.GetStatus() == "cache_update" {
 				// Refresh cached overrides before returning so the restarted push
 				// reads the latest value from Helmsman.
@@ -1454,23 +1461,23 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			} else {
 				go processProcessingJobResult(x.ProcessingJobResult, nodeID, registry.log)
 			}
-		case *pb.ControlMessage_ProcessingJobProgress:
+		case *ipcpb.ControlMessage_ProcessingJobProgress:
 			go processProcessingJobProgress(x.ProcessingJobProgress, registry.log)
-		case *pb.ControlMessage_ThumbnailUploadRequest:
+		case *ipcpb.ControlMessage_ThumbnailUploadRequest:
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_ThumbnailUploaded:
+		case *ipcpb.ControlMessage_ThumbnailUploaded:
 			go processThumbnailUploaded(x.ThumbnailUploaded, nodeID, registry.log)
-		case *pb.ControlMessage_RecordDvrSegmentRequest:
+		case *ipcpb.ControlMessage_RecordDvrSegmentRequest:
 			go processRecordDVRSegment(x.RecordDvrSegmentRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_MarkDvrSegmentUploaded:
+		case *ipcpb.ControlMessage_MarkDvrSegmentUploaded:
 			go processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, nodeID, registry.log)
-		case *pb.ControlMessage_DvrSegmentDropped:
+		case *ipcpb.ControlMessage_DvrSegmentDropped:
 			go processDVRSegmentDropped(x.DvrSegmentDropped, nodeID, registry.log)
-		case *pb.ControlMessage_EvictableSegmentsRequest:
+		case *ipcpb.ControlMessage_EvictableSegmentsRequest:
 			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_RestoreLocalSegmentIndexRequest:
+		case *ipcpb.ControlMessage_RestoreLocalSegmentIndexRequest:
 			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, nodeID, stream, registry.log)
-		case *pb.ControlMessage_ConfigSeedApplyResult:
+		case *ipcpb.ControlMessage_ConfigSeedApplyResult:
 			if x.ConfigSeedApplyResult != nil {
 				ack := x.ConfigSeedApplyResult
 				canonicalID := nodeID
@@ -1483,7 +1490,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					clusterID = c.clusterID
 				}
 				registry.mu.RUnlock()
-				go func(a *pb.ConfigSeedApplyResult, canonical, resolvedClusterID string) {
+				go func(a *ipcpb.ConfigSeedApplyResult, canonical, resolvedClusterID string) {
 					ackClusterID := resolvedClusterID
 					if ackClusterID == "" && quartermasterClient != nil && canonical != "" {
 						lookupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1545,15 +1552,15 @@ func CleanupLocalConnOwners(ctx context.Context) {
 // local bidi stream. Used by the PUSH_REWRITE takeover path to unload the
 // lingering Mist buffer and disconnect viewer sessions on the previous
 // owner before admitting the new publisher.
-func SendLocalDrainStream(nodeID string, req *pb.DrainStreamRequest) error {
+func SendLocalDrainStream(nodeID string, req *ipcpb.DrainStreamRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DrainStreamRequest{DrainStreamRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DrainStreamRequest{DrainStreamRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
@@ -1562,7 +1569,7 @@ func SendLocalDrainStream(nodeID string, req *pb.DrainStreamRequest) error {
 // SendDrainStream sends a DrainStreamRequest to the named node, relaying
 // via HA if the target's bidi stream is held by a different Foghorn
 // instance.
-func SendDrainStream(nodeID string, req *pb.DrainStreamRequest) error {
+func SendDrainStream(nodeID string, req *ipcpb.DrainStreamRequest) error {
 	err := SendLocalDrainStream(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1572,24 +1579,24 @@ func SendDrainStream(nodeID string, req *pb.DrainStreamRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DrainStream{DrainStream: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DrainStream{DrainStream: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalDVRUpdateSource(nodeID string, req *pb.DVRUpdateSourceRequest) error {
+func SendLocalDVRUpdateSource(nodeID string, req *ipcpb.DVRUpdateSourceRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DvrUpdateSourceRequest{DvrUpdateSourceRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DvrUpdateSourceRequest{DvrUpdateSourceRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
@@ -1604,7 +1611,7 @@ var sendDVRUpdateSourceFn = SendDVRUpdateSource
 // node, relaying via HA if the target's bidi stream is held by a
 // different Foghorn instance. Issued from the takeover path when the
 // source publisher moved nodes mid-recording.
-func SendDVRUpdateSource(nodeID string, req *pb.DVRUpdateSourceRequest) error {
+func SendDVRUpdateSource(nodeID string, req *ipcpb.DVRUpdateSourceRequest) error {
 	err := SendLocalDVRUpdateSource(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1614,31 +1621,31 @@ func SendDVRUpdateSource(nodeID string, req *pb.DVRUpdateSourceRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalDVRStart(nodeID string, req *pb.DVRStartRequest) error {
+func SendLocalDVRStart(nodeID string, req *ipcpb.DVRStartRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DvrStartRequest{DvrStartRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DvrStartRequest{DvrStartRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendDVRStart sends a DVRStartRequest to the given node, relaying via HA if needed.
-func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
+func SendDVRStart(nodeID string, req *ipcpb.DVRStartRequest) error {
 	err := SendLocalDVRStart(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1648,31 +1655,31 @@ func SendDVRStart(nodeID string, req *pb.DVRStartRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DvrStart{DvrStart: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStart{DvrStart: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalDVRStop(nodeID string, req *pb.DVRStopRequest) error {
+func SendLocalDVRStop(nodeID string, req *ipcpb.DVRStopRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DvrStopRequest{DvrStopRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DvrStopRequest{DvrStopRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendDVRStop sends a DVRStopRequest to the given node, relaying via HA if needed.
-func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
+func SendDVRStop(nodeID string, req *ipcpb.DVRStopRequest) error {
 	err := SendLocalDVRStop(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1682,31 +1689,31 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
+func SendLocalClipDelete(nodeID string, req *ipcpb.ClipDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ClipDelete{ClipDelete: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ClipDelete{ClipDelete: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendClipDelete sends a ClipDeleteRequest to the given node, relaying via HA if needed.
-func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
+func SendClipDelete(nodeID string, req *ipcpb.ClipDeleteRequest) error {
 	err := SendLocalClipDelete(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1716,31 +1723,31 @@ func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ClipDelete{ClipDelete: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
+func SendLocalDVRDelete(nodeID string, req *ipcpb.DVRDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DvrDelete{DvrDelete: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DvrDelete{DvrDelete: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendDVRDelete sends a DVRDeleteRequest to the given node, relaying via HA if needed.
-func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
+func SendDVRDelete(nodeID string, req *ipcpb.DVRDeleteRequest) error {
 	err := SendLocalDVRDelete(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1750,31 +1757,31 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrDelete{DvrDelete: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
 	return nil
 }
 
-func SendLocalVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
+func SendLocalVodDelete(nodeID string, req *ipcpb.VodDeleteRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_VodDelete{VodDelete: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_VodDelete{VodDelete: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendVodDelete sends a VodDeleteRequest to the given node, relaying via HA if needed.
-func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
+func SendVodDelete(nodeID string, req *ipcpb.VodDeleteRequest) error {
 	err := SendLocalVodDelete(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -1784,9 +1791,9 @@ func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if relayErr := commandRelay.forward(ctx, &pb.ForwardCommandRequest{
+	if relayErr := commandRelay.forward(ctx, &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_VodDelete{VodDelete: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_VodDelete{VodDelete: req},
 	}); relayErr != nil {
 		return relayFailure(err, relayErr)
 	}
@@ -1822,7 +1829,7 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		}
 		return
 	}
-	if err := SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash}); err != nil {
+	if err := SendDVRStop(storageNodeID, &ipcpb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash}); err != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"node_id":  storageNodeID,
@@ -1940,7 +1947,7 @@ func RefreshActiveDVRSourceOnTakeover(internalName, newOwnerNodeID string, logge
 			runtimeName = RuntimeNameFor(entry.IngestMode, internalName)
 		}
 	}
-	req := &pb.DVRUpdateSourceRequest{
+	req := &ipcpb.DVRUpdateSourceRequest{
 		DvrHash:           dvrHash,
 		SourceRuntimeName: runtimeName,
 		SourceBaseUrl:     newSourceBaseURL,
@@ -2131,7 +2138,7 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	}
 
 	rootDomain := platformRootDomain()
-	tlsBundles := []*pb.TLSCertBundle{}
+	tlsBundles := []*ipcpb.TLSCertBundle{}
 
 	if navigatorClient != nil {
 		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -2180,9 +2187,9 @@ func startExternalGRPCListener(ctx context.Context, cfg GRPCServerConfig) (*grpc
 	opts = appendCommonInterceptors(opts, cfg)
 
 	srv := grpc.NewServer(opts...)
-	pb.RegisterHelmsmanControlServer(srv, &Server{})
+	ipcpb.RegisterHelmsmanControlServer(srv, &Server{})
 	RegisterEdgeProvisioningService(srv)
-	registerHealthAndReflection(srv, pb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
+	registerHealthAndReflection(srv, ipcpb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -2208,15 +2215,15 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 	}
 
 	nodeControlMethods := []string{
-		pb.NodeControlService_SetNodeOperationalMode_FullMethodName,
-		pb.NodeControlService_GetNodeHealth_FullMethodName,
+		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName,
+		foghornpb.NodeControlService_GetNodeHealth_FullMethodName,
 	}
 
 	if cfg.ServiceToken != "" {
 		skipMethods := []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
-			pb.HelmsmanControl_Connect_FullMethodName,
+			ipcpb.HelmsmanControl_Connect_FullMethodName,
 			"/foghorn.EdgeProvisioningService/PreRegisterEdge",
 		}
 		if strings.TrimSpace(cfg.JWTSecret) != "" {
@@ -2242,7 +2249,7 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 			Logger:       cfg.Logger,
 			SkipMethods: []string{
 				"/grpc.health.v1.Health/Watch",
-				pb.HelmsmanControl_Connect_FullMethodName,
+				ipcpb.HelmsmanControl_Connect_FullMethodName,
 			},
 		})
 		opts = append(opts, grpc.ChainStreamInterceptor(streamAuth))
@@ -2252,8 +2259,8 @@ func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []
 
 func nodeControlAuthInterceptor(serviceToken, jwtSecret string, logger logging.Logger) grpc.UnaryServerInterceptor {
 	protected := map[string]bool{
-		pb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
-		pb.NodeControlService_GetNodeHealth_FullMethodName:          true,
+		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName: true,
+		foghornpb.NodeControlService_GetNodeHealth_FullMethodName:          true,
 	}
 	serviceToken = strings.TrimSpace(serviceToken)
 	jwtSecret = strings.TrimSpace(jwtSecret)
@@ -2298,7 +2305,7 @@ func shouldRelay(nodeID string, err error) bool {
 	return c == nil
 }
 
-func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger logging.Logger) {
+func handleArtifactDeleted(deleted *ipcpb.ArtifactDeleted, nodeID string, logger logging.Logger) {
 	artifactHash := deleted.GetArtifactHash()
 	reason := deleted.GetReason()
 
@@ -2314,7 +2321,7 @@ func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger lo
 }
 
 // processDVRProgress handles DVR progress updates from storage Helmsman
-func processDVRProgress(progress *pb.DVRProgress, storageNodeID string, logger logging.Logger) {
+func processDVRProgress(progress *ipcpb.DVRProgress, storageNodeID string, logger logging.Logger) {
 	dvrHash := progress.GetDvrHash()
 	status := progress.GetStatus()
 	segmentCount := progress.GetSegmentCount()
@@ -2350,7 +2357,7 @@ func processDVRProgress(progress *pb.DVRProgress, storageNodeID string, logger l
 }
 
 // processDVRStopped handles DVR completion from storage Helmsman
-func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logging.Logger) {
+func processDVRStopped(stopped *ipcpb.DVRStopped, storageNodeID string, logger logging.Logger) {
 	dvrHash := stopped.GetDvrHash()
 	status := stopped.GetStatus()
 	errorMsg := stopped.GetError()
@@ -2417,7 +2424,7 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 }
 
 // ResolveClipHash implements the ResolveClipHash RPC method
-func (s *Server) ResolveClipHash(ctx context.Context, req *pb.ClipHashRequest) (*pb.ClipHashResponse, error) {
+func (s *Server) ResolveClipHash(ctx context.Context, req *ipcpb.ClipHashRequest) (*ipcpb.ClipHashResponse, error) {
 	if clipHashResolver == nil {
 		return nil, status.Error(codes.Unimplemented, "clip hash resolution not configured")
 	}
@@ -2431,7 +2438,7 @@ func (s *Server) ResolveClipHash(ctx context.Context, req *pb.ClipHashRequest) (
 		return nil, status.Error(codes.NotFound, "clip not found")
 	}
 
-	return &pb.ClipHashResponse{
+	return &ipcpb.ClipHashResponse{
 		ClipHash:   req.GetClipHash(),
 		TenantId:   tenantID,
 		StreamName: streamName,
@@ -2588,7 +2595,7 @@ var mistTriggerProcessor MistTriggerProcessor
 // MistTriggerProcessor interface for handling MistServer triggers
 type MistTriggerProcessor interface {
 	ProcessTrigger(triggerType string, rawPayload []byte, nodeID string) (string, bool, error)
-	ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error)
+	ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error)
 }
 
 // triggerTypesNeedingDurableAck enumerates final/accounting Mist triggers
@@ -2610,41 +2617,41 @@ var triggerTypesNeedingDurableAck = map[string]struct{}{
 // classifyTriggerError maps a processor error to the ack error_code and
 // retryable flag Helmsman uses to decide between backoff-and-resend vs
 // dead-letter.
-func classifyTriggerError(err error) (pb.TriggerAckErrorCode, bool) {
+func classifyTriggerError(err error) (ipcpb.TriggerAckErrorCode, bool) {
 	if err == nil {
-		return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_NONE, false
+		return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_NONE, false
 	}
 	if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
 		switch ingestErr.Code {
-		case pb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY,
-			pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED,
-			pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED,
-			pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
-			pb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED,
-			pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP:
-			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_SCHEMA, false
-		case pb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
-			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE, true
+		case ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY,
+			ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED,
+			ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED,
+			ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
+			ipcpb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED,
+			ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP:
+			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_SCHEMA, false
+		case ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
+			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE, true
 		default:
-			return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_INTERNAL, true
+			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_INTERNAL, true
 		}
 	}
 	// Decklog client / Kafka publish errors and everything else are
 	// assumed transient. Helmsman will retry with the same source_event_id;
 	// downstream dedupe (raw_mist_triggers + canonical ledger argMax)
 	// collapses duplicates.
-	return pb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_KAFKA_PUBLISH, true
+	return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_KAFKA_PUBLISH, true
 }
 
 // sendMistTriggerAck delivers the durable ack back to Helmsman on the
 // same control stream. Caller invokes for any trigger in
 // triggerTypesNeedingDurableAck regardless of blocking flag.
-func sendMistTriggerAck(stream pb.HelmsmanControl_ConnectServer, requestID string, err error, logger logging.Logger) {
+func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID string, err error, logger logging.Logger) {
 	if stream == nil {
 		return
 	}
 	code, retryable := classifyTriggerError(err)
-	ack := &pb.MistTriggerAck{
+	ack := &ipcpb.MistTriggerAck{
 		RequestId: requestID,
 		Success:   err == nil,
 		Retryable: retryable,
@@ -2653,9 +2660,9 @@ func sendMistTriggerAck(stream pb.HelmsmanControl_ConnectServer, requestID strin
 	if err != nil {
 		ack.ErrorMessage = err.Error()
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_MistTriggerAck{MistTriggerAck: ack},
+		Payload: &ipcpb.ControlMessage_MistTriggerAck{MistTriggerAck: ack},
 	}
 	if sendErr := stream.Send(msg); sendErr != nil {
 		logger.WithFields(logging.Fields{
@@ -2666,7 +2673,7 @@ func sendMistTriggerAck(stream pb.HelmsmanControl_ConnectServer, requestID strin
 }
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
-func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processMistTrigger(trigger *ipcpb.MistTrigger, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	if trigger != nil {
 		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && strings.TrimSpace(ns.ClusterID) != "" {
 			cid := strings.TrimSpace(ns.ClusterID)
@@ -2690,11 +2697,11 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 			"node_id":      nodeID,
 		}).Warn("Dropping MistServer trigger from stale Helmsman control stream")
 		if blocking {
-			sendMistTriggerResponse(stream, &pb.MistTriggerResponse{
+			sendMistTriggerResponse(stream, &ipcpb.MistTriggerResponse{
 				RequestId: requestID,
 				Response:  "",
 				Abort:     true,
-				ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+				ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL,
 			}, logger)
 		}
 		if needsDurableAck {
@@ -2717,7 +2724,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		logger.Error("MistTriggerProcessor not set, cannot process triggers")
 		if blocking {
 			// Send error response for blocking triggers
-			response := &pb.MistTriggerResponse{
+			response := &ipcpb.MistTriggerResponse{
 				RequestId: requestID,
 				Response:  "",
 				Abort:     true,
@@ -2741,12 +2748,12 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		}).Error("Failed to process MistServer trigger")
 
 		if blocking {
-			errorCode := pb.IngestErrorCode_INGEST_ERROR_INTERNAL
+			errorCode := ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
 			if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
 				errorCode = ingestErr.Code
 			}
 			// Send error response for blocking triggers
-			response := &pb.MistTriggerResponse{
+			response := &ipcpb.MistTriggerResponse{
 				RequestId: requestID,
 				Response:  "",
 				Abort:     true,
@@ -2780,7 +2787,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	}
 
 	// For blocking triggers, send the response back to Helmsman
-	response := &pb.MistTriggerResponse{
+	response := &ipcpb.MistTriggerResponse{
 		RequestId: requestID,
 		Response:  responseText,
 		Abort:     shouldAbort,
@@ -2803,10 +2810,10 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 }
 
 // sendMistTriggerResponse sends a MistTriggerResponse back to Helmsman
-func sendMistTriggerResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.MistTriggerResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendMistTriggerResponse(stream ipcpb.HelmsmanControl_ConnectServer, response *ipcpb.MistTriggerResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_MistTriggerResponse{MistTriggerResponse: response},
+		Payload: &ipcpb.ControlMessage_MistTriggerResponse{MistTriggerResponse: response},
 	}
 
 	if err := stream.Send(msg); err != nil {
@@ -2819,25 +2826,25 @@ func sendMistTriggerResponse(stream pb.HelmsmanControl_ConnectServer, response *
 
 // resolveOperationalMode determines the authoritative mode for a node.
 // Priority: DB-persisted mode > Helmsman's requested mode > default (NORMAL).
-func resolveOperationalMode(nodeID string, requestedMode pb.NodeOperationalMode) pb.NodeOperationalMode {
+func resolveOperationalMode(nodeID string, requestedMode ipcpb.NodeOperationalMode) ipcpb.NodeOperationalMode {
 	// Check if we have a persisted mode in state (loaded from DB on startup or set by admin)
 	persistedMode := state.DefaultManager().GetNodeOperationalMode(nodeID)
 	if persistedMode != "" && persistedMode != state.NodeModeNormal {
 		// Non-normal mode is persisted (admin set it), use that
 		switch persistedMode {
 		case state.NodeModeDraining:
-			return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+			return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
 		case state.NodeModeMaintenance:
-			return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+			return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
 		}
 	}
 
 	// No persisted override, honor Helmsman's request if valid
-	if requestedMode != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+	if requestedMode != ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
 		return requestedMode
 	}
 
-	return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 }
 
 // Config seed composition and sending
@@ -2846,7 +2853,7 @@ var geoipReader *geoip.Reader
 
 const edgeTelemetryTokenTTL = 365 * 24 * time.Hour
 
-func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode, clusterID string) *pb.ConfigSeed {
+func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode ipcpb.NodeOperationalMode, clusterID string) *ipcpb.ConfigSeed {
 	var lat, lon float64
 	var loc string
 	var ownerTenantID string
@@ -2867,41 +2874,41 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		}
 	}
 
-	templates := []*pb.StreamTemplate{
+	templates := []*ipcpb.StreamTemplate{
 		{
 			Id:    "live",
-			Def:   &pb.StreamDef{Name: "live", Realtime: false, StopSessions: false, Tags: []string{"live"}},
+			Def:   &ipcpb.StreamDef{Name: "live", Realtime: false, StopSessions: false, Tags: []string{"live"}},
 			Roles: []string{"ingest", "edge"},
 			Caps:  []string{"ingest", "edge"},
 		},
 		{
 			Id:    "vod",
-			Def:   &pb.StreamDef{Name: "vod", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
+			Def:   &ipcpb.StreamDef{Name: "vod", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"edge", "storage"},
 		},
 		{
 			Id:    "dvr",
-			Def:   &pb.StreamDef{Name: "dvr", Realtime: false, StopSessions: false, Tags: []string{"dvr"}},
+			Def:   &ipcpb.StreamDef{Name: "dvr", Realtime: false, StopSessions: false, Tags: []string{"dvr"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"edge", "storage"},
 		},
 		{
 			Id:    "processing",
-			Def:   &pb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, StopSessions: false, Tags: []string{"processing"}},
+			Def:   &ipcpb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, StopSessions: false, Tags: []string{"processing"}},
 			Roles: []string{"edge", "storage"},
 			Caps:  []string{"processing"},
 		},
 		{
 			Id:    "pull",
-			Def:   &pb.StreamDef{Name: "pull", Realtime: false, StopSessions: false, Tags: []string{"pull"}},
+			Def:   &ipcpb.StreamDef{Name: "pull", Realtime: false, StopSessions: false, Tags: []string{"pull"}},
 			Roles: []string{"edge"},
 			Caps:  []string{"edge"},
 		},
 	}
 
-	var tlsBundle *pb.TLSCertBundle
-	var siteConfig *pb.SiteConfig
+	var tlsBundle *ipcpb.TLSCertBundle
+	var siteConfig *ipcpb.SiteConfig
 
 	resolvedClusterID := clusterID
 	if quartermasterClient != nil {
@@ -2930,7 +2937,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		rootDomain := platformRootDomain()
 		slug := pkgdns.SanitizeLabel(resolvedClusterID)
 
-		siteConfig = &pb.SiteConfig{
+		siteConfig = &ipcpb.SiteConfig{
 			SiteAddress: fmt.Sprintf("*.%s.%s", slug, rootDomain),
 			EdgeDomain:  pkgdns.EdgeNodeFQDN(nodeID, slug, rootDomain),
 			PoolDomain:  fmt.Sprintf("edge.%s.%s", slug, rootDomain),
@@ -2958,7 +2965,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 	caBundle := readConfiguredCABundle()
 	telemetry := buildEdgeTelemetryConfig(nodeID, resolvedClusterID, ownerTenantID)
 
-	seed := &pb.ConfigSeed{
+	seed := &ipcpb.ConfigSeed{
 		NodeId:              nodeID,
 		Latitude:            lat,
 		Longitude:           lon,
@@ -2974,7 +2981,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		SeedVersion:         nextSeedVersion(nodeID),
 	}
 	if tlsBundle != nil {
-		seed.TlsBundles = []*pb.TLSCertBundle{tlsBundle}
+		seed.TlsBundles = []*ipcpb.TLSCertBundle{tlsBundle}
 	}
 	if isPlatformOfficial {
 		if extra := fetchPlatformEdgeBundle(); extra != nil {
@@ -2993,7 +3000,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 // subscribed to clusterID, then pulls each tenant's TLS bundle from
 // Navigator. Returns only bundles that exist (cert issuance complete).
 // Bundles for tenants still in cert_issuing state are skipped.
-func fetchTenantBundles(clusterID string) []*pb.TLSCertBundle {
+func fetchTenantBundles(clusterID string) []*ipcpb.TLSCertBundle {
 	if clusterID == "" || quartermasterClient == nil || navigatorClient == nil {
 		return nil
 	}
@@ -3006,17 +3013,17 @@ func fetchTenantBundles(clusterID string) []*pb.TLSCertBundle {
 	rootDomain := platformRootDomain()
 	tenantZoneLabel := pkgdns.TenantAliasZoneLabel
 
-	out := make([]*pb.TLSCertBundle, 0, len(resp.GetTenants()))
+	out := make([]*ipcpb.TLSCertBundle, 0, len(resp.GetTenants()))
 	for _, ref := range resp.GetTenants() {
 		bundleID := "tenant:" + ref.GetTenantId()
 		certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		certResp, certErr := navigatorClient.GetTLSBundle(certCtx, &pb.GetTLSBundleRequest{BundleId: bundleID})
+		certResp, certErr := navigatorClient.GetTLSBundle(certCtx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 		certCancel()
 		if certErr != nil || certResp == nil || !certResp.GetFound() {
 			continue
 		}
 		apex := ref.GetSubdomain() + "." + tenantZoneLabel + "." + rootDomain
-		out = append(out, &pb.TLSCertBundle{
+		out = append(out, &ipcpb.TLSCertBundle{
 			CertPem:       certResp.GetCertPem(),
 			KeyPem:        certResp.GetKeyPem(),
 			Domain:        apex,
@@ -3032,20 +3039,20 @@ func fetchTenantBundles(clusterID string) []*pb.TLSCertBundle {
 // Navigator. Returns nil if Navigator is unavailable or the cert hasn't
 // been issued yet. Caller is responsible for deciding which nodes
 // receive this bundle (only platform_official cluster edges).
-func fetchPlatformEdgeBundle() *pb.TLSCertBundle {
+func fetchPlatformEdgeBundle() *ipcpb.TLSCertBundle {
 	if navigatorClient == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{
+	resp, err := navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{
 		BundleId: "platform:edge-multi",
 	})
 	if err != nil || resp == nil || !resp.GetFound() {
 		return nil
 	}
 	rootDomain := platformRootDomain()
-	return &pb.TLSCertBundle{
+	return &ipcpb.TLSCertBundle{
 		CertPem:       resp.GetCertPem(),
 		KeyPem:        resp.GetKeyPem(),
 		Domain:        strings.Join(resp.GetDomains(), ","),
@@ -3129,7 +3136,7 @@ type edgeTelemetryClaims struct {
 	jwt.RegisteredClaims
 }
 
-func buildEdgeTelemetryConfig(nodeID, clusterID, tenantID string) *pb.EdgeTelemetryConfig {
+func buildEdgeTelemetryConfig(nodeID, clusterID, tenantID string) *commonpb.EdgeTelemetryConfig {
 	nodeID = strings.TrimSpace(nodeID)
 	clusterID = strings.TrimSpace(clusterID)
 	if nodeID == "" || clusterID == "" {
@@ -3147,7 +3154,7 @@ func buildEdgeTelemetryConfig(nodeID, clusterID, tenantID string) *pb.EdgeTeleme
 		}).Warn("Failed to mint edge telemetry token")
 		return nil
 	}
-	return &pb.EdgeTelemetryConfig{
+	return &commonpb.EdgeTelemetryConfig{
 		Enabled:     true,
 		WriteUrl:    writeURL,
 		BearerToken: token,
@@ -3241,7 +3248,7 @@ func parseEdgeTelemetryPrivateKey() (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
+func resolveClusterTLSBundle(nodeID string) *ipcpb.TLSCertBundle {
 	bundle, found, err := fetchClusterTLSBundle(nodeID)
 	if err != nil || !found {
 		return nil
@@ -3249,7 +3256,7 @@ func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
 	return bundle
 }
 
-func SendLocalConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
+func SendLocalConfigSeed(nodeID string, seed *ipcpb.ConfigSeed) error {
 	if seed == nil {
 		return fmt.Errorf("nil ConfigSeed")
 	}
@@ -3259,15 +3266,15 @@ func SendLocalConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.
-func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
+func SendConfigSeed(nodeID string, seed *ipcpb.ConfigSeed) error {
 	err := SendLocalConfigSeed(nodeID, seed)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -3275,13 +3282,13 @@ func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	if commandRelay == nil || seed == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
 	}))
 }
 
-func SendDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) error {
+func SendDesiredStateUpdate(nodeID string, update *ipcpb.DesiredStateUpdate) error {
 	err := SendLocalDesiredStateUpdate(nodeID, update)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -3289,13 +3296,13 @@ func SendDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) error 
 	if commandRelay == nil || update == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: update},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: update},
 	}))
 }
 
-func SendLocalDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) error {
+func SendLocalDesiredStateUpdate(nodeID string, update *ipcpb.DesiredStateUpdate) error {
 	if update == nil {
 		return fmt.Errorf("nil DesiredStateUpdate")
 	}
@@ -3305,13 +3312,13 @@ func SendLocalDesiredStateUpdate(nodeID string, update *pb.DesiredStateUpdate) e
 	if c == nil {
 		return ErrNotConnected
 	}
-	return c.stream.Send(&pb.ControlMessage{
-		Payload: &pb.ControlMessage_DesiredStateUpdate{DesiredStateUpdate: update},
+	return c.stream.Send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DesiredStateUpdate{DesiredStateUpdate: update},
 		SentAt:  timestamppb.Now(),
 	})
 }
 
-func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
+func SendLocalPushOperationalMode(nodeID string, mode ipcpb.NodeOperationalMode) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -3322,8 +3329,8 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 	// Helmsman sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
 	// Send a full seed to avoid wiping previously seeded fields.
 	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode, "")
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
@@ -3331,7 +3338,7 @@ func SendLocalPushOperationalMode(nodeID string, mode pb.NodeOperationalMode) er
 
 // PushOperationalMode sends a ConfigSeed with the specified operational mode to the node,
 // relaying via HA if needed.
-func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
+func PushOperationalMode(nodeID string, mode ipcpb.NodeOperationalMode) error {
 	err := SendLocalPushOperationalMode(nodeID, mode)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -3341,22 +3348,22 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 	}
 	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
 	seed := composeConfigSeed(nodeID, nil, "", mode, "")
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
 	}))
 }
 
 // processModeChangeRequest handles an upstream mode change request from Helmsman.
 // Validates the mode and applies it via the existing SetNodeOperationalMode + PushOperationalMode path.
-func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.HelmsmanControl_ConnectServer, log logging.Logger) {
+func processModeChangeRequest(req *ipcpb.ModeChangeRequest, nodeID string, _ ipcpb.HelmsmanControl_ConnectServer, log logging.Logger) {
 	if req == nil {
 		return
 	}
 
 	protoMode := req.GetRequestedMode()
-	if protoMode == pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
-		protoMode = pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	if protoMode == ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+		protoMode = ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	}
 
 	log.WithFields(logging.Fields{
@@ -3367,9 +3374,9 @@ func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.Hel
 
 	var stateMode state.NodeOperationalMode
 	switch protoMode {
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
 		stateMode = state.NodeModeDraining
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
 		stateMode = state.NodeModeMaintenance
 	default:
 		stateMode = state.NodeModeNormal
@@ -3386,7 +3393,7 @@ func processModeChangeRequest(req *pb.ModeChangeRequest, nodeID string, _ pb.Hel
 	}
 }
 
-func processUpdateApplyResult(result *pb.UpdateApplyResult, fallbackNodeID string, log logging.Logger) {
+func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID string, log logging.Logger) {
 	if result == nil {
 		return
 	}
@@ -3481,7 +3488,7 @@ func processUpdateApplyResult(result *pb.UpdateApplyResult, fallbackNodeID strin
 			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to return node to normal mode after update")
 		}
 		cancel()
-		if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil && log != nil {
+		if err := PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil && log != nil {
 			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push normal mode after update")
 		}
 	}
@@ -3497,7 +3504,7 @@ func processUpdateApplyResult(result *pb.UpdateApplyResult, fallbackNodeID strin
 	}
 }
 
-func updateResultIncludesMist(result *pb.UpdateApplyResult) bool {
+func updateResultIncludesMist(result *ipcpb.UpdateApplyResult) bool {
 	for _, component := range result.GetComponents() {
 		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), "mist") {
 			return true
@@ -3569,7 +3576,7 @@ func fenceNodeAfterUpdateWarmupFailure(nodeID string, log logging.Logger) {
 	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeMaintenance, "update-orchestrator"); err != nil && log != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to fence node after update warmup failure")
 	}
-	if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil && log != nil {
+	if err := PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil && log != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push maintenance mode after update warmup failure")
 	}
 }
@@ -3596,7 +3603,7 @@ func CompleteUpdateWarmupIfReady(ctx context.Context, nodeID, targetRelease stri
 		if err := state.DefaultManager().SetNodeOperationalMode(setCtx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
 			return false, "", err
 		}
-		if err := PushOperationalMode(nodeID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil {
+		if err := PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil {
 			return false, "", err
 		}
 	}
@@ -3824,7 +3831,7 @@ var (
 // that owns the named storage cluster's S3. Wired from main.go to the
 // federation client + peer manager pair; absent in tests or when
 // federation isn't enabled.
-type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error)
+type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error)
 
 // StorageDeleteDelegate sends a DeleteStorageObjects request to the
 // Foghorn pool that owns the named storage cluster's S3. Wired from
@@ -3832,7 +3839,7 @@ type StorageMintDelegate func(ctx context.Context, targetClusterID string, req *
 // or when federation isn't enabled. Cleanup paths fall back to a clear
 // "remote storage cleanup pending" when the delegate is nil so we don't
 // accidentally delete against the wrong bucket.
-type StorageDeleteDelegate func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error)
+type StorageDeleteDelegate func(ctx context.Context, targetClusterID string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error)
 
 // SetStorageResolverFactory wires the per-request storage cluster resolver
 // factory. Called once at startup.
@@ -3930,8 +3937,8 @@ func thumbnailContentType(fileName string) string {
 // matches the local-mint code paths' S3 key shapes for each freeze asset
 // type. Returns nil for unsupported asset types so the caller can reject
 // with a clear reason.
-func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, targetCluster, localPath string) *pb.MintStorageURLsRequest {
-	base := &pb.MintStorageURLsRequest{
+func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, targetCluster, localPath string) *foghornfederationpb.MintStorageURLsRequest {
+	base := &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:          tenantID,
 		RequestingCluster: requestingCluster,
 		TargetClusterId:   targetCluster,
@@ -3944,7 +3951,7 @@ func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, t
 		}
 		base.ArtifactType = "clip"
 		base.ArtifactKey = assetHash
-		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
+		base.Op = foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
 		base.ContentType = "video/" + format
 		return base
 	case "vod":
@@ -3954,7 +3961,7 @@ func buildFreezeMintRequest(assetType, assetHash, tenantID, requestingCluster, t
 		}
 		base.ArtifactType = "vod"
 		base.ArtifactKey = assetHash
-		base.Op = pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
+		base.Op = foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE
 		base.ContentType = "video/" + format
 		return base
 	}
@@ -4081,7 +4088,7 @@ func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
 	v, ok, err := officialClusterCache.Get(ctx, "official:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
 		rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
 		defer cancel()
-		routing, qErr := quartermasterClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+		routing, qErr := quartermasterClient.GetClusterRouting(rctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 		if qErr != nil {
 			return "", false, qErr
 		}
@@ -4102,7 +4109,7 @@ func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
 
 // processFreezePermissionRequest handles freeze permission requests from Helmsman
 // Generates presigned URLs for secure S3 uploads without exposing credentials
-func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	requestID := req.GetRequestId()
 	assetType := req.GetAssetType()
 	assetHash := req.GetAssetHash()
@@ -4126,7 +4133,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	defer cancel()
 
 	if assetType == "dvr" || assetType == "dvr_segment" || assetType == "dvr_manifest" {
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
 			Approved:  false,
@@ -4215,7 +4222,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		} else {
 			entry.Error("Failed to resolve asset for freeze permission")
 		}
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
 			Approved:  false,
@@ -4229,7 +4236,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			"asset_hash": assetHash,
 			"asset_type": assetType,
 		}).Error("Could not resolve tenant for asset")
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
 			Approved:  false,
@@ -4261,7 +4268,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			"storage_cluster": storageCluster,
 			"origin_cluster":  originClusterID,
 		}).Info("Remote artifact — skip_upload=true (storage cluster's S3 authoritative)")
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId:  requestID,
 			AssetHash:  assetHash,
 			Approved:   true,
@@ -4286,7 +4293,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	expiry := 30 * time.Minute
 	expirySeconds := int64(expiry.Seconds())
 
-	response := &pb.FreezePermissionResponse{
+	response := &ipcpb.FreezePermissionResponse{
 		RequestId:        requestID,
 		AssetHash:        assetHash,
 		Approved:         true,
@@ -4299,7 +4306,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	// rejects with a structured reason so the operator can act.
 	switch mintMode {
 	case storage.StorageUnavailable:
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
 			Approved:  false,
@@ -4310,7 +4317,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	case storage.StorageMintViaFederation:
 		if storageMintDelegate == nil {
 			logger.WithField("storage_cluster", storageCluster).Warn("Federated mint required but no delegate wired")
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID,
 				AssetHash: assetHash,
 				Approved:  false,
@@ -4320,7 +4327,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		}
 		mintReq := buildFreezeMintRequest(assetType, assetHash, tenantID, localClusterID, storageCluster, localPath)
 		if mintReq == nil {
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID,
 				AssetHash: assetHash,
 				Approved:  false,
@@ -4339,7 +4346,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 				"storage_cluster": storageCluster,
 				"reason":          reason,
 			}).Warn("Federated MintStorageURLs rejected freeze")
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID,
 				AssetHash: assetHash,
 				Approved:  false,
@@ -4362,7 +4369,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	// minting above uses the origin cluster's storage surface instead.
 	if s3Client == nil {
 		logger.Warn("S3 client not configured, rejecting freeze request")
-		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 			RequestId: requestID,
 			AssetHash: assetHash,
 			Approved:  false,
@@ -4382,7 +4389,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
 			logger.WithError(err).Error("Failed to generate presigned PUT URL for clip")
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID,
 				AssetHash: assetHash,
 				Approved:  false,
@@ -4402,7 +4409,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
 		if err != nil {
 			logger.WithError(err).Error("Failed to generate presigned PUT URL for VOD")
-			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID,
 				AssetHash: assetHash,
 				Approved:  false,
@@ -4439,10 +4446,10 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 }
 
 // sendFreezePermissionResponse sends a FreezePermissionResponse back to Helmsman
-func sendFreezePermissionResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.FreezePermissionResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendFreezePermissionResponse(stream ipcpb.HelmsmanControl_ConnectServer, response *ipcpb.FreezePermissionResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_FreezePermissionResponse{FreezePermissionResponse: response},
+		Payload: &ipcpb.ControlMessage_FreezePermissionResponse{FreezePermissionResponse: response},
 	}
 
 	if err := stream.Send(msg); err != nil {
@@ -4454,7 +4461,7 @@ func sendFreezePermissionResponse(stream pb.HelmsmanControl_ConnectServer, respo
 }
 
 // processFreezeProgress handles freeze progress updates from Helmsman
-func processFreezeProgress(progress *pb.FreezeProgress, nodeID string, logger logging.Logger) {
+func processFreezeProgress(progress *ipcpb.FreezeProgress, nodeID string, logger logging.Logger) {
 	logger.WithFields(logging.Fields{
 		"request_id":     progress.GetRequestId(),
 		"asset_hash":     progress.GetAssetHash(),
@@ -4465,7 +4472,7 @@ func processFreezeProgress(progress *pb.FreezeProgress, nodeID string, logger lo
 }
 
 // processFreezeComplete handles freeze completion from Helmsman
-func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nodeID string, logger logging.Logger) {
+func processFreezeComplete(ctx context.Context, complete *ipcpb.FreezeComplete, nodeID string, logger logging.Logger) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
@@ -4580,7 +4587,7 @@ func processFreezeComplete(ctx context.Context, complete *pb.FreezeComplete, nod
 }
 
 // SendFreezeRequest sends a proactive FreezeRequest to the given node, relaying via HA if needed.
-func SendFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+func SendFreezeRequest(nodeID string, req *ipcpb.FreezeRequest) error {
 	err := SendLocalFreezeRequest(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4588,43 +4595,43 @@ func SendFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_Freeze{Freeze: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_Freeze{Freeze: req},
 	}))
 }
 
-func SendLocalFreezeRequest(nodeID string, req *pb.FreezeRequest) error {
+func SendLocalFreezeRequest(nodeID string, req *ipcpb.FreezeRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: req.RequestId,
-		Payload:   &pb.ControlMessage_FreezeRequest{FreezeRequest: req},
+		Payload:   &ipcpb.ControlMessage_FreezeRequest{FreezeRequest: req},
 		SentAt:    timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
-func SendLocalDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
+func SendLocalDtshSyncRequest(nodeID string, req *ipcpb.DtshSyncRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DtshSyncRequest{DtshSyncRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DtshSyncRequest{DtshSyncRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendDtshSyncRequest sends a DtshSyncRequest to the given node, relaying via HA if needed.
-func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
+func SendDtshSyncRequest(nodeID string, req *ipcpb.DtshSyncRequest) error {
 	err := SendLocalDtshSyncRequest(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4632,28 +4639,28 @@ func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DtshSync{DtshSync: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DtshSync{DtshSync: req},
 	}))
 }
 
-func SendLocalStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
+func SendLocalStopSessions(nodeID string, req *ipcpb.StopSessionsRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_StopSessionsRequest{StopSessionsRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_StopSessionsRequest{StopSessionsRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendStopSessions sends a StopSessionsRequest to the given node, relaying via HA if needed.
-func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
+func SendStopSessions(nodeID string, req *ipcpb.StopSessionsRequest) error {
 	err := SendLocalStopSessions(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4661,9 +4668,9 @@ func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_StopSessions{StopSessions: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: req},
 	}))
 }
 
@@ -4674,15 +4681,15 @@ func SendStopSessions(nodeID string, req *pb.StopSessionsRequest) error {
 // re-run USER_NEW for active sessions on the listed streams. Viewers whose
 // tokens still pass the (refreshed) policy continue with a brief reconnect
 // blip; viewers whose tokens are now invalid are denied.
-func SendLocalInvalidateSessions(nodeID string, req *pb.InvalidateSessionsRequest) error {
+func SendLocalInvalidateSessions(nodeID string, req *ipcpb.InvalidateSessionsRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_InvalidateSessionsRequest{InvalidateSessionsRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_InvalidateSessionsRequest{InvalidateSessionsRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
@@ -4690,7 +4697,7 @@ func SendLocalInvalidateSessions(nodeID string, req *pb.InvalidateSessionsReques
 
 // SendInvalidateSessions sends an InvalidateSessionsRequest to the given node,
 // relaying through Foghorn HA if the stream is held by a peer instance.
-func SendInvalidateSessions(nodeID string, req *pb.InvalidateSessionsRequest) error {
+func SendInvalidateSessions(nodeID string, req *ipcpb.InvalidateSessionsRequest) error {
 	err := SendLocalInvalidateSessions(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4698,29 +4705,29 @@ func SendInvalidateSessions(nodeID string, req *pb.InvalidateSessionsRequest) er
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: req},
 	}))
 }
 
 // SendLocalActivatePushTargets sends an ActivatePushTargets message to a local Helmsman.
-func SendLocalActivatePushTargets(nodeID string, req *pb.ActivatePushTargets) error {
+func SendLocalActivatePushTargets(nodeID string, req *ipcpb.ActivatePushTargets) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ActivatePushTargets{ActivatePushTargets: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ActivatePushTargets{ActivatePushTargets: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendActivatePushTargets sends ActivatePushTargets to the given node, relaying via HA if needed.
-func SendActivatePushTargets(nodeID string, req *pb.ActivatePushTargets) error {
+func SendActivatePushTargets(nodeID string, req *ipcpb.ActivatePushTargets) error {
 	err := SendLocalActivatePushTargets(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4728,14 +4735,14 @@ func SendActivatePushTargets(nodeID string, req *pb.ActivatePushTargets) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: req},
 	}))
 }
 
 // SendLocalDeactivatePushTargets sends a DeactivatePushTargets message to a local Helmsman.
-func SendLocalDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) error {
+func SendLocalDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTargets) error {
 	if registry == nil {
 		return ErrNotConnected
 	}
@@ -4745,15 +4752,15 @@ func SendLocalDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_DeactivatePushTargets{DeactivatePushTargets: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_DeactivatePushTargets{DeactivatePushTargets: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendDeactivatePushTargets sends DeactivatePushTargets to the given node, relaying via HA if needed.
-func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) error {
+func SendDeactivatePushTargets(nodeID string, req *ipcpb.DeactivatePushTargets) error {
 	err := SendLocalDeactivatePushTargets(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -4761,9 +4768,9 @@ func SendDeactivatePushTargets(nodeID string, req *pb.DeactivatePushTargets) err
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: req},
 	}))
 }
 
@@ -4790,7 +4797,7 @@ func SetProcessConfigCacheUpdater(h ProcessConfigCacheUpdater) {
 }
 
 // processProcessingJobResult handles job completion/failure results from Helmsman.
-func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, logger logging.Logger) {
+func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) {
 	fields := logging.Fields{
 		"job_id":  result.GetJobId(),
 		"status":  result.GetStatus(),
@@ -4930,13 +4937,13 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						logger.WithError(err).WithFields(fields).Warn("Failed to register processed artifact as origin")
 					}
 				}
-				state.DefaultManager().AddNodeArtifact(nodeID, &pb.StoredArtifact{
+				state.DefaultManager().AddNodeArtifact(nodeID, &ipcpb.StoredArtifact{
 					ClipHash:   artifactHash,
 					FilePath:   outputPath,
 					SizeBytes:  uint64(sizeBytes),
 					CreatedAt:  time.Now().Unix(),
 					Format:     newFormat,
-					Role:       pb.StoredArtifact_ROLE_ORIGIN,
+					Role:       ipcpb.StoredArtifact_ROLE_ORIGIN,
 					IsComplete: true,
 				})
 				projectArtifactSizeToCommodore(ctx, artifactHash, sizeBytes, logger)
@@ -4951,8 +4958,8 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 						}
 						cancel()
 					}
-					clipData := &pb.ClipLifecycleData{
-						Stage:    pb.ClipLifecycleData_STAGE_DONE,
+					clipData := &ipcpb.ClipLifecycleData{
+						Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
 						ClipHash: artifactHash,
 						ProgressPercent: func() *uint32 {
 							p := uint32(100)
@@ -4981,8 +4988,8 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 					go artifactoutbox.EnqueueClipLifecycleLogged(clipData)
 				}
 				if artifactType == "vod" && decklogClient != nil {
-					vodData := &pb.VodLifecycleData{
-						Status:          pb.VodLifecycleData_STATUS_COMPLETED,
+					vodData := &ipcpb.VodLifecycleData{
+						Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
 						VodHash:         artifactHash,
 						FilePath:        &outputPath,
 						SizeBytes:       func() *uint64 { s := uint64(sizeBytes); return &s }(),
@@ -5048,8 +5055,8 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 			}
 			if decklogClient != nil {
 				errText := result.GetError()
-				clipData := &pb.ClipLifecycleData{
-					Stage:    pb.ClipLifecycleData_STAGE_FAILED,
+				clipData := &ipcpb.ClipLifecycleData{
+					Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
 					ClipHash: failedArtifactHash,
 					Error:    &errText,
 				}
@@ -5073,7 +5080,7 @@ func processProcessingJobResult(result *pb.ProcessingJobResult, nodeID string, l
 
 // processProcessingJobProgress handles periodic progress updates from Helmsman.
 // Refreshes updated_at (preventing stale recovery) and emits lifecycle events.
-func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger logging.Logger) {
+func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, logger logging.Logger) {
 	if db == nil {
 		return
 	}
@@ -5119,8 +5126,8 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 
 	if decklogClient != nil && artifactHash.Valid {
 		if artifactType == "clip" {
-			clipData := &pb.ClipLifecycleData{
-				Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
+			clipData := &ipcpb.ClipLifecycleData{
+				Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
 				ClipHash:        artifactHash.String,
 				ProgressPercent: func() *uint32 { p := uint32(progressPct); return &p }(),
 			}
@@ -5144,8 +5151,8 @@ func processProcessingJobProgress(progress *pb.ProcessingJobProgress, logger log
 		// Emit VodLifecycleData with progress for VOD processing. DVR chapter
 		// finalization has its own path above because chapter jobs are not in
 		// foghorn.processing_jobs.
-		vodData := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+		vodData := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
 			VodHash:     artifactHash.String,
 			ProgressPct: &progressPct,
 		}
@@ -5177,8 +5184,8 @@ func processChapterFinalizeProgress(ctx context.Context, chapterID string, progr
 		}
 		return
 	}
-	vodData := &pb.VodLifecycleData{
-		Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+	vodData := &ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
 		VodHash:     artifactHash,
 		TenantId:    &tenantID,
 		ProgressPct: &progressPct,
@@ -5186,22 +5193,22 @@ func processChapterFinalizeProgress(ctx context.Context, chapterID string, progr
 	go artifactoutbox.EnqueueVodLifecycleLogged(vodData)
 }
 
-func SendLocalProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {
+func SendLocalProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
-	msg := &pb.ControlMessage{
-		Payload: &pb.ControlMessage_ProcessingJobRequest{ProcessingJobRequest: req},
+	msg := &ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_ProcessingJobRequest{ProcessingJobRequest: req},
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
 }
 
 // SendProcessingJob sends a ProcessingJobRequest to the given node, relaying via HA if needed.
-func SendProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {
+func SendProcessingJob(nodeID string, req *ipcpb.ProcessingJobRequest) error {
 	err := SendLocalProcessingJob(nodeID, req)
 	if !shouldRelay(nodeID, err) {
 		return err
@@ -5209,9 +5216,9 @@ func SendProcessingJob(nodeID string, req *pb.ProcessingJobRequest) error {
 	if commandRelay == nil {
 		return ErrNotConnected
 	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &pb.ForwardCommandRequest{
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: nodeID,
-		Command:      &pb.ForwardCommandRequest_ProcessingJob{ProcessingJob: req},
+		Command:      &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: req},
 	}))
 }
 
@@ -5297,7 +5304,7 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	expirySeconds := int64(expiry.Seconds())
 	requestID := fmt.Sprintf("dtsh-%s-%d", assetHash, time.Now().UnixNano())
 
-	req := &pb.DtshSyncRequest{
+	req := &ipcpb.DtshSyncRequest{
 		RequestId:        requestID,
 		AssetType:        assetType,
 		AssetHash:        assetHash,
@@ -5415,7 +5422,7 @@ func GetRelayBaseURL(nodeID string) string {
 
 // processCanDeleteRequest handles can-delete checks from Helmsman. Before
 // deleting a local asset copy, Helmsman asks Foghorn if it's safe.
-func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	assetHash := req.GetAssetHash()
 	requestingNodeID := req.GetNodeId()
 	if requestingNodeID == "" {
@@ -5427,7 +5434,7 @@ func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.
 		"node_id":    requestingNodeID,
 	}).Info("Processing can-delete request")
 
-	response := &pb.CanDeleteResponse{
+	response := &ipcpb.CanDeleteResponse{
 		AssetHash:    assetHash,
 		SafeToDelete: false,
 		Reason:       "unknown",
@@ -5554,10 +5561,10 @@ func verifyDurableArtifactCopy(ctx context.Context, info *state.ArtifactSyncInfo
 }
 
 // sendCanDeleteResponse sends a CanDeleteResponse back to Helmsman
-func sendCanDeleteResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.CanDeleteResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendCanDeleteResponse(stream ipcpb.HelmsmanControl_ConnectServer, response *ipcpb.CanDeleteResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_CanDeleteResponse{CanDeleteResponse: response},
+		Payload: &ipcpb.ControlMessage_CanDeleteResponse{CanDeleteResponse: response},
 	}
 
 	if err := stream.Send(msg); err != nil {
@@ -5570,7 +5577,7 @@ func sendCanDeleteResponse(stream pb.HelmsmanControl_ConnectServer, response *pb
 
 // processSyncComplete handles sync completion from Helmsman
 // After Helmsman uploads an asset to S3 (without deleting local), it notifies Foghorn
-func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger logging.Logger) {
+func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger logging.Logger) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
@@ -5869,8 +5876,8 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 
 	switch state.artifactType {
 	case "clip":
-		data := &pb.ClipLifecycleData{
-			Stage:              pb.ClipLifecycleData_STAGE_DONE,
+		data := &ipcpb.ClipLifecycleData{
+			Stage:              ipcpb.ClipLifecycleData_STAGE_DONE,
 			ClipHash:           state.artifactHash,
 			S3Url:              stringPtrIfNotEmpty(state.s3URL),
 			SizeBytes:          uint64PtrIfNonZero(state.sizeBytes),
@@ -5889,8 +5896,8 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 		}
 		go artifactoutbox.EnqueueClipLifecycleLogged(data)
 	case "vod":
-		data := &pb.VodLifecycleData{
-			Status:          pb.VodLifecycleData_STATUS_COMPLETED,
+		data := &ipcpb.VodLifecycleData{
+			Status:          ipcpb.VodLifecycleData_STATUS_COMPLETED,
 			VodHash:         state.artifactHash,
 			S3Url:           stringPtrIfNotEmpty(state.s3URL),
 			SizeBytes:       uint64PtrIfNonZero(state.sizeBytes),
@@ -5907,8 +5914,8 @@ func emitArtifactStorageStateLifecycle(ctx context.Context, logger logging.Logge
 		}
 		go artifactoutbox.EnqueueVodLifecycleLogged(data)
 	case "dvr":
-		data := &pb.DVRLifecycleData{
-			Status:             pb.DVRLifecycleData_STATUS_STOPPED,
+		data := &ipcpb.DVRLifecycleData{
+			Status:             ipcpb.DVRLifecycleData_STATUS_STOPPED,
 			DvrHash:            state.artifactHash,
 			SizeBytes:          uint64PtrIfNonZero(state.sizeBytes),
 			NodeId:             stringPtrIfNotEmpty(state.nodeID),
@@ -6002,7 +6009,7 @@ func refreshTLSBundles(log logging.Logger) {
 	// Refresh the server's own TLS certificates. The Foghorn control listener
 	// serves both internal mesh callers and public cluster-FQDN callers.
 	if serverCert.Loaded() {
-		bundles := []*pb.TLSCertBundle{}
+		bundles := []*ipcpb.TLSCertBundle{}
 		if certFile, keyFile := os.Getenv("GRPC_TLS_CERT_PATH"), os.Getenv("GRPC_TLS_KEY_PATH"); certFile != "" || keyFile != "" {
 			if bundle, err := fileServerTLSBundle(certFile, keyFile); err == nil {
 				bundles = append(bundles, bundle)
@@ -6067,7 +6074,7 @@ func refreshTLSBundles(log logging.Logger) {
 		// bundle changes; adding/removing a paying tenant's cluster
 		// subscription would never trigger a push until the cluster
 		// bundle itself rotated. Fingerprint the full set instead.
-		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
+		mode := resolveOperationalMode(n.canonicalID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
 		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
 		stripWildcardSiteWithoutTLS(seed)
 
@@ -6106,7 +6113,7 @@ func refreshTLSBundles(log logging.Logger) {
 	}
 }
 
-func stripWildcardSiteWithoutTLS(seed *pb.ConfigSeed) {
+func stripWildcardSiteWithoutTLS(seed *ipcpb.ConfigSeed) {
 	if seed == nil || seed.GetTls() != nil || seed.GetSite() == nil {
 		return
 	}
@@ -6206,7 +6213,7 @@ func probeEdgeActivation(nodeID, edgeDomain, connID string) {
 	}
 }
 
-func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
+func fetchClusterTLSBundle(nodeID string) (*ipcpb.TLSCertBundle, bool, error) {
 	if quartermasterClient == nil || navigatorClient == nil {
 		return nil, false, nil
 	}
@@ -6226,7 +6233,7 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 	return fetchClusterTLSBundleByClusterID(node.GetClusterId(), rootDomain)
 }
 
-func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCertBundle, bool, error) {
+func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSCertBundle, bool, error) {
 	if navigatorClient == nil {
 		return nil, false, nil
 	}
@@ -6237,7 +6244,7 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCert
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	certResp, certErr := navigatorClient.GetTLSBundle(ctx, &pb.GetTLSBundleRequest{BundleId: bundleID})
+	certResp, certErr := navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 	if certErr != nil {
 		return nil, false, certErr
 	}
@@ -6248,7 +6255,7 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCert
 		return nil, false, nil
 	}
 
-	return &pb.TLSCertBundle{
+	return &ipcpb.TLSCertBundle{
 		CertPem:       certResp.GetCertPem(),
 		KeyPem:        certResp.GetKeyPem(),
 		Domain:        wildcardDomain,
@@ -6258,7 +6265,7 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*pb.TLSCert
 	}, true, nil
 }
 
-func fileServerTLSBundle(certFile, keyFile string) (*pb.TLSCertBundle, error) {
+func fileServerTLSBundle(certFile, keyFile string) (*ipcpb.TLSCertBundle, error) {
 	if strings.TrimSpace(certFile) == "" || strings.TrimSpace(keyFile) == "" {
 		return nil, fmt.Errorf("both GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH are required together")
 	}
@@ -6270,7 +6277,7 @@ func fileServerTLSBundle(certFile, keyFile string) (*pb.TLSCertBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read key file %q: %w", keyFile, err)
 	}
-	return &pb.TLSCertBundle{
+	return &ipcpb.TLSCertBundle{
 		BundleId: "file:" + certFile,
 		Domain:   "foghorn.internal",
 		CertPem:  string(certPEM),
@@ -6278,7 +6285,7 @@ func fileServerTLSBundle(certFile, keyFile string) (*pb.TLSCertBundle, error) {
 	}, nil
 }
 
-func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*pb.TLSCertBundle, error) {
+func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -6303,12 +6310,12 @@ func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*
 	}
 }
 
-func fetchServedClusterTLSBundles(rootDomain string) ([]*pb.TLSCertBundle, error) {
+func fetchServedClusterTLSBundles(rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
 	clusterIDs := servedClusterIDsForTLS()
 	if len(clusterIDs) == 0 {
 		return nil, nil
 	}
-	bundles := make([]*pb.TLSCertBundle, 0, len(clusterIDs))
+	bundles := make([]*ipcpb.TLSCertBundle, 0, len(clusterIDs))
 	var lastErr error
 	for _, clusterID := range clusterIDs {
 		bundle, found, err := fetchClusterTLSBundleByClusterID(clusterID, rootDomain)
@@ -6371,7 +6378,7 @@ func clusterTLSBundleLookup(clusterID, rootDomain string) (string, string, bool)
 	return "cluster:" + slug, wildcardDomain, true
 }
 
-func tlsBundleState(bundle *pb.TLSCertBundle) string {
+func tlsBundleState(bundle *ipcpb.TLSCertBundle) string {
 	return tlsMaterialState(bundle, nil)
 }
 
@@ -6381,7 +6388,7 @@ func tlsBundleState(bundle *pb.TLSCertBundle) string {
 // produces a different fingerprint, which guarantees the next refresh
 // pushes a fresh ConfigSeed instead of stalling on the cluster bundle's
 // fingerprint alone.
-func tlsBundleSetState(bundles []*pb.TLSCertBundle, caBundle []byte) string {
+func tlsBundleSetState(bundles []*ipcpb.TLSCertBundle, caBundle []byte) string {
 	if len(bundles) == 0 && len(caBundle) == 0 {
 		return tlsStateNoCert
 	}
@@ -6405,7 +6412,7 @@ func tlsBundleSetState(bundles []*pb.TLSCertBundle, caBundle []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func tlsMaterialState(bundle *pb.TLSCertBundle, caBundle []byte) string {
+func tlsMaterialState(bundle *ipcpb.TLSCertBundle, caBundle []byte) string {
 	if bundle == nil && len(caBundle) == 0 {
 		return tlsStateNoCert
 	}
@@ -6441,14 +6448,14 @@ func readConfiguredCABundle() []byte {
 }
 
 type EdgeProvisioningServer struct {
-	pb.UnimplementedEdgeProvisioningServiceServer
+	foghornpb.UnimplementedEdgeProvisioningServiceServer
 }
 
 func RegisterEdgeProvisioningService(srv *grpc.Server) {
-	pb.RegisterEdgeProvisioningServiceServer(srv, &EdgeProvisioningServer{})
+	foghornpb.RegisterEdgeProvisioningServiceServer(srv, &EdgeProvisioningServer{})
 }
 
-func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.PreRegisterEdgeRequest) (*pb.PreRegisterEdgeResponse, error) {
+func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error) {
 	token := strings.TrimSpace(req.GetEnrollmentToken())
 	if token == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "enrollment_token is required")
@@ -6472,8 +6479,8 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 		if quartermasterClient == nil {
 			return nil, status.Error(codes.Unavailable, "enrollment service unavailable")
 		}
-		validateFn = func(c context.Context, t string) (*pb.ValidateBootstrapTokenResponse, error) {
-			return quartermasterClient.ValidateBootstrapTokenEx(c, &pb.ValidateBootstrapTokenRequest{
+		validateFn = func(c context.Context, t string) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
+			return quartermasterClient.ValidateBootstrapTokenEx(c, &quartermasterpb.ValidateBootstrapTokenRequest{
 				Token:    t,
 				ClientIp: clientIP,
 				Consume:  false,
@@ -6522,7 +6529,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
 	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18029", clusterSlug, rootDomain)
 
-	resp := &pb.PreRegisterEdgeResponse{
+	resp := &foghornpb.PreRegisterEdgeResponse{
 		NodeId:           nodeID,
 		EdgeDomain:       edgeDomain,
 		PoolDomain:       poolDomain,
@@ -6536,9 +6543,9 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 	return resp, nil
 }
 
-func processValidateEdgeToken(requestID string, req *pb.ValidateEdgeTokenRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processValidateEdgeToken(requestID string, req *ipcpb.ValidateEdgeTokenRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	token := req.GetToken()
-	resp := &pb.ValidateEdgeTokenResponse{Valid: false}
+	resp := &ipcpb.ValidateEdgeTokenResponse{Valid: false}
 
 	if token == "" || CommodoreClient == nil {
 		sendEdgeTokenResponse(requestID, stream, resp, logger)
@@ -6564,11 +6571,11 @@ func processValidateEdgeToken(requestID string, req *pb.ValidateEdgeTokenRequest
 	sendEdgeTokenResponse(requestID, stream, resp, logger)
 }
 
-func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectServer, resp *pb.ValidateEdgeTokenResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendEdgeTokenResponse(requestID string, stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.ValidateEdgeTokenResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_ValidateEdgeTokenResponse{ValidateEdgeTokenResponse: resp},
+		Payload:   &ipcpb.ControlMessage_ValidateEdgeTokenResponse{ValidateEdgeTokenResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).Warn("Failed to send edge token validation response")
@@ -6578,8 +6585,8 @@ func sendEdgeTokenResponse(requestID string, stream pb.HelmsmanControl_ConnectSe
 // processEdgeMistAdminSession relays a Mist-admin session validation
 // request from Helmsman to Commodore. The connected nodeID is injected
 // here so a token minted for one edge cannot be replayed against another.
-func processEdgeMistAdminSession(requestID string, req *pb.EdgeMistAdminSessionRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
-	resp := &pb.EdgeMistAdminSessionResponse{Valid: false}
+func processEdgeMistAdminSession(requestID string, req *ipcpb.EdgeMistAdminSessionRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	resp := &ipcpb.EdgeMistAdminSessionResponse{Valid: false}
 	if req.GetToken() == "" || nodeID == "" || CommodoreClient == nil {
 		sendEdgeMistAdminSessionResponse(requestID, stream, resp, logger)
 		return
@@ -6588,7 +6595,7 @@ func processEdgeMistAdminSession(requestID string, req *pb.EdgeMistAdminSessionR
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	commResp, err := CommodoreClient.ValidateMistAdminSession(ctx, &pb.ValidateMistAdminSessionRequest{
+	commResp, err := CommodoreClient.ValidateMistAdminSession(ctx, &commodorepb.ValidateMistAdminSessionRequest{
 		Token:          req.GetToken(),
 		ExpectedNodeId: nodeID,
 	})
@@ -6610,11 +6617,11 @@ func processEdgeMistAdminSession(requestID string, req *pb.EdgeMistAdminSessionR
 	sendEdgeMistAdminSessionResponse(requestID, stream, resp, logger)
 }
 
-func sendEdgeMistAdminSessionResponse(requestID string, stream pb.HelmsmanControl_ConnectServer, resp *pb.EdgeMistAdminSessionResponse, logger logging.Logger) {
-	msg := &pb.ControlMessage{
+func sendEdgeMistAdminSessionResponse(requestID string, stream ipcpb.HelmsmanControl_ConnectServer, resp *ipcpb.EdgeMistAdminSessionResponse, logger logging.Logger) {
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_EdgeMistAdminSessionResponse{EdgeMistAdminSessionResponse: resp},
+		Payload:   &ipcpb.ControlMessage_EdgeMistAdminSessionResponse{EdgeMistAdminSessionResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).Warn("Failed to send mist admin session response")
@@ -6625,7 +6632,7 @@ func sendEdgeMistAdminSessionResponse(requestID string, stream pb.HelmsmanContro
 // presigned PUT URLs for each thumbnail file, and sends them back to Helmsman.
 // S3 keys use stable identifiers: stream_id (UUID) for live streams,
 // artifact_hash (32-char hex) for artifacts. Never playback_id (rotatable).
-func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadRequest, nodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	internalName := req.GetInternalName()
 	filePaths := req.GetFilePaths()
 
@@ -6843,9 +6850,9 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 	storageCluster, mintMode := resolveThumbnailStorageCluster(context.Background(), thumbTenantID, thumbOriginCluster)
 
 	expiry := 15 * time.Minute
-	resp := &pb.ThumbnailUploadResponse{
+	resp := &ipcpb.ThumbnailUploadResponse{
 		ThumbnailKey: thumbnailKey,
-		Uploads:      make([]*pb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
+		Uploads:      make([]*ipcpb.ThumbnailUploadResponse_PresignedUpload, 0, len(filePaths)),
 	}
 
 	allowedThumbnailFiles := map[string]bool{
@@ -6882,13 +6889,13 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 				logger.WithField("file_name", fileName).Warn("Rejected thumbnail filename not in allowlist")
 				continue
 			}
-			mintReq := &pb.MintStorageURLsRequest{
+			mintReq := &foghornfederationpb.MintStorageURLsRequest{
 				TenantId:           thumbTenantID,
 				RequestingCluster:  localClusterID,
 				TargetClusterId:    storageCluster,
 				ArtifactType:       "thumbnail",
 				ArtifactKey:        thumbnailKey + "/" + fileName,
-				Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+				Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 				ContentType:        thumbnailContentType(fileName),
 				StreamInternalName: streamCtxName,
 			}
@@ -6900,7 +6907,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 				}).Warn("Federated MintStorageURLs failed for thumbnail")
 				continue
 			}
-			resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
+			resp.Uploads = append(resp.Uploads, &ipcpb.ThumbnailUploadResponse_PresignedUpload{
 				FileName:     fileName,
 				PresignedUrl: mintResp.GetPresignedPutUrl(),
 				S3Key:        mintResp.GetS3Key(),
@@ -6930,7 +6937,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 				}).Error("Failed to generate presigned PUT URL for thumbnail")
 				continue
 			}
-			resp.Uploads = append(resp.Uploads, &pb.ThumbnailUploadResponse_PresignedUpload{
+			resp.Uploads = append(resp.Uploads, &ipcpb.ThumbnailUploadResponse_PresignedUpload{
 				FileName:     fileName,
 				PresignedUrl: presignedURL,
 				S3Key:        s3Key,
@@ -6944,10 +6951,10 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 		return
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_ThumbnailUploadResponse{ThumbnailUploadResponse: resp},
+		Payload:   &ipcpb.ControlMessage_ThumbnailUploadResponse{ThumbnailUploadResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil {
 		logger.WithError(err).Error("Failed to send thumbnail upload response")
@@ -6958,7 +6965,7 @@ func processThumbnailUploadRequest(requestID string, req *pb.ThumbnailUploadRequ
 // files to S3. For artifact thumbnails (DVR/clip), marks has_thumbnails=true.
 // Stream thumbnails need no DB update — the frontend resolves them via
 // deterministic Chandler URL from assetsDomain + stream_id.
-func processThumbnailUploaded(req *pb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
+func processThumbnailUploaded(req *ipcpb.ThumbnailUploaded, nodeID string, logger logging.Logger) {
 	thumbnailKey := req.GetThumbnailKey()
 	s3Keys := req.GetS3Keys()
 
@@ -7158,16 +7165,16 @@ func markArtifactHasThumbnails(artifactHash string, logger logging.Logger) {
 // artifactAssetTypeFromString maps foghorn.artifacts.artifact_type values to
 // the proto enum used by MarkArtifactThumbnailsReady /
 // UpdateArtifactStorageCluster.
-func artifactAssetTypeFromString(t string) (pb.ArtifactAssetType, bool) {
+func artifactAssetTypeFromString(t string) (commodorepb.ArtifactAssetType, bool) {
 	switch t {
 	case "clip":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
 	case "dvr":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
 	case "vod":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
 	default:
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
 	}
 }
 

@@ -5,7 +5,8 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/triggers"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,7 +29,7 @@ import (
 // fire_webhook=false on a webhook policy returns "webhook-test-skipped"
 // without making the call so an operator can inspect the policy shape
 // before opting in to the side effect.
-func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, error) {
+func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -59,7 +60,7 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *pb.Test
 	// gets the policy shape without paying the outbound HTTP side effect.
 	// Allowed=false here is informational, not a real enforcement deny.
 	if policy.GetType() == "webhook" && !req.GetFireWebhook() {
-		return &pb.TestPlaybackAccessResponse{
+		return &foghornpb.TestPlaybackAccessResponse{
 			Allowed:              false,
 			PolicyType:           "webhook",
 			Reason:               "webhook-test-skipped",
@@ -68,7 +69,7 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *pb.Test
 		}, nil
 	}
 
-	userNew := &pb.ViewerConnectTrigger{
+	userNew := &ipcpb.ViewerConnectTrigger{
 		StreamName:  resolvedInternal,
 		SessionId:   req.GetSessionId(),
 		Host:        req.GetViewerIp(),
@@ -84,7 +85,7 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *pb.Test
 	if d == nil {
 		return nil, status.Error(codes.Internal, "evaluator returned nil decision")
 	}
-	return &pb.TestPlaybackAccessResponse{
+	return &foghornpb.TestPlaybackAccessResponse{
 		Allowed:              d.Allowed,
 		PolicyType:           d.PolicyType,
 		Reason:               d.Reason,

@@ -17,8 +17,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 )
@@ -321,7 +320,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		internalName = job.InternalName.String
 	}
 
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		JobId:        job.JobID,
 		TenantId:     job.TenantID,
 		ArtifactHash: artifactHash,
@@ -434,8 +433,8 @@ func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID 
 
 	switch job.ArtifactType.String {
 	case "clip":
-		data := &pb.ClipLifecycleData{
-			Stage:           pb.ClipLifecycleData_STAGE_PROGRESS,
+		data := &ipcpb.ClipLifecycleData{
+			Stage:           ipcpb.ClipLifecycleData_STAGE_PROGRESS,
 			ClipHash:        artifactHash,
 			ProgressPercent: &progress,
 			StartedAt:       &startedAt,
@@ -456,8 +455,8 @@ func (d *ProcessingDispatcher) emitProcessingStarted(job *processingJob, nodeID 
 		}
 		artifactoutbox.EnqueueClipLifecycleLogged(data)
 	case "vod":
-		data := &pb.VodLifecycleData{
-			Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+		data := &ipcpb.VodLifecycleData{
+			Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
 			VodHash:     artifactHash,
 			ProgressPct: &vodProgress,
 			StartedAt:   &startedAt,
@@ -672,8 +671,8 @@ func (d *ProcessingDispatcher) failClipArtifact(ctx context.Context, artifactHas
 		d.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to mark exhausted clip artifact failed")
 	}
 
-	data := &pb.ClipLifecycleData{
-		Stage:    pb.ClipLifecycleData_STAGE_FAILED,
+	data := &ipcpb.ClipLifecycleData{
+		Stage:    ipcpb.ClipLifecycleData_STAGE_FAILED,
 		ClipHash: artifactHash,
 		Error:    &errorMsg,
 	}

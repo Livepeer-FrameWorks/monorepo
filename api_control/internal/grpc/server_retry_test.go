@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 )
@@ -32,7 +32,7 @@ func TestResolveArtifactPlaybackIDRetriesRetryablePostgresErrors(t *testing.T) {
 		WillReturnRows(rows)
 
 	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
-	resp, err := server.ResolveArtifactPlaybackID(context.Background(), &pb.ResolveArtifactPlaybackIDRequest{
+	resp, err := server.ResolveArtifactPlaybackID(context.Background(), &commodorepb.ResolveArtifactPlaybackIDRequest{
 		PlaybackId: "playback-1",
 	})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestResolveIdentifierRetriesStreamIDLookupOnRetryablePostgresErrors(t *test
 		}).AddRow(streamID, "tenant-1", "user-1", "live+abc", true, false))
 
 	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
-	resp, err := server.ResolveIdentifier(context.Background(), &pb.ResolveIdentifierRequest{
+	resp, err := server.ResolveIdentifier(context.Background(), &commodorepb.ResolveIdentifierRequest{
 		Identifier: streamID,
 	})
 	if err != nil {

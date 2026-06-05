@@ -15,7 +15,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -87,8 +90,8 @@ type healthSnapshot struct {
 	TenantID      string
 	ActiveStreams int
 	Window        time.Duration
-	Health        *pb.StreamHealthSummary
-	ClientQoE     *pb.ClientQoeSummary
+	Health        *periscopepb.StreamHealthSummary
+	ClientQoE     *periscopepb.ClientQoeSummary
 }
 
 type Orchestrator interface {
@@ -96,23 +99,23 @@ type Orchestrator interface {
 }
 
 type PeriscopeClient interface {
-	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
-	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error)
-	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetPlatformOverviewResponse, error)
-	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, pagination *periscope.CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error)
+	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error)
+	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error)
+	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetPlatformOverviewResponse, error)
+	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, pagination *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error)
 }
 
 type BillingClient interface {
-	GetBillingStatus(ctx context.Context, tenantID string) (*pb.BillingStatusResponse, error)
+	GetBillingStatus(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error)
 }
 
 type QuartermasterClient interface {
 	ListActiveTenants(ctx context.Context) ([]string, error)
-	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+	BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error)
 }
 
 type DecklogClient interface {
-	SendServiceEvent(event *pb.ServiceEvent) error
+	SendServiceEvent(event *ipcpb.ServiceEvent) error
 	Close() error
 }
 
@@ -370,7 +373,7 @@ func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tenantID string, 
 		EndTime:   now,
 	}
 	pagination := &periscope.CursorPaginationOpts{First: 100}
-	var allMetrics []*pb.StreamHealthMetric
+	var allMetrics []*periscopepb.StreamHealthMetric
 	for {
 		resp, err := a.periscope.GetStreamHealthMetrics(ctx, tenantID, nil, timeRange, pagination)
 		if err != nil {
@@ -421,7 +424,7 @@ func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnaps
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat client QoE lookup failed")
 		}
 	}
-	var qoeSummary *pb.ClientQoeSummary
+	var qoeSummary *periscopepb.ClientQoeSummary
 	if qoeResp != nil {
 		qoeSummary = qoeResp.GetSummary()
 	}
@@ -477,7 +480,7 @@ func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.Token
 	}
 	duration := uint64(time.Second.Milliseconds())
 	totalTokens := uint32(tokens.Input + tokens.Output)
-	agg := &pb.APIRequestAggregate{
+	agg := &ipcpb.APIRequestAggregate{
 		TenantId:        tenantID,
 		AuthType:        "service",
 		OperationType:   "skipper_heartbeat",
@@ -488,17 +491,17 @@ func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.Token
 		TotalComplexity: totalTokens,
 		Timestamp:       time.Now().Unix(),
 	}
-	batch := &pb.APIRequestBatch{
+	batch := &ipcpb.APIRequestBatch{
 		Timestamp:  time.Now().Unix(),
 		SourceNode: "skipper",
-		Aggregates: []*pb.APIRequestAggregate{agg},
+		Aggregates: []*ipcpb.APIRequestAggregate{agg},
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType: "api_request_batch",
 		Timestamp: timestamppb.Now(),
 		Source:    "skipper",
 		TenantId:  tenantID,
-		Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
+		Payload:   &ipcpb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 	}
 	if err := a.decklog.SendServiceEvent(event); err != nil {
 		if a.logger != nil {

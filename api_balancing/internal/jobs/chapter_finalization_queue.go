@@ -15,7 +15,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Polls foghorn.dvr_chapters for rows in state='closed' (or stuck in
@@ -351,8 +351,8 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		return nil
 	}
 	startedAt := time.Now().Unix()
-	artifactoutbox.EnqueueVodLifecycleLogged(&pb.VodLifecycleData{
-		Status:    pb.VodLifecycleData_STATUS_PROCESSING,
+	artifactoutbox.EnqueueVodLifecycleLogged(&ipcpb.VodLifecycleData{
+		Status:    ipcpb.VodLifecycleData_STATUS_PROCESSING,
 		VodHash:   playbackHash,
 		TenantId:  &parent.tenantID,
 		StartedAt: &startedAt,
@@ -360,7 +360,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
 	chapterInt := chapterInternalName(playbackHash)
-	req := &pb.ProcessingJobRequest{
+	req := &ipcpb.ProcessingJobRequest{
 		JobId:                    "chapter-finalize-" + c.ChapterID,
 		TenantId:                 parent.tenantID,
 		ArtifactHash:             playbackHash,
@@ -432,8 +432,8 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 	return p, nil
 }
 
-func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamInternalName*/, _ /*dvrHash*/ string, rows []control.DVRSegmentRow) ([]*pb.DVRChapterSegmentRef, int, error) {
-	refs := make([]*pb.DVRChapterSegmentRef, 0, len(rows))
+func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamInternalName*/, _ /*dvrHash*/ string, rows []control.DVRSegmentRow) ([]*ipcpb.DVRChapterSegmentRef, int, error) {
+	refs := make([]*ipcpb.DVRChapterSegmentRef, 0, len(rows))
 	missing := 0
 	for _, r := range rows {
 		// LocalPath is intentionally empty: Helmsman owns the on-disk
@@ -442,7 +442,7 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 		// for the matching dvr_hash + segment_name. Foghorn doesn't
 		// know the streamID-rooted layout, so it never tries to
 		// pre-compute a path the sidecar would just have to undo.
-		ref := &pb.DVRChapterSegmentRef{
+		ref := &ipcpb.DVRChapterSegmentRef{
 			SegmentName:  r.SegmentName,
 			Sequence:     r.Sequence,
 			DurationMs:   r.DurationMs,
@@ -594,7 +594,7 @@ func nodeAliveAndProcessingCapable(nodeID string) bool {
 // S3 freeze completes. uploaded/deleted_local rows always carry a
 // presigned recovery URL after buildSegmentRefs runs; pending rows
 // (still being uploaded) don't.
-func pendingLocalOnly(refs []*pb.DVRChapterSegmentRef) bool {
+func pendingLocalOnly(refs []*ipcpb.DVRChapterSegmentRef) bool {
 	for _, r := range refs {
 		if r.GetPresignedRecoveryUrl() == "" {
 			return true

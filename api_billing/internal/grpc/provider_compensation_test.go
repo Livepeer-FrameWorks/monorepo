@@ -7,7 +7,9 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	stripelib "github.com/stripe/stripe-go/v85"
 
@@ -56,7 +58,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 		WithArgs(tierID, "tenant-a", "intent-tenant").
 		WillReturnError(errors.New("db down"))
 
-	_, err = server.CreateCheckoutSession(context.Background(), &pb.CreateStripeCheckoutRequest{
+	_, err = server.CreateCheckoutSession(context.Background(), &purserpb.CreateStripeCheckoutRequest{
 		TenantId:      "tenant-a",
 		TierId:        tierID,
 		BillingPeriod: "monthly",
@@ -111,7 +113,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET mollie_subscription_id = \$1`).
 		WillReturnError(errors.New("db down"))
 
-	_, err = server.CreateMollieSubscription(context.Background(), &pb.CreateMollieSubscriptionRequest{
+	_, err = server.CreateMollieSubscription(context.Background(), &purserpb.CreateMollieSubscriptionRequest{
 		TenantId:  "tenant-a",
 		TierId:    tierID,
 		MandateId: "mdt_123",
@@ -202,20 +204,20 @@ func (f *fakeMollieBillingClient) ExtractMandateInfo(*mollielib.Mandate, string)
 
 type fakeCommodorePrimaryUser struct{}
 
-func (f *fakeCommodorePrimaryUser) TerminateTenantStreams(context.Context, string, string) (*pb.TerminateTenantStreamsResponse, error) {
+func (f *fakeCommodorePrimaryUser) TerminateTenantStreams(context.Context, string, string) (*foghornpb.TerminateTenantStreamsResponse, error) {
 	panic("unexpected TerminateTenantStreams call")
 }
 
-func (f *fakeCommodorePrimaryUser) InvalidateTenantCache(context.Context, string, string) (*pb.InvalidateTenantCacheResponse, error) {
+func (f *fakeCommodorePrimaryUser) InvalidateTenantCache(context.Context, string, string) (*foghornpb.InvalidateTenantCacheResponse, error) {
 	panic("unexpected InvalidateTenantCache call")
 }
 
-func (f *fakeCommodorePrimaryUser) GetTenantUserCount(context.Context, string) (*pb.GetTenantUserCountResponse, error) {
+func (f *fakeCommodorePrimaryUser) GetTenantUserCount(context.Context, string) (*commodorepb.GetTenantUserCountResponse, error) {
 	panic("unexpected GetTenantUserCount call")
 }
 
-func (f *fakeCommodorePrimaryUser) GetTenantPrimaryUser(context.Context, string) (*pb.GetTenantPrimaryUserResponse, error) {
-	return &pb.GetTenantPrimaryUserResponse{
+func (f *fakeCommodorePrimaryUser) GetTenantPrimaryUser(context.Context, string) (*commodorepb.GetTenantPrimaryUserResponse, error) {
+	return &commodorepb.GetTenantPrimaryUserResponse{
 		Email: "billing@example.com",
 		Name:  "Billing User",
 	}, nil

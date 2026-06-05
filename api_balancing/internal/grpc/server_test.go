@@ -7,7 +7,9 @@ import (
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -33,7 +35,7 @@ func (m *mockCacheInvalidator) GetBillingStatus(ctx context.Context, internalNam
 	return nil
 }
 
-func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer {
+func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer {
 	return nil
 }
 
@@ -56,7 +58,7 @@ func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
 func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
-	_, err := server.InvalidateTenantCache(context.Background(), &pb.InvalidateTenantCacheRequest{})
+	_, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{})
 	if err == nil {
 		t.Fatal("expected error for missing tenant id")
 	}
@@ -73,7 +75,7 @@ func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 func TestInvalidateTenantCacheNoInvalidatorConfigured(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &pb.InvalidateTenantCacheRequest{
+	resp, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{
 		TenantId: "tenant-1",
 		Reason:   "reactivate",
 	})
@@ -90,7 +92,7 @@ func TestInvalidateTenantCacheUsesInvalidator(t *testing.T) {
 	invalidator := &mockCacheInvalidator{entries: 3}
 	server.SetCacheInvalidator(invalidator)
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &pb.InvalidateTenantCacheRequest{
+	resp, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{
 		TenantId: "tenant-2",
 		Reason:   "reactivate",
 	})
@@ -178,7 +180,7 @@ func TestLookupCompletedUploadAssetReturnsFailedAssetWhenPipelineFailed(t *testi
 	if asset.GetArtifactHash() != "art-1" {
 		t.Fatalf("expected artifact hash art-1, got %s", asset.GetArtifactHash())
 	}
-	if asset.GetStatus() != pb.VodStatus_VOD_STATUS_FAILED {
+	if asset.GetStatus() != sharedpb.VodStatus_VOD_STATUS_FAILED {
 		t.Fatalf("expected failed status, got %v", asset.GetStatus())
 	}
 

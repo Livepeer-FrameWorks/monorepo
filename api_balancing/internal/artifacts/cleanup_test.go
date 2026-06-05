@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	"strings"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type fakeS3 struct {
@@ -147,12 +146,12 @@ func TestCleaner_RemoteOnlyDeploymentNoLocalS3(t *testing.T) {
 	// Storage-via-federation: this Foghorn has no local S3, but the
 	// delegate is wired. Remote rows must still get cleaned.
 	called := false
-	delegate := func(_ context.Context, _ string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	delegate := func(_ context.Context, _ string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		called = true
 		if req.GetS3Key() != "vod/tenant-a/vod-1/movie.mp4" {
 			t.Errorf("delegate received key = %q", req.GetS3Key())
 		}
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: nil, Delegate: delegate}
 
@@ -225,13 +224,13 @@ func TestCleaner_UnsupportedTypeReturnsTypedError(t *testing.T) {
 
 func TestCleaner_RemoteUsesDelegateNotLocalS3(t *testing.T) {
 	s3 := &fakeS3{}
-	var got *pb.DeleteStorageObjectsRequest
-	delegate := func(_ context.Context, target string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	var got *foghornfederationpb.DeleteStorageObjectsRequest
+	delegate := func(_ context.Context, target string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		got = req
 		if target != "us-east" {
 			t.Errorf("delegate target = %q, want us-east", target)
 		}
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: s3, Delegate: delegate}
 
@@ -263,10 +262,10 @@ func TestCleaner_RemoteUsesDelegateNotLocalS3(t *testing.T) {
 }
 
 func TestCleaner_RemoteDVRSendsPrefix(t *testing.T) {
-	var got *pb.DeleteStorageObjectsRequest
-	delegate := func(_ context.Context, _ string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	var got *foghornfederationpb.DeleteStorageObjectsRequest
+	delegate := func(_ context.Context, _ string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		got = req
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: &fakeS3{}, Delegate: delegate}
 
@@ -303,8 +302,8 @@ func TestCleaner_RemoteWithoutDelegateReturnsErr(t *testing.T) {
 }
 
 func TestCleaner_RemoteRejectionPropagatesReason(t *testing.T) {
-	delegate := func(_ context.Context, _ string, _ *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
-		return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: &fakeS3{}, Delegate: delegate}
 	err := c.Delete(context.Background(), ArtifactRef{
@@ -325,9 +324,9 @@ func TestCleaner_RemoteRejectionPropagatesReason(t *testing.T) {
 func TestCleaner_OriginClusterFallbackForRemoteCheck(t *testing.T) {
 	// storage_cluster_id empty, origin_cluster_id != local → remote
 	called := false
-	delegate := func(_ context.Context, _ string, _ *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		called = true
-		return &pb.DeleteStorageObjectsResponse{Accepted: true}, nil
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 	}
 	c := &Cleaner{LocalCluster: "eu-west", S3: &fakeS3{}, Delegate: delegate}
 
@@ -350,7 +349,7 @@ func TestCleaner_OriginClusterFallbackForRemoteCheck(t *testing.T) {
 func TestCleaner_LocalClusterMatchUsesLocalS3(t *testing.T) {
 	// storage_cluster_id == local → local S3
 	s3 := &fakeS3{}
-	delegate := func(_ context.Context, _ string, _ *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 		t.Fatal("delegate should not be called when storage_cluster_id == local")
 		return nil, nil
 	}

@@ -16,7 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
@@ -32,14 +32,14 @@ func notifyFoghornShutdown() error {
 		}
 	}
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "NODE_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
 		Timestamp:   time.Now().Unix(),
 		Blocking:    false,
 		RequestId:   "",
-		TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
-			NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+		TriggerPayload: &ipcpb.MistTrigger_NodeLifecycleUpdate{
+			NodeLifecycleUpdate: &ipcpb.NodeLifecycleUpdate{
 				NodeId:    nodeID,
 				IsHealthy: false,
 				EventType: "node_shutdown",

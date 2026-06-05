@@ -7,7 +7,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -19,13 +20,13 @@ type artifactCommandSpy struct {
 	stopDVRCalled    bool
 	deleteDVRCalled  bool
 	deleteVodCalled  bool
-	lastStopReq      *pb.StopDVRRequest
+	lastStopReq      *sharedpb.StopDVRRequest
 	noForwardSeen    bool
 	returnNotFound   bool
 	returnErr        error
 }
 
-func (s *artifactCommandSpy) DeleteClip(_ context.Context, _ *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error) {
+func (s *artifactCommandSpy) DeleteClip(_ context.Context, _ *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	s.deleteClipCalled = true
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
@@ -33,10 +34,10 @@ func (s *artifactCommandSpy) DeleteClip(_ context.Context, _ *pb.DeleteClipReque
 	if s.returnErr != nil {
 		return nil, s.returnErr
 	}
-	return &pb.DeleteClipResponse{Success: true}, nil
+	return &sharedpb.DeleteClipResponse{Success: true}, nil
 }
 
-func (s *artifactCommandSpy) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error) {
+func (s *artifactCommandSpy) StopDVR(ctx context.Context, req *sharedpb.StopDVRRequest) (*sharedpb.StopDVRResponse, error) {
 	s.stopDVRCalled = true
 	s.lastStopReq = req
 	if ctx.Value(ctxkeys.KeyNoForward) != nil {
@@ -48,10 +49,10 @@ func (s *artifactCommandSpy) StopDVR(ctx context.Context, req *pb.StopDVRRequest
 	if s.returnErr != nil {
 		return nil, s.returnErr
 	}
-	return &pb.StopDVRResponse{Success: true}, nil
+	return &sharedpb.StopDVRResponse{Success: true}, nil
 }
 
-func (s *artifactCommandSpy) DeleteDVR(_ context.Context, _ *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error) {
+func (s *artifactCommandSpy) DeleteDVR(_ context.Context, _ *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
 	s.deleteDVRCalled = true
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
@@ -59,10 +60,10 @@ func (s *artifactCommandSpy) DeleteDVR(_ context.Context, _ *pb.DeleteDVRRequest
 	if s.returnErr != nil {
 		return nil, s.returnErr
 	}
-	return &pb.DeleteDVRResponse{Success: true}, nil
+	return &sharedpb.DeleteDVRResponse{Success: true}, nil
 }
 
-func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, _ *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error) {
+func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, _ *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error) {
 	s.deleteVodCalled = true
 	if s.returnNotFound {
 		return nil, status.Error(codes.NotFound, "not found")
@@ -70,12 +71,12 @@ func (s *artifactCommandSpy) DeleteVodAsset(_ context.Context, _ *pb.DeleteVodAs
 	if s.returnErr != nil {
 		return nil, s.returnErr
 	}
-	return &pb.DeleteVodAssetResponse{Success: true}, nil
+	return &sharedpb.DeleteVodAssetResponse{Success: true}, nil
 }
 
 func TestForwardArtifactCommand_RequiresAuth(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
-	_, err := srv.ForwardArtifactCommand(context.Background(), &pb.ForwardArtifactCommandRequest{
+	_, err := srv.ForwardArtifactCommand(context.Background(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "hash-1",
 	})
@@ -89,7 +90,7 @@ func TestForwardArtifactCommand_RequiresAuth(t *testing.T) {
 
 func TestForwardArtifactCommand_RequiresArtifactHash(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
-	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command: "delete_clip",
 	})
 	if err == nil {
@@ -102,7 +103,7 @@ func TestForwardArtifactCommand_RequiresArtifactHash(t *testing.T) {
 
 func TestForwardArtifactCommand_RequiresCommand(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
-	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		ArtifactHash: "hash-1",
 	})
 	if err == nil {
@@ -115,7 +116,7 @@ func TestForwardArtifactCommand_RequiresCommand(t *testing.T) {
 
 func TestForwardArtifactCommand_RequiresTenant(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: logging.NewLogger()})
-	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	_, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "hash-1",
 	})
@@ -133,7 +134,7 @@ func TestForwardArtifactCommand_DeleteClip_Handled(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "clip-hash-1",
 		TenantId:     "tenant-a",
@@ -155,7 +156,7 @@ func TestForwardArtifactCommand_StopDVR_Handled(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "stop_dvr",
 		ArtifactHash: "dvr-hash-1",
 		TenantId:     "tenant-a",
@@ -178,7 +179,7 @@ func TestForwardArtifactCommand_DeleteDVR_Handled(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_dvr",
 		ArtifactHash: "dvr-hash-1",
 		TenantId:     "tenant-a",
@@ -200,7 +201,7 @@ func TestForwardArtifactCommand_DeleteVod_Handled(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_vod",
 		ArtifactHash: "vod-hash-1",
 		TenantId:     "tenant-a",
@@ -222,7 +223,7 @@ func TestForwardArtifactCommand_NotFound_ReturnsFalse(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "clip-hash-missing",
 		TenantId:     "tenant-a",
@@ -241,7 +242,7 @@ func TestForwardArtifactCommand_UnknownCommand(t *testing.T) {
 		Logger:          logging.NewLogger(),
 		ArtifactHandler: spy,
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "nuke_everything",
 		ArtifactHash: "hash-1",
 		TenantId:     "tenant-a",
@@ -262,7 +263,7 @@ func TestForwardArtifactCommand_NilHandler(t *testing.T) {
 		Logger: logging.NewLogger(),
 		// No ArtifactHandler wired
 	})
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "delete_clip",
 		ArtifactHash: "hash-1",
 		TenantId:     "tenant-a",
@@ -285,7 +286,7 @@ func TestForwardArtifactCommand_StopDVR_StreamIDNotSetWhenEmpty(t *testing.T) {
 		ArtifactHandler: spy,
 	})
 
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "stop_dvr",
 		ArtifactHash: "dvr-hash-1",
 		TenantId:     "tenant-a",
@@ -326,7 +327,7 @@ func TestForwardArtifactCommand_StopDVR_StreamIDMismatchRejected(t *testing.T) {
 		ArtifactHandler: spy,
 	})
 
-	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &pb.ForwardArtifactCommandRequest{
+	resp, err := srv.ForwardArtifactCommand(serviceAuthContext(), &foghornfederationpb.ForwardArtifactCommandRequest{
 		Command:      "stop_dvr",
 		ArtifactHash: "dvr-hash-1",
 		TenantId:     "tenant-a",

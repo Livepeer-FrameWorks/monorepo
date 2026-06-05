@@ -10,12 +10,13 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoGetStreamPushTargets returns push targets for a stream (Stream.pushTargets field resolver).
-func (r *Resolver) DoGetStreamPushTargets(ctx context.Context, streamID string) ([]*pb.PushTarget, error) {
+func (r *Resolver) DoGetStreamPushTargets(ctx context.Context, streamID string) ([]*commodorepb.PushTarget, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GeneratePushTargets(streamID), nil
 	}
@@ -30,7 +31,7 @@ func (r *Resolver) DoGetStreamPushTargets(ctx context.Context, streamID string) 
 }
 
 // DoCreatePushTarget creates a new multistream push target.
-func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, input model.CreatePushTargetInput) (*pb.PushTarget, error) {
+func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, input model.CreatePushTargetInput) (*commodorepb.PushTarget, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -41,7 +42,7 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		if input.Platform != nil && strings.TrimSpace(*input.Platform) != "" {
 			platform = *input.Platform
 		}
-		return &pb.PushTarget{
+		return &commodorepb.PushTarget{
 			Id:        "push_target_demo_created",
 			StreamId:  streamID,
 			Platform:  platform,
@@ -54,7 +55,7 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		}, nil
 	}
 
-	req := &pb.CreatePushTargetRequest{
+	req := &commodorepb.CreatePushTargetRequest{
 		StreamId:  streamID,
 		Name:      input.Name,
 		TargetUri: input.TargetURI,
@@ -69,12 +70,12 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		return nil, fmt.Errorf("failed to create push target: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventPushTargetCreated,
 		ResourceType: "push_target",
 		ResourceId:   target.GetId(),
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId:      streamID,
 				ChangedFields: []string{"push_targets"},
 			},
@@ -85,7 +86,7 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 }
 
 // DoUpdatePushTarget updates a multistream push target.
-func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input model.UpdatePushTargetInput) (*pb.PushTarget, error) {
+func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input model.UpdatePushTargetInput) (*commodorepb.PushTarget, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
@@ -104,7 +105,7 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		if input.IsEnabled != nil {
 			enabled = *input.IsEnabled
 		}
-		return &pb.PushTarget{
+		return &commodorepb.PushTarget{
 			Id:        id,
 			StreamId:  demo.DemoStreamID,
 			Platform:  "custom",
@@ -122,7 +123,7 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		return nil, fmt.Errorf("invalid push target ID: %w", err)
 	}
 
-	req := &pb.UpdatePushTargetRequest{
+	req := &commodorepb.UpdatePushTargetRequest{
 		Id: rawID,
 	}
 
@@ -146,12 +147,12 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		return nil, fmt.Errorf("failed to update push target: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventPushTargetUpdated,
 		ResourceType: "push_target",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_StreamChangeEvent{
-			StreamChangeEvent: &pb.StreamChangeEvent{
+		Payload: &ipcpb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &ipcpb.StreamChangeEvent{
 				StreamId:      target.GetStreamId(),
 				ChangedFields: changedFields,
 			},
@@ -185,7 +186,7 @@ func (r *Resolver) DoDeletePushTarget(ctx context.Context, id string) (*model.De
 		return nil, fmt.Errorf("failed to delete push target: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventPushTargetDeleted,
 		ResourceType: "push_target",
 		ResourceId:   id,

@@ -24,7 +24,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -272,7 +273,7 @@ func main() {
 				for _, c := range clusters {
 					cid := c
 					log := logger.WithField("service_type", wakeType).WithField("cluster_id", c).WithField("instance_id", instanceID)
-					resp, err := navigatorClient.SyncDNS(ctx, &pb.SyncDNSRequest{ServiceType: wakeType, ClusterId: &cid})
+					resp, err := navigatorClient.SyncDNS(ctx, &dnspb.SyncDNSRequest{ServiceType: wakeType, ClusterId: &cid})
 					if err != nil {
 						log.WithError(err).Warn("Navigator pool DNS wake failed; reconcile loop will converge")
 						continue
@@ -360,7 +361,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("QUARTERMASTER_HOST", "quartermaster")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "quartermaster",
 			Version:        version.Version,
 			Protocol:       "http",

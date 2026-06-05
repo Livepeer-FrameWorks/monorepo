@@ -11,7 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 // Blocker represents something preventing an operation.
@@ -133,7 +133,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		}
 		// For prepaid accounts, treat missing balance as 0 (will be created on first top-up)
 		if statusErr == nil && billingStatus.BillingModel == "prepaid" {
-			balance = &pb.PrepaidBalance{BalanceCents: 0}
+			balance = &purserpb.PrepaidBalance{BalanceCents: 0}
 		} else {
 			return nil, fmt.Errorf("failed to get balance: %w", err)
 		}

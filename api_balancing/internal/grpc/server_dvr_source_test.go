@@ -7,7 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 func TestWaitForStreamSourceWithHintUsesHealthyTriggerNode(t *testing.T) {
@@ -96,7 +96,7 @@ func TestClipLiveSourceStreamNameUsesRegistryRuntimeName(t *testing.T) {
 		IngestMode:   control.IngestPush,
 	})
 
-	got, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{StreamInternalName: "demo_stream"})
+	got, err := clipLiveSourceStreamName(context.Background(), &sharedpb.CreateClipRequest{StreamInternalName: "demo_stream"})
 	if err != nil {
 		t.Fatalf("clipLiveSourceStreamName() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestClipLiveSourceStreamNameMistNativeRegistry(t *testing.T) {
 		IngestMode:   control.IngestMistNative,
 	})
 
-	got, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{
+	got, err := clipLiveSourceStreamName(context.Background(), &sharedpb.CreateClipRequest{
 		StreamInternalName: "60546679b497415db2338cd5cae54992",
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func TestClipLiveSourceStreamNameIgnoresArtifactPlaybackID(t *testing.T) {
 	})
 
 	playbackID := "clip-artifact-playback"
-	got, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{
+	got, err := clipLiveSourceStreamName(context.Background(), &sharedpb.CreateClipRequest{
 		StreamInternalName: "demo_stream",
 		PlaybackId:         &playbackID,
 	})
@@ -168,7 +168,7 @@ func TestClipLiveSourceStreamNameFailsClosedOnUnresolvableSource(t *testing.T) {
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-a", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
 
-	_, err := clipLiveSourceStreamName(context.Background(), &pb.CreateClipRequest{StreamInternalName: "demo_stream"})
+	_, err := clipLiveSourceStreamName(context.Background(), &sharedpb.CreateClipRequest{StreamInternalName: "demo_stream"})
 	if err == nil {
 		t.Fatal("expected fail-closed error when source cannot be resolved")
 	}

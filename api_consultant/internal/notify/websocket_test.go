@@ -8,23 +8,23 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type decklogServer struct {
-	pb.UnimplementedDecklogServiceServer
-	events chan *pb.ServiceEvent
+	ipcpb.UnimplementedDecklogServiceServer
+	events chan *ipcpb.ServiceEvent
 }
 
-func (s *decklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceEvent) (*emptypb.Empty, error) {
+func (s *decklogServer) SendServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) (*emptypb.Empty, error) {
 	s.events <- event
 	return &emptypb.Empty{}, nil
 }
 
-func (s *decklogServer) SendEvent(ctx context.Context, event *pb.MistTrigger) (*emptypb.Empty, error) {
+func (s *decklogServer) SendEvent(ctx context.Context, event *ipcpb.MistTrigger) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
 }
 
@@ -36,8 +36,8 @@ func TestWebsocketNotifierSendsServiceEvent(t *testing.T) {
 	defer listener.Close()
 
 	server := grpc.NewServer()
-	decklogSvc := &decklogServer{events: make(chan *pb.ServiceEvent, 1)}
-	pb.RegisterDecklogServiceServer(server, decklogSvc)
+	decklogSvc := &decklogServer{events: make(chan *ipcpb.ServiceEvent, 1)}
+	ipcpb.RegisterDecklogServiceServer(server, decklogSvc)
 
 	go func() {
 		_ = server.Serve(listener)

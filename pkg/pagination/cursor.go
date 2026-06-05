@@ -6,11 +6,10 @@ package pagination
 import (
 	"encoding/base64"
 	"fmt"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"strconv"
 	"strings"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const (
@@ -140,7 +139,7 @@ type Params struct {
 
 // Parse parses a CursorPaginationRequest for bidirectional pagination.
 // If both forward (first/after) and backward (last/before) are provided, backward takes precedence.
-func Parse(req *pb.CursorPaginationRequest) (*Params, error) {
+func Parse(req *commonpb.CursorPaginationRequest) (*Params, error) {
 	params := &Params{
 		Limit:     DefaultLimit,
 		Direction: Forward,
@@ -229,10 +228,10 @@ func (b *KeysetBuilder) OrderBy(params *Params) string {
 //   - totalCount: total number of items (from COUNT query)
 //   - startCursor: cursor of first item in trimmed results
 //   - endCursor: cursor of last item in trimmed results
-func BuildResponse(resultsLen, limit int, direction Direction, totalCount int32, startCursor, endCursor string) *pb.CursorPaginationResponse {
+func BuildResponse(resultsLen, limit int, direction Direction, totalCount int32, startCursor, endCursor string) *commonpb.CursorPaginationResponse {
 	hasMore := resultsLen > limit
 
-	resp := &pb.CursorPaginationResponse{
+	resp := &commonpb.CursorPaginationResponse{
 		TotalCount: totalCount,
 	}
 

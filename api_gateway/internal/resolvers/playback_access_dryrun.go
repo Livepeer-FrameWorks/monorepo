@@ -6,7 +6,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 )
 
 // DoTestPlaybackAccess wraps Commodore.TestPlaybackAccess. The mutation
@@ -42,7 +42,7 @@ func (r *Resolver) DoTestPlaybackAccess(ctx context.Context, input model.TestPla
 		}, nil
 	}
 
-	resp, err := r.Clients.Commodore.TestPlaybackAccess(ctx, &pb.TestPlaybackAccessRequest{
+	resp, err := r.Clients.Commodore.TestPlaybackAccess(ctx, &foghornpb.TestPlaybackAccessRequest{
 		PlaybackId:   playback,
 		InternalName: internal,
 		ViewerToken:  deref(input.ViewerToken),

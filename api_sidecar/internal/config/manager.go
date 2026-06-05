@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net"
 	"net/http"
@@ -22,7 +23,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,14 +34,14 @@ type Manager struct {
 	reconcileMu      sync.Mutex
 	mistClient       mistAPI
 	logger           logging.Logger
-	lastSeed         *pb.ConfigSeed
+	lastSeed         *ipcpb.ConfigSeed
 	lastAppliedSum   string
 	retryTimer       *time.Timer
 	retryAttempt     int
 	driftRepairOnce  sync.Once
 	lastCaddyHash    string
 	caddyActivated   bool
-	ackSender        func(*pb.ControlMessage)
+	ackSender        func(*ipcpb.ControlMessage)
 	lastAckedSeedVer uint64
 }
 
@@ -57,12 +59,13 @@ type mistAPI interface {
 // ApplySeedSender is the signature for the function Helmsman uses to send
 // ConfigSeedApplyResult back to Foghorn over the existing bidi control
 // stream.
-type ApplySeedSender func(*pb.ControlMessage)
+type ApplySeedSender func(*ipcpb.ControlMessage)
 
 const (
 	maxReconcileRetryDelay = 30 * time.Second
 	mistConfigRepairEvery  = 30 * time.Second
 	inertMistSource        = "/tmp/none"
+	edgeBundleDirMode      = fs.ModeSetgid | 0o770
 )
 
 var manager *Manager
@@ -82,7 +85,7 @@ func InitManager(logger logging.Logger) {
 // optional sender is invoked with a ConfigSeedApplyResult after Helmsman
 // has applied the seed's TLS bundles and reloaded Caddy. Pass nil to
 // skip ACK (e.g. tests).
-func ApplySeed(seed *pb.ConfigSeed, sender ApplySeedSender) {
+func ApplySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 	if manager == nil || seed == nil {
 		return
 	}
@@ -112,18 +115,18 @@ func GetTenantID() string {
 
 // GetOperationalMode returns the authoritative operational mode from the last applied ConfigSeed.
 // Foghorn is the authority; this is what Helmsman should report in heartbeats.
-func GetOperationalMode() pb.NodeOperationalMode {
+func GetOperationalMode() ipcpb.NodeOperationalMode {
 	if manager == nil {
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.lastSeed == nil {
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	}
 	mode := manager.lastSeed.GetOperationalMode()
-	if mode == pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	if mode == ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	}
 	return mode
 }
@@ -418,7 +421,7 @@ func edgeTelemetryTokenPath() string {
 	return "/etc/frameworks/telemetry/token"
 }
 
-func (m *Manager) applyTelemetryConfig(cfg *pb.EdgeTelemetryConfig) bool {
+func (m *Manager) applyTelemetryConfig(cfg *commonpb.EdgeTelemetryConfig) bool {
 	tokenPath := edgeTelemetryTokenPath()
 	if cfg == nil || !cfg.GetEnabled() || strings.TrimSpace(cfg.GetBearerToken()) == "" {
 		if err := os.Remove(tokenPath); err != nil && !os.IsNotExist(err) {
@@ -481,12 +484,12 @@ type bundleApplyResult struct {
 // per-bundle directory, removes files for bundle_ids no longer in the
 // set, and returns per-bundle apply results plus whether any file on
 // disk changed.
-func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleApplyResult) {
+func (m *Manager) applyTLSBundles(bundles []*ipcpb.TLSCertBundle) (bool, []bundleApplyResult) {
 	results := make([]bundleApplyResult, 0, len(bundles))
 	anyChanged := false
 
 	dir := edgeBundleDir()
-	if err := os.MkdirAll(dir, 0o2770); err != nil {
+	if err := os.MkdirAll(dir, edgeBundleDirMode.Perm()); err != nil {
 		m.logger.WithError(err).Warn("Failed to create TLS bundle directory")
 		// Surface the failure per-bundle so Foghorn ACK reflects it.
 		for _, b := range bundles {
@@ -498,7 +501,7 @@ func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleAp
 		}
 		return false, results
 	}
-	if err := os.Chmod(dir, 0o2770); err != nil {
+	if err := os.Chmod(dir, edgeBundleDirMode); err != nil {
 		m.logger.WithError(err).WithField("path", dir).Warn("Failed to set TLS bundle directory mode")
 	}
 
@@ -559,7 +562,7 @@ func (m *Manager) applyTLSBundles(bundles []*pb.TLSCertBundle) (bool, []bundleAp
 
 // writeBundleFiles atomically writes cert + key for one bundle. Returns
 // true if either file content changed.
-func writeBundleFiles(certPath, keyPath string, bundle *pb.TLSCertBundle) (bool, error) {
+func writeBundleFiles(certPath, keyPath string, bundle *ipcpb.TLSCertBundle) (bool, error) {
 	certBytes := []byte(bundle.GetCertPem())
 	keyBytes := []byte(bundle.GetKeyPem())
 	if len(certBytes) == 0 || len(keyBytes) == 0 {
@@ -609,7 +612,7 @@ func (m *Manager) removeAllBundleFiles() {
 // sendApplyResultLocked composes a ConfigSeedApplyResult from per-bundle
 // results and the Caddy reload outcome, and dispatches via the sender.
 // Only sends once per seed_version (idempotent on retries).
-func (m *Manager) sendApplyResultLocked(seed *pb.ConfigSeed, results []bundleApplyResult, caddyOK bool, sender func(*pb.ControlMessage)) {
+func (m *Manager) sendApplyResultLocked(seed *ipcpb.ConfigSeed, results []bundleApplyResult, caddyOK bool, sender func(*ipcpb.ControlMessage)) {
 	if sender == nil {
 		return
 	}
@@ -650,7 +653,7 @@ func (m *Manager) sendApplyResultLocked(seed *pb.ConfigSeed, results []bundleApp
 		applied = applied[:0]
 	}
 
-	ack := &pb.ConfigSeedApplyResult{
+	ack := &ipcpb.ConfigSeedApplyResult{
 		NodeId:           seed.GetNodeId(),
 		SeedVersion:      seed.GetSeedVersion(),
 		AppliedBundleIds: applied,
@@ -659,16 +662,16 @@ func (m *Manager) sendApplyResultLocked(seed *pb.ConfigSeed, results []bundleApp
 		Error:            firstErr,
 		AppliedAt:        timestamppb.Now(),
 	}
-	sender(&pb.ControlMessage{
+	sender(&ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
-		Payload: &pb.ControlMessage_ConfigSeedApplyResult{
+		Payload: &ipcpb.ControlMessage_ConfigSeedApplyResult{
 			ConfigSeedApplyResult: ack,
 		},
 	})
 }
 
 // applyTLSBundle writes cert/key files to disk. Returns true if files were changed.
-func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) bool {
+func (m *Manager) applyTLSBundle(bundle *ipcpb.TLSCertBundle) bool {
 	certPath, keyPath := edgeTLSPaths()
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
@@ -808,7 +811,7 @@ func removeIfNotEmpty(path string) {
 // It always reloads the rendered config because Caddy may have been restarted
 // independently after Helmsman last activated it.
 // Returns false if rendering, persistence, or reload failed; callers ACK accordingly.
-func (m *Manager) activateCaddy(seed *pb.ConfigSeed, certChanged bool) bool {
+func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 	bundles := composeCaddyBundles(seed)
 	if len(bundles) == 0 {
 		// Nothing to render: no bundles AND no legacy site address.
@@ -876,7 +879,7 @@ func (m *Manager) persistCaddyfile(content []byte) error {
 // composeCaddyBundles builds the list of CaddyfileBundle entries from a
 // ConfigSeed. Multi-bundle TLS is authoritative when present; otherwise
 // a single SiteConfig/Tls pair renders one site block.
-func composeCaddyBundles(seed *pb.ConfigSeed) []CaddyfileBundle {
+func composeCaddyBundles(seed *ipcpb.ConfigSeed) []CaddyfileBundle {
 	if bundles := seed.GetTlsBundles(); len(bundles) > 0 {
 		out := make([]CaddyfileBundle, 0, len(bundles))
 		for _, b := range bundles {
@@ -1286,7 +1289,7 @@ func hostnameFromPublicURL(edgePublicURL string) string {
 	return u.Hostname()
 }
 
-func (m *Manager) ensureStreams(current map[string]any, seed *pb.ConfigSeed) error {
+func (m *Manager) ensureStreams(current map[string]any, seed *ipcpb.ConfigSeed) error {
 	if seed == nil || len(seed.GetTemplates()) == 0 {
 		return nil
 	}
@@ -1306,7 +1309,7 @@ func (m *Manager) ensureStreams(current map[string]any, seed *pb.ConfigSeed) err
 	return m.mistClient.AddStreams(streams)
 }
 
-func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
+func (m *Manager) repairMissingManagedStreams(seed *ipcpb.ConfigSeed) error {
 	if seed == nil || len(seed.GetTemplates()) == 0 {
 		return nil
 	}
@@ -1348,7 +1351,7 @@ func (m *Manager) repairMissingManagedStreams(seed *pb.ConfigSeed) error {
 	return nil
 }
 
-func streamConfigsFromSeed(seed *pb.ConfigSeed, base, nodeID string) map[string]map[string]any {
+func streamConfigsFromSeed(seed *ipcpb.ConfigSeed, base, nodeID string) map[string]map[string]any {
 	// Both live and pull wildcards use balance:<foghorn> — the source
 	// resolution differs (live falls back to push:// for ingest, pull
 	// returns the upstream URI for allowed clusters) but the template
@@ -1473,7 +1476,7 @@ func join(base, path string) string {
 	return base + path
 }
 
-func hashSeed(seed *pb.ConfigSeed) string {
+func hashSeed(seed *ipcpb.ConfigSeed) string {
 	if seed == nil {
 		return ""
 	}

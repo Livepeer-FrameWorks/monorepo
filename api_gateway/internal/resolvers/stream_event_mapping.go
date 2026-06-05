@@ -8,13 +8,14 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-func mapPeriscopeStreamEvent(event *pb.StreamEvent) *model.StreamEvent {
+func mapPeriscopeStreamEvent(event *periscopepb.StreamEvent) *model.StreamEvent {
 	if event == nil {
 		return nil
 	}
@@ -70,7 +71,7 @@ func mapPeriscopeStreamEvent(event *pb.StreamEvent) *model.StreamEvent {
 	}
 }
 
-func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
+func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEvent {
 	if event == nil || event.Data == nil {
 		return nil
 	}
@@ -81,7 +82,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 	}
 
 	switch event.EventType {
-	case pb.EventType_EVENT_TYPE_PUSH_REWRITE:
+	case signalmanpb.EventType_EVENT_TYPE_PUSH_REWRITE:
 		data := event.Data.GetPushRewrite()
 		if data == nil {
 			return nil
@@ -102,7 +103,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
 		data := event.Data.GetStreamLifecycle()
 		if data == nil {
 			return nil
@@ -122,7 +123,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_STREAM_END:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_END:
 		data := event.Data.GetStreamEnd()
 		if data == nil {
 			return nil
@@ -143,7 +144,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER:
 		data := event.Data.GetStreamBuffer()
 		if data == nil {
 			return nil
@@ -160,7 +161,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
 		data := event.Data.GetTrackList()
 		if data == nil {
 			return nil
@@ -177,7 +178,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_PLAY_REWRITE:
+	case signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE:
 		data := event.Data.GetPlayRewrite()
 		if data == nil {
 			return nil
@@ -194,7 +195,7 @@ func mapSignalmanStreamEvent(event *pb.SignalmanEvent) *model.StreamEvent {
 			Source:    model.StreamEventSourceLive,
 		}
 
-	case pb.EventType_EVENT_TYPE_STREAM_SOURCE:
+	case signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE:
 		data := event.Data.GetStreamSource()
 		if data == nil {
 			return nil

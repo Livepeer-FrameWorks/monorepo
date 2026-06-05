@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -15,13 +15,13 @@ import (
 
 type testPeerChannelServerStream struct {
 	ctx      context.Context
-	messages []*pb.PeerMessage
+	messages []*foghornfederationpb.PeerMessage
 	idx      int
 }
 
-func (s *testPeerChannelServerStream) Send(*pb.PeerMessage) error { return nil }
+func (s *testPeerChannelServerStream) Send(*foghornfederationpb.PeerMessage) error { return nil }
 
-func (s *testPeerChannelServerStream) Recv() (*pb.PeerMessage, error) {
+func (s *testPeerChannelServerStream) Recv() (*foghornfederationpb.PeerMessage, error) {
 	if s.idx >= len(s.messages) {
 		return nil, io.EOF
 	}
@@ -58,9 +58,9 @@ func TestPeerChannel_RejectsEmptyClusterID(t *testing.T) {
 	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	err := srv.PeerChannel(&testPeerChannelServerStream{
 		ctx: svcCtx,
-		messages: []*pb.PeerMessage{{
+		messages: []*foghornfederationpb.PeerMessage{{
 			ClusterId: "",
-			Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
+			Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
 				StreamName: "s",
 				NodeId:     "n",
 			}},
@@ -83,9 +83,9 @@ func TestPeerChannel_RejectsClusterIDChangeWithinStream(t *testing.T) {
 	svcCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	err := srv.PeerChannel(&testPeerChannelServerStream{
 		ctx: svcCtx,
-		messages: []*pb.PeerMessage{
-			{ClusterId: "cluster-b", Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{ProtocolVersion: 1}}},
-			{ClusterId: "cluster-c", Payload: &pb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &pb.PeerHeartbeat{ProtocolVersion: 1}}},
+		messages: []*foghornfederationpb.PeerMessage{
+			{ClusterId: "cluster-b", Payload: &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &foghornfederationpb.PeerHeartbeat{ProtocolVersion: 1}}},
+			{ClusterId: "cluster-c", Payload: &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &foghornfederationpb.PeerHeartbeat{ProtocolVersion: 1}}},
 		},
 	})
 

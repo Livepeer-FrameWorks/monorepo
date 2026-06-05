@@ -8,7 +8,7 @@ import (
 
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 )
 
 type mockReportQuerier struct {
@@ -69,7 +69,7 @@ func TestListReportsReturnsReports(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 
 	ctx := tenantContext("tenant-a")
-	resp, err := srv.ListReports(ctx, &pb.ListSkipperReportsRequest{Limit: 10})
+	resp, err := srv.ListReports(ctx, &skipperpb.ListSkipperReportsRequest{Limit: 10})
 	if err != nil {
 		t.Fatalf("ListReports: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestListReportsReturnsReports(t *testing.T) {
 
 func TestListReportsRequiresTenant(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: &mockReportQuerier{}})
-	_, err := srv.ListReports(context.Background(), &pb.ListSkipperReportsRequest{})
+	_, err := srv.ListReports(context.Background(), &skipperpb.ListSkipperReportsRequest{})
 	if err == nil {
 		t.Fatal("expected error for missing tenant")
 	}
@@ -109,7 +109,7 @@ func TestGetReportReturnsReport(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 
 	ctx := tenantContext("tenant-a")
-	resp, err := srv.GetReport(ctx, &pb.GetSkipperReportRequest{Id: "r-1"})
+	resp, err := srv.GetReport(ctx, &skipperpb.GetSkipperReportRequest{Id: "r-1"})
 	if err != nil {
 		t.Fatalf("GetReport: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestMarkReportsReadReturnsCount(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 
 	ctx := tenantContext("tenant-a")
-	resp, err := srv.MarkReportsRead(ctx, &pb.MarkSkipperReportsReadRequest{Ids: []string{"r-1", "r-2", "r-3"}})
+	resp, err := srv.MarkReportsRead(ctx, &skipperpb.MarkSkipperReportsReadRequest{Ids: []string{"r-1", "r-2", "r-3"}})
 	if err != nil {
 		t.Fatalf("MarkReportsRead: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestGetUnreadReportCountReturnsCount(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 
 	ctx := tenantContext("tenant-a")
-	resp, err := srv.GetUnreadReportCount(ctx, &pb.GetUnreadReportCountRequest{})
+	resp, err := srv.GetUnreadReportCount(ctx, &skipperpb.GetUnreadReportCountRequest{})
 	if err != nil {
 		t.Fatalf("GetUnreadReportCount: %v", err)
 	}
@@ -154,16 +154,16 @@ func TestReportMethodsHandleStoreErrors(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 	ctx := tenantContext("tenant-a")
 
-	if _, err := srv.ListReports(ctx, &pb.ListSkipperReportsRequest{}); err == nil {
+	if _, err := srv.ListReports(ctx, &skipperpb.ListSkipperReportsRequest{}); err == nil {
 		t.Fatal("expected error from ListReports")
 	}
-	if _, err := srv.GetReport(ctx, &pb.GetSkipperReportRequest{Id: "r-1"}); err == nil {
+	if _, err := srv.GetReport(ctx, &skipperpb.GetSkipperReportRequest{Id: "r-1"}); err == nil {
 		t.Fatal("expected error from GetReport")
 	}
-	if _, err := srv.MarkReportsRead(ctx, &pb.MarkSkipperReportsReadRequest{}); err == nil {
+	if _, err := srv.MarkReportsRead(ctx, &skipperpb.MarkSkipperReportsReadRequest{}); err == nil {
 		t.Fatal("expected error from MarkReportsRead")
 	}
-	if _, err := srv.GetUnreadReportCount(ctx, &pb.GetUnreadReportCountRequest{}); err == nil {
+	if _, err := srv.GetUnreadReportCount(ctx, &skipperpb.GetUnreadReportCountRequest{}); err == nil {
 		t.Fatal("expected error from GetUnreadReportCount")
 	}
 }
@@ -180,7 +180,7 @@ func TestReportReadAtSerializedWhenSet(t *testing.T) {
 	srv := NewGRPCServer(GRPCServerConfig{Reports: mock})
 	ctx := tenantContext("tenant-a")
 
-	resp, err := srv.GetReport(ctx, &pb.GetSkipperReportRequest{Id: "r-1"})
+	resp, err := srv.GetReport(ctx, &skipperpb.GetSkipperReportRequest{Id: "r-1"})
 	if err != nil {
 		t.Fatalf("GetReport: %v", err)
 	}

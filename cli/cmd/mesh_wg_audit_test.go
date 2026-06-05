@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/inventory"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -43,7 +43,7 @@ func TestAuditMeshIdentity_CleanMatch(t *testing.T) {
 			WireguardPrivateKey: "priv-1",
 		},
 	})
-	qm := []*pb.InfrastructureNode{{
+	qm := []*quartermasterpb.InfrastructureNode{{
 		NodeName:           "core-1",
 		ClusterId:          testCluster,
 		WireguardIp:        strPtr("10.88.0.2"),
@@ -71,7 +71,7 @@ func TestAuditMeshIdentity_SeedMismatchIsError(t *testing.T) {
 			WireguardPrivateKey: "priv-1",
 		},
 	})
-	qm := []*pb.InfrastructureNode{{
+	qm := []*quartermasterpb.InfrastructureNode{{
 		NodeName:           "core-1",
 		ClusterId:          testCluster,
 		WireguardIp:        strPtr("10.88.0.2"),
@@ -96,7 +96,7 @@ func TestAuditMeshIdentity_RuntimeEnrolledIsInfoNotError(t *testing.T) {
 			WireguardPrivateKey: "priv-1",
 		},
 	})
-	qm := []*pb.InfrastructureNode{
+	qm := []*quartermasterpb.InfrastructureNode{
 		{
 			NodeName:           "core-1",
 			ClusterId:          testCluster,
@@ -159,7 +159,7 @@ func TestAuditMeshIdentity_AdoptedLocalDivergenceIsError(t *testing.T) {
 			WireguardPrivateKey: "priv-1",
 		},
 	})
-	qm := []*pb.InfrastructureNode{{
+	qm := []*quartermasterpb.InfrastructureNode{{
 		NodeName:           "core-1",
 		ClusterId:          testCluster,
 		WireguardIp:        strPtr("10.88.0.2"),
@@ -192,7 +192,7 @@ func TestAuditMeshIdentity_MultiClusterIsolation(t *testing.T) {
 			},
 		},
 	}
-	qm := []*pb.InfrastructureNode{
+	qm := []*quartermasterpb.InfrastructureNode{
 		{
 			NodeName:           "core-1",
 			ClusterId:          "prod-platform",
@@ -220,8 +220,8 @@ func TestAuditMeshIdentity_MultiClusterIsolation(t *testing.T) {
 
 // auditQMCoreOne returns a baseline QM row for core-1 matching the
 // testManifest fixture, so liveness tests focus on heartbeat handling.
-func auditQMCoreOne(hb *timestamppb.Timestamp) []*pb.InfrastructureNode {
-	return []*pb.InfrastructureNode{{
+func auditQMCoreOne(hb *timestamppb.Timestamp) []*quartermasterpb.InfrastructureNode {
+	return []*quartermasterpb.InfrastructureNode{{
 		NodeName:           "core-1",
 		ClusterId:          testCluster,
 		WireguardIp:        strPtr("10.88.0.2"),
@@ -367,7 +367,7 @@ func TestAuditLiveness_NoQMRowReportsUnknown(t *testing.T) {
 // classified there too, not only on manifest-matched rows.
 func TestAuditLiveness_UnmatchedQMRowSurfacesHeartbeat(t *testing.T) {
 	hb := timestamppb.New(testNow.Add(-30 * time.Second))
-	qm := append(auditQMCoreOne(timestamppb.New(testNow)), &pb.InfrastructureNode{
+	qm := append(auditQMCoreOne(timestamppb.New(testNow)), &quartermasterpb.InfrastructureNode{
 		NodeName:           "edge-runtime",
 		ClusterId:          testCluster,
 		WireguardIp:        strPtr("10.88.0.20"),

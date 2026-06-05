@@ -13,7 +13,8 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,7 +41,7 @@ func timePtrsToTimeRangeOpts(startTime, endTime *time.Time) *periscopeclient.Tim
 }
 
 // DoGetStreamAnalyticsSummary returns MV-backed range aggregates for a stream.
-func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*pb.StreamAnalyticsSummary, error) {
+func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*periscopepb.StreamAnalyticsSummary, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -73,7 +74,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 		r.Logger.WithError(err).Error("Failed to get stream analytics summary")
 		return nil, fmt.Errorf("failed to get stream analytics summary: %w", err)
 	}
-	resp, ok := val.(*pb.GetStreamAnalyticsSummaryResponse)
+	resp, ok := val.(*periscopepb.GetStreamAnalyticsSummaryResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream analytics summary: %T", val)
 	}
@@ -85,7 +86,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 }
 
 // DoGetPlatformOverview returns platform-wide metrics
-func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*pb.GetPlatformOverviewResponse, error) {
+func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*periscopepb.GetPlatformOverviewResponse, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -114,14 +115,14 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 		r.Logger.WithError(err).Error("Failed to get platform overview")
 		return nil, fmt.Errorf("failed to get platform overview: %w", err)
 	}
-	resp, ok := val.(*pb.GetPlatformOverviewResponse)
+	resp, ok := val.(*periscopepb.GetPlatformOverviewResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for platform overview: %T", val)
 	}
 	return sanitizePlatformOverviewGraphQL(resp), nil
 }
 
-func sanitizePlatformOverviewGraphQL(resp *pb.GetPlatformOverviewResponse) *pb.GetPlatformOverviewResponse {
+func sanitizePlatformOverviewGraphQL(resp *periscopepb.GetPlatformOverviewResponse) *periscopepb.GetPlatformOverviewResponse {
 	if resp == nil {
 		return nil
 	}
@@ -144,7 +145,7 @@ func sanitizeGraphQLFloat(v float64) float64 {
 
 // DoGetViewerCountTimeSeries returns time-bucketed viewer counts for charts
 // interval should be "5m", "15m", "1h", or "1d"
-func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, interval *string) ([]*pb.ViewerCountBucket, error) {
+func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, interval *string) ([]*periscopepb.ViewerCountBucket, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -194,7 +195,7 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 		}).Error("Failed to get viewer count time series")
 		return nil, fmt.Errorf("failed to get viewer count time series: %w", err)
 	}
-	resp, ok := val.(*pb.GetViewerCountTimeSeriesResponse)
+	resp, ok := val.(*periscopepb.GetViewerCountTimeSeriesResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for viewer count time series: %T", val)
 	}
@@ -203,7 +204,7 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 }
 
 // DoGetStreamHealthMetrics returns stream health metrics
-func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*pb.StreamHealthMetric, error) {
+func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*periscopepb.StreamHealthMetric, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -245,20 +246,20 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 		r.Logger.WithError(err).Error("Failed to get stream health metrics")
 		return nil, fmt.Errorf("failed to get stream health metrics: %w", err)
 	}
-	resp, ok := val.(*pb.GetStreamHealthMetricsResponse)
+	resp, ok := val.(*periscopepb.GetStreamHealthMetricsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream health metrics: %T", val)
 	}
 
 	// Return metrics
-	result := make([]*pb.StreamHealthMetric, len(resp.Metrics))
+	result := make([]*periscopepb.StreamHealthMetric, len(resp.Metrics))
 	copy(result, resp.Metrics)
 
 	return result, nil
 }
 
 // DoGetCurrentStreamHealth returns current health for a stream
-func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string) (*pb.StreamHealthMetric, error) {
+func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string) (*periscopepb.StreamHealthMetric, error) {
 	// Get recent health metrics (last 5 minutes)
 	now := time.Now()
 	startTime := now.Add(-5 * time.Minute)
@@ -282,7 +283,7 @@ func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string
 }
 
 // DoGetViewerGeographics returns geographic data for individual viewer/connection events
-func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*pb.ConnectionEvent, error) {
+func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*periscopepb.ConnectionEvent, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -318,12 +319,12 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 		r.Logger.WithError(err).Error("Failed to get connection events for geographics")
 		return nil, fmt.Errorf("failed to fetch geographic data: %w", err)
 	}
-	connResp, ok := val.(*pb.GetConnectionEventsResponse)
+	connResp, ok := val.(*periscopepb.GetConnectionEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for connection events: %T", val)
 	}
 
-	var out []*pb.ConnectionEvent
+	var out []*periscopepb.ConnectionEvent
 	for _, ev := range connResp.Events {
 		if stream != nil && *stream != "" && ev.StreamId != *stream {
 			continue
@@ -385,7 +386,7 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		}).Error("Failed to get geographic distribution")
 		return nil, fmt.Errorf("failed to get geographic distribution: %w", err)
 	}
-	resp, ok := val.(*pb.GetGeographicDistributionResponse)
+	resp, ok := val.(*periscopepb.GetGeographicDistributionResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for geographic distribution: %T", val)
 	}
@@ -397,7 +398,7 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		startTime = timeRange.Start
 		endTime = timeRange.End
 	}
-	tr := &pb.TimeRange{
+	tr := &commonpb.TimeRange{
 		Start: timestamppb.New(startTime),
 		End:   timestamppb.New(endTime),
 	}
@@ -440,7 +441,7 @@ func timeKey(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
+func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -485,14 +486,14 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetRoutingEventsResponse)
+	resp, ok := val.(*periscopepb.GetRoutingEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for routing events: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetConnectionEventsResponse, error) {
+func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetConnectionEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -524,14 +525,14 @@ func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, sta
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetConnectionEventsResponse)
+	resp, ok := val.(*periscopepb.GetConnectionEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for connection events: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetricsResponse, error) {
+func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetNodeMetricsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -570,14 +571,14 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetNodeMetricsResponse)
+	resp, ok := val.(*periscopepb.GetNodeMetricsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for node metrics: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetrics1HResponse, error) {
+func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetNodeMetrics1HResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -616,14 +617,14 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetNodeMetrics1HResponse)
+	resp, ok := val.(*periscopepb.GetNodeMetrics1HResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for node metrics 1h: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentType *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetClipEventsResponse, error) {
+func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentType *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetClipEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -663,14 +664,14 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetClipEventsResponse)
+	resp, ok := val.(*periscopepb.GetClipEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for clip events: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamEventsResponse, error) {
+func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetStreamEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -697,14 +698,14 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetStreamEventsResponse)
+	resp, ok := val.(*periscopepb.GetStreamEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream events: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetTrackListEventsResponse, error) {
+func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetTrackListEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -731,14 +732,14 @@ func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, sta
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetTrackListEventsResponse)
+	resp, ok := val.(*periscopepb.GetTrackListEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for track list events: %T", val)
 	}
 	return resp, nil
 }
 
-func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamHealthMetricsResponse, error) {
+func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetStreamHealthMetricsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -769,7 +770,7 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetStreamHealthMetricsResponse)
+	resp, ok := val.(*periscopepb.GetStreamHealthMetricsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream health metrics: %T", val)
 	}
@@ -778,7 +779,7 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 }
 
 // DoGetTenantDailyStats returns daily tenant statistics for PlatformOverview.dailyStats.
-func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*pb.TenantDailyStat, error) {
+func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*periscopepb.TenantDailyStat, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic tenant daily stats")
 		return demo.GenerateTenantDailyStats(days), nil

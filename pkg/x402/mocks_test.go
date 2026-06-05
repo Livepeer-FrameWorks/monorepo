@@ -2,24 +2,24 @@ package x402
 
 import (
 	"context"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 type MockPurserClient struct {
-	VerifyResponse *pb.VerifyX402PaymentResponse
+	VerifyResponse *purserpb.VerifyX402PaymentResponse
 	VerifyError    error
-	SettleResponse *pb.SettleX402PaymentResponse
+	SettleResponse *purserpb.SettleX402PaymentResponse
 	SettleError    error
 
 	VerifyCalled bool
 	SettleCalled bool
 	LastTenantID string
-	LastPayment  *pb.X402PaymentPayload
+	LastPayment  *purserpb.X402PaymentPayload
 	LastClientIP string
 }
 
-func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error) {
+func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
 	m.VerifyCalled = true
 	m.LastTenantID = tenantID
 	m.LastPayment = payment
@@ -27,7 +27,7 @@ func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID strin
 	return m.VerifyResponse, m.VerifyError
 }
 
-func (m *MockPurserClient) SettleX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error) {
+func (m *MockPurserClient) SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
 	m.SettleCalled = true
 	m.LastTenantID = tenantID
 	m.LastPayment = payment
@@ -36,46 +36,46 @@ func (m *MockPurserClient) SettleX402Payment(ctx context.Context, tenantID strin
 }
 
 type MockCommodoreClient struct {
-	PlaybackResponse         *pb.ResolvePlaybackIDResponse
+	PlaybackResponse         *commodorepb.ResolvePlaybackIDResponse
 	PlaybackError            error
-	ArtifactPlaybackResponse *pb.ResolveArtifactPlaybackIDResponse
+	ArtifactPlaybackResponse *commodorepb.ResolveArtifactPlaybackIDResponse
 	ArtifactPlaybackError    error
-	ClipResponse             *pb.ResolveClipHashResponse
+	ClipResponse             *commodorepb.ResolveClipHashResponse
 	ClipError                error
-	DVRResponse              *pb.ResolveDVRHashResponse
+	DVRResponse              *commodorepb.ResolveDVRHashResponse
 	DVRError                 error
-	IdentifierResponse       *pb.ResolveIdentifierResponse
+	IdentifierResponse       *commodorepb.ResolveIdentifierResponse
 	IdentifierError          error
-	VodResponse              *pb.ResolveVodIDResponse
+	VodResponse              *commodorepb.ResolveVodIDResponse
 	VodError                 error
-	StreamKeyResponse        *pb.ValidateStreamKeyResponse
+	StreamKeyResponse        *commodorepb.ValidateStreamKeyResponse
 	StreamKeyError           error
 }
 
-func (m *MockCommodoreClient) ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error) {
+func (m *MockCommodoreClient) ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error) {
 	return m.PlaybackResponse, m.PlaybackError
 }
 
-func (m *MockCommodoreClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+func (m *MockCommodoreClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	return m.ArtifactPlaybackResponse, m.ArtifactPlaybackError
 }
 
-func (m *MockCommodoreClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
+func (m *MockCommodoreClient) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
 	return m.ClipResponse, m.ClipError
 }
 
-func (m *MockCommodoreClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
+func (m *MockCommodoreClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error) {
 	return m.DVRResponse, m.DVRError
 }
 
-func (m *MockCommodoreClient) ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
+func (m *MockCommodoreClient) ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
 	return m.IdentifierResponse, m.IdentifierError
 }
 
-func (m *MockCommodoreClient) ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error) {
+func (m *MockCommodoreClient) ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error) {
 	return m.VodResponse, m.VodError
 }
 
-func (m *MockCommodoreClient) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*pb.ValidateStreamKeyResponse, error) {
+func (m *MockCommodoreClient) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	return m.StreamKeyResponse, m.StreamKeyError
 }

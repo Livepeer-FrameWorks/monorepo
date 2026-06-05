@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package navigator;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns;dnspb";
 
 // NavigatorService manages public DNS records and certificates.
 service NavigatorService {

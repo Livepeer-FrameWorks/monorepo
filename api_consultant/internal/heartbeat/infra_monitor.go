@@ -9,7 +9,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 const (
@@ -58,16 +60,16 @@ func (a InfraAlert) Severity() string {
 
 // InfraNodeClient provides Periscope methods needed by infra monitoring.
 type InfraNodeClient interface {
-	GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error)
-	GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetNodePerformance5MResponse, error)
-	GetNetworkLiveStats(ctx context.Context) (*pb.GetNetworkLiveStatsResponse, error)
-	GetFederationSummary(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error)
+	GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*periscopepb.GetLiveNodesResponse, error)
+	GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetNodePerformance5MResponse, error)
+	GetNetworkLiveStats(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error)
+	GetFederationSummary(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetFederationSummaryResponse, error)
 }
 
 // InfraClusterClient provides Quartermaster methods for cluster/node discovery.
 type InfraClusterClient interface {
-	ListClusters(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error)
-	GetNodeOwner(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
+	ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	GetNodeOwner(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error)
 }
 
 type InfraMonitorConfig struct {
@@ -81,8 +83,8 @@ type InfraMonitorConfig struct {
 	DefaultRecipient string
 
 	// Callbacks for external consumers (e.g. social posting agent).
-	OnNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
-	OnFederationSummary func(ownerTenantID string, summary *pb.GetFederationSummaryResponse)
+	OnNetworkStats      func(*periscopepb.GetNetworkLiveStatsResponse)
+	OnFederationSummary func(ownerTenantID string, summary *periscopepb.GetFederationSummaryResponse)
 }
 
 type InfraMonitor struct {
@@ -97,8 +99,8 @@ type InfraMonitor struct {
 	cooldown         *diagnostics.TriageCooldown
 	logger           logging.Logger
 
-	onNetworkStats      func(*pb.GetNetworkLiveStatsResponse)
-	onFederationSummary func(string, *pb.GetFederationSummaryResponse)
+	onNetworkStats      func(*periscopepb.GetNetworkLiveStatsResponse)
+	onFederationSummary func(string, *periscopepb.GetFederationSummaryResponse)
 }
 
 func NewInfraMonitor(cfg *InfraMonitorConfig) *InfraMonitor {
@@ -176,7 +178,7 @@ func (m *InfraMonitor) Run(ctx context.Context) {
 	m.collectFederation(ctx, clusters)
 }
 
-func (m *InfraMonitor) collectFederation(ctx context.Context, clusters []*pb.InfrastructureCluster) {
+func (m *InfraMonitor) collectFederation(ctx context.Context, clusters []*quartermasterpb.InfrastructureCluster) {
 	if m.onFederationSummary == nil {
 		return
 	}
@@ -202,15 +204,15 @@ func (m *InfraMonitor) collectFederation(ctx context.Context, clusters []*pb.Inf
 	}
 }
 
-func (m *InfraMonitor) discoverClusters(ctx context.Context) ([]*pb.InfrastructureCluster, error) {
-	var all []*pb.InfrastructureCluster
+func (m *InfraMonitor) discoverClusters(ctx context.Context) ([]*quartermasterpb.InfrastructureCluster, error) {
+	var all []*quartermasterpb.InfrastructureCluster
 	var cursor string
 	for {
-		var pagination *pb.CursorPaginationRequest
+		var pagination *commonpb.CursorPaginationRequest
 		if cursor != "" {
-			pagination = &pb.CursorPaginationRequest{First: 100, After: &cursor}
+			pagination = &commonpb.CursorPaginationRequest{First: 100, After: &cursor}
 		} else {
-			pagination = &pb.CursorPaginationRequest{First: 100}
+			pagination = &commonpb.CursorPaginationRequest{First: 100}
 		}
 		resp, err := m.clusters.ListClusters(ctx, pagination)
 		if err != nil {
@@ -230,7 +232,7 @@ func (m *InfraMonitor) discoverClusters(ctx context.Context) ([]*pb.Infrastructu
 	return all, nil
 }
 
-func (m *InfraMonitor) checkNode(ctx context.Context, node *pb.LiveNode, cluster *pb.InfrastructureCluster) {
+func (m *InfraMonitor) checkNode(ctx context.Context, node *periscopepb.LiveNode, cluster *quartermasterpb.InfrastructureCluster) {
 	nodeID := node.GetNodeId()
 	if nodeID == "" {
 		return

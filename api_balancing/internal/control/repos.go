@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/lib/pq"
 )
 
@@ -276,7 +276,7 @@ func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string,
 	return err
 }
 
-func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error {
+func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
@@ -310,7 +310,7 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*
 	return err
 }
 
-func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error {
+func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
@@ -337,9 +337,9 @@ func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*
 	return err
 }
 
-func dedupeNodeLifecycleUpdates(updates []*pb.NodeLifecycleUpdate) []*pb.NodeLifecycleUpdate {
+func dedupeNodeLifecycleUpdates(updates []*ipcpb.NodeLifecycleUpdate) []*ipcpb.NodeLifecycleUpdate {
 	order := make([]string, 0, len(updates))
-	byNode := make(map[string]*pb.NodeLifecycleUpdate, len(updates))
+	byNode := make(map[string]*ipcpb.NodeLifecycleUpdate, len(updates))
 	for _, update := range updates {
 		if update == nil || update.GetNodeId() == "" {
 			continue
@@ -350,7 +350,7 @@ func dedupeNodeLifecycleUpdates(updates []*pb.NodeLifecycleUpdate) []*pb.NodeLif
 		}
 		byNode[nodeID] = update
 	}
-	out := make([]*pb.NodeLifecycleUpdate, 0, len(order))
+	out := make([]*ipcpb.NodeLifecycleUpdate, 0, len(order))
 	for _, nodeID := range order {
 		out = append(out, byNode[nodeID])
 	}
@@ -363,7 +363,7 @@ type nodeComponentUpdate struct {
 	version   string
 }
 
-func dedupeNodeComponentUpdates(updates []*pb.NodeLifecycleUpdate) []nodeComponentUpdate {
+func dedupeNodeComponentUpdates(updates []*ipcpb.NodeLifecycleUpdate) []nodeComponentUpdate {
 	order := make([]string, 0)
 	byKey := make(map[string]nodeComponentUpdate)
 	for _, update := range updates {

@@ -2,17 +2,18 @@ package grpc
 
 import (
 	"database/sql"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestValidateBehavior_AllValid(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		PhoneNumber: "",
 		HumanCheck:  "human",
-		Behavior: &pb.BehaviorData{
+		Behavior: &commodorepb.BehaviorData{
 			FormShownAt: 1000,
 			SubmittedAt: 10000,
 			Mouse:       true,
@@ -25,7 +26,7 @@ func TestValidateBehavior_AllValid(t *testing.T) {
 }
 
 func TestPosterOnlyThumbnailAssets(t *testing.T) {
-	got := posterOnlyThumbnailAssets(&pb.ThumbnailAssets{
+	got := posterOnlyThumbnailAssets(&sharedpb.ThumbnailAssets{
 		PosterUrl:    "http://localhost:18090/assets/stream/poster.jpg",
 		SpriteVttUrl: "http://localhost:18090/assets/stream/sprite.vtt",
 		SpriteJpgUrl: "http://localhost:18090/assets/stream/sprite.jpg",
@@ -46,10 +47,10 @@ func TestPosterOnlyThumbnailAssets(t *testing.T) {
 }
 
 func TestValidateBehavior_HoneypotFilled(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		PhoneNumber: "555-1234",
 		HumanCheck:  "human",
-		Behavior:    &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true},
+		Behavior:    &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true},
 	}
 	if validateBehavior(req) {
 		t.Fatal("honeypot filled should be invalid")
@@ -57,9 +58,9 @@ func TestValidateBehavior_HoneypotFilled(t *testing.T) {
 }
 
 func TestValidateBehavior_WrongHumanCheck(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "bot",
-		Behavior:   &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true},
+		Behavior:   &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true},
 	}
 	if validateBehavior(req) {
 		t.Fatal("wrong human check should be invalid")
@@ -67,7 +68,7 @@ func TestValidateBehavior_WrongHumanCheck(t *testing.T) {
 }
 
 func TestValidateBehavior_NilBehavior(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
 		Behavior:   nil,
 	}
@@ -77,9 +78,9 @@ func TestValidateBehavior_NilBehavior(t *testing.T) {
 }
 
 func TestValidateBehavior_TooFast(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
-		Behavior:   &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 2000, Mouse: true},
+		Behavior:   &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 2000, Mouse: true},
 	}
 	if validateBehavior(req) {
 		t.Fatal("too fast (1s) should be invalid")
@@ -87,9 +88,9 @@ func TestValidateBehavior_TooFast(t *testing.T) {
 }
 
 func TestValidateBehavior_TooSlow(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
-		Behavior: &pb.BehaviorData{
+		Behavior: &commodorepb.BehaviorData{
 			FormShownAt: 0,
 			SubmittedAt: 31 * 60 * 1000, // 31 minutes
 			Mouse:       true,
@@ -101,9 +102,9 @@ func TestValidateBehavior_TooSlow(t *testing.T) {
 }
 
 func TestValidateBehavior_NoInteraction(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
-		Behavior:   &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: false, Typed: false},
+		Behavior:   &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: false, Typed: false},
 	}
 	if validateBehavior(req) {
 		t.Fatal("no mouse/typed interaction should be invalid")
@@ -111,9 +112,9 @@ func TestValidateBehavior_NoInteraction(t *testing.T) {
 }
 
 func TestValidateBehavior_MouseOnly(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
-		Behavior:   &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true, Typed: false},
+		Behavior:   &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: true, Typed: false},
 	}
 	if !validateBehavior(req) {
 		t.Fatal("mouse-only interaction should be valid")
@@ -121,9 +122,9 @@ func TestValidateBehavior_MouseOnly(t *testing.T) {
 }
 
 func TestValidateBehavior_TypedOnly(t *testing.T) {
-	req := &pb.RegisterRequest{
+	req := &commodorepb.RegisterRequest{
 		HumanCheck: "human",
-		Behavior:   &pb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: false, Typed: true},
+		Behavior:   &commodorepb.BehaviorData{FormShownAt: 1000, SubmittedAt: 10000, Mouse: false, Typed: true},
 	}
 	if !validateBehavior(req) {
 		t.Fatal("typed-only interaction should be valid")
@@ -268,7 +269,7 @@ func TestSelectActiveIngestCluster_NullUpdatedAt(t *testing.T) {
 }
 
 func TestClusterInPeers_Found(t *testing.T) {
-	peers := []*pb.TenantClusterPeer{
+	peers := []*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "c1"},
 		{ClusterId: "c2"},
 		{ClusterId: "c3"},
@@ -279,7 +280,7 @@ func TestClusterInPeers_Found(t *testing.T) {
 }
 
 func TestClusterInPeers_NotFound(t *testing.T) {
-	peers := []*pb.TenantClusterPeer{
+	peers := []*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "c1"},
 	}
 	if clusterInPeers(peers, "c99") {
@@ -309,7 +310,7 @@ func TestBuildClusterFanoutTargets_Dedup(t *testing.T) {
 		foghornAddrsByCluster: map[string][]string{
 			"c1": []string{"addr1", "addr1b"},
 		},
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "c1", FoghornGrpcAddr: "addr1"},
 			{ClusterId: "c2", FoghornGrpcAddr: "addr2"},
 		},
@@ -327,7 +328,7 @@ func TestFoghornCandidatesFromRoute_DedupesAllSources(t *testing.T) {
 		foghornAddrsByCluster: map[string][]string{
 			"c1": []string{"addr1", "addr2"},
 		},
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "c1", FoghornGrpcAddr: "addr2"},
 			{ClusterId: "c1", FoghornGrpcAddr: "addr3"},
 		},
@@ -368,7 +369,7 @@ func TestBuildClusterFanoutTargets_SkipsEmptyAddr(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "c1",
 		foghornAddr: "",
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "c2", FoghornGrpcAddr: "addr2"},
 		},
 	}
@@ -395,7 +396,7 @@ func TestBuildClusterFanoutTargets_DistinctOfficial(t *testing.T) {
 }
 
 func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testing.T) {
-	peers := []*pb.TenantClusterPeer{
+	peers := []*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb"},
 		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted"},
 		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated"},
@@ -410,7 +411,7 @@ func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testi
 }
 
 func TestFilterPeersByPolicy_DropsUnhealthySelfHostedPeer(t *testing.T) {
-	peers := []*pb.TenantClusterPeer{
+	peers := []*quartermasterpb.TenantClusterPeer{
 		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "offline"},
 	}
 	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})

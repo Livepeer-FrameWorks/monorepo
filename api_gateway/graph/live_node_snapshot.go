@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
-	proto "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	protoclone "google.golang.org/protobuf/proto"
 	structpb "google.golang.org/protobuf/types/known/structpb"
@@ -36,12 +37,12 @@ const (
 // snapshot_stale is always boolean; the enum-ish "why is this timestamp not
 // usable" lives in snapshot_invalid_reason so the frontend / alerts don't
 // have to handle a polymorphic key.
-func liveNodeFromSnapshot(obj *proto.InfrastructureNode) *proto.LiveNode {
+func liveNodeFromSnapshot(obj *quartermasterpb.InfrastructureNode) *periscopepb.LiveNode {
 	snap := obj.GetResourceSnapshot()
 	if snap == nil {
 		return nil
 	}
-	live := &proto.LiveNode{
+	live := &periscopepb.LiveNode{
 		NodeId:         obj.GetNodeId(),
 		TenantId:       obj.GetOwnerTenantId(),
 		CpuPercent:     snap.GetCpuPercent(),
@@ -91,12 +92,12 @@ func liveNodeFromSnapshot(obj *proto.InfrastructureNode) *proto.LiveNode {
 // liveNodeWithMetadataSource returns a clone of in with metadata.source set,
 // preserving all other metadata keys. Loaders return cached pointers per
 // request; mutating in place would clobber concurrent resolver calls. nil-safe.
-func liveNodeWithMetadataSource(in *proto.LiveNode, source string) *proto.LiveNode {
+func liveNodeWithMetadataSource(in *periscopepb.LiveNode, source string) *periscopepb.LiveNode {
 	if in == nil {
 		return nil
 	}
 	cloned := protoclone.Clone(in)
-	out, ok := cloned.(*proto.LiveNode)
+	out, ok := cloned.(*periscopepb.LiveNode)
 	if !ok {
 		return in
 	}
@@ -109,7 +110,7 @@ func liveNodeWithMetadataSource(in *proto.LiveNode, source string) *proto.LiveNo
 	return out
 }
 
-func heartbeatFresh(obj *proto.InfrastructureNode, now time.Time) bool {
+func heartbeatFresh(obj *quartermasterpb.InfrastructureNode, now time.Time) bool {
 	hb := obj.GetLastHeartbeat()
 	if hb == nil {
 		return false

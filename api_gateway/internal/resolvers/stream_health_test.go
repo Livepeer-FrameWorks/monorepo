@@ -1,14 +1,13 @@
 package resolvers
 
 import (
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestNormalizeStreamHealthMetricsDefaultsHasIssues(t *testing.T) {
 	explicit := true
-	metrics := []*pb.StreamHealthMetric{
+	metrics := []*periscopepb.StreamHealthMetric{
 		{StreamId: "stream-1"},
 		{StreamId: "stream-2", HasIssues: &explicit},
 		nil,

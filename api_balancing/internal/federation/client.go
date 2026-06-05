@@ -7,7 +7,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 // federationContext strips user JWT from the context so the client interceptor
@@ -45,7 +45,7 @@ func NewFederationClient(cfg FederationClientConfig) *FederationClient {
 }
 
 // QueryStream asks a peer cluster whether it has a stream and returns scored candidates.
-func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr string, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr stri
 }
 
 // NotifyOriginPull tells the origin cluster that we intend to pull a stream.
-func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error) {
+func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr
 }
 
 // PrepareArtifact requests a cross-cluster artifact be made available.
-func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error) {
+func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr 
 // MintStorageURLs asks the storage-cluster Foghorn pool to issue presigned
 // PUT URLs against its S3 backing for an upload that this cluster cannot
 // mint locally.
-func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr string, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr 
 // target (s3_key/s3_prefix) from its authoritative row and passes it on
 // the wire; the callee validates ownership/tenant/shape and operates on
 // exactly the supplied target.
-func (c *FederationClient) DeleteStorageObjects(ctx context.Context, clusterID, addr string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+func (c *FederationClient) DeleteStorageObjects(ctx context.Context, clusterID, addr string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func (c *FederationClient) DeleteStorageObjects(ctx context.Context, clusterID, 
 }
 
 // CreateRemoteClip requests the origin cluster to create a clip on behalf of this cluster.
-func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr string, req *pb.RemoteClipRequest) (*pb.RemoteClipResponse, error) {
+func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr string, req *foghornfederationpb.RemoteClipRequest) (*foghornfederationpb.RemoteClipResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr
 }
 
 // CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of this cluster.
-func (c *FederationClient) CreateRemoteDVR(ctx context.Context, clusterID, addr string, req *pb.RemoteDVRRequest) (*pb.RemoteDVRResponse, error) {
+func (c *FederationClient) CreateRemoteDVR(ctx context.Context, clusterID, addr string, req *foghornfederationpb.RemoteDVRRequest) (*foghornfederationpb.RemoteDVRResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -142,7 +142,7 @@ func (c *FederationClient) CreateRemoteDVR(ctx context.Context, clusterID, addr 
 }
 
 // ListTenantArtifacts asks a peer cluster for all artifact metadata belonging to a tenant.
-func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, addr string, req *pb.ListTenantArtifactsRequest) (*pb.ListTenantArtifactsResponse, error) {
+func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, addr string, req *foghornfederationpb.ListTenantArtifactsRequest) (*foghornfederationpb.ListTenantArtifactsResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, a
 }
 
 // ForwardArtifactCommand forwards an artifact lifecycle command to a peer cluster.
-func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID, addr string, req *pb.ForwardArtifactCommandRequest) (*pb.ForwardArtifactCommandResponse, error) {
+func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID, addr string, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err
@@ -174,7 +174,7 @@ func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID
 
 // OpenPeerChannel opens a bidirectional PeerChannel stream to a peer cluster.
 // The caller is responsible for sending/receiving PeerMessages on the returned stream.
-func (c *FederationClient) OpenPeerChannel(ctx context.Context, clusterID, addr string) (pb.FoghornFederation_PeerChannelClient, error) {
+func (c *FederationClient) OpenPeerChannel(ctx context.Context, clusterID, addr string) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
 		return nil, err

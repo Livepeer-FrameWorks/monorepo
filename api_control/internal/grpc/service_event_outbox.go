@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -49,7 +49,7 @@ func (s *CommodoreServer) EnqueueServiceEventTx(
 	exec interface {
 		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	},
-	event *pb.ServiceEvent,
+	event *ipcpb.ServiceEvent,
 ) (string, error) {
 	if event == nil {
 		return "", errors.New("nil service event")
@@ -74,7 +74,7 @@ func (s *CommodoreServer) EnqueueServiceEventTx(
 
 // enqueueServiceEvent writes the outbox row in its own short transaction.
 // Use EnqueueServiceEventTx when the caller already holds a transaction.
-func (s *CommodoreServer) enqueueServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
+func (s *CommodoreServer) enqueueServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
 	if s.db == nil || event == nil || event.GetTenantId() == "" {
 		return
 	}
@@ -232,7 +232,7 @@ func (s *CommodoreServer) dispatchCommodoreServiceOutboxRow(_ context.Context, r
 	if s.decklogClient == nil {
 		return nil, errors.New("decklog client not configured")
 	}
-	event := &pb.ServiceEvent{}
+	event := &ipcpb.ServiceEvent{}
 	if err := protojson.Unmarshal(row.payload, event); err != nil {
 		return nil, fmt.Errorf("unmarshal service event payload: %w", err)
 	}

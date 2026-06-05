@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -19,7 +19,7 @@ func TestProcessFreezeComplete_Success(t *testing.T) {
 		WithArgs("s3://bucket/clip.mp4", "hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		RequestId: "req-1",
 		AssetHash: "hash-1",
 		Status:    "success",
@@ -40,7 +40,7 @@ func TestProcessFreezeComplete_Success_EmptyS3URL(t *testing.T) {
 		WithArgs("", "hash-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		AssetHash: "hash-1",
 		Status:    "success",
 	}, "node-1", logger)
@@ -64,7 +64,7 @@ func TestProcessFreezeComplete_Failure_RevertsToLocal(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "tenant_id"}).
 			AddRow("clip", "stream-1", "tenant-1"))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		AssetHash: "hash-2",
 		Status:    "failed",
 		Error:     "upload timed out",
@@ -96,7 +96,7 @@ func TestProcessFreezeComplete_Failure_DVR_CleanupPrefix(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "tenant_id"}).
 			AddRow("dvr", "stream-dvr", "tenant-dvr"))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		AssetHash: "dvr-hash",
 		Status:    "failed",
 	}, "node-1", logger)
@@ -126,7 +126,7 @@ func TestProcessFreezeComplete_Failure_NoTenant_SkipsCleanup(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_internal_name", "tenant_id"}).
 			AddRow("clip", "", ""))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		AssetHash: "hash-3",
 		Status:    "failed",
 		Error:     "err",
@@ -149,7 +149,7 @@ func TestProcessFreezeComplete_Failure_NilS3Client_SkipsCleanup(t *testing.T) {
 		WithArgs("err", "hash-4", "failed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processFreezeComplete(context.Background(), &pb.FreezeComplete{
+	processFreezeComplete(context.Background(), &ipcpb.FreezeComplete{
 		AssetHash: "hash-4",
 		Status:    "failed",
 		Error:     "err",

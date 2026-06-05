@@ -23,7 +23,7 @@ func TestDeductPrepaidBalanceForCreditTx_FreshDeduction(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	ref := "ref-1"
@@ -73,7 +73,7 @@ func TestDeductPrepaidBalanceForCreditTx_CapsAgainstLockedBalance(t *testing.T) 
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	ref := "ref-cap"
@@ -128,7 +128,7 @@ func TestDeductPrepaidBalanceForCreditTx_DuplicateNoOps(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	ref := "ref-2"
@@ -179,7 +179,7 @@ func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
@@ -232,7 +232,7 @@ func TestDeductPrepaidBalanceForUsageMicro_AccumulatesSubCent(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	refID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("test-1"))
@@ -295,7 +295,7 @@ func TestDeductPrepaidBalanceForUsageMicro_AppliesNegativeCorrectionCredit(t *te
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	refID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("negative-correction"))
@@ -335,7 +335,7 @@ func TestDeductPrepaidBalanceForUsageMicro_DuplicateReferenceNoOps(t *testing.T)
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.DefaultCurrency()
 	tenantID := "tenant-1"
 	refID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("dup"))

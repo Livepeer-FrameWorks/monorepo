@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -183,8 +183,8 @@ func relayGrantAllows(g relayGrant, found bool, servingNodeID, artifactHash, req
 // path it minted. Unknown/expired grant, node/hash mismatch, or path outside
 // the grant → deny. servingNodeID is the node id of the control connection
 // this request arrived on — never client-supplied.
-func processAuthorizeRelayPullRequest(req *pb.AuthorizeRelayPullRequest, servingNodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
-	resp := &pb.AuthorizeRelayPullResponse{RequestId: req.GetRequestId()}
+func processAuthorizeRelayPullRequest(req *ipcpb.AuthorizeRelayPullRequest, servingNodeID string, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	resp := &ipcpb.AuthorizeRelayPullResponse{RequestId: req.GetRequestId()}
 
 	g, ok := lookupRelayGrant(strings.TrimSpace(req.GetGrantId()))
 	resp.Allowed, resp.Reason = relayGrantAllows(g, ok, servingNodeID, req.GetArtifactHash(), req.GetRequestPath())
@@ -193,10 +193,10 @@ func processAuthorizeRelayPullRequest(req *pb.AuthorizeRelayPullRequest, serving
 		logger.WithField("reason", resp.Reason).WithField("artifact_hash", req.GetArtifactHash()).Debug("AuthorizeRelayPull denied")
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: req.GetRequestId(),
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_AuthorizeRelayPullResponse{AuthorizeRelayPullResponse: resp},
+		Payload:   &ipcpb.ControlMessage_AuthorizeRelayPullResponse{AuthorizeRelayPullResponse: resp},
 	}
 	if err := stream.Send(msg); err != nil && logger != nil {
 		logger.WithError(err).Warn("Failed to send AuthorizeRelayPullResponse")

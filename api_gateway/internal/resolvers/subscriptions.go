@@ -11,7 +11,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
@@ -90,8 +91,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 }
 
 // DoAnalyticsUpdates handles real-time analytics updates via WebSocket
-// Returns proto.ClientLifecycleUpdate (bound to GraphQL ViewerMetrics)
-func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-chan *pb.ClientLifecycleUpdate, error) {
+func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-chan *ipcpb.ClientLifecycleUpdate, error) {
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo analytics subscription")
-		ch := make(chan *pb.ClientLifecycleUpdate, 10)
+		ch := make(chan *ipcpb.ClientLifecycleUpdate, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateViewerMetricsEvents()
@@ -163,8 +163,7 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 }
 
 // DoConnectionEvents handles real-time viewer connection events via WebSocket
-// Returns proto.ConnectionEvent (bound to GraphQL ConnectionEvent)
-func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-chan *pb.ConnectionEvent, error) {
+func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-chan *periscopepb.ConnectionEvent, error) {
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
 	if err != nil {
 		return nil, err
@@ -173,7 +172,7 @@ func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo connection events subscription")
-		ch := make(chan *pb.ConnectionEvent, 10)
+		ch := make(chan *periscopepb.ConnectionEvent, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateConnectionEventSubscriptionEvents()
@@ -227,8 +226,7 @@ func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-
 }
 
 // DoStorageEvents handles real-time storage lifecycle events via WebSocket
-// Returns proto.StorageEvent (mapped from StorageLifecycleData)
-func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-chan *pb.StorageEvent, error) {
+func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-chan *periscopepb.StorageEvent, error) {
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
 	if err != nil {
 		return nil, err
@@ -237,7 +235,7 @@ func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-cha
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo storage events subscription")
-		ch := make(chan *pb.StorageEvent, 10)
+		ch := make(chan *periscopepb.StorageEvent, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateStorageEventSubscriptionEvents()
@@ -290,8 +288,7 @@ func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-cha
 }
 
 // DoProcessingEvents handles real-time processing/transcoding events via WebSocket
-// Returns proto.ProcessingUsageRecord (mapped from ProcessBillingEvent)
-func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-chan *pb.ProcessingUsageRecord, error) {
+func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-chan *periscopepb.ProcessingUsageRecord, error) {
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
 	if err != nil {
 		return nil, err
@@ -300,7 +297,7 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo processing events subscription")
-		ch := make(chan *pb.ProcessingUsageRecord, 10)
+		ch := make(chan *periscopepb.ProcessingUsageRecord, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateProcessingEventSubscriptionEvents()
@@ -353,11 +350,10 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 }
 
 // DoSystemUpdates handles real-time system updates via WebSocket
-// Returns proto.NodeLifecycleUpdate (bound to GraphQL SystemHealthEvent)
-func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *pb.NodeLifecycleUpdate, error) {
+func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *ipcpb.NodeLifecycleUpdate, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo system health subscription")
-		ch := make(chan *pb.NodeLifecycleUpdate, 10)
+		ch := make(chan *ipcpb.NodeLifecycleUpdate, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateSystemHealthEvents()
@@ -403,8 +399,7 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *pb.NodeLifecycl
 }
 
 // DoTrackListUpdates handles real-time track list updates via WebSocket
-// Returns proto.StreamTrackListTrigger directly (bound to GraphQL TrackListEvent)
-func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *pb.StreamTrackListTrigger, error) {
+func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *ipcpb.StreamTrackListTrigger, error) {
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -413,7 +408,7 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo track list subscription")
-		ch := make(chan *pb.StreamTrackListTrigger, 10)
+		ch := make(chan *ipcpb.StreamTrackListTrigger, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateTrackListEvents()

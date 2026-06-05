@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"errors"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -26,7 +27,7 @@ import (
 // Auth logic itself lives in Foghorn's evaluator (see
 // api_balancing/internal/triggers/playback_auth.go EvaluatePlaybackPolicyDetailed).
 // Commodore does NOT reimplement JWT verification or webhook calling here.
-func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, error) {
+func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -44,11 +45,11 @@ func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *pb.TestPl
 	// confirm the caller's tenant matches the policy's tenant_id before
 	// forwarding to Foghorn (which would otherwise execute against the
 	// target without tenant scoping).
-	var policyReq *pb.ResolvePlaybackPolicyRequest
+	var policyReq *commodorepb.ResolvePlaybackPolicyRequest
 	if playbackID != "" {
-		policyReq = &pb.ResolvePlaybackPolicyRequest{PlaybackId: playbackID}
+		policyReq = &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: playbackID}
 	} else {
-		policyReq = &pb.ResolvePlaybackPolicyRequest{InternalName: internalName}
+		policyReq = &commodorepb.ResolvePlaybackPolicyRequest{InternalName: internalName}
 	}
 	policy, perr := s.ResolvePlaybackPolicy(ctx, policyReq)
 	if perr != nil {

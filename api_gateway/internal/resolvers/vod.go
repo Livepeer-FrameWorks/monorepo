@@ -17,7 +17,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // =============================================================================
@@ -43,7 +46,7 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	userID := ctxkeys.GetUserID(ctx)
 
 	// Build gRPC request
-	req := &pb.CreateVodUploadRequest{
+	req := &sharedpb.CreateVodUploadRequest{
 		TenantId:  tenantID,
 		UserId:    userID,
 		Filename:  input.Filename,
@@ -94,13 +97,13 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	}
 
 	// Convert to GraphQL model
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventVodUploadCreated,
 		ResourceType: "vod_upload",
 		ResourceId:   resp.UploadId,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
 				ArtifactId: resp.ArtifactHash,
 				Status:     "upload_created",
@@ -136,16 +139,16 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	}
 
 	// Convert parts from GraphQL to proto
-	protoParts := make([]*pb.VodCompletedPart, len(input.Parts))
+	protoParts := make([]*sharedpb.VodCompletedPart, len(input.Parts))
 	for i, p := range input.Parts {
-		protoParts[i] = &pb.VodCompletedPart{
+		protoParts[i] = &sharedpb.VodCompletedPart{
 			PartNumber: int32(p.PartNumber),
 			Etag:       p.Etag,
 		}
 	}
 
 	// Build gRPC request
-	req := &pb.CompleteVodUploadRequest{
+	req := &sharedpb.CompleteVodUploadRequest{
 		TenantId: tenantID,
 		UploadId: input.UploadID,
 		Parts:    protoParts,
@@ -188,13 +191,13 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	}
 
 	// Convert to GraphQL model
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventVodUploadCompleted,
 		ResourceType: "vod_upload",
 		ResourceId:   input.UploadID,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
 				ArtifactId: resp.GetAsset().GetArtifactHash(),
 				Status:     "upload_completed",
@@ -209,7 +212,7 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 // Returns the proto response so the MCP tool can map to its own JSON shape; the GraphQL
 // resolver builds a model.VodUploadStatusResult union value via DoGetVodUploadStatus.
 // Tenant_id is taken from the auth context, never from the wire.
-func (r *Resolver) DoGetVodUploadStatusProto(ctx context.Context, uploadID string) (*pb.GetVodUploadStatusResponse, error) {
+func (r *Resolver) DoGetVodUploadStatusProto(ctx context.Context, uploadID string) (*sharedpb.GetVodUploadStatusResponse, error) {
 	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
 		return nil, err
 	}
@@ -295,19 +298,19 @@ func (r *Resolver) DoGetVodUploadStatus(ctx context.Context, uploadID string) (m
 	return out, nil
 }
 
-func protoToVodAssetStatus(s pb.VodStatus) model.VodAssetStatus {
+func protoToVodAssetStatus(s sharedpb.VodStatus) model.VodAssetStatus {
 	switch s {
-	case pb.VodStatus_VOD_STATUS_UPLOADING:
+	case sharedpb.VodStatus_VOD_STATUS_UPLOADING:
 		return model.VodAssetStatusUploading
-	case pb.VodStatus_VOD_STATUS_PROCESSING:
+	case sharedpb.VodStatus_VOD_STATUS_PROCESSING:
 		return model.VodAssetStatusProcessing
-	case pb.VodStatus_VOD_STATUS_READY:
+	case sharedpb.VodStatus_VOD_STATUS_READY:
 		return model.VodAssetStatusReady
-	case pb.VodStatus_VOD_STATUS_FAILED:
+	case sharedpb.VodStatus_VOD_STATUS_FAILED:
 		return model.VodAssetStatusFailed
-	case pb.VodStatus_VOD_STATUS_DELETED:
+	case sharedpb.VodStatus_VOD_STATUS_DELETED:
 		return model.VodAssetStatusDeleted
-	case pb.VodStatus_VOD_STATUS_EXPIRED:
+	case sharedpb.VodStatus_VOD_STATUS_EXPIRED:
 		return model.VodAssetStatusExpired
 	default:
 		return model.VodAssetStatusUploading
@@ -374,13 +377,13 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 		return nil, fmt.Errorf("failed to abort VOD upload: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventVodUploadAborted,
 		ResourceType: "vod_upload",
 		ResourceId:   uploadID,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
 				// Abort doesn't return the hash, so leave artifact_id empty.
 				ArtifactId: "",
@@ -423,13 +426,13 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 		return nil, fmt.Errorf("failed to delete VOD asset: %w", err)
 	}
 
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
 		EventType:    apiEventVodAssetDeleted,
 		ResourceType: "vod_asset",
 		ResourceId:   id,
-		Payload: &pb.ServiceEvent_ArtifactEvent{
-			ArtifactEvent: &pb.ArtifactEvent{
-				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &ipcpb.ArtifactEvent{
+				ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 				ArtifactId:   id,
 				Status:       "deleted",
 			},
@@ -487,7 +490,7 @@ func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, aft
 // stream-derived VOD artifacts for a single source stream.
 func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string, input ...*model.MediaArtifactConnectionInput) (*model.VodAssetsConnection, error) {
 	// Build cursor pagination request with bidirectional support
-	paginationReq := &pb.CursorPaginationRequest{
+	paginationReq := &commonpb.CursorPaginationRequest{
 		First: int32(pagination.DefaultLimit),
 	}
 	if first != nil {
@@ -557,7 +560,7 @@ func (r *Resolver) DoGetVodAssetsConnectionFiltered(ctx context.Context, streamI
 }
 
 // buildVodAssetsConnection constructs a VodAssetsConnection from a slice of assets
-func (r *Resolver) buildVodAssetsConnection(assets []*model.VodAsset, paginationResp *pb.CursorPaginationResponse) *model.VodAssetsConnection {
+func (r *Resolver) buildVodAssetsConnection(assets []*model.VodAsset, paginationResp *commonpb.CursorPaginationResponse) *model.VodAssetsConnection {
 	edges := make([]*model.VodAssetEdge, len(assets))
 	for i, asset := range assets {
 		cursor := pagination.EncodeCursor(asset.CreatedAt, asset.ArtifactHash)
@@ -603,7 +606,7 @@ func (r *Resolver) buildVodAssetsConnection(assets []*model.VodAsset, pagination
 }
 
 // protoToVodAsset converts a proto VodAssetInfo to a GraphQL VodAsset
-func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
+func protoToVodAsset(p *sharedpb.VodAssetInfo) *model.VodAsset {
 	if p == nil {
 		return nil
 	}
@@ -611,15 +614,15 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 	// Map proto status to GraphQL enum
 	var status model.VodAssetStatus
 	switch p.Status {
-	case pb.VodStatus_VOD_STATUS_UPLOADING:
+	case sharedpb.VodStatus_VOD_STATUS_UPLOADING:
 		status = model.VodAssetStatusUploading
-	case pb.VodStatus_VOD_STATUS_PROCESSING:
+	case sharedpb.VodStatus_VOD_STATUS_PROCESSING:
 		status = model.VodAssetStatusProcessing
-	case pb.VodStatus_VOD_STATUS_READY:
+	case sharedpb.VodStatus_VOD_STATUS_READY:
 		status = model.VodAssetStatusReady
-	case pb.VodStatus_VOD_STATUS_FAILED:
+	case sharedpb.VodStatus_VOD_STATUS_FAILED:
 		status = model.VodAssetStatusFailed
-	case pb.VodStatus_VOD_STATUS_DELETED:
+	case sharedpb.VodStatus_VOD_STATUS_DELETED:
 		status = model.VodAssetStatusDeleted
 	default:
 		status = model.VodAssetStatusUploading // default fallback
@@ -754,7 +757,7 @@ func vodRetentionSource(s *string) model.RetentionSource {
 
 // enrichVodAssetWithLifecycle merges lifecycle data from Periscope into VOD proto
 // Maps ArtifactState fields to VodAssetInfo fields
-func enrichVodAssetWithLifecycle(asset *pb.VodAssetInfo, state *pb.ArtifactState) {
+func enrichVodAssetWithLifecycle(asset *sharedpb.VodAssetInfo, state *periscopepb.ArtifactState) {
 	if asset == nil || state == nil {
 		return
 	}
@@ -763,15 +766,15 @@ func enrichVodAssetWithLifecycle(asset *pb.VodAssetInfo, state *pb.ArtifactState
 		// Map stage to VodStatus
 		switch state.Stage {
 		case "requested", "queued", "uploading":
-			asset.Status = pb.VodStatus_VOD_STATUS_UPLOADING
+			asset.Status = sharedpb.VodStatus_VOD_STATUS_UPLOADING
 		case "processing":
-			asset.Status = pb.VodStatus_VOD_STATUS_PROCESSING
+			asset.Status = sharedpb.VodStatus_VOD_STATUS_PROCESSING
 		case "completed", "complete", "done", "ready", "synced":
-			asset.Status = pb.VodStatus_VOD_STATUS_READY
+			asset.Status = sharedpb.VodStatus_VOD_STATUS_READY
 		case "failed", "failed_terminal", "error", "lost_local":
-			asset.Status = pb.VodStatus_VOD_STATUS_FAILED
+			asset.Status = sharedpb.VodStatus_VOD_STATUS_FAILED
 		case "deleted", "evicted":
-			asset.Status = pb.VodStatus_VOD_STATUS_DELETED
+			asset.Status = sharedpb.VodStatus_VOD_STATUS_DELETED
 		}
 	}
 

@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func (sm *StreamStateManager) EnableRedisSync(ctx context.Context, store *RedisStateStore, instanceID string, logger logging.Logger) error {
@@ -79,9 +78,9 @@ func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {
 	}
 	for nodeID, arts := range artifacts {
 		if n := sm.nodes[nodeID]; n != nil {
-			n.Artifacts = make([]*pb.StoredArtifact, 0, len(arts))
+			n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(arts))
 			for _, a := range arts {
-				n.Artifacts = append(n.Artifacts, &pb.StoredArtifact{
+				n.Artifacts = append(n.Artifacts, &ipcpb.StoredArtifact{
 					ClipHash:     a.ClipHash,
 					FilePath:     a.FilePath,
 					SizeBytes:    a.SizeBytes,
@@ -143,9 +142,9 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 		var arts []*NodeArtifactState
 		if err := json.Unmarshal(change.Payload, &arts); err == nil {
 			if n := sm.nodes[change.NodeID]; n != nil {
-				n.Artifacts = make([]*pb.StoredArtifact, 0, len(arts))
+				n.Artifacts = make([]*ipcpb.StoredArtifact, 0, len(arts))
 				for _, a := range arts {
-					n.Artifacts = append(n.Artifacts, &pb.StoredArtifact{
+					n.Artifacts = append(n.Artifacts, &ipcpb.StoredArtifact{
 						ClipHash:     a.ClipHash,
 						FilePath:     a.FilePath,
 						SizeBytes:    a.SizeBytes,

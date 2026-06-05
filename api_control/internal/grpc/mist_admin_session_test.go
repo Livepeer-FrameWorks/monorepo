@@ -10,7 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 )
 
@@ -19,9 +20,9 @@ import (
 // real Quartermaster gRPC server.
 func stubOwnership(
 	t *testing.T,
-	nodeOwner *pb.NodeOwnerResponse,
+	nodeOwner *quartermasterpb.NodeOwnerResponse,
 	nodeOwnerErr error,
-	cluster *pb.ClusterResponse,
+	cluster *quartermasterpb.ClusterResponse,
 	clusterErr error,
 ) {
 	t.Helper()
@@ -30,10 +31,10 @@ func stubOwnership(
 		mistAdminGetNodeOwner = prevOwner
 		mistAdminGetCluster = prevCluster
 	})
-	mistAdminGetNodeOwner = func(s *CommodoreServer, ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+	mistAdminGetNodeOwner = func(s *CommodoreServer, ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
 		return nodeOwner, nodeOwnerErr
 	}
-	mistAdminGetCluster = func(s *CommodoreServer, ctx context.Context, clusterID string) (*pb.ClusterResponse, error) {
+	mistAdminGetCluster = func(s *CommodoreServer, ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
 		return cluster, clusterErr
 	}
 }
@@ -63,18 +64,18 @@ func newMistAdminTestServer(t *testing.T) *CommodoreServer {
 	return &CommodoreServer{logger: logrus.New()}
 }
 
-func platformOfficialOwner(node, cluster string) *pb.NodeOwnerResponse {
-	return &pb.NodeOwnerResponse{NodeId: node, ClusterId: cluster, ClusterName: cluster}
+func platformOfficialOwner(node, cluster string) *quartermasterpb.NodeOwnerResponse {
+	return &quartermasterpb.NodeOwnerResponse{NodeId: node, ClusterId: cluster, ClusterName: cluster}
 }
 
-func tenantOwnedOwner(node, cluster, ownerTenant string) *pb.NodeOwnerResponse {
+func tenantOwnedOwner(node, cluster, ownerTenant string) *quartermasterpb.NodeOwnerResponse {
 	t := ownerTenant
-	return &pb.NodeOwnerResponse{NodeId: node, ClusterId: cluster, ClusterName: cluster, OwnerTenantId: &t}
+	return &quartermasterpb.NodeOwnerResponse{NodeId: node, ClusterId: cluster, ClusterName: cluster, OwnerTenantId: &t}
 }
 
-func clusterResp(id string, isPlatformOfficial bool) *pb.ClusterResponse {
-	return &pb.ClusterResponse{
-		Cluster: &pb.InfrastructureCluster{
+func clusterResp(id string, isPlatformOfficial bool) *quartermasterpb.ClusterResponse {
+	return &quartermasterpb.ClusterResponse{
+		Cluster: &quartermasterpb.InfrastructureCluster{
 			ClusterId:          id,
 			IsPlatformOfficial: isPlatformOfficial,
 		},
@@ -93,7 +94,7 @@ func TestMintMistAdminSession_SystemTenantBreakGlassAllowsOwnerAndAdmin(t *testi
 				clusterResp("media-us-1", true), nil,
 			)
 			ctx := ctxAs("platform-user", systemTenant, role)
-			resp, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+			resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 			if err != nil {
 				t.Fatalf("mint: %v", err)
 			}
@@ -103,7 +104,7 @@ func TestMintMistAdminSession_SystemTenantBreakGlassAllowsOwnerAndAdmin(t *testi
 
 			// Token claims must come from the trusted context, not from
 			// any request body field — round-trip through Validate.
-			vresp, err := srv.ValidateMistAdminSession(ctx, &pb.ValidateMistAdminSessionRequest{
+			vresp, err := srv.ValidateMistAdminSession(ctx, &commodorepb.ValidateMistAdminSessionRequest{
 				Token:          resp.GetToken(),
 				ExpectedNodeId: "edge-us-1",
 			})
@@ -127,7 +128,7 @@ func TestMintMistAdminSession_TenantPrivateAllowsOwnerTenant(t *testing.T) {
 		clusterResp("acme-private", false), nil,
 	)
 	ctx := ctxAs("acme-user", "tenant-acme", "owner")
-	resp, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestMintMistAdminSession_TenantPrivateAllowsOwnerTenantAdmin(t *testing.T) 
 		clusterResp("acme-private", false), nil,
 	)
 	ctx := ctxAs("acme-admin", "tenant-acme", "admin")
-	resp, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestMintMistAdminSession_DeniesMemberOnPlatformOfficial(t *testing.T) {
 		clusterResp("media-us-1", true), nil,
 	)
 	ctx := ctxAs("member-user", "any-tenant", "member")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("member on platform-official must be denied; got %v", err)
 	}
@@ -174,7 +175,7 @@ func TestMintMistAdminSession_DeniesTenantOwnerOnPlatformOfficial(t *testing.T) 
 		clusterResp("media-us-1", true), nil,
 	)
 	ctx := ctxAs("u", "tenant-customer", "owner")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("tenant owner on platform-owned node must be denied; got %v", err)
 	}
@@ -187,7 +188,7 @@ func TestMintMistAdminSession_DeniesOwnerTenantMemberOnPrivateCluster(t *testing
 		clusterResp("acme-private", false), nil,
 	)
 	ctx := ctxAs("member-user", "tenant-acme", "member")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("owner tenant member must be denied; got %v", err)
 	}
@@ -200,7 +201,7 @@ func TestMintMistAdminSession_SystemTenantCanAdminPrivateCluster(t *testing.T) {
 		clusterResp("acme-private", false), nil,
 	)
 	ctx := ctxAs("platform-admin", tenants.SystemTenantID.String(), "admin")
-	resp, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestMintMistAdminSession_DeniesOtherTenantOnPrivateCluster(t *testing.T) {
 	// Trusted identity says "tenant-evil" but the cluster is owned by
 	// "tenant-acme" — must be PermissionDenied.
 	ctx := ctxAs("evil-user", "tenant-evil", "owner")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("cross-tenant access must be denied; got %v", err)
 	}
@@ -229,11 +230,11 @@ func TestMintMistAdminSession_DeniesPrivateClusterWithoutOwner(t *testing.T) {
 	// owner_tenant_id (data anomaly) must fail closed, not match-any.
 	srv := newMistAdminTestServer(t)
 	stubOwnership(t,
-		&pb.NodeOwnerResponse{NodeId: "edge-x", ClusterId: "weird"}, nil,
+		&quartermasterpb.NodeOwnerResponse{NodeId: "edge-x", ClusterId: "weird"}, nil,
 		clusterResp("weird", false), nil,
 	)
 	ctx := ctxAs("u", "any", "owner")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-x"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-x"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("missing owner_tenant_id must fail closed; got %v", err)
 	}
@@ -242,7 +243,7 @@ func TestMintMistAdminSession_DeniesPrivateClusterWithoutOwner(t *testing.T) {
 func TestMintMistAdminSession_RejectsMissingTrustedIdentity(t *testing.T) {
 	srv := newMistAdminTestServer(t)
 	// No user/tenant in context — extractUserContext should fail.
-	_, err := srv.MintMistAdminSession(context.Background(), &pb.MintMistAdminSessionRequest{NodeId: "edge-x"})
+	_, err := srv.MintMistAdminSession(context.Background(), &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-x"})
 	if status.Code(err) != codes.Unauthenticated {
 		t.Errorf("missing trusted identity must be Unauthenticated; got %v", err)
 	}
@@ -251,7 +252,7 @@ func TestMintMistAdminSession_RejectsMissingTrustedIdentity(t *testing.T) {
 func TestMintMistAdminSession_RejectsEmptyNode(t *testing.T) {
 	srv := newMistAdminTestServer(t)
 	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: ""})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: ""})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("empty node_id must be InvalidArgument; got %v", err)
 	}
@@ -261,7 +262,7 @@ func TestMintMistAdminSession_PropagatesNodeOwnerErrors(t *testing.T) {
 	srv := newMistAdminTestServer(t)
 	stubOwnership(t, nil, errors.New("qm boom"), nil, nil)
 	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
-	_, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-x"})
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-x"})
 	if status.Code(err) != codes.Internal {
 		t.Errorf("quartermaster failure must be Internal; got %v", err)
 	}
@@ -276,11 +277,11 @@ func TestValidateMistAdminSession_RejectsWrongNode(t *testing.T) {
 		clusterResp("media-us-1", true), nil,
 	)
 	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
-	mint, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	mint, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	resp, _ := srv.ValidateMistAdminSession(context.Background(), &pb.ValidateMistAdminSessionRequest{
+	resp, _ := srv.ValidateMistAdminSession(context.Background(), &commodorepb.ValidateMistAdminSessionRequest{
 		Token:          mint.GetToken(),
 		ExpectedNodeId: "edge-eu-1",
 	})
@@ -296,11 +297,11 @@ func TestValidateMistAdminSession_RejectsMissingExpectedNode(t *testing.T) {
 		clusterResp("media-us-1", true), nil,
 	)
 	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
-	mint, err := srv.MintMistAdminSession(ctx, &pb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
+	mint, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-us-1"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	resp, _ := srv.ValidateMistAdminSession(context.Background(), &pb.ValidateMistAdminSessionRequest{
+	resp, _ := srv.ValidateMistAdminSession(context.Background(), &commodorepb.ValidateMistAdminSessionRequest{
 		Token:          mint.GetToken(),
 		ExpectedNodeId: "", // caller bug — fail closed, not match-any
 	})
@@ -311,7 +312,7 @@ func TestValidateMistAdminSession_RejectsMissingExpectedNode(t *testing.T) {
 
 func TestValidateMistAdminSession_RejectsEmptyToken(t *testing.T) {
 	srv := newMistAdminTestServer(t)
-	resp, err := srv.ValidateMistAdminSession(context.Background(), &pb.ValidateMistAdminSessionRequest{
+	resp, err := srv.ValidateMistAdminSession(context.Background(), &commodorepb.ValidateMistAdminSessionRequest{
 		Token:          "",
 		ExpectedNodeId: "edge-us-1",
 	})

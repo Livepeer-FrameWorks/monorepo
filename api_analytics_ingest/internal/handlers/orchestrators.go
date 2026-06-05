@@ -7,7 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // processOrchestratorDiscoveryObserved writes a per-vantage discovery
@@ -25,7 +25,7 @@ import (
 // stay under the stable url:<host> key emitted by the gateway; later attempts
 // use the eth address once the gateway has learned it.
 func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Context, event kafka.AnalyticsEvent) error {
-	var msg pb.OrchestratorDiscoveryObserved
+	var msg ipcpb.OrchestratorDiscoveryObserved
 	if err := h.parseProtobufData(event, &msg); err != nil {
 		return fmt.Errorf("parse orchestrator_discovery_observed: %w", err)
 	}
@@ -41,7 +41,7 @@ func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Cont
 	if vantage == nil {
 		// Discovery without resolved IP / geo is still useful. Record with empty
 		// resolved_ip so the row is unique by (gateway, orch_addr, resolved_ip="").
-		vantage = &pb.OrchestratorVantageGeo{}
+		vantage = &ipcpb.OrchestratorVantageGeo{}
 	}
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -130,7 +130,7 @@ func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Cont
 // The vantage row (per-(gateway, instance) latency/score/geo) is upserted
 // separately when the observation includes vantage data.
 func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, event kafka.AnalyticsEvent) error {
-	var msg pb.OrchestratorStateUpdate
+	var msg ipcpb.OrchestratorStateUpdate
 	if err := h.parseProtobufData(event, &msg); err != nil {
 		return fmt.Errorf("parse orchestrator_state_update: %w", err)
 	}
@@ -227,7 +227,7 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 	return nil
 }
 
-func capabilityPriceArrays(entries []*pb.OrchestratorCapabilityPriceEntry) ([]string, []uint32, []int64, []int64) {
+func capabilityPriceArrays(entries []*ipcpb.OrchestratorCapabilityPriceEntry) ([]string, []uint32, []int64, []int64) {
 	capabilities := make([]string, 0, len(entries))
 	positions := make([]uint32, 0, len(entries))
 	pricePerUnits := make([]int64, 0, len(entries))
@@ -249,7 +249,7 @@ func capabilityPriceArrays(entries []*pb.OrchestratorCapabilityPriceEntry) ([]st
 // tenant_id is the stream tenant; cluster_owner_tenant_id is the gateway
 // cluster owner.
 func (h *AnalyticsHandler) processOrchestratorTranscodeOutcome(ctx context.Context, event kafka.AnalyticsEvent) error {
-	var msg pb.OrchestratorTranscodeOutcome
+	var msg ipcpb.OrchestratorTranscodeOutcome
 	if err := h.parseProtobufData(event, &msg); err != nil {
 		return fmt.Errorf("parse orchestrator_transcode_outcome: %w", err)
 	}
@@ -314,7 +314,7 @@ func (h *AnalyticsHandler) processOrchestratorTranscodeOutcome(ctx context.Conte
 // table; pricing meters and consumers differ from transcode (GPU-hour vs
 // delivered minutes are not interchangeable).
 func (h *AnalyticsHandler) processOrchestratorAIOutcome(ctx context.Context, event kafka.AnalyticsEvent) error {
-	var msg pb.OrchestratorAIOutcome
+	var msg ipcpb.OrchestratorAIOutcome
 	if err := h.parseProtobufData(event, &msg); err != nil {
 		return fmt.Errorf("parse orchestrator_ai_outcome: %w", err)
 	}
@@ -379,7 +379,7 @@ func (h *AnalyticsHandler) processOrchestratorAIOutcome(ctx context.Context, eve
 // most recent dial — failures still update the row (so a degraded path
 // doesn't keep showing the last good measurement), with dialedRecently=false
 // signaling "last attempt failed".
-func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event kafka.AnalyticsEvent, ident orchestratorIdent, orchAddr string, vantage *pb.OrchestratorVantageGeo, latencyMs uint32, score float32, dialedRecently bool) error {
+func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event kafka.AnalyticsEvent, ident orchestratorIdent, orchAddr string, vantage *ipcpb.OrchestratorVantageGeo, latencyMs uint32, score float32, dialedRecently bool) error {
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO orchestrator_vantage_current (
 			tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,

@@ -12,7 +12,8 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // ReconcilerS3Client defines S3 operations needed by the artifact reconciler.
@@ -24,7 +25,7 @@ type ReconcilerS3Client interface {
 }
 
 // FreezeRequestSender sends a FreezeRequest to a specific node.
-type FreezeRequestSender func(nodeID string, req *pb.FreezeRequest) error
+type FreezeRequestSender func(nodeID string, req *ipcpb.FreezeRequest) error
 
 // maxArtifactRetries caps the number of generic-freeze retries for a single
 // artifact before it is left in sync_status='failed' as a terminal-by-budget
@@ -33,12 +34,12 @@ const maxArtifactRetries = 8
 
 // ReconcilerCommodoreClient defines Commodore operations needed by the reconciler.
 type ReconcilerCommodoreClient interface {
-	ResolveClipHash(ctx context.Context, hash string) (*pb.ResolveClipHashResponse, error)
-	ResolveDVRHash(ctx context.Context, hash string) (*pb.ResolveDVRHashResponse, error)
-	ResolveVodHash(ctx context.Context, hash string) (*pb.ResolveVodHashResponse, error)
-	MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error)
-	UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error)
-	UpdateArtifactSize(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error)
+	ResolveClipHash(ctx context.Context, hash string) (*commodorepb.ResolveClipHashResponse, error)
+	ResolveDVRHash(ctx context.Context, hash string) (*commodorepb.ResolveDVRHashResponse, error)
+	ResolveVodHash(ctx context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error)
+	MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error)
+	UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error)
+	UpdateArtifactSize(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error)
 }
 
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
@@ -474,13 +475,13 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 	return count
 }
 
-func artifactTypeFromProto(t pb.ArtifactEvent_ArtifactType) string {
+func artifactTypeFromProto(t ipcpb.ArtifactEvent_ArtifactType) string {
 	switch t {
-	case pb.ArtifactEvent_ARTIFACT_TYPE_CLIP:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP:
 		return "clip"
-	case pb.ArtifactEvent_ARTIFACT_TYPE_DVR:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR:
 		return "dvr"
-	case pb.ArtifactEvent_ARTIFACT_TYPE_VOD:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD:
 		return "vod"
 	default:
 		return ""
@@ -492,7 +493,7 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 	expiry := 30 * time.Minute
 	requestID := fmt.Sprintf("reconcile-%s-%d", hash, time.Now().UnixMilli())
 
-	req := &pb.FreezeRequest{
+	req := &ipcpb.FreezeRequest{
 		RequestId:        requestID,
 		AssetType:        assetType,
 		AssetHash:        hash,
@@ -583,16 +584,16 @@ func (r *ArtifactReconciler) resolveArtifactContext(ctx context.Context, hash, a
 	}
 }
 
-func artifactAssetTypeFromString(t string) (pb.ArtifactAssetType, bool) {
+func artifactAssetTypeFromString(t string) (commodorepb.ArtifactAssetType, bool) {
 	switch t {
 	case "clip":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true
 	case "dvr", "dvr_segment", "dvr_manifest":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true
 	case "vod":
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true
 	default:
-		return pb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
+		return commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false
 	}
 }
 

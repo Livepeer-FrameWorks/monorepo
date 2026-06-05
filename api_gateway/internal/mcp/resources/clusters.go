@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -157,7 +157,7 @@ func handleClustersMarketplace(ctx context.Context, resolver *resolvers.Resolver
 	})
 }
 
-func marketplaceEntryToDetail(c *pb.MarketplaceClusterEntry) ClusterDetailInfo {
+func marketplaceEntryToDetail(c *quartermasterpb.MarketplaceClusterEntry) ClusterDetailInfo {
 	info := ClusterDetailInfo{
 		ClusterID:         c.ClusterId,
 		ClusterName:       c.ClusterName,

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -17,17 +17,17 @@ func TestBuildArtifactLifecycleEvent(t *testing.T) {
 	expiresAt := int64(300)
 
 	t.Run("returns nil when required fields are missing", func(t *testing.T) {
-		if got := buildArtifactLifecycleEvent(pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "", "stream-1", "completed", nil, nil, nil, "tenant-1", "user-1"); got != nil {
+		if got := buildArtifactLifecycleEvent(ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "", "stream-1", "completed", nil, nil, nil, "tenant-1", "user-1"); got != nil {
 			t.Fatalf("expected nil for missing artifact id, got %#v", got)
 		}
-		if got := buildArtifactLifecycleEvent(pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "artifact-1", "stream-1", "completed", nil, nil, nil, "", "user-1"); got != nil {
+		if got := buildArtifactLifecycleEvent(ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "artifact-1", "stream-1", "completed", nil, nil, nil, "", "user-1"); got != nil {
 			t.Fatalf("expected nil for missing tenant id, got %#v", got)
 		}
 	})
 
 	t.Run("builds service event with artifact payload", func(t *testing.T) {
 		event := buildArtifactLifecycleEvent(
-			pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+			ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 			"artifact-1",
 			"stream-1",
 			"completed",
@@ -49,12 +49,12 @@ func TestBuildArtifactLifecycleEvent(t *testing.T) {
 		if event.ResourceType != "artifact" || event.ResourceId != "artifact-1" {
 			t.Fatalf("unexpected resource fields: type=%q id=%q", event.ResourceType, event.ResourceId)
 		}
-		payload, ok := event.Payload.(*pb.ServiceEvent_ArtifactEvent)
+		payload, ok := event.Payload.(*ipcpb.ServiceEvent_ArtifactEvent)
 		if !ok {
 			t.Fatalf("expected artifact event payload, got %T", event.Payload)
 		}
 		artifact := payload.ArtifactEvent
-		if artifact.GetArtifactType() != pb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
+		if artifact.GetArtifactType() != ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP {
 			t.Fatalf("unexpected artifact type: %v", artifact.GetArtifactType())
 		}
 		if artifact.GetArtifactId() != "artifact-1" || artifact.GetStreamId() != "stream-1" {
@@ -78,16 +78,16 @@ func TestBuildArtifactLifecycleEvent(t *testing.T) {
 func TestClipStageToStatus(t *testing.T) {
 	cases := []struct {
 		name     string
-		input    pb.ClipLifecycleData_Stage
+		input    ipcpb.ClipLifecycleData_Stage
 		expected string
 	}{
-		{name: "requested", input: pb.ClipLifecycleData_STAGE_REQUESTED, expected: "requested"},
-		{name: "queued", input: pb.ClipLifecycleData_STAGE_QUEUED, expected: "queued"},
-		{name: "progress", input: pb.ClipLifecycleData_STAGE_PROGRESS, expected: "processing"},
-		{name: "done", input: pb.ClipLifecycleData_STAGE_DONE, expected: "completed"},
-		{name: "failed", input: pb.ClipLifecycleData_STAGE_FAILED, expected: "failed"},
-		{name: "deleted", input: pb.ClipLifecycleData_STAGE_DELETED, expected: "deleted"},
-		{name: "unknown", input: pb.ClipLifecycleData_Stage(999), expected: "unknown"},
+		{name: "requested", input: ipcpb.ClipLifecycleData_STAGE_REQUESTED, expected: "requested"},
+		{name: "queued", input: ipcpb.ClipLifecycleData_STAGE_QUEUED, expected: "queued"},
+		{name: "progress", input: ipcpb.ClipLifecycleData_STAGE_PROGRESS, expected: "processing"},
+		{name: "done", input: ipcpb.ClipLifecycleData_STAGE_DONE, expected: "completed"},
+		{name: "failed", input: ipcpb.ClipLifecycleData_STAGE_FAILED, expected: "failed"},
+		{name: "deleted", input: ipcpb.ClipLifecycleData_STAGE_DELETED, expected: "deleted"},
+		{name: "unknown", input: ipcpb.ClipLifecycleData_Stage(999), expected: "unknown"},
 	}
 
 	for _, tc := range cases {
@@ -102,15 +102,15 @@ func TestClipStageToStatus(t *testing.T) {
 func TestDVRStatusToStatus(t *testing.T) {
 	cases := []struct {
 		name     string
-		input    pb.DVRLifecycleData_Status
+		input    ipcpb.DVRLifecycleData_Status
 		expected string
 	}{
-		{name: "started", input: pb.DVRLifecycleData_STATUS_STARTED, expected: "started"},
-		{name: "recording", input: pb.DVRLifecycleData_STATUS_RECORDING, expected: "recording"},
-		{name: "stopped", input: pb.DVRLifecycleData_STATUS_STOPPED, expected: "stopped"},
-		{name: "failed", input: pb.DVRLifecycleData_STATUS_FAILED, expected: "failed"},
-		{name: "deleted", input: pb.DVRLifecycleData_STATUS_DELETED, expected: "deleted"},
-		{name: "unknown", input: pb.DVRLifecycleData_Status(999), expected: "unknown"},
+		{name: "started", input: ipcpb.DVRLifecycleData_STATUS_STARTED, expected: "started"},
+		{name: "recording", input: ipcpb.DVRLifecycleData_STATUS_RECORDING, expected: "recording"},
+		{name: "stopped", input: ipcpb.DVRLifecycleData_STATUS_STOPPED, expected: "stopped"},
+		{name: "failed", input: ipcpb.DVRLifecycleData_STATUS_FAILED, expected: "failed"},
+		{name: "deleted", input: ipcpb.DVRLifecycleData_STATUS_DELETED, expected: "deleted"},
+		{name: "unknown", input: ipcpb.DVRLifecycleData_Status(999), expected: "unknown"},
 	}
 
 	for _, tc := range cases {
@@ -125,16 +125,16 @@ func TestDVRStatusToStatus(t *testing.T) {
 func TestVodStatusToStatus(t *testing.T) {
 	cases := []struct {
 		name     string
-		input    pb.VodLifecycleData_Status
+		input    ipcpb.VodLifecycleData_Status
 		expected string
 	}{
-		{name: "requested", input: pb.VodLifecycleData_STATUS_REQUESTED, expected: "requested"},
-		{name: "uploading", input: pb.VodLifecycleData_STATUS_UPLOADING, expected: "uploading"},
-		{name: "processing", input: pb.VodLifecycleData_STATUS_PROCESSING, expected: "processing"},
-		{name: "completed", input: pb.VodLifecycleData_STATUS_COMPLETED, expected: "completed"},
-		{name: "failed", input: pb.VodLifecycleData_STATUS_FAILED, expected: "failed"},
-		{name: "deleted", input: pb.VodLifecycleData_STATUS_DELETED, expected: "deleted"},
-		{name: "unknown", input: pb.VodLifecycleData_Status(999), expected: "unknown"},
+		{name: "requested", input: ipcpb.VodLifecycleData_STATUS_REQUESTED, expected: "requested"},
+		{name: "uploading", input: ipcpb.VodLifecycleData_STATUS_UPLOADING, expected: "uploading"},
+		{name: "processing", input: ipcpb.VodLifecycleData_STATUS_PROCESSING, expected: "processing"},
+		{name: "completed", input: ipcpb.VodLifecycleData_STATUS_COMPLETED, expected: "completed"},
+		{name: "failed", input: ipcpb.VodLifecycleData_STATUS_FAILED, expected: "failed"},
+		{name: "deleted", input: ipcpb.VodLifecycleData_STATUS_DELETED, expected: "deleted"},
+		{name: "unknown", input: ipcpb.VodLifecycleData_Status(999), expected: "unknown"},
 	}
 
 	for _, tc := range cases {
@@ -174,19 +174,19 @@ func TestInt64Ptr(t *testing.T) {
 }
 
 type fakeDecklogServiceClient struct {
-	lastTrigger *pb.MistTrigger
+	lastTrigger *ipcpb.MistTrigger
 }
 
-func (f *fakeDecklogServiceClient) SendEvent(_ context.Context, in *pb.MistTrigger, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+func (f *fakeDecklogServiceClient) SendEvent(_ context.Context, in *ipcpb.MistTrigger, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.lastTrigger = in
 	return &emptypb.Empty{}, nil
 }
 
-func (f *fakeDecklogServiceClient) SendServiceEvent(_ context.Context, _ *pb.ServiceEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+func (f *fakeDecklogServiceClient) SendServiceEvent(_ context.Context, _ *ipcpb.ServiceEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
 }
 
-func (f *fakeDecklogServiceClient) SendGatewayTelemetry(_ context.Context, _ *pb.GatewayTelemetryEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+func (f *fakeDecklogServiceClient) SendGatewayTelemetry(_ context.Context, _ *ipcpb.GatewayTelemetryEvent, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
 }
 
@@ -199,8 +199,8 @@ func TestSendVodLifecycleCopiesTenantToEnvelope(t *testing.T) {
 
 	tenantID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	progress := int32(55)
-	err := client.SendVodLifecycle(&pb.VodLifecycleData{
-		Status:      pb.VodLifecycleData_STATUS_PROCESSING,
+	err := client.SendVodLifecycle(&ipcpb.VodLifecycleData{
+		Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
 		VodHash:     "vod-1",
 		TenantId:    &tenantID,
 		ProgressPct: &progress,
@@ -231,7 +231,7 @@ func TestSendLifecycleWrappersCopyIdentityToEnvelope(t *testing.T) {
 		{
 			name: "load_balancing",
 			send: func(c *BatchedClient) error {
-				return c.SendLoadBalancing(&pb.LoadBalancingData{
+				return c.SendLoadBalancing(&ipcpb.LoadBalancingData{
 					SelectedNode:   "https://edge.example/view",
 					SelectedNodeId: &nodeID,
 					TenantId:       &tenantID,
@@ -242,8 +242,8 @@ func TestSendLifecycleWrappersCopyIdentityToEnvelope(t *testing.T) {
 		{
 			name: "clip_lifecycle",
 			send: func(c *BatchedClient) error {
-				return c.SendClipLifecycle(&pb.ClipLifecycleData{
-					Stage:    pb.ClipLifecycleData_STAGE_DONE,
+				return c.SendClipLifecycle(&ipcpb.ClipLifecycleData{
+					Stage:    ipcpb.ClipLifecycleData_STAGE_DONE,
 					ClipHash: "clip-hash",
 					TenantId: &tenantID,
 					StreamId: &streamID,
@@ -254,8 +254,8 @@ func TestSendLifecycleWrappersCopyIdentityToEnvelope(t *testing.T) {
 		{
 			name: "dvr_lifecycle",
 			send: func(c *BatchedClient) error {
-				return c.SendDVRLifecycle(&pb.DVRLifecycleData{
-					Status:   pb.DVRLifecycleData_STATUS_STOPPED,
+				return c.SendDVRLifecycle(&ipcpb.DVRLifecycleData{
+					Status:   ipcpb.DVRLifecycleData_STATUS_STOPPED,
 					DvrHash:  "dvr-hash",
 					TenantId: &tenantID,
 					StreamId: &streamID,
@@ -266,8 +266,8 @@ func TestSendLifecycleWrappersCopyIdentityToEnvelope(t *testing.T) {
 		{
 			name: "vod_lifecycle",
 			send: func(c *BatchedClient) error {
-				return c.SendVodLifecycle(&pb.VodLifecycleData{
-					Status:   pb.VodLifecycleData_STATUS_COMPLETED,
+				return c.SendVodLifecycle(&ipcpb.VodLifecycleData{
+					Status:   ipcpb.VodLifecycleData_STATUS_COMPLETED,
 					VodHash:  "vod-hash",
 					TenantId: &tenantID,
 					NodeId:   &nodeID,

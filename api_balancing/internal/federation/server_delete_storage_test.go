@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 // fakeDeleteS3Client captures Delete/DeletePrefix calls and lets a test
@@ -58,12 +58,12 @@ func newDeleteServer(t *testing.T, fake *fakeDeleteS3Client) *FederationServer {
 
 func TestDeleteStorageObjects_RequiresServiceAuth(t *testing.T) {
 	srv := newDeleteServer(t, &fakeDeleteS3Client{})
-	_, err := srv.DeleteStorageObjects(context.Background(), &pb.DeleteStorageObjectsRequest{
+	_, err := srv.DeleteStorageObjects(context.Background(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
 		ArtifactHash:    "v1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v", err)
@@ -72,12 +72,12 @@ func TestDeleteStorageObjects_RequiresServiceAuth(t *testing.T) {
 
 func TestDeleteStorageObjects_RejectsTargetWeDoNotOwn(t *testing.T) {
 	srv := newDeleteServer(t, &fakeDeleteS3Client{})
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "selfhost-x",
 		ArtifactType:    "vod",
 		ArtifactHash:    "v1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
 	})
 	if err != nil {
 		t.Fatalf("err = %v", err)
@@ -93,12 +93,12 @@ func TestDeleteStorageObjects_RejectsTargetWeDoNotOwn(t *testing.T) {
 func TestDeleteStorageObjects_VODSuccess(t *testing.T) {
 	fake := &fakeDeleteS3Client{}
 	srv := newDeleteServer(t, fake)
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
 		ArtifactHash:    "v1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
 	})
 	if err != nil {
 		t.Fatalf("err = %v", err)
@@ -114,12 +114,12 @@ func TestDeleteStorageObjects_VODSuccess(t *testing.T) {
 func TestDeleteStorageObjects_DVRSuccess(t *testing.T) {
 	fake := &fakeDeleteS3Client{}
 	srv := newDeleteServer(t, fake)
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "dvr",
 		ArtifactHash:    "d1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-a/stream-x/d1"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-a/stream-x/d1"},
 	})
 	if err != nil {
 		t.Fatalf("err = %v", err)
@@ -135,86 +135,86 @@ func TestDeleteStorageObjects_DVRSuccess(t *testing.T) {
 func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 	cases := []struct {
 		name string
-		req  *pb.DeleteStorageObjectsRequest
+		req  *foghornfederationpb.DeleteStorageObjectsRequest
 	}{
 		{
 			"clip key in different tenant namespace",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "clip",
 				ArtifactHash:    "c1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-b/stream/c1.mp4"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-b/stream/c1.mp4"},
 			},
 		},
 		{
 			"vod key not under vod/<tenant>/",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "vod",
 				ArtifactHash:    "v1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "garbage/key"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "garbage/key"},
 			},
 		},
 		{
 			"dvr prefix in different tenant namespace",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "dvr",
 				ArtifactHash:    "d1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-b/stream/d1"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-b/stream/d1"},
 			},
 		},
 		{
 			"clip key targets a different artifact in same tenant",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "clip",
 				ArtifactHash:    "c1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-a/stream/c2.mp4"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-a/stream/c2.mp4"},
 			},
 		},
 		{
 			"clip key without extension",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "clip",
 				ArtifactHash:    "c1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-a/stream/c1"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "clips/tenant-a/stream/c1"},
 			},
 		},
 		{
 			"vod key targets a different artifact in same tenant",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "vod",
 				ArtifactHash:    "v1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v2/movie.mp4"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v2/movie.mp4"},
 			},
 		},
 		{
 			"vod key without filename component (tenant-wide attempt)",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "vod",
 				ArtifactHash:    "v1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1"},
 			},
 		},
 		{
 			"dvr prefix targets a different artifact in same tenant",
-			&pb.DeleteStorageObjectsRequest{
+			&foghornfederationpb.DeleteStorageObjectsRequest{
 				TenantId:        "tenant-a",
 				TargetClusterId: "platform-eu",
 				ArtifactType:    "dvr",
 				ArtifactHash:    "d1",
-				Target:          &pb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-a/stream/d2"},
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-a/stream/d2"},
 			},
 		},
 	}
@@ -241,7 +241,7 @@ func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 
 func TestDeleteStorageObjects_MissingTarget(t *testing.T) {
 	srv := newDeleteServer(t, &fakeDeleteS3Client{})
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
@@ -288,12 +288,12 @@ func TestDeleteStorageObjects_TenantMismatchAgainstLocalRow(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-other")
 	mock.ExpectQuery("FROM foghorn.artifacts WHERE artifact_hash").WillReturnRows(rows)
 
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
 		ArtifactHash:    "v1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
 	})
 	if err != nil {
 		t.Fatalf("err = %v", err)
@@ -312,12 +312,12 @@ func TestDeleteStorageObjects_TenantMismatchAgainstLocalRow(t *testing.T) {
 func TestDeleteStorageObjects_S3ErrorPropagates(t *testing.T) {
 	fake := &fakeDeleteS3Client{deleteErr: errors.New("503 throttled")}
 	srv := newDeleteServer(t, fake)
-	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &pb.DeleteStorageObjectsRequest{
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
 		ArtifactHash:    "v1",
-		Target:          &pb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Key{S3Key: "vod/tenant-a/v1/m.mp4"},
 	})
 	if err != nil {
 		t.Fatalf("err = %v", err)

@@ -9,12 +9,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clips"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 // getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
 // Used by clip resolvers to get processing status, file paths, etc.
-func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) *pb.ArtifactState {
+func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) *periscopepb.ArtifactState {
 	if requestID == "" {
 		return nil
 	}
@@ -39,7 +39,7 @@ func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) *
 
 // getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
 // Used by DVR resolvers to get processing status, file paths, etc.
-func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID string) *pb.ArtifactState {
+func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID string) *periscopepb.ArtifactState {
 	if requestID == "" {
 		return nil
 	}

@@ -9,7 +9,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -62,10 +62,10 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 				WillReturnRows(rows)
 
 			server := &CommodoreServer{db: db, logger: logrus.New()}
-			_, err = server.Login(context.Background(), &pb.LoginRequest{
+			_, err = server.Login(context.Background(), &commodorepb.LoginRequest{
 				Email:    "user@example.com",
 				Password: tt.password,
-				Behavior: &pb.BehaviorData{
+				Behavior: &commodorepb.BehaviorData{
 					FormShownAt: 1,
 					SubmittedAt: 5000,
 					Mouse:       true,

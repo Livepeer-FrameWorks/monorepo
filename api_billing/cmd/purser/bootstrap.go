@@ -15,7 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"gopkg.in/yaml.v3"
 )
@@ -173,7 +173,7 @@ func applyPostCommitOp(ctx context.Context, client *qmclient.GRPCClient, op boot
 		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil)
 	case bootstrap.PostCommitSetPrimaryCluster:
 		clusterID := op.ClusterID
-		_, err := client.UpdateTenant(ctx, &pb.UpdateTenantRequest{
+		_, err := client.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
 			TenantId: op.TenantID, PrimaryClusterId: &clusterID,
 		})
 		return err

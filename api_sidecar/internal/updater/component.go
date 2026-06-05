@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"hash"
 	"io"
 	"net/http"
@@ -20,8 +21,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 type Result struct {
@@ -34,7 +33,7 @@ var componentInstallMu sync.Mutex
 
 var artifactHTTPClient = &http.Client{Timeout: 30 * time.Minute}
 
-func Apply(ctx context.Context, component *pb.DesiredComponent) Result {
+func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 	if component == nil {
 		return Result{Detail: "empty component"}
 	}
@@ -185,7 +184,7 @@ func componentVersionPath() string {
 	return ""
 }
 
-func downloadArtifact(ctx context.Context, component *pb.DesiredComponent) (string, func(), error) {
+func downloadArtifact(ctx context.Context, component *ipcpb.DesiredComponent) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "frameworks-update-*")
 	if err != nil {
 		return "", func() {}, err

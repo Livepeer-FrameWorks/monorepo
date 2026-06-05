@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // StreamLoader loads streams with request-scoped caching.
@@ -13,19 +13,19 @@ import (
 type StreamLoader struct {
 	client *commodore.GRPCClient
 	mu     sync.Mutex
-	cache  map[string]*pb.Stream // key: "tenantID:streamID"
+	cache  map[string]*commodorepb.Stream // key: "tenantID:streamID"
 }
 
 // NewStreamLoader creates a new stream loader
 func NewStreamLoader(client *commodore.GRPCClient) *StreamLoader {
 	return &StreamLoader{
 		client: client,
-		cache:  make(map[string]*pb.Stream),
+		cache:  make(map[string]*commodorepb.Stream),
 	}
 }
 
 // Load fetches a single stream, using cache if available
-func (l *StreamLoader) Load(ctx context.Context, tenantID, streamID string) (*pb.Stream, error) {
+func (l *StreamLoader) Load(ctx context.Context, tenantID, streamID string) (*commodorepb.Stream, error) {
 	key := tenantID + ":" + streamID
 
 	l.mu.Lock()
@@ -49,8 +49,8 @@ func (l *StreamLoader) Load(ctx context.Context, tenantID, streamID string) (*pb
 }
 
 // LoadMany fetches multiple streams in a single batch call
-func (l *StreamLoader) LoadMany(ctx context.Context, tenantID string, streamIDs []string) (map[string]*pb.Stream, error) {
-	results := make(map[string]*pb.Stream)
+func (l *StreamLoader) LoadMany(ctx context.Context, tenantID string, streamIDs []string) (map[string]*commodorepb.Stream, error) {
+	results := make(map[string]*commodorepb.Stream)
 	var toFetch []string
 
 	l.mu.Lock()
@@ -78,7 +78,7 @@ func (l *StreamLoader) LoadMany(ctx context.Context, tenantID string, streamIDs 
 	defer l.mu.Unlock()
 
 	// Index response by stream_id
-	streamsByID := make(map[string]*pb.Stream)
+	streamsByID := make(map[string]*commodorepb.Stream)
 	for _, stream := range resp.Streams {
 		streamsByID[stream.StreamId] = stream
 	}
@@ -95,7 +95,7 @@ func (l *StreamLoader) LoadMany(ctx context.Context, tenantID string, streamIDs 
 }
 
 // Prime adds a stream to the cache (used when parent resolver pre-fetches)
-func (l *StreamLoader) Prime(tenantID string, stream *pb.Stream) {
+func (l *StreamLoader) Prime(tenantID string, stream *commodorepb.Stream) {
 	if stream == nil || stream.StreamId == "" {
 		return
 	}
@@ -106,7 +106,7 @@ func (l *StreamLoader) Prime(tenantID string, stream *pb.Stream) {
 }
 
 // PrimeMany adds multiple streams to the cache
-func (l *StreamLoader) PrimeMany(tenantID string, streams []*pb.Stream) {
+func (l *StreamLoader) PrimeMany(tenantID string, streams []*commodorepb.Stream) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, stream := range streams {

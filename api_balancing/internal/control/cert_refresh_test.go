@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -23,16 +23,16 @@ import (
 
 // mockStream satisfies pb.HelmsmanControl_ConnectServer for registry population.
 type mockStream struct {
-	pb.HelmsmanControl_ConnectServer
-	sent []*pb.ControlMessage
+	ipcpb.HelmsmanControl_ConnectServer
+	sent []*ipcpb.ControlMessage
 }
 
-func (m *mockStream) Send(msg *pb.ControlMessage) error {
+func (m *mockStream) Send(msg *ipcpb.ControlMessage) error {
 	m.sent = append(m.sent, msg)
 	return nil
 }
 
-func testTLSBundle(t *testing.T, bundleID string, dnsNames ...string) *pb.TLSCertBundle {
+func testTLSBundle(t *testing.T, bundleID string, dnsNames ...string) *ipcpb.TLSCertBundle {
 	t.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -54,7 +54,7 @@ func testTLSBundle(t *testing.T, bundleID string, dnsNames ...string) *pb.TLSCer
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	return &pb.TLSCertBundle{
+	return &ipcpb.TLSCertBundle{
 		BundleId:  bundleID,
 		Domain:    dnsNames[0],
 		CertPem:   string(certPEM),
@@ -69,7 +69,7 @@ func TestServerCertHolderSelectsServedClusterBySNI(t *testing.T) {
 	eu := testTLSBundle(t, "cluster:media-eu-1", "*.media-eu-1.frameworks.network")
 	us := testTLSBundle(t, "cluster:media-us-1", "*.media-us-1.frameworks.network")
 
-	if err := holder.StoreBundles([]*pb.TLSCertBundle{internal, eu, us}); err != nil {
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{internal, eu, us}); err != nil {
 		t.Fatalf("StoreBundles: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestServerCertHolderFileBundleDoesNotShadowPublicWildcard(t *testing.T) {
 	)
 	eu := testTLSBundle(t, "cluster:media-eu-1", "*.media-eu-1.frameworks.network")
 
-	if err := holder.StoreBundles([]*pb.TLSCertBundle{internal, eu}); err != nil {
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{internal, eu}); err != nil {
 		t.Fatalf("StoreBundles: %v", err)
 	}
 
@@ -146,7 +146,7 @@ func TestServerCertHolderRejectsConfiguredNameNotCoveredByCert(t *testing.T) {
 	bundle.Domain = "*.media-eu-1.frameworks.network"
 	bundle.SiteAddresses = []string{"*.media-eu-1.frameworks.network"}
 
-	if err := holder.StoreBundles([]*pb.TLSCertBundle{bundle}); err == nil {
+	if err := holder.StoreBundles([]*ipcpb.TLSCertBundle{bundle}); err == nil {
 		t.Fatal("expected certificate/name mismatch to fail")
 	}
 }
@@ -216,7 +216,7 @@ func TestLastPushedTLSState_DeduplicatesStateChanges(t *testing.T) {
 	lastPushedTLSState = sync.Map{}
 
 	connID := "test-node"
-	first := &pb.TLSCertBundle{
+	first := &ipcpb.TLSCertBundle{
 		CertPem:   "cert-a",
 		KeyPem:    "key-a",
 		Domain:    "*.cluster.frameworks.network",
@@ -234,7 +234,7 @@ func TestLastPushedTLSState_DeduplicatesStateChanges(t *testing.T) {
 	}
 
 	// Same expiry but different certificate material must produce a new state.
-	rotated := &pb.TLSCertBundle{
+	rotated := &ipcpb.TLSCertBundle{
 		CertPem:   "cert-b",
 		KeyPem:    "key-a",
 		Domain:    "*.cluster.frameworks.network",
@@ -259,24 +259,24 @@ func TestLastPushedTLSState_DeduplicatesStateChanges(t *testing.T) {
 }
 
 func TestStripWildcardSiteWithoutTLS(t *testing.T) {
-	seed := &pb.ConfigSeed{
-		Site: &pb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
+	seed := &ipcpb.ConfigSeed{
+		Site: &ipcpb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
 	}
 	stripWildcardSiteWithoutTLS(seed)
 	if seed.GetSite() != nil {
 		t.Fatal("wildcard site without TLS should be stripped")
 	}
 
-	withTLS := &pb.ConfigSeed{
-		Tls:  &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key"},
-		Site: &pb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
+	withTLS := &ipcpb.ConfigSeed{
+		Tls:  &ipcpb.TLSCertBundle{CertPem: "cert", KeyPem: "key"},
+		Site: &ipcpb.SiteConfig{SiteAddress: "*.cluster.frameworks.network"},
 	}
 	stripWildcardSiteWithoutTLS(withTLS)
 	if withTLS.GetSite() == nil {
 		t.Fatal("wildcard site with TLS should be retained")
 	}
 
-	apex := &pb.ConfigSeed{Site: &pb.SiteConfig{SiteAddress: "edge.frameworks.network"}}
+	apex := &ipcpb.ConfigSeed{Site: &ipcpb.SiteConfig{SiteAddress: "edge.frameworks.network"}}
 	stripWildcardSiteWithoutTLS(apex)
 	if apex.GetSite() == nil {
 		t.Fatal("non-wildcard site without TLS should be retained for Caddy-managed ACME")
@@ -291,13 +291,13 @@ func TestTLSBundleState(t *testing.T) {
 	})
 
 	t.Run("stable hash and sensitive to all fields", func(t *testing.T) {
-		base := &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
-		again := &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
+		base := &ipcpb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
+		again := &ipcpb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
 		if tlsBundleState(base) != tlsBundleState(again) {
 			t.Fatal("expected identical bundles to hash identically")
 		}
 
-		cases := []*pb.TLSCertBundle{
+		cases := []*ipcpb.TLSCertBundle{
 			{CertPem: "cert2", KeyPem: "key", Domain: "*.a", ExpiresAt: 10},
 			{CertPem: "cert", KeyPem: "key2", Domain: "*.a", ExpiresAt: 10},
 			{CertPem: "cert", KeyPem: "key", Domain: "*.b", ExpiresAt: 10},
@@ -417,8 +417,8 @@ func TestClusterTLSBundleLookupMatchesNavigatorClusterSlug(t *testing.T) {
 	oldGetCluster := getClusterFn
 	defer func() { getClusterFn = oldGetCluster }()
 
-	getClusterFn = func(context.Context, string) (*pb.InfrastructureCluster, error) {
-		return &pb.InfrastructureCluster{ClusterName: "Media EU 1"}, nil
+	getClusterFn = func(context.Context, string) (*quartermasterpb.InfrastructureCluster, error) {
+		return &quartermasterpb.InfrastructureCluster{ClusterName: "Media EU 1"}, nil
 	}
 
 	bundleID, wildcard, ok := clusterTLSBundleLookup("!!!", "frameworks.network")

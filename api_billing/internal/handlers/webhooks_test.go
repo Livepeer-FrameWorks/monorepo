@@ -24,12 +24,7 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	metrics = nil
-	t.Cleanup(func() {
-		db = nil
-	})
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	t.Setenv("STRIPE_WEBHOOK_SECRET", "unit-test-secret")
 
@@ -58,7 +53,7 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 		WithArgs("stripe", "evt_test_123", "payment_intent.succeeded", signature, sqlmock.AnyArg(), int(webhookClaimLease/time.Second)).
 		WillReturnRows(sqlmock.NewRows([]string{"status", "acquired"}).AddRow("processed", false))
 
-	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	ok, msg, code := s.ProcessStripeWebhookGRPC(body, headers)
 	if !ok {
 		t.Fatalf("expected ok=true, got false (msg=%q)", msg)
 	}
@@ -81,11 +76,7 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() {
-		db = nil
-	})
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	tenantID := "11111111-1111-1111-1111-111111111111"
 	subscriptionID := "sub_test_123"
@@ -125,7 +116,7 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 		WithArgs(eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleStripeSubscriptionEvent(payload); err != nil {
+	if err := s.handleStripeSubscriptionEvent(payload); err != nil {
 		t.Fatalf("handleStripeSubscriptionEvent: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -143,9 +134,7 @@ func TestHandleStripeCheckoutAsyncPaymentFailedPrepaid(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	payload := StripeWebhookPayload{
 		ID:   "evt_async_failed",
@@ -161,7 +150,7 @@ func TestHandleStripeCheckoutAsyncPaymentFailedPrepaid(t *testing.T) {
 		WithArgs("failed", "topup-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleStripeCheckoutAsyncPaymentFailed(payload); err != nil {
+	if err := s.handleStripeCheckoutAsyncPaymentFailed(payload); err != nil {
 		t.Fatalf("handleStripeCheckoutAsyncPaymentFailed: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -179,9 +168,7 @@ func TestHandleStripeCheckoutExpiredSubscription(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	payload := StripeWebhookPayload{
 		ID:   "evt_expired",
@@ -205,7 +192,7 @@ func TestHandleStripeCheckoutExpiredSubscription(t *testing.T) {
 		WithArgs("t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleStripeCheckoutExpired(payload); err != nil {
+	if err := s.handleStripeCheckoutExpired(payload); err != nil {
 		t.Fatalf("handleStripeCheckoutExpired: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -223,9 +210,7 @@ func TestHandleStripeCheckoutExpiredCluster(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	payload := StripeWebhookPayload{
 		ID:   "evt_expired_cluster",
@@ -244,7 +229,7 @@ func TestHandleStripeCheckoutExpiredCluster(t *testing.T) {
 		WithArgs("cs_2", "sub_2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := handleStripeCheckoutExpired(payload); err != nil {
+	if err := s.handleStripeCheckoutExpired(payload); err != nil {
 		t.Fatalf("handleStripeCheckoutExpired: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -314,9 +299,7 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
@@ -336,7 +319,7 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 		WithArgs("invoice-1").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed")
 	if err != nil {
 		t.Fatalf("updateInvoicePaymentStatus: %v", err)
 	}
@@ -355,9 +338,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
@@ -388,7 +369,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 		WithArgs("invoice-2").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed")
 	if err != nil {
 		t.Fatalf("updateInvoicePaymentStatus: %v", err)
 	}
@@ -407,9 +388,7 @@ func TestUpdateInvoicePaymentStatusRejectsInvoiceMismatch(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	logger = logrus.New()
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT id, invoice_id FROM purser\.billing_payments`).
@@ -417,7 +396,7 @@ func TestUpdateInvoicePaymentStatusRejectsInvoiceMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-3", "invoice-real"))
 	mock.ExpectRollback()
 
-	updated, err := updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed")
 	if err == nil {
 		t.Fatal("expected invoice mismatch error")
 	}
@@ -436,14 +415,13 @@ func TestMollieReversalDeltaUsesCumulativeAmount(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	db = mockDB
-	t.Cleanup(func() { db = nil })
+	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(amount_cents\), 0\)`).
 		WithArgs("refund", "mollie-refund:tr_123:%").
 		WillReturnRows(sqlmock.NewRows([]string{"already_applied"}).AddRow(int64(500)))
 
-	delta, err := mollieReversalDelta(context.Background(), "refund", "tr_123", 1200)
+	delta, err := s.mollieReversalDelta(context.Background(), "refund", "tr_123", 1200)
 	if err != nil {
 		t.Fatalf("mollieReversalDelta: %v", err)
 	}
@@ -456,6 +434,7 @@ func TestMollieReversalDeltaUsesCumulativeAmount(t *testing.T) {
 }
 
 func TestProcessStripeWebhookGRPCMissingSecret(t *testing.T) {
+	s := &Service{logger: logrus.New()}
 	t.Setenv("STRIPE_WEBHOOK_SECRET", "")
 
 	body := []byte(`{"id":"evt_missing_secret"}`)
@@ -463,7 +442,7 @@ func TestProcessStripeWebhookGRPCMissingSecret(t *testing.T) {
 		"Stripe-Signature": "t=123,v1=deadbeef",
 	}
 
-	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	ok, msg, code := s.ProcessStripeWebhookGRPC(body, headers)
 	if ok {
 		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
 	}
@@ -473,6 +452,7 @@ func TestProcessStripeWebhookGRPCMissingSecret(t *testing.T) {
 }
 
 func TestProcessStripeWebhookGRPCInvalidSignature(t *testing.T) {
+	s := &Service{logger: logrus.New()}
 	t.Setenv("STRIPE_WEBHOOK_SECRET", "unit-test-secret")
 
 	body := []byte(`{"id":"evt_invalid_signature"}`)
@@ -480,7 +460,7 @@ func TestProcessStripeWebhookGRPCInvalidSignature(t *testing.T) {
 		"Stripe-Signature": "t=123,v1=deadbeef",
 	}
 
-	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	ok, msg, code := s.ProcessStripeWebhookGRPC(body, headers)
 	if ok {
 		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
 	}
@@ -490,6 +470,7 @@ func TestProcessStripeWebhookGRPCInvalidSignature(t *testing.T) {
 }
 
 func TestProcessStripeWebhookGRPCInvalidPayload(t *testing.T) {
+	s := &Service{logger: logrus.New()}
 	t.Setenv("STRIPE_WEBHOOK_SECRET", "unit-test-secret")
 
 	body := []byte(`not-json`)
@@ -498,7 +479,7 @@ func TestProcessStripeWebhookGRPCInvalidPayload(t *testing.T) {
 		"Stripe-Signature": signature,
 	}
 
-	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	ok, msg, code := s.ProcessStripeWebhookGRPC(body, headers)
 	if ok {
 		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
 	}

@@ -9,7 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/listmonk"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -62,7 +62,7 @@ func TestGetMe_MapsInlineUserAndWalletRows(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
 
-	resp, err := server.GetMe(ctx, &pb.GetMeRequest{})
+	resp, err := server.GetMe(ctx, &commodorepb.GetMeRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRefreshToken_MapsInlineUserStructToAuthResponse(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.RefreshToken(context.Background(), &pb.RefreshTokenRequest{RefreshToken: refreshToken})
+	resp, err := server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestRefreshToken_RecentRevokedTokenDoesNotRevokeSessionFamily(t *testing.T)
 			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Minute)))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	_, err = server.RefreshToken(context.Background(), &pb.RefreshTokenRequest{RefreshToken: refreshToken})
+	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 	if err == nil {
 		t.Fatal("expected refresh token reuse to be rejected")
 	}
@@ -225,7 +225,7 @@ func TestGetNewsletterStatus_ListmonkErrorReturnsUnsubscribed(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
 
-	resp, err := server.GetNewsletterStatus(ctx, &pb.GetNewsletterStatusRequest{})
+	resp, err := server.GetNewsletterStatus(ctx, &commodorepb.GetNewsletterStatusRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

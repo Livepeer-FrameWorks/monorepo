@@ -21,7 +21,20 @@ resolver:
 
 # Optional: turn on or off automatic camelCase marshaling for field names
 autobind:
-  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand
+  - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper
 
 # Map GraphQL types to existing Go models (comprehensive mapping)
 # NOTE: Using pb.* proto types for all analytics/streaming types
@@ -79,7 +92,7 @@ models:
   # Analytics types - bound to proto types
   StreamAnalyticsSummary:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamAnalyticsSummary
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamAnalyticsSummary
     fields:
       streamId:
         resolver: true
@@ -87,10 +100,10 @@ models:
         resolver: true
   QualityTierSummary:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.QualityTierSummary
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.QualityTierSummary
   RoutingEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.RoutingEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.RoutingEvent
     fields:
       streamId:
         resolver: true
@@ -98,7 +111,7 @@ models:
         resolver: true
   ViewerSession:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerSession
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ViewerSession
     fields:
       id:
         resolver: true
@@ -106,12 +119,9 @@ models:
         resolver: true
       stream:
         resolver: true
-  ViewerMetrics5m:
-    model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerSession5M
   ConnectionEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ConnectionEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ConnectionEvent
     fields:
       id:
         resolver: true
@@ -123,7 +133,7 @@ models:
         resolver: true
   StreamHealthMetric:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamHealthMetric
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamHealthMetric
     fields:
       id:
         resolver: true
@@ -133,7 +143,7 @@ models:
         resolver: true
   ViewerCountBucket:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerCountBucket
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ViewerCountBucket
     fields:
       streamId:
         resolver: true
@@ -149,7 +159,7 @@ models:
         resolver: true
   RebufferingEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.RebufferingEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.RebufferingEvent
     fields:
       streamId:
         resolver: true
@@ -157,19 +167,19 @@ models:
         resolver: true
   CountryMetric:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.CountryMetric
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.CountryMetric
   CountryMetrics:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.CountryMetrics
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.CountryMetrics
   CityMetric:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.CityMetric
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.CityMetric
   PlatformOverview:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.GetPlatformOverviewResponse
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.GetPlatformOverviewResponse
   ViewerGeographic:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ConnectionEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ConnectionEvent
     fields:
       streamId:
         resolver: true
@@ -191,7 +201,7 @@ models:
         resolver: true
   BufferEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.BufferEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.BufferEvent
     fields:
       id:
         resolver: true
@@ -204,7 +214,7 @@ models:
   # Query types - bound to periscope.proto types (analytics API responses)
   TrackListEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.TrackListEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.TrackListEvent
     fields:
       id:
         resolver: true
@@ -214,7 +224,7 @@ models:
         resolver: true
   ArtifactEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClipEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ClipEvent
     fields:
       id:
         resolver: true
@@ -230,7 +240,7 @@ models:
         resolver: true
   ArtifactState:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ArtifactState
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ArtifactState
     fields:
       streamId:
         resolver: true
@@ -246,11 +256,11 @@ models:
         resolver: true
   StreamTrack:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamTrack
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.StreamTrack
   # Pre-aggregated analytics types (Materialized Views)
   StreamConnectionHourly:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamConnectionHourly
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamConnectionHourly
     fields:
       id:
         resolver: true
@@ -260,7 +270,7 @@ models:
         resolver: true
   ClientMetrics5m:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClientMetrics5M
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ClientMetrics5M
     fields:
       id:
         resolver: true
@@ -270,7 +280,7 @@ models:
         resolver: true
   QualityTierDaily:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.QualityTierDaily
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.QualityTierDaily
     fields:
       id:
         resolver: true
@@ -278,18 +288,15 @@ models:
         resolver: true
       stream:
         resolver: true
-  QualityChangesHourly:
-    model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.QualityChangesHourly
   StorageUsageRecord:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StorageUsageRecord
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StorageUsageRecord
     fields:
       id:
         resolver: true
   StorageEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StorageEvent
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StorageEvent
     fields:
       id:
         resolver: true
@@ -299,25 +306,25 @@ models:
         resolver: true
   StorageSnapshot:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StorageSnapshot
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.StorageSnapshot
   TenantStorageUsage:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.TenantStorageUsage
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.TenantStorageUsage
   StreamHealth5m:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamHealth5M
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamHealth5M
     fields:
       id:
         resolver: true
   NodePerformance5m:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.NodePerformance5M
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.NodePerformance5M
     fields:
       id:
         resolver: true
   ViewerHoursHourly:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerHoursHourly
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ViewerHoursHourly
     fields:
       id:
         resolver: true
@@ -327,19 +334,19 @@ models:
         resolver: true
   ViewerGeoHourly:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerGeoHourly
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ViewerGeoHourly
     fields:
       id:
         resolver: true
   TenantDailyStat:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.TenantDailyStat
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.TenantDailyStat
     fields:
       id:
         resolver: true
   StreamAnalyticsDaily:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamAnalyticsDaily
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamAnalyticsDaily
     fields:
       id:
         resolver: true
@@ -349,7 +356,7 @@ models:
         resolver: true
   ProcessingUsageRecord:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ProcessingUsageRecord
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ProcessingUsageRecord
     fields:
       id:
         resolver: true
@@ -359,7 +366,7 @@ models:
         resolver: true
   APIUsageRecord:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.APIUsageRecord
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.APIUsageRecord
     fields:
       id:
         resolver: true
@@ -379,7 +386,7 @@ models:
         resolver: true
   APIUsageSummary:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.APIUsageSummary
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.APIUsageSummary
     fields:
       date:
         resolver: true
@@ -395,7 +402,7 @@ models:
         resolver: true
   APIUsageOperationSummary:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.APIUsageOperationSummary
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.APIUsageOperationSummary
     fields:
       totalRequests:
         resolver: true
@@ -409,7 +416,7 @@ models:
   # Real-time subscription types - bound to ipc.proto types (raw Kafka events via Signalman)
   ViewerMetrics:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClientLifecycleUpdate
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.ClientLifecycleUpdate
     fields:
       streamId:
         resolver: true
@@ -419,13 +426,13 @@ models:
         resolver: true
   SystemHealthEvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.NodeLifecycleUpdate
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.NodeLifecycleUpdate
     fields:
       nodeId:
         resolver: true # Return node_uuid (database UUID) not node_id (logical name)
   DVREvent:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.DVRLifecycleData
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.DVRLifecycleData
     fields:
       playbackId:
         resolver: true
@@ -435,7 +442,7 @@ models:
         resolver: true
   TrackListUpdate:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamTrackListTrigger
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.StreamTrackListTrigger
     fields:
       streamId:
         resolver: true
@@ -443,7 +450,7 @@ models:
         resolver: true
   ClipLifecycle:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClipLifecycleData
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.ClipLifecycleData
     fields:
       playbackId:
         resolver: true
@@ -459,7 +466,7 @@ models:
   # Real-time stream subscription types - direct proto passthrough
   VodLifecycle:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.VodLifecycleData
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc.VodLifecycleData
     fields:
       playbackId:
         resolver: true
@@ -476,13 +483,13 @@ models:
   # Stream management types - bound to proto types
   Stream:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.Stream
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.Stream
     fields:
       pushTargets:
         resolver: true
   PushTarget:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PushTarget
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.PushTarget
     fields:
       id:
         resolver: true
@@ -494,21 +501,18 @@ models:
         resolver: true
   StreamMetrics:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamStatusResponse
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamStatusResponse
   StreamKey:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamKey
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.StreamKey
     fields:
       streamId:
         resolver: true
       stream:
         resolver: true
-  Recording:
-    model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.Recording
   Clip:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClipInfo
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.ClipInfo
     fields:
       id:
         resolver: true
@@ -529,7 +533,7 @@ models:
         resolver: true
   DVRRequest:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.DVRInfo
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.DVRInfo
     fields:
       streamId:
         resolver: true
@@ -592,22 +596,22 @@ models:
         resolver: true
   ViewerEndpointResponse:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerEndpointResponse
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.ViewerEndpointResponse
   ViewerEndpoint:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ViewerEndpoint
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.ViewerEndpoint
   PlaybackMetadata:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PlaybackMetadata
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.PlaybackMetadata
   PlaybackTrack:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PlaybackTrack
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.PlaybackTrack
   PlaybackInstance:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PlaybackInstance
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.PlaybackInstance
   IngestMetadata:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.IngestMetadata
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.IngestMetadata
     fields:
       streamId:
         resolver: true
@@ -617,34 +621,34 @@ models:
         resolver: true
   BillingStatus:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.BillingStatusResponse
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.BillingStatusResponse
     fields:
       paymentMethods:
         resolver: true
   BillingTier:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.BillingTier
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.BillingTier
   BillingFeatures:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.BillingFeatures
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.BillingFeatures
   PricingRule:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PricingRule
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.PricingRule
   LineItem:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.LineItem
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.LineItem
   Invoice:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.Invoice
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.Invoice
   Payment:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.PaymentResponse
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.PaymentResponse
   UsageRecord:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.UsageRecord
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.UsageRecord
   LiveUsageSummary:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.LiveUsageSummary
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.LiveUsageSummary
   # TenantUsage, UsageEntry, CostEntry remain as model types
   # because proto.TenantUsageResponse uses map<string, double>
   # which doesn't map directly to GraphQL arrays
@@ -652,10 +656,10 @@ models:
   # Infrastructure types - bound to proto types
   ServiceInstance:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ServiceInstance
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ServiceInstance
   ServiceInstanceHealth:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ServiceInstanceHealth
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ServiceInstanceHealth
     fields:
       host:
         resolver: true
@@ -663,25 +667,25 @@ models:
         resolver: true
   NodeMetric:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.NodeMetric
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.NodeMetric
     fields:
       id:
         resolver: true
   NodeMetricHourly:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.NodeMetricHourly
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.NodeMetricHourly
     fields:
       id:
         resolver: true
   NodeMetricsAggregated:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.NodeMetricsAggregated
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.NodeMetricsAggregated
   TimeRange:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.TimeRange
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common.TimeRange
   Cluster:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.InfrastructureCluster
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.InfrastructureCluster
     fields:
       id:
         resolver: true
@@ -690,7 +694,7 @@ models:
       - frameworks/api_gateway/graph/model.Node
   InfrastructureNode:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.InfrastructureNode
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.InfrastructureNode
     fields:
       id:
         resolver: true
@@ -706,21 +710,21 @@ models:
   # Cluster Marketplace types - bound to proto types
   MarketplaceCluster:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.MarketplaceClusterEntry
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.MarketplaceClusterEntry
   ClusterSubscription:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClusterSubscription
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ClusterSubscription
   ClusterInvite:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClusterInvite
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ClusterInvite
 
   # Tenant types - bound to proto types
   Tenant:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.Tenant
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.Tenant
   User:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.User
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.User
   # WalletIdentity and WalletLoginPayload: NOT bound to proto.
   # Because they're used in union types which require marker interface methods.
   # Use manually created model types (graph/model/wallet.go).
@@ -740,10 +744,10 @@ models:
       - frameworks/api_gateway/graph/model.PrepaidBalance
   DeveloperToken:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.APITokenInfo
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.APITokenInfo
   BootstrapToken:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.BootstrapToken
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.BootstrapToken
 
   Money:
     model:
@@ -755,26 +759,26 @@ models:
   # Analytics sort enums - bound to proto types
   SortOrder:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.SortOrder
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common.SortOrder
   StreamSummarySortField:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.StreamSummarySortField
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.StreamSummarySortField
 
   # Cluster marketplace enums - bound to proto types
   ClusterVisibility:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClusterVisibility
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ClusterVisibility
   ClusterPricingModel:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClusterPricingModel
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ClusterPricingModel
   ClusterSubscriptionStatus:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ClusterSubscriptionStatus
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster.ClusterSubscriptionStatus
 
   # Crypto top-up enums - bound to proto types
   CryptoAsset:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.CryptoAsset
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.CryptoAsset
 
   # AI Consultant (Skipper) types - manual model types (union members need marker interfaces)
   SkipperChatEvent:
@@ -820,10 +824,10 @@ models:
   # Support messaging enums - bound to proto types
   ConversationStatus:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.ConversationStatus
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand.ConversationStatus
   MessageSender:
     model:
-      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto.MessageSender
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand.MessageSender
 
   # Media retention enum: proto's MediaRetentionTarget is an int32 enum,
   # which gqlgen can't autobind as a string GraphQL enum. Force a generated

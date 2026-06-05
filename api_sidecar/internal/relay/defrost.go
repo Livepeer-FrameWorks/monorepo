@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/control"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // defrostFlushInterval bounds how long a single asset's cold read-through
@@ -24,9 +24,9 @@ type defrostEntry struct {
 	firstSeen time.Time
 }
 
-func (e *defrostEntry) lifecycle() *pb.StorageLifecycleData {
-	return &pb.StorageLifecycleData{
-		Action:    pb.StorageLifecycleData_ACTION_CACHED,
+func (e *defrostEntry) lifecycle() *ipcpb.StorageLifecycleData {
+	return &ipcpb.StorageLifecycleData{
+		Action:    ipcpb.StorageLifecycleData_ACTION_CACHED,
 		AssetType: e.assetType,
 		AssetHash: e.hash,
 		SizeBytes: uint64(e.bytes),
@@ -41,14 +41,14 @@ type defrostAggregator struct {
 	acc           map[string]*defrostEntry
 	flushInterval time.Duration
 	timer         *time.Timer
-	emit          func(*pb.StorageLifecycleData) error
+	emit          func(*ipcpb.StorageLifecycleData) error
 }
 
 func newDefrostAggregator() *defrostAggregator {
 	return newDefrostAggregatorWithInterval(defrostFlushInterval, control.SendStorageLifecycle)
 }
 
-func newDefrostAggregatorWithInterval(interval time.Duration, emit func(*pb.StorageLifecycleData) error) *defrostAggregator {
+func newDefrostAggregatorWithInterval(interval time.Duration, emit func(*ipcpb.StorageLifecycleData) error) *defrostAggregator {
 	if interval <= 0 {
 		interval = defrostFlushInterval
 	}
@@ -95,7 +95,7 @@ func (a *defrostAggregator) record(kind, hash string, n int64) {
 
 func (a *defrostAggregator) flushDue() {
 	now := time.Now()
-	var due []*pb.StorageLifecycleData
+	var due []*ipcpb.StorageLifecycleData
 
 	a.mu.Lock()
 	for k, entry := range a.acc {

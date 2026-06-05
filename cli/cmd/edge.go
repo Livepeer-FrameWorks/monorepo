@@ -37,7 +37,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	infra "github.com/Livepeer-FrameWorks/monorepo/pkg/models"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -221,7 +223,7 @@ func newEdgeInitCmd() *cobra.Command {
 		if enrollmentToken != "" {
 			fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
 			var (
-				resp      *pb.PreRegisterEdgeResponse
+				resp      *foghornpb.PreRegisterEdgeResponse
 				preRegErr error
 			)
 			if foghornAddr != "" {
@@ -615,7 +617,7 @@ Multi-node manifest example:
 				}
 				preferredNodeID := deriveEdgeNodeName(nodeName, "", sshTarget, isLocal)
 				var (
-					preRegResp *pb.PreRegisterEdgeResponse
+					preRegResp *foghornpb.PreRegisterEdgeResponse
 					preRegErr  error
 				)
 				if foghornAddrExplicit && foghornAddr != "" {
@@ -1228,7 +1230,7 @@ func edgeManifestNodeDomain(rootDomain, clusterID, subdomain string) string {
 	return label + "." + clusterID + "." + rootDomain
 }
 
-func applyEdgePreRegistrationConfig(cfg *provisioner.EdgeProvisionConfig, resp *pb.PreRegisterEdgeResponse) {
+func applyEdgePreRegistrationConfig(cfg *provisioner.EdgeProvisionConfig, resp *foghornpb.PreRegisterEdgeResponse) {
 	if cfg == nil || resp == nil {
 		return
 	}
@@ -1271,7 +1273,7 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 
 	preferredNodeID := firstNonEmpty(cfg.NodeID, canonicalEdgeNodeID(cfg.NodeName), cfg.NodeName)
 	var (
-		resp *pb.PreRegisterEdgeResponse
+		resp *foghornpb.PreRegisterEdgeResponse
 		err  error
 	)
 	if strings.TrimSpace(cliCtx.Endpoints.BridgeURL) != "" {
@@ -1457,11 +1459,11 @@ func sshTargetToHost(sshTarget string) inventory.Host {
 }
 
 // getRemoteExternalIP detects the external IP of the remote host
-func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, preferredNodeID string) (*pb.PreRegisterEdgeResponse, error) {
+func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, preferredNodeID string) (*foghornpb.PreRegisterEdgeResponse, error) {
 	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "", preferredNodeID, "")
 }
 
-func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*pb.PreRegisterEdgeResponse, error) {
+func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*foghornpb.PreRegisterEdgeResponse, error) {
 	externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, knownExternalIP)
 
 	logger := logrus.New()
@@ -1477,7 +1479,7 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 	}
 	defer client.Close()
 
-	return client.PreRegisterEdge(ctx, &pb.PreRegisterEdgeRequest{
+	return client.PreRegisterEdge(ctx, &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: enrollmentToken,
 		ExternalIp:      externalIP,
 		PreferredNodeId: preferredNodeID,
@@ -1613,7 +1615,7 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	fmt.Fprintf(cmd.OutOrStdout(), "    Upserting node id=%s external_ip=%s region=%s\n", nodeID, firstNonEmpty(externalIP, "<unset>"), firstNonEmpty(region, "<unset>"))
 
 	// Create node request
-	req := &pb.CreateNodeRequest{
+	req := &quartermasterpb.CreateNodeRequest{
 		NodeId:    nodeID,
 		ClusterId: clusterID,
 		NodeName:  nodeName,
@@ -1659,14 +1661,14 @@ func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshKey, nodeName
 	return token, nil
 }
 
-func edgeEnrollmentTokenRequest(clusterID, nodeName, tenantID string) *pb.CreateEnrollmentTokenRequest {
+func edgeEnrollmentTokenRequest(clusterID, nodeName, tenantID string) *quartermasterpb.CreateEnrollmentTokenRequest {
 	tokenName := "edge provision"
 	if trimmed := strings.TrimSpace(nodeName); trimmed != "" {
 		tokenName = "edge provision: " + trimmed
 	}
 	tokenTTL := edgeProvisionEnrollmentTokenTTL
 	tenantID = strings.TrimSpace(tenantID)
-	return &pb.CreateEnrollmentTokenRequest{
+	return &quartermasterpb.CreateEnrollmentTokenRequest{
 		ClusterId: clusterID,
 		TenantId:  &tenantID,
 		Name:      &tokenName,
@@ -1829,7 +1831,7 @@ func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, em
 
 	// Request certificate issuance
 	fmt.Fprintf(cmd.OutOrStdout(), "  - Requesting certificate for %s (this may take a minute)...\n", domain)
-	resp, err := navClient.IssueCertificate(ctx, &pb.IssueCertificateRequest{
+	resp, err := navClient.IssueCertificate(ctx, &dnspb.IssueCertificateRequest{
 		Domain: domain,
 		Email:  email,
 	})

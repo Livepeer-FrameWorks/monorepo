@@ -19,7 +19,9 @@ import (
 	"frameworks/api_mesh/internal/wireguard"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pkgmesh "github.com/Livepeer-FrameWorks/monorepo/pkg/mesh"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -32,24 +34,24 @@ type fakeMeshClient struct {
 	syncResponses        []meshSyncResult
 	createNodeResponses  []meshCreateNodeResult
 	createTokenResponses []meshCreateTokenResult
-	syncRequests         []*pb.InfrastructureSyncRequest
-	createNodeRequests   []*pb.CreateNodeRequest
-	createTokenRequests  []*pb.CreateBootstrapTokenRequest
+	syncRequests         []*quartermasterpb.InfrastructureSyncRequest
+	createNodeRequests   []*quartermasterpb.CreateNodeRequest
+	createTokenRequests  []*quartermasterpb.CreateBootstrapTokenRequest
 }
 
 type fakeServiceRegistryClient struct {
-	responses []*pb.ListServiceInstancesResponse
+	responses []*quartermasterpb.ListServiceInstancesResponse
 	err       error
-	requests  []*pb.CursorPaginationRequest
+	requests  []*commonpb.CursorPaginationRequest
 }
 
-func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _, _ string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error) {
+func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _, _ string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
 	f.requests = append(f.requests, pagination)
 	if f.err != nil {
 		return nil, f.err
 	}
 	if len(f.responses) == 0 {
-		return &pb.ListServiceInstancesResponse{}, nil
+		return &quartermasterpb.ListServiceInstancesResponse{}, nil
 	}
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
@@ -57,31 +59,31 @@ func (f *fakeServiceRegistryClient) ListServiceInstances(_ context.Context, _, _
 }
 
 type fakeCertificateClient struct {
-	caResponse               *pb.GetCABundleResponse
+	caResponse               *dnspb.GetCABundleResponse
 	caErr                    error
-	issueResponse            *pb.IssueInternalCertResponse
+	issueResponse            *dnspb.IssueInternalCertResponse
 	issueErr                 error
 	issueErrByServiceType    map[string]error
 	issueRejectByServiceType map[string]string
-	issueRequests            []*pb.IssueInternalCertRequest
+	issueRequests            []*dnspb.IssueInternalCertRequest
 	caRequestCount           int
-	tlsBundles               map[string]*pb.GetTLSBundleResponse
+	tlsBundles               map[string]*dnspb.GetTLSBundleResponse
 	tlsBundleErr             error
-	tlsBundleRequests        []*pb.GetTLSBundleRequest
+	tlsBundleRequests        []*dnspb.GetTLSBundleRequest
 }
 
-func (f *fakeCertificateClient) GetCABundle(_ context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+func (f *fakeCertificateClient) GetCABundle(_ context.Context, _ *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error) {
 	f.caRequestCount++
 	if f.caErr != nil {
 		return nil, f.caErr
 	}
 	if f.caResponse == nil {
-		return &pb.GetCABundleResponse{}, nil
+		return &dnspb.GetCABundleResponse{}, nil
 	}
 	return f.caResponse, nil
 }
 
-func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *dnspb.IssueInternalCertRequest) (*dnspb.IssueInternalCertResponse, error) {
 	f.issueRequests = append(f.issueRequests, req)
 	if f.issueErr != nil {
 		return nil, f.issueErr
@@ -90,15 +92,15 @@ func (f *fakeCertificateClient) IssueInternalCert(_ context.Context, req *pb.Iss
 		return nil, err
 	}
 	if msg, ok := f.issueRejectByServiceType[req.GetServiceType()]; ok {
-		return &pb.IssueInternalCertResponse{Success: false, Error: msg}, nil
+		return &dnspb.IssueInternalCertResponse{Success: false, Error: msg}, nil
 	}
 	if f.issueResponse == nil {
-		return &pb.IssueInternalCertResponse{}, nil
+		return &dnspb.IssueInternalCertResponse{}, nil
 	}
 	return f.issueResponse, nil
 }
 
-func (f *fakeCertificateClient) GetTLSBundle(_ context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+func (f *fakeCertificateClient) GetTLSBundle(_ context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error) {
 	f.tlsBundleRequests = append(f.tlsBundleRequests, req)
 	if f.tlsBundleErr != nil {
 		return nil, f.tlsBundleErr
@@ -106,17 +108,17 @@ func (f *fakeCertificateClient) GetTLSBundle(_ context.Context, req *pb.GetTLSBu
 	if resp, ok := f.tlsBundles[req.GetBundleId()]; ok {
 		return resp, nil
 	}
-	return &pb.GetTLSBundleResponse{Found: false, BundleId: req.GetBundleId()}, nil
+	return &dnspb.GetTLSBundleResponse{Found: false, BundleId: req.GetBundleId()}, nil
 }
 
 type fakeIngressClient struct {
-	pages    []*pb.ListIngressSitesResponse
+	pages    []*quartermasterpb.ListIngressSitesResponse
 	err      error
-	requests []*pb.ListIngressSitesRequest
+	requests []*quartermasterpb.ListIngressSitesRequest
 }
 
-func (f *fakeIngressClient) ListIngressSites(_ context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error) {
-	f.requests = append(f.requests, &pb.ListIngressSitesRequest{
+func (f *fakeIngressClient) ListIngressSites(_ context.Context, clusterID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error) {
+	f.requests = append(f.requests, &quartermasterpb.ListIngressSitesRequest{
 		ClusterId:  clusterID,
 		NodeId:     nodeID,
 		Pagination: pagination,
@@ -125,7 +127,7 @@ func (f *fakeIngressClient) ListIngressSites(_ context.Context, clusterID, nodeI
 		return nil, f.err
 	}
 	if len(f.pages) == 0 {
-		return &pb.ListIngressSitesResponse{}, nil
+		return &quartermasterpb.ListIngressSitesResponse{}, nil
 	}
 	resp := f.pages[0]
 	f.pages = f.pages[1:]
@@ -133,21 +135,24 @@ func (f *fakeIngressClient) ListIngressSites(_ context.Context, clusterID, nodeI
 }
 
 type meshSyncResult struct {
-	resp *pb.InfrastructureSyncResponse
+	resp *quartermasterpb.InfrastructureSyncResponse
 	err  error
 }
 
 type meshCreateNodeResult struct {
-	resp *pb.NodeResponse
+	resp *quartermasterpb.NodeResponse
 	err  error
 }
 
 type meshCreateTokenResult struct {
-	resp *pb.CreateBootstrapTokenResponse
+	resp *quartermasterpb.CreateBootstrapTokenResponse
 	err  error
 }
 
-func (f *fakeMeshClient) SyncMesh(_ context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error) {
+func (f *fakeMeshClient) SyncMesh(ctx context.Context, req *quartermasterpb.InfrastructureSyncRequest) (*quartermasterpb.InfrastructureSyncResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.syncRequests = append(f.syncRequests, req)
 	if len(f.syncResponses) == 0 {
 		return nil, status.Error(codes.Internal, "no sync response")
@@ -157,7 +162,7 @@ func (f *fakeMeshClient) SyncMesh(_ context.Context, req *pb.InfrastructureSyncR
 	return result.resp, result.err
 }
 
-func (f *fakeMeshClient) CreateNode(_ context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
+func (f *fakeMeshClient) CreateNode(_ context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error) {
 	f.createNodeRequests = append(f.createNodeRequests, req)
 	if len(f.createNodeResponses) == 0 {
 		return nil, status.Error(codes.Internal, "no create-node response")
@@ -167,7 +172,7 @@ func (f *fakeMeshClient) CreateNode(_ context.Context, req *pb.CreateNodeRequest
 	return result.resp, result.err
 }
 
-func (f *fakeMeshClient) CreateBootstrapToken(_ context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+func (f *fakeMeshClient) CreateBootstrapToken(_ context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
 	f.createTokenRequests = append(f.createTokenRequests, req)
 	if len(f.createTokenResponses) == 0 {
 		return nil, status.Error(codes.Internal, "no create-token response")
@@ -359,6 +364,35 @@ func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *
 	}
 }
 
+func TestSyncDoesNotSpendRPCDeadlineOnResourceSnapshot(t *testing.T) {
+	client := &fakeMeshClient{syncResponses: []meshSyncResult{{
+		resp: &quartermasterpb.InfrastructureSyncResponse{
+			WireguardIp:   "10.0.0.10",
+			WireguardPort: 51820,
+			MeshRevision:  "rev-1",
+		},
+	}}}
+	agent := newTestAgent(t, client, &fakeWireguard{}, &fakeDNS{})
+	agent.syncTimeout = 20 * time.Millisecond
+	snapshotCalled := make(chan struct{})
+	agent.snapshot = func(ctx context.Context, _ string) *quartermasterpb.NodeResourceSnapshot {
+		close(snapshotCalled)
+		<-ctx.Done()
+		return nil
+	}
+
+	agent.sync()
+
+	select {
+	case <-snapshotCalled:
+	default:
+		t.Fatal("expected sync to attempt resource snapshot collection")
+	}
+	if len(client.syncRequests) != 1 {
+		t.Fatalf("expected SyncMesh request after snapshot timeout, got %d", len(client.syncRequests))
+	}
+}
+
 // mustGenPubB64 returns a freshly generated wireguard public key in
 // base64 form, suitable for use as a proto/JSON peer public_key field.
 func mustGenPubB64(t *testing.T) string {
@@ -484,17 +518,17 @@ func TestMissingInternalPKIMaterials(t *testing.T) {
 func TestSyncInternalCertificatesBypassesCooldownWhenFilesMissing(t *testing.T) {
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{
-		responses: []*pb.ListServiceInstancesResponse{
-			{Instances: []*pb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
-			{Instances: []*pb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
+		responses: []*quartermasterpb.ListServiceInstancesResponse{
+			{Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
+			{Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "commodore", Status: "running"}}},
 		},
 	}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -593,11 +627,11 @@ func TestWriteServiceCertificateUsesConfiguredReaderGroup(t *testing.T) {
 func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *testing.T) {
 	dir := t.TempDir()
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -628,8 +662,8 @@ func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *te
 func TestSyncInternalCertificatesUnionsExpectedAndRegisteredServices(t *testing.T) {
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{
-		responses: []*pb.ListServiceInstancesResponse{
-			{Instances: []*pb.ServiceInstance{
+		responses: []*quartermasterpb.ListServiceInstancesResponse{
+			{Instances: []*quartermasterpb.ServiceInstance{
 				{ServiceId: "decklog", Status: "running"},
 				{ServiceId: "signalman", Status: "stopped"},
 				{ServiceId: "privateer", Status: "running"},
@@ -637,11 +671,11 @@ func TestSyncInternalCertificatesUnionsExpectedAndRegisteredServices(t *testing.
 		},
 	}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -680,19 +714,19 @@ func TestSyncInternalCertificatesUnionsExpectedAndRegisteredServices(t *testing.
 func TestSyncInternalCertificatesIsolatesPerServiceFailure(t *testing.T) {
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{
-		responses: []*pb.ListServiceInstancesResponse{
-			{Instances: []*pb.ServiceInstance{
+		responses: []*quartermasterpb.ListServiceInstancesResponse{
+			{Instances: []*quartermasterpb.ServiceInstance{
 				{ServiceId: "decklog", Status: "running"},
 			}},
 		},
 	}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
 		// Default response: success. Override below per-service-type to fail signalman.
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -753,19 +787,19 @@ func TestSyncInternalCertificatesIsolatesPerServiceFailure(t *testing.T) {
 func TestSyncInternalCertificatesReturnsRegisteredServiceFailure(t *testing.T) {
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{
-		responses: []*pb.ListServiceInstancesResponse{
-			{Instances: []*pb.ServiceInstance{
+		responses: []*quartermasterpb.ListServiceInstancesResponse{
+			{Instances: []*quartermasterpb.ServiceInstance{
 				{ServiceId: "decklog", Status: "running"},
 				{ServiceId: "privateer", Status: "running"},
 			}},
 		},
 	}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -806,18 +840,18 @@ func TestSyncInternalCertificatesReturnsWriteFailure(t *testing.T) {
 		t.Fatalf("write blocking services path: %v", err)
 	}
 	registry := &fakeServiceRegistryClient{
-		responses: []*pb.ListServiceInstancesResponse{
-			{Instances: []*pb.ServiceInstance{
+		responses: []*quartermasterpb.ListServiceInstancesResponse{
+			{Instances: []*quartermasterpb.ServiceInstance{
 				{ServiceId: "decklog", Status: "running"},
 			}},
 		},
 	}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -850,11 +884,11 @@ func TestSyncInternalCertificatesFallsBackToExpectedServicesWhenRegistryUnavaila
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{err: errors.New("registry unavailable")}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -884,7 +918,7 @@ func TestSyncInternalCertificatesReturnsIssueFailureWhenRegistryUnavailable(t *t
 	dir := t.TempDir()
 	registry := &fakeServiceRegistryClient{err: errors.New("registry unavailable")}
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
@@ -919,11 +953,11 @@ func TestSyncInternalCertificatesReturnsIssueFailureWhenRegistryUnavailable(t *t
 func TestSyncInternalCertificatesMintsTokenWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	navigator := &fakeCertificateClient{
-		caResponse: &pb.GetCABundleResponse{
+		caResponse: &dnspb.GetCABundleResponse{
 			Found: true,
 			CaPem: "ca-pem",
 		},
-		issueResponse: &pb.IssueInternalCertResponse{
+		issueResponse: &dnspb.IssueInternalCertResponse{
 			Success: true,
 			CertPem: "cert-pem",
 			KeyPem:  "key-pem",
@@ -931,8 +965,8 @@ func TestSyncInternalCertificatesMintsTokenWhenMissing(t *testing.T) {
 	}
 	mesh := &fakeMeshClient{
 		createTokenResponses: []meshCreateTokenResult{{
-			resp: &pb.CreateBootstrapTokenResponse{
-				Token: &pb.BootstrapToken{Token: "bt_cert_sync"},
+			resp: &quartermasterpb.CreateBootstrapTokenResponse{
+				Token: &quartermasterpb.BootstrapToken{Token: "bt_cert_sync"},
 			},
 		}},
 	}
@@ -976,10 +1010,10 @@ func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.8",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{
+				Peers: []*quartermasterpb.InfrastructurePeer{
 					{
 						NodeName:   "node-a",
 						PublicKey:  peerKey,
@@ -988,13 +1022,13 @@ func TestAgentSyncRegistersNodeOnNotFound(t *testing.T) {
 						KeepAlive:  25,
 					},
 				},
-				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+				ServiceEndpoints: map[string]*quartermasterpb.ServiceEndpoints{
 					"api": {Ips: []string{"10.0.0.9"}},
 				},
 			}},
 		},
 		createNodeResponses: []meshCreateNodeResult{
-			{resp: &pb.NodeResponse{}},
+			{resp: &quartermasterpb.NodeResponse{}},
 		},
 	}
 
@@ -1066,13 +1100,13 @@ func TestAgentSyncReconcilesNodeOnFailedPrecondition(t *testing.T) {
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.FailedPrecondition, "wireguard identity mismatch")},
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.8",
 				WireguardPort: 51820,
 			}},
 		},
 		createNodeResponses: []meshCreateNodeResult{
-			{resp: &pb.NodeResponse{}},
+			{resp: &quartermasterpb.NodeResponse{}},
 		},
 	}
 
@@ -1210,17 +1244,17 @@ func TestAgentSyncNotFoundKeepsExistingMeshWhenRegistrationCannotRun(t *testing.
 	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{{
+				Peers: []*quartermasterpb.InfrastructurePeer{{
 					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.2/32"},
 					KeepAlive:  25,
 					NodeName:   "peer-one",
 				}},
-				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+				ServiceEndpoints: map[string]*quartermasterpb.ServiceEndpoints{
 					"metrics": {Ips: []string{"10.0.0.5"}},
 				},
 			}},
@@ -1297,7 +1331,7 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 			{err: status.Error(codes.Unavailable, "temporary")},
 		},
 		createNodeResponses: []meshCreateNodeResult{
-			{resp: &pb.NodeResponse{}},
+			{resp: &quartermasterpb.NodeResponse{}},
 		},
 	}
 
@@ -1332,10 +1366,10 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 
 func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
 	peerKey := mustGenPubB64(t)
-	resp := &pb.InfrastructureSyncResponse{
+	resp := &quartermasterpb.InfrastructureSyncResponse{
 		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
-		Peers: []*pb.InfrastructurePeer{
+		Peers: []*quartermasterpb.InfrastructurePeer{
 			{
 				PublicKey:  peerKey,
 				Endpoint:   "10.0.0.1:51820",
@@ -1344,7 +1378,7 @@ func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
 				NodeName:   "edge-1",
 			},
 		},
-		ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+		ServiceEndpoints: map[string]*quartermasterpb.ServiceEndpoints{
 			"router": {Ips: []string{"10.0.0.10"}},
 		},
 	}
@@ -1380,7 +1414,7 @@ func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
 
 func TestSyncRejectsManagedSelfIdentityMismatch(t *testing.T) {
 	client := &fakeMeshClient{syncResponses: []meshSyncResult{{
-		resp: &pb.InfrastructureSyncResponse{
+		resp: &quartermasterpb.InfrastructureSyncResponse{
 			WireguardIp:   "10.0.0.99",
 			WireguardPort: 51820,
 		},
@@ -1405,10 +1439,10 @@ func TestSyncRejectsManagedSelfIdentityMismatch(t *testing.T) {
 func TestSyncAcceptsManagedSelfIdentityWithCIDRResponse(t *testing.T) {
 	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{syncResponses: []meshSyncResult{{
-		resp: &pb.InfrastructureSyncResponse{
+		resp: &quartermasterpb.InfrastructureSyncResponse{
 			WireguardIp:   "10.0.0.10/32",
 			WireguardPort: 51820,
-			Peers: []*pb.InfrastructurePeer{
+			Peers: []*quartermasterpb.InfrastructurePeer{
 				{
 					PublicKey:  peerKey,
 					Endpoint:   "10.0.0.1:51820",
@@ -1436,10 +1470,10 @@ func TestSyncAcceptsManagedSelfIdentityWithCIDRResponse(t *testing.T) {
 func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 	peer1Key := mustGenPubB64(t)
 	peer2Key := mustGenPubB64(t)
-	initialResp := &pb.InfrastructureSyncResponse{
+	initialResp := &quartermasterpb.InfrastructureSyncResponse{
 		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
-		Peers: []*pb.InfrastructurePeer{
+		Peers: []*quartermasterpb.InfrastructurePeer{
 			{
 				PublicKey:  peer1Key,
 				Endpoint:   "10.0.0.1:51820",
@@ -1449,10 +1483,10 @@ func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 			},
 		},
 	}
-	rotatedResp := &pb.InfrastructureSyncResponse{
+	rotatedResp := &quartermasterpb.InfrastructureSyncResponse{
 		WireguardIp:   "10.0.0.10",
 		WireguardPort: 51820,
-		Peers: []*pb.InfrastructurePeer{
+		Peers: []*quartermasterpb.InfrastructurePeer{
 			{
 				PublicKey:  peer2Key,
 				Endpoint:   "10.0.0.2:51820",
@@ -1569,10 +1603,10 @@ func TestAgentSyncReconcilesStaleState(t *testing.T) {
 	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{
+				Peers: []*quartermasterpb.InfrastructurePeer{
 					{
 						PublicKey:  peerKey,
 						Endpoint:   "1.2.3.4:51820",
@@ -1581,11 +1615,11 @@ func TestAgentSyncReconcilesStaleState(t *testing.T) {
 						NodeName:   "peer-one",
 					},
 				},
-				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+				ServiceEndpoints: map[string]*quartermasterpb.ServiceEndpoints{
 					"metrics": {Ips: []string{"10.0.0.5"}},
 				},
 			}},
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 			}},
@@ -1620,7 +1654,7 @@ func TestAgentSyncReconcilesStaleState(t *testing.T) {
 func TestAgentSyncApplyFailurePropagates(t *testing.T) {
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 			}},
@@ -1646,10 +1680,10 @@ func TestAgentSyncSuccessRecordsApplyMetrics(t *testing.T) {
 	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{{
+				Peers: []*quartermasterpb.InfrastructurePeer{{
 					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.3/32"},
@@ -1682,10 +1716,10 @@ func TestAgentSyncDNSFailureRecordsDNSReasonAndDoesNotUpdatePeerCount(t *testing
 	peerKey := mustGenPubB64(t)
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{{
+				Peers: []*quartermasterpb.InfrastructurePeer{{
 					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.3/32"},
@@ -1718,10 +1752,10 @@ func TestAgentSyncDNSFailureRecordsDNSReasonAndDoesNotUpdatePeerCount(t *testing
 func TestAgentSyncMalformedPeerRecordsInvalidPeerReason(t *testing.T) {
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{{
+				Peers: []*quartermasterpb.InfrastructurePeer{{
 					PublicKey:  "not-a-valid-key", // forces parsePeerStrings failure
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.3/32"},
@@ -1793,13 +1827,13 @@ func TestRegisterNodeSendsNodeType(t *testing.T) {
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{err: status.Error(codes.NotFound, "missing")},
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 			}},
 		},
 		createNodeResponses: []meshCreateNodeResult{
-			{resp: &pb.NodeResponse{}},
+			{resp: &quartermasterpb.NodeResponse{}},
 		},
 	}
 	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
@@ -1842,17 +1876,17 @@ func TestAgentSyncRegistrationRetryFailureKeepsMeshState(t *testing.T) {
 	peerKey := mustGenPubB64(t)
 	mesh := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
-				Peers: []*pb.InfrastructurePeer{{
+				Peers: []*quartermasterpb.InfrastructurePeer{{
 					PublicKey:  peerKey,
 					Endpoint:   "1.2.3.4:51820",
 					AllowedIps: []string{"10.0.0.2/32"},
 					KeepAlive:  25,
 					NodeName:   "peer-one",
 				}},
-				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+				ServiceEndpoints: map[string]*quartermasterpb.ServiceEndpoints{
 					"metrics": {Ips: []string{"10.0.0.5"}},
 				},
 			}},
@@ -1860,7 +1894,7 @@ func TestAgentSyncRegistrationRetryFailureKeepsMeshState(t *testing.T) {
 			{err: status.Error(codes.Unavailable, "still down")},
 		},
 		createNodeResponses: []meshCreateNodeResult{
-			{resp: &pb.NodeResponse{}},
+			{resp: &quartermasterpb.NodeResponse{}},
 		},
 	}
 
@@ -2077,7 +2111,7 @@ func TestAgentSyncMergesSeedPeersWhenManagedPeersAreEmpty(t *testing.T) {
 	}
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
-			{resp: &pb.InfrastructureSyncResponse{
+			{resp: &quartermasterpb.InfrastructureSyncResponse{
 				WireguardIp:   "10.0.0.10",
 				WireguardPort: 51820,
 			}},
@@ -2120,7 +2154,7 @@ func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
 	}
 
 	navigator := &fakeCertificateClient{
-		tlsBundles: map[string]*pb.GetTLSBundleResponse{
+		tlsBundles: map[string]*dnspb.GetTLSBundleResponse{
 			bundleID: {
 				Found:    true,
 				BundleId: bundleID,
@@ -2131,8 +2165,8 @@ func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
 		},
 	}
 	ingress := &fakeIngressClient{
-		pages: []*pb.ListIngressSitesResponse{{
-			Sites: []*pb.IngressSite{
+		pages: []*quartermasterpb.ListIngressSitesResponse{{
+			Sites: []*quartermasterpb.IngressSite{
 				{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID},
 				{SiteId: "no-bundle", NodeId: "regional-eu-1"},
 			},
@@ -2176,8 +2210,8 @@ func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
 
 	// Second sync: same version, no IngressSite changes — must skip writes
 	// and not re-touch the trigger.
-	ingress.pages = []*pb.ListIngressSitesResponse{{
-		Sites: []*pb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
+	ingress.pages = []*quartermasterpb.ListIngressSitesResponse{{
+		Sites: []*quartermasterpb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
 	}}
 	time.Sleep(10 * time.Millisecond) // ensure mtime granularity would notice a touch
 	if syncErr := agent.syncIngressCertificates(); syncErr != nil {
@@ -2192,15 +2226,15 @@ func TestSyncIngressCertificatesWritesAndTouchesTrigger(t *testing.T) {
 	}
 
 	// Third sync: rotated version — must rewrite + retouch trigger.
-	navigator.tlsBundles[bundleID] = &pb.GetTLSBundleResponse{
+	navigator.tlsBundles[bundleID] = &dnspb.GetTLSBundleResponse{
 		Found:    true,
 		BundleId: bundleID,
 		CertPem:  "cert-pem-v2",
 		KeyPem:   "key-pem-v2",
 		Version:  "v2",
 	}
-	ingress.pages = []*pb.ListIngressSitesResponse{{
-		Sites: []*pb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
+	ingress.pages = []*quartermasterpb.ListIngressSitesResponse{{
+		Sites: []*quartermasterpb.IngressSite{{SiteId: "bridge-regional-eu-1", NodeId: "regional-eu-1", TlsBundleId: bundleID}},
 	}}
 	if syncErr := agent.syncIngressCertificates(); syncErr != nil {
 		t.Fatalf("third syncIngressCertificates: %v", syncErr)
@@ -2224,14 +2258,14 @@ func TestSyncIngressCertificatesHonorsCadenceUntilFilesMissing(t *testing.T) {
 	bundleID := "wildcard-frameworks-network"
 
 	navigator := &fakeCertificateClient{
-		tlsBundles: map[string]*pb.GetTLSBundleResponse{
+		tlsBundles: map[string]*dnspb.GetTLSBundleResponse{
 			bundleID: {Found: true, BundleId: bundleID, CertPem: "cert", KeyPem: "key", Version: "v1"},
 		},
 	}
 	ingress := &fakeIngressClient{}
 	queueIngressPage := func() {
-		ingress.pages = append(ingress.pages, &pb.ListIngressSitesResponse{
-			Sites: []*pb.IngressSite{{SiteId: "x", NodeId: "n", TlsBundleId: bundleID}},
+		ingress.pages = append(ingress.pages, &quartermasterpb.ListIngressSitesResponse{
+			Sites: []*quartermasterpb.IngressSite{{SiteId: "x", NodeId: "n", TlsBundleId: bundleID}},
 		})
 	}
 	queueIngressPage()
@@ -2299,11 +2333,11 @@ func TestSyncIngressCertificatesRejectsUnsafeBundleID(t *testing.T) {
 	navigator := &fakeCertificateClient{
 		// If the unsafe id ever reaches GetTLSBundle the test will fail
 		// because we record any request the fake sees.
-		tlsBundles: map[string]*pb.GetTLSBundleResponse{},
+		tlsBundles: map[string]*dnspb.GetTLSBundleResponse{},
 	}
 	ingress := &fakeIngressClient{
-		pages: []*pb.ListIngressSitesResponse{{
-			Sites: []*pb.IngressSite{
+		pages: []*quartermasterpb.ListIngressSitesResponse{{
+			Sites: []*quartermasterpb.IngressSite{
 				{SiteId: "evil", NodeId: "regional-eu-1", TlsBundleId: "../../../etc/passwd"},
 				{SiteId: "also-evil", NodeId: "regional-eu-1", TlsBundleId: "has space"},
 				{SiteId: "uppercase", NodeId: "regional-eu-1", TlsBundleId: "Wildcard"},
@@ -2342,7 +2376,7 @@ func TestSyncIngressCertificatesRejectsUnsafeBundleID(t *testing.T) {
 func TestSyncIngressCertificatesNoBundleIDsIsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	trigger := filepath.Join(dir, "reload.trigger")
-	ingress := &fakeIngressClient{pages: []*pb.ListIngressSitesResponse{{}}}
+	ingress := &fakeIngressClient{pages: []*quartermasterpb.ListIngressSitesResponse{{}}}
 	navigator := &fakeCertificateClient{}
 	agent := &Agent{
 		logger:          logging.NewLogger(),

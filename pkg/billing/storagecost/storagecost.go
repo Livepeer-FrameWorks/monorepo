@@ -10,9 +10,7 @@
 // than a blended rate that's harder to reason about.
 package storagecost
 
-import (
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-)
+import purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 // bytesPerGiB matches the canonical storage_gb_seconds ledger unit.
 const bytesPerGiB = 1024 * 1024 * 1024
@@ -32,7 +30,7 @@ type Projection struct {
 // tier for one day and one month. Returns the zero Projection when pricing is
 // nil or unit price is zero — both render as "$0.00" or "operator-absorbed"
 // upstream (self-hosted / marketplace clusters should pass nil pricing).
-func Project(pricing *pb.StoragePricing, bytes int64) Projection {
+func Project(pricing *purserpb.StoragePricing, bytes int64) Projection {
 	if pricing == nil || pricing.GetUnitPricePerGbHour() <= 0 || bytes <= 0 {
 		if pricing != nil {
 			return Projection{Currency: pricing.GetCurrency()}

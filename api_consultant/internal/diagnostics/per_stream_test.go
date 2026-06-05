@@ -2,9 +2,8 @@ package diagnostics
 
 import (
 	"context"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestPerStreamAnalyzerNil(t *testing.T) {
@@ -46,7 +45,7 @@ func TestPerStreamAnalyzerFindsOutlier(t *testing.T) {
 	}
 
 	// One healthy stream, one outlier.
-	metrics := []*pb.StreamHealthMetric{
+	metrics := []*periscopepb.StreamHealthMetric{
 		{StreamId: "stream-good", Bitrate: 5000000, Fps: 30, BufferHealth: 3.0},
 		{StreamId: "stream-good", Bitrate: 5000000, Fps: 30, BufferHealth: 3.0},
 		{StreamId: "stream-bad", Bitrate: 100000, Fps: 10, BufferHealth: 0.5},
@@ -85,10 +84,10 @@ func TestPerStreamAnalyzerCapsAt20(t *testing.T) {
 	}
 
 	// Create 25 outlier streams.
-	var metrics []*pb.StreamHealthMetric
+	var metrics []*periscopepb.StreamHealthMetric
 	for i := 0; i < 25; i++ {
 		sid := "stream-" + string(rune('a'+i))
-		metrics = append(metrics, &pb.StreamHealthMetric{
+		metrics = append(metrics, &periscopepb.StreamHealthMetric{
 			StreamId:     sid,
 			Bitrate:      100000,
 			Fps:          10,
@@ -120,7 +119,7 @@ func TestPerStreamAnalyzerHealthyFilteredOut(t *testing.T) {
 		})
 	}
 
-	metrics := []*pb.StreamHealthMetric{
+	metrics := []*periscopepb.StreamHealthMetric{
 		{StreamId: "healthy-1", Bitrate: 5000000, Fps: 30, BufferHealth: 3.0},
 		{StreamId: "healthy-2", Bitrate: 5000000, Fps: 30, BufferHealth: 3.0},
 	}
@@ -136,7 +135,7 @@ func TestPerStreamAnalyzerHealthyFilteredOut(t *testing.T) {
 }
 
 func TestGroupByStream(t *testing.T) {
-	metrics := []*pb.StreamHealthMetric{
+	metrics := []*periscopepb.StreamHealthMetric{
 		{StreamId: "s1", Bitrate: 1000, Fps: 20, BufferHealth: 2.0},
 		{StreamId: "s1", Bitrate: 3000, Fps: 30, BufferHealth: 4.0},
 		{StreamId: "s2", Bitrate: 5000, Fps: 25, BufferHealth: 3.0},

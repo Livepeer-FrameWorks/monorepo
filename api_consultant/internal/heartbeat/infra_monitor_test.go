@@ -8,7 +8,11 @@ import (
 	"frameworks/api_consultant/internal/diagnostics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/email"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -16,43 +20,43 @@ import (
 // --- Fakes ---
 
 type fakeInfraNodeClient struct {
-	liveNodes []*pb.LiveNode
-	perfResp  *pb.GetNodePerformance5MResponse
+	liveNodes []*periscopepb.LiveNode
+	perfResp  *periscopepb.GetNodePerformance5MResponse
 }
 
-func (f *fakeInfraNodeClient) GetLiveNodes(_ context.Context, _ string, _ *string, _ []string) (*pb.GetLiveNodesResponse, error) {
-	return &pb.GetLiveNodesResponse{Nodes: f.liveNodes}, nil
+func (f *fakeInfraNodeClient) GetLiveNodes(_ context.Context, _ string, _ *string, _ []string) (*periscopepb.GetLiveNodesResponse, error) {
+	return &periscopepb.GetLiveNodesResponse{Nodes: f.liveNodes}, nil
 }
 
-func (f *fakeInfraNodeClient) GetNodePerformance5m(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts) (*pb.GetNodePerformance5MResponse, error) {
+func (f *fakeInfraNodeClient) GetNodePerformance5m(_ context.Context, _ string, _ *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts) (*periscopepb.GetNodePerformance5MResponse, error) {
 	if f.perfResp != nil {
 		return f.perfResp, nil
 	}
-	return &pb.GetNodePerformance5MResponse{}, nil
+	return &periscopepb.GetNodePerformance5MResponse{}, nil
 }
 
-func (f *fakeInfraNodeClient) GetNetworkLiveStats(_ context.Context) (*pb.GetNetworkLiveStatsResponse, error) {
-	return &pb.GetNetworkLiveStatsResponse{}, nil
+func (f *fakeInfraNodeClient) GetNetworkLiveStats(_ context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error) {
+	return &periscopepb.GetNetworkLiveStatsResponse{}, nil
 }
 
-func (f *fakeInfraNodeClient) GetFederationSummary(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*pb.GetFederationSummaryResponse, error) {
-	return &pb.GetFederationSummaryResponse{}, nil
+func (f *fakeInfraNodeClient) GetFederationSummary(_ context.Context, _ string, _ *periscope.TimeRangeOpts) (*periscopepb.GetFederationSummaryResponse, error) {
+	return &periscopepb.GetFederationSummaryResponse{}, nil
 }
 
 type fakeInfraClusterClient struct {
-	clusters []*pb.InfrastructureCluster
-	owners   map[string]*pb.NodeOwnerResponse
+	clusters []*quartermasterpb.InfrastructureCluster
+	owners   map[string]*quartermasterpb.NodeOwnerResponse
 }
 
-func (f *fakeInfraClusterClient) ListClusters(_ context.Context, _ *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
-	return &pb.ListClustersResponse{Clusters: f.clusters}, nil
+func (f *fakeInfraClusterClient) ListClusters(_ context.Context, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+	return &quartermasterpb.ListClustersResponse{Clusters: f.clusters}, nil
 }
 
-func (f *fakeInfraClusterClient) GetNodeOwner(_ context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+func (f *fakeInfraClusterClient) GetNodeOwner(_ context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
 	if resp, ok := f.owners[nodeID]; ok {
 		return resp, nil
 	}
-	return &pb.NodeOwnerResponse{}, nil
+	return &quartermasterpb.NodeOwnerResponse{}, nil
 }
 
 type fakeBillingClient struct {
@@ -61,17 +65,17 @@ type fakeBillingClient struct {
 	tierLevel    int32
 }
 
-func (f *fakeBillingClient) GetBillingStatus(_ context.Context, _ string) (*pb.BillingStatusResponse, error) {
+func (f *fakeBillingClient) GetBillingStatus(_ context.Context, _ string) (*purserpb.BillingStatusResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	resp := &pb.BillingStatusResponse{
-		Subscription: &pb.TenantSubscription{
+	resp := &purserpb.BillingStatusResponse{
+		Subscription: &purserpb.TenantSubscription{
 			BillingEmail: f.billingEmail,
 		},
 	}
 	if f.tierLevel > 0 {
-		resp.Tier = &pb.BillingTier{TierLevel: f.tierLevel}
+		resp.Tier = &purserpb.BillingTier{TierLevel: f.tierLevel}
 	}
 	return resp, nil
 }
@@ -82,11 +86,11 @@ type fakeTenantContactClient struct {
 	err   error
 }
 
-func (f *fakeTenantContactClient) GetTenantPrimaryUser(_ context.Context, _ string) (*pb.GetTenantPrimaryUserResponse, error) {
+func (f *fakeTenantContactClient) GetTenantPrimaryUser(_ context.Context, _ string) (*commodorepb.GetTenantPrimaryUserResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &pb.GetTenantPrimaryUserResponse{Email: f.email, Name: f.name}, nil
+	return &commodorepb.GetTenantPrimaryUserResponse{Email: f.email, Name: f.name}, nil
 }
 
 type emailCapture struct {
@@ -108,8 +112,8 @@ func staleTimestamp() *timestamppb.Timestamp {
 	return timestamppb.New(time.Now().Add(-15 * time.Minute))
 }
 
-func activeCluster(id, name, ownerTenantID string) *pb.InfrastructureCluster {
-	return &pb.InfrastructureCluster{
+func activeCluster(id, name, ownerTenantID string) *quartermasterpb.InfrastructureCluster {
+	return &quartermasterpb.InfrastructureCluster{
 		ClusterId:     id,
 		ClusterName:   name,
 		OwnerTenantId: ptr(ownerTenantID),
@@ -117,8 +121,8 @@ func activeCluster(id, name, ownerTenantID string) *pb.InfrastructureCluster {
 	}
 }
 
-func healthyNode(nodeID string) *pb.LiveNode {
-	return &pb.LiveNode{
+func healthyNode(nodeID string) *periscopepb.LiveNode {
+	return &periscopepb.LiveNode{
 		NodeId:         nodeID,
 		CpuPercent:     40,
 		RamUsedBytes:   4_000_000_000,
@@ -129,8 +133,8 @@ func healthyNode(nodeID string) *pb.LiveNode {
 	}
 }
 
-func cpuStuckNode(nodeID string) *pb.LiveNode {
-	return &pb.LiveNode{
+func cpuStuckNode(nodeID string) *periscopepb.LiveNode {
+	return &periscopepb.LiveNode{
 		NodeId:         nodeID,
 		CpuPercent:     99,
 		RamUsedBytes:   8_000_000_000,
@@ -141,10 +145,10 @@ func cpuStuckNode(nodeID string) *pb.LiveNode {
 	}
 }
 
-func diskFullNode(nodeID string, usedPct float64) *pb.LiveNode {
+func diskFullNode(nodeID string, usedPct float64) *periscopepb.LiveNode {
 	total := uint64(200_000_000_000)
 	used := uint64(float64(total) * usedPct / 100)
-	return &pb.LiveNode{
+	return &periscopepb.LiveNode{
 		NodeId:         nodeID,
 		CpuPercent:     30,
 		RamUsedBytes:   4_000_000_000,
@@ -155,10 +159,10 @@ func diskFullNode(nodeID string, usedPct float64) *pb.LiveNode {
 	}
 }
 
-func persistentCPURecords(count int, avgCPU float32) []*pb.NodePerformance5M {
-	recs := make([]*pb.NodePerformance5M, count)
+func persistentCPURecords(count int, avgCPU float32) []*periscopepb.NodePerformance5M {
+	recs := make([]*periscopepb.NodePerformance5M, count)
 	for i := range recs {
-		recs[i] = &pb.NodePerformance5M{AvgCpu: avgCPU}
+		recs[i] = &periscopepb.NodePerformance5M{AvgCpu: avgCPU}
 	}
 	return recs
 }
@@ -177,10 +181,10 @@ func newTestMonitor(nodes InfraNodeClient, clusters InfraClusterClient, billing 
 
 func TestInfraMonitor_HealthyNodes_NoAlerts(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{healthyNode("node-1"), healthyNode("node-2")},
+		liveNodes: []*periscopepb.LiveNode{healthyNode("node-1"), healthyNode("node-2")},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -191,9 +195,9 @@ func TestInfraMonitor_HealthyNodes_NoAlerts(t *testing.T) {
 
 func TestInfraMonitor_CPUStuck_TransientNoAlert(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{cpuStuckNode("node-stuck")},
-		perfResp: &pb.GetNodePerformance5MResponse{
-			Records: []*pb.NodePerformance5M{
+		liveNodes: []*periscopepb.LiveNode{cpuStuckNode("node-stuck")},
+		perfResp: &periscopepb.GetNodePerformance5MResponse{
+			Records: []*periscopepb.NodePerformance5M{
 				{AvgCpu: 99}, // only 1 window above threshold
 				{AvgCpu: 50},
 				{AvgCpu: 40},
@@ -202,7 +206,7 @@ func TestInfraMonitor_CPUStuck_TransientNoAlert(t *testing.T) {
 		},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -213,15 +217,15 @@ func TestInfraMonitor_CPUStuck_TransientNoAlert(t *testing.T) {
 
 func TestInfraMonitor_CPUStuck_PersistentTriggersAlert(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{cpuStuckNode("node-stuck")},
-		perfResp: &pb.GetNodePerformance5MResponse{
+		liveNodes: []*periscopepb.LiveNode{cpuStuckNode("node-stuck")},
+		perfResp: &periscopepb.GetNodePerformance5MResponse{
 			Records: persistentCPURecords(4, 98),
 		},
 	}
 	ownerTenantID := "tenant-a"
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", ownerTenantID)},
-		owners: map[string]*pb.NodeOwnerResponse{
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", ownerTenantID)},
+		owners: map[string]*quartermasterpb.NodeOwnerResponse{
 			"node-stuck": {OwnerTenantId: ptr(ownerTenantID)},
 		},
 	}
@@ -235,10 +239,10 @@ func TestInfraMonitor_CPUStuck_PersistentTriggersAlert(t *testing.T) {
 
 func TestInfraMonitor_DiskWarning_ImmediateAlert(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{diskFullNode("node-disk", 92)},
+		liveNodes: []*periscopepb.LiveNode{diskFullNode("node-disk", 92)},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -248,10 +252,10 @@ func TestInfraMonitor_DiskWarning_ImmediateAlert(t *testing.T) {
 
 func TestInfraMonitor_DiskCritical_ImmediateAlert(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{diskFullNode("node-disk", 96)},
+		liveNodes: []*periscopepb.LiveNode{diskFullNode("node-disk", 96)},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -261,10 +265,10 @@ func TestInfraMonitor_DiskCritical_ImmediateAlert(t *testing.T) {
 
 func TestInfraMonitor_CooldownSuppressesRepeat(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{diskFullNode("node-disk", 96)},
+		liveNodes: []*periscopepb.LiveNode{diskFullNode("node-disk", 96)},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -274,7 +278,7 @@ func TestInfraMonitor_CooldownSuppressesRepeat(t *testing.T) {
 }
 
 func TestInfraMonitor_StaleNodeSkipped(t *testing.T) {
-	staleNode := &pb.LiveNode{
+	staleNode := &periscopepb.LiveNode{
 		NodeId:         "node-stale",
 		CpuPercent:     99,
 		RamUsedBytes:   15_000_000_000,
@@ -284,10 +288,10 @@ func TestInfraMonitor_StaleNodeSkipped(t *testing.T) {
 		UpdatedAt:      staleTimestamp(),
 	}
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{staleNode},
+		liveNodes: []*periscopepb.LiveNode{staleNode},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
+		clusters: []*quartermasterpb.InfrastructureCluster{activeCluster("c1", "prod", "tenant-a")},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -298,16 +302,16 @@ func TestInfraMonitor_StaleNodeSkipped(t *testing.T) {
 
 func TestInfraMonitor_InactiveClusterSkipped(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{cpuStuckNode("node-stuck")},
+		liveNodes: []*periscopepb.LiveNode{cpuStuckNode("node-stuck")},
 	}
-	inactiveCluster := &pb.InfrastructureCluster{
+	inactiveCluster := &quartermasterpb.InfrastructureCluster{
 		ClusterId:     "c1",
 		ClusterName:   "decommissioned",
 		OwnerTenantId: ptr("tenant-a"),
 		IsActive:      false,
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{inactiveCluster},
+		clusters: []*quartermasterpb.InfrastructureCluster{inactiveCluster},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -317,15 +321,15 @@ func TestInfraMonitor_InactiveClusterSkipped(t *testing.T) {
 
 func TestInfraMonitor_NoOwnerTenantSkipped(t *testing.T) {
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{cpuStuckNode("node-stuck")},
+		liveNodes: []*periscopepb.LiveNode{cpuStuckNode("node-stuck")},
 	}
-	noOwner := &pb.InfrastructureCluster{
+	noOwner := &quartermasterpb.InfrastructureCluster{
 		ClusterId:   "c1",
 		ClusterName: "orphan",
 		IsActive:    true,
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{noOwner},
+		clusters: []*quartermasterpb.InfrastructureCluster{noOwner},
 	}
 	billing := &fakeBillingClient{billingEmail: "ops@test.com"}
 
@@ -336,13 +340,13 @@ func TestInfraMonitor_NoOwnerTenantSkipped(t *testing.T) {
 func TestInfraMonitor_NodeDedupAcrossClusters(t *testing.T) {
 	sharedNode := cpuStuckNode("shared-node")
 	nodes := &fakeInfraNodeClient{
-		liveNodes: []*pb.LiveNode{sharedNode},
-		perfResp: &pb.GetNodePerformance5MResponse{
+		liveNodes: []*periscopepb.LiveNode{sharedNode},
+		perfResp: &periscopepb.GetNodePerformance5MResponse{
 			Records: persistentCPURecords(4, 98),
 		},
 	}
 	clusters := &fakeInfraClusterClient{
-		clusters: []*pb.InfrastructureCluster{
+		clusters: []*quartermasterpb.InfrastructureCluster{
 			activeCluster("c1", "prod-a", "tenant-a"),
 			activeCluster("c2", "prod-b", "tenant-b"),
 		},
@@ -389,7 +393,7 @@ func TestInfraMonitor_MissingClustersReturnsNil(t *testing.T) {
 func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 	tests := []struct {
 		name     string
-		records  []*pb.NodePerformance5M
+		records  []*periscopepb.NodePerformance5M
 		metric   string
 		expected bool
 	}{
@@ -401,13 +405,13 @@ func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 		},
 		{
 			name:     "3 of 4 above threshold",
-			records:  append(persistentCPURecords(3, 97), &pb.NodePerformance5M{AvgCpu: 50}),
+			records:  append(persistentCPURecords(3, 97), &periscopepb.NodePerformance5M{AvgCpu: 50}),
 			metric:   "cpu",
 			expected: true,
 		},
 		{
 			name: "2 of 4 above threshold",
-			records: []*pb.NodePerformance5M{
+			records: []*periscopepb.NodePerformance5M{
 				{AvgCpu: 97}, {AvgCpu: 97}, {AvgCpu: 50}, {AvgCpu: 50},
 			},
 			metric:   "cpu",
@@ -415,7 +419,7 @@ func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 		},
 		{
 			name:     "1 of 4 above threshold",
-			records:  []*pb.NodePerformance5M{{AvgCpu: 97}, {AvgCpu: 30}, {AvgCpu: 40}, {AvgCpu: 50}},
+			records:  []*periscopepb.NodePerformance5M{{AvgCpu: 97}, {AvgCpu: 30}, {AvgCpu: 40}, {AvgCpu: 50}},
 			metric:   "cpu",
 			expected: false,
 		},
@@ -427,7 +431,7 @@ func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 		},
 		{
 			name: "memory 3 of 4",
-			records: []*pb.NodePerformance5M{
+			records: []*periscopepb.NodePerformance5M{
 				{AvgMemory: 96}, {AvgMemory: 97}, {AvgMemory: 98}, {AvgMemory: 50},
 			},
 			metric:   "memory",
@@ -435,7 +439,7 @@ func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 		},
 		{
 			name: "fewer than 4 records — 2 of 2 above",
-			records: []*pb.NodePerformance5M{
+			records: []*periscopepb.NodePerformance5M{
 				{AvgCpu: 98}, {AvgCpu: 97},
 			},
 			metric:   "cpu",
@@ -446,7 +450,7 @@ func TestConfirmPersistence_RequiresMinViolations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			nodes := &fakeInfraNodeClient{
-				perfResp: &pb.GetNodePerformance5MResponse{Records: tt.records},
+				perfResp: &periscopepb.GetNodePerformance5MResponse{Records: tt.records},
 			}
 			m := newTestMonitor(nodes, &fakeInfraClusterClient{}, &fakeBillingClient{})
 			got := m.confirmPersistence(context.Background(), "t1", "n1", tt.metric)
@@ -560,7 +564,7 @@ func TestResolveBaselines(t *testing.T) {
 func TestResolveOwnerEmail_FallsBackToTenantID(t *testing.T) {
 	billing := &fakeBillingClient{billingEmail: "owner@test.com"}
 	clusters := &fakeInfraClusterClient{
-		owners: map[string]*pb.NodeOwnerResponse{},
+		owners: map[string]*quartermasterpb.NodeOwnerResponse{},
 	}
 	m := newTestMonitor(&fakeInfraNodeClient{}, clusters, billing)
 	email := m.resolveOwnerEmail(context.Background(), "node-1", "tenant-fallback")
@@ -573,7 +577,7 @@ func TestResolveOwnerEmail_UsesNodeOwner(t *testing.T) {
 	billing := &fakeBillingClient{billingEmail: "node-owner@test.com"}
 	ownerID := "specific-owner"
 	clusters := &fakeInfraClusterClient{
-		owners: map[string]*pb.NodeOwnerResponse{
+		owners: map[string]*quartermasterpb.NodeOwnerResponse{
 			"node-1": {OwnerTenantId: &ownerID},
 		},
 	}

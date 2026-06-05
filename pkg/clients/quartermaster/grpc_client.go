@@ -9,7 +9,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -22,13 +24,13 @@ const DefaultServerName = "quartermaster.internal"
 // GRPCClient is the gRPC client for Quartermaster
 type GRPCClient struct {
 	conn            *grpc.ClientConn
-	tenant          pb.TenantServiceClient
-	cluster         pb.ClusterServiceClient
-	node            pb.NodeServiceClient
-	bootstrap       pb.BootstrapServiceClient
-	mesh            pb.MeshServiceClient
-	serviceRegistry pb.ServiceRegistryServiceClient
-	ingress         pb.IngressServiceClient
+	tenant          quartermasterpb.TenantServiceClient
+	cluster         quartermasterpb.ClusterServiceClient
+	node            quartermasterpb.NodeServiceClient
+	bootstrap       quartermasterpb.BootstrapServiceClient
+	mesh            quartermasterpb.MeshServiceClient
+	serviceRegistry quartermasterpb.ServiceRegistryServiceClient
+	ingress         quartermasterpb.IngressServiceClient
 	logger          logging.Logger
 }
 
@@ -130,13 +132,13 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	return &GRPCClient{
 		conn:            conn,
-		tenant:          pb.NewTenantServiceClient(conn),
-		cluster:         pb.NewClusterServiceClient(conn),
-		node:            pb.NewNodeServiceClient(conn),
-		bootstrap:       pb.NewBootstrapServiceClient(conn),
-		mesh:            pb.NewMeshServiceClient(conn),
-		serviceRegistry: pb.NewServiceRegistryServiceClient(conn),
-		ingress:         pb.NewIngressServiceClient(conn),
+		tenant:          quartermasterpb.NewTenantServiceClient(conn),
+		cluster:         quartermasterpb.NewClusterServiceClient(conn),
+		node:            quartermasterpb.NewNodeServiceClient(conn),
+		bootstrap:       quartermasterpb.NewBootstrapServiceClient(conn),
+		mesh:            quartermasterpb.NewMeshServiceClient(conn),
+		serviceRegistry: quartermasterpb.NewServiceRegistryServiceClient(conn),
+		ingress:         quartermasterpb.NewIngressServiceClient(conn),
 		logger:          config.Logger,
 	}, nil
 }
@@ -167,22 +169,22 @@ func (c *GRPCClient) CheckHealth(ctx context.Context) error {
 // ============================================================================
 
 // ValidateTenant validates a tenant
-func (c *GRPCClient) ValidateTenant(ctx context.Context, tenantID, userID string) (*pb.ValidateTenantResponse, error) {
-	return c.tenant.ValidateTenant(ctx, &pb.ValidateTenantRequest{
+func (c *GRPCClient) ValidateTenant(ctx context.Context, tenantID, userID string) (*quartermasterpb.ValidateTenantResponse, error) {
+	return c.tenant.ValidateTenant(ctx, &quartermasterpb.ValidateTenantRequest{
 		TenantId: tenantID,
 		UserId:   userID,
 	})
 }
 
 // GetTenant gets a tenant by ID
-func (c *GRPCClient) GetTenant(ctx context.Context, tenantID string) (*pb.GetTenantResponse, error) {
-	return c.tenant.GetTenant(ctx, &pb.GetTenantRequest{
+func (c *GRPCClient) GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error) {
+	return c.tenant.GetTenant(ctx, &quartermasterpb.GetTenantRequest{
 		TenantId: tenantID,
 	})
 }
 
 // GetClusterRouting gets cluster routing for a tenant
-func (c *GRPCClient) GetClusterRouting(ctx context.Context, req *pb.GetClusterRoutingRequest) (*pb.ClusterRoutingResponse, error) {
+func (c *GRPCClient) GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
 	return c.tenant.GetClusterRouting(ctx, req)
 }
 
@@ -191,8 +193,8 @@ func (c *GRPCClient) GetClusterRouting(ctx context.Context, req *pb.GetClusterRo
 // quartermaster.bootstrap_tenant_aliases directly. Aliases without a mapping
 // arrive in resp.Unknown rather than as an error so the caller can render a
 // precise message naming every missing alias.
-func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string) (*pb.ResolveTenantAliasesResponse, error) {
-	return c.tenant.ResolveTenantAliases(ctx, &pb.ResolveTenantAliasesRequest{Aliases: aliases})
+func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string) (*quartermasterpb.ResolveTenantAliasesResponse, error) {
+	return c.tenant.ResolveTenantAliases(ctx, &quartermasterpb.ResolveTenantAliasesRequest{Aliases: aliases})
 }
 
 // BootstrapClusterAccess grants a tenant access to a platform-official cluster
@@ -204,8 +206,8 @@ func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string)
 // access-specific override onto tenant_cluster_access.resource_limits via
 // COALESCE. Plan-level Free caps are resolved by Purser tier entitlements, so
 // normal platform bootstrap passes nil.
-func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *pb.TenantResourceLimits) error {
-	_, err := c.cluster.BootstrapClusterAccess(ctx, &pb.BootstrapClusterAccessRequest{
+func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *quartermasterpb.TenantResourceLimits) error {
+	_, err := c.cluster.BootstrapClusterAccess(ctx, &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId:       tenantID,
 		ClusterId:      clusterID,
 		ResourceLimits: resourceLimits,
@@ -216,7 +218,7 @@ func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clust
 // DeactivateClusterAccess soft-suspends a tenant_cluster_access row. Used by
 // Purser's tier reconciliation on downgrade. Idempotent.
 func (c *GRPCClient) DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error {
-	_, err := c.cluster.DeactivateClusterAccess(ctx, &pb.DeactivateClusterAccessRequest{
+	_, err := c.cluster.DeactivateClusterAccess(ctx, &quartermasterpb.DeactivateClusterAccessRequest{
 		TenantId:  tenantID,
 		ClusterId: clusterID,
 		Reason:    reason,
@@ -227,38 +229,38 @@ func (c *GRPCClient) DeactivateClusterAccess(ctx context.Context, tenantID, clus
 // ListTenantClusterAccess returns every tenant_cluster_access row with the
 // fields needed for tier reconciliation diffs. Service-token only; distinct
 // from ListClustersForTenant which is a user-facing minimal-entry RPC.
-func (c *GRPCClient) ListTenantClusterAccess(ctx context.Context, tenantID string) (*pb.ListTenantClusterAccessResponse, error) {
-	return c.cluster.ListTenantClusterAccess(ctx, &pb.ListTenantClusterAccessRequest{
+func (c *GRPCClient) ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error) {
+	return c.cluster.ListTenantClusterAccess(ctx, &quartermasterpb.ListTenantClusterAccessRequest{
 		TenantId: tenantID,
 	})
 }
 
 // ListTenants lists tenants with cursor pagination
-func (c *GRPCClient) ListTenants(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListTenantsResponse, error) {
-	return c.tenant.ListTenants(ctx, &pb.ListTenantsRequest{
+func (c *GRPCClient) ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error) {
+	return c.tenant.ListTenants(ctx, &quartermasterpb.ListTenantsRequest{
 		Pagination: pagination,
 	})
 }
 
 // CreateTenant creates a new tenant
-func (c *GRPCClient) CreateTenant(ctx context.Context, req *pb.CreateTenantRequest) (*pb.CreateTenantResponse, error) {
+func (c *GRPCClient) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) {
 	return c.tenant.CreateTenant(ctx, req)
 }
 
 // UpdateTenant updates a tenant
-func (c *GRPCClient) UpdateTenant(ctx context.Context, req *pb.UpdateTenantRequest) (*pb.Tenant, error) {
+func (c *GRPCClient) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error) {
 	return c.tenant.UpdateTenant(ctx, req)
 }
 
 // ResolveTenant resolves tenant context from various identifiers
-func (c *GRPCClient) ResolveTenant(ctx context.Context, req *pb.ResolveTenantRequest) (*pb.ResolveTenantResponse, error) {
+func (c *GRPCClient) ResolveTenant(ctx context.Context, req *quartermasterpb.ResolveTenantRequest) (*quartermasterpb.ResolveTenantResponse, error) {
 	return c.tenant.ResolveTenant(ctx, req)
 }
 
 // ListActiveTenants returns all active tenant IDs for billing batch processing.
 // Called by Purser billing job to avoid cross-service DB access.
 func (c *GRPCClient) ListActiveTenants(ctx context.Context) ([]string, error) {
-	resp, err := c.tenant.ListActiveTenants(ctx, &pb.ListActiveTenantsRequest{})
+	resp, err := c.tenant.ListActiveTenants(ctx, &quartermasterpb.ListActiveTenantsRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +272,8 @@ func (c *GRPCClient) ListActiveTenants(ctx context.Context) ([]string, error) {
 // ============================================================================
 
 // GetCluster gets a cluster by ID
-func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*pb.ClusterResponse, error) {
-	return c.cluster.GetCluster(ctx, &pb.GetClusterRequest{
+func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
+	return c.cluster.GetCluster(ctx, &quartermasterpb.GetClusterRequest{
 		ClusterId: clusterID,
 	})
 }
@@ -280,123 +282,123 @@ func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*pb.Clus
 // access + a subdomain in this cluster. Used by Foghorn to know which
 // per-tenant TLS bundles to include in ConfigSeed for edges in the
 // cluster.
-func (c *GRPCClient) ListAliasedTenantsForCluster(ctx context.Context, clusterID string) (*pb.ListAliasedTenantsForClusterResponse, error) {
-	return c.tenant.ListAliasedTenantsForCluster(ctx, &pb.ListAliasedTenantsForClusterRequest{
+func (c *GRPCClient) ListAliasedTenantsForCluster(ctx context.Context, clusterID string) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error) {
+	return c.tenant.ListAliasedTenantsForCluster(ctx, &quartermasterpb.ListAliasedTenantsForClusterRequest{
 		ClusterId: clusterID,
 	})
 }
 
 // ListClusters lists clusters with cursor pagination
-func (c *GRPCClient) ListClusters(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
-	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+func (c *GRPCClient) ListClusters(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+	return c.cluster.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
 		Pagination: pagination,
 	})
 }
 
 // ListClustersByOwner lists clusters owned by a specific tenant.
-func (c *GRPCClient) ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
-	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+func (c *GRPCClient) ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+	return c.cluster.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
 		Pagination:    pagination,
 		OwnerTenantId: &ownerTenantID,
 	})
 }
 
 // ListOfficialClusters lists all platform-official clusters.
-func (c *GRPCClient) ListOfficialClusters(ctx context.Context) (*pb.ListClustersResponse, error) {
+func (c *GRPCClient) ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error) {
 	t := true
-	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+	return c.cluster.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
 		IsPlatformOfficial: &t,
 	})
 }
 
 // ListPublicTopologyClusters lists clusters visible on public topology maps.
-func (c *GRPCClient) ListPublicTopologyClusters(ctx context.Context) (*pb.ListClustersResponse, error) {
+func (c *GRPCClient) ListPublicTopologyClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error) {
 	t := true
-	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+	return c.cluster.ListClusters(ctx, &quartermasterpb.ListClustersRequest{
 		PublicTopology: &t,
 	})
 }
 
 // CreateCluster creates a new cluster
-func (c *GRPCClient) CreateCluster(ctx context.Context, req *pb.CreateClusterRequest) (*pb.ClusterResponse, error) {
+func (c *GRPCClient) CreateCluster(ctx context.Context, req *quartermasterpb.CreateClusterRequest) (*quartermasterpb.ClusterResponse, error) {
 	return c.cluster.CreateCluster(ctx, req)
 }
 
 // UpdateCluster updates a cluster
-func (c *GRPCClient) UpdateCluster(ctx context.Context, req *pb.UpdateClusterRequest) (*pb.ClusterResponse, error) {
+func (c *GRPCClient) UpdateCluster(ctx context.Context, req *quartermasterpb.UpdateClusterRequest) (*quartermasterpb.ClusterResponse, error) {
 	return c.cluster.UpdateCluster(ctx, req)
 }
 
 // UpdateClusterMeshConfig stores the cluster's WireGuard mesh CIDR and
 // default listen port in Quartermaster. Sourced from the manifest during
 // cluster provision; used later by BootstrapInfrastructureNode.
-func (c *GRPCClient) UpdateClusterMeshConfig(ctx context.Context, req *pb.UpdateClusterMeshConfigRequest) (*pb.UpdateClusterMeshConfigResponse, error) {
+func (c *GRPCClient) UpdateClusterMeshConfig(ctx context.Context, req *quartermasterpb.UpdateClusterMeshConfigRequest) (*quartermasterpb.UpdateClusterMeshConfigResponse, error) {
 	return c.cluster.UpdateClusterMeshConfig(ctx, req)
 }
 
 // SetNodeEnrollmentOrigin flips a node's enrollment_origin. Used by
 // `frameworks mesh reconcile` to promote enrolled nodes into GitOps.
-func (c *GRPCClient) SetNodeEnrollmentOrigin(ctx context.Context, req *pb.SetNodeEnrollmentOriginRequest) (*pb.SetNodeEnrollmentOriginResponse, error) {
+func (c *GRPCClient) SetNodeEnrollmentOrigin(ctx context.Context, req *quartermasterpb.SetNodeEnrollmentOriginRequest) (*quartermasterpb.SetNodeEnrollmentOriginResponse, error) {
 	return c.node.SetNodeEnrollmentOrigin(ctx, req)
 }
 
 // ListClustersForTenant lists clusters accessible to a tenant
-func (c *GRPCClient) ListClustersForTenant(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ClustersAccessResponse, error) {
-	return c.cluster.ListClustersForTenant(ctx, &pb.ListClustersForTenantRequest{
+func (c *GRPCClient) ListClustersForTenant(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAccessResponse, error) {
+	return c.cluster.ListClustersForTenant(ctx, &quartermasterpb.ListClustersForTenantRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	})
 }
 
 // ListClustersAvailable lists all clusters available in the system
-func (c *GRPCClient) ListClustersAvailable(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ClustersAvailableResponse, error) {
-	return c.cluster.ListClustersAvailable(ctx, &pb.ListClustersAvailableRequest{
+func (c *GRPCClient) ListClustersAvailable(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAvailableResponse, error) {
+	return c.cluster.ListClustersAvailable(ctx, &quartermasterpb.ListClustersAvailableRequest{
 		Pagination: pagination,
 	})
 }
 
 // GrantClusterAccess grants cluster access to a tenant
-func (c *GRPCClient) GrantClusterAccess(ctx context.Context, req *pb.GrantClusterAccessRequest) error {
+func (c *GRPCClient) GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) error {
 	_, err := c.cluster.GrantClusterAccess(ctx, req)
 	return err
 }
 
 // SubscribeToCluster subscribes a tenant to a cluster
-func (c *GRPCClient) SubscribeToCluster(ctx context.Context, req *pb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
+func (c *GRPCClient) SubscribeToCluster(ctx context.Context, req *quartermasterpb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
 	return c.cluster.SubscribeToCluster(ctx, req)
 }
 
 // UnsubscribeFromCluster unsubscribes a tenant from a cluster
-func (c *GRPCClient) UnsubscribeFromCluster(ctx context.Context, req *pb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
+func (c *GRPCClient) UnsubscribeFromCluster(ctx context.Context, req *quartermasterpb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	return c.cluster.UnsubscribeFromCluster(ctx, req)
 }
 
 // ListMySubscriptions lists clusters the tenant is subscribed to
-func (c *GRPCClient) ListMySubscriptions(ctx context.Context, req *pb.ListMySubscriptionsRequest) (*pb.ListClustersResponse, error) {
+func (c *GRPCClient) ListMySubscriptions(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
 	return c.cluster.ListMySubscriptions(ctx, req)
 }
 
 // UpsertTLSBundle creates or updates desired ingress TLS state.
-func (c *GRPCClient) UpsertTLSBundle(ctx context.Context, bundle *pb.TLSBundle) (*pb.TLSBundleResponse, error) {
-	return c.ingress.UpsertTLSBundle(ctx, &pb.UpsertTLSBundleRequest{Bundle: bundle})
+func (c *GRPCClient) UpsertTLSBundle(ctx context.Context, bundle *quartermasterpb.TLSBundle) (*quartermasterpb.TLSBundleResponse, error) {
+	return c.ingress.UpsertTLSBundle(ctx, &quartermasterpb.UpsertTLSBundleRequest{Bundle: bundle})
 }
 
 // ListTLSBundles lists desired ingress TLS bundles.
-func (c *GRPCClient) ListTLSBundles(ctx context.Context, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ListTLSBundlesResponse, error) {
-	return c.ingress.ListTLSBundles(ctx, &pb.ListTLSBundlesRequest{
+func (c *GRPCClient) ListTLSBundles(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+	return c.ingress.ListTLSBundles(ctx, &quartermasterpb.ListTLSBundlesRequest{
 		ClusterId:  clusterID,
 		Pagination: pagination,
 	})
 }
 
 // UpsertIngressSite creates or updates a desired ingress site.
-func (c *GRPCClient) UpsertIngressSite(ctx context.Context, site *pb.IngressSite) (*pb.IngressSiteResponse, error) {
-	return c.ingress.UpsertIngressSite(ctx, &pb.UpsertIngressSiteRequest{Site: site})
+func (c *GRPCClient) UpsertIngressSite(ctx context.Context, site *quartermasterpb.IngressSite) (*quartermasterpb.IngressSiteResponse, error) {
+	return c.ingress.UpsertIngressSite(ctx, &quartermasterpb.UpsertIngressSiteRequest{Site: site})
 }
 
 // ListIngressSites lists desired ingress sites.
-func (c *GRPCClient) ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListIngressSitesResponse, error) {
-	return c.ingress.ListIngressSites(ctx, &pb.ListIngressSitesRequest{
+func (c *GRPCClient) ListIngressSites(ctx context.Context, clusterID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error) {
+	return c.ingress.ListIngressSites(ctx, &quartermasterpb.ListIngressSitesRequest{
 		ClusterId:  clusterID,
 		NodeId:     nodeID,
 		Pagination: pagination,
@@ -408,86 +410,86 @@ func (c *GRPCClient) ListIngressSites(ctx context.Context, clusterID, nodeID str
 // ============================================================================
 
 // ListMarketplaceClusters lists clusters in the marketplace (respects visibility + billing tier)
-func (c *GRPCClient) ListMarketplaceClusters(ctx context.Context, req *pb.ListMarketplaceClustersRequest) (*pb.ListMarketplaceClustersResponse, error) {
+func (c *GRPCClient) ListMarketplaceClusters(ctx context.Context, req *quartermasterpb.ListMarketplaceClustersRequest) (*quartermasterpb.ListMarketplaceClustersResponse, error) {
 	return c.cluster.ListMarketplaceClusters(ctx, req)
 }
 
 // GetMarketplaceCluster gets a marketplace cluster (with optional invite token for unlisted)
-func (c *GRPCClient) GetMarketplaceCluster(ctx context.Context, req *pb.GetMarketplaceClusterRequest) (*pb.MarketplaceClusterEntry, error) {
+func (c *GRPCClient) GetMarketplaceCluster(ctx context.Context, req *quartermasterpb.GetMarketplaceClusterRequest) (*quartermasterpb.MarketplaceClusterEntry, error) {
 	return c.cluster.GetMarketplaceCluster(ctx, req)
 }
 
 // UpdateClusterMarketplace updates cluster marketplace settings (owner only)
-func (c *GRPCClient) UpdateClusterMarketplace(ctx context.Context, req *pb.UpdateClusterMarketplaceRequest) (*pb.ClusterResponse, error) {
+func (c *GRPCClient) UpdateClusterMarketplace(ctx context.Context, req *quartermasterpb.UpdateClusterMarketplaceRequest) (*quartermasterpb.ClusterResponse, error) {
 	return c.cluster.UpdateClusterMarketplace(ctx, req)
 }
 
 // GetClusterMetadataBatch fetches cluster metadata for multiple clusters at once.
 // Used by Gateway to enrich marketplace pricing data from Purser with cluster details.
-func (c *GRPCClient) GetClusterMetadataBatch(ctx context.Context, req *pb.GetClusterMetadataBatchRequest) (*pb.GetClusterMetadataBatchResponse, error) {
+func (c *GRPCClient) GetClusterMetadataBatch(ctx context.Context, req *quartermasterpb.GetClusterMetadataBatchRequest) (*quartermasterpb.GetClusterMetadataBatchResponse, error) {
 	return c.cluster.GetClusterMetadataBatch(ctx, req)
 }
 
 // CreatePrivateCluster creates a private cluster (self-hosted edge)
-func (c *GRPCClient) CreatePrivateCluster(ctx context.Context, req *pb.CreatePrivateClusterRequest) (*pb.CreatePrivateClusterResponse, error) {
+func (c *GRPCClient) CreatePrivateCluster(ctx context.Context, req *quartermasterpb.CreatePrivateClusterRequest) (*quartermasterpb.CreatePrivateClusterResponse, error) {
 	return c.cluster.CreatePrivateCluster(ctx, req)
 }
 
 // CreateClusterInvite creates an invite to a cluster (cluster owner)
-func (c *GRPCClient) CreateClusterInvite(ctx context.Context, req *pb.CreateClusterInviteRequest) (*pb.ClusterInvite, error) {
+func (c *GRPCClient) CreateClusterInvite(ctx context.Context, req *quartermasterpb.CreateClusterInviteRequest) (*quartermasterpb.ClusterInvite, error) {
 	return c.cluster.CreateClusterInvite(ctx, req)
 }
 
 // RevokeClusterInvite revokes an invite to a cluster (cluster owner)
-func (c *GRPCClient) RevokeClusterInvite(ctx context.Context, req *pb.RevokeClusterInviteRequest) error {
+func (c *GRPCClient) RevokeClusterInvite(ctx context.Context, req *quartermasterpb.RevokeClusterInviteRequest) error {
 	_, err := c.cluster.RevokeClusterInvite(ctx, req)
 	return err
 }
 
 // ListClusterInvites lists invites for a cluster (cluster owner)
-func (c *GRPCClient) ListClusterInvites(ctx context.Context, req *pb.ListClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+func (c *GRPCClient) ListClusterInvites(ctx context.Context, req *quartermasterpb.ListClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error) {
 	return c.cluster.ListClusterInvites(ctx, req)
 }
 
 // ListMyClusterInvites lists pending invites for the current tenant
-func (c *GRPCClient) ListMyClusterInvites(ctx context.Context, req *pb.ListMyClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+func (c *GRPCClient) ListMyClusterInvites(ctx context.Context, req *quartermasterpb.ListMyClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error) {
 	return c.cluster.ListMyClusterInvites(ctx, req)
 }
 
 // RequestClusterSubscription requests subscription to a cluster (with approval workflow)
-func (c *GRPCClient) RequestClusterSubscription(ctx context.Context, req *pb.RequestClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (c *GRPCClient) RequestClusterSubscription(ctx context.Context, req *quartermasterpb.RequestClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	return c.cluster.RequestClusterSubscription(ctx, req)
 }
 
 // AcceptClusterInvite accepts a cluster invite
-func (c *GRPCClient) AcceptClusterInvite(ctx context.Context, req *pb.AcceptClusterInviteRequest) (*pb.ClusterSubscription, error) {
+func (c *GRPCClient) AcceptClusterInvite(ctx context.Context, req *quartermasterpb.AcceptClusterInviteRequest) (*quartermasterpb.ClusterSubscription, error) {
 	return c.cluster.AcceptClusterInvite(ctx, req)
 }
 
 // ListPendingSubscriptions lists pending subscription requests (cluster owner)
-func (c *GRPCClient) ListPendingSubscriptions(ctx context.Context, req *pb.ListPendingSubscriptionsRequest) (*pb.ListPendingSubscriptionsResponse, error) {
+func (c *GRPCClient) ListPendingSubscriptions(ctx context.Context, req *quartermasterpb.ListPendingSubscriptionsRequest) (*quartermasterpb.ListPendingSubscriptionsResponse, error) {
 	return c.cluster.ListPendingSubscriptions(ctx, req)
 }
 
 // ApproveClusterSubscription approves a subscription request (cluster owner)
-func (c *GRPCClient) ApproveClusterSubscription(ctx context.Context, req *pb.ApproveClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (c *GRPCClient) ApproveClusterSubscription(ctx context.Context, req *quartermasterpb.ApproveClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	return c.cluster.ApproveClusterSubscription(ctx, req)
 }
 
 // RejectClusterSubscription rejects a subscription request (cluster owner)
-func (c *GRPCClient) RejectClusterSubscription(ctx context.Context, req *pb.RejectClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (c *GRPCClient) RejectClusterSubscription(ctx context.Context, req *quartermasterpb.RejectClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	return c.cluster.RejectClusterSubscription(ctx, req)
 }
 
 // UpdateTenantCluster updates tenant cluster assignment (e.g. preferred cluster)
-func (c *GRPCClient) UpdateTenantCluster(ctx context.Context, req *pb.UpdateTenantClusterRequest) error {
+func (c *GRPCClient) UpdateTenantCluster(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) error {
 	_, err := c.tenant.UpdateTenantCluster(ctx, req)
 	return err
 }
 
 // ListPeers returns clusters that share tenants with the given cluster.
-func (c *GRPCClient) ListPeers(ctx context.Context, clusterID string) (*pb.ListPeersResponse, error) {
-	return c.cluster.ListPeers(ctx, &pb.ListPeersRequest{
+func (c *GRPCClient) ListPeers(ctx context.Context, clusterID string) (*quartermasterpb.ListPeersResponse, error) {
+	return c.cluster.ListPeers(ctx, &quartermasterpb.ListPeersRequest{
 		ClusterId: clusterID,
 	})
 }
@@ -497,15 +499,15 @@ func (c *GRPCClient) ListPeers(ctx context.Context, clusterID string) (*pb.ListP
 // ============================================================================
 
 // GetNode gets a node by ID
-func (c *GRPCClient) GetNode(ctx context.Context, nodeID string) (*pb.NodeResponse, error) {
-	return c.node.GetNode(ctx, &pb.GetNodeRequest{
+func (c *GRPCClient) GetNode(ctx context.Context, nodeID string) (*quartermasterpb.NodeResponse, error) {
+	return c.node.GetNode(ctx, &quartermasterpb.GetNodeRequest{
 		NodeId: nodeID,
 	})
 }
 
 // ListNodes lists nodes with filters and cursor pagination
-func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *pb.CursorPaginationRequest) (*pb.ListNodesResponse, error) {
-	return c.node.ListNodes(ctx, &pb.ListNodesRequest{
+func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error) {
+	return c.node.ListNodes(ctx, &quartermasterpb.ListNodesRequest{
 		ClusterId:  clusterID,
 		NodeType:   nodeType,
 		Region:     region,
@@ -516,14 +518,14 @@ func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region 
 // ListHealthyNodesForDNS lists healthy nodes for DNS sync by service type.
 // Quartermaster resolves edge queries (service_type "edge" or "edge-*") via
 // node_type + heartbeat; all other queries use the service_instance join.
-func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*pb.ListHealthyNodesForDNSResponse, error) {
+func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, staleThresholdSeconds int, serviceType string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	return c.ListHealthyNodesForDNSForCluster(ctx, staleThresholdSeconds, serviceType, "")
 }
 
 // ListHealthyNodesForDNSForCluster lists DNS-eligible nodes for one cluster.
 // Empty clusterID leaves the request unscoped.
-func (c *GRPCClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*pb.ListHealthyNodesForDNSResponse, error) {
-	req := &pb.ListHealthyNodesForDNSRequest{
+func (c *GRPCClient) ListHealthyNodesForDNSForCluster(ctx context.Context, staleThresholdSeconds int, serviceType, clusterID string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
+	req := &quartermasterpb.ListHealthyNodesForDNSRequest{
 		StaleThresholdSeconds: int32(staleThresholdSeconds),
 	}
 	if serviceType != "" {
@@ -536,23 +538,23 @@ func (c *GRPCClient) ListHealthyNodesForDNSForCluster(ctx context.Context, stale
 }
 
 // CreateNode creates a new node
-func (c *GRPCClient) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
+func (c *GRPCClient) CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error) {
 	return c.node.CreateNode(ctx, req)
 }
 
 // UpdateNodeStatus changes a node's routing-visible registry status.
-func (c *GRPCClient) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNodeStatusRequest) (*pb.NodeResponse, error) {
+func (c *GRPCClient) UpdateNodeStatus(ctx context.Context, req *quartermasterpb.UpdateNodeStatusRequest) (*quartermasterpb.NodeResponse, error) {
 	return c.node.UpdateNodeStatus(ctx, req)
 }
 
 // ResolveNodeFingerprint resolves a node fingerprint
-func (c *GRPCClient) ResolveNodeFingerprint(ctx context.Context, req *pb.ResolveNodeFingerprintRequest) (*pb.ResolveNodeFingerprintResponse, error) {
+func (c *GRPCClient) ResolveNodeFingerprint(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
 	return c.node.ResolveNodeFingerprint(ctx, req)
 }
 
 // GetNodeOwner gets the owner tenant for a node
-func (c *GRPCClient) GetNodeOwner(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
-	return c.node.GetNodeOwner(ctx, &pb.GetNodeOwnerRequest{
+func (c *GRPCClient) GetNodeOwner(ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
+	return c.node.GetNodeOwner(ctx, &quartermasterpb.GetNodeOwnerRequest{
 		NodeId: nodeID,
 	})
 }
@@ -560,8 +562,8 @@ func (c *GRPCClient) GetNodeOwner(ctx context.Context, nodeID string) (*pb.NodeO
 // GetNodeByLogicalName resolves a node by its logical name (node_id string like "edge-node-1")
 // Returns the full node record including the database UUID (id field)
 // Used by Foghorn to enrich subscription broadcasts with database UUID
-func (c *GRPCClient) GetNodeByLogicalName(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
-	resp, err := c.node.GetNodeByLogicalName(ctx, &pb.GetNodeByLogicalNameRequest{
+func (c *GRPCClient) GetNodeByLogicalName(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
+	resp, err := c.node.GetNodeByLogicalName(ctx, &quartermasterpb.GetNodeByLogicalNameRequest{
 		NodeId: nodeID,
 	})
 	if err != nil {
@@ -572,7 +574,7 @@ func (c *GRPCClient) GetNodeByLogicalName(ctx context.Context, nodeID string) (*
 
 // UpdateNodeHardware updates hardware specs for a node (detected at startup by Helmsman)
 // Called by Foghorn when processing Register message with hardware info
-func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) error {
+func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *quartermasterpb.UpdateNodeHardwareRequest) error {
 	_, err := c.node.UpdateNodeHardware(ctx, req)
 	return err
 }
@@ -582,8 +584,8 @@ func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeH
 // refreshes infrastructure_nodes.last_heartbeat, syncs service_instances
 // health_status from capabilities, and fires Navigator wakeups for any
 // (cluster, edge-service) pair whose DNS-visible set changes.
-func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodes []*pb.NodeAliveness) error {
-	_, err := c.node.ReportAliveNodes(ctx, &pb.ReportAliveNodesRequest{
+func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodes []*quartermasterpb.NodeAliveness) error {
+	_, err := c.node.ReportAliveNodes(ctx, &quartermasterpb.ReportAliveNodesRequest{
 		Nodes: nodes,
 	})
 	return err
@@ -594,23 +596,23 @@ func (c *GRPCClient) ReportAliveNodes(ctx context.Context, nodes []*pb.NodeAlive
 // ============================================================================
 
 // BootstrapEdgeNode bootstraps an edge node
-func (c *GRPCClient) BootstrapEdgeNode(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
+func (c *GRPCClient) BootstrapEdgeNode(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
 	return c.bootstrap.BootstrapEdgeNode(ctx, req)
 }
 
 // BootstrapInfrastructureNode bootstraps an infrastructure node
-func (c *GRPCClient) BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error) {
+func (c *GRPCClient) BootstrapInfrastructureNode(ctx context.Context, req *quartermasterpb.BootstrapInfrastructureNodeRequest) (*quartermasterpb.BootstrapInfrastructureNodeResponse, error) {
 	return c.bootstrap.BootstrapInfrastructureNode(ctx, req)
 }
 
 // BootstrapService bootstraps a service
-func (c *GRPCClient) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
+func (c *GRPCClient) BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error) {
 	return c.bootstrap.BootstrapService(ctx, req)
 }
 
 // DiscoverServices finds instances of a service type
-func (c *GRPCClient) DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error) {
-	return c.bootstrap.DiscoverServices(ctx, &pb.ServiceDiscoveryRequest{
+func (c *GRPCClient) DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
+	return c.bootstrap.DiscoverServices(ctx, &quartermasterpb.ServiceDiscoveryRequest{
 		ServiceType: serviceType,
 		ClusterId:   clusterID,
 		Pagination:  pagination,
@@ -618,13 +620,13 @@ func (c *GRPCClient) DiscoverServices(ctx context.Context, serviceType, clusterI
 }
 
 // CreateBootstrapToken creates a bootstrap token
-func (c *GRPCClient) CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+func (c *GRPCClient) CreateBootstrapToken(ctx context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
 	return c.bootstrap.CreateBootstrapToken(ctx, req)
 }
 
 // ListBootstrapTokens lists bootstrap tokens
-func (c *GRPCClient) ListBootstrapTokens(ctx context.Context, kind, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListBootstrapTokensResponse, error) {
-	return c.bootstrap.ListBootstrapTokens(ctx, &pb.ListBootstrapTokensRequest{
+func (c *GRPCClient) ListBootstrapTokens(ctx context.Context, kind, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListBootstrapTokensResponse, error) {
+	return c.bootstrap.ListBootstrapTokens(ctx, &quartermasterpb.ListBootstrapTokensRequest{
 		Kind:       kind,
 		TenantId:   tenantID,
 		Pagination: pagination,
@@ -633,7 +635,7 @@ func (c *GRPCClient) ListBootstrapTokens(ctx context.Context, kind, tenantID str
 
 // RevokeBootstrapToken revokes a bootstrap token
 func (c *GRPCClient) RevokeBootstrapToken(ctx context.Context, tokenID string) error {
-	_, err := c.bootstrap.RevokeBootstrapToken(ctx, &pb.RevokeBootstrapTokenRequest{
+	_, err := c.bootstrap.RevokeBootstrapToken(ctx, &quartermasterpb.RevokeBootstrapTokenRequest{
 		TokenId: tokenID,
 	})
 	return err
@@ -641,14 +643,14 @@ func (c *GRPCClient) RevokeBootstrapToken(ctx context.Context, tokenID string) e
 
 // ValidateBootstrapToken performs a read-only check on a bootstrap token.
 // Returns validity status, kind, cluster_id, and tenant_id without consuming the token.
-func (c *GRPCClient) ValidateBootstrapToken(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error) {
-	return c.bootstrap.ValidateBootstrapToken(ctx, &pb.ValidateBootstrapTokenRequest{
+func (c *GRPCClient) ValidateBootstrapToken(ctx context.Context, token string) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
+	return c.bootstrap.ValidateBootstrapToken(ctx, &quartermasterpb.ValidateBootstrapTokenRequest{
 		Token: token,
 	})
 }
 
 // ValidateBootstrapTokenEx validates with IP binding and optional consumption.
-func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *pb.ValidateBootstrapTokenRequest) (*pb.ValidateBootstrapTokenResponse, error) {
+func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *quartermasterpb.ValidateBootstrapTokenRequest) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
 	return c.bootstrap.ValidateBootstrapToken(ctx, req)
 }
 
@@ -656,53 +658,53 @@ func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *pb.Valid
 // SERVICE POOL MANAGEMENT
 // ============================================================================
 
-func (c *GRPCClient) GetServicePoolStatus(ctx context.Context, serviceType string) (*pb.GetServicePoolStatusResponse, error) {
-	return c.bootstrap.GetServicePoolStatus(ctx, &pb.GetServicePoolStatusRequest{ServiceType: serviceType})
+func (c *GRPCClient) GetServicePoolStatus(ctx context.Context, serviceType string) (*quartermasterpb.GetServicePoolStatusResponse, error) {
+	return c.bootstrap.GetServicePoolStatus(ctx, &quartermasterpb.GetServicePoolStatusRequest{ServiceType: serviceType})
 }
 
-func (c *GRPCClient) AddToServicePool(ctx context.Context, req *pb.AddToServicePoolRequest) (*pb.AddToServicePoolResponse, error) {
+func (c *GRPCClient) AddToServicePool(ctx context.Context, req *quartermasterpb.AddToServicePoolRequest) (*quartermasterpb.AddToServicePoolResponse, error) {
 	return c.bootstrap.AddToServicePool(ctx, req)
 }
 
-func (c *GRPCClient) DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
+func (c *GRPCClient) DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error) {
 	return c.bootstrap.DrainServiceInstance(ctx, req)
 }
 
-func (c *GRPCClient) AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) error {
+func (c *GRPCClient) AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) error {
 	_, err := c.cluster.AssignServiceToCluster(ctx, req)
 	return err
 }
 
-func (c *GRPCClient) UnassignServiceFromCluster(ctx context.Context, req *pb.UnassignServiceFromClusterRequest) error {
+func (c *GRPCClient) UnassignServiceFromCluster(ctx context.Context, req *quartermasterpb.UnassignServiceFromClusterRequest) error {
 	_, err := c.cluster.UnassignServiceFromCluster(ctx, req)
 	return err
 }
 
-func (c *GRPCClient) EnableSelfHosting(ctx context.Context, req *pb.EnableSelfHostingRequest) (*pb.EnableSelfHostingResponse, error) {
+func (c *GRPCClient) EnableSelfHosting(ctx context.Context, req *quartermasterpb.EnableSelfHostingRequest) (*quartermasterpb.EnableSelfHostingResponse, error) {
 	return c.cluster.EnableSelfHosting(ctx, req)
 }
 
-func (c *GRPCClient) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+func (c *GRPCClient) CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
 	return c.cluster.CreateEnrollmentToken(ctx, req)
 }
 
-func (c *GRPCClient) ListEdgeReleases(ctx context.Context, req *pb.ListEdgeReleasesRequest) (*pb.ListEdgeReleasesResponse, error) {
+func (c *GRPCClient) ListEdgeReleases(ctx context.Context, req *quartermasterpb.ListEdgeReleasesRequest) (*quartermasterpb.ListEdgeReleasesResponse, error) {
 	return c.cluster.ListEdgeReleases(ctx, req)
 }
 
-func (c *GRPCClient) UpsertEdgeRelease(ctx context.Context, req *pb.UpsertEdgeReleaseRequest) (*pb.EdgeReleaseResponse, error) {
+func (c *GRPCClient) UpsertEdgeRelease(ctx context.Context, req *quartermasterpb.UpsertEdgeReleaseRequest) (*quartermasterpb.EdgeReleaseResponse, error) {
 	return c.cluster.UpsertEdgeRelease(ctx, req)
 }
 
-func (c *GRPCClient) GetClusterReleaseTarget(ctx context.Context, req *pb.GetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+func (c *GRPCClient) GetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.GetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error) {
 	return c.cluster.GetClusterReleaseTarget(ctx, req)
 }
 
-func (c *GRPCClient) ListClusterReleaseTargets(ctx context.Context, req *pb.ListClusterReleaseTargetsRequest) (*pb.ListClusterReleaseTargetsResponse, error) {
+func (c *GRPCClient) ListClusterReleaseTargets(ctx context.Context, req *quartermasterpb.ListClusterReleaseTargetsRequest) (*quartermasterpb.ListClusterReleaseTargetsResponse, error) {
 	return c.cluster.ListClusterReleaseTargets(ctx, req)
 }
 
-func (c *GRPCClient) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+func (c *GRPCClient) SetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.SetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error) {
 	return c.cluster.SetClusterReleaseTarget(ctx, req)
 }
 
@@ -711,7 +713,7 @@ func (c *GRPCClient) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClu
 // ============================================================================
 
 // SyncMesh synchronizes WireGuard mesh configuration
-func (c *GRPCClient) SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error) {
+func (c *GRPCClient) SyncMesh(ctx context.Context, req *quartermasterpb.InfrastructureSyncRequest) (*quartermasterpb.InfrastructureSyncResponse, error) {
 	return c.mesh.SyncMesh(ctx, req)
 }
 
@@ -720,23 +722,23 @@ func (c *GRPCClient) SyncMesh(ctx context.Context, req *pb.InfrastructureSyncReq
 // ============================================================================
 
 // ListServices lists all registered services
-func (c *GRPCClient) ListServices(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListServicesResponse, error) {
-	return c.serviceRegistry.ListServices(ctx, &pb.ListServicesRequest{
+func (c *GRPCClient) ListServices(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesResponse, error) {
+	return c.serviceRegistry.ListServices(ctx, &quartermasterpb.ListServicesRequest{
 		Pagination: pagination,
 	})
 }
 
 // ListClusterServices lists services for a specific cluster
-func (c *GRPCClient) ListClusterServices(ctx context.Context, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ListClusterServicesResponse, error) {
-	return c.serviceRegistry.ListClusterServices(ctx, &pb.ListClusterServicesRequest{
+func (c *GRPCClient) ListClusterServices(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClusterServicesResponse, error) {
+	return c.serviceRegistry.ListClusterServices(ctx, &quartermasterpb.ListClusterServicesRequest{
 		ClusterId:  clusterID,
 		Pagination: pagination,
 	})
 }
 
 // ListServiceInstances lists instances of a service
-func (c *GRPCClient) ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error) {
-	return c.serviceRegistry.ListServiceInstances(ctx, &pb.ListServiceInstancesRequest{
+func (c *GRPCClient) ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+	return c.serviceRegistry.ListServiceInstances(ctx, &quartermasterpb.ListServiceInstancesRequest{
 		ClusterId:  clusterID,
 		ServiceId:  serviceID,
 		NodeId:     nodeID,
@@ -747,8 +749,8 @@ func (c *GRPCClient) ListServiceInstances(ctx context.Context, clusterID, servic
 // ListServiceInstancesByType lists the physical instances of a service type,
 // each carrying its node external IP and synthesized infra endpoint. Used by
 // Navigator to publish per-node infra DNS records (no SCA grouping).
-func (c *GRPCClient) ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*pb.ListServiceInstancesByTypeResponse, error) {
-	return c.serviceRegistry.ListServiceInstancesByType(ctx, &pb.ListServiceInstancesByTypeRequest{
+func (c *GRPCClient) ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*quartermasterpb.ListServiceInstancesByTypeResponse, error) {
+	return c.serviceRegistry.ListServiceInstancesByType(ctx, &quartermasterpb.ListServiceInstancesByTypeRequest{
 		ServiceType:           serviceType,
 		ClusterId:             clusterID,
 		StaleThresholdSeconds: staleThresholdSeconds,
@@ -756,15 +758,15 @@ func (c *GRPCClient) ListServiceInstancesByType(ctx context.Context, serviceType
 }
 
 // ListServicesHealth lists health status for all services
-func (c *GRPCClient) ListServicesHealth(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListServicesHealthResponse, error) {
-	return c.serviceRegistry.ListServicesHealth(ctx, &pb.ListServicesHealthRequest{
+func (c *GRPCClient) ListServicesHealth(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
+	return c.serviceRegistry.ListServicesHealth(ctx, &quartermasterpb.ListServicesHealthRequest{
 		Pagination: pagination,
 	})
 }
 
 // GetServiceHealth gets health status for a specific service
-func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*pb.ListServicesHealthResponse, error) {
-	return c.serviceRegistry.GetServiceHealth(ctx, &pb.GetServiceHealthRequest{
+func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*quartermasterpb.ListServicesHealthResponse, error) {
+	return c.serviceRegistry.GetServiceHealth(ctx, &quartermasterpb.GetServiceHealthRequest{
 		ServiceId: serviceID,
 	})
 }
@@ -774,8 +776,8 @@ func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*p
 // stateless producers (Deckhand) that don't own a local outbox; durability
 // then matches the QM-originated event path. event.source must identify
 // the originating service so the dispatcher attributes correctly.
-func (c *GRPCClient) EnqueueServiceEvent(ctx context.Context, event *pb.ServiceEvent) (string, error) {
-	resp, err := c.serviceRegistry.EnqueueServiceEvent(ctx, &pb.EnqueueServiceEventRequest{
+func (c *GRPCClient) EnqueueServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) (string, error) {
+	resp, err := c.serviceRegistry.EnqueueServiceEvent(ctx, &quartermasterpb.EnqueueServiceEventRequest{
 		Event: event,
 	})
 	if err != nil {

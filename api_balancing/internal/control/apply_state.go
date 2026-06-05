@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // seedVersionCounter assigns monotonic seed_versions per node. Resets
@@ -52,7 +53,7 @@ func nextSeedVersion(nodeID string) uint64 {
 // the per-bundle gating: a partial failure where caddyOK=true with two
 // good bundles and one bad bundle correctly publishes the two good
 // bundles for DNS.
-func reportApplyResultToNavigator(ack *pb.ConfigSeedApplyResult, nodeID, clusterID string, log logging.Logger) {
+func reportApplyResultToNavigator(ack *ipcpb.ConfigSeedApplyResult, nodeID, clusterID string, log logging.Logger) {
 	if ack == nil || navigatorClient == nil || nodeID == "" {
 		return
 	}
@@ -62,7 +63,7 @@ func reportApplyResultToNavigator(ack *pb.ConfigSeedApplyResult, nodeID, cluster
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := navigatorClient.ReportConfigSeedApplyResult(ctx, &pb.ReportConfigSeedApplyResultRequest{
+	if _, err := navigatorClient.ReportConfigSeedApplyResult(ctx, &dnspb.ReportConfigSeedApplyResultRequest{
 		NodeId:           nodeID,
 		ClusterId:        clusterID,
 		SeedVersion:      ack.GetSeedVersion(),

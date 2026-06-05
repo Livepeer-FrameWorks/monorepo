@@ -7,7 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -33,7 +33,7 @@ func TestResolveRetentionUntilRejectsHorizonPastTierBound(t *testing.T) {
 		WithArgs("artifact-a", "tenant-a", "dvr").
 		WillReturnRows(sqlmock.NewRows([]string{"ended_at"}).AddRow(endedAt))
 
-	_, err := server.resolveRetentionUntil(context.Background(), "tenant-a", "artifact-a", "dvr", &pb.OverrideArtifactRetentionRequest{
+	_, err := server.resolveRetentionUntil(context.Background(), "tenant-a", "artifact-a", "dvr", &foghornpb.OverrideArtifactRetentionRequest{
 		RetentionUntil:   timestamppb.New(endedAt.Add(31 * 24 * time.Hour)),
 		MaxRetentionDays: 30,
 	})
@@ -54,7 +54,7 @@ func TestResolveRetentionUntilAnchorsDaysToEndedAt(t *testing.T) {
 		WithArgs("artifact-a", "tenant-a", "clip").
 		WillReturnRows(sqlmock.NewRows([]string{"ended_at"}).AddRow(endedAt))
 
-	got, err := server.resolveRetentionUntil(context.Background(), "tenant-a", "artifact-a", "clip", &pb.OverrideArtifactRetentionRequest{
+	got, err := server.resolveRetentionUntil(context.Background(), "tenant-a", "artifact-a", "clip", &foghornpb.OverrideArtifactRetentionRequest{
 		RetentionDays:   14,
 		AnchorToEndedAt: true,
 	})

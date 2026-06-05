@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -31,7 +31,7 @@ type clientBatchKey struct {
 }
 
 type clientBatchBucket struct {
-	samples   []*pb.ClientLifecycleUpdate
+	samples   []*ipcpb.ClientLifecycleUpdate
 	firstSeen time.Time
 }
 
@@ -44,7 +44,7 @@ type clientLifecycleBatcher struct {
 	mu      sync.Mutex
 	buckets map[clientBatchKey]*clientBatchBucket
 
-	send   func(*pb.MistTrigger) error
+	send   func(*ipcpb.MistTrigger) error
 	logger logging.Logger
 	drops  *prometheus.CounterVec // labels: reason
 
@@ -54,7 +54,7 @@ type clientLifecycleBatcher struct {
 	wg       sync.WaitGroup
 }
 
-func newClientLifecycleBatcher(send func(*pb.MistTrigger) error, logger logging.Logger, drops *prometheus.CounterVec) *clientLifecycleBatcher {
+func newClientLifecycleBatcher(send func(*ipcpb.MistTrigger) error, logger logging.Logger, drops *prometheus.CounterVec) *clientLifecycleBatcher {
 	b := &clientLifecycleBatcher{
 		buckets: make(map[clientBatchKey]*clientBatchBucket),
 		send:    send,
@@ -85,7 +85,7 @@ func (b *clientLifecycleBatcher) run() {
 // Add buffers an enriched ClientLifecycleUpdate for batched forwarding.
 // Never blocks the caller; if a key has reached the hard cap it flushes
 // that key asynchronously and the new sample seeds the next batch.
-func (b *clientLifecycleBatcher) Add(clu *pb.ClientLifecycleUpdate) {
+func (b *clientLifecycleBatcher) Add(clu *ipcpb.ClientLifecycleUpdate) {
 	if clu == nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (b *clientLifecycleBatcher) Add(clu *pb.ClientLifecycleUpdate) {
 		nodeID:   clu.GetNodeId(),
 	}
 
-	var toFlush []*pb.ClientLifecycleUpdate
+	var toFlush []*ipcpb.ClientLifecycleUpdate
 	var toFlushKey clientBatchKey
 	var toFlushStart time.Time
 
@@ -159,17 +159,17 @@ func (b *clientLifecycleBatcher) flushAll() {
 
 type flushItem struct {
 	key     clientBatchKey
-	samples []*pb.ClientLifecycleUpdate
+	samples []*ipcpb.ClientLifecycleUpdate
 	start   time.Time
 	end     time.Time
 }
 
-func (b *clientLifecycleBatcher) sendBatch(key clientBatchKey, samples []*pb.ClientLifecycleUpdate, start, end time.Time) {
+func (b *clientLifecycleBatcher) sendBatch(key clientBatchKey, samples []*ipcpb.ClientLifecycleUpdate, start, end time.Time) {
 	if len(samples) == 0 {
 		return
 	}
 
-	batch := &pb.ClientLifecycleBatch{
+	batch := &ipcpb.ClientLifecycleBatch{
 		InternalName: deriveInternalName(samples),
 		NodeId:       key.nodeID,
 		WindowStart:  start.Unix(),
@@ -185,12 +185,12 @@ func (b *clientLifecycleBatcher) sendBatch(key clientBatchKey, samples []*pb.Cli
 		batch.StreamId = &s
 	}
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_BATCH",
 		NodeId:      key.nodeID,
 		Timestamp:   end.Unix(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_ClientLifecycleBatch{
+		TriggerPayload: &ipcpb.MistTrigger_ClientLifecycleBatch{
 			ClientLifecycleBatch: batch,
 		},
 	}
@@ -255,7 +255,7 @@ func (b *clientLifecycleBatcher) Shutdown(ctx context.Context) error {
 	}
 }
 
-func deriveInternalName(samples []*pb.ClientLifecycleUpdate) string {
+func deriveInternalName(samples []*ipcpb.ClientLifecycleUpdate) string {
 	for _, s := range samples {
 		if name := s.GetInternalName(); name != "" {
 			return name

@@ -12,7 +12,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
@@ -40,7 +40,7 @@ type Config struct {
 
 // Server implements the DeckhandService gRPC server
 type Server struct {
-	pb.UnimplementedDeckhandServiceServer
+	deckhandpb.UnimplementedDeckhandServiceServer
 	logger        logging.Logger
 	metrics       *ServerMetrics
 	chatwoot      *chatwoot.Client
@@ -65,7 +65,7 @@ func NewServer(cfg Config) *Server {
 }
 
 // ListConversations returns all conversations for the authenticated tenant
-func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversationsRequest) (*pb.ListConversationsResponse, error) {
+func (s *Server) ListConversations(ctx context.Context, req *deckhandpb.ListConversationsRequest) (*deckhandpb.ListConversationsResponse, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("ListConversations").Observe(time.Since(start).Seconds())
@@ -97,8 +97,8 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 		// No contact means no conversations
 		s.logger.WithField("tenant_id", tenantID).Warn("Deckhand conversation list found no Chatwoot contact")
 		s.metrics.GRPCRequests.WithLabelValues("ListConversations", "ok").Inc()
-		return &pb.ListConversationsResponse{
-			Conversations: []*pb.DeckhandConversation{},
+		return &deckhandpb.ListConversationsResponse{
+			Conversations: []*deckhandpb.DeckhandConversation{},
 			TotalCount:    0,
 		}, nil
 	}
@@ -121,7 +121,7 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 	}
 
 	// Convert to proto
-	result := make([]*pb.DeckhandConversation, len(convs))
+	result := make([]*deckhandpb.DeckhandConversation, len(convs))
 	for i, conv := range convs {
 		result[i] = s.chatwootConvToProto(&conv)
 	}
@@ -137,14 +137,14 @@ func (s *Server) ListConversations(ctx context.Context, req *pb.ListConversation
 		logEntry.Info("Deckhand conversation list completed")
 	}
 	s.metrics.GRPCRequests.WithLabelValues("ListConversations", "ok").Inc()
-	return &pb.ListConversationsResponse{
+	return &deckhandpb.ListConversationsResponse{
 		Conversations: result,
 		TotalCount:    int32(total),
 	}, nil
 }
 
 // SearchConversations searches conversations for the authenticated tenant.
-func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversationsRequest) (*pb.SearchConversationsResponse, error) {
+func (s *Server) SearchConversations(ctx context.Context, req *deckhandpb.SearchConversationsRequest) (*deckhandpb.SearchConversationsResponse, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("SearchConversations").Observe(time.Since(start).Seconds())
@@ -187,7 +187,7 @@ func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversa
 
 	// Offset within matched results to support paging.
 	skip := (page - 1) * perPage
-	results := make([]*pb.DeckhandConversation, 0, perPage)
+	results := make([]*deckhandpb.DeckhandConversation, 0, perPage)
 	rawMatches := 0
 	filteredMatches := 0
 	pagesScanned := 0
@@ -241,14 +241,14 @@ func (s *Server) SearchConversations(ctx context.Context, req *pb.SearchConversa
 		logEntry.Info("Deckhand conversation search completed")
 	}
 	s.metrics.GRPCRequests.WithLabelValues("SearchConversations", "ok").Inc()
-	return &pb.SearchConversationsResponse{
+	return &deckhandpb.SearchConversationsResponse{
 		Conversations: results,
 		TotalCount:    int32(len(results)),
 	}, nil
 }
 
 // GetConversation returns a single conversation by ID
-func (s *Server) GetConversation(ctx context.Context, req *pb.GetConversationRequest) (*pb.DeckhandConversation, error) {
+func (s *Server) GetConversation(ctx context.Context, req *deckhandpb.GetConversationRequest) (*deckhandpb.DeckhandConversation, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("GetConversation").Observe(time.Since(start).Seconds())
@@ -281,7 +281,7 @@ func (s *Server) GetConversation(ctx context.Context, req *pb.GetConversationReq
 }
 
 // CreateConversation creates a new conversation
-func (s *Server) CreateConversation(ctx context.Context, req *pb.CreateConversationRequest) (*pb.DeckhandConversation, error) {
+func (s *Server) CreateConversation(ctx context.Context, req *deckhandpb.CreateConversationRequest) (*deckhandpb.DeckhandConversation, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("CreateConversation").Observe(time.Since(start).Seconds())
@@ -333,7 +333,7 @@ func (s *Server) CreateConversation(ctx context.Context, req *pb.CreateConversat
 }
 
 // ListMessages returns messages for a conversation
-func (s *Server) ListMessages(ctx context.Context, req *pb.ListMessagesRequest) (*pb.ListMessagesResponse, error) {
+func (s *Server) ListMessages(ctx context.Context, req *deckhandpb.ListMessagesRequest) (*deckhandpb.ListMessagesResponse, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("ListMessages").Observe(time.Since(start).Seconds())
@@ -358,20 +358,20 @@ func (s *Server) ListMessages(ctx context.Context, req *pb.ListMessagesRequest) 
 	}
 
 	// Convert to proto
-	result := make([]*pb.DeckhandMessage, len(msgs))
+	result := make([]*deckhandpb.DeckhandMessage, len(msgs))
 	for i, msg := range msgs {
 		result[i] = s.chatwootMsgToProto(&msg)
 	}
 
 	s.metrics.GRPCRequests.WithLabelValues("ListMessages", "ok").Inc()
-	return &pb.ListMessagesResponse{
+	return &deckhandpb.ListMessagesResponse{
 		Messages:   result,
 		TotalCount: int32(len(msgs)),
 	}, nil
 }
 
 // SendMessage sends a message in a conversation
-func (s *Server) SendMessage(ctx context.Context, req *pb.SendMessageRequest) (*pb.DeckhandMessage, error) {
+func (s *Server) SendMessage(ctx context.Context, req *deckhandpb.SendMessageRequest) (*deckhandpb.DeckhandMessage, error) {
 	start := time.Now()
 	defer func() {
 		s.metrics.GRPCDuration.WithLabelValues("SendMessage").Observe(time.Since(start).Seconds())
@@ -405,8 +405,8 @@ func (s *Server) SendMessage(ctx context.Context, req *pb.SendMessageRequest) (*
 }
 
 // chatwootConvToProto converts a Chatwoot conversation to proto
-func (s *Server) chatwootConvToProto(conv *chatwoot.Conversation) *pb.DeckhandConversation {
-	result := &pb.DeckhandConversation{
+func (s *Server) chatwootConvToProto(conv *chatwoot.Conversation) *deckhandpb.DeckhandConversation {
+	result := &deckhandpb.DeckhandConversation{
 		Id:          fmt.Sprintf("%d", conv.ID),
 		UnreadCount: int32(conv.UnreadCount),
 	}
@@ -414,13 +414,13 @@ func (s *Server) chatwootConvToProto(conv *chatwoot.Conversation) *pb.DeckhandCo
 	// Map status
 	switch conv.Status {
 	case "open":
-		result.Status = pb.ConversationStatus_CONVERSATION_STATUS_OPEN
+		result.Status = deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN
 	case "resolved":
-		result.Status = pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED
+		result.Status = deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED
 	case "pending":
-		result.Status = pb.ConversationStatus_CONVERSATION_STATUS_PENDING
+		result.Status = deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING
 	default:
-		result.Status = pb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED
+		result.Status = deckhandpb.ConversationStatus_CONVERSATION_STATUS_UNSPECIFIED
 	}
 
 	// Timestamps
@@ -447,8 +447,8 @@ func (s *Server) chatwootConvToProto(conv *chatwoot.Conversation) *pb.DeckhandCo
 }
 
 // chatwootMsgToProto converts a Chatwoot message to proto
-func (s *Server) chatwootMsgToProto(msg *chatwoot.Message) *pb.DeckhandMessage {
-	result := &pb.DeckhandMessage{
+func (s *Server) chatwootMsgToProto(msg *chatwoot.Message) *deckhandpb.DeckhandMessage {
+	result := &deckhandpb.DeckhandMessage{
 		Id:             fmt.Sprintf("%d", msg.ID),
 		ConversationId: fmt.Sprintf("%d", msg.ConversationID),
 		Content:        msg.Content,
@@ -457,18 +457,18 @@ func (s *Server) chatwootMsgToProto(msg *chatwoot.Message) *pb.DeckhandMessage {
 	// Map sender type based on message_type and sender info
 	// Chatwoot message types: 0=incoming (customer), 1=outgoing (agent), 2=activity (system)
 	if msg.MessageType == chatwoot.MessageTypeActivity {
-		result.Sender = pb.MessageSender_MESSAGE_SENDER_SYSTEM
+		result.Sender = deckhandpb.MessageSender_MESSAGE_SENDER_SYSTEM
 	} else if msg.Sender != nil {
 		switch msg.Sender.Type {
 		case "user":
-			result.Sender = pb.MessageSender_MESSAGE_SENDER_AGENT
+			result.Sender = deckhandpb.MessageSender_MESSAGE_SENDER_AGENT
 		case "contact":
-			result.Sender = pb.MessageSender_MESSAGE_SENDER_USER
+			result.Sender = deckhandpb.MessageSender_MESSAGE_SENDER_USER
 		}
 	} else if msg.MessageType == chatwoot.MessageTypeOutgoing {
-		result.Sender = pb.MessageSender_MESSAGE_SENDER_AGENT
+		result.Sender = deckhandpb.MessageSender_MESSAGE_SENDER_AGENT
 	} else {
-		result.Sender = pb.MessageSender_MESSAGE_SENDER_USER
+		result.Sender = deckhandpb.MessageSender_MESSAGE_SENDER_USER
 	}
 
 	// Timestamp

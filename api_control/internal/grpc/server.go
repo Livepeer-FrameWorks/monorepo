@@ -42,7 +42,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
@@ -64,7 +71,7 @@ import (
 type botProtectionRequest interface {
 	GetPhoneNumber() string
 	GetHumanCheck() string
-	GetBehavior() *pb.BehaviorData
+	GetBehavior() *commodorepb.BehaviorData
 }
 
 // validateBehavior checks behavioral signals (fallback when Turnstile not configured)
@@ -102,18 +109,18 @@ type ServerMetrics struct {
 
 // CommodoreServer implements the Commodore gRPC services
 type CommodoreServer struct {
-	pb.UnimplementedInternalServiceServer
-	pb.UnimplementedUserServiceServer
-	pb.UnimplementedStreamServiceServer
-	pb.UnimplementedStreamKeyServiceServer
-	pb.UnimplementedDeveloperServiceServer
-	pb.UnimplementedClipServiceServer
-	pb.UnimplementedDVRServiceServer
-	pb.UnimplementedViewerServiceServer
-	pb.UnimplementedVodServiceServer
-	pb.UnimplementedNodeManagementServiceServer
-	pb.UnimplementedPushTargetServiceServer
-	pb.UnimplementedPlaybackAccessControlServiceServer
+	commodorepb.UnimplementedInternalServiceServer
+	commodorepb.UnimplementedUserServiceServer
+	commodorepb.UnimplementedStreamServiceServer
+	commodorepb.UnimplementedStreamKeyServiceServer
+	commodorepb.UnimplementedDeveloperServiceServer
+	commodorepb.UnimplementedClipServiceServer
+	commodorepb.UnimplementedDVRServiceServer
+	commodorepb.UnimplementedViewerServiceServer
+	commodorepb.UnimplementedVodServiceServer
+	commodorepb.UnimplementedNodeManagementServiceServer
+	commodorepb.UnimplementedPushTargetServiceServer
+	commodorepb.UnimplementedPlaybackAccessControlServiceServer
 	db                   *sql.DB
 	dbMaxIdleConns       int
 	logger               logging.Logger
@@ -182,8 +189,8 @@ type clusterRoute struct {
 	officialClusterName     string
 	officialFoghornGrpcAddr string
 	foghornAddrsByCluster   map[string][]string
-	clusterPeers            []*pb.TenantClusterPeer  // full tenant cluster context (includes per-peer foghorn addrs)
-	tenantResourceLimits    *pb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
+	clusterPeers            []*quartermasterpb.TenantClusterPeer  // full tenant cluster context (includes per-peer foghorn addrs)
+	tenantResourceLimits    *quartermasterpb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
 	resolvedAt              time.Time
 }
 
@@ -211,7 +218,7 @@ func dedupeAddrs(addrs ...string) []string {
 	return out
 }
 
-func serviceInstanceAddr(inst *pb.ServiceInstance) string {
+func serviceInstanceAddr(inst *quartermasterpb.ServiceInstance) string {
 	if inst == nil || inst.GetHost() == "" || inst.GetPort() <= 0 {
 		return ""
 	}
@@ -222,7 +229,7 @@ func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID st
 	if s.quartermasterClient == nil || clusterID == "" {
 		return nil
 	}
-	resp, err := s.quartermasterClient.DiscoverServices(ctx, "foghorn", clusterID, &pb.CursorPaginationRequest{First: 20})
+	resp, err := s.quartermasterClient.DiscoverServices(ctx, "foghorn", clusterID, &commonpb.CursorPaginationRequest{First: 20})
 	if err != nil {
 		s.logger.WithError(err).WithField("cluster_id", clusterID).Debug("Foghorn candidate discovery failed")
 		return nil
@@ -464,7 +471,7 @@ func scanCommodoreUserForRefresh(row *sql.Row, user *commodoreUserRecord) error 
 	)
 }
 
-func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *pb.User {
+func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.User {
 	id := u.ID
 	if userID != "" {
 		id = userID
@@ -475,7 +482,7 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *pb.User {
 	}
 	email := u.Email
 
-	result := &pb.User{
+	result := &commodorepb.User{
 		Id:          id,
 		TenantId:    tenant,
 		Email:       &email,
@@ -584,7 +591,7 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 		return nil, status.Error(codes.Unavailable, "quartermaster not available for cluster routing")
 	}
 
-	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "cluster routing failed: %v", err)
 	}
@@ -645,7 +652,7 @@ func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, te
 	return out
 }
 
-func findPeerByClusterID(peers []*pb.TenantClusterPeer, clusterID string) *pb.TenantClusterPeer {
+func findPeerByClusterID(peers []*quartermasterpb.TenantClusterPeer, clusterID string) *quartermasterpb.TenantClusterPeer {
 	for _, p := range peers {
 		if p != nil && p.GetClusterId() == clusterID {
 			return p
@@ -671,11 +678,11 @@ func streamOriginRegionForRoute(route *clusterRoute, activeClusterID string) str
 	return ""
 }
 
-func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[string]struct{}) []*pb.TenantClusterPeer {
+func filterPeersByPolicy(peers []*quartermasterpb.TenantClusterPeer, allowedClasses map[string]struct{}) []*quartermasterpb.TenantClusterPeer {
 	if len(peers) == 0 {
 		return peers
 	}
-	out := make([]*pb.TenantClusterPeer, 0, len(peers))
+	out := make([]*quartermasterpb.TenantClusterPeer, 0, len(peers))
 	for _, peer := range peers {
 		if peer == nil {
 			continue
@@ -695,7 +702,7 @@ func filterPeersByPolicy(peers []*pb.TenantClusterPeer, allowedClasses map[strin
 	return out
 }
 
-func isSelfHostedPeer(peer *pb.TenantClusterPeer) bool {
+func isSelfHostedPeer(peer *quartermasterpb.TenantClusterPeer) bool {
 	if peer == nil {
 		return false
 	}
@@ -751,7 +758,7 @@ func processConfigColumn(lifecycle string) string {
 	}
 }
 
-func tierProcessesForLifecycle(tier *pb.BillingTier, lifecycle string) string {
+func tierProcessesForLifecycle(tier *purserpb.BillingTier, lifecycle string) string {
 	switch normalizeProcessLifecycle(lifecycle) {
 	case processLifecycleDVR:
 		return tier.GetProcessesDvr()
@@ -1108,7 +1115,7 @@ func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, co
 	return true, tenantID, clusterID, nil
 }
 
-func clusterInPeers(peers []*pb.TenantClusterPeer, clusterID string) bool {
+func clusterInPeers(peers []*quartermasterpb.TenantClusterPeer, clusterID string) bool {
 	for _, p := range peers {
 		if p.ClusterId == clusterID {
 			return true
@@ -1146,18 +1153,18 @@ func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) 
 	return resolvedClusterID
 }
 
-func hasTenantResourceLimits(limits *pb.TenantResourceLimits) bool {
+func hasTenantResourceLimits(limits *quartermasterpb.TenantResourceLimits) bool {
 	return limits != nil && (limits.GetMaxStreams() > 0 || limits.GetMaxViewers() > 0)
 }
 
-func mergeTenantResourceLimits(base, override *pb.TenantResourceLimits) *pb.TenantResourceLimits {
+func mergeTenantResourceLimits(base, override *quartermasterpb.TenantResourceLimits) *quartermasterpb.TenantResourceLimits {
 	if !hasTenantResourceLimits(base) {
 		if hasTenantResourceLimits(override) {
 			return override
 		}
 		return nil
 	}
-	merged := &pb.TenantResourceLimits{
+	merged := &quartermasterpb.TenantResourceLimits{
 		MaxStreams: base.GetMaxStreams(),
 		MaxViewers: base.GetMaxViewers(),
 	}
@@ -1185,10 +1192,10 @@ func (s *CommodoreServer) resolveFoghornForArtifact(ctx context.Context, tenantI
 // ============================================================================
 
 // ValidateStreamKey validates a stream key for RTMP ingest (called by Foghorn on PUSH_REWRITE)
-func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
+func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
 	streamKey := req.GetStreamKey()
 	if streamKey == "" {
-		return &pb.ValidateStreamKeyResponse{
+		return &commodorepb.ValidateStreamKeyResponse{
 			Valid: false,
 			Error: "stream_key required",
 		}, nil
@@ -1208,10 +1215,10 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID, &ingestMode)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ValidateStreamKeyResponse{
+		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
 			Error:           "Invalid stream key",
-			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, nil
 	}
 
@@ -1224,17 +1231,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	if !isActive {
-		return &pb.ValidateStreamKeyResponse{
+		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
 			Error:           "User account is inactive",
-			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
 		}, nil
 	}
 	if ingestMode == "pull" {
-		return &pb.ValidateStreamKeyResponse{
+		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
 			Error:           "Pull streams do not accept push ingest",
-			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_PULL_MODE,
 		}, nil
 	}
 
@@ -1254,17 +1261,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 					"tenant_id":  tenantID,
 					"cluster_id": requestedClusterID,
 				}).Warn("ValidateStreamKey rejected: cluster not entitled or filtered by plan policy")
-				return &pb.ValidateStreamKeyResponse{
+				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
 					Error:           "Tenant not entitled to ingest cluster " + requestedClusterID,
-					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
+					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
 				}, nil
 			}
 			if status := peer.GetHealthStatus(); status == "offline" || status == "degraded" {
-				return &pb.ValidateStreamKeyResponse{
+				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
 					Error:           "Ingest cluster " + requestedClusterID + " is " + status,
-					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
+					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
 				}, nil
 			}
 		}
@@ -1273,9 +1280,9 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	// Get billing status via Purser gRPC (not direct DB access)
 	billingModel := "postpaid"
 	var isSuspended, isBalanceNegative bool
-	var dvrPolicy *pb.DVRPolicy
-	var allowances []*pb.MeterAllowance
-	var tenantResourceLimits *pb.TenantResourceLimits
+	var dvrPolicy *sharedpb.DVRPolicy
+	var allowances []*purserpb.MeterAllowance
+	var tenantResourceLimits *quartermasterpb.TenantResourceLimits
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -1295,7 +1302,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		}
 	}
 
-	resp := &pb.ValidateStreamKeyResponse{
+	resp := &commodorepb.ValidateStreamKeyResponse{
 		Valid:                true,
 		UserId:               userID,
 		TenantId:             tenantID,
@@ -1334,7 +1341,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	} else {
 		defer pushRows.Close()
 		for pushRows.Next() {
-			var t pb.PushTargetInternal
+			var t commodorepb.PushTargetInternal
 			if scanErr := pushRows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); scanErr != nil {
 				s.logger.WithError(scanErr).Warn("Failed to scan push target")
 				continue
@@ -1398,10 +1405,10 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 					"requesting_cluster_id": activeIngestClusterID,
 					"active_ingest_cluster": heldCluster.String,
 				}).Warn("ValidateStreamKey rejected: duplicate ingest claim against fresh lease on another cluster")
-				return &pb.ValidateStreamKeyResponse{
+				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
 					Error:           "Stream is already ingesting on cluster " + heldCluster.String,
-					RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
+					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
 				}, nil
 			}
 			s.logger.WithFields(logging.Fields{
@@ -1430,7 +1437,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 // affect customer billing. Widening managed-stream ownership to tenants
 // requires implementing those gates before relaxing the render-layer
 // constraint.
-func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.ResolveStreamContextRequest) (*pb.ResolveStreamContextResponse, error) {
+func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
 	var isActive, isRecordingEnabled bool
 
@@ -1447,13 +1454,13 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 		field string
 	)
 	switch id := req.GetIdentifier().(type) {
-	case *pb.ResolveStreamContextRequest_StreamId:
+	case *commodorepb.ResolveStreamContextRequest_StreamId:
 		field, arg = "stream_id", id.StreamId
 		query = baseSelect + "s.id = $1"
-	case *pb.ResolveStreamContextRequest_PlaybackId:
+	case *commodorepb.ResolveStreamContextRequest_PlaybackId:
 		field, arg = "playback_id", id.PlaybackId
 		query = baseSelect + "s.playback_id = $1"
-	case *pb.ResolveStreamContextRequest_InternalName:
+	case *commodorepb.ResolveStreamContextRequest_InternalName:
 		field, arg = "internal_name", id.InternalName
 		query = baseSelect + "s.internal_name = $1"
 	default:
@@ -1468,10 +1475,10 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 		&isActive, &isRecordingEnabled, &playbackID, &ingestMode,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveStreamContextResponse{
+		return &commodorepb.ResolveStreamContextResponse{
 			Admitted:        false,
 			AdmissionReason: "stream not found",
-			RejectionReason: pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
+			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY,
 		}, nil
 	}
 	if err != nil {
@@ -1483,7 +1490,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ResolveStreamContextResponse{
+	resp := &commodorepb.ResolveStreamContextResponse{
 		StreamId:           streamID,
 		PlaybackId:         playbackID,
 		InternalName:       internalName,
@@ -1496,7 +1503,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 	if !isActive {
 		resp.Admitted = false
 		resp.AdmissionReason = "User account is inactive"
-		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
+		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
 		return resp, nil
 	}
 
@@ -1521,13 +1528,13 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 		if peer == nil {
 			resp.Admitted = false
 			resp.AdmissionReason = "Tenant not entitled to cluster " + requestedClusterID
-			resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
 			return resp, nil
 		}
 		if peerStatus := peer.GetHealthStatus(); peerStatus == "offline" || peerStatus == "degraded" {
 			resp.Admitted = false
 			resp.AdmissionReason = "Cluster " + requestedClusterID + " is " + peerStatus
-			resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
+			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
 			return resp, nil
 		}
 	}
@@ -1594,11 +1601,11 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 	case resp.IsSuspended:
 		resp.Admitted = false
 		resp.AdmissionReason = "Tenant is suspended"
-		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED
+		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED
 	case resp.IsBalanceNegative:
 		resp.Admitted = false
 		resp.AdmissionReason = "Tenant balance is negative"
-		resp.RejectionReason = pb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE
+		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE
 	default:
 		resp.Admitted = true
 	}
@@ -1611,7 +1618,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *pb.Reso
 // stream reconciler calls this each tick to build desired state; per-stream
 // admission/cache writes then go through ResolveStreamContext. Stable ordering
 // by stream_id keeps reconciler diffs deterministic across calls.
-func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *pb.ListManagedStreamsRequest) (*pb.ListManagedStreamsResponse, error) {
+func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodorepb.ListManagedStreamsRequest) (*commodorepb.ListManagedStreamsResponse, error) {
 	clusterID := strings.TrimSpace(req.GetClusterId())
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -1648,10 +1655,10 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *pb.ListMa
 	}
 	defer rows.Close()
 
-	resp := &pb.ListManagedStreamsResponse{}
+	resp := &commodorepb.ListManagedStreamsResponse{}
 	for rows.Next() {
 		var (
-			row        pb.ManagedStreamRow
+			row        commodorepb.ManagedStreamRow
 			placement  sql.NullInt32
 			allowedArr pq.StringArray
 		)
@@ -1680,7 +1687,7 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *pb.ListMa
 // for a managed stream. Mirrors the contended-update guard from
 // ValidateStreamKey's push-ingest path so a stale claim cannot overwrite a
 // fresh lease held by a different cluster.
-func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *pb.RecordStreamActiveClusterRequest) (*pb.RecordStreamActiveClusterResponse, error) {
+func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *commodorepb.RecordStreamActiveClusterRequest) (*commodorepb.RecordStreamActiveClusterResponse, error) {
 	streamID := strings.TrimSpace(req.GetStreamId())
 	clusterID := strings.TrimSpace(req.GetClusterId())
 	if streamID == "" || clusterID == "" {
@@ -1711,7 +1718,7 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
-	return &pb.RecordStreamActiveClusterResponse{Updated: rows > 0}, nil
+	return &commodorepb.RecordStreamActiveClusterResponse{Updated: rows > 0}, nil
 }
 
 // ClearStreamActiveCluster clears commodore.streams.active_ingest_cluster_id
@@ -1719,7 +1726,7 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *pb
 // that Mist no longer has the config. expected_cluster_id guards against
 // clobbering a fresher claim from a peer cluster — the column only
 // transitions to NULL when the recorded value matches the caller.
-func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *pb.ClearStreamActiveClusterRequest) (*pb.ClearStreamActiveClusterResponse, error) {
+func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *commodorepb.ClearStreamActiveClusterRequest) (*commodorepb.ClearStreamActiveClusterResponse, error) {
 	streamID := strings.TrimSpace(req.GetStreamId())
 	expected := strings.TrimSpace(req.GetExpectedClusterId())
 	if streamID == "" || expected == "" {
@@ -1744,11 +1751,11 @@ func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
-	return &pb.ClearStreamActiveClusterResponse{Cleared: rows > 0}, nil
+	return &commodorepb.ClearStreamActiveClusterResponse{Cleared: rows > 0}, nil
 }
 
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer PLAY_REWRITE trigger
-func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.ResolvePlaybackIDRequest) (*pb.ResolvePlaybackIDResponse, error) {
+func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorepb.ResolvePlaybackIDRequest) (*commodorepb.ResolvePlaybackIDResponse, error) {
 	playbackID := req.GetPlaybackId()
 	if playbackID == "" {
 		return nil, status.Error(codes.InvalidArgument, "playback_id required")
@@ -1777,7 +1784,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ResolvePlaybackIDResponse{
+	resp := &commodorepb.ResolvePlaybackIDResponse{
 		InternalName: internalName,
 		TenantId:     tenantID,
 		PlaybackId:   playbackID,
@@ -1807,7 +1814,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 }
 
 // ResolveInternalName resolves an internal_name to tenant context for event enrichment
-func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.ResolveInternalNameRequest) (*pb.ResolveInternalNameResponse, error) {
+func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
 	internalName := req.GetInternalName()
 	if internalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
@@ -1835,7 +1842,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ResolveInternalNameResponse{
+	resp := &commodorepb.ResolveInternalNameResponse{
 		InternalName:       internalName,
 		TenantId:           tenantID,
 		UserId:             userID,
@@ -1861,7 +1868,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 // ResolvePullSourceByInternalName returns the configured upstream pull URI for a
 // pull-mode stream, decrypted. Foghorn calls this from STREAM_SOURCE handling
 // and /source origin selection for pull+<internal_name> streams.
-func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, req *pb.ResolvePullSourceByInternalNameRequest) (*pb.ResolvePullSourceByInternalNameResponse, error) {
+func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, req *commodorepb.ResolvePullSourceByInternalNameRequest) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {
 	internalName := req.GetInternalName()
 	if internalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
@@ -1886,7 +1893,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
+		return &commodorepb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
 	}
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -1898,7 +1905,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 
 	if ingestMode != "pull" {
 		// Stream exists but isn't a pull stream — refuse to leak any URI.
-		return &pb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
+		return &commodorepb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
 	}
 
 	sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc)
@@ -1907,7 +1914,7 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		return nil, status.Error(codes.Internal, "failed to decrypt pull source")
 	}
 
-	return &pb.ResolvePullSourceByInternalNameResponse{
+	return &commodorepb.ResolvePullSourceByInternalNameResponse{
 		Found:             true,
 		SourceUri:         sourceURI,
 		Enabled:           enabled,
@@ -1921,11 +1928,11 @@ func normalizeIngestMode(mode string) string {
 	return strings.ToLower(strings.TrimSpace(mode))
 }
 
-func buildPullSourceView(rawURI string, enabled bool, class pullsource.Class, allowedClusterIDs []string) *pb.PullSourceView {
+func buildPullSourceView(rawURI string, enabled bool, class pullsource.Class, allowedClusterIDs []string) *commodorepb.PullSourceView {
 	if rawURI == "" {
 		return nil
 	}
-	return &pb.PullSourceView{
+	return &commodorepb.PullSourceView{
 		SourceUriRedacted: pullsource.Redact(rawURI),
 		Enabled:           enabled,
 		Class:             class.String(),
@@ -1933,7 +1940,7 @@ func buildPullSourceView(rawURI string, enabled bool, class pullsource.Class, al
 	}
 }
 
-func pullSourceEnabled(input *pb.PullSourceInput) bool {
+func pullSourceEnabled(input *commodorepb.PullSourceInput) bool {
 	if input == nil || input.Enabled == nil {
 		return true
 	}
@@ -1977,7 +1984,7 @@ func (s *CommodoreServer) listPullSourceClusterCapabilities(ctx context.Context)
 		after *string
 	)
 	for {
-		resp, err := s.quartermasterClient.ListClusters(ctx, &pb.CursorPaginationRequest{
+		resp, err := s.quartermasterClient.ListClusters(ctx, &commonpb.CursorPaginationRequest{
 			First: int32(pagination.MaxLimit),
 			After: after,
 		})
@@ -2074,10 +2081,10 @@ func normalizeAllowedClusterIDs(in []string) []string {
 }
 
 // ValidateAPIToken validates a developer API token (called by Gateway middleware)
-func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.ValidateAPITokenRequest) (*pb.ValidateAPITokenResponse, error) {
+func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb.ValidateAPITokenRequest) (*commodorepb.ValidateAPITokenResponse, error) {
 	token := req.GetToken()
 	if token == "" {
-		return &pb.ValidateAPITokenResponse{Valid: false}, nil
+		return &commodorepb.ValidateAPITokenResponse{Valid: false}, nil
 	}
 
 	var tokenID, userID, tenantID string
@@ -2091,7 +2098,7 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, pq.Array(&permissions))
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ValidateAPITokenResponse{Valid: false}, nil
+		return &commodorepb.ValidateAPITokenResponse{Valid: false}, nil
 	}
 
 	if err != nil {
@@ -2116,7 +2123,7 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 		}).Warn("Failed to fetch user details for API token")
 	}
 
-	return &pb.ValidateAPITokenResponse{
+	return &commodorepb.ValidateAPITokenResponse{
 		Valid:       true,
 		UserId:      userID,
 		TenantId:    tenantID,
@@ -2130,13 +2137,13 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 // Quartermaster lookup functions are package variables so tests can exercise
 // the ownership policy without a real Quartermaster gRPC server.
 var (
-	mistAdminGetNodeOwner = func(s *CommodoreServer, ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+	mistAdminGetNodeOwner = func(s *CommodoreServer, ctx context.Context, nodeID string) (*quartermasterpb.NodeOwnerResponse, error) {
 		if s.quartermasterClient == nil {
 			return nil, fmt.Errorf("quartermaster client unavailable")
 		}
 		return s.quartermasterClient.GetNodeOwner(ctx, nodeID)
 	}
-	mistAdminGetCluster = func(s *CommodoreServer, ctx context.Context, clusterID string) (*pb.ClusterResponse, error) {
+	mistAdminGetCluster = func(s *CommodoreServer, ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
 		if s.quartermasterClient == nil {
 			return nil, fmt.Errorf("quartermaster client unavailable")
 		}
@@ -2161,7 +2168,7 @@ var (
 //  2. Ownership is verified against Quartermaster. The caller must be an
 //     owner/admin in the cluster's owner tenant; the reserved system
 //     tenant is allowed as platform break-glass.
-func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *pb.MintMistAdminSessionRequest) (*pb.MintMistAdminSessionResponse, error) {
+func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
@@ -2238,7 +2245,7 @@ func (s *CommodoreServer) MintMistAdminSession(ctx context.Context, req *pb.Mint
 		"expires_at":           exp.Unix(),
 	}).Info("Minted mist admin session token")
 	s.emitMistAdminSessionMintedEvent(ctx, trustedUserID, trustedTenantID, nodeID, clusterID)
-	return &pb.MintMistAdminSessionResponse{
+	return &commodorepb.MintMistAdminSessionResponse{
 		Token:      token,
 		ExpiresAt:  exp.Unix(),
 		EdgeDomain: edgeDomain,
@@ -2262,18 +2269,18 @@ func mistAdminRootDomain() string {
 // caller (Foghorn) says is the connected Helmsman's nodeID. Bound-node
 // enforcement lives in pkg/auth so every validation path uses the same
 // node-binding rule.
-func (s *CommodoreServer) ValidateMistAdminSession(ctx context.Context, req *pb.ValidateMistAdminSessionRequest) (*pb.ValidateMistAdminSessionResponse, error) {
+func (s *CommodoreServer) ValidateMistAdminSession(ctx context.Context, req *commodorepb.ValidateMistAdminSessionRequest) (*commodorepb.ValidateMistAdminSessionResponse, error) {
 	if req.GetToken() == "" || req.GetExpectedNodeId() == "" {
-		return &pb.ValidateMistAdminSessionResponse{Valid: false}, nil
+		return &commodorepb.ValidateMistAdminSessionResponse{Valid: false}, nil
 	}
 	secret := []byte(config.RequireEnv("JWT_SECRET"))
 	claims, err := auth.ValidateMistAdminSessionJWT(req.GetToken(), secret, req.GetExpectedNodeId())
 	if err != nil {
 		s.logger.WithError(err).WithField("expected_node_id", req.GetExpectedNodeId()).
 			Debug("mist admin session validation rejected")
-		return &pb.ValidateMistAdminSessionResponse{Valid: false}, nil
+		return &commodorepb.ValidateMistAdminSessionResponse{Valid: false}, nil
 	}
-	return &pb.ValidateMistAdminSessionResponse{
+	return &commodorepb.ValidateMistAdminSessionResponse{
 		Valid:     true,
 		UserId:    claims.UserID,
 		TenantId:  claims.TenantID,
@@ -2285,7 +2292,7 @@ func (s *CommodoreServer) ValidateMistAdminSession(ctx context.Context, req *pb.
 }
 
 // StartDVR initiates DVR recording for a stream (Gateway → Commodore → Foghorn).
-func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	// Get user and tenant context from gateway metadata.
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -2300,7 +2307,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	// One Purser RPC for both suspension AND retention. Avoids a per-DVR-start
 	// GetSubscription + GetBillingTier roundtrip since GetTenantBillingStatus
 	// returns recording_retention_days alongside is_suspended.
-	var billingStatus *pb.GetTenantBillingStatusResponse
+	var billingStatus *purserpb.GetTenantBillingStatusResponse
 	if s.purserClient != nil {
 		var bsErr error
 		billingStatus, bsErr = s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -2355,7 +2362,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	if dvrRoute != nil {
 		processClusterID = dvrRoute.clusterID
 	}
-	foghornReq := &pb.StartDVRRequest{
+	foghornReq := &sharedpb.StartDVRRequest{
 		TenantId:      tenantID,
 		InternalName:  internalName,
 		UserId:        &userID,
@@ -2372,9 +2379,9 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	// forever" (NULL retention_until at finalize); >0 sets that many days.
 	// Per-asset override doesn't apply at start (artifact doesn't exist yet);
 	// it kicks in via UpdateAssetRetention after finalize.
-	if dvrDays, dvrErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, tenantID, streamID); dvrErr == nil {
+	if dvrDays, dvrErr := s.resolveInitialRetention(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, tenantID, streamID); dvrErr == nil {
 		if foghornReq.DvrPolicy == nil {
-			foghornReq.DvrPolicy = &pb.DVRPolicy{}
+			foghornReq.DvrPolicy = &sharedpb.DVRPolicy{}
 		}
 		days := dvrDays
 		foghornReq.DvrPolicy.RecordingRetentionDays = &days
@@ -2438,7 +2445,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 
 // RegisterClip creates a new clip in the business registry
 // Called by Foghorn during the CreateClip flow
-func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClipRequest) (*pb.RegisterClipResponse, error) {
+func (s *CommodoreServer) RegisterClip(ctx context.Context, req *commodorepb.RegisterClipRequest) (*commodorepb.RegisterClipResponse, error) {
 	tenantID := req.GetTenantId()
 	userID := req.GetUserId()
 	streamID := req.GetStreamId()
@@ -2514,9 +2521,9 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		ts := req.GetRetentionUntil().AsTime().Unix()
 		expiresAt = &ts
 	}
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
 
-	return &pb.RegisterClipResponse{
+	return &commodorepb.RegisterClipResponse{
 		ClipHash:     clipHash,
 		ClipId:       clipID,
 		PlaybackId:   playbackID,
@@ -2526,7 +2533,7 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 
 // RegisterDVR creates a new DVR recording in the business registry
 // Called by Foghorn during the StartDVR flow
-func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest) (*pb.RegisterDVRResponse, error) {
+func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.RegisterDVRRequest) (*commodorepb.RegisterDVRResponse, error) {
 	tenantID := req.GetTenantId()
 	userID := req.GetUserId()
 	internalName := req.GetStreamInternalName()
@@ -2604,9 +2611,9 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		ts := req.GetRetentionUntil().AsTime().Unix()
 		expiresAt = &ts
 	}
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
 
-	return &pb.RegisterDVRResponse{
+	return &commodorepb.RegisterDVRResponse{
 		DvrHash:      dvrHash,
 		DvrId:        dvrID,
 		PlaybackId:   playbackID,
@@ -2620,7 +2627,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 // dvr_retention_days snapshot (ended_at + days*24h), so the business
 // registry's expires_at reflects post-end retention rather than a synthetic
 // start-time projection. Active recordings carry NULL until they finalize.
-func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRetentionRequest) (*pb.UpdateDVRRetentionResponse, error) {
+func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *commodorepb.UpdateDVRRetentionRequest) (*commodorepb.UpdateDVRRetentionResponse, error) {
 	dvrHash := req.GetDvrHash()
 	if dvrHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
@@ -2647,12 +2654,12 @@ func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *pb.Update
 	if rowsErr != nil {
 		return nil, status.Errorf(codes.Internal, "update retention affected rows failed: %v", rowsErr)
 	}
-	return &pb.UpdateDVRRetentionResponse{Updated: affected > 0}, nil
+	return &commodorepb.UpdateDVRRetentionResponse{Updated: affected > 0}, nil
 }
 
 // ResolveClipHash resolves a clip hash to tenant context
 // Used for analytics enrichment and playback authorization
-func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveClipHashRequest) (*pb.ResolveClipHashResponse, error) {
+func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *commodorepb.ResolveClipHashRequest) (*commodorepb.ResolveClipHashResponse, error) {
 	clipHash := req.GetClipHash()
 	if clipHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
@@ -2674,7 +2681,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveClipHashResponse{
+		return &commodorepb.ResolveClipHashResponse{
 			Found: false,
 		}, nil
 	}
@@ -2687,7 +2694,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveClipHashResponse{
+	return &commodorepb.ResolveClipHashResponse{
 		Found:              true,
 		TenantId:           tenantID,
 		UserId:             userID,
@@ -2706,7 +2713,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 
 // ResolveDVRHash resolves a DVR hash to tenant context
 // Used for analytics enrichment and playback authorization
-func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVRHashRequest) (*pb.ResolveDVRHashResponse, error) {
+func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *commodorepb.ResolveDVRHashRequest) (*commodorepb.ResolveDVRHashResponse, error) {
 	dvrHash := req.GetDvrHash()
 	if dvrHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
@@ -2725,7 +2732,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveDVRHashResponse{
+		return &commodorepb.ResolveDVRHashResponse{
 			Found: false,
 		}, nil
 	}
@@ -2738,7 +2745,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveDVRHashResponse{
+	return &commodorepb.ResolveDVRHashResponse{
 		Found:              true,
 		TenantId:           tenantID,
 		UserId:             userID,
@@ -2752,7 +2759,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 
 // RegisterVod registers a new VOD asset in the business registry
 // Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
-func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRequest) (*pb.RegisterVodResponse, error) {
+func (s *CommodoreServer) RegisterVod(ctx context.Context, req *commodorepb.RegisterVodRequest) (*commodorepb.RegisterVodResponse, error) {
 	tenantID := req.GetTenantId()
 	userID := req.GetUserId()
 	filename := req.GetFilename()
@@ -2809,9 +2816,9 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	}).Info("Registered VOD in business registry")
 
 	expiresAt := retentionUntil.Unix()
-	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
 
-	return &pb.RegisterVodResponse{
+	return &commodorepb.RegisterVodResponse{
 		VodHash:      vodHash,
 		VodId:        vodID,
 		PlaybackId:   playbackID,
@@ -2821,7 +2828,7 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 
 // ResolveVodHash resolves a VOD hash to tenant context
 // Used for analytics enrichment, playback authorization, and lifecycle operations
-func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVodHashRequest) (*pb.ResolveVodHashResponse, error) {
+func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
 	vodHash := req.GetVodHash()
 	if vodHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "vod_hash is required")
@@ -2840,7 +2847,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveVodHashResponse{
+		return &commodorepb.ResolveVodHashResponse{
 			Found: false,
 		}, nil
 	}
@@ -2853,7 +2860,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ResolveVodHashResponse{
+	resp := &commodorepb.ResolveVodHashResponse{
 		Found:           true,
 		TenantId:        tenantID,
 		UserId:          userID,
@@ -2871,7 +2878,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 }
 
 // ResolveVodID resolves a VOD relay ID (commodore.vod_assets.id) to vod_hash + tenant context
-func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodIDRequest) (*pb.ResolveVodIDResponse, error) {
+func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *commodorepb.ResolveVodIDRequest) (*commodorepb.ResolveVodIDResponse, error) {
 	vodID := req.GetVodId()
 	if vodID == "" {
 		return nil, status.Error(codes.InvalidArgument, "vod_id is required")
@@ -2887,7 +2894,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveVodIDResponse{
+		return &commodorepb.ResolveVodIDResponse{
 			Found: false,
 		}, nil
 	}
@@ -2899,7 +2906,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveVodIDResponse{
+	return &commodorepb.ResolveVodIDResponse{
 		Found:        true,
 		TenantId:     tenantID,
 		UserId:       userID,
@@ -2915,7 +2922,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 // playback_id even across finalization retries; artifact_hash is upserted
 // because retries may reuse the same hash via the deterministic
 // chapterPlaybackArtifactHash() derivation, but tenants change rarely.
-func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.MintChapterPlaybackIDRequest) (*pb.MintChapterPlaybackIDResponse, error) {
+func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commodorepb.MintChapterPlaybackIDRequest) (*commodorepb.MintChapterPlaybackIDResponse, error) {
 	chapterID := req.GetChapterId()
 	tenantID := req.GetTenantId()
 	artifactHash := req.GetArtifactHash()
@@ -3004,13 +3011,13 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *pb.Min
 		return nil, status.Errorf(codes.Internal, "register chapter VOD asset: %v", err)
 	}
 
-	return &pb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
+	return &commodorepb.MintChapterPlaybackIDResponse{PlaybackId: stored}, nil
 }
 
 // GetTenantProcessesJSON exposes Commodore's resolved MistServer process config
 // for a given tenant/stream/lifecycle. Foghorn-internal pipelines store and
 // apply the returned snapshot without deriving local lifecycle subsets.
-func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.GetTenantProcessesJSONRequest) (*pb.GetTenantProcessesJSONResponse, error) {
+func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *commodorepb.GetTenantProcessesJSONRequest) (*commodorepb.GetTenantProcessesJSONResponse, error) {
 	tenantID := req.GetTenantId()
 	lifecycle := req.GetLifecycle()
 	if lifecycle == "" {
@@ -3024,14 +3031,14 @@ func (s *CommodoreServer) GetTenantProcessesJSON(ctx context.Context, req *pb.Ge
 	}
 	lifecycle = normalizeProcessLifecycle(lifecycle)
 	processesJSON := s.resolveProcessesJSON(ctx, tenantID, req.GetStreamId(), req.GetClusterId(), lifecycle)
-	return &pb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
+	return &commodorepb.GetTenantProcessesJSONResponse{ProcessesJson: processesJSON}, nil
 }
 
 // ResolveChapterPlaybackID maps a public chapter playback_id back to its
 // internal (chapter_id, tenant_id, artifact_hash). Foghorn's playback
 // resolver calls this to bridge the public ID into the artifact-hash
 // path that handles policy walk + artifact serving.
-func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *pb.ResolveChapterPlaybackIDRequest) (*pb.ResolveChapterPlaybackIDResponse, error) {
+func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *commodorepb.ResolveChapterPlaybackIDRequest) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
 	playbackID := req.GetPlaybackId()
 	if playbackID == "" {
 		return nil, status.Error(codes.InvalidArgument, "playback_id is required")
@@ -3049,13 +3056,13 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *pb.
 		`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveChapterPlaybackIDResponse{Found: false}, nil
+		return &commodorepb.ResolveChapterPlaybackIDResponse{Found: false}, nil
 	}
 	if err != nil {
 		s.logger.WithError(err).WithField("playback_id", playbackID).Error("Failed to resolve chapter playback id")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	return &pb.ResolveChapterPlaybackIDResponse{
+	return &commodorepb.ResolveChapterPlaybackIDResponse{
 		Found:        true,
 		ChapterId:    chapterID,
 		TenantId:     tenantID,
@@ -3064,7 +3071,7 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *pb.
 }
 
 // ResolveArtifactPlaybackID resolves an artifact playback ID to artifact identity
-func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb.ResolveArtifactPlaybackIDRequest) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	playbackID := req.GetPlaybackId()
 	if playbackID == "" {
 		return nil, status.Error(codes.InvalidArgument, "playback_id is required")
@@ -3088,7 +3095,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
-		resp := &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3130,7 +3137,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		// Missing source stream → treat as protected so a deleted-stream race
 		// does not silently expose what was once gated content.
 		requiresAuth = !dvrSourceRequiresAuth.Valid || dvrSourceRequiresAuth.Bool
-		resp := &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3164,7 +3171,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
-		resp := &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3185,10 +3192,10 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
+	return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
 }
 
-func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*pb.TenantClusterPeer) {
+func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*quartermasterpb.TenantClusterPeer) {
 	if tenantID == "" || peers == nil {
 		return
 	}
@@ -3198,7 +3205,7 @@ func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, te
 }
 
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
-func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *pb.ResolveArtifactInternalNameRequest) (*pb.ResolveArtifactInternalNameResponse, error) {
+func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
 	internalName := req.GetInternalName()
 	if internalName == "" {
 		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
@@ -3222,7 +3229,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
-		resp := &pb.ResolveArtifactInternalNameResponse{
+		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3257,7 +3264,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
 	})
 	if err == nil {
-		resp := &pb.ResolveArtifactInternalNameResponse{
+		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3290,7 +3297,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
 	})
 	if err == nil {
-		resp := &pb.ResolveArtifactInternalNameResponse{
+		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
 			ArtifactHash:    artifactHash,
 			InternalName:    artifactInternalName,
@@ -3311,12 +3318,12 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveArtifactInternalNameResponse{Found: false}, nil
+	return &commodorepb.ResolveArtifactInternalNameResponse{Found: false}, nil
 }
 
 // ResolveIdentifier provides unified resolution across all Commodore registries.
 // Enriches found responses with cluster context from Quartermaster.
-func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *commodorepb.ResolveIdentifierRequest) (*commodorepb.ResolveIdentifierResponse, error) {
 	resp, err := s.resolveIdentifierLookup(ctx, req)
 	if err != nil {
 		return nil, err
@@ -3332,7 +3339,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 
 // resolveIdentifierLookup checks all Commodore registries for the identifier.
 // Lookup order: streams (stream_id, internal_name, playback_id), clips, DVR, VOD
-func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *commodorepb.ResolveIdentifierRequest) (*commodorepb.ResolveIdentifierResponse, error) {
 	identifier := req.GetIdentifier()
 	if identifier == "" {
 		return nil, status.Error(codes.InvalidArgument, "identifier is required")
@@ -3350,7 +3357,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 		})
 		if err == nil {
-			return &pb.ResolveIdentifierResponse{
+			return &commodorepb.ResolveIdentifierResponse{
 				Found:              true,
 				TenantId:           tenantID,
 				UserId:             userID,
@@ -3372,7 +3379,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 			`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
 		})
 		if err == nil {
-			return &pb.ResolveIdentifierResponse{
+			return &commodorepb.ResolveIdentifierResponse{
 				Found:          true,
 				TenantId:       vodTenantID,
 				UserId:         vodUserID,
@@ -3392,7 +3399,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1
 	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:              true,
 			TenantId:           tenantID,
 			UserId:             userID,
@@ -3413,7 +3420,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		FROM commodore.streams WHERE playback_id = $1
 	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:              true,
 			TenantId:           tenantID,
 			UserId:             userID,
@@ -3437,7 +3444,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE c.playback_id = $1
 	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3459,7 +3466,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE d.playback_id = $1
 	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3479,7 +3486,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE playback_id = $1
 	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3498,7 +3505,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE c.internal_name = $1
 	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3520,7 +3527,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE d.internal_name = $1
 	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3540,7 +3547,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE internal_name = $1
 	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3559,7 +3566,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE c.clip_hash = $1
 	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3581,7 +3588,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		WHERE d.dvr_hash = $1
 	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3599,7 +3606,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 		SELECT tenant_id, user_id, requires_auth FROM commodore.vod_assets WHERE vod_hash = $1
 	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
 	if err == nil {
-		return &pb.ResolveIdentifierResponse{
+		return &commodorepb.ResolveIdentifierResponse{
 			Found:          true,
 			TenantId:       tenantID,
 			UserId:         userID,
@@ -3611,7 +3618,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 	}
 
 	// Not found in any registry
-	return &pb.ResolveIdentifierResponse{
+	return &commodorepb.ResolveIdentifierResponse{
 		Found: false,
 	}, nil
 }
@@ -3623,7 +3630,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.R
 // GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
 // This is called by x402 middleware after verifying the ERC-3009 payment signature.
 // If the wallet is not known, creates a new tenant (prepaid) + user (email=NULL) + wallet_identity.
-func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.GetOrCreateWalletUserRequest) (*pb.GetOrCreateWalletUserResponse, error) {
+func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commodorepb.GetOrCreateWalletUserRequest) (*commodorepb.GetOrCreateWalletUserResponse, error) {
 	chainType := req.GetChainType()
 	walletAddress := req.GetWalletAddress()
 
@@ -3675,7 +3682,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 			"user_id":        userID,
 		}).Info("Wallet identity found")
 
-		return &pb.GetOrCreateWalletUserResponse{
+		return &commodorepb.GetOrCreateWalletUserResponse{
 			TenantId:      tenantID,
 			UserId:        userID,
 			IsNew:         false,
@@ -3696,7 +3703,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 		return nil, status.Error(codes.Internal, "quartermaster client not available")
 	}
 	tenantName := "Wallet: " + normalizedAddress[:10] + "..."
-	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
+	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &quartermasterpb.CreateTenantRequest{
 		Name:        tenantName,
 		Attribution: req.GetAttribution(),
 	})
@@ -3764,7 +3771,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 		"user_id":        userID,
 	}).Info("Created new wallet account")
 
-	return &pb.GetOrCreateWalletUserResponse{
+	return &commodorepb.GetOrCreateWalletUserResponse{
 		TenantId:      tenantID,
 		UserId:        userID,
 		IsNew:         true,
@@ -3778,7 +3785,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 // ============================================================================
 
 // Login authenticates a user and returns a JWT token
-func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
 	email := req.GetEmail()
 	password := req.GetPassword()
 
@@ -3882,7 +3889,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	expiresAt := time.Now().Add(15 * time.Minute)
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "", "", "")
 
-	return &pb.AuthResponse{
+	return &commodorepb.AuthResponse{
 		Token:        token,
 		RefreshToken: refreshToken,
 		User:         user.toProtoUser("", ""),
@@ -3891,7 +3898,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 }
 
 // Register creates a new user account
-func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error) {
 	email := req.GetEmail()
 	password := req.GetPassword()
 
@@ -3937,7 +3944,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 	var existingID string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&existingID)
 	if err == nil {
-		return &pb.RegisterResponse{
+		return &commodorepb.RegisterResponse{
 			Success: false,
 			Message: "user already exists",
 		}, nil
@@ -3949,7 +3956,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 	// Create tenant via Quartermaster
 	var tenantID string
 	if s.quartermasterClient != nil {
-		resp, createErr := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
+		resp, createErr := s.quartermasterClient.CreateTenant(ctx, &quartermasterpb.CreateTenantRequest{
 			Name:        email, // Use email as initial tenant name
 			Attribution: req.GetAttribution(),
 		})
@@ -3970,7 +3977,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 		if limitErr != nil {
 			s.logger.WithError(limitErr).Warn("Failed to check user limit with Purser, proceeding anyway")
 		} else if !limitCheck.GetAllowed() {
-			return &pb.RegisterResponse{
+			return &commodorepb.RegisterResponse{
 				Success: false,
 				Message: "tenant user limit reached",
 			}, nil
@@ -4050,14 +4057,14 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 
 	s.emitAuthEvent(ctx, eventAuthRegistered, userID, tenantID, "password", "", "", "")
 
-	return &pb.RegisterResponse{
+	return &commodorepb.RegisterResponse{
 		Success: true,
 		Message: "Registration successful. Please check your email to verify your account.",
 	}, nil
 }
 
 // GetMe returns the current user's profile
-func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.User, error) {
+func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeRequest) (*commodorepb.User, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -4098,7 +4105,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 			if err := walletRows.Scan(&walletID, &walletAddr, &walletCreatedAt, &walletLastAuthAt); err != nil {
 				continue
 			}
-			wallet := &pb.WalletIdentity{
+			wallet := &commodorepb.WalletIdentity{
 				Id:            walletID,
 				WalletAddress: walletAddr,
 				CreatedAt:     timestamppb.New(walletCreatedAt),
@@ -4114,13 +4121,13 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 }
 
 // Logout invalidates user session (token blacklisting handled at Gateway)
-func (s *CommodoreServer) Logout(ctx context.Context, req *pb.LogoutRequest) (*pb.LogoutResponse, error) {
+func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutRequest) (*commodorepb.LogoutResponse, error) {
 	// Get user context to delete their refresh tokens
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		// Still acknowledge logout even without user context
 		//nolint:nilerr // graceful logout even without user context
-		return &pb.LogoutResponse{
+		return &commodorepb.LogoutResponse{
 			Success: true,
 			Message: "logged out successfully",
 		}, nil
@@ -4134,14 +4141,14 @@ func (s *CommodoreServer) Logout(ctx context.Context, req *pb.LogoutRequest) (*p
 		s.logger.WithError(err).Warn("Failed to delete refresh tokens during logout")
 	}
 
-	return &pb.LogoutResponse{
+	return &commodorepb.LogoutResponse{
 		Success: true,
 		Message: "logged out successfully",
 	}, nil
 }
 
 // RefreshToken exchanges a refresh token for a new access token
-func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshTokenRequest) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.RefreshTokenRequest) (*commodorepb.AuthResponse, error) {
 	refreshToken := req.GetRefreshToken()
 	if refreshToken == "" {
 		return nil, status.Error(codes.InvalidArgument, "refresh token required")
@@ -4252,7 +4259,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	expiresAt := time.Now().Add(15 * time.Minute)
 	s.emitAuthEvent(ctx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", "", "", "")
 
-	return &pb.AuthResponse{
+	return &commodorepb.AuthResponse{
 		Token:        token,
 		RefreshToken: newRefreshToken,
 		User:         user.toProtoUser(userID, tenantID),
@@ -4305,7 +4312,7 @@ func validateAuthorizationClient(clientID, redirectURI string) error {
 // CompleteAuthorization persists a single-use PKCE authorization code bound
 // to the caller's code_challenge. Called by the gateway on behalf of the
 // webapp /authorize page after the signed-in user approves the request.
-func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *pb.CompleteAuthorizationRequest) (*pb.CompleteAuthorizationResponse, error) {
+func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *commodorepb.CompleteAuthorizationRequest) (*commodorepb.CompleteAuthorizationResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -4350,7 +4357,7 @@ func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *pb.Com
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.CompleteAuthorizationResponse{
+	return &commodorepb.CompleteAuthorizationResponse{
 		Code:      code,
 		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
@@ -4361,7 +4368,7 @@ func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *pb.Com
 // and constant-time compared against the stored code_challenge. The code is
 // marked consumed in the same transaction that issues the refresh token, so
 // a successful exchange is atomic and a second exchange returns AlreadyExists.
-func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *pb.ExchangeAuthorizationCodeRequest) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *commodorepb.ExchangeAuthorizationCodeRequest) (*commodorepb.AuthResponse, error) {
 	if req.GetCode() == "" || req.GetCodeVerifier() == "" || req.GetClientId() == "" || req.GetRedirectUri() == "" {
 		return nil, status.Error(codes.InvalidArgument, "code, code_verifier, client_id and redirect_uri required")
 	}
@@ -4435,7 +4442,7 @@ func (s *CommodoreServer) rollbackTx(tx *sql.Tx) {
 // issueUserSessionTx issues a new access + refresh token pair for the given
 // user inside an open transaction. The caller is responsible for committing.
 // Returns the same AuthResponse shape as Login.
-func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*commodorepb.AuthResponse, error) {
 	var user commodoreUserRecord
 	err := scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
 		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at
@@ -4474,7 +4481,7 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	expiresAt := time.Now().Add(15 * time.Minute)
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, authType, "", "", "")
 
-	return &pb.AuthResponse{
+	return &commodorepb.AuthResponse{
 		Token:        token,
 		RefreshToken: refreshToken,
 		User:         user.toProtoUser(userID, tenantID),
@@ -4519,7 +4526,7 @@ func normalizeUserCode(input string) string {
 // StartDeviceAuthorization initiates a device-code grant for a CLI/headless
 // client. Returns a (device_code, user_code) pair plus the verification URL.
 // No session required — the user authenticates in a browser at /device.
-func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.StartDeviceAuthorizationRequest) (*pb.StartDeviceAuthorizationResponse, error) {
+func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *commodorepb.StartDeviceAuthorizationRequest) (*commodorepb.StartDeviceAuthorizationResponse, error) {
 	clientID := req.GetClientId()
 	if clientID == "" {
 		return nil, status.Error(codes.InvalidArgument, "client_id required")
@@ -4577,7 +4584,7 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *pb.
 	}
 	verificationURIComplete := verificationURI + "?user_code=" + url.QueryEscape(userCode)
 
-	return &pb.StartDeviceAuthorizationResponse{
+	return &commodorepb.StartDeviceAuthorizationResponse{
 		DeviceCode:              deviceCode,
 		UserCode:                userCode,
 		VerificationUri:         verificationURI,
@@ -4604,7 +4611,7 @@ func (s *CommodoreServer) deviceVerificationBaseURL() (string, error) {
 // the user_code is unapproved, returns one of the RFC 8628 §3.5 markers:
 // AUTHORIZATION_PENDING, SLOW_DOWN, ACCESS_DENIED, EXPIRED_TOKEN. On approval
 // returns a normal AuthResponse and consumes the device_code row.
-func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *pb.PollDeviceAuthorizationRequest) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *commodorepb.PollDeviceAuthorizationRequest) (*commodorepb.AuthResponse, error) {
 	if req.GetDeviceCode() == "" || req.GetClientId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "device_code and client_id required")
 	}
@@ -4698,7 +4705,7 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *pb.P
 
 // LookupDeviceAuthorization returns pending device-code metadata for the
 // consent page without approving it.
-func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *pb.LookupDeviceAuthorizationRequest) (*pb.LookupDeviceAuthorizationResponse, error) {
+func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *commodorepb.LookupDeviceAuthorizationRequest) (*commodorepb.LookupDeviceAuthorizationResponse, error) {
 	if _, _, err := extractUserContext(ctx); err != nil {
 		return nil, err
 	}
@@ -4744,7 +4751,7 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 	}
 
-	return &pb.LookupDeviceAuthorizationResponse{
+	return &commodorepb.LookupDeviceAuthorizationResponse{
 		ClientId:  clientID,
 		Scope:     scope,
 		ExpiresAt: timestamppb.New(expiresAt),
@@ -4755,7 +4762,7 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *pb
 // stamps the calling user's identity onto it. Called by the gateway on behalf
 // of the webapp /device page after the signed-in user confirms the displayed
 // user_code. user_id / tenant_id MUST come from the gateway session.
-func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *pb.ApproveDeviceAuthorizationRequest) (*pb.ApproveDeviceAuthorizationResponse, error) {
+func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *commodorepb.ApproveDeviceAuthorizationRequest) (*commodorepb.ApproveDeviceAuthorizationResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -4810,14 +4817,14 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *p
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
-	return &pb.ApproveDeviceAuthorizationResponse{
+	return &commodorepb.ApproveDeviceAuthorizationResponse{
 		Success:  true,
 		ClientId: clientID,
 	}, nil
 }
 
 // VerifyEmail verifies a user's email address with a token
-func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *pb.VerifyEmailRequest) (*pb.VerifyEmailResponse, error) {
+func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.VerifyEmailRequest) (*commodorepb.VerifyEmailResponse, error) {
 	token := req.GetToken()
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "verification token required")
@@ -4834,7 +4841,7 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *pb.VerifyEmailRe
 	`, tokenHash).Scan(&userID)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.VerifyEmailResponse{
+		return &commodorepb.VerifyEmailResponse{
 			Success: false,
 			Message: "invalid or expired verification token",
 		}, nil
@@ -4853,14 +4860,14 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *pb.VerifyEmailRe
 		return nil, status.Errorf(codes.Internal, "failed to verify email: %v", err)
 	}
 
-	return &pb.VerifyEmailResponse{
+	return &commodorepb.VerifyEmailResponse{
 		Success: true,
 		Message: "email verified successfully",
 	}, nil
 }
 
 // ResendVerification resends the email verification link
-func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.ResendVerificationRequest) (*pb.ResendVerificationResponse, error) {
+func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodorepb.ResendVerificationRequest) (*commodorepb.ResendVerificationResponse, error) {
 	email := req.GetEmail()
 	if email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email required")
@@ -4898,7 +4905,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal if email exists - return success anyway
-		return &pb.ResendVerificationResponse{
+		return &commodorepb.ResendVerificationResponse{
 			Success: true,
 			Message: "if an account exists with that email and is unverified, a new verification link will be sent",
 		}, nil
@@ -4909,7 +4916,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 
 	// Already verified
 	if isVerified {
-		return &pb.ResendVerificationResponse{
+		return &commodorepb.ResendVerificationResponse{
 			Success: false,
 			Message: "email is already verified",
 		}, nil
@@ -4920,7 +4927,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 		// Token expiry is 24h from creation, so creation time is expiry - 24h
 		tokenCreatedAt := tokenExpiresAt.Time.Add(-24 * time.Hour)
 		if time.Since(tokenCreatedAt) < 5*time.Minute {
-			return &pb.ResendVerificationResponse{
+			return &commodorepb.ResendVerificationResponse{
 				Success: false,
 				Message: "please wait a few minutes before requesting another verification email",
 			}, nil
@@ -4953,7 +4960,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 			"error":   err,
 		}).Error("Failed to send verification email")
 		//nolint:nilerr // error returned in response message, not as Go error
-		return &pb.ResendVerificationResponse{
+		return &commodorepb.ResendVerificationResponse{
 			Success: false,
 			Message: "failed to send verification email, please try again later",
 		}, nil
@@ -4964,14 +4971,14 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 		"email":   email,
 	}).Info("Verification email resent")
 
-	return &pb.ResendVerificationResponse{
+	return &commodorepb.ResendVerificationResponse{
 		Success: true,
 		Message: "verification email sent",
 	}, nil
 }
 
 // ForgotPassword initiates the password reset flow
-func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *pb.ForgotPasswordRequest) (*pb.ForgotPasswordResponse, error) {
+func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.ForgotPasswordRequest) (*commodorepb.ForgotPasswordResponse, error) {
 	email := req.GetEmail()
 	if email == "" {
 		return nil, status.Error(codes.InvalidArgument, "email required")
@@ -4982,7 +4989,7 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *pb.ForgotPass
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal whether email exists - always return success
-		return &pb.ForgotPasswordResponse{
+		return &commodorepb.ForgotPasswordResponse{
 			Success: true,
 			Message: "if an account exists with that email, a reset link will be sent",
 		}, nil
@@ -5024,14 +5031,14 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *pb.ForgotPass
 		}).Info("Password reset email sent")
 	}
 
-	return &pb.ForgotPasswordResponse{
+	return &commodorepb.ForgotPasswordResponse{
 		Success: true,
 		Message: "if an account exists with that email, a reset link will be sent",
 	}, nil
 }
 
 // ResetPassword resets a user's password with a valid token
-func (s *CommodoreServer) ResetPassword(ctx context.Context, req *pb.ResetPasswordRequest) (*pb.ResetPasswordResponse, error) {
+func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.ResetPasswordRequest) (*commodorepb.ResetPasswordResponse, error) {
 	token := req.GetToken()
 	password := req.GetPassword()
 
@@ -5050,7 +5057,7 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *pb.ResetPasswo
 	`, tokenHash).Scan(&userID)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResetPasswordResponse{
+		return &commodorepb.ResetPasswordResponse{
 			Success: false,
 			Message: "invalid or expired reset token",
 		}, nil
@@ -5075,14 +5082,14 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *pb.ResetPasswo
 		return nil, status.Errorf(codes.Internal, "failed to update password: %v", err)
 	}
 
-	return &pb.ResetPasswordResponse{
+	return &commodorepb.ResetPasswordResponse{
 		Success: true,
 		Message: "password reset successfully",
 	}, nil
 }
 
 // UpdateMe updates the current user's profile
-func (s *CommodoreServer) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest) (*pb.User, error) {
+func (s *CommodoreServer) UpdateMe(ctx context.Context, req *commodorepb.UpdateMeRequest) (*commodorepb.User, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5122,11 +5129,11 @@ func (s *CommodoreServer) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest)
 	}
 
 	// Return updated user
-	return s.GetMe(ctx, &pb.GetMeRequest{})
+	return s.GetMe(ctx, &commodorepb.GetMeRequest{})
 }
 
 // UpdateNewsletter updates the user's newsletter subscription in Listmonk (source of truth)
-func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNewsletterRequest) (*pb.UpdateNewsletterResponse, error) {
+func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *commodorepb.UpdateNewsletterRequest) (*commodorepb.UpdateNewsletterResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5168,7 +5175,7 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNe
 		}
 		if !exists {
 			// Not subscribed anyway, nothing to do
-			return &pb.UpdateNewsletterResponse{
+			return &commodorepb.UpdateNewsletterResponse{
 				Success: true,
 				Message: "newsletter preference updated",
 			}, nil
@@ -5180,14 +5187,14 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNe
 		return nil, status.Errorf(codes.Internal, "failed to update newsletter preference: %v", err)
 	}
 
-	return &pb.UpdateNewsletterResponse{
+	return &commodorepb.UpdateNewsletterResponse{
 		Success: true,
 		Message: "newsletter preference updated",
 	}, nil
 }
 
 // GetNewsletterStatus returns the user's current newsletter subscription status from Listmonk
-func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNewsletterStatusRequest) (*pb.GetNewsletterStatusResponse, error) {
+func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *commodorepb.GetNewsletterStatusRequest) (*commodorepb.GetNewsletterStatusResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5204,7 +5211,7 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNe
 
 	if !email.Valid || email.String == "" {
 		// Wallet-only users can't have newsletter subscription
-		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
+		return &commodorepb.GetNewsletterStatusResponse{Subscribed: false}, nil
 	}
 
 	if s.listmonkClient == nil {
@@ -5215,16 +5222,16 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNe
 	info, exists, err := s.listmonkClient.GetSubscriber(ctx, email.String)
 	if err != nil {
 		s.logger.WithError(err).WithField("email", email.String).Warn("Failed to get subscriber from Listmonk")
-		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
+		return &commodorepb.GetNewsletterStatusResponse{Subscribed: false}, nil
 	}
 
 	// If subscriber doesn't exist in Listmonk, return unsubscribed
 	if !exists {
-		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
+		return &commodorepb.GetNewsletterStatusResponse{Subscribed: false}, nil
 	}
 
 	// Check if subscribed to the newsletter list specifically
-	return &pb.GetNewsletterStatusResponse{Subscribed: info.IsSubscribedToList(s.defaultMailingListID)}, nil
+	return &commodorepb.GetNewsletterStatusResponse{Subscribed: info.IsSubscribedToList(s.defaultMailingListID)}, nil
 }
 
 // ============================================================================
@@ -5233,7 +5240,7 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNe
 
 // WalletLogin authenticates via Ethereum wallet signature
 // If the wallet is not linked to any account, creates a new one (auto-provisioning)
-func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRequest) (*pb.AuthResponse, error) {
+func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.WalletLoginRequest) (*commodorepb.AuthResponse, error) {
 	walletAddr := req.GetWalletAddress()
 	message := req.GetMessage()
 	signature := req.GetSignature()
@@ -5265,12 +5272,12 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 	// Resolve or create wallet identity (single source of truth)
 	attr := req.GetAttribution()
 	if attr == nil {
-		attr = &pb.SignupAttribution{
+		attr = &commonpb.SignupAttribution{
 			SignupChannel: "wallet",
 			SignupMethod:  "wallet_ethereum",
 		}
 	}
-	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+	walletResp, err := s.GetOrCreateWalletUser(ctx, &commodorepb.GetOrCreateWalletUserRequest{
 		ChainType:     string(auth.ChainEthereum),
 		WalletAddress: normalizedAddr,
 		Attribution:   attr,
@@ -5324,7 +5331,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	// Build user response
-	user := &pb.User{
+	user := &commodorepb.User{
 		Id:         userID,
 		TenantId:   tenantID,
 		FirstName:  firstName,
@@ -5344,7 +5351,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
 
-	return &pb.AuthResponse{
+	return &commodorepb.AuthResponse{
 		Token:     token,
 		User:      user,
 		ExpiresAt: timestamppb.New(expiresAt),
@@ -5354,7 +5361,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 
 // WalletLoginWithX402 authenticates via x402 payload and returns a session token.
 // If payment value > 0, it settles the payment and credits the target tenant (or payer if none specified).
-func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.WalletLoginWithX402Request) (*pb.WalletLoginWithX402Response, error) {
+func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *commodorepb.WalletLoginWithX402Request) (*commodorepb.WalletLoginWithX402Response, error) {
 	if s.purserClient == nil {
 		return nil, status.Error(codes.Unavailable, "purser client not configured")
 	}
@@ -5384,12 +5391,12 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 		if payment.GetNetwork() != "" {
 			signupMethod = "x402_" + strings.ToLower(payment.GetNetwork())
 		}
-		attr = &pb.SignupAttribution{
+		attr = &commonpb.SignupAttribution{
 			SignupChannel: "x402",
 			SignupMethod:  signupMethod,
 		}
 	}
-	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+	walletResp, err := s.GetOrCreateWalletUser(ctx, &commodorepb.GetOrCreateWalletUserRequest{
 		ChainType:     chainType,
 		WalletAddress: payerAddress,
 		Attribution:   attr,
@@ -5442,7 +5449,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 
-	user := &pb.User{
+	user := &commodorepb.User{
 		Id:         userID,
 		TenantId:   tenantID,
 		FirstName:  firstName,
@@ -5462,7 +5469,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "x402", "", "", "")
 
-	authResp := &pb.AuthResponse{
+	authResp := &commodorepb.AuthResponse{
 		Token:     token,
 		User:      user,
 		ExpiresAt: timestamppb.New(expiresAt),
@@ -5470,7 +5477,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 	}
 
 	if verifyResp.IsAuthOnly {
-		return &pb.WalletLoginWithX402Response{
+		return &commodorepb.WalletLoginWithX402Response{
 			Auth:           authResp,
 			IsAuthOnly:     true,
 			PayerAddress:   payerAddress,
@@ -5491,7 +5498,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 		return nil, status.Errorf(codes.Internal, "payment settlement failed: %s", settleResp.Error)
 	}
 
-	return &pb.WalletLoginWithX402Response{
+	return &commodorepb.WalletLoginWithX402Response{
 		Auth:            authResp,
 		IsAuthOnly:      false,
 		CreditedCents:   settleResp.CreditedCents,
@@ -5518,7 +5525,7 @@ func x402NetworkToChainType(network string) string {
 }
 
 // LinkWallet links a wallet to the authenticated user's account
-func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequest) (*pb.WalletIdentity, error) {
+func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkWalletRequest) (*commodorepb.WalletIdentity, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5580,7 +5587,7 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequ
 
 	s.emitAuthEvent(ctx, eventWalletLinked, userID, tenantID, "wallet", walletID, "", "")
 
-	return &pb.WalletIdentity{
+	return &commodorepb.WalletIdentity{
 		Id:            walletID,
 		WalletAddress: normalizedAddr,
 		CreatedAt:     timestamppb.New(createdAt),
@@ -5588,7 +5595,7 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequ
 }
 
 // UnlinkWallet removes a wallet from the user's account
-func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *pb.UnlinkWalletRequest) (*pb.UnlinkWalletResponse, error) {
+func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.UnlinkWalletRequest) (*commodorepb.UnlinkWalletResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5615,14 +5622,14 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *pb.UnlinkWallet
 
 	s.emitAuthEvent(ctx, eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
 
-	return &pb.UnlinkWalletResponse{
+	return &commodorepb.UnlinkWalletResponse{
 		Success: true,
 		Message: "wallet unlinked",
 	}, nil
 }
 
 // ListWallets returns all wallets linked to the authenticated user
-func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRequest) (*pb.ListWalletsResponse, error) {
+func (s *CommodoreServer) ListWallets(ctx context.Context, req *commodorepb.ListWalletsRequest) (*commodorepb.ListWalletsResponse, error) {
 	userID, _, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5639,7 +5646,7 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var wallets []*pb.WalletIdentity
+	var wallets []*commodorepb.WalletIdentity
 	for rows.Next() {
 		var id, addr string
 		var createdAt time.Time
@@ -5647,7 +5654,7 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRe
 		if err := rows.Scan(&id, &addr, &createdAt, &lastAuthAt); err != nil {
 			continue
 		}
-		w := &pb.WalletIdentity{
+		w := &commodorepb.WalletIdentity{
 			Id:            id,
 			WalletAddress: addr,
 			CreatedAt:     timestamppb.New(createdAt),
@@ -5658,11 +5665,11 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRe
 		wallets = append(wallets, w)
 	}
 
-	return &pb.ListWalletsResponse{Wallets: wallets}, nil
+	return &commodorepb.ListWalletsResponse{Wallets: wallets}, nil
 }
 
 // LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
-func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailRequest) (*pb.LinkEmailResponse, error) {
+func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEmailRequest) (*commodorepb.LinkEmailResponse, error) {
 	userID, _, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5728,14 +5735,14 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailReques
 	// Send verification email
 	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
 		s.logger.WithError(err).Warn("Failed to send verification email")
-		return &pb.LinkEmailResponse{
+		return &commodorepb.LinkEmailResponse{
 			Success:          true,
 			Message:          "Email linked. Verification email could not be sent - please use resend verification.",
 			VerificationSent: false,
 		}, nil
 	}
 
-	return &pb.LinkEmailResponse{
+	return &commodorepb.LinkEmailResponse{
 		Success:          true,
 		Message:          fmt.Sprintf("Verification email sent to %s", email),
 		VerificationSent: true,
@@ -5747,7 +5754,7 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailReques
 // ============================================================================
 
 // CreateStream creates a new stream for the authenticated user
-func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStreamRequest) (*pb.CreateStreamResponse, error) {
+func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5863,7 +5870,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	}
 	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, streamID, changedFields)
 
-	resp := &pb.CreateStreamResponse{
+	resp := &commodorepb.CreateStreamResponse{
 		Id:          streamID,
 		StreamKey:   streamKey,
 		PlaybackId:  playbackID,
@@ -5914,7 +5921,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 // platform-official tier) and per-tenant alias entrypoints (paid tier
 // with active alias). Cluster-concrete fields are populated upstream;
 // this function leaves them alone.
-func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID string, resp *pb.CreateStreamResponse) {
+func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID string, resp *commodorepb.CreateStreamResponse) {
 	rootDomain := strings.TrimSpace(os.Getenv("PLATFORM_ROOT_DOMAIN"))
 	if rootDomain == "" {
 		rootDomain = strings.TrimSpace(os.Getenv("BRAND_DOMAIN"))
@@ -5942,7 +5949,7 @@ func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID st
 	}
 	aliasCtx, aliasCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer aliasCancel()
-	aliasResp, aliasErr := s.navigatorClient.GetTenantAliasStatus(aliasCtx, &pb.GetTenantAliasStatusRequest{TenantId: tenantID})
+	aliasResp, aliasErr := s.navigatorClient.GetTenantAliasStatus(aliasCtx, &dnspb.GetTenantAliasStatusRequest{TenantId: tenantID})
 	if aliasErr != nil || aliasResp == nil || !aliasResp.GetFound() || aliasResp.GetStatus() != "cert_issued" || !aliasResp.GetDnsReady() {
 		return
 	}
@@ -5961,7 +5968,7 @@ func (s *CommodoreServer) populateTieredDomains(ctx context.Context, tenantID st
 }
 
 // GetStream retrieves a specific stream
-func (s *CommodoreServer) GetStream(ctx context.Context, req *pb.GetStreamRequest) (*pb.Stream, error) {
+func (s *CommodoreServer) GetStream(ctx context.Context, req *commodorepb.GetStreamRequest) (*commodorepb.Stream, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -5976,7 +5983,7 @@ func (s *CommodoreServer) GetStream(ctx context.Context, req *pb.GetStreamReques
 }
 
 // ListStreams returns all streams for the authenticated user with keyset pagination
-func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRequest) (*pb.ListStreamsResponse, error) {
+func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.ListStreamsRequest) (*commodorepb.ListStreamsResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6032,7 +6039,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var streams []*pb.Stream
+	var streams []*commodorepb.Stream
 	var route *clusterRoute
 	routeAttempted := false
 	for rows.Next() {
@@ -6076,9 +6083,9 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListStreamsResponse{
+	resp := &commodorepb.ListStreamsResponse{
 		Streams: streams,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -6100,7 +6107,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 }
 
 // UpdateStream updates a stream's properties
-func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStreamRequest) (*pb.Stream, error) {
+func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.UpdateStreamRequest) (*commodorepb.Stream, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6373,7 +6380,7 @@ func (s *CommodoreServer) startDVRAfterStreamUpdate(userID, tenantID, streamID, 
 	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userID)
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 
-	_, err := s.StartDVR(ctx, &pb.StartDVRRequest{
+	_, err := s.StartDVR(ctx, &sharedpb.StartDVRRequest{
 		StreamId:     &streamID,
 		InternalName: internalName,
 	})
@@ -6387,7 +6394,7 @@ func (s *CommodoreServer) startDVRAfterStreamUpdate(userID, tenantID, streamID, 
 }
 
 // DeleteStream deletes a stream
-func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStreamRequest) (*pb.DeleteStreamResponse, error) {
+func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.DeleteStreamRequest) (*commodorepb.DeleteStreamResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6459,7 +6466,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 
 	s.emitStreamChangeEvent(ctx, eventStreamDeleted, tenantID, userID, streamID, nil)
 
-	return &pb.DeleteStreamResponse{
+	return &commodorepb.DeleteStreamResponse{
 		Message:     "Stream deleted successfully",
 		StreamId:    streamID,
 		StreamTitle: title,
@@ -6468,7 +6475,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 }
 
 // RefreshStreamKey generates a new stream key
-func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshStreamKeyRequest) (*pb.RefreshStreamKeyResponse, error) {
+func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb.RefreshStreamKeyRequest) (*commodorepb.RefreshStreamKeyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6508,7 +6515,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 
 	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
 
-	return &pb.RefreshStreamKeyResponse{
+	return &commodorepb.RefreshStreamKeyResponse{
 		Message:           "Stream key refreshed successfully",
 		StreamId:          streamID,
 		StreamKey:         newStreamKey,
@@ -6522,7 +6529,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 // ============================================================================
 
 // CreateStreamKey creates a new stream key for a stream
-func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStreamKeyRequest) (*pb.StreamKeyResponse, error) {
+func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.CreateStreamKeyRequest) (*commodorepb.StreamKeyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6569,8 +6576,8 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 
 	s.emitStreamKeyEvent(ctx, eventStreamKeyCreated, tenantID, userID, streamID, keyID)
 
-	return &pb.StreamKeyResponse{
-		StreamKey: &pb.StreamKey{
+	return &commodorepb.StreamKeyResponse{
+		StreamKey: &commodorepb.StreamKey{
 			Id:        keyID,
 			TenantId:  tenantID,
 			UserId:    userID,
@@ -6586,7 +6593,7 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 }
 
 // ListStreamKeys lists all keys for a stream
-func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStreamKeysRequest) (*pb.ListStreamKeysResponse, error) {
+func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.ListStreamKeysRequest) (*commodorepb.ListStreamKeysResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6653,9 +6660,9 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 	}
 	defer func() { _ = rows.Close() }()
 
-	var keys []*pb.StreamKey
+	var keys []*commodorepb.StreamKey
 	for rows.Next() {
-		var key pb.StreamKey
+		var key commodorepb.StreamKey
 		var lastUsedAt sql.NullTime
 		var createdAt, updatedAt time.Time
 
@@ -6696,9 +6703,9 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListStreamKeysResponse{
+	resp := &commodorepb.ListStreamKeysResponse{
 		StreamKeys: keys,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -6720,7 +6727,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 }
 
 // DeactivateStreamKey deactivates a stream key
-func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *pb.DeactivateStreamKeyRequest) (*emptypb.Empty, error) {
+func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodorepb.DeactivateStreamKeyRequest) (*emptypb.Empty, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6806,7 +6813,7 @@ func validatePushTargetURI(uri string) error {
 	return nil
 }
 
-func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *pb.CreatePushTargetRequest) (*pb.PushTarget, error) {
+func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6859,7 +6866,7 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *pb.CreatePu
 	}
 	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
-	return &pb.PushTarget{
+	return &commodorepb.PushTarget{
 		Id:        id,
 		StreamId:  streamID,
 		Platform:  platform,
@@ -6872,7 +6879,7 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *pb.CreatePu
 	}, nil
 }
 
-func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *pb.ListPushTargetsRequest) (*pb.ListPushTargetsResponse, error) {
+func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *commodorepb.ListPushTargetsRequest) (*commodorepb.ListPushTargetsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6894,10 +6901,10 @@ func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *pb.ListPushT
 	}
 	defer rows.Close()
 
-	var targets []*pb.PushTarget
+	var targets []*commodorepb.PushTarget
 	for rows.Next() {
 		var (
-			t            pb.PushTarget
+			t            commodorepb.PushTarget
 			targetURI    string
 			lastError    sql.NullString
 			lastPushedAt sql.NullTime
@@ -6924,10 +6931,10 @@ func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *pb.ListPushT
 		targets = append(targets, &t)
 	}
 
-	return &pb.ListPushTargetsResponse{PushTargets: targets}, nil
+	return &commodorepb.ListPushTargetsResponse{PushTargets: targets}, nil
 }
 
-func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTargetRequest) (*pb.PushTarget, error) {
+func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -6966,7 +6973,7 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePu
 	}
 
 	var (
-		t            pb.PushTarget
+		t            commodorepb.PushTarget
 		targetURI    string
 		lastError    sql.NullString
 		lastPushedAt sql.NullTime
@@ -7010,7 +7017,7 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *pb.UpdatePu
 	return &t, nil
 }
 
-func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePushTargetRequest) (*pb.DeletePushTargetResponse, error) {
+func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *commodorepb.DeletePushTargetRequest) (*commodorepb.DeletePushTargetResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -7035,7 +7042,7 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePu
 	}
 	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"push_targets"})
 
-	return &pb.DeletePushTargetResponse{
+	return &commodorepb.DeletePushTargetResponse{
 		Message:   "Push target deleted",
 		Id:        id,
 		DeletedAt: timestamppb.Now(),
@@ -7044,7 +7051,7 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *pb.DeletePu
 
 // GetStreamPushTargets is an internal RPC called by Foghorn when a stream goes live.
 // Returns unmasked target URIs for Helmsman to push to.
-func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *pb.GetStreamPushTargetsRequest) (*pb.GetStreamPushTargetsResponse, error) {
+func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *commodorepb.GetStreamPushTargetsRequest) (*commodorepb.GetStreamPushTargetsResponse, error) {
 	streamID := req.GetStreamId()
 	tenantID := req.GetTenantId()
 	if streamID == "" || tenantID == "" {
@@ -7061,9 +7068,9 @@ func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *pb.GetS
 	}
 	defer rows.Close()
 
-	var targets []*pb.PushTargetInternal
+	var targets []*commodorepb.PushTargetInternal
 	for rows.Next() {
-		var t pb.PushTargetInternal
+		var t commodorepb.PushTargetInternal
 		if err := rows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
 		}
@@ -7076,12 +7083,12 @@ func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *pb.GetS
 		targets = append(targets, &t)
 	}
 
-	return &pb.GetStreamPushTargetsResponse{PushTargets: targets}, nil
+	return &commodorepb.GetStreamPushTargetsResponse{PushTargets: targets}, nil
 }
 
 // UpdatePushTargetStatus is an internal RPC called by Foghorn to update push target status
 // based on PUSH_OUT_START / PUSH_END trigger events.
-func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *pb.UpdatePushTargetStatusRequest) (*pb.PushTarget, error) {
+func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commodorepb.UpdatePushTargetStatusRequest) (*commodorepb.PushTarget, error) {
 	id := req.GetId()
 	tenantID := req.GetTenantId()
 	if id == "" || tenantID == "" {
@@ -7104,7 +7111,7 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *pb.Up
 	}
 
 	var (
-		t            pb.PushTarget
+		t            commodorepb.PushTarget
 		targetURI    string
 		lastError    sql.NullString
 		lastPushedAt sql.NullTime
@@ -7151,7 +7158,7 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *pb.Up
 // ============================================================================
 
 // CreateAPIToken creates a new API token
-func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPITokenRequest) (*pb.CreateAPITokenResponse, error) {
+func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -7189,7 +7196,7 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 
 	s.emitAuthEvent(ctx, eventTokenCreated, userID, tenantID, "api_token", "", tokenID, "")
 
-	resp := &pb.CreateAPITokenResponse{
+	resp := &commodorepb.CreateAPITokenResponse{
 		Id:          tokenID,
 		TokenValue:  tokenValue,
 		TokenName:   tokenName,
@@ -7205,7 +7212,7 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 }
 
 // ListAPITokens lists all API tokens for the user
-func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPITokensRequest) (*pb.ListAPITokensResponse, error) {
+func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *commodorepb.ListAPITokensRequest) (*commodorepb.ListAPITokensResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -7257,9 +7264,9 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPIToke
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tokens []*pb.APITokenInfo
+	var tokens []*commodorepb.APITokenInfo
 	for rows.Next() {
-		var token pb.APITokenInfo
+		var token commodorepb.APITokenInfo
 		var permissions []string
 		var lastUsedAt, expiresAt sql.NullTime
 		var createdAt time.Time
@@ -7304,9 +7311,9 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPIToke
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListAPITokensResponse{
+	resp := &commodorepb.ListAPITokensResponse{
 		Tokens: tokens,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -7328,7 +7335,7 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPIToke
 }
 
 // RevokeAPIToken revokes an API token
-func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPITokenRequest) (*pb.RevokeAPITokenResponse, error) {
+func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.RevokeAPITokenRequest) (*commodorepb.RevokeAPITokenResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -7356,7 +7363,7 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 
 	s.emitAuthEvent(ctx, eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
 
-	return &pb.RevokeAPITokenResponse{
+	return &commodorepb.RevokeAPITokenResponse{
 		Message:   "Token revoked successfully",
 		TokenId:   req.GetTokenId(),
 		TokenName: tokenName,
@@ -7397,7 +7404,7 @@ const (
 // fire-and-forget SendServiceEvent path so a Decklog outage no longer
 // drops stream/policy mutation events. For strict atomicity with a
 // caller-held state-mutation tx, use EnqueueServiceEventTx(ctx, tx, event).
-func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
+func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
 	if event == nil {
 		return
 	}
@@ -7408,7 +7415,7 @@ func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *pb.Servic
 }
 
 func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
-	payload := &pb.AuthEvent{
+	payload := &ipcpb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
 		AuthType: authType,
@@ -7416,7 +7423,7 @@ func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, 
 		TokenId:  tokenID,
 		Error:    errMsg,
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -7424,18 +7431,18 @@ func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, 
 		UserId:       userID,
 		ResourceType: "user",
 		ResourceId:   userID,
-		Payload:      &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }
 
 func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, userID, tenantID, nodeID, clusterID string) {
-	payload := &pb.AuthEvent{
+	payload := &ipcpb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
 		AuthType: "mist_admin_session",
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:       eventMistAdminSessionMinted,
 		Timestamp:       timestamppb.Now(),
 		Source:          "commodore",
@@ -7444,17 +7451,17 @@ func (s *CommodoreServer) emitMistAdminSessionMintedEvent(ctx context.Context, u
 		ResourceType:    "infrastructure_node",
 		ResourceId:      nodeID,
 		SourceClusterId: clusterID,
-		Payload:         &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
+		Payload:         &ipcpb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }
 
 func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, tenantID, userID, streamID string, changedFields []string) {
-	payload := &pb.StreamChangeEvent{
+	payload := &ipcpb.StreamChangeEvent{
 		StreamId:      streamID,
 		ChangedFields: changedFields,
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -7462,17 +7469,17 @@ func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, 
 		UserId:       userID,
 		ResourceType: "stream",
 		ResourceId:   streamID,
-		Payload:      &pb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tenantID, userID string, artifactType pb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
+func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tenantID, userID string, artifactType ipcpb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
 	if artifactID == "" || tenantID == "" {
 		return
 	}
 
-	payload := &pb.ArtifactEvent{
+	payload := &ipcpb.ArtifactEvent{
 		ArtifactType: artifactType,
 		ArtifactId:   artifactID,
 		StreamId:     streamID,
@@ -7482,7 +7489,7 @@ func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tena
 		payload.ExpiresAt = expiresAt
 	}
 
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -7490,17 +7497,17 @@ func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tena
 		UserId:       userID,
 		ResourceType: "artifact",
 		ResourceId:   artifactID,
-		Payload:      &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }
 
 func (s *CommodoreServer) emitStreamKeyEvent(ctx context.Context, eventType, tenantID, userID, streamID, keyID string) {
-	payload := &pb.StreamKeyEvent{
+	payload := &ipcpb.StreamKeyEvent{
 		StreamId: streamID,
 		KeyId:    keyID,
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -7508,13 +7515,13 @@ func (s *CommodoreServer) emitStreamKeyEvent(ctx context.Context, eventType, ten
 		UserId:       userID,
 		ResourceType: "stream_key",
 		ResourceId:   keyID,
-		Payload:      &pb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
 	}
 	s.emitServiceEvent(ctx, event)
 }
 
 // GetStreamsBatch retrieves multiple streams by IDs in a single query
-func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStreamsBatchRequest) (*pb.GetStreamsBatchResponse, error) {
+func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.GetStreamsBatchRequest) (*commodorepb.GetStreamsBatchResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -7522,7 +7529,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 
 	streamIDs := req.GetStreamIds()
 	if len(streamIDs) == 0 {
-		return &pb.GetStreamsBatchResponse{}, nil
+		return &commodorepb.GetStreamsBatchResponse{}, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -7540,7 +7547,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 	}
 	defer func() { _ = rows.Close() }()
 
-	var streams []*pb.Stream
+	var streams []*commodorepb.Stream
 	var route *clusterRoute
 	routeAttempted := false
 	for rows.Next() {
@@ -7561,11 +7568,11 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStream
 		streams = append(streams, stream)
 	}
 
-	return &pb.GetStreamsBatchResponse{Streams: streams}, nil
+	return &commodorepb.GetStreamsBatchResponse{Streams: streams}, nil
 }
 
-func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
-	var stream pb.Stream
+func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*commodorepb.Stream, error) {
+	var stream commodorepb.Stream
 	var description, sourceURIEnc, activeIngest, chapterMode sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
@@ -7641,7 +7648,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	return &stream, nil
 }
 
-func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenantID string, stream *pb.Stream, route *clusterRoute) {
+func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenantID string, stream *commodorepb.Stream, route *clusterRoute) {
 	if stream == nil {
 		return
 	}
@@ -7659,7 +7666,7 @@ func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenant
 // (active_ingest_cluster_id, stream_id) via the in-process clusterurls
 // resolver. Returns nil when the stream has never been live or the cluster
 // is unknown to the resolver. No I/O: the resolver is a map lookup.
-func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString, streamID string) *pb.ThumbnailAssets {
+func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString, streamID string) *sharedpb.ThumbnailAssets {
 	if s.clusterURLs == nil || !activeIngest.Valid || activeIngest.String == "" || streamID == "" {
 		return nil
 	}
@@ -7670,26 +7677,26 @@ func (s *CommodoreServer) buildStreamThumbnailAssets(activeIngest sql.NullString
 // artifact. Returns nil unless has_thumbnails is TRUE and a cluster is
 // known. Caller supplies COALESCE(storage_cluster_id, origin_cluster_id)
 // as the authoritative thumbnail cluster.
-func (s *CommodoreServer) buildArtifactThumbnailAssets(hasThumbnails bool, cluster sql.NullString, assetKey string) *pb.ThumbnailAssets {
+func (s *CommodoreServer) buildArtifactThumbnailAssets(hasThumbnails bool, cluster sql.NullString, assetKey string) *sharedpb.ThumbnailAssets {
 	if !hasThumbnails || s.clusterURLs == nil || !cluster.Valid || cluster.String == "" || assetKey == "" {
 		return nil
 	}
 	return s.clusterURLs.BuildThumbnailAssets(cluster.String, assetKey)
 }
 
-func posterOnlyThumbnailAssets(assets *pb.ThumbnailAssets) *pb.ThumbnailAssets {
+func posterOnlyThumbnailAssets(assets *sharedpb.ThumbnailAssets) *sharedpb.ThumbnailAssets {
 	if assets == nil || assets.GetPosterUrl() == "" {
 		return nil
 	}
-	return &pb.ThumbnailAssets{
+	return &sharedpb.ThumbnailAssets{
 		PosterUrl: assets.GetPosterUrl(),
 		AssetKey:  assets.GetAssetKey(),
 	}
 }
 
 // scanStream scans config-only stream data; operational state comes from Periscope Data Plane
-func (s *CommodoreServer) scanStream(rows *sql.Rows) (*pb.Stream, error) {
-	var stream pb.Stream
+func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error) {
+	var stream commodorepb.Stream
 	var description, sourceURIEnc, activeIngest sql.NullString
 	var pullEnabled sql.NullBool
 	var pullAllowedClusters pq.StringArray
@@ -7906,7 +7913,7 @@ func getDefaultPermissions(role string) []string {
 // ============================================================================
 
 // CreateClip registers clip in business registry and orchestrates creation via Foghorn
-func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	// Get user and tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -7996,7 +8003,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// tenant per-class default → system default), clamped by the tier cap.
 	// User-supplied expires_at is treated as a per-asset override and
 	// clamped to the same cap.
-	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, tenantID, streamID)
+	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, tenantID, streamID)
 	if retentionErr != nil {
 		s.logger.WithError(retentionErr).WithFields(logging.Fields{
 			"tenant_id": tenantID,
@@ -8045,7 +8052,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	paramsJSON, _ := json.Marshal(requestedParams)
 
 	// Build Foghorn request with pre-generated hash
-	foghornReq := &pb.CreateClipRequest{
+	foghornReq := &sharedpb.CreateClipRequest{
 		TenantId:           tenantID,
 		StreamInternalName: internalName,
 		ClipHash:           &clipHash, // Pass the hash we generated
@@ -8148,7 +8155,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 // successful clip (it alone resolves relative/media-time anchors and best-effort
 // coverage), so ok=false means the fields are absent — a contract violation the
 // caller fails closed on rather than persisting request-derived timing.
-func fulfilledClipTiming(resp *pb.CreateClipResponse) (startTimeMs, durationMs int64, ok bool) {
+func fulfilledClipTiming(resp *sharedpb.CreateClipResponse) (startTimeMs, durationMs int64, ok bool) {
 	startTimeMs, durationMs = resp.GetEffectiveStartMs(), resp.GetEffectiveDurationMs()
 	return startTimeMs, durationMs, startTimeMs > 0 && durationMs > 0
 }
@@ -8201,7 +8208,7 @@ func vodListSortColumn(raw string) string {
 
 // GetClips returns clips from Commodore business registry
 // Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
-func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest) (*pb.GetClipsResponse, error) {
+func (s *CommodoreServer) GetClips(ctx context.Context, req *sharedpb.GetClipsRequest) (*sharedpb.GetClipsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8278,7 +8285,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var clips []*pb.ClipInfo
+	var clips []*sharedpb.ClipInfo
 	for rows.Next() {
 		var (
 			id, clipHash, playbackID, streamID string
@@ -8301,7 +8308,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 			continue
 		}
 
-		clip := &pb.ClipInfo{
+		clip := &sharedpb.ClipInfo{
 			Id:         id,
 			ClipHash:   clipHash,
 			PlaybackId: playbackID,
@@ -8364,9 +8371,9 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	}
 
 	// Build response
-	resp := &pb.GetClipsResponse{
+	resp := &sharedpb.GetClipsResponse{
 		Clips: clips,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -8393,7 +8400,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 
 // GetClip returns clip business registry metadata (no lifecycle data).
 // Lifecycle/access data must come from Periscope (data plane).
-func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (*pb.ClipInfo, error) {
+func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequest) (*sharedpb.ClipInfo, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8438,7 +8445,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	clip := &pb.ClipInfo{
+	clip := &sharedpb.ClipInfo{
 		Id:         id,
 		ClipHash:   clipHash,
 		PlaybackId: playbackID,
@@ -8479,7 +8486,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 }
 
 // DeleteClip proxies clip deletion to Foghorn
-func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error) {
+func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8514,7 +8521,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 			s.logger.WithError(delErr).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from business registry")
 		}
 
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -8525,7 +8532,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 // ============================================================================
 
 // StopDVR proxies DVR stop to Foghorn
-func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error) {
+func (s *CommodoreServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRequest) (*sharedpb.StopDVRResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8557,7 +8564,7 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 }
 
 // DeleteDVR proxies DVR deletion to Foghorn
-func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error) {
+func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVRRequest) (*sharedpb.DeleteDVRResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8592,7 +8599,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 			s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from business registry")
 		}
 
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -8600,7 +8607,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 
 // ListDVRRequests returns DVR recordings from Commodore business registry
 // Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
-func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRecordingsRequest) (*pb.ListDVRRecordingsResponse, error) {
+func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *sharedpb.ListDVRRecordingsRequest) (*sharedpb.ListDVRRecordingsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -8678,7 +8685,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var recordings []*pb.DVRInfo
+	var recordings []*sharedpb.DVRInfo
 	for rows.Next() {
 		var (
 			id, dvrHash, playbackID, internalName, streamID, title string
@@ -8697,7 +8704,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 			continue
 		}
 
-		recording := &pb.DVRInfo{
+		recording := &sharedpb.DVRInfo{
 			Id:              &id,
 			DvrHash:         dvrHash,
 			PlaybackId:      &playbackID,
@@ -8747,9 +8754,9 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	}
 
 	// Build response
-	resp := &pb.ListDVRRecordingsResponse{
+	resp := &sharedpb.ListDVRRecordingsResponse{
 		DvrRecordings: recordings,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -8776,7 +8783,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
-func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	contentID := req.GetContentId()
 	if normalized, ok, err := s.normalizeArtifactPlaybackID(ctx, contentID); err != nil {
@@ -8895,7 +8902,7 @@ func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, conte
 
 // ResolveIngestEndpoint proxies ingest endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
-func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.IngestEndpointRequest) (*pb.IngestEndpointResponse, error) {
+func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *sharedpb.IngestEndpointRequest) (*sharedpb.IngestEndpointResponse, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 
 	var foghornClient *foghornclient.GRPCClient
@@ -8983,7 +8990,7 @@ func (s *CommodoreServer) resolveFoghornForNode(ctx context.Context, nodeID, req
 }
 
 // SetNodeOperationalMode proxies mode changes to Foghorn via the node's cluster.
-func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -9002,7 +9009,7 @@ func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *pb.Se
 }
 
 // GetNodeHealth proxies health queries to Foghorn via the node's cluster.
-func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -9079,19 +9086,19 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	go commodoreServer.runServiceEventOutboxWorker(context.Background())
 
 	// Register all services
-	pb.RegisterInternalServiceServer(server, commodoreServer)
-	pb.RegisterUserServiceServer(server, commodoreServer)
-	pb.RegisterStreamServiceServer(server, commodoreServer)
-	pb.RegisterStreamKeyServiceServer(server, commodoreServer)
-	pb.RegisterDeveloperServiceServer(server, commodoreServer)
+	commodorepb.RegisterInternalServiceServer(server, commodoreServer)
+	commodorepb.RegisterUserServiceServer(server, commodoreServer)
+	commodorepb.RegisterStreamServiceServer(server, commodoreServer)
+	commodorepb.RegisterStreamKeyServiceServer(server, commodoreServer)
+	commodorepb.RegisterDeveloperServiceServer(server, commodoreServer)
 	// ClipService, DVRService, ViewerService, and VodService proxy to Foghorn via gRPC
-	pb.RegisterClipServiceServer(server, commodoreServer)
-	pb.RegisterDVRServiceServer(server, commodoreServer)
-	pb.RegisterViewerServiceServer(server, commodoreServer)
-	pb.RegisterVodServiceServer(server, commodoreServer)
-	pb.RegisterNodeManagementServiceServer(server, commodoreServer)
-	pb.RegisterPushTargetServiceServer(server, commodoreServer)
-	pb.RegisterPlaybackAccessControlServiceServer(server, commodoreServer)
+	commodorepb.RegisterClipServiceServer(server, commodoreServer)
+	commodorepb.RegisterDVRServiceServer(server, commodoreServer)
+	commodorepb.RegisterViewerServiceServer(server, commodoreServer)
+	commodorepb.RegisterVodServiceServer(server, commodoreServer)
+	commodorepb.RegisterNodeManagementServiceServer(server, commodoreServer)
+	commodorepb.RegisterPushTargetServiceServer(server, commodoreServer)
+	commodorepb.RegisterPlaybackAccessControlServiceServer(server, commodoreServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -9236,7 +9243,7 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 // ============================================================================
 
 // CreateVodUpload registers VOD in business registry and initiates multipart upload via Foghorn
-func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
 	// Get user and tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -9276,7 +9283,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	// override (uploads aren't bound to a stream); cascade collapses to
 	// tenant per-class default → system default (keep forever), clamped
 	// by the tier cap (Free=30d, paid=uncapped).
-	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, tenantID, "")
+	resolvedDays, retentionErr := s.resolveInitialRetention(ctx, commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, tenantID, "")
 	if retentionErr != nil {
 		s.logger.WithError(retentionErr).WithField("tenant_id", tenantID).Warn("VOD retention resolution failed; falling back to 30-day horizon for safety")
 		resolvedDays = 30
@@ -9314,7 +9321,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	}).Info("Registered VOD asset in business registry")
 
 	// Build Foghorn request with pre-generated hash
-	foghornReq := &pb.CreateVodUploadRequest{
+	foghornReq := &sharedpb.CreateVodUploadRequest{
 		TenantId:      tenantID,
 		UserId:        userID,
 		Filename:      req.Filename,
@@ -9349,7 +9356,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 }
 
 // CompleteVodUpload finalizes multipart upload via Foghorn
-func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
 	// Get tenant context from metadata (for logging/verification)
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -9371,7 +9378,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 	processesJSON := s.resolveProcessesJSON(ctx, tenantID, "", vodRoute.clusterID, "vod")
 
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
-	foghornReq := &pb.CompleteVodUploadRequest{
+	foghornReq := &sharedpb.CompleteVodUploadRequest{
 		TenantId:      tenantID,
 		UploadId:      req.UploadId,
 		Parts:         req.Parts,
@@ -9395,7 +9402,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 
 // GetVodUploadStatus reads media upload state from Foghorn, then validates and
 // enriches the response with Commodore-owned VOD registry metadata.
-func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *pb.GetVodUploadStatusRequest) (*pb.GetVodUploadStatusResponse, error) {
+func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.GetVodUploadStatusRequest) (*sharedpb.GetVodUploadStatusResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -9442,7 +9449,7 @@ func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *pb.GetVod
 }
 
 // AbortVodUpload cancels multipart upload via Foghorn
-func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUploadRequest) (*pb.AbortVodUploadResponse, error) {
+func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.AbortVodUploadRequest) (*sharedpb.AbortVodUploadResponse, error) {
 	// Get tenant context from metadata
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -9473,7 +9480,7 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUp
 
 // GetVodAsset returns VOD business metadata from Commodore registry
 // Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
-func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRequest) (*pb.VodAssetInfo, error) {
+func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *sharedpb.GetVodAssetRequest) (*sharedpb.VodAssetInfo, error) {
 	// Get tenant context from metadata
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -9522,12 +9529,12 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 
 	// Build response with business metadata only
 	// Status/storageLocation will be enriched by Gateway via Periscope
-	asset := &pb.VodAssetInfo{
+	asset := &sharedpb.VodAssetInfo{
 		Id:           id,
 		ArtifactHash: vodHash,
 		PlaybackId:   &playbackID,
 		Filename:     filename,
-		Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
+		Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
 		CreatedAt:    timestamppb.New(createdAt),
 		UpdatedAt:    timestamppb.New(updatedAt),
 	}
@@ -9564,7 +9571,7 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 
 // ListVodAssets returns VOD assets from Commodore business registry with pagination
 // Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
-func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAssetsRequest) (*pb.ListVodAssetsResponse, error) {
+func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *sharedpb.ListVodAssetsRequest) (*sharedpb.ListVodAssetsResponse, error) {
 	// Get tenant context from metadata
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -9638,7 +9645,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	}
 	defer func() { _ = rows.Close() }()
 
-	var assets []*pb.VodAssetInfo
+	var assets []*sharedpb.VodAssetInfo
 	for rows.Next() {
 		var (
 			id                   string
@@ -9666,12 +9673,12 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 
 		// Build asset with business metadata only
 		// Status/storageLocation will be enriched by Gateway via Periscope
-		asset := &pb.VodAssetInfo{
+		asset := &sharedpb.VodAssetInfo{
 			Id:           id,
 			ArtifactHash: vodHash,
 			PlaybackId:   &playbackID,
 			Filename:     filename,
-			Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
+			Status:       sharedpb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
 			CreatedAt:    timestamppb.New(createdAt),
 			UpdatedAt:    timestamppb.New(updatedAt),
 		}
@@ -9729,9 +9736,9 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	}
 
 	// Build response
-	resp := &pb.ListVodAssetsResponse{
+	resp := &sharedpb.ListVodAssetsResponse{
 		Assets: assets,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -9760,7 +9767,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 // registry projection. This is intentionally served from Commodore instead of
 // Bridge joining one page each of clips/DVR/VOD, so search, sorting, and
 // pagination run against the full tenant dataset.
-func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.ListStorageArtifactsRequest) (*pb.ListStorageArtifactsResponse, error) {
+func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -9932,7 +9939,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.List
 	}
 	defer func() { _ = rows.Close() }()
 
-	var artifacts []*pb.StorageArtifactInfo
+	var artifacts []*commodorepb.StorageArtifactInfo
 	for rows.Next() {
 		var (
 			kind, id, hash, playbackID, streamID, streamTitle, title, secondary string
@@ -9951,7 +9958,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.List
 			continue
 		}
 
-		artifact := &pb.StorageArtifactInfo{
+		artifact := &commodorepb.StorageArtifactInfo{
 			Kind:             kind,
 			Id:               id,
 			ArtifactHash:     hash,
@@ -10004,7 +10011,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.List
 		artifacts = artifacts[:limit]
 	}
 
-	return &pb.ListStorageArtifactsResponse{
+	return &commodorepb.ListStorageArtifactsResponse{
 		Artifacts:   artifacts,
 		TotalCount:  total,
 		HasNextPage: hasNext,
@@ -10012,7 +10019,7 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *pb.List
 }
 
 // DeleteVodAsset deletes a VOD asset via Foghorn
-func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error) {
+func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.DeleteVodAssetRequest) (*sharedpb.DeleteVodAssetResponse, error) {
 	// Get tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -10049,7 +10056,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 
 	// Emit deletion event
 	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -10063,7 +10070,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below -$10.
 // Forwards to Foghorn which sends stop_sessions to affected nodes.
-func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.TerminateTenantStreamsRequest) (*pb.TerminateTenantStreamsResponse, error) {
+func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *foghornpb.TerminateTenantStreamsRequest) (*foghornpb.TerminateTenantStreamsResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -10129,7 +10136,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		"clusters_contacted":  len(targets),
 	}).Info("Tenant streams terminated across all clusters")
 
-	return &pb.TerminateTenantStreamsResponse{
+	return &foghornpb.TerminateTenantStreamsResponse{
 		StreamsTerminated:  totalStreams,
 		SessionsTerminated: totalSessions,
 		StreamNames:        allStreamNames,
@@ -10137,7 +10144,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.InvalidateTenantCacheRequest) (*pb.InvalidateTenantCacheResponse, error) {
+func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghornpb.InvalidateTenantCacheRequest) (*foghornpb.InvalidateTenantCacheResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -10199,7 +10206,7 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 		"clusters_contacted":  len(targets),
 	}).Info("Tenant cache invalidated across all clusters")
 
-	return &pb.InvalidateTenantCacheResponse{
+	return &foghornpb.InvalidateTenantCacheResponse{
 		EntriesInvalidated: totalInvalidated,
 	}, nil
 }
@@ -10211,7 +10218,7 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 
 // GetTenantUserCount returns active and total user counts for a tenant.
 // Called by Purser billing job for user-based billing calculations.
-func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *pb.GetTenantUserCountRequest) (*pb.GetTenantUserCountResponse, error) {
+func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *commodorepb.GetTenantUserCountRequest) (*commodorepb.GetTenantUserCountResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -10234,7 +10241,7 @@ func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *pb.GetTen
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.GetTenantUserCountResponse{
+	return &commodorepb.GetTenantUserCountResponse{
 		ActiveCount: activeCount,
 		TotalCount:  totalCount,
 	}, nil
@@ -10243,7 +10250,7 @@ func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *pb.GetTen
 // GetTenantPrimaryUser returns the primary user info for a tenant.
 // Called by Purser billing job for billing notifications and invoices.
 // Returns the first owner/admin user, or the first user if no privileged user exists.
-func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetTenantPrimaryUserRequest) (*pb.GetTenantPrimaryUserResponse, error) {
+func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *commodorepb.GetTenantPrimaryUserRequest) (*commodorepb.GetTenantPrimaryUserResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -10287,7 +10294,7 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetT
 		name += lastName.String
 	}
 
-	return &pb.GetTenantPrimaryUserResponse{
+	return &commodorepb.GetTenantPrimaryUserResponse{
 		UserId: userID,
 		Email:  email,
 		Name:   name,
@@ -10296,7 +10303,7 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetT
 
 // CreateUserInTenant creates a user in an existing tenant without triggering
 // tenant creation or billing initialization. SERVICE_TOKEN auth only.
-func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *pb.CreateUserInTenantRequest) (*pb.CreateUserInTenantResponse, error) {
+func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodorepb.CreateUserInTenantRequest) (*commodorepb.CreateUserInTenantResponse, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "CreateUserInTenant requires service token auth")
 	}
@@ -10360,8 +10367,8 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *pb.Create
 		"role":      role,
 	}).Info("User created in existing tenant via CreateUserInTenant")
 
-	return &pb.CreateUserInTenantResponse{
-		User: &pb.User{
+	return &commodorepb.CreateUserInTenantResponse{
+		User: &commodorepb.User{
 			Id:          userID,
 			TenantId:    tenantID,
 			Email:       &email,

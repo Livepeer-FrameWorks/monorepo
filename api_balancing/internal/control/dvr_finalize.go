@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -271,10 +272,10 @@ func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string
 			return nil
 		}
 		names := make([]string, 0, len(pending))
-		refs := make([]*pb.DVRSegmentRef, 0, len(pending))
+		refs := make([]*ipcpb.DVRSegmentRef, 0, len(pending))
 		for _, r := range pending {
 			names = append(names, r.SegmentName)
-			refs = append(refs, &pb.DVRSegmentRef{
+			refs = append(refs, &ipcpb.DVRSegmentRef{
 				SegmentName:  r.SegmentName,
 				Sequence:     r.Sequence,
 				MediaStartMs: r.MediaStartMs,
@@ -283,7 +284,7 @@ func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string
 				Status:       r.Status,
 			})
 		}
-		if err := SendRetryDVRSegmentUpload(preferNodeID, &pb.RetryDVRSegmentUpload{
+		if err := SendRetryDVRSegmentUpload(preferNodeID, &ipcpb.RetryDVRSegmentUpload{
 			DvrHash:      dvrHash,
 			SegmentNames: names,
 			Segments:     refs,
@@ -322,7 +323,7 @@ func backfillDVRRetention(ctx context.Context, dvrHash string, retentionUntilArg
 	if !ok {
 		return fmt.Errorf("retention_until has unexpected type for %s", dvrHash)
 	}
-	updateReq := &pb.UpdateDVRRetentionRequest{
+	updateReq := &commodorepb.UpdateDVRRetentionRequest{
 		TenantId:       readArtifactTenant(ctx, dvrHash),
 		DvrHash:        dvrHash,
 		RetentionUntil: timestamppb.New(retentionTime),

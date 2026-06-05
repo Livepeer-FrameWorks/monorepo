@@ -34,7 +34,6 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	fwsops "frameworks/cli/pkg/sops"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
@@ -44,6 +43,8 @@ import (
 	"frameworks/cli/pkg/ssh"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
@@ -1371,10 +1372,10 @@ func serviceExists(state *detect.ServiceState) bool {
 }
 
 type serviceClusterAssignmentClient interface {
-	AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) error
-	DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error)
-	ListServices(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListServicesResponse, error)
-	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *pb.CursorPaginationRequest) (*pb.ListServiceInstancesResponse, error)
+	AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) error
+	DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error)
+	ListServices(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesResponse, error)
+	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
 }
 
 func resolveQuartermasterRuntimeData(manifest *inventory.Manifest, runtimeData map[string]any) (string, string, error) {
@@ -1979,7 +1980,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 		}
 		for _, assignment := range plan.assignments {
 			assignCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := client.AssignServiceToCluster(assignCtx, &pb.AssignServiceToClusterRequest{
+			err := client.AssignServiceToCluster(assignCtx, &quartermasterpb.AssignServiceToClusterRequest{
 				ClusterId:   assignment.clusterID,
 				InstanceIds: assignment.instanceIDs,
 				ServiceType: plan.serviceName,
@@ -1998,7 +1999,7 @@ func reconcileServiceClusterAssignmentsWithClient(ctx context.Context, out io.Wr
 
 type serviceAssignmentPlan struct {
 	serviceName string
-	instances   []*pb.ServiceInstance
+	instances   []*quartermasterpb.ServiceInstance
 	assignments []serviceAssignmentTarget
 }
 
@@ -2059,7 +2060,7 @@ func serviceIDsByType(ctx context.Context, client serviceClusterAssignmentClient
 }
 
 func serviceCatalogByType(ctx context.Context, client serviceClusterAssignmentClient) (map[string]string, string, error) {
-	resp, err := client.ListServices(ctx, &pb.CursorPaginationRequest{First: 1000})
+	resp, err := client.ListServices(ctx, &commonpb.CursorPaginationRequest{First: 1000})
 	if err != nil {
 		return nil, "", fmt.Errorf("list Quartermaster services: %w", err)
 	}
@@ -2093,19 +2094,19 @@ func serviceCatalogByType(ctx context.Context, client serviceClusterAssignmentCl
 	return out, catalogSummary, nil
 }
 
-func serviceInstancesForService(ctx context.Context, client serviceClusterAssignmentClient, serviceID string) ([]*pb.ServiceInstance, error) {
-	resp, err := client.ListServiceInstances(ctx, "", serviceID, "", &pb.CursorPaginationRequest{First: 1000})
+func serviceInstancesForService(ctx context.Context, client serviceClusterAssignmentClient, serviceID string) ([]*quartermasterpb.ServiceInstance, error) {
+	resp, err := client.ListServiceInstances(ctx, "", serviceID, "", &commonpb.CursorPaginationRequest{First: 1000})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetInstances(), nil
 }
 
-func serviceInstancesOnManifestHosts(manifest *inventory.Manifest, instances []*pb.ServiceInstance) []*pb.ServiceInstance {
+func serviceInstancesOnManifestHosts(manifest *inventory.Manifest, instances []*quartermasterpb.ServiceInstance) []*quartermasterpb.ServiceInstance {
 	if manifest == nil || len(manifest.Hosts) == 0 || len(instances) == 0 {
 		return nil
 	}
-	filtered := make([]*pb.ServiceInstance, 0, len(instances))
+	filtered := make([]*quartermasterpb.ServiceInstance, 0, len(instances))
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -2121,13 +2122,13 @@ func serviceInstancesOnManifestHosts(manifest *inventory.Manifest, instances []*
 	return filtered
 }
 
-func drainServiceAssignments(ctx context.Context, client serviceClusterAssignmentClient, serviceName string, instances []*pb.ServiceInstance) error {
+func drainServiceAssignments(ctx context.Context, client serviceClusterAssignmentClient, serviceName string, instances []*quartermasterpb.ServiceInstance) error {
 	for _, inst := range instances {
 		if inst.GetId() == "" {
 			continue
 		}
 		drainCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, err := client.DrainServiceInstance(drainCtx, &pb.DrainServiceInstanceRequest{
+		_, err := client.DrainServiceInstance(drainCtx, &quartermasterpb.DrainServiceInstanceRequest{
 			InstanceId:  inst.GetId(),
 			ServiceType: serviceName,
 		})
@@ -2207,7 +2208,7 @@ func serviceHostsForAssignmentTarget(serviceName string, svc inventory.ServiceCo
 	return filtered, nil
 }
 
-func desiredServiceInstanceIDs(serviceName string, hosts []string, instances []*pb.ServiceInstance) ([]string, error) {
+func desiredServiceInstanceIDs(serviceName string, hosts []string, instances []*quartermasterpb.ServiceInstance) ([]string, error) {
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("%s needs host or hosts before service-cluster assignments can be reconciled", serviceName)
 	}
@@ -2245,7 +2246,7 @@ type removedServicePlacement struct {
 	deployName   string
 	serviceID    string
 	svc          inventory.ServiceConfig
-	instance     *pb.ServiceInstance
+	instance     *quartermasterpb.ServiceInstance
 	nodeID       string
 	cleanupModes []string
 }
@@ -2363,7 +2364,7 @@ func reconcileRemovedServicePlacementsWithClient(ctx context.Context, out io.Wri
 	for _, placement := range placements {
 		if pkgdns.IsPoolAssignedServiceType(placement.serviceName) {
 			drainCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			_, drainErr := client.DrainServiceInstance(drainCtx, &pb.DrainServiceInstanceRequest{
+			_, drainErr := client.DrainServiceInstance(drainCtx, &quartermasterpb.DrainServiceInstanceRequest{
 				InstanceId:  placement.instance.GetId(),
 				ServiceType: placement.serviceName,
 			})
@@ -2528,7 +2529,7 @@ func phaseIncludesDeletedService(phase orchestrator.Phase, serviceName string) b
 	}
 }
 
-func removedPlacementCleanupModes(svc inventory.ServiceConfig, inst *pb.ServiceInstance) []string {
+func removedPlacementCleanupModes(svc inventory.ServiceConfig, inst *quartermasterpb.ServiceInstance) []string {
 	mode := strings.TrimSpace(svc.Mode)
 	if mode != "" {
 		return []string{mode}
@@ -2560,7 +2561,7 @@ func desiredPlacementHosts(manifest *inventory.Manifest, serviceName string, svc
 	return desired
 }
 
-func serviceInstanceShouldBePruned(inst *pb.ServiceInstance, desiredHosts map[string]struct{}) bool {
+func serviceInstanceShouldBePruned(inst *quartermasterpb.ServiceInstance, desiredHosts map[string]struct{}) bool {
 	if inst == nil || strings.TrimSpace(inst.GetId()) == "" {
 		return false
 	}

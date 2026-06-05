@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -37,7 +37,7 @@ func TestCreateBootstrapToken_Success(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	resp, err := server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Name: "my-token",
 		Kind: "service",
 	})
@@ -71,7 +71,7 @@ func TestCreateBootstrapToken_MissingName(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	_, err = server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Kind: "service",
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -88,7 +88,7 @@ func TestCreateBootstrapToken_InvalidKind(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	_, err = server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Name: "my-token",
 		Kind: "invalid_kind",
 	})
@@ -106,7 +106,7 @@ func TestCreateBootstrapToken_EdgeNodeRequiresTenantID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	_, err = server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Name: "edge-token",
 		Kind: "edge_node",
 	})
@@ -141,7 +141,7 @@ func TestCreateBootstrapToken_EdgeNodeWithTenantID(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	resp, err := server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Name:     "edge-token",
 		Kind:     "edge_node",
 		TenantId: &tenantID,
@@ -170,7 +170,7 @@ func TestCreateBootstrapToken_TokenHasCorrectPrefix(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO quartermaster\.bootstrap_tokens`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.CreateBootstrapToken(context.Background(), &pb.CreateBootstrapTokenRequest{
+	resp, err := server.CreateBootstrapToken(context.Background(), &quartermasterpb.CreateBootstrapTokenRequest{
 		Name: "test-token",
 		Kind: "infrastructure_node",
 	})

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 
 	"github.com/sirupsen/logrus"
@@ -15,7 +15,7 @@ import (
 
 type blockingBootstrapper struct{}
 
-func (b *blockingBootstrapper) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
+func (b *blockingBootstrapper) BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -26,7 +26,7 @@ func TestBootstrapSignalmanServiceTimeout(t *testing.T) {
 	cfg.AttemptTimeout = 10 * time.Millisecond
 	cfg.MaxAttempts = 1
 
-	_, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), &blockingBootstrapper{}, &pb.BootstrapServiceRequest{Type: "signalman"}, logger, cfg)
+	_, err := qmbootstrap.BootstrapServiceWithRetry(context.Background(), &blockingBootstrapper{}, &quartermasterpb.BootstrapServiceRequest{Type: "signalman"}, logger, cfg)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded, got %v", err)
 	}

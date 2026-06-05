@@ -15,8 +15,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"github.com/spf13/cobra"
 )
 
@@ -272,7 +271,7 @@ func runEdgeDeploy(ctx context.Context, cmd *cobra.Command, cliCtx fwcfg.Context
 
 	preferredNodeID := deriveEdgeNodeName(cfg.nodeName, "", cfg.sshTarget, cfg.sshTarget == "")
 	var (
-		resp *pb.PreRegisterEdgeResponse
+		resp *foghornpb.PreRegisterEdgeResponse
 		err  error
 	)
 	if cfg.foghornAddr != "" {
@@ -375,7 +374,7 @@ func loadActiveContextLax() (fwcfg.Context, error) {
 	return fwcfg.MaybeActiveContext(rt, fwcfg.OSEnv{}, loaded)
 }
 
-func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *pb.PreRegisterEdgeResponse, foghornGRPC string) error {
+func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *foghornpb.PreRegisterEdgeResponse, foghornGRPC string) error {
 	host := sshTargetToHost(cfg.sshTarget)
 	pool := fwssh.NewPool(30*time.Second, cfg.sshKey)
 	clusterID := cfg.clusterID
@@ -418,7 +417,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 	return ep.Provision(ctx, host, epConfig)
 }
 
-func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *pb.PreRegisterEdgeResponse, foghornGRPC string) error {
+func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp *foghornpb.PreRegisterEdgeResponse, foghornGRPC string) error {
 	host := inventory.Host{
 		ExternalIP: "localhost",
 		User:       os.Getenv("USER"),
@@ -466,7 +465,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 	return ep.Provision(ctx, host, epConfig)
 }
 
-func applyEdgeDeployTelemetryConfig(cfg *provisioner.EdgeProvisionConfig, resp *pb.PreRegisterEdgeResponse) error {
+func applyEdgeDeployTelemetryConfig(cfg *provisioner.EdgeProvisionConfig, resp *foghornpb.PreRegisterEdgeResponse) error {
 	if cfg == nil || resp == nil {
 		return nil
 	}

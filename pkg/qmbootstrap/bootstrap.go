@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // BootstrapClient is the minimum Quartermaster client surface required for service bootstrap.
 type BootstrapClient interface {
-	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+	BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error)
 }
 
 // RetryConfig controls retry behavior for service bootstrap registration.
@@ -36,7 +36,7 @@ func DefaultRetryConfig(serviceName string) RetryConfig {
 
 // BootstrapServiceWithRetry keeps attempting Quartermaster bootstrap until success,
 // attempts are exhausted, or the parent context is cancelled.
-func BootstrapServiceWithRetry(ctx context.Context, client BootstrapClient, req *pb.BootstrapServiceRequest, logger logging.Logger, cfg RetryConfig) (*pb.BootstrapServiceResponse, error) {
+func BootstrapServiceWithRetry(ctx context.Context, client BootstrapClient, req *quartermasterpb.BootstrapServiceRequest, logger logging.Logger, cfg RetryConfig) (*quartermasterpb.BootstrapServiceResponse, error) {
 	if client == nil {
 		return nil, fmt.Errorf("quartermaster bootstrap client is nil")
 	}

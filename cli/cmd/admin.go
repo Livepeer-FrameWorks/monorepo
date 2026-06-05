@@ -23,7 +23,10 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -296,7 +299,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		req := &pb.CreateAPITokenRequest{TokenName: name}
+		req := &commodorepb.CreateAPITokenRequest{TokenName: name}
 		if strings.TrimSpace(perms) != "" {
 			req.Permissions = strings.Split(perms, ",")
 		}
@@ -593,7 +596,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		}
 		defer cleanup()
 		defer func() { _ = qm.Close() }()
-		req := &pb.CreateBootstrapTokenRequest{
+		req := &quartermasterpb.CreateBootstrapTokenRequest{
 			Name:     name,
 			Kind:     kind,
 			Ttl:      normalizedTTL,
@@ -896,7 +899,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.CreateClusterRequest{
+		req := &quartermasterpb.CreateClusterRequest{
 			ClusterId:            clusterID,
 			ClusterName:          clusterName,
 			ClusterType:          clusterType,
@@ -997,7 +1000,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.UpdateClusterRequest{
+		req := &quartermasterpb.UpdateClusterRequest{
 			ClusterId: clusterID,
 		}
 		if v := optionalStringFlag(cmd, "cluster-name", clusterName); v != nil {
@@ -1160,7 +1163,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.GrantClusterAccessRequest{
+		req := &quartermasterpb.GrantClusterAccessRequest{
 			TenantId:       tenantID,
 			ClusterId:      clusterID,
 			AccessLevel:    accessLevel,
@@ -1233,7 +1236,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.CreateClusterInviteRequest{
+		req := &quartermasterpb.CreateClusterInviteRequest{
 			ClusterId:       clusterID,
 			OwnerTenantId:   ownerTenantID,
 			InvitedTenantId: invitedTenantID,
@@ -1289,7 +1292,7 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.ListClusterInvites(cctx, &pb.ListClusterInvitesRequest{
+		resp, err := qm.ListClusterInvites(cctx, &quartermasterpb.ListClusterInvitesRequest{
 			ClusterId:     clusterID,
 			OwnerTenantId: ownerTenantID,
 		})
@@ -1342,7 +1345,7 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		if err := qm.RevokeClusterInvite(cctx, &pb.RevokeClusterInviteRequest{
+		if err := qm.RevokeClusterInvite(cctx, &quartermasterpb.RevokeClusterInviteRequest{
 			InviteId:      inviteID,
 			OwnerTenantId: ownerTenantID,
 		}); err != nil {
@@ -1376,7 +1379,7 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.ListMyClusterInvites(cctx, &pb.ListMyClusterInvitesRequest{
+		resp, err := qm.ListMyClusterInvites(cctx, &quartermasterpb.ListMyClusterInvitesRequest{
 			TenantId: tenantID,
 		})
 		if err != nil {
@@ -1426,7 +1429,7 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.AcceptClusterInvite(cctx, &pb.AcceptClusterInviteRequest{
+		resp, err := qm.AcceptClusterInvite(cctx, &quartermasterpb.AcceptClusterInviteRequest{
 			TenantId:    tenantID,
 			InviteToken: inviteToken,
 		})
@@ -1480,7 +1483,7 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
-		resp, err := qm.ListMySubscriptions(cctx, &pb.ListMySubscriptionsRequest{TenantId: tenantID})
+		resp, err := qm.ListMySubscriptions(cctx, &quartermasterpb.ListMySubscriptionsRequest{TenantId: tenantID})
 		if err != nil {
 			return err
 		}
@@ -1588,7 +1591,7 @@ func newAdminClustersCreateEdgeCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.EnableSelfHostingRequest{
+		req := &quartermasterpb.EnableSelfHostingRequest{
 			TenantId:         tenantID,
 			ClusterName:      clusterName,
 			ControlClusterId: strings.TrimSpace(controlClusterID),
@@ -1672,7 +1675,7 @@ func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.CreateEnrollmentTokenRequest{
+		req := &quartermasterpb.CreateEnrollmentTokenRequest{
 			ClusterId: clusterID,
 		}
 		if tenantID != "" {
@@ -1828,7 +1831,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.CreateNodeRequest{
+		req := &quartermasterpb.CreateNodeRequest{
 			NodeId:    nodeID,
 			ClusterId: clusterID,
 			NodeName:  nodeName,
@@ -1986,7 +1989,7 @@ func newAdminServicePoolAddCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.AddToServicePool(cctx, &pb.AddToServicePoolRequest{
+		resp, err := qm.AddToServicePool(cctx, &quartermasterpb.AddToServicePoolRequest{
 			InstanceIds:   instanceIDs,
 			Count:         int32(count),
 			FromClusterId: fromCluster,
@@ -2027,7 +2030,7 @@ func newAdminServicePoolDrainCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := qm.DrainServiceInstance(cctx, &pb.DrainServiceInstanceRequest{
+		resp, err := qm.DrainServiceInstance(cctx, &quartermasterpb.DrainServiceInstanceRequest{
 			InstanceId:  instanceID,
 			ServiceType: serviceType,
 		})
@@ -2074,7 +2077,7 @@ func newAdminServicePoolAssignCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		if err := qm.AssignServiceToCluster(cctx, &pb.AssignServiceToClusterRequest{
+		if err := qm.AssignServiceToCluster(cctx, &quartermasterpb.AssignServiceToClusterRequest{
 			ClusterId:   clusterID,
 			InstanceIds: instanceIDs,
 			Count:       int32(count),
@@ -2130,7 +2133,7 @@ func newAdminServicePoolUnassignCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		if err := qm.UnassignServiceFromCluster(cctx, &pb.UnassignServiceFromClusterRequest{
+		if err := qm.UnassignServiceFromCluster(cctx, &quartermasterpb.UnassignServiceFromClusterRequest{
 			ClusterId:   clusterID,
 			InstanceIds: instanceIDs,
 			ServiceType: serviceType,
@@ -2166,7 +2169,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if ctxCfg.Auth.JWT != "" {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
-		req := &pb.UpdateNodeHardwareRequest{
+		req := &quartermasterpb.UpdateNodeHardwareRequest{
 			NodeId: nodeID,
 		}
 		if v := optionalInt32Flag(cmd, "cpu-cores", cpuCores); v != nil {
@@ -2357,7 +2360,7 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		req := &pb.SetClusterPricingRequest{
+		req := &purserpb.SetClusterPricingRequest{
 			ClusterId:    clusterID,
 			PricingModel: pricingModel,
 		}
@@ -2465,7 +2468,7 @@ Password input methods, in precedence order:
 				cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 			}
 
-			resp, err := cli.CreateUserInTenant(cctx, &pb.CreateUserInTenantRequest{
+			resp, err := cli.CreateUserInTenant(cctx, &commodorepb.CreateUserInTenantRequest{
 				TenantId:  tenantID,
 				Email:     email,
 				Password:  resolvedPW,
@@ -2596,7 +2599,7 @@ func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := fh.Federation().MigrateArtifactMetadata(cctx, &pb.MigrateArtifactMetadataRequest{
+		resp, err := fh.Federation().MigrateArtifactMetadata(cctx, &foghornfederationpb.MigrateArtifactMetadataRequest{
 			TenantId:        tenantID,
 			SourceClusterId: fromCluster,
 		})

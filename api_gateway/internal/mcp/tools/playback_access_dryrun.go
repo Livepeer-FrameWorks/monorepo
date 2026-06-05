@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -76,7 +76,7 @@ func handleTestPlaybackAccess(ctx context.Context, args TestPlaybackAccessInput,
 		}
 	}
 
-	resp, err := c.Commodore.TestPlaybackAccess(ctx, &pb.TestPlaybackAccessRequest{
+	resp, err := c.Commodore.TestPlaybackAccess(ctx, &foghornpb.TestPlaybackAccessRequest{
 		PlaybackId:   args.PlaybackID,
 		InternalName: args.InternalName,
 		ViewerToken:  args.ViewerToken,

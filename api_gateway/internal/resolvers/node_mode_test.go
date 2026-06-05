@@ -7,12 +7,12 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func TestNodeModeFieldsSkipNonEdgeNodes(t *testing.T) {
 	resolver := &Resolver{}
-	node := &pb.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:   "central-eu-1",
 		NodeType: "core",
 	}
@@ -36,7 +36,7 @@ func TestNodeModeFieldsSkipNonEdgeNodes(t *testing.T) {
 
 func TestNodeModeFieldsDefaultWhenControlPlaneUnavailable(t *testing.T) {
 	resolver := &Resolver{Logger: logging.NewLogger()}
-	node := &pb.InfrastructureNode{
+	node := &quartermasterpb.InfrastructureNode{
 		NodeId:   "regional-eu-1",
 		NodeType: "edge",
 	}

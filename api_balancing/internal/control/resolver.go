@@ -8,7 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // CommodoreClient holds the reference to the commodore gRPC client for resolution.
@@ -34,7 +34,7 @@ type StreamTarget struct {
 	TenantID string
 	// ContentType indicates the artifact type: "clip", "dvr", or "live"
 	ContentType       string
-	ClusterPeers      []*pb.TenantClusterPeer // Tenant's cluster context from Commodore
+	ClusterPeers      []*quartermasterpb.TenantClusterPeer // Tenant's cluster context from Commodore
 	RequiresAuth      bool
 	RequiresAuthKnown bool
 }
@@ -255,7 +255,7 @@ func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *
 	return nil
 }
 
-func resolveArtifactPolicy(ctx context.Context, artifactInternalName string) (bool, bool, []*pb.TenantClusterPeer) {
+func resolveArtifactPolicy(ctx context.Context, artifactInternalName string) (bool, bool, []*quartermasterpb.TenantClusterPeer) {
 	if CommodoreClient == nil || artifactInternalName == "" {
 		return false, false, nil
 	}

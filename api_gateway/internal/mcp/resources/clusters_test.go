@@ -1,9 +1,8 @@
 package resources
 
 import (
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestMarketplaceEntryToDetail_FullMapping(t *testing.T) {
@@ -11,12 +10,12 @@ func TestMarketplaceEntryToDetail_FullMapping(t *testing.T) {
 	utilization := 73.5
 	owner := "FrameWorks Ops"
 
-	entry := &pb.MarketplaceClusterEntry{
+	entry := &quartermasterpb.MarketplaceClusterEntry{
 		ClusterId:            "cluster-1",
 		ClusterName:          "Virginia Edge",
 		ShortDescription:     &description,
-		Visibility:           pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
-		PricingModel:         pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY,
+		Visibility:           quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+		PricingModel:         quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY,
 		MonthlyPriceCents:    4999,
 		RequiresApproval:     true,
 		OwnerName:            &owner,
@@ -24,7 +23,7 @@ func TestMarketplaceEntryToDetail_FullMapping(t *testing.T) {
 		MaxConcurrentViewers: 12000,
 		CurrentUtilization:   &utilization,
 		IsSubscribed:         true,
-		SubscriptionStatus:   pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE,
+		SubscriptionStatus:   quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE,
 		IsEligible:           true,
 	}
 
@@ -77,13 +76,13 @@ func TestMarketplaceEntryToDetail_FullMapping(t *testing.T) {
 func TestMarketplaceEntryToDetail_OptionalAndEligibilityRules(t *testing.T) {
 	denialReason := "billing tier does not allow this cluster"
 
-	entry := &pb.MarketplaceClusterEntry{
+	entry := &quartermasterpb.MarketplaceClusterEntry{
 		ClusterId:          "cluster-2",
 		ClusterName:        "Private Compute",
-		Visibility:         pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE,
-		PricingModel:       pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
+		Visibility:         quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE,
+		PricingModel:       quartermasterpb.ClusterPricingModel_CLUSTER_PRICING_METERED,
 		IsEligible:         true,
-		SubscriptionStatus: pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED,
+		SubscriptionStatus: quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED,
 		DenialReason:       &denialReason,
 	}
 

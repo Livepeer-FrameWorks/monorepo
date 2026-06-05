@@ -16,7 +16,8 @@ import (
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -73,7 +74,7 @@ type GatewayDepositState struct {
 }
 
 type livepeerServiceDiscoveryClient interface {
-	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error)
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
 }
 
 // TicketBroker contract on Arbitrum One (Livepeer protocol)

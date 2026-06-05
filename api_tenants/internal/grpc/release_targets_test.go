@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -187,7 +186,7 @@ func TestUpsertEdgeReleaseRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"channel", "version", "components", "published_at"}).
 			AddRow("stable", "v1.2.3", normalizedComponents, publishedAt))
 
-	resp, err := server.UpsertEdgeRelease(serviceCtx(), &pb.UpsertEdgeReleaseRequest{Release: &pb.EdgeRelease{
+	resp, err := server.UpsertEdgeRelease(serviceCtx(), &quartermasterpb.UpsertEdgeReleaseRequest{Release: &quartermasterpb.EdgeRelease{
 		Channel:        "stable",
 		Version:        "v1.2.3",
 		ComponentsJson: components,
@@ -227,7 +226,7 @@ func TestSetClusterReleaseTargetRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "channel", "target_version", "rollout_plan", "paused", "updated_at"}).
 			AddRow("media-eu-1", "stable", "v1.2.3", "{}", false, updatedAt))
 
-	resp, err := server.SetClusterReleaseTarget(serviceCtx(), &pb.SetClusterReleaseTargetRequest{Target: &pb.ClusterReleaseTarget{
+	resp, err := server.SetClusterReleaseTarget(serviceCtx(), &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 		ClusterId:       "media-eu-1",
 		Channel:         "stable",
 		TargetVersion:   "v1.2.3",
@@ -262,7 +261,7 @@ func TestGetClusterReleaseTargetRetriesRetryablePostgresError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "channel", "target_version", "rollout_plan", "paused", "updated_at"}).
 			AddRow("core-central-primary", "stable", "v1.2.3", `{"batch_size":1}`, false, updatedAt))
 
-	resp, err := server.GetClusterReleaseTarget(serviceCtx(), &pb.GetClusterReleaseTargetRequest{ClusterId: "core-central-primary"})
+	resp, err := server.GetClusterReleaseTarget(serviceCtx(), &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: "core-central-primary"})
 	if err != nil {
 		t.Fatalf("GetClusterReleaseTarget: %v", err)
 	}

@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 // resolveClipAbsoluteRangeMs converts an incoming CreateClipRequest's
@@ -27,7 +28,7 @@ import (
 // (StreamStateManager carries this once the buffer fills); without it
 // we cannot translate media offsets to wall-clock and the dispatch
 // rejects the request rather than mis-routing it to LIVE/DVR/CHAPTER.
-func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName string) (startMsAbs, endMsAbs int64, err error) {
+func resolveClipAbsoluteRangeMs(req *sharedpb.CreateClipRequest, streamInternalName string) (startMsAbs, endMsAbs int64, err error) {
 	nowMs := time.Now().UnixMilli()
 	mode := req.GetMode()
 	durationMs := int64(0)
@@ -44,7 +45,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 	}
 
 	switch mode {
-	case pb.ClipMode_CLIP_MODE_ABSOLUTE:
+	case sharedpb.ClipMode_CLIP_MODE_ABSOLUTE:
 		if req.StartUnix == nil {
 			return 0, 0, fmt.Errorf("ABSOLUTE clip requires start_unix")
 		}
@@ -57,7 +58,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 			return 0, 0, fmt.Errorf("ABSOLUTE clip requires stop_unix or duration_sec")
 		}
 
-	case pb.ClipMode_CLIP_MODE_RELATIVE:
+	case sharedpb.ClipMode_CLIP_MODE_RELATIVE:
 		if req.StartMs == nil {
 			return 0, 0, fmt.Errorf("RELATIVE clip requires start_ms")
 		}
@@ -74,7 +75,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 			return 0, 0, fmt.Errorf("RELATIVE clip requires stop_ms or duration_sec")
 		}
 
-	case pb.ClipMode_CLIP_MODE_DURATION:
+	case sharedpb.ClipMode_CLIP_MODE_DURATION:
 		if durationMs <= 0 {
 			return 0, 0, fmt.Errorf("DURATION clip requires positive duration_sec")
 		}
@@ -92,7 +93,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 		}
 		endMsAbs = startMsAbs + durationMs
 
-	case pb.ClipMode_CLIP_MODE_CLIP_NOW:
+	case sharedpb.ClipMode_CLIP_MODE_CLIP_NOW:
 		if durationMs <= 0 {
 			return 0, 0, fmt.Errorf("CLIP_NOW requires positive duration_sec")
 		}
@@ -103,7 +104,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 		startMsAbs = nowMs + startOffsetMs
 		endMsAbs = startMsAbs + durationMs
 
-	case pb.ClipMode_CLIP_MODE_UNSPECIFIED:
+	case sharedpb.ClipMode_CLIP_MODE_UNSPECIFIED:
 		// Legacy callers may omit mode; treat StartUnix-only inputs as ABSOLUTE.
 		if req.StartUnix != nil {
 			startMsAbs = *req.StartUnix * 1000
@@ -152,7 +153,7 @@ func resolveClipAbsoluteRangeMs(req *pb.CreateClipRequest, streamInternalName st
 const liveSHMWindowMs = 120 * 1000 // 120s — matches MistServer's default live look-ahead
 
 type clipSourceDecision struct {
-	kind                pb.ClipPullRequest_SourceKind
+	kind                ipcpb.ClipPullRequest_SourceKind
 	streamName          string // dvr+<internal_name> for DVR_ROLLING, vod+<artifact_hash> for CHAPTER
 	sourceNodeID        string // recording/source node for live-style pulls when known
 	dvrHash             string // populated for DVR_ROLLING
@@ -169,7 +170,7 @@ type clipSourceDecision struct {
 // and covEnd <= requestEnd). An empty streamName means the source is not
 // a candidate (e.g. no active DVR, no overlapping chapter).
 type clipCoverage struct {
-	kind                pb.ClipPullRequest_SourceKind
+	kind                ipcpb.ClipPullRequest_SourceKind
 	streamName          string
 	sourceNodeID        string
 	dvrHash             string
@@ -325,9 +326,9 @@ func (s *FoghornGRPCServer) computeClipCoverages(ctx context.Context, tenantID, 
 		liveAvailable = true
 	}
 	liveStart, liveEnd := liveCoverageRange(liveStartedAtMs, liveAvailable, clipStartMs, clipEndMs, nowMs)
-	live = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_LIVE, covStart: liveStart, covEnd: liveEnd}
-	dvr = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
-	chap = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER}
+	live = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_LIVE, covStart: liveStart, covEnd: liveEnd}
+	dvr = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
+	chap = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER}
 	if liveEnd > liveStart {
 		live.streamName = streamInternalName
 	}
@@ -346,8 +347,8 @@ func (s *FoghornGRPCServer) computeClipCoverages(ctx context.Context, tenantID, 
 // genuine DB errors propagate, because we must not downgrade to a shorter clip
 // or claim "no media" when the truth is we could not assess the source.
 func (s *FoghornGRPCServer) computeRecordedCoverages(ctx context.Context, tenantID, streamInternalName string, clipStartMs, clipEndMs int64) (dvr, chap clipCoverage, err error) {
-	dvr = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
-	chap = clipCoverage{kind: pb.ClipPullRequest_SOURCE_KIND_CHAPTER}
+	dvr = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_DVR_ROLLING}
+	chap = clipCoverage{kind: ipcpb.ClipPullRequest_SOURCE_KIND_CHAPTER}
 
 	// DVR_ROLLING — only when an actively-recording DVR with a known recording
 	// node exists. findRecordingDVR reports unusable recordings as an empty

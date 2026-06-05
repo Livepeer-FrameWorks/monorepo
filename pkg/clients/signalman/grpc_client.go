@@ -10,7 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -22,19 +22,19 @@ const DefaultServerName = "signalman.internal"
 // GRPCClient is the gRPC streaming client for Signalman
 type GRPCClient struct {
 	conn    *grpc.ClientConn
-	client  pb.SignalmanServiceClient
+	client  signalmanpb.SignalmanServiceClient
 	logger  logging.Logger
 	timeout time.Duration
 
 	// Subscription state
-	stream    pb.SignalmanService_SubscribeClient
-	eventChan chan *pb.SignalmanEvent
+	stream    signalmanpb.SignalmanService_SubscribeClient
+	eventChan chan *signalmanpb.SignalmanEvent
 	errorChan chan error
 	stopChan  chan struct{}
 	doneChan  chan struct{}
 	mutex     sync.RWMutex
 	connected bool
-	channels  []pb.Channel
+	channels  []signalmanpb.Channel
 	userID    string
 	tenantID  string
 }
@@ -101,7 +101,7 @@ func attachAuthMetadata(ctx context.Context, serviceToken string) context.Contex
 }
 
 // EventHandler is a function that handles incoming events
-type EventHandler func(event *pb.SignalmanEvent) error
+type EventHandler func(event *signalmanpb.SignalmanEvent) error
 
 // NewGRPCClient creates a new gRPC client for Signalman
 func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
@@ -139,10 +139,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	return &GRPCClient{
 		conn:      conn,
-		client:    pb.NewSignalmanServiceClient(conn),
+		client:    signalmanpb.NewSignalmanServiceClient(conn),
 		logger:    config.Logger,
 		timeout:   config.Timeout,
-		eventChan: make(chan *pb.SignalmanEvent, 256),
+		eventChan: make(chan *signalmanpb.SignalmanEvent, 256),
 		errorChan: make(chan error, 1),
 		stopChan:  make(chan struct{}),
 		doneChan:  make(chan struct{}),
@@ -246,22 +246,22 @@ func (c *GRPCClient) receiveLoop() {
 		}
 
 		switch m := msg.Message.(type) {
-		case *pb.ServerMessage_Event:
+		case *signalmanpb.ServerMessage_Event:
 			select {
 			case c.eventChan <- m.Event:
 			default:
 				c.logger.Warn("Event channel full, dropping event")
 			}
-		case *pb.ServerMessage_SubscriptionConfirmed:
+		case *signalmanpb.ServerMessage_SubscriptionConfirmed:
 			c.mutex.Lock()
 			c.channels = m.SubscriptionConfirmed.SubscribedChannels
 			c.mutex.Unlock()
 			c.logger.WithFields(logging.Fields{
 				"channels": c.channels,
 			}).Info("Subscription confirmed")
-		case *pb.ServerMessage_Pong:
+		case *signalmanpb.ServerMessage_Pong:
 			// Pong received, connection is alive
-		case *pb.ServerMessage_Error:
+		case *signalmanpb.ServerMessage_Error:
 			c.logger.WithFields(logging.Fields{
 				"code":    m.Error.Code,
 				"message": m.Error.Message,
@@ -271,7 +271,7 @@ func (c *GRPCClient) receiveLoop() {
 }
 
 // Subscribe subscribes to the specified channels
-func (c *GRPCClient) Subscribe(channels ...pb.Channel) error {
+func (c *GRPCClient) Subscribe(channels ...signalmanpb.Channel) error {
 	c.mutex.RLock()
 	if !c.connected {
 		c.mutex.RUnlock()
@@ -280,19 +280,19 @@ func (c *GRPCClient) Subscribe(channels ...pb.Channel) error {
 	stream := c.stream
 	c.mutex.RUnlock()
 
-	req := &pb.ClientMessage{
-		Message: &pb.ClientMessage_Subscribe{
-			Subscribe: &pb.SubscribeRequest{
+	req := &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Subscribe{
+			Subscribe: &signalmanpb.SubscribeRequest{
 				Channels: channels,
 			},
 		},
 	}
 
 	if c.userID != "" {
-		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.UserId = &c.userID //nolint:errcheck // type just set above
+		req.Message.(*signalmanpb.ClientMessage_Subscribe).Subscribe.UserId = &c.userID //nolint:errcheck // type just set above
 	}
 	if c.tenantID != "" {
-		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.TenantId = &c.tenantID //nolint:errcheck // type just set above
+		req.Message.(*signalmanpb.ClientMessage_Subscribe).Subscribe.TenantId = &c.tenantID //nolint:errcheck // type just set above
 	}
 
 	if err := stream.Send(req); err != nil {
@@ -307,7 +307,7 @@ func (c *GRPCClient) Subscribe(channels ...pb.Channel) error {
 }
 
 // Unsubscribe unsubscribes from the specified channels
-func (c *GRPCClient) Unsubscribe(channels ...pb.Channel) error {
+func (c *GRPCClient) Unsubscribe(channels ...signalmanpb.Channel) error {
 	c.mutex.RLock()
 	if !c.connected {
 		c.mutex.RUnlock()
@@ -316,9 +316,9 @@ func (c *GRPCClient) Unsubscribe(channels ...pb.Channel) error {
 	stream := c.stream
 	c.mutex.RUnlock()
 
-	req := &pb.ClientMessage{
-		Message: &pb.ClientMessage_Unsubscribe{
-			Unsubscribe: &pb.UnsubscribeRequest{
+	req := &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Unsubscribe{
+			Unsubscribe: &signalmanpb.UnsubscribeRequest{
 				Channels: channels,
 			},
 		},
@@ -341,9 +341,9 @@ func (c *GRPCClient) Ping() error {
 	stream := c.stream
 	c.mutex.RUnlock()
 
-	req := &pb.ClientMessage{
-		Message: &pb.ClientMessage_Ping{
-			Ping: &pb.Ping{
+	req := &signalmanpb.ClientMessage{
+		Message: &signalmanpb.ClientMessage_Ping{
+			Ping: &signalmanpb.Ping{
 				TimestampMs: time.Now().UnixMilli(),
 			},
 		},
@@ -353,7 +353,7 @@ func (c *GRPCClient) Ping() error {
 }
 
 // Events returns the channel for receiving events
-func (c *GRPCClient) Events() <-chan *pb.SignalmanEvent {
+func (c *GRPCClient) Events() <-chan *signalmanpb.SignalmanEvent {
 	return c.eventChan
 }
 
@@ -370,10 +370,10 @@ func (c *GRPCClient) IsConnected() bool {
 }
 
 // GetSubscribedChannels returns the currently subscribed channels
-func (c *GRPCClient) GetSubscribedChannels() []pb.Channel {
+func (c *GRPCClient) GetSubscribedChannels() []signalmanpb.Channel {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	result := make([]pb.Channel, len(c.channels))
+	result := make([]signalmanpb.Channel, len(c.channels))
 	copy(result, c.channels)
 	return result
 }
@@ -393,8 +393,8 @@ func (c *GRPCClient) StartEventHandler(handler EventHandler) {
 }
 
 // GetHubStats returns hub statistics (admin/monitoring)
-func (c *GRPCClient) GetHubStats(ctx context.Context) (*pb.HubStats, error) {
-	return c.client.GetHubStats(ctx, &pb.GetHubStatsRequest{})
+func (c *GRPCClient) GetHubStats(ctx context.Context) (*signalmanpb.HubStats, error) {
+	return c.client.GetHubStats(ctx, &signalmanpb.GetHubStatsRequest{})
 }
 
 // ============================================================================
@@ -403,30 +403,30 @@ func (c *GRPCClient) GetHubStats(ctx context.Context) (*pb.HubStats, error) {
 
 // SubscribeToStreams subscribes to the streams channel
 func (c *GRPCClient) SubscribeToStreams() error {
-	return c.Subscribe(pb.Channel_CHANNEL_STREAMS)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_STREAMS)
 }
 
 // SubscribeToAnalytics subscribes to the analytics channel
 func (c *GRPCClient) SubscribeToAnalytics() error {
-	return c.Subscribe(pb.Channel_CHANNEL_ANALYTICS)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_ANALYTICS)
 }
 
 // SubscribeToSystem subscribes to the system channel
 func (c *GRPCClient) SubscribeToSystem() error {
-	return c.Subscribe(pb.Channel_CHANNEL_SYSTEM)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_SYSTEM)
 }
 
 // SubscribeToAll subscribes to all channels
 func (c *GRPCClient) SubscribeToAll() error {
-	return c.Subscribe(pb.Channel_CHANNEL_ALL)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_ALL)
 }
 
 // SubscribeToMessaging subscribes to the messaging channel
 func (c *GRPCClient) SubscribeToMessaging() error {
-	return c.Subscribe(pb.Channel_CHANNEL_MESSAGING)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_MESSAGING)
 }
 
 // SubscribeToAI subscribes to the AI channel (Skipper investigation events)
 func (c *GRPCClient) SubscribeToAI() error {
-	return c.Subscribe(pb.Channel_CHANNEL_AI)
+	return c.Subscribe(signalmanpb.Channel_CHANNEL_AI)
 }

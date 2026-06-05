@@ -11,7 +11,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -229,11 +229,11 @@ func handleSearchSupportHistory(ctx context.Context, args SearchSupportHistoryIn
 
 		status := "unknown"
 		switch conv.Status {
-		case pb.ConversationStatus_CONVERSATION_STATUS_OPEN:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN:
 			status = "open"
-		case pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
 			status = "resolved"
-		case pb.ConversationStatus_CONVERSATION_STATUS_PENDING:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING:
 			status = "pending"
 		}
 
@@ -330,7 +330,7 @@ func isGenericSupportHistoryQuery(query string) bool {
 	return genericQueries[normalized]
 }
 
-func supportSearchResults(conversations []*pb.DeckhandConversation, limit int) []SearchResult {
+func supportSearchResults(conversations []*deckhandpb.DeckhandConversation, limit int) []SearchResult {
 	results := make([]SearchResult, 0, len(conversations))
 	for _, conv := range conversations {
 		if conv == nil {
@@ -342,11 +342,11 @@ func supportSearchResults(conversations []*pb.DeckhandConversation, limit int) [
 		}
 		status := "unknown"
 		switch conv.Status {
-		case pb.ConversationStatus_CONVERSATION_STATUS_OPEN:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN:
 			status = "open"
-		case pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
 			status = "resolved"
-		case pb.ConversationStatus_CONVERSATION_STATUS_PENDING:
+		case deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING:
 			status = "pending"
 		}
 		snippet := ""

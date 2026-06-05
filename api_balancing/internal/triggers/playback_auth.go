@@ -20,7 +20,8 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 const (
@@ -106,7 +107,7 @@ func denyDecision(policyType, reason, detail string) *PlaybackDecision {
 // Every deny returns a distinct log reason. Operators need this to
 // distinguish "customer-misconfigured" from "actual attack" from
 // "infrastructure error."
-func (p *Processor) enforcePlaybackPolicy(ctx context.Context, internalName string, marker streamContext, userNew *pb.ViewerConnectTrigger) (string, error) {
+func (p *Processor) enforcePlaybackPolicy(ctx context.Context, internalName string, marker streamContext, userNew *ipcpb.ViewerConnectTrigger) (string, error) {
 	if marker.RequiresAuthKnown && !marker.RequiresAuth {
 		return "true", nil
 	}
@@ -141,12 +142,12 @@ type SigningKeyUseRecorder interface {
 //
 // Returns the "true"/"false" Mist string. Callers that need diagnostic detail
 // should use EvaluatePlaybackPolicyDetailed.
-func EvaluatePlaybackPolicy(ctx context.Context, logger logging.Logger, internalName string, userNew *pb.ViewerConnectTrigger, policy *pb.ResolvePlaybackPolicyResponse) string {
+func EvaluatePlaybackPolicy(ctx context.Context, logger logging.Logger, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.ResolvePlaybackPolicyResponse) string {
 	return EvaluatePlaybackPolicyDetailed(ctx, logger, internalName, userNew, policy, nil).MistDecision()
 }
 
 // EvaluatePlaybackPolicyWithRecorder applies a resolved policy and records successful JWT key use.
-func EvaluatePlaybackPolicyWithRecorder(ctx context.Context, logger logging.Logger, internalName string, userNew *pb.ViewerConnectTrigger, policy *pb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) string {
+func EvaluatePlaybackPolicyWithRecorder(ctx context.Context, logger logging.Logger, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) string {
 	return EvaluatePlaybackPolicyDetailed(ctx, logger, internalName, userNew, policy, recorder).MistDecision()
 }
 
@@ -156,12 +157,12 @@ func EvaluatePlaybackPolicyWithRecorder(ctx context.Context, logger logging.Logg
 //
 // Webhook policies make a real outbound HTTP request. Callers must validate
 // tenant ownership of the target before invoking this routine.
-func EvaluatePlaybackPolicyDetailed(ctx context.Context, logger logging.Logger, internalName string, userNew *pb.ViewerConnectTrigger, policy *pb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) *PlaybackDecision {
+func EvaluatePlaybackPolicyDetailed(ctx context.Context, logger logging.Logger, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) *PlaybackDecision {
 	p := &Processor{logger: logger}
 	return p.evaluatePlaybackPolicyDetailed(ctx, internalName, userNew, policy, recorder)
 }
 
-func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internalName string, userNew *pb.ViewerConnectTrigger, policy *pb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) *PlaybackDecision {
+func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.ResolvePlaybackPolicyResponse, recorder SigningKeyUseRecorder) *PlaybackDecision {
 	if policy == nil {
 		p.logPlaybackDeny(internalName, userNew, "policy-empty", "")
 		return denyDecision("", "policy-empty", "")
@@ -179,7 +180,7 @@ func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internal
 	}
 }
 
-func (p *Processor) enforceJWTPolicy(internalName string, userNew *pb.ViewerConnectTrigger, tenantID string, policy *pb.PlaybackJwtPolicy, recorder SigningKeyUseRecorder) *PlaybackDecision {
+func (p *Processor) enforceJWTPolicy(internalName string, userNew *ipcpb.ViewerConnectTrigger, tenantID string, policy *commodorepb.PlaybackJwtPolicy, recorder SigningKeyUseRecorder) *PlaybackDecision {
 	if policy == nil {
 		p.logPlaybackDeny(internalName, userNew, "policy-jwt-empty", "")
 		return denyDecision("jwt", "policy-jwt-empty", "")
@@ -309,7 +310,7 @@ func jwtDenyReason(err error) string {
 // enforceWebhookPolicy POSTs to the customer URL with an HMAC-signed body.
 // Allow only on 200; everything else (403, other 4xx, 5xx, timeout, network
 // error, blocked SSRF target) denies.
-func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName string, userNew *pb.ViewerConnectTrigger, policy *pb.PlaybackWebhookPolicy) *PlaybackDecision {
+func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.PlaybackWebhookPolicy) *PlaybackDecision {
 	if policy == nil || policy.GetUrl() == "" {
 		p.logPlaybackDeny(internalName, userNew, "webhook-no-url", "")
 		return denyDecision("webhook", "webhook-no-url", "")
@@ -409,7 +410,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 	}
 }
 
-func (p *Processor) logPlaybackDeny(internalName string, userNew *pb.ViewerConnectTrigger, reason, detail string) {
+func (p *Processor) logPlaybackDeny(internalName string, userNew *ipcpb.ViewerConnectTrigger, reason, detail string) {
 	if p.metrics != nil {
 		if p.metrics.PlaybackDenyTotal != nil {
 			p.metrics.PlaybackDenyTotal.WithLabelValues(reason).Inc()

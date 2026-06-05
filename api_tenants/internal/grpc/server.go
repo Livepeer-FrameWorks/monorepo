@@ -34,7 +34,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
@@ -55,13 +58,13 @@ import (
 
 // QuartermasterServer implements the Quartermaster gRPC services
 type QuartermasterServer struct {
-	pb.UnimplementedTenantServiceServer
-	pb.UnimplementedBootstrapServiceServer
-	pb.UnimplementedNodeServiceServer
-	pb.UnimplementedClusterServiceServer
-	pb.UnimplementedMeshServiceServer
-	pb.UnimplementedServiceRegistryServiceServer
-	pb.UnimplementedIngressServiceServer
+	quartermasterpb.UnimplementedTenantServiceServer
+	quartermasterpb.UnimplementedBootstrapServiceServer
+	quartermasterpb.UnimplementedNodeServiceServer
+	quartermasterpb.UnimplementedClusterServiceServer
+	quartermasterpb.UnimplementedMeshServiceServer
+	quartermasterpb.UnimplementedServiceRegistryServiceServer
+	quartermasterpb.UnimplementedIngressServiceServer
 	db              *sql.DB
 	logger          logging.Logger
 	navigatorClient *navigator.Client
@@ -281,10 +284,10 @@ func isLoopbackAddress(host string) bool {
 
 // ValidateTenant validates a tenant and returns its features/limits
 // Billing info is fetched via Purser gRPC (no cross-service DB access)
-func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.ValidateTenantRequest) (*pb.ValidateTenantResponse, error) {
+func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
-		return &pb.ValidateTenantResponse{
+		return &quartermasterpb.ValidateTenantResponse{
 			Valid: false,
 			Error: "tenant_id required",
 		}, nil
@@ -304,7 +307,7 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ValidateTenantResponse{
+		return &quartermasterpb.ValidateTenantResponse{
 			Valid: false,
 			Error: "Tenant not found",
 		}, nil
@@ -341,7 +344,7 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 		billingModel = "postpaid"
 	}
 
-	return &pb.ValidateTenantResponse{
+	return &quartermasterpb.ValidateTenantResponse{
 		Valid:              isActive,
 		TenantId:           tenantID,
 		TenantName:         name,
@@ -355,13 +358,13 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 }
 
 // GetTenant retrieves tenant details by ID
-func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRequest) (*pb.GetTenantResponse, error) {
+func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterpb.GetTenantRequest) (*quartermasterpb.GetTenantResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var tenant pb.Tenant
+	var tenant quartermasterpb.Tenant
 	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
@@ -384,7 +387,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.GetTenantResponse{Error: "Tenant not found"}, nil
+		return &quartermasterpb.GetTenantResponse{Error: "Tenant not found"}, nil
 	}
 
 	if err != nil {
@@ -421,12 +424,12 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 	tenant.CreatedAt = timestamppb.New(createdAt)
 	tenant.UpdatedAt = timestamppb.New(updatedAt)
 
-	return &pb.GetTenantResponse{Tenant: &tenant}, nil
+	return &quartermasterpb.GetTenantResponse{Tenant: &tenant}, nil
 }
 
 // GetClusterRouting returns the best cluster for a tenant's stream.
 // Validates cluster has capacity (max_streams, max_bandwidth_mbps) before returning.
-func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.GetClusterRoutingRequest) (*pb.ClusterRoutingResponse, error) {
+func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -458,7 +461,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	// Get cluster info with capacity validation
 	// max_streams = 0 means unlimited
 	// max_bandwidth_mbps = 0 means unlimited
-	var resp pb.ClusterRoutingResponse
+	var resp quartermasterpb.ClusterRoutingResponse
 	var kafkaBrokers []string
 	var databaseURL, periscopeURL sql.NullString
 	var topicPrefix string
@@ -517,7 +520,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits); err == nil && len(tenantResourceLimits) > 0 {
 		var limits map[string]any
 		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
-			caps := &pb.TenantResourceLimits{}
+			caps := &quartermasterpb.TenantResourceLimits{}
 			if v, ok := limits["max_streams"].(float64); ok && v > 0 {
 				caps.MaxStreams = int32(v)
 			}
@@ -682,7 +685,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			default:
 				role = "subscribed"
 			}
-			resp.ClusterPeers = append(resp.ClusterPeers, &pb.TenantClusterPeer{
+			resp.ClusterPeers = append(resp.ClusterPeers, &quartermasterpb.TenantClusterPeer{
 				ClusterId:       cID,
 				ClusterSlug:     dns.SanitizeLabel(cID),
 				BaseUrl:         cBaseURL,
@@ -743,7 +746,7 @@ func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceTy
 }
 
 // BootstrapService handles service registration with idempotent instance management
-func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
+func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error) {
 	type queryExecutor interface {
 		ExecContext(context.Context, string, ...any) (sql.Result, error)
 		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -1129,7 +1132,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		`, serviceID, registrationClusterID, instanceID, proto, advHost, port)
 	}
 
-	resp := &pb.BootstrapServiceResponse{
+	resp := &quartermasterpb.BootstrapServiceResponse{
 		ServiceId:  serviceID,
 		InstanceId: instanceID,
 		ClusterId:  clusterID,
@@ -1159,13 +1162,13 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 }
 
 // GetNodeOwner returns the owner tenant for a node
-func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeOwnerRequest) (*pb.NodeOwnerResponse, error) {
+func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *quartermasterpb.GetNodeOwnerRequest) (*quartermasterpb.NodeOwnerResponse, error) {
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
 	}
 
-	var resp pb.NodeOwnerResponse
+	var resp quartermasterpb.NodeOwnerResponse
 	var ownerTenantID, tenantName, foghornHost sql.NullString
 	var foghornPort sql.NullInt32
 	err := s.db.QueryRowContext(ctx, `
@@ -1224,7 +1227,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 }
 
 // DiscoverServices finds instances of a service type with cursor pagination
-func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.ServiceDiscoveryRequest) (*pb.ServiceDiscoveryResponse, error) {
+func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
 	serviceType := req.GetServiceType()
 	if serviceType == "" {
 		return nil, status.Error(codes.InvalidArgument, "service_type required")
@@ -1378,9 +1381,9 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	}
 	defer func() { _ = rows.Close() }()
 
-	var instances []*pb.ServiceInstance
+	var instances []*quartermasterpb.ServiceInstance
 	for rows.Next() {
-		var inst pb.ServiceInstance
+		var inst quartermasterpb.ServiceInstance
 		var nodeID, host, healthEndpoint sql.NullString
 		var lastHealthCheck sql.NullTime
 		var metadataJSON []byte
@@ -1490,7 +1493,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	}
 
 	// Build response with cursor pagination
-	resp := &pb.ServiceDiscoveryResponse{
+	resp := &quartermasterpb.ServiceDiscoveryResponse{
 		Instances:  instances,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(instances)), startCursor, endCursor),
 	}
@@ -1502,7 +1505,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 // SERVICE POOL MANAGEMENT
 // ============================================================================
 
-func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.GetServicePoolStatusRequest) (*pb.GetServicePoolStatusResponse, error) {
+func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *quartermasterpb.GetServicePoolStatusRequest) (*quartermasterpb.GetServicePoolStatusResponse, error) {
 	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
 	if err != nil {
 		return nil, err
@@ -1524,10 +1527,10 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 	}
 	defer func() { _ = rows.Close() }()
 
-	clusterMap := make(map[string]*pb.ServicePoolClusterEntry)
+	clusterMap := make(map[string]*quartermasterpb.ServicePoolClusterEntry)
 	seenInstances := make(map[string]bool)
 	var total, unassigned, assigned int32
-	var assignments []*pb.ServiceInstanceAssignment
+	var assignments []*quartermasterpb.ServiceInstanceAssignment
 
 	for rows.Next() {
 		var id, instanceID, host, instStatus, assignedCluster string
@@ -1555,7 +1558,7 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 				seenInstances[id+":counted"] = true
 				assigned++
 			}
-			assignments = append(assignments, &pb.ServiceInstanceAssignment{
+			assignments = append(assignments, &quartermasterpb.ServiceInstanceAssignment{
 				InstanceId: id,
 				ClusterId:  assignedCluster,
 				IsActive:   true,
@@ -1567,11 +1570,11 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 		clusterID := assignedCluster
 		entry, ok := clusterMap[clusterID]
 		if !ok {
-			entry = &pb.ServicePoolClusterEntry{ClusterId: clusterID}
+			entry = &quartermasterpb.ServicePoolClusterEntry{ClusterId: clusterID}
 			clusterMap[clusterID] = entry
 		}
 		entry.InstanceCount++
-		entry.Instances = append(entry.Instances, &pb.ServiceInstance{
+		entry.Instances = append(entry.Instances, &quartermasterpb.ServiceInstance{
 			Id:         id,
 			InstanceId: instanceID,
 			ClusterId:  clusterID,
@@ -1586,12 +1589,12 @@ func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "service pool status iteration error: %v", err)
 	}
 
-	clusters := make([]*pb.ServicePoolClusterEntry, 0, len(clusterMap))
+	clusters := make([]*quartermasterpb.ServicePoolClusterEntry, 0, len(clusterMap))
 	for _, entry := range clusterMap {
 		clusters = append(clusters, entry)
 	}
 
-	return &pb.GetServicePoolStatusResponse{
+	return &quartermasterpb.GetServicePoolStatusResponse{
 		Total:       total,
 		Unassigned:  unassigned,
 		Assigned:    assigned,
@@ -1610,7 +1613,7 @@ func resolveAssignmentServiceType(svcType string) (string, error) {
 	return "", status.Error(codes.InvalidArgument, "service_type required")
 }
 
-func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *pb.AddToServicePoolRequest) (*pb.AddToServicePoolResponse, error) {
+func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *quartermasterpb.AddToServicePoolRequest) (*quartermasterpb.AddToServicePoolResponse, error) {
 	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
 	if err != nil {
 		return nil, err
@@ -1667,10 +1670,10 @@ func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *pb.AddT
 
 	// Pool membership shrank for these clusters; wake Navigator to drop them now.
 	s.fireNavigatorSyncForPoolClusters(serviceType, affectedClusters)
-	return &pb.AddToServicePoolResponse{Released: int32(released)}, nil
+	return &quartermasterpb.AddToServicePoolResponse{Released: int32(released)}, nil
 }
 
-func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *pb.DrainServiceInstanceRequest) (*pb.DrainServiceInstanceResponse, error) {
+func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error) {
 	instanceID := req.GetInstanceId()
 	if instanceID == "" {
 		return nil, status.Error(codes.InvalidArgument, "instance_id required")
@@ -1704,10 +1707,10 @@ func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *pb.
 
 	// Wake every cluster this instance served so their pooled records drop it now.
 	s.fireNavigatorSyncForPoolClusters(serviceType, drainedClusters)
-	return &pb.DrainServiceInstanceResponse{PreviousClusterId: drainedClusters[0]}, nil
+	return &quartermasterpb.DrainServiceInstanceResponse{PreviousClusterId: drainedClusters[0]}, nil
 }
 
-func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *pb.AssignServiceToClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) (*emptypb.Empty, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -1782,7 +1785,7 @@ func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *p
 	return &emptypb.Empty{}, nil
 }
 
-func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, req *pb.UnassignServiceFromClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, req *quartermasterpb.UnassignServiceFromClusterRequest) (*emptypb.Empty, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -1817,7 +1820,7 @@ func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, re
 
 // EnableSelfHosting creates a tenant's private cluster, assigns it to a shared
 // Foghorn (least-loaded running instance), and returns an enrollment token.
-func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.EnableSelfHostingRequest) (*pb.EnableSelfHostingResponse, error) {
+func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quartermasterpb.EnableSelfHostingRequest) (*quartermasterpb.EnableSelfHostingResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -1979,9 +1982,9 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		return nil, err
 	}
 
-	return &pb.EnableSelfHostingResponse{
+	return &quartermasterpb.EnableSelfHostingResponse{
 		Cluster: cluster,
-		BootstrapToken: &pb.BootstrapToken{
+		BootstrapToken: &quartermasterpb.BootstrapToken{
 			Id:        tokenID,
 			Token:     token,
 			Kind:      "edge_node",
@@ -1996,7 +1999,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 }
 
 // CreateEnrollmentToken creates a bootstrap token for a cluster lifecycle actor.
-func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -2089,8 +2092,8 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
 	}
 
-	return &pb.CreateBootstrapTokenResponse{
-		Token: &pb.BootstrapToken{
+	return &quartermasterpb.CreateBootstrapTokenResponse{
+		Token: &quartermasterpb.BootstrapToken{
 			Id:        tokenID,
 			Token:     token,
 			Kind:      "edge_node",
@@ -2108,7 +2111,7 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb
 // ============================================================================
 
 // ResolveTenant resolves a tenant by subdomain or platform-managed domain (no BYO)
-func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.ResolveTenantRequest) (*pb.ResolveTenantResponse, error) {
+func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *quartermasterpb.ResolveTenantRequest) (*quartermasterpb.ResolveTenantResponse, error) {
 	subdomain := req.GetSubdomain()
 	domain := req.GetDomain()
 
@@ -2131,13 +2134,13 @@ func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.Resolve
 
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(&tenantID, &tenantName, &primaryClusterID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ResolveTenantResponse{Found: false, Error: "Tenant not found"}, nil
+		return &quartermasterpb.ResolveTenantResponse{Found: false, Error: "Tenant not found"}, nil
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	resp := &pb.ResolveTenantResponse{
+	resp := &quartermasterpb.ResolveTenantResponse{
 		Found:      true,
 		TenantId:   tenantID,
 		TenantName: tenantName,
@@ -2156,13 +2159,13 @@ func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.Resolve
 // telling the operator to run quartermaster bootstrap first.
 //
 // SERVICE_TOKEN auth: the alias→UUID handoff is service-to-service only.
-func (s *QuartermasterServer) ResolveTenantAliases(ctx context.Context, req *pb.ResolveTenantAliasesRequest) (*pb.ResolveTenantAliasesResponse, error) {
+func (s *QuartermasterServer) ResolveTenantAliases(ctx context.Context, req *quartermasterpb.ResolveTenantAliasesRequest) (*quartermasterpb.ResolveTenantAliasesResponse, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "ResolveTenantAliases requires service token auth")
 	}
 	aliases := req.GetAliases()
 	if len(aliases) == 0 {
-		return &pb.ResolveTenantAliasesResponse{Mapping: map[string]string{}}, nil
+		return &quartermasterpb.ResolveTenantAliasesResponse{Mapping: map[string]string{}}, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -2193,11 +2196,11 @@ func (s *QuartermasterServer) ResolveTenantAliases(ctx context.Context, req *pb.
 			unknown = append(unknown, a)
 		}
 	}
-	return &pb.ResolveTenantAliasesResponse{Mapping: mapping, Unknown: unknown}, nil
+	return &quartermasterpb.ResolveTenantAliasesResponse{Mapping: mapping, Unknown: unknown}, nil
 }
 
 // ListTenants lists all tenants with pagination
-func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenantsRequest) (*pb.ListTenantsResponse, error) {
+func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermasterpb.ListTenantsRequest) (*quartermasterpb.ListTenantsResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -2244,7 +2247,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tenants []*pb.Tenant
+	var tenants []*quartermasterpb.Tenant
 	for rows.Next() {
 		tenant, err := scanTenant(rows)
 		if err != nil {
@@ -2274,7 +2277,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	resp := &pb.ListTenantsResponse{
+	resp := &quartermasterpb.ListTenantsResponse{
 		Tenants:    tenants,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(tenants)), startCursor, endCursor),
 	}
@@ -2288,7 +2291,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 
 // ListActiveTenants returns all active tenant IDs for billing batch processing.
 // Called by Purser billing job to avoid cross-service DB access.
-func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *pb.ListActiveTenantsRequest) (*pb.ListActiveTenantsResponse, error) {
+func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quartermasterpb.ListActiveTenantsRequest) (*quartermasterpb.ListActiveTenantsResponse, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id FROM quartermaster.tenants WHERE is_active = true
 	`)
@@ -2307,13 +2310,13 @@ func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *pb.Lis
 		tenantIDs = append(tenantIDs, id)
 	}
 
-	return &pb.ListActiveTenantsResponse{
+	return &quartermasterpb.ListActiveTenantsResponse{
 		TenantIds: tenantIDs,
 	}, nil
 }
 
 // CreateTenant creates a new tenant
-func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTenantRequest) (*pb.CreateTenantResponse, error) {
+func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) {
 	name := req.GetName()
 	if name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name required")
@@ -2481,7 +2484,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
 	}
 
-	tenant := &pb.Tenant{
+	tenant := &quartermasterpb.Tenant{
 		Id:                    tenantID,
 		Name:                  name,
 		Subdomain:             &subdomain,
@@ -2497,11 +2500,11 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		UpdatedAt:             timestamppb.New(now),
 	}
 
-	return &pb.CreateTenantResponse{Tenant: tenant}, nil
+	return &quartermasterpb.CreateTenantResponse{Tenant: tenant}, nil
 }
 
 // UpdateTenant updates a tenant's properties
-func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTenantRequest) (*pb.Tenant, error) {
+func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -2682,7 +2685,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	}
 
 	// Fetch updated tenant
-	resp, err := s.GetTenant(ctx, &pb.GetTenantRequest{TenantId: tenantID})
+	resp, err := s.GetTenant(ctx, &quartermasterpb.GetTenantRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
@@ -2875,7 +2878,7 @@ func (s *QuartermasterServer) enqueueTenantAliasForTierChange(ctx context.Contex
 }
 
 // DeleteTenant soft deletes a tenant
-func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTenantRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *quartermasterpb.DeleteTenantRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -2945,13 +2948,13 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 }
 
 // GetTenantCluster returns cluster/deployment info for a tenant
-func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetTenantClusterRequest) (*pb.GetTenantResponse, error) {
+func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quartermasterpb.GetTenantClusterRequest) (*quartermasterpb.GetTenantResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var tenant pb.Tenant
+	var tenant quartermasterpb.Tenant
 	var createdAt, updatedAt time.Time
 	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
@@ -3003,11 +3006,11 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetT
 	tenant.CreatedAt = timestamppb.New(createdAt)
 	tenant.UpdatedAt = timestamppb.New(updatedAt)
 
-	return &pb.GetTenantResponse{Tenant: &tenant}, nil
+	return &quartermasterpb.GetTenantResponse{Tenant: &tenant}, nil
 }
 
 // UpdateTenantCluster updates the cluster routing info for a tenant
-func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.UpdateTenantClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -3120,7 +3123,7 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 }
 
 // GetTenantsBatch retrieves multiple tenants by IDs
-func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *pb.GetTenantsBatchRequest) (*pb.ListTenantsResponse, error) {
+func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quartermasterpb.GetTenantsBatchRequest) (*quartermasterpb.ListTenantsResponse, error) {
 	tenantIDs := req.GetTenantIds()
 	if len(tenantIDs) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "tenant_ids required")
@@ -3139,9 +3142,9 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *pb.GetTe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tenants []*pb.Tenant
+	var tenants []*quartermasterpb.Tenant
 	for rows.Next() {
-		var tenant pb.Tenant
+		var tenant quartermasterpb.Tenant
 		var createdAt, updatedAt time.Time
 		var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 		var kafkaBrokers []string
@@ -3181,11 +3184,11 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *pb.GetTe
 		tenants = append(tenants, &tenant)
 	}
 
-	return &pb.ListTenantsResponse{Tenants: tenants}, nil
+	return &quartermasterpb.ListTenantsResponse{Tenants: tenants}, nil
 }
 
 // GetTenantsByCluster retrieves all tenants assigned to a specific cluster
-func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *pb.GetTenantsByClusterRequest) (*pb.GetTenantsByClusterResponse, error) {
+func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quartermasterpb.GetTenantsByClusterRequest) (*quartermasterpb.GetTenantsByClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -3205,9 +3208,9 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *pb.G
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tenants []*pb.Tenant
+	var tenants []*quartermasterpb.Tenant
 	for rows.Next() {
-		var tenant pb.Tenant
+		var tenant quartermasterpb.Tenant
 		var createdAt, updatedAt time.Time
 		var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 		var kafkaBrokers []string
@@ -3247,7 +3250,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *pb.G
 		tenants = append(tenants, &tenant)
 	}
 
-	return &pb.GetTenantsByClusterResponse{
+	return &quartermasterpb.GetTenantsByClusterResponse{
 		ClusterId: clusterID,
 		Tenants:   tenants,
 	}, nil
@@ -3362,7 +3365,7 @@ func (s *QuartermasterServer) tenantSubdomainAvailable(ctx context.Context, cand
 //
 // Cert readiness happens at the caller via Navigator; this method
 // returns candidates without crossing service boundaries.
-func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, req *pb.ListAliasedTenantsForClusterRequest) (*pb.ListAliasedTenantsForClusterResponse, error) {
+func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, req *quartermasterpb.ListAliasedTenantsForClusterRequest) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -3385,7 +3388,7 @@ func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []*pb.AliasedTenantRef
+	var out []*quartermasterpb.AliasedTenantRef
 	for rows.Next() {
 		var tenantID string
 		var subdomain sql.NullString
@@ -3396,12 +3399,12 @@ func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, 
 		if !subdomain.Valid || subdomain.String == "" {
 			continue
 		}
-		out = append(out, &pb.AliasedTenantRef{
+		out = append(out, &quartermasterpb.AliasedTenantRef{
 			TenantId:  tenantID,
 			Subdomain: subdomain.String,
 		})
 	}
-	return &pb.ListAliasedTenantsForClusterResponse{
+	return &quartermasterpb.ListAliasedTenantsForClusterResponse{
 		ClusterId: clusterID,
 		Tenants:   out,
 	}, nil
@@ -3412,7 +3415,7 @@ func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, 
 // ============================================================================
 
 // GetCluster returns a specific cluster
-func (s *QuartermasterServer) GetCluster(ctx context.Context, req *pb.GetClusterRequest) (*pb.ClusterResponse, error) {
+func (s *QuartermasterServer) GetCluster(ctx context.Context, req *quartermasterpb.GetClusterRequest) (*quartermasterpb.ClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -3423,11 +3426,11 @@ func (s *QuartermasterServer) GetCluster(ctx context.Context, req *pb.GetCluster
 		return nil, err
 	}
 
-	return &pb.ClusterResponse{Cluster: cluster}, nil
+	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
 
 // ListClusters returns all clusters with pagination
-func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClustersRequest) (*pb.ListClustersResponse, error) {
+func (s *QuartermasterServer) ListClusters(ctx context.Context, req *quartermasterpb.ListClustersRequest) (*quartermasterpb.ListClustersResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -3568,7 +3571,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	}
 	defer func() { _ = rows.Close() }()
 
-	var clusters []*pb.InfrastructureCluster
+	var clusters []*quartermasterpb.InfrastructureCluster
 	for rows.Next() {
 		cluster, err := scanCluster(rows) // scanCluster needs to be updated for is_default_cluster
 		if err != nil {
@@ -3601,9 +3604,9 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListClustersResponse{
+	resp := &quartermasterpb.ListClustersResponse{
 		Clusters: clusters,
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -3625,7 +3628,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 }
 
 // CreateCluster creates a new cluster
-func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateClusterRequest) (*pb.ClusterResponse, error) {
+func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermasterpb.CreateClusterRequest) (*quartermasterpb.ClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -3764,11 +3767,11 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 	}
 	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
-	return &pb.ClusterResponse{Cluster: cluster}, nil
+	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
 
 // UpdateCluster updates a cluster's properties
-func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateClusterRequest) (*pb.ClusterResponse, error) {
+func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermasterpb.UpdateClusterRequest) (*quartermasterpb.ClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -3882,13 +3885,13 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	}
 	s.emitClusterEvent(ctx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
-	return &pb.ClusterResponse{Cluster: cluster}, nil
+	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
 
 // UpdateClusterMeshConfig stores the WireGuard mesh parameters for a cluster
 // so BootstrapInfrastructureNode can allocate mesh IPs for enrolling nodes.
 // Sourced from the manifest's wireguard.* block during cluster provision.
-func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *pb.UpdateClusterMeshConfigRequest) (*pb.UpdateClusterMeshConfigResponse, error) {
+func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *quartermasterpb.UpdateClusterMeshConfigRequest) (*quartermasterpb.UpdateClusterMeshConfigResponse, error) {
 	clusterID := req.GetClusterId()
 	meshCIDR := strings.TrimSpace(req.GetMeshCidr())
 	port := req.GetWgListenPort()
@@ -3922,7 +3925,7 @@ func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 
-	return &pb.UpdateClusterMeshConfigResponse{
+	return &quartermasterpb.UpdateClusterMeshConfigResponse{
 		ClusterId:    clusterID,
 		MeshCidr:     meshCIDR,
 		WgListenPort: port,
@@ -3930,7 +3933,7 @@ func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *
 }
 
 // ListClustersForTenant returns clusters accessible to a tenant
-func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb.ListClustersForTenantRequest) (*pb.ClustersAccessResponse, error) {
+func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *quartermasterpb.ListClustersForTenantRequest) (*quartermasterpb.ClustersAccessResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -3987,15 +3990,15 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 	}
 	defer func() { _ = rows.Close() }()
 
-	var clusters []*pb.ClusterAccessEntry
+	var clusters []*quartermasterpb.ClusterAccessEntry
 	type entryWithCursor struct {
-		entry     *pb.ClusterAccessEntry
+		entry     *quartermasterpb.ClusterAccessEntry
 		createdAt time.Time
 		id        string
 	}
 	var entries []entryWithCursor
 	for rows.Next() {
-		var entry pb.ClusterAccessEntry
+		var entry quartermasterpb.ClusterAccessEntry
 		var resourceLimits sql.NullString
 		var createdAt time.Time
 		var id string
@@ -4028,14 +4031,14 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 		endCursor = pagination.EncodeCursor(last.createdAt, last.id)
 	}
 
-	return &pb.ClustersAccessResponse{
+	return &quartermasterpb.ClustersAccessResponse{
 		Clusters:   clusters,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
 }
 
 // ListClustersAvailable returns clusters available for tenant onboarding
-func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb.ListClustersAvailableRequest) (*pb.ClustersAvailableResponse, error) {
+func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *quartermasterpb.ListClustersAvailableRequest) (*quartermasterpb.ClustersAvailableResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -4082,13 +4085,13 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 	defer func() { _ = rows.Close() }()
 
 	type entryWithCursor struct {
-		entry     *pb.AvailableClusterEntry
+		entry     *quartermasterpb.AvailableClusterEntry
 		createdAt time.Time
 		clusterID string
 	}
 	var entries []entryWithCursor
 	for rows.Next() {
-		var entry pb.AvailableClusterEntry
+		var entry quartermasterpb.AvailableClusterEntry
 		var clusterType string
 		var createdAt time.Time
 		if err := rows.Scan(&entry.ClusterId, &entry.ClusterName, &clusterType, &entry.AutoEnroll, &createdAt); err != nil {
@@ -4110,7 +4113,7 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 	}
 
 	// Build cursors and extract entries
-	var clusters []*pb.AvailableClusterEntry
+	var clusters []*quartermasterpb.AvailableClusterEntry
 	var startCursor, endCursor string
 	for _, e := range entries {
 		clusters = append(clusters, e.entry)
@@ -4122,14 +4125,14 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 		endCursor = pagination.EncodeCursor(last.createdAt, last.clusterID)
 	}
 
-	return &pb.ClustersAvailableResponse{
+	return &quartermasterpb.ClustersAvailableResponse{
 		Clusters:   clusters,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
 }
 
 // GrantClusterAccess grants a tenant access to a cluster
-func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *pb.GrantClusterAccessRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
 	clusterID := req.GetClusterId()
 
@@ -4178,7 +4181,7 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *pb.Gr
 // The server still enforces the is_platform_official boundary so a private
 // customer cluster's pricing rows can never be turned into entitlements via
 // this path.
-func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *pb.BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *quartermasterpb.BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "BootstrapClusterAccess requires service token auth")
 	}
@@ -4282,7 +4285,7 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *p
 // absent. Purser calls this from tier downgrade reconciliation; the row is
 // retained so a future upgrade can re-activate it without losing any
 // resource_limits override or audit history.
-func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *pb.DeactivateClusterAccessRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *quartermasterpb.DeactivateClusterAccessRequest) (*emptypb.Empty, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "DeactivateClusterAccess requires service token auth")
 	}
@@ -4341,7 +4344,7 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 // from ListClustersForTenant, which is a user-facing RPC with a minimal entry
 // shape and does not surface the is_active / subscription_status fields needed
 // for tier reconciliation diffs.
-func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *pb.ListTenantClusterAccessRequest) (*pb.ListTenantClusterAccessResponse, error) {
+func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *quartermasterpb.ListTenantClusterAccessRequest) (*quartermasterpb.ListTenantClusterAccessResponse, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "ListTenantClusterAccess requires service token auth")
 	}
@@ -4359,9 +4362,9 @@ func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "list tenant_cluster_access: %v", err)
 	}
 	defer rows.Close()
-	out := &pb.ListTenantClusterAccessResponse{}
+	out := &quartermasterpb.ListTenantClusterAccessResponse{}
 	for rows.Next() {
-		var r pb.TenantClusterAccessRow
+		var r quartermasterpb.TenantClusterAccessRow
 		if err := rows.Scan(&r.ClusterId, &r.IsActive, &r.SubscriptionStatus, &r.IsPlatformOfficial); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan tenant_cluster_access: %v", err)
 		}
@@ -4374,7 +4377,7 @@ func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *
 }
 
 // SubscribeToCluster subscribes a tenant to a public/shared cluster
-func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *quartermasterpb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
 	tenantID := middleware.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
@@ -4440,7 +4443,7 @@ func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.Su
 }
 
 // UnsubscribeFromCluster unsubscribes a tenant from a cluster
-func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *pb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *quartermasterpb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	tenantID := middleware.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
@@ -4500,7 +4503,7 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *p
 }
 
 // ListMySubscriptions lists clusters the tenant is subscribed to
-func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.ListMySubscriptionsRequest) (*pb.ListClustersResponse, error) {
+func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
 	s.logger.WithField("tenant_id", tenantID).Info("ListMySubscriptions: called")
 	if tenantID == "" {
@@ -4570,7 +4573,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	}
 	defer func() { _ = rows.Close() }()
 
-	var clusters []*pb.InfrastructureCluster
+	var clusters []*quartermasterpb.InfrastructureCluster
 	for rows.Next() {
 		cluster, err := scanCluster(rows)
 		if err != nil {
@@ -4602,14 +4605,14 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	return &pb.ListClustersResponse{
+	return &quartermasterpb.ListClustersResponse{
 		Clusters:   clusters,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(clusters)), startCursor, endCursor),
 	}, nil
 }
 
 // GetNode returns a specific node
-func (s *QuartermasterServer) GetNode(ctx context.Context, req *pb.GetNodeRequest) (*pb.NodeResponse, error) {
+func (s *QuartermasterServer) GetNode(ctx context.Context, req *quartermasterpb.GetNodeRequest) (*quartermasterpb.NodeResponse, error) {
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
@@ -4620,12 +4623,12 @@ func (s *QuartermasterServer) GetNode(ctx context.Context, req *pb.GetNodeReques
 		return nil, err
 	}
 
-	return &pb.NodeResponse{Node: node}, nil
+	return &quartermasterpb.NodeResponse{Node: node}, nil
 }
 
 // GetNodeByLogicalName resolves a node by its logical name (node_id string like "edge-node-1")
 // Used by Foghorn to get the database UUID for subscription enrichment
-func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *pb.GetNodeByLogicalNameRequest) (*pb.NodeResponse, error) {
+func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *quartermasterpb.GetNodeByLogicalNameRequest) (*quartermasterpb.NodeResponse, error) {
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
@@ -4636,11 +4639,11 @@ func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	return &pb.NodeResponse{Node: node}, nil
+	return &quartermasterpb.NodeResponse{Node: node}, nil
 }
 
 // UpdateNodeStatus changes routing-visible node state for lifecycle actions.
-func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.UpdateNodeStatusRequest) (*pb.NodeResponse, error) {
+func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *quartermasterpb.UpdateNodeStatusRequest) (*quartermasterpb.NodeResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	nextStatus := strings.TrimSpace(req.GetStatus())
 	if nodeID == "" || nextStatus == "" {
@@ -4752,7 +4755,7 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *pb.Upda
 	if err != nil {
 		return nil, err
 	}
-	return &pb.NodeResponse{Node: node}, nil
+	return &quartermasterpb.NodeResponse{Node: node}, nil
 }
 
 func (s *QuartermasterServer) hasProviderLifecycleAuthority(ctx context.Context, tenantID string) (bool, error) {
@@ -4785,7 +4788,7 @@ func (s *QuartermasterServer) hasProviderLifecycleAuthority(ctx context.Context,
 	return isProvider, nil
 }
 
-func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.ListEdgeReleasesRequest) (*pb.ListEdgeReleasesResponse, error) {
+func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *quartermasterpb.ListEdgeReleasesRequest) (*quartermasterpb.ListEdgeReleasesResponse, error) {
 	where := []string{"TRUE"}
 	args := []any{}
 	if strings.TrimSpace(req.GetChannel()) != "" {
@@ -4800,7 +4803,7 @@ func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.List
 		args = append(args, version)
 		where = append(where, fmt.Sprintf("version = $%d", len(args)))
 	}
-	var releases []*pb.EdgeRelease
+	var releases []*quartermasterpb.EdgeRelease
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		rows, err := s.listEdgeReleasesNoRetry(ctx, where, args)
 		if err == nil {
@@ -4811,10 +4814,10 @@ func (s *QuartermasterServer) ListEdgeReleases(ctx context.Context, req *pb.List
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	return &pb.ListEdgeReleasesResponse{Releases: releases}, nil
+	return &quartermasterpb.ListEdgeReleasesResponse{Releases: releases}, nil
 }
 
-func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, where []string, args []any) ([]*pb.EdgeRelease, error) {
+func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, where []string, args []any) ([]*quartermasterpb.EdgeRelease, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 			SELECT channel, version, components::text, published_at
 		FROM quartermaster.edge_releases
@@ -4825,7 +4828,7 @@ func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, where
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var releases []*pb.EdgeRelease
+	var releases []*quartermasterpb.EdgeRelease
 	for rows.Next() {
 		release, err := scanEdgeRelease(rows)
 		if err != nil {
@@ -4839,7 +4842,7 @@ func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, where
 	return releases, nil
 }
 
-func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.UpsertEdgeReleaseRequest) (*pb.EdgeReleaseResponse, error) {
+func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *quartermasterpb.UpsertEdgeReleaseRequest) (*quartermasterpb.EdgeReleaseResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
 	ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
 	if err != nil {
@@ -4868,7 +4871,7 @@ func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.Ups
 	if release.GetPublishedAt() != nil {
 		publishedAt = release.GetPublishedAt().AsTime()
 	}
-	var saved *pb.EdgeRelease
+	var saved *quartermasterpb.EdgeRelease
 	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		row := s.db.QueryRowContext(ctx, `
 			INSERT INTO quartermaster.edge_releases (channel, version, components, published_at)
@@ -4885,7 +4888,7 @@ func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *pb.Ups
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert release: %v", err)
 	}
-	return &pb.EdgeReleaseResponse{Release: saved}, nil
+	return &quartermasterpb.EdgeReleaseResponse{Release: saved}, nil
 }
 
 func validateEdgeReleaseComponents(raw string) error {
@@ -4991,7 +4994,7 @@ func envLineValueSafe(value string) bool {
 	return !strings.ContainsAny(value, "\r\n\x00")
 }
 
-func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *pb.GetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.GetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error) {
 	clusterID := strings.TrimSpace(req.GetClusterId())
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -5003,10 +5006,10 @@ func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ClusterReleaseTargetResponse{Target: target}, nil
+	return &quartermasterpb.ClusterReleaseTargetResponse{Target: target}, nil
 }
 
-func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req *pb.ListClusterReleaseTargetsRequest) (*pb.ListClusterReleaseTargetsResponse, error) {
+func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req *quartermasterpb.ListClusterReleaseTargetsRequest) (*quartermasterpb.ListClusterReleaseTargetsResponse, error) {
 	where := []string{"TRUE"}
 	args := []any{}
 	if clusterID := strings.TrimSpace(req.GetClusterId()); clusterID != "" {
@@ -5025,7 +5028,7 @@ func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req
 			return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 		}
 	}
-	var targets []*pb.ClusterReleaseTarget
+	var targets []*quartermasterpb.ClusterReleaseTarget
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		rows, err := s.listClusterReleaseTargetsNoRetry(ctx, where, args)
 		if err == nil {
@@ -5036,10 +5039,10 @@ func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	return &pb.ListClusterReleaseTargetsResponse{Targets: targets}, nil
+	return &quartermasterpb.ListClusterReleaseTargetsResponse{Targets: targets}, nil
 }
 
-func (s *QuartermasterServer) listClusterReleaseTargetsNoRetry(ctx context.Context, where []string, args []any) ([]*pb.ClusterReleaseTarget, error) {
+func (s *QuartermasterServer) listClusterReleaseTargetsNoRetry(ctx context.Context, where []string, args []any) ([]*quartermasterpb.ClusterReleaseTarget, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
 		FROM quartermaster.cluster_release_targets
@@ -5050,7 +5053,7 @@ func (s *QuartermasterServer) listClusterReleaseTargetsNoRetry(ctx context.Conte
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var targets []*pb.ClusterReleaseTarget
+	var targets []*quartermasterpb.ClusterReleaseTarget
 	for rows.Next() {
 		target, err := scanClusterReleaseTarget(rows)
 		if err != nil {
@@ -5064,7 +5067,7 @@ func (s *QuartermasterServer) listClusterReleaseTargetsNoRetry(ctx context.Conte
 	return targets, nil
 }
 
-func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *pb.SetClusterReleaseTargetRequest) (*pb.ClusterReleaseTargetResponse, error) {
+func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *quartermasterpb.SetClusterReleaseTargetRequest) (*quartermasterpb.ClusterReleaseTargetResponse, error) {
 	target := req.GetTarget()
 	if target == nil || strings.TrimSpace(target.GetClusterId()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster target required")
@@ -5085,7 +5088,7 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 		return nil, err
 	}
 	targetVersion := strings.TrimSpace(target.GetTargetVersion())
-	var saved *pb.ClusterReleaseTarget
+	var saved *quartermasterpb.ClusterReleaseTarget
 	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		if existsErr := s.ensureEdgeReleaseTargetExists(ctx, channel, targetVersion); existsErr != nil {
 			return existsErr
@@ -5111,7 +5114,7 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 		}
 		return nil, status.Errorf(codes.Internal, "set release target: %v", err)
 	}
-	return &pb.ClusterReleaseTargetResponse{Target: saved}, nil
+	return &quartermasterpb.ClusterReleaseTargetResponse{Target: saved}, nil
 }
 
 func (s *QuartermasterServer) ensureEdgeReleaseTargetExists(ctx context.Context, channel, version string) error {
@@ -5179,8 +5182,8 @@ func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context,
 	return nil
 }
 
-func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clusterID string) (*pb.ClusterReleaseTarget, error) {
-	var target *pb.ClusterReleaseTarget
+func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clusterID string) (*quartermasterpb.ClusterReleaseTarget, error) {
+	var target *quartermasterpb.ClusterReleaseTarget
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		rowTarget, err := s.queryClusterReleaseTargetNoRetry(ctx, clusterID)
 		if err == nil {
@@ -5197,7 +5200,7 @@ func (s *QuartermasterServer) queryClusterReleaseTarget(ctx context.Context, clu
 	return target, nil
 }
 
-func (s *QuartermasterServer) queryClusterReleaseTargetNoRetry(ctx context.Context, clusterID string) (*pb.ClusterReleaseTarget, error) {
+func (s *QuartermasterServer) queryClusterReleaseTargetNoRetry(ctx context.Context, clusterID string) (*quartermasterpb.ClusterReleaseTarget, error) {
 	row := s.db.QueryRowContext(ctx, `
 			SELECT cluster_id, channel, COALESCE(target_version, ''), rollout_plan::text, COALESCE(paused, false), updated_at
 		FROM quartermaster.cluster_release_targets
@@ -5210,8 +5213,8 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanEdgeRelease(row rowScanner) (*pb.EdgeRelease, error) {
-	var release pb.EdgeRelease
+func scanEdgeRelease(row rowScanner) (*quartermasterpb.EdgeRelease, error) {
+	var release quartermasterpb.EdgeRelease
 	var publishedAt time.Time
 	if err := row.Scan(&release.Channel, &release.Version, &release.ComponentsJson, &publishedAt); err != nil {
 		return nil, err
@@ -5220,8 +5223,8 @@ func scanEdgeRelease(row rowScanner) (*pb.EdgeRelease, error) {
 	return &release, nil
 }
 
-func scanClusterReleaseTarget(row rowScanner) (*pb.ClusterReleaseTarget, error) {
-	var target pb.ClusterReleaseTarget
+func scanClusterReleaseTarget(row rowScanner) (*quartermasterpb.ClusterReleaseTarget, error) {
+	var target quartermasterpb.ClusterReleaseTarget
 	var updatedAt time.Time
 	if err := row.Scan(&target.ClusterId, &target.Channel, &target.TargetVersion, &target.RolloutPlanJson, &target.Paused, &updatedAt); err != nil {
 		return nil, err
@@ -5297,7 +5300,7 @@ func firstNonEmptyString(values ...string) string {
 
 // UpdateNodeHardware updates the hardware specs for a node (detected at startup by Helmsman)
 // Called by Foghorn when processing Register message with hardware info
-func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *quartermasterpb.UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
@@ -5353,13 +5356,13 @@ func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.Up
 // in the same change.
 var edgeServiceTypeDerivations = []struct {
 	serviceType string
-	cap         func(c *pb.EdgeCapabilities) bool
+	cap         func(c *quartermasterpb.EdgeCapabilities) bool
 }{
-	{"edge", func(c *pb.EdgeCapabilities) bool { return true }},
-	{"edge-ingest", func(c *pb.EdgeCapabilities) bool { return c.GetIngest() }},
-	{"edge-egress", func(c *pb.EdgeCapabilities) bool { return c.GetEgress() }},
-	{"edge-storage", func(c *pb.EdgeCapabilities) bool { return c.GetStorage() }},
-	{"edge-processing", func(c *pb.EdgeCapabilities) bool { return c.GetProcessing() }},
+	{"edge", func(c *quartermasterpb.EdgeCapabilities) bool { return true }},
+	{"edge-ingest", func(c *quartermasterpb.EdgeCapabilities) bool { return c.GetIngest() }},
+	{"edge-egress", func(c *quartermasterpb.EdgeCapabilities) bool { return c.GetEgress() }},
+	{"edge-storage", func(c *quartermasterpb.EdgeCapabilities) bool { return c.GetStorage() }},
+	{"edge-processing", func(c *quartermasterpb.EdgeCapabilities) bool { return c.GetProcessing() }},
 }
 
 // dnsPairKey identifies the (cluster, service_type) tuple that scopes a
@@ -5427,7 +5430,7 @@ func scanPriorInst(rows *sql.Rows) (map[string]instBefore, error) {
 // from service_instances health, external_ip, or cluster_id changes,
 // Quartermaster fires Navigator.SyncDNS for that pair after commit. The 60s
 // Navigator reconcile loop is the backstop.
-func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *pb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quartermasterpb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
 	nodes := req.GetNodes()
 	if len(nodes) == 0 {
 		return &emptypb.Empty{}, nil
@@ -5741,7 +5744,7 @@ func (s *QuartermasterServer) fireNavigatorSyncForPairs(pairs map[dnsPairKey]str
 				defer cancel()
 
 				clusterID := p.clusterID
-				req := &pb.SyncDNSRequest{
+				req := &dnspb.SyncDNSRequest{
 					ServiceType: p.serviceType,
 					ClusterId:   &clusterID,
 				}
@@ -5876,7 +5879,7 @@ func (s *QuartermasterServer) servedClustersForNodeType(ctx context.Context, nod
 }
 
 // ListNodes returns nodes with optional filters
-func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRequest) (*pb.ListNodesResponse, error) {
+func (s *QuartermasterServer) ListNodes(ctx context.Context, req *quartermasterpb.ListNodesRequest) (*quartermasterpb.ListNodesResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -5986,7 +5989,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var nodes []*pb.InfrastructureNode
+	var nodes []*quartermasterpb.InfrastructureNode
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
@@ -6025,12 +6028,12 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListNodesResponse{
+	resp := &quartermasterpb.ListNodesResponse{
 		Nodes:     nodes,
 		ClusterId: req.GetClusterId(),
 		NodeType:  req.GetNodeType(),
 		Region:    req.GetRegion(),
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -6060,7 +6063,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 // through service_cluster_assignments.
 //
 // All paths require: accessible cluster, non-empty external_ip.
-func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *pb.ListHealthyNodesForDNSRequest) (*pb.ListHealthyNodesForDNSResponse, error) {
+func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *quartermasterpb.ListHealthyNodesForDNSRequest) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
 
 	baseWhere := ""
@@ -6201,7 +6204,7 @@ func synthesizePublicHost(serviceType, clusterID, clusterName, baseURL string) s
 // listHealthyServiceNodes returns nodes with healthy service instances matching the type.
 // Used for platform services (bridge, foghorn, chartroom, etc.) that register
 // via BootstrapService and have service_instance health tracking.
-func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	where := baseWhere
 	args := append([]any{}, baseArgs...)
 	argIdx := len(baseArgs) + 1
@@ -6269,7 +6272,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 	}
 	defer func() { _ = rows.Close() }()
 
-	var nodes []*pb.InfrastructureNode
+	var nodes []*quartermasterpb.InfrastructureNode
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
@@ -6285,7 +6288,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
 	}
 
-	return &pb.ListHealthyNodesForDNSResponse{
+	return &quartermasterpb.ListHealthyNodesForDNSResponse{
 		Nodes:        nodes,
 		TotalNodes:   totalNodes,
 		HealthyNodes: healthyNodes,
@@ -6297,7 +6300,7 @@ func (s *QuartermasterServer) listHealthyServiceNodes(ctx context.Context, baseW
 // stays the physical/runtime cluster (FK-bound to the host); the logical media
 // cluster comes from sca.cluster_id. The same physical instance can therefore
 // surface under multiple media-cluster DNS records (M:N).
-func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*pb.ListHealthyNodesForDNSResponse, error) {
+func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Context, baseWhere string, baseArgs []any, serviceTypeFilter string, staleThreshold int32) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	where := strings.ReplaceAll(baseWhere, "n.cluster_id", "sca.cluster_id")
 	args := append([]any{}, baseArgs...)
 	argIdx := len(args) + 1
@@ -6359,7 +6362,7 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 	}
 	defer func() { _ = rows.Close() }()
 
-	var nodes []*pb.InfrastructureNode
+	var nodes []*quartermasterpb.InfrastructureNode
 	for rows.Next() {
 		node, err := scanNode(rows)
 		if err != nil {
@@ -6375,7 +6378,7 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
 	}
 
-	return &pb.ListHealthyNodesForDNSResponse{
+	return &quartermasterpb.ListHealthyNodesForDNSResponse{
 		Nodes:        nodes,
 		TotalNodes:   totalNodes,
 		HealthyNodes: healthyNodes,
@@ -6383,7 +6386,7 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 }
 
 // CreateNode creates a new node
-func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
+func (s *QuartermasterServer) CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error) {
 	nodeID := req.GetNodeId()
 	clusterID := req.GetClusterId()
 	if nodeID == "" || clusterID == "" {
@@ -6459,7 +6462,7 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	// would be premature: no services are deployed on a freshly-created node,
 	// and node_type (e.g. "core") is not a valid service type for DNS lookup.
 
-	return &pb.NodeResponse{Node: node}, nil
+	return &quartermasterpb.NodeResponse{Node: node}, nil
 }
 
 func (s *QuartermasterServer) geoForExternalIP(externalIP *string) (any, any) {
@@ -6622,7 +6625,7 @@ func geoDistanceKm(lat, lon float64, candidateLat, candidateLon sql.NullFloat64)
 // 3. Match by peer_ip in seen_ips array
 // On match, updates seen_ips with current peer_ip.
 // Returns NotFound if no match - does not create new mappings to avoid bypassing enrollment.
-func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *pb.ResolveNodeFingerprintRequest) (*pb.ResolveNodeFingerprintResponse, error) {
+func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
 	peerIP := req.GetPeerIp()
 	if peerIP == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_ip required")
@@ -6645,7 +6648,7 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 			if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
 				s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
 			}
-			return &pb.ResolveNodeFingerprintResponse{
+			return &quartermasterpb.ResolveNodeFingerprintResponse{
 				TenantId:        tenantID,
 				CanonicalNodeId: nodeID,
 			}, nil
@@ -6667,7 +6670,7 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 			if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
 				s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
 			}
-			return &pb.ResolveNodeFingerprintResponse{
+			return &quartermasterpb.ResolveNodeFingerprintResponse{
 				TenantId:        tenantID,
 				CanonicalNodeId: nodeID,
 			}, nil
@@ -6689,7 +6692,7 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 		if upsertErr := s.upsertSeenIP(ctx, nodeID, peerIP); upsertErr != nil {
 			s.logger.WithError(upsertErr).WithField("node_id", nodeID).Warn("Failed to update fingerprint seen IP")
 		}
-		return &pb.ResolveNodeFingerprintResponse{
+		return &quartermasterpb.ResolveNodeFingerprintResponse{
 			TenantId:        tenantID,
 			CanonicalNodeId: nodeID,
 		}, nil
@@ -6765,8 +6768,8 @@ func deriveEdgeNodeID(hostname string) string {
 // ============================================================================
 
 // BootstrapEdgeNode registers an edge node using a bootstrap token
-func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
-	var resp *pb.BootstrapEdgeNodeResponse
+func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
+	var resp *quartermasterpb.BootstrapEdgeNodeResponse
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
 		resp, err = s.bootstrapEdgeNodeOnce(ctx, req)
@@ -6778,7 +6781,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	return resp, nil
 }
 
-func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
+func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
 	token := req.GetToken()
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
@@ -6889,7 +6892,7 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *pb
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
-		return &pb.BootstrapEdgeNodeResponse{
+		return &quartermasterpb.BootstrapEdgeNodeResponse{
 			NodeId:    nodeID,
 			TenantId:  tenantID.String,
 			ClusterId: resolvedClusterID,
@@ -6945,7 +6948,7 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *pb
 	// is determined by mesh heartbeats (SyncMesh), not by service_instance
 	// status, so there's nothing to resolve until the mesh agent checks in.
 
-	return &pb.BootstrapEdgeNodeResponse{
+	return &quartermasterpb.BootstrapEdgeNodeResponse{
 		NodeId:    nodeID,
 		TenantId:  tenantID.String,
 		ClusterId: resolvedClusterID,
@@ -6953,7 +6956,7 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *pb
 }
 
 // BootstrapInfrastructureNode registers a general infrastructure node using a bootstrap token
-func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error) {
+func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, req *quartermasterpb.BootstrapInfrastructureNodeRequest) (*quartermasterpb.BootstrapInfrastructureNodeResponse, error) {
 	token := req.GetToken()
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
@@ -7106,7 +7109,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 			wgIP = existingWGIP.String
 		}
 
-		resp := &pb.BootstrapInfrastructureNodeResponse{
+		resp := &quartermasterpb.BootstrapInfrastructureNodeResponse{
 			NodeId:                nodeID,
 			ClusterId:             resolvedClusterID,
 			WireguardIp:           wgIP,
@@ -7245,7 +7248,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		meshCIDR = clusterMeshCIDR.String
 	}
 
-	return &pb.BootstrapInfrastructureNodeResponse{
+	return &quartermasterpb.BootstrapInfrastructureNodeResponse{
 		NodeId:                nodeID,
 		TenantId:              tenantResp,
 		ClusterId:             resolvedClusterID,
@@ -7262,7 +7265,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}, nil
 }
 
-func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID string, req *pb.BootstrapEdgeNodeRequest) error {
+func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID string, req *quartermasterpb.BootstrapEdgeNodeRequest) error {
 	machineIDSHA := req.GetMachineIdSha256()
 	macsSHA := req.GetMacsSha256()
 	ips := req.GetIps()
@@ -7306,7 +7309,7 @@ func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID
 // `frameworks mesh reconcile --write-gitops` to promote runtime_enrolled
 // nodes to adopted_local, and by the rotate-on-promotion flow to finalize
 // adopted_local → gitops_seed.
-func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *pb.SetNodeEnrollmentOriginRequest) (*pb.SetNodeEnrollmentOriginResponse, error) {
+func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *quartermasterpb.SetNodeEnrollmentOriginRequest) (*quartermasterpb.SetNodeEnrollmentOriginResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	newOrigin := strings.TrimSpace(req.GetEnrollmentOrigin())
 	if nodeID == "" {
@@ -7346,7 +7349,7 @@ func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "commit: %v", commitErr)
 		}
-		return &pb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: current}, nil
+		return &quartermasterpb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: current}, nil
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -7366,7 +7369,7 @@ func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *
 		"enrollment_origin": newOrigin,
 	}).Info("Node enrollment_origin updated")
 
-	return &pb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: newOrigin}, nil
+	return &quartermasterpb.SetNodeEnrollmentOriginResponse{NodeId: nodeID, EnrollmentOrigin: newOrigin}, nil
 }
 
 // bootstrapReplay resolves a retry of a previously-committed infrastructure
@@ -7383,7 +7386,7 @@ func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *
 //     matches the request
 //   - if the token carries a cluster binding, the stored row's cluster_id
 //     must match
-func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, token, nodeID, wgPub string) (*pb.BootstrapInfrastructureNodeResponse, error) {
+func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, token, nodeID, wgPub string) (*quartermasterpb.BootstrapInfrastructureNodeResponse, error) {
 	var tokenClusterID sql.NullString
 	var expectedIP sql.NullString
 	var expiresAt time.Time
@@ -7463,7 +7466,7 @@ func (s *QuartermasterServer) bootstrapReplay(ctx context.Context, tx *sql.Tx, t
 	}
 	seedPeers, seedSvc := s.collectBootstrapSeed(ctx, clusterIDStr, nodeID)
 
-	resp := &pb.BootstrapInfrastructureNodeResponse{
+	resp := &quartermasterpb.BootstrapInfrastructureNodeResponse{
 		NodeId:                nodeID,
 		ClusterId:             clusterIDStr,
 		WireguardIp:           wgIP,
@@ -7511,7 +7514,7 @@ func loadClusterMeshConfig(ctx context.Context, db *sql.DB, clusterID string) (s
 // enrolling node itself. Errors are logged and produce empty results so
 // bootstrap never fails on auxiliary data: the node will rediscover via
 // SyncMesh once connected.
-func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*pb.InfrastructurePeer, map[string]*pb.ServiceEndpoints) {
+func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterID, excludeNodeID string) ([]*quartermasterpb.InfrastructurePeer, map[string]*quartermasterpb.ServiceEndpoints) {
 	dnsRequired, peerRequired, globalPeerRequired, infraRequired, reqErr := s.meshServiceRequirements(ctx, excludeNodeID)
 	if reqErr != nil {
 		s.logger.WithError(reqErr).Warn("collectBootstrapSeed: service requirements unavailable")
@@ -7552,9 +7555,9 @@ func (s *QuartermasterServer) collectBootstrapSeed(ctx context.Context, clusterI
 	}
 	defer func() { _ = rows.Close() }()
 
-	var peers []*pb.InfrastructurePeer
+	var peers []*quartermasterpb.InfrastructurePeer
 	for rows.Next() {
-		var p pb.InfrastructurePeer
+		var p quartermasterpb.InfrastructurePeer
 		var extIP, intIP, wgIP sql.NullString
 		var listenPort sql.NullInt32
 		if scanErr := rows.Scan(&p.NodeName, &p.PublicKey, &extIP, &intIP, &wgIP, &listenPort); scanErr != nil {
@@ -7665,8 +7668,8 @@ func (s *QuartermasterServer) meshServiceRequirements(ctx context.Context, nodeI
 	return dnsRequired, peerRequired, globalPeerRequired, infraRequired, nil
 }
 
-func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, clusterID, nodeID string, dnsRequired, peerRequired, globalPeerRequired map[string]struct{}) (map[string]*pb.ServiceEndpoints, map[string]struct{}, error) {
-	endpoints := map[string]*pb.ServiceEndpoints{}
+func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, clusterID, nodeID string, dnsRequired, peerRequired, globalPeerRequired map[string]struct{}) (map[string]*quartermasterpb.ServiceEndpoints, map[string]struct{}, error) {
+	endpoints := map[string]*quartermasterpb.ServiceEndpoints{}
 	requiredPeerNodeIDs := map[string]struct{}{}
 	peerTypes := sortedStringKeys(peerRequired)
 	globalPeerTypes := sortedStringKeys(globalPeerRequired)
@@ -7754,7 +7757,7 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 		}
 		defer func() { _ = svcRows.Close() }()
 
-		nextEndpoints := map[string]*pb.ServiceEndpoints{}
+		nextEndpoints := map[string]*quartermasterpb.ServiceEndpoints{}
 		nextRequiredPeerNodeIDs := map[string]struct{}{}
 		for svcRows.Next() {
 			var svcType, svcNodeID, svcIP string
@@ -7771,7 +7774,7 @@ func (s *QuartermasterServer) collectMeshServiceEndpoints(ctx context.Context, c
 				continue
 			}
 			if nextEndpoints[svcType] == nil {
-				nextEndpoints[svcType] = &pb.ServiceEndpoints{Ips: []string{}}
+				nextEndpoints[svcType] = &quartermasterpb.ServiceEndpoints{Ips: []string{}}
 			}
 			nextEndpoints[svcType].Ips = append(nextEndpoints[svcType].Ips, svcIP)
 		}
@@ -8154,7 +8157,7 @@ func sortedStringKeys(m map[string]struct{}) []string {
 }
 
 // CreateBootstrapToken creates a new bootstrap token
-func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.CreateBootstrapTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
 	name := req.GetName()
 	kind := req.GetKind()
 	if name == "" || kind == "" {
@@ -8207,8 +8210,8 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
 	}
 
-	return &pb.CreateBootstrapTokenResponse{
-		Token: &pb.BootstrapToken{
+	return &quartermasterpb.CreateBootstrapTokenResponse{
+		Token: &quartermasterpb.BootstrapToken{
 			Id:         tokenID,
 			Name:       name,
 			Token:      tokenValue,
@@ -8226,7 +8229,7 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *pb.
 }
 
 // ListBootstrapTokens returns bootstrap tokens with optional filters
-func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.ListBootstrapTokensRequest) (*pb.ListBootstrapTokensResponse, error) {
+func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *quartermasterpb.ListBootstrapTokensRequest) (*quartermasterpb.ListBootstrapTokensResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -8280,9 +8283,9 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.L
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tokens []*pb.BootstrapToken
+	var tokens []*quartermasterpb.BootstrapToken
 	for rows.Next() {
-		var token pb.BootstrapToken
+		var token quartermasterpb.BootstrapToken
 		var tenantID, clusterID, expectedIP, createdBy sql.NullString
 		var usageLimit sql.NullInt32
 		var usedAt sql.NullTime
@@ -8339,14 +8342,14 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.L
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	return &pb.ListBootstrapTokensResponse{
+	return &quartermasterpb.ListBootstrapTokensResponse{
 		Tokens:     tokens,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(tokens)), startCursor, endCursor),
 	}, nil
 }
 
 // RevokeBootstrapToken revokes a bootstrap token
-func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *pb.RevokeBootstrapTokenRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *quartermasterpb.RevokeBootstrapTokenRequest) (*emptypb.Empty, error) {
 	tokenID := req.GetTokenId()
 	if tokenID == "" {
 		return nil, status.Error(codes.InvalidArgument, "token_id required")
@@ -8371,7 +8374,7 @@ func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *pb.
 // ValidateBootstrapToken checks a bootstrap token's validity.
 // When client_ip is set, validates against the token's expected_ip.
 // When consume is true, increments usage_count (used by PreRegisterEdge).
-func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *pb.ValidateBootstrapTokenRequest) (*pb.ValidateBootstrapTokenResponse, error) {
+func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *quartermasterpb.ValidateBootstrapTokenRequest) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
 	token := strings.TrimSpace(req.GetToken())
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
@@ -8395,7 +8398,7 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
+		return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -8403,22 +8406,22 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 
 	// Single-use tokens (usage_limit IS NULL) are consumed when used_at is set
 	if !usageLimit.Valid && usedAt.Valid {
-		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
+		return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
 	}
 
 	// Multi-use tokens: reject when usage_count >= usage_limit
 	if usageLimit.Valid && usageLimit.Int32 > 0 && usageCount >= usageLimit.Int32 {
-		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "usage_exceeded"}, nil
+		return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "usage_exceeded"}, nil
 	}
 
 	if time.Now().After(expiresAt) {
-		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "expired"}, nil
+		return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "expired"}, nil
 	}
 
 	// IP binding: if client_ip is provided and token has expected_ip, validate match
 	if clientIP := req.GetClientIp(); clientIP != "" {
 		if !validateExpectedIP(expectedIP, clientIP) {
-			return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "ip_mismatch"}, nil
+			return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "ip_mismatch"}, nil
 		}
 	}
 
@@ -8447,11 +8450,11 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 			return nil, status.Errorf(codes.Internal, "failed to verify bootstrap token consumption: %v", rowsErr)
 		}
 		if rowsAffected == 0 {
-			return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
+			return &quartermasterpb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
 		}
 	}
 
-	resp := &pb.ValidateBootstrapTokenResponse{
+	resp := &quartermasterpb.ValidateBootstrapTokenResponse{
 		Valid: true,
 		Kind:  kind,
 	}
@@ -8545,7 +8548,7 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 // ============================================================================
 
 // SyncMesh handles WireGuard mesh synchronization
-func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error) {
+func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb.InfrastructureSyncRequest) (*quartermasterpb.InfrastructureSyncResponse, error) {
 	nodeID := req.GetNodeId()
 	publicKey := req.GetPublicKey()
 	if nodeID == "" {
@@ -8750,9 +8753,9 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		entry.Warn("Excluding peer from mesh sync")
 	}
 
-	var peers []*pb.InfrastructurePeer
+	var peers []*quartermasterpb.InfrastructurePeer
 	for rows.Next() {
-		var peer pb.InfrastructurePeer
+		var peer quartermasterpb.InfrastructurePeer
 		var peerExtIP, peerIntIP, peerWgIP sql.NullString
 		var peerListenPort sql.NullInt32
 		if scanErr := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); scanErr != nil {
@@ -8795,7 +8798,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	recordPhase("peer_query", phaseStarted)
 	peerCount = len(peers)
 
-	return &pb.InfrastructureSyncResponse{
+	return &quartermasterpb.InfrastructureSyncResponse{
 		WireguardIp:      wireguardIP,
 		WireguardPort:    wireguardPort,
 		Peers:            peers,
@@ -8808,8 +8811,8 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 // this node's own mesh identity. Agents persist it into last_known_mesh.json
 // so a reboot can tell whether the managed overlay matches what QM would
 // return now.
-func computeMeshRevision(peers []*pb.InfrastructurePeer, serviceEndpoints map[string]*pb.ServiceEndpoints, selfIP string, selfPort int32) string {
-	sorted := make([]*pb.InfrastructurePeer, len(peers))
+func computeMeshRevision(peers []*quartermasterpb.InfrastructurePeer, serviceEndpoints map[string]*quartermasterpb.ServiceEndpoints, selfIP string, selfPort int32) string {
+	sorted := make([]*quartermasterpb.InfrastructurePeer, len(peers))
 	copy(sorted, peers)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].GetPublicKey() < sorted[j].GetPublicKey() })
 	h := sha256.New()
@@ -8842,7 +8845,7 @@ func computeMeshRevision(peers []*pb.InfrastructurePeer, serviceEndpoints map[st
 // stays as the originating service's name; the dispatcher routes by
 // payload, not by which service wrote the row. Returns NotFound when the
 // event is nil, InvalidArgument when event.tenant_id is empty.
-func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *pb.EnqueueServiceEventRequest) (*pb.EnqueueServiceEventResponse, error) {
+func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *quartermasterpb.EnqueueServiceEventRequest) (*quartermasterpb.EnqueueServiceEventResponse, error) {
 	event := req.GetEvent()
 	if event == nil {
 		return nil, status.Error(codes.InvalidArgument, "event is required")
@@ -8854,11 +8857,11 @@ func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *pb.E
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue service event: %v", err)
 	}
-	return &pb.EnqueueServiceEventResponse{OutboxId: id}, nil
+	return &quartermasterpb.EnqueueServiceEventResponse{OutboxId: id}, nil
 }
 
 // ListServices returns all services in the catalog
-func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
+func (s *QuartermasterServer) ListServices(ctx context.Context, req *quartermasterpb.ListServicesRequest) (*quartermasterpb.ListServicesResponse, error) {
 	rows, err := s.db.QueryContext(ctx, `
 			SELECT id, service_id, name, plane, description, default_port,
 			       health_check_path, docker_image, version, dependencies,
@@ -8872,9 +8875,9 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 	}
 	defer func() { _ = rows.Close() }()
 
-	var services []*pb.Service
+	var services []*quartermasterpb.Service
 	for rows.Next() {
-		var svc pb.Service
+		var svc quartermasterpb.Service
 		var createdAt, updatedAt time.Time
 		var serviceID, plane, description, healthCheckPath, dockerImage, version sql.NullString
 		var serviceType, serviceProtocol sql.NullString
@@ -8935,11 +8938,11 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 		services = append(services, &svc)
 	}
 
-	return &pb.ListServicesResponse{Services: services}, nil
+	return &quartermasterpb.ListServicesResponse{Services: services}, nil
 }
 
 // ListClusterServices returns services assigned to a cluster
-func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.ListClusterServicesRequest) (*pb.ListClusterServicesResponse, error) {
+func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *quartermasterpb.ListClusterServicesRequest) (*quartermasterpb.ListClusterServicesResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -8960,9 +8963,9 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.L
 	}
 	defer func() { _ = rows.Close() }()
 
-	var services []*pb.ClusterServiceAssignment
+	var services []*quartermasterpb.ClusterServiceAssignment
 	for rows.Next() {
-		var svc pb.ClusterServiceAssignment
+		var svc quartermasterpb.ClusterServiceAssignment
 		var createdAt, updatedAt time.Time
 		var configBlob, envVars sql.NullString
 		var cpuLimit sql.NullFloat64
@@ -9020,14 +9023,14 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.L
 		services = append(services, &svc)
 	}
 
-	return &pb.ListClusterServicesResponse{
+	return &quartermasterpb.ListClusterServicesResponse{
 		ClusterId: clusterID,
 		Services:  services,
 	}, nil
 }
 
 // ListServiceInstances returns running service instances
-func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.ListServiceInstancesRequest) (*pb.ListServiceInstancesResponse, error) {
+func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *quartermasterpb.ListServiceInstancesRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -9101,9 +9104,9 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	}
 	defer func() { _ = rows.Close() }()
 
-	var instances []*pb.ServiceInstance
+	var instances []*quartermasterpb.ServiceInstance
 	for rows.Next() {
-		var inst pb.ServiceInstance
+		var inst quartermasterpb.ServiceInstance
 		var nodeID, host, healthEndpoint, version, containerID sql.NullString
 		var processID sql.NullInt32
 		var startedAt, stoppedAt, lastHealthCheck sql.NullTime
@@ -9175,12 +9178,12 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListServiceInstancesResponse{
+	resp := &quartermasterpb.ListServiceInstancesResponse{
 		Instances: instances,
 		ClusterId: req.GetClusterId(),
 		ServiceId: req.GetServiceId(),
 		NodeId:    req.GetNodeId(),
-		Pagination: &pb.CursorPaginationResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount: total,
 		},
 	}
@@ -9206,7 +9209,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 // the physical endpoint <service>.<node>.infra.<root>. It deliberately does NOT
 // route through service_cluster_assignments: cluster_id stays the physical host
 // cluster so Navigator can publish one infra A record per running instance/node.
-func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, req *pb.ListServiceInstancesByTypeRequest) (*pb.ListServiceInstancesByTypeResponse, error) {
+func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, req *quartermasterpb.ListServiceInstancesByTypeRequest) (*quartermasterpb.ListServiceInstancesByTypeResponse, error) {
 	// Physical inventory (node IDs + external IPs) is infrastructure-internal:
 	// only SERVICE_TOKEN callers (Navigator) may read it, never tenant/user JWTs.
 	if ctxkeys.GetAuthType(ctx) != "service" {
@@ -9256,9 +9259,9 @@ func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, re
 	}
 	defer func() { _ = rows.Close() }()
 
-	var instances []*pb.PhysicalServiceInstance
+	var instances []*quartermasterpb.PhysicalServiceInstance
 	for rows.Next() {
-		var inst pb.PhysicalServiceInstance
+		var inst quartermasterpb.PhysicalServiceInstance
 		var externalIP sql.NullString
 		if err := rows.Scan(&inst.InstanceId, &inst.ServiceId, &inst.ClusterId, &inst.NodeId,
 			&externalIP, &inst.Status, &inst.HealthStatus, &inst.Port, &inst.Protocol); err != nil {
@@ -9279,23 +9282,23 @@ func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, re
 		return nil, status.Errorf(codes.Internal, "physical instance iteration error: %v", err)
 	}
 
-	return &pb.ListServiceInstancesByTypeResponse{
+	return &quartermasterpb.ListServiceInstancesByTypeResponse{
 		Instances:   instances,
 		ServiceType: serviceType,
 	}, nil
 }
 
 // ListServicesHealth returns health of all service instances
-func (s *QuartermasterServer) ListServicesHealth(ctx context.Context, req *pb.ListServicesHealthRequest) (*pb.ListServicesHealthResponse, error) {
+func (s *QuartermasterServer) ListServicesHealth(ctx context.Context, req *quartermasterpb.ListServicesHealthRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
 	return s.getServicesHealth(ctx, "")
 }
 
 // GetServiceHealth returns health of specific service instances
-func (s *QuartermasterServer) GetServiceHealth(ctx context.Context, req *pb.GetServiceHealthRequest) (*pb.ListServicesHealthResponse, error) {
+func (s *QuartermasterServer) GetServiceHealth(ctx context.Context, req *quartermasterpb.GetServiceHealthRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
 	return s.getServicesHealth(ctx, req.GetServiceId())
 }
 
-func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *pb.UpsertTLSBundleRequest) (*pb.TLSBundleResponse, error) {
+func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *quartermasterpb.UpsertTLSBundleRequest) (*quartermasterpb.TLSBundleResponse, error) {
 	if req.GetBundle() == nil {
 		return nil, status.Error(codes.InvalidArgument, "bundle is required")
 	}
@@ -9342,8 +9345,8 @@ func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *pb.Upser
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.TLSBundleResponse{
-		Bundle: &pb.TLSBundle{
+	return &quartermasterpb.TLSBundleResponse{
+		Bundle: &quartermasterpb.TLSBundle{
 			Id:        id,
 			BundleId:  bundle.GetBundleId(),
 			ClusterId: bundle.GetClusterId(),
@@ -9357,7 +9360,7 @@ func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *pb.Upser
 	}, nil
 }
 
-func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTLSBundlesRequest) (*pb.ListTLSBundlesResponse, error) {
+func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *quartermasterpb.ListTLSBundlesRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
@@ -9409,9 +9412,9 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 	}
 	defer func() { _ = rows.Close() }()
 
-	var bundles []*pb.TLSBundle
+	var bundles []*quartermasterpb.TLSBundle
 	for rows.Next() {
-		var bundle pb.TLSBundle
+		var bundle quartermasterpb.TLSBundle
 		var domainsJSON, metadataJSON []byte
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(&bundle.Id, &bundle.BundleId, &bundle.ClusterId, &domainsJSON, &bundle.Issuer, &bundle.Email, &metadataJSON, &createdAt, &updatedAt); err != nil {
@@ -9445,10 +9448,10 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 		endCursor = pagination.EncodeCursor(bundles[len(bundles)-1].CreatedAt.AsTime(), bundles[len(bundles)-1].Id)
 	}
 
-	resp := &pb.ListTLSBundlesResponse{
+	resp := &quartermasterpb.ListTLSBundlesResponse{
 		Bundles:    bundles,
 		ClusterId:  req.GetClusterId(),
-		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+		Pagination: &commonpb.CursorPaginationResponse{TotalCount: total},
 	}
 	if startCursor != "" {
 		resp.Pagination.StartCursor = &startCursor
@@ -9467,7 +9470,7 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *pb.ListTL
 	return resp, nil
 }
 
-func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *pb.UpsertIngressSiteRequest) (*pb.IngressSiteResponse, error) {
+func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *quartermasterpb.UpsertIngressSiteRequest) (*quartermasterpb.IngressSiteResponse, error) {
 	if req.GetSite() == nil {
 		return nil, status.Error(codes.InvalidArgument, "site is required")
 	}
@@ -9516,8 +9519,8 @@ func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *pb.Ups
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.IngressSiteResponse{
-		Site: &pb.IngressSite{
+	return &quartermasterpb.IngressSiteResponse{
+		Site: &quartermasterpb.IngressSite{
 			Id:          id,
 			SiteId:      site.GetSiteId(),
 			ClusterId:   site.GetClusterId(),
@@ -9533,7 +9536,7 @@ func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *pb.Ups
 	}, nil
 }
 
-func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.ListIngressSitesRequest) (*pb.ListIngressSitesResponse, error) {
+func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *quartermasterpb.ListIngressSitesRequest) (*quartermasterpb.ListIngressSitesResponse, error) {
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
@@ -9592,9 +9595,9 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 	}
 	defer func() { _ = rows.Close() }()
 
-	var sites []*pb.IngressSite
+	var sites []*quartermasterpb.IngressSite
 	for rows.Next() {
-		var site pb.IngressSite
+		var site quartermasterpb.IngressSite
 		var domainsJSON, metadataJSON []byte
 		var createdAt, updatedAt time.Time
 		if err := rows.Scan(
@@ -9646,11 +9649,11 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 		endCursor = pagination.EncodeCursor(sites[len(sites)-1].CreatedAt.AsTime(), sites[len(sites)-1].Id)
 	}
 
-	resp := &pb.ListIngressSitesResponse{
+	resp := &quartermasterpb.ListIngressSitesResponse{
 		Sites:      sites,
 		ClusterId:  req.GetClusterId(),
 		NodeId:     req.GetNodeId(),
-		Pagination: &pb.CursorPaginationResponse{TotalCount: total},
+		Pagination: &commonpb.CursorPaginationResponse{TotalCount: total},
 	}
 	if startCursor != "" {
 		resp.Pagination.StartCursor = &startCursor
@@ -9669,7 +9672,7 @@ func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *pb.List
 	return resp, nil
 }
 
-func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID string) (*pb.ListServicesHealthResponse, error) {
+func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID string) (*quartermasterpb.ListServicesHealthResponse, error) {
 	where := "WHERE 1=1"
 	args := []any{}
 	if serviceID != "" {
@@ -9690,9 +9693,9 @@ func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID s
 	}
 	defer func() { _ = rows.Close() }()
 
-	var instances []*pb.ServiceInstanceHealth
+	var instances []*quartermasterpb.ServiceInstanceHealth
 	for rows.Next() {
-		var inst pb.ServiceInstanceHealth
+		var inst quartermasterpb.ServiceInstanceHealth
 		var host, healthEndpoint sql.NullString
 		var lastHealthCheck sql.NullTime
 
@@ -9715,7 +9718,7 @@ func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID s
 		instances = append(instances, &inst)
 	}
 
-	return &pb.ListServicesHealthResponse{Instances: instances}, nil
+	return &quartermasterpb.ListServicesHealthResponse{Instances: instances}, nil
 }
 
 // ============================================================================
@@ -9747,20 +9750,20 @@ const (
 // (not strictly atomic with upstream state mutation). For strict
 // atomicity, callers that hold a tx can switch to
 // EnqueueServiceEventTx(ctx, tx, event).
-func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
+func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) {
 	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
 	s.enqueueServiceEvent(ctx, event)
 }
 
-func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) *pb.ServiceEvent {
-	payload := &pb.TenantEvent{
+func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) *ipcpb.ServiceEvent {
+	payload := &ipcpb.TenantEvent{
 		TenantId:      tenantID,
 		ChangedFields: changedFields,
 		Attribution:   attribution,
 	}
-	return &pb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "quartermaster",
@@ -9768,11 +9771,11 @@ func (s *QuartermasterServer) buildTenantEvent(eventType, tenantID, userID strin
 		UserId:       userID,
 		ResourceType: "tenant",
 		ResourceId:   tenantID,
-		Payload:      &pb.ServiceEvent_TenantEvent{TenantEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_TenantEvent{TenantEvent: payload},
 	}
 }
 
-func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) {
+func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) {
 	s.emitServiceEvent(ctx, s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution))
 }
 
@@ -9780,7 +9783,7 @@ func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, te
 // transaction. Use when the state mutation that justifies the event runs in
 // the same tx — guarantees the mutation and the event become durable
 // atomically. Falls back to the short-tx variant on tx==nil.
-func (s *QuartermasterServer) emitTenantEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) error {
+func (s *QuartermasterServer) emitTenantEventTx(ctx context.Context, tx *sql.Tx, eventType, tenantID, userID string, changedFields []string, attribution *commonpb.SignupAttribution) error {
 	event := s.buildTenantEvent(eventType, tenantID, userID, changedFields, attribution)
 	if tx == nil {
 		s.emitServiceEvent(ctx, event)
@@ -9793,15 +9796,15 @@ func (s *QuartermasterServer) emitTenantEventTx(ctx context.Context, tx *sql.Tx,
 	return err
 }
 
-func (s *QuartermasterServer) buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) *pb.ServiceEvent {
-	payload := &pb.ClusterEvent{
+func (s *QuartermasterServer) buildClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) *ipcpb.ServiceEvent {
+	payload := &ipcpb.ClusterEvent{
 		ClusterId:      clusterID,
 		TenantId:       tenantID,
 		InviteId:       inviteID,
 		SubscriptionId: subscriptionID,
 		Reason:         reason,
 	}
-	return &pb.ServiceEvent{
+	return &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "quartermaster",
@@ -9809,7 +9812,7 @@ func (s *QuartermasterServer) buildClusterEvent(eventType, tenantID, userID, clu
 		UserId:       userID,
 		ResourceType: resourceType,
 		ResourceId:   resourceID,
-		Payload:      &pb.ServiceEvent_ClusterEvent{ClusterEvent: payload},
+		Payload:      &ipcpb.ServiceEvent_ClusterEvent{ClusterEvent: payload},
 	}
 }
 
@@ -9832,8 +9835,8 @@ func (s *QuartermasterServer) emitClusterEventTx(ctx context.Context, tx *sql.Tx
 	return err
 }
 
-func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
-	var tenant pb.Tenant
+func scanTenant(rows *sql.Rows) (*quartermasterpb.Tenant, error) {
+	var tenant quartermasterpb.Tenant
 	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
@@ -9877,8 +9880,8 @@ func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
 	return &tenant, nil
 }
 
-func scanCluster(rows *sql.Rows) (*pb.InfrastructureCluster, error) {
-	var cluster pb.InfrastructureCluster
+func scanCluster(rows *sql.Rows) (*quartermasterpb.InfrastructureCluster, error) {
+	var cluster quartermasterpb.InfrastructureCluster
 	var ownerTenantID, databaseURL, periscopeURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
@@ -9918,7 +9921,7 @@ const prefixedNodeSnapshotColumns = ", n.snapshot_cpu_percent, n.snapshot_ram_us
 const prefixedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = n.cluster_id)"
 const prefixedAssignedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = sca.cluster_id)"
 
-func resourceSnapshotComplete(snap *pb.NodeResourceSnapshot) bool {
+func resourceSnapshotComplete(snap *quartermasterpb.NodeResourceSnapshot) bool {
 	return snap != nil &&
 		snap.GetRamTotalBytes() > 0 &&
 		snap.GetDiskTotalBytes() > 0 &&
@@ -9928,11 +9931,11 @@ func resourceSnapshotComplete(snap *pb.NodeResourceSnapshot) bool {
 // nodeSnapshotProto builds a NodeResourceSnapshot from the seven nullable
 // columns appended by nodeSnapshotColumns. Returns nil when no agent has
 // ever reported a snapshot for the row (snapshot_at IS NULL).
-func nodeSnapshotProto(cpu sql.NullFloat64, ramUsed, ramTotal, diskUsed, diskTotal, uptime sql.NullInt64, at sql.NullTime) *pb.NodeResourceSnapshot {
+func nodeSnapshotProto(cpu sql.NullFloat64, ramUsed, ramTotal, diskUsed, diskTotal, uptime sql.NullInt64, at sql.NullTime) *quartermasterpb.NodeResourceSnapshot {
 	if !at.Valid {
 		return nil
 	}
-	snap := &pb.NodeResourceSnapshot{CollectedAt: timestamppb.New(at.Time)}
+	snap := &quartermasterpb.NodeResourceSnapshot{CollectedAt: timestamppb.New(at.Time)}
 	if cpu.Valid {
 		snap.CpuPercent = float32(cpu.Float64)
 	}
@@ -9954,8 +9957,8 @@ func nodeSnapshotProto(cpu sql.NullFloat64, ramUsed, ramTotal, diskUsed, diskTot
 	return snap
 }
 
-func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
-	var node pb.InfrastructureNode
+func scanNode(rows *sql.Rows) (*quartermasterpb.InfrastructureNode, error) {
+	var node quartermasterpb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev, ownerTenantID sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
@@ -10033,7 +10036,7 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 	return &node, nil
 }
 
-func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string) (*quartermasterpb.InfrastructureCluster, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
 		       base_url, database_url, periscope_url, kafka_brokers,
@@ -10047,7 +10050,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		WHERE cluster_id = $1
 	`, clusterID)
 
-	var cluster pb.InfrastructureCluster
+	var cluster quartermasterpb.InfrastructureCluster
 	var ownerTenantID, databaseURL, periscopeURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
@@ -10099,27 +10102,27 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 }
 
 // visibilityStringToProto converts DB string to proto enum
-func visibilityStringToProto(s string) pb.ClusterVisibility {
+func visibilityStringToProto(s string) quartermasterpb.ClusterVisibility {
 	switch s {
 	case "public":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC
 	case "unlisted":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED
 	case "private":
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
 	default:
-		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
+		return quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
 	}
 }
 
 // visibilityProtoToString converts proto enum to DB string
-func visibilityProtoToString(v pb.ClusterVisibility) string {
+func visibilityProtoToString(v quartermasterpb.ClusterVisibility) string {
 	switch v {
-	case pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC:
+	case quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC:
 		return "public"
-	case pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED:
+	case quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED:
 		return "unlisted"
-	case pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE:
+	case quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE:
 		return "private"
 	default:
 		return "private"
@@ -10129,22 +10132,22 @@ func visibilityProtoToString(v pb.ClusterVisibility) string {
 // Note: Pricing model helpers moved to Purser service
 
 // subscriptionStatusStringToProto converts DB string to proto enum
-func subscriptionStatusStringToProto(s string) pb.ClusterSubscriptionStatus {
+func subscriptionStatusStringToProto(s string) quartermasterpb.ClusterSubscriptionStatus {
 	switch s {
 	case "pending_approval":
-		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL
+		return quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL
 	case "active":
-		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE
+		return quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE
 	case "suspended":
-		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_SUSPENDED
+		return quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_SUSPENDED
 	case "rejected":
-		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED
+		return quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED
 	default:
-		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED
+		return quartermasterpb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED
 	}
 }
 
-func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
 	row := s.db.QueryRowContext(ctx, `
 			SELECT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
 			       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
@@ -10158,7 +10161,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 			WHERE n.node_id = $1 OR n.id::text = $1
 		`, nodeID)
 
-	var node pb.InfrastructureNode
+	var node quartermasterpb.InfrastructureNode
 	var internalIP, externalIP, wireguardIP, wireguardPubKey, region, az, appliedRev, ownerTenantID sql.NullString
 	var wgPort, cpuCores, memoryGB, diskGB sql.NullInt32
 	var lat, lon sql.NullFloat64
@@ -10289,7 +10292,7 @@ func tokenPrefix(token string) string {
 // ============================================================================
 
 // ListMarketplaceClusters returns clusters visible to the requesting tenant
-func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *pb.ListMarketplaceClustersRequest) (*pb.ListMarketplaceClustersResponse, error) {
+func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *quartermasterpb.ListMarketplaceClustersRequest) (*quartermasterpb.ListMarketplaceClustersResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -10398,13 +10401,13 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 	defer func() { _ = rows.Close() }()
 
 	type entryWithCursor struct {
-		entry     *pb.MarketplaceClusterEntry
+		entry     *quartermasterpb.MarketplaceClusterEntry
 		createdAt time.Time
 		clusterID string
 	}
 	var entries []entryWithCursor
 	for rows.Next() {
-		var entry pb.MarketplaceClusterEntry
+		var entry quartermasterpb.MarketplaceClusterEntry
 		var visibility string
 		var ownerName, shortDesc, subscriptionStatus sql.NullString
 		var createdAt time.Time
@@ -10446,7 +10449,7 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 	}
 
 	// Build cursors and extract entries
-	var clusters []*pb.MarketplaceClusterEntry
+	var clusters []*quartermasterpb.MarketplaceClusterEntry
 	var startCursor, endCursor string
 	for _, e := range entries {
 		clusters = append(clusters, e.entry)
@@ -10458,14 +10461,14 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 		endCursor = pagination.EncodeCursor(last.createdAt, last.clusterID)
 	}
 
-	return &pb.ListMarketplaceClustersResponse{
+	return &quartermasterpb.ListMarketplaceClustersResponse{
 		Clusters:   clusters,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
 }
 
 // GetMarketplaceCluster returns a single marketplace cluster entry
-func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb.GetMarketplaceClusterRequest) (*pb.MarketplaceClusterEntry, error) {
+func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *quartermasterpb.GetMarketplaceClusterRequest) (*quartermasterpb.MarketplaceClusterEntry, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -10511,7 +10514,7 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 		`, clusterID, tenantID)
 	}
 
-	var entry pb.MarketplaceClusterEntry
+	var entry quartermasterpb.MarketplaceClusterEntry
 	var visibility string
 	var ownerName, shortDesc, subscriptionStatus sql.NullString
 	var createdAt time.Time
@@ -10545,7 +10548,7 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 }
 
 // UpdateClusterMarketplace updates marketplace settings for a cluster (owner only)
-func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req *pb.UpdateClusterMarketplaceRequest) (*pb.ClusterResponse, error) {
+func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req *quartermasterpb.UpdateClusterMarketplaceRequest) (*quartermasterpb.ClusterResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -10588,7 +10591,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 
 	if req.Visibility != nil {
 		// Non-providers can only set private visibility
-		if !isProvider && *req.Visibility != pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE {
+		if !isProvider && *req.Visibility != quartermasterpb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE {
 			return nil, status.Error(codes.PermissionDenied, "only providers can set public/unlisted visibility")
 		}
 		newVisibility := visibilityProtoToString(*req.Visibility)
@@ -10665,15 +10668,15 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		return nil, err
 	}
 
-	return &pb.ClusterResponse{Cluster: cluster}, nil
+	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
 
 // GetClusterMetadataBatch returns metadata for multiple clusters (for Gateway enrichment).
 // Used by Gateway to enrich Purser's marketplace pricing data with cluster operational info.
-func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *pb.GetClusterMetadataBatchRequest) (*pb.GetClusterMetadataBatchResponse, error) {
+func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *quartermasterpb.GetClusterMetadataBatchRequest) (*quartermasterpb.GetClusterMetadataBatchResponse, error) {
 	clusterIDs := req.GetClusterIds()
 	if len(clusterIDs) == 0 {
-		return &pb.GetClusterMetadataBatchResponse{Clusters: map[string]*pb.ClusterMetadata{}}, nil
+		return &quartermasterpb.GetClusterMetadataBatchResponse{Clusters: map[string]*quartermasterpb.ClusterMetadata{}}, nil
 	}
 
 	requestingTenantID := req.GetRequestingTenantId()
@@ -10697,9 +10700,9 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 	}
 	defer func() { _ = rows.Close() }()
 
-	clusters := make(map[string]*pb.ClusterMetadata)
+	clusters := make(map[string]*quartermasterpb.ClusterMetadata)
 	for rows.Next() {
-		var meta pb.ClusterMetadata
+		var meta quartermasterpb.ClusterMetadata
 		var shortDescription, ownerName sql.NullString
 		var visibility, subscriptionStatus string
 		var maxStreams, maxViewers int32
@@ -10731,11 +10734,11 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 		clusters[meta.ClusterId] = &meta
 	}
 
-	return &pb.GetClusterMetadataBatchResponse{Clusters: clusters}, nil
+	return &quartermasterpb.GetClusterMetadataBatchResponse{Clusters: clusters}, nil
 }
 
 // CreatePrivateCluster creates a private cluster for self-hosted edge
-func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.CreatePrivateClusterRequest) (*pb.CreatePrivateClusterResponse, error) {
+func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *quartermasterpb.CreatePrivateClusterRequest) (*quartermasterpb.CreatePrivateClusterResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -10878,9 +10881,9 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	return &pb.CreatePrivateClusterResponse{
+	return &quartermasterpb.CreatePrivateClusterResponse{
 		Cluster: cluster,
-		BootstrapToken: &pb.BootstrapToken{
+		BootstrapToken: &quartermasterpb.BootstrapToken{
 			Id:        tokenID,
 			Token:     token,
 			Kind:      "edge_node",
@@ -10894,7 +10897,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 }
 
 // CreateClusterInvite creates an invite for a tenant to join a cluster
-func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.CreateClusterInviteRequest) (*pb.ClusterInvite, error) {
+func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quartermasterpb.CreateClusterInviteRequest) (*quartermasterpb.ClusterInvite, error) {
 	clusterID := req.GetClusterId()
 	ownerTenantID := req.GetOwnerTenantId()
 	invitedTenantID := req.GetInvitedTenantId()
@@ -10982,7 +10985,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 
 	s.emitClusterEvent(ctx, eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
 
-	return &pb.ClusterInvite{
+	return &quartermasterpb.ClusterInvite{
 		Id:                id,
 		ClusterId:         clusterID,
 		InvitedTenantId:   invitedTenantID,
@@ -10999,7 +11002,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 }
 
 // RevokeClusterInvite revokes a pending cluster invite
-func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.RevokeClusterInviteRequest) (*emptypb.Empty, error) {
+func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *quartermasterpb.RevokeClusterInviteRequest) (*emptypb.Empty, error) {
 	inviteID := req.GetInviteId()
 	ownerTenantID := req.GetOwnerTenantId()
 
@@ -11040,7 +11043,7 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.R
 }
 
 // ListClusterInvites lists invites for a cluster (owner only)
-func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.ListClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *quartermasterpb.ListClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error) {
 	clusterID := req.GetClusterId()
 	ownerTenantID := req.GetOwnerTenantId()
 
@@ -11112,9 +11115,9 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 	}
 	defer func() { _ = rows.Close() }()
 
-	var invites []*pb.ClusterInvite
+	var invites []*quartermasterpb.ClusterInvite
 	for rows.Next() {
-		var invite pb.ClusterInvite
+		var invite quartermasterpb.ClusterInvite
 		var resourceLimits sql.NullString
 		var createdAt time.Time
 		var expiresAt, acceptedAt sql.NullTime
@@ -11171,14 +11174,14 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	return &pb.ListClusterInvitesResponse{
+	return &quartermasterpb.ListClusterInvitesResponse{
 		Invites:    invites,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
 }
 
 // ListMyClusterInvites lists invites received by a tenant
-func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.ListMyClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *quartermasterpb.ListMyClusterInvitesRequest) (*quartermasterpb.ListClusterInvitesResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -11235,9 +11238,9 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 	}
 	defer func() { _ = rows.Close() }()
 
-	var invites []*pb.ClusterInvite
+	var invites []*quartermasterpb.ClusterInvite
 	for rows.Next() {
-		var invite pb.ClusterInvite
+		var invite quartermasterpb.ClusterInvite
 		var resourceLimits sql.NullString
 		var createdAt time.Time
 		var expiresAt, acceptedAt sql.NullTime
@@ -11291,7 +11294,7 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	return &pb.ListClusterInvitesResponse{
+	return &quartermasterpb.ListClusterInvitesResponse{
 		Invites:    invites,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
@@ -11314,7 +11317,7 @@ func rejectDirectCommercialClusterAccess(tenantID string, isPlatformOfficial boo
 }
 
 // RequestClusterSubscription requests access to a cluster
-func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, req *pb.RequestClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, req *quartermasterpb.RequestClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -11468,7 +11471,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 }
 
 // AcceptClusterInvite accepts a cluster invite using the token
-func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.AcceptClusterInviteRequest) (*pb.ClusterSubscription, error) {
+func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quartermasterpb.AcceptClusterInviteRequest) (*quartermasterpb.ClusterSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
@@ -11569,7 +11572,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 }
 
 // ListPendingSubscriptions lists pending subscription requests for a cluster
-func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req *pb.ListPendingSubscriptionsRequest) (*pb.ListPendingSubscriptionsResponse, error) {
+func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req *quartermasterpb.ListPendingSubscriptionsRequest) (*quartermasterpb.ListPendingSubscriptionsResponse, error) {
 	clusterID := req.GetClusterId()
 	ownerTenantID := req.GetOwnerTenantId()
 
@@ -11646,7 +11649,7 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var subscriptions []*pb.ClusterSubscription
+	var subscriptions []*quartermasterpb.ClusterSubscription
 	for rows.Next() {
 		sub, err := scanClusterSubscription(rows)
 		if err != nil {
@@ -11675,14 +11678,14 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
 	}
 
-	return &pb.ListPendingSubscriptionsResponse{
+	return &quartermasterpb.ListPendingSubscriptionsResponse{
 		Subscriptions: subscriptions,
 		Pagination:    pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
 }
 
 // ApproveClusterSubscription approves a pending subscription
-func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, req *pb.ApproveClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, req *quartermasterpb.ApproveClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	subscriptionID := req.GetSubscriptionId()
 	ownerTenantID := req.GetOwnerTenantId()
 
@@ -11753,7 +11756,7 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 }
 
 // RejectClusterSubscription rejects a pending subscription
-func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req *pb.RejectClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req *quartermasterpb.RejectClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	subscriptionID := req.GetSubscriptionId()
 	ownerTenantID := req.GetOwnerTenantId()
 
@@ -11822,7 +11825,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 
 // ListPeers returns clusters that share at least one tenant with the requesting cluster.
 // Used by Foghorn federation to discover peers for cross-cluster stream routing.
-func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRequest) (*pb.ListPeersResponse, error) {
+func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterpb.ListPeersRequest) (*quartermasterpb.ListPeersResponse, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -11875,9 +11878,9 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 	}
 	defer rows.Close()
 
-	var peers []*pb.PeerCluster
+	var peers []*quartermasterpb.PeerCluster
 	for rows.Next() {
-		var peer pb.PeerCluster
+		var peer quartermasterpb.PeerCluster
 		var sharedTenantIDs []string
 		if err := rows.Scan(&peer.ClusterId, pq.Array(&sharedTenantIDs), &peer.ClusterName, &peer.ClusterType, &peer.FoghornAddr); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan peer: %v", err)
@@ -11889,11 +11892,11 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 		return nil, status.Errorf(codes.Internal, "iterate peers: %v", err)
 	}
 
-	return &pb.ListPeersResponse{Peers: peers}, nil
+	return &quartermasterpb.ListPeersResponse{Peers: peers}, nil
 }
 
 // getClusterSubscription is a helper to fetch a subscription by tenant and cluster
-func (s *QuartermasterServer) getClusterSubscription(ctx context.Context, tenantID, clusterID string) (*pb.ClusterSubscription, error) {
+func (s *QuartermasterServer) getClusterSubscription(ctx context.Context, tenantID, clusterID string) (*quartermasterpb.ClusterSubscription, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT a.id, a.tenant_id, a.cluster_id, a.access_level, a.subscription_status,
 		       a.resource_limits, a.requested_at, a.approved_at, a.approved_by,
@@ -11909,8 +11912,8 @@ func (s *QuartermasterServer) getClusterSubscription(ctx context.Context, tenant
 }
 
 // scanClusterSubscription scans a ClusterSubscription from rows
-func scanClusterSubscription(rows *sql.Rows) (*pb.ClusterSubscription, error) {
-	var sub pb.ClusterSubscription
+func scanClusterSubscription(rows *sql.Rows) (*quartermasterpb.ClusterSubscription, error) {
+	var sub quartermasterpb.ClusterSubscription
 	var resourceLimits sql.NullString
 	var requestedAt, approvedAt, expiresAt sql.NullTime
 	var approvedBy, rejectionReason, clusterName, tenantName sql.NullString
@@ -11963,8 +11966,8 @@ func scanClusterSubscription(rows *sql.Rows) (*pb.ClusterSubscription, error) {
 }
 
 // scanClusterSubscriptionRow scans a ClusterSubscription from a single row
-func scanClusterSubscriptionRow(row *sql.Row) (*pb.ClusterSubscription, error) {
-	var sub pb.ClusterSubscription
+func scanClusterSubscriptionRow(row *sql.Row) (*quartermasterpb.ClusterSubscription, error) {
+	var sub quartermasterpb.ClusterSubscription
 	var resourceLimits sql.NullString
 	var requestedAt, approvedAt, expiresAt sql.NullTime
 	var approvedBy, rejectionReason, clusterName, tenantName sql.NullString
@@ -12123,13 +12126,13 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	go qmServer.runTenantAliasBackstop(context.Background())
 
 	// Register all services
-	pb.RegisterTenantServiceServer(server, qmServer)
-	pb.RegisterBootstrapServiceServer(server, qmServer)
-	pb.RegisterNodeServiceServer(server, qmServer)
-	pb.RegisterClusterServiceServer(server, qmServer)
-	pb.RegisterMeshServiceServer(server, qmServer)
-	pb.RegisterServiceRegistryServiceServer(server, qmServer)
-	pb.RegisterIngressServiceServer(server, qmServer)
+	quartermasterpb.RegisterTenantServiceServer(server, qmServer)
+	quartermasterpb.RegisterBootstrapServiceServer(server, qmServer)
+	quartermasterpb.RegisterNodeServiceServer(server, qmServer)
+	quartermasterpb.RegisterClusterServiceServer(server, qmServer)
+	quartermasterpb.RegisterMeshServiceServer(server, qmServer)
+	quartermasterpb.RegisterServiceRegistryServiceServer(server, qmServer)
+	quartermasterpb.RegisterIngressServiceServer(server, qmServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

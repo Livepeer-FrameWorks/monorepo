@@ -27,10 +27,14 @@ import (
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 
 	"github.com/google/uuid"
@@ -54,7 +58,7 @@ import (
 
 // loadTierPricingRules reads pricing rules for a tier and converts them into
 // the protobuf shape exposed on BillingTier.
-func loadTierPricingRules(ctx context.Context, db *sql.DB, tierID string) ([]*pb.PricingRule, error) {
+func loadTierPricingRules(ctx context.Context, db *sql.DB, tierID string) ([]*purserpb.PricingRule, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT meter, model, currency, included_quantity::text, unit_price::text, config::text
 		FROM purser.tier_pricing_rules
@@ -64,13 +68,13 @@ func loadTierPricingRules(ctx context.Context, db *sql.DB, tierID string) ([]*pb
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*pb.PricingRule
+	var out []*purserpb.PricingRule
 	for rows.Next() {
 		var meter, model, currency, included, unitPrice, config string
 		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
 			return nil, err
 		}
-		out = append(out, &pb.PricingRule{
+		out = append(out, &purserpb.PricingRule{
 			Meter:            meter,
 			Model:            model,
 			Currency:         currency,
@@ -103,7 +107,7 @@ func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[s
 
 // loadSubscriptionPricingOverrides reads per-tenant pricing overrides into
 // proto messages.
-func loadSubscriptionPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string) ([]*pb.PricingRule, error) {
+func loadSubscriptionPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string) ([]*purserpb.PricingRule, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT meter, COALESCE(model, ''), COALESCE(currency, ''),
 		       COALESCE(included_quantity::text, ''), COALESCE(unit_price::text, ''),
@@ -115,13 +119,13 @@ func loadSubscriptionPricingOverrides(ctx context.Context, db *sql.DB, subscript
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*pb.PricingRule
+	var out []*purserpb.PricingRule
 	for rows.Next() {
 		var meter, model, currency, included, unitPrice, config string
 		if err := rows.Scan(&meter, &model, &currency, &included, &unitPrice, &config); err != nil {
 			return nil, err
 		}
-		out = append(out, &pb.PricingRule{
+		out = append(out, &purserpb.PricingRule{
 			Meter:            meter,
 			Model:            model,
 			Currency:         currency,
@@ -152,7 +156,7 @@ func loadSubscriptionEntitlementOverrides(ctx context.Context, db *sql.DB, subsc
 }
 
 // scanBillingFeatures scans a JSONB column into BillingFeatures proto
-func scanBillingFeatures(data []byte) *pb.BillingFeatures {
+func scanBillingFeatures(data []byte) *purserpb.BillingFeatures {
 	if len(data) == 0 {
 		return nil
 	}
@@ -168,7 +172,7 @@ func scanBillingFeatures(data []byte) *pb.BillingFeatures {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
-	return &pb.BillingFeatures{
+	return &purserpb.BillingFeatures{
 		Recording:              raw.Recording,
 		Analytics:              raw.Analytics,
 		CustomBranding:         raw.CustomBranding,
@@ -180,7 +184,7 @@ func scanBillingFeatures(data []byte) *pb.BillingFeatures {
 }
 
 // marshalBillingFeatures converts BillingFeatures proto to JSONB bytes
-func marshalBillingFeatures(bf *pb.BillingFeatures) ([]byte, error) {
+func marshalBillingFeatures(bf *purserpb.BillingFeatures) ([]byte, error) {
 	if bf == nil {
 		return []byte("{}"), nil
 	}
@@ -246,18 +250,18 @@ type mollieBillingClient interface {
 
 // PurserServer implements the Purser gRPC services
 type PurserServer struct {
-	pb.UnimplementedBillingServiceServer
-	pb.UnimplementedUsageServiceServer
-	pb.UnimplementedSubscriptionServiceServer
-	pb.UnimplementedInvoiceServiceServer
-	pb.UnimplementedPaymentServiceServer
-	pb.UnimplementedClusterPricingServiceServer
-	pb.UnimplementedOperatorRevenueServiceServer
-	pb.UnimplementedPrepaidServiceServer
-	pb.UnimplementedWebhookServiceServer
-	pb.UnimplementedStripeServiceServer
-	pb.UnimplementedMollieServiceServer
-	pb.UnimplementedX402ServiceServer
+	purserpb.UnimplementedBillingServiceServer
+	purserpb.UnimplementedUsageServiceServer
+	purserpb.UnimplementedSubscriptionServiceServer
+	purserpb.UnimplementedInvoiceServiceServer
+	purserpb.UnimplementedPaymentServiceServer
+	purserpb.UnimplementedClusterPricingServiceServer
+	purserpb.UnimplementedOperatorRevenueServiceServer
+	purserpb.UnimplementedPrepaidServiceServer
+	purserpb.UnimplementedWebhookServiceServer
+	purserpb.UnimplementedStripeServiceServer
+	purserpb.UnimplementedMollieServiceServer
+	purserpb.UnimplementedX402ServiceServer
 	db                  *sql.DB
 	logger              logging.Logger
 	metrics             *ServerMetrics
@@ -272,10 +276,11 @@ type PurserServer struct {
 	decklogClient       *decklogclient.BatchedClient
 	thresholdEnforcer   *handlers.ThresholdEnforcer
 	tierReconciler      *tieraccess.Reconciler
+	billing             *handlers.Service
 }
 
 // NewPurserServer creates a new Purser gRPC server
-func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, stripeClient *stripe.Client, mollieClient *mollie.Client, qmClient *qmclient.GRPCClient, commodoreClient handlers.CommodoreClient, decklogClient *decklogclient.BatchedClient) *PurserServer {
+func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, stripeClient *stripe.Client, mollieClient *mollie.Client, qmClient *qmclient.GRPCClient, commodoreClient handlers.CommodoreClient, decklogClient *decklogclient.BatchedClient, billing *handlers.Service) *PurserServer {
 	hdwallet := handlers.NewHDWallet(db, logger)
 	if created, err := hdwallet.EnsureState(context.Background(), os.Getenv("HD_WALLET_XPUB")); err != nil {
 		logger.WithError(err).Warn("HD wallet state not initialized; crypto deposits disabled until configured")
@@ -297,8 +302,9 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		priceFeed:           priceFeed,
 		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
 		decklogClient:       decklogClient,
-		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil),
+		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil, billing),
 		tierReconciler:      tieraccess.NewReconciler(db, qmClient, logger),
+		billing:             billing,
 	}
 }
 
@@ -326,7 +332,7 @@ func (s *PurserServer) markProviderIntentFailed(ctx context.Context, intentID, c
 }
 
 // GetBillingTiers returns available billing tiers with cursor pagination
-func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTiersRequest) (*pb.GetBillingTiersResponse, error) {
+func (s *PurserServer) GetBillingTiers(ctx context.Context, req *purserpb.GetBillingTiersRequest) (*purserpb.GetBillingTiersResponse, error) {
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -386,9 +392,9 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 	}
 	defer func() { _ = rows.Close() }()
 
-	var tiers []*pb.BillingTier
+	var tiers []*purserpb.BillingTier
 	for rows.Next() {
-		var tier pb.BillingTier
+		var tier purserpb.BillingTier
 		var createdAt, updatedAt time.Time
 		var features []byte
 		var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
@@ -464,7 +470,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		endCursor = pagination.EncodeCursorWithSortKey(int64(last.TierLevel), last.Id)
 	}
 
-	resp := &pb.GetBillingTiersResponse{
+	resp := &purserpb.GetBillingTiersResponse{
 		Tiers:          tiers,
 		PaymentMethods: paymentMethods,
 		Pagination:     pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(tiers)), startCursor, endCursor),
@@ -474,13 +480,13 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 }
 
 // GetBillingTier returns a specific billing tier
-func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTierRequest) (*pb.BillingTier, error) {
+func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error) {
 	tierID := req.GetTierId()
 	if tierID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tier_id required")
 	}
 
-	var tier pb.BillingTier
+	var tier purserpb.BillingTier
 	var createdAt, updatedAt time.Time
 	var features []byte
 	var processesLive, processesDVR, processesClip, processesDVRFinalize, processesVod sql.NullString
@@ -553,7 +559,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 // GetTenantBillingStatus returns lightweight billing status for cross-service checks.
 // Called by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
 // This avoids cross-service database access by providing billing info via gRPC.
-func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTenantBillingStatusRequest) (*pb.GetTenantBillingStatusResponse, error) {
+func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb.GetTenantBillingStatusRequest) (*purserpb.GetTenantBillingStatusResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -672,7 +678,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
-		return &pb.GetTenantBillingStatusResponse{
+		return &purserpb.GetTenantBillingStatusResponse{
 			BillingModel:      "postpaid",
 			IsSuspended:       false,
 			IsBalanceNegative: false,
@@ -717,20 +723,20 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 	// to its 30-day system default.
 	if retentionDays > 0 {
 		if dvrPolicy == nil {
-			dvrPolicy = &pb.DVRPolicy{}
+			dvrPolicy = &sharedpb.DVRPolicy{}
 		}
 		v := retentionDays
 		dvrPolicy.RecordingRetentionDays = &v
 	}
-	var allowances []*pb.MeterAllowance
-	var storagePricing *pb.StoragePricing
+	var allowances []*purserpb.MeterAllowance
+	var storagePricing *purserpb.StoragePricing
 	if tierID.Valid && tierID.String != "" {
 		periodStart, periodEnd := resolveCurrentPeriod(billingPeriodStart, billingPeriodEnd, time.Now().UTC())
 		allowances = s.computeAllowances(ctx, tenantID, tierID.String, periodStart, periodEnd)
 		storagePricing = s.loadStoragePricing(ctx, tierID.String)
 	}
 
-	return &pb.GetTenantBillingStatusResponse{
+	return &purserpb.GetTenantBillingStatusResponse{
 		BillingModel:           model,
 		IsSuspended:            isSuspended,
 		IsBalanceNegative:      isBalanceNegative,
@@ -750,7 +756,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 // Both unit_price and included_quantity are in GiB-hours — the rating engine
 // converts GiB-seconds → GiB-hours via toRatedUnits before subtracting the
 // included allowance, so the catalog and the wire are in the same unit.
-func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *pb.StoragePricing {
+func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *purserpb.StoragePricing {
 	const meter = "storage_gb_seconds_cold"
 	var (
 		included  float64
@@ -778,7 +784,7 @@ func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *p
 		}).Warn("Failed to load storage pricing rule")
 		return nil
 	}
-	return &pb.StoragePricing{
+	return &purserpb.StoragePricing{
 		IncludedGbHours:    included,
 		UnitPricePerGbHour: unitPrice,
 		Currency:           currency,
@@ -805,7 +811,7 @@ func parseStorageLimitBytes(raw sql.NullString) int64 {
 // parseTenantResourceLimits decodes Free-plan fair-use entitlements into the
 // wire shape Foghorn already consumes. These values are tenant-plan policy, not
 // cluster capacity; paid tiers normally omit the keys and therefore return nil.
-func parseTenantResourceLimits(raw sql.NullString) *pb.TenantResourceLimits {
+func parseTenantResourceLimits(raw sql.NullString) *quartermasterpb.TenantResourceLimits {
 	if !raw.Valid || raw.String == "" {
 		return nil
 	}
@@ -813,7 +819,7 @@ func parseTenantResourceLimits(raw sql.NullString) *pb.TenantResourceLimits {
 	if err := json.Unmarshal([]byte(raw.String), &entitlements); err != nil {
 		return nil
 	}
-	limits := &pb.TenantResourceLimits{
+	limits := &quartermasterpb.TenantResourceLimits{
 		MaxStreams: parsePositiveInt32(entitlements["max_concurrent_streams"]),
 		MaxViewers: parsePositiveInt32(entitlements["max_concurrent_viewers"]),
 	}
@@ -856,7 +862,7 @@ func resolveCurrentPeriod(start, end sql.NullTime, now time.Time) (time.Time, ti
 //
 // Surfaced via GetTenantBillingStatusResponse.Allowances so Foghorn
 // PUSH_REWRITE can apply load-aware admission without a second RPC.
-func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*pb.MeterAllowance {
+func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*purserpb.MeterAllowance {
 	const meter = "delivered_minutes"
 
 	var included, unitPrice float64
@@ -925,7 +931,7 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 		remaining = 0
 	}
 
-	return []*pb.MeterAllowance{
+	return []*purserpb.MeterAllowance{
 		{
 			Meter:      meter,
 			Included:   included,
@@ -941,7 +947,7 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 // Each key is JSON-encoded in tier_entitlements.value (e.g. 86400, true). Missing
 // keys leave the corresponding field at its zero value; pkg/dvrpolicy.Resolve
 // then applies its safety fallback.
-func parseDVRPolicy(raw sql.NullString) *pb.DVRPolicy {
+func parseDVRPolicy(raw sql.NullString) *sharedpb.DVRPolicy {
 	if !raw.Valid || raw.String == "" {
 		return nil
 	}
@@ -949,7 +955,7 @@ func parseDVRPolicy(raw sql.NullString) *pb.DVRPolicy {
 	if err := json.Unmarshal([]byte(raw.String), &entitlements); err != nil {
 		return nil
 	}
-	out := &pb.DVRPolicy{}
+	out := &sharedpb.DVRPolicy{}
 	if v, ok := entitlements["dvr_default_window_seconds"]; ok {
 		var n int32
 		if err := json.Unmarshal(v, &n); err == nil {
@@ -1003,7 +1009,7 @@ func parseRetentionDays(raw sql.NullString) int32 {
 // The processUsageSummary and updateInvoiceDraft logic lives in handlers/jobs.go
 
 // GetUsageRecords returns usage records for a tenant with cursor pagination
-func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageRecordsRequest) (*pb.UsageRecordsResponse, error) {
+func (s *PurserServer) GetUsageRecords(ctx context.Context, req *purserpb.GetUsageRecordsRequest) (*purserpb.UsageRecordsResponse, error) {
 	tenantID := req.GetTenantId()
 	ctxTenantID := middleware.GetTenantID(ctx)
 	isServiceCall := middleware.IsServiceCall(ctx)
@@ -1103,9 +1109,9 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.UsageRecord
+	var records []*purserpb.UsageRecord
 	for rows.Next() {
-		var rec pb.UsageRecord
+		var rec purserpb.UsageRecord
 		var clusterID sql.NullString
 		var usageDetailsBytes []byte
 		var createdAt time.Time
@@ -1173,10 +1179,10 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 		endCursor = pagination.EncodeCursor(endTime, lastRec.Id)
 	}
 
-	resp := &pb.UsageRecordsResponse{
+	resp := &purserpb.UsageRecordsResponse{
 		UsageRecords: records,
 		TenantId:     tenantID,
-		Filters: &pb.UsageFilters{
+		Filters: &purserpb.UsageFilters{
 			ClusterId: req.GetClusterId(),
 			UsageType: req.GetUsageType(),
 			TimeRange: req.GetTimeRange(),
@@ -1188,7 +1194,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 }
 
 // GetUsageAggregates rolls canonical 5-minute usage_records into chart buckets.
-func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageAggregatesRequest) (*pb.GetUsageAggregatesResponse, error) {
+func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *purserpb.GetUsageAggregatesRequest) (*purserpb.GetUsageAggregatesResponse, error) {
 	tenantID := req.GetTenantId()
 	ctxTenantID := middleware.GetTenantID(ctx)
 	isServiceCall := middleware.IsServiceCall(ctx)
@@ -1283,7 +1289,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	}
 	defer func() { _ = rows.Close() }()
 
-	var aggregates []*pb.UsageAggregate
+	var aggregates []*purserpb.UsageAggregate
 	for rows.Next() {
 		var usageType, rowGranularity string
 		var usageValue float64
@@ -1291,7 +1297,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 		if err := rows.Scan(&usageType, &periodStart, &periodEnd, &usageValue, &rowGranularity); err != nil {
 			return nil, status.Errorf(codes.Internal, "scan usage aggregate: %v", err)
 		}
-		agg := &pb.UsageAggregate{
+		agg := &purserpb.UsageAggregate{
 			UsageType:   usageType,
 			UsageValue:  usageValue,
 			Granularity: rowGranularity,
@@ -1308,11 +1314,11 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 		return nil, status.Errorf(codes.Internal, "iterate usage aggregates: %v", err)
 	}
 
-	return &pb.GetUsageAggregatesResponse{Aggregates: aggregates}, nil
+	return &purserpb.GetUsageAggregatesResponse{Aggregates: aggregates}, nil
 }
 
 // CheckUserLimit checks if a tenant can add more users
-func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimitRequest) (*pb.CheckUserLimitResponse, error) {
+func (s *PurserServer) CheckUserLimit(ctx context.Context, req *purserpb.CheckUserLimitRequest) (*purserpb.CheckUserLimitResponse, error) {
 	tenantID := req.GetTenantId()
 	ctxTenantID := middleware.GetTenantID(ctx)
 	isServiceCall := middleware.IsServiceCall(ctx)
@@ -1371,7 +1377,7 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 
 	// Unlimited if max_users is null or 0
 	if !maxUsers.Valid || maxUsers.Int32 == 0 {
-		return &pb.CheckUserLimitResponse{
+		return &purserpb.CheckUserLimitResponse{
 			Allowed:      true,
 			CurrentUsers: currentUsers,
 			MaxUsers:     0, // 0 = unlimited
@@ -1379,7 +1385,7 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 	}
 
 	allowed := currentUsers < maxUsers.Int32
-	resp := &pb.CheckUserLimitResponse{
+	resp := &purserpb.CheckUserLimitResponse{
 		Allowed:      allowed,
 		CurrentUsers: currentUsers,
 		MaxUsers:     maxUsers.Int32,
@@ -1396,13 +1402,13 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 // ============================================================================
 
 // GetSubscription returns the current subscription for a tenant
-func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscriptionRequest) (*pb.GetSubscriptionResponse, error) {
+func (s *PurserServer) GetSubscription(ctx context.Context, req *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	var sub pb.TenantSubscription
+	var sub purserpb.TenantSubscription
 	var startedAt, createdAt, updatedAt time.Time
 	var trialEndsAt, nextBillingDate, cancelledAt sql.NullTime
 	var billingPeriodStart, billingPeriodEnd sql.NullTime
@@ -1440,7 +1446,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		&createdAt, &updatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.GetSubscriptionResponse{
+		return &purserpb.GetSubscriptionResponse{
 			Error: "No active subscription found",
 		}, nil
 	}
@@ -1524,13 +1530,13 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		sub.EntitlementOverrides = overrides
 	}
 
-	return &pb.GetSubscriptionResponse{
+	return &purserpb.GetSubscriptionResponse{
 		Subscription: &sub,
 	}, nil
 }
 
 // CreateSubscription creates a new subscription for a tenant
-func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSubscriptionRequest) (*pb.TenantSubscription, error) {
+func (s *PurserServer) CreateSubscription(ctx context.Context, req *purserpb.CreateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
 	tenantID := req.GetTenantId()
 	tierID := req.GetTierId()
 	billingEmail := req.GetBillingEmail()
@@ -1600,7 +1606,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
 	}
 
-	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
+	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &ipcpb.BillingEvent{
 		SubscriptionId: subID,
 		Status:         "active",
 		Provider:       req.GetPaymentMethod(),
@@ -1612,7 +1618,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		return nil, status.Errorf(codes.Internal, "commit subscription create: %v", err)
 	}
 
-	sub := &pb.TenantSubscription{
+	sub := &purserpb.TenantSubscription{
 		Id:                 subID,
 		TenantId:           tenantID,
 		TierId:             tierID,
@@ -1644,7 +1650,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 // purser.subscription_entitlement_overrides. The header update and override
 // writes commit in a single transaction so a partial failure cannot leave
 // custom_features / tier / status touched while overrides rolled back.
-func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSubscriptionRequest) (*pb.TenantSubscription, error) {
+func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -1758,7 +1764,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		if updatedPaymentMethod.Valid {
 			paymentMethod = updatedPaymentMethod.String
 		}
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionUpdated, tenantID, userID, "subscription", updatedSubID, &ipcpb.BillingEvent{
 			SubscriptionId: updatedSubID,
 			Status:         updatedStatus,
 			Provider:       paymentMethod,
@@ -1787,7 +1793,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	}
 
 	// Return updated subscription
-	resp, err := s.GetSubscription(ctx, &pb.GetSubscriptionRequest{TenantId: tenantID})
+	resp, err := s.GetSubscription(ctx, &purserpb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
@@ -1801,7 +1807,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 // ClearPricingOverrides / ClearEntitlementOverrides delete all rows for the
 // subscription. Supplying both a clear flag and rows is treated as
 // "clear, then insert".
-func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql.Tx, tenantID string, req *pb.UpdateSubscriptionRequest) error {
+func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql.Tx, tenantID string, req *purserpb.UpdateSubscriptionRequest) error {
 	if !req.GetClearPricingOverrides() && len(req.GetPricingOverrides()) == 0 &&
 		!req.GetClearEntitlementOverrides() && len(req.GetEntitlementOverrides()) == 0 {
 		return nil
@@ -1874,7 +1880,7 @@ func (s *PurserServer) applySubscriptionOverridesTx(ctx context.Context, tx *sql
 	return nil
 }
 
-func validatePricingOverrideRule(rule *pb.PricingRule) error {
+func validatePricingOverrideRule(rule *purserpb.PricingRule) error {
 	if rule == nil {
 		return errors.New("rule is nil")
 	}
@@ -1951,7 +1957,7 @@ func normalizeOverrideCurrency(currency string) string {
 }
 
 // CancelSubscription cancels a tenant's subscription
-func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSubscriptionRequest) (*emptypb.Empty, error) {
+func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.CancelSubscriptionRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -1987,7 +1993,7 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSub
 	}
 
 	if subscriptionID != "" {
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &ipcpb.BillingEvent{
 			SubscriptionId: subscriptionID,
 			Status:         "cancelled",
 		}); enqErr != nil {
@@ -2007,7 +2013,7 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSub
 // ============================================================================
 
 // GetInvoice returns a specific invoice with tenant isolation
-func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest) (*pb.GetInvoiceResponse, error) {
+func (s *PurserServer) GetInvoice(ctx context.Context, req *purserpb.GetInvoiceRequest) (*purserpb.GetInvoiceResponse, error) {
 	invoiceID := req.GetInvoiceId()
 	if invoiceID == "" {
 		return nil, status.Error(codes.InvalidArgument, "invoice_id required")
@@ -2019,7 +2025,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		return nil, status.Error(codes.PermissionDenied, "tenant context required")
 	}
 
-	var invoice pb.Invoice
+	var invoice purserpb.Invoice
 	var dueDate, createdAt, updatedAt time.Time
 	var paidAt sql.NullTime
 	var tierID string
@@ -2082,9 +2088,9 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 	// Get tier info. NotFound is tolerated (tier may have been removed since
 	// the invoice was issued); other errors fail loud — a broken normalized
 	// pricing-rules table must not return a partial invoice with nil tier.
-	var tier *pb.BillingTier
+	var tier *purserpb.BillingTier
 	if tierID != "" {
-		tierResp, tierErr := s.GetBillingTier(ctx, &pb.GetBillingTierRequest{TierId: tierID})
+		tierResp, tierErr := s.GetBillingTier(ctx, &purserpb.GetBillingTierRequest{TierId: tierID})
 		switch {
 		case tierErr == nil:
 			tier = tierResp
@@ -2095,14 +2101,14 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		}
 	}
 
-	return &pb.GetInvoiceResponse{
+	return &purserpb.GetInvoiceResponse{
 		Invoice: &invoice,
 		Tier:    tier,
 	}, nil
 }
 
 // ListInvoices returns invoices for a tenant
-func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesRequest) (*pb.ListInvoicesResponse, error) {
+func (s *PurserServer) ListInvoices(ctx context.Context, req *purserpb.ListInvoicesRequest) (*purserpb.ListInvoicesResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -2160,9 +2166,9 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 	}
 	defer func() { _ = rows.Close() }()
 
-	var invoices []*pb.Invoice
+	var invoices []*purserpb.Invoice
 	for rows.Next() {
-		var inv pb.Invoice
+		var inv purserpb.Invoice
 		var dueDate, createdAt, updatedAt time.Time
 		var paidAt sql.NullTime
 		var usageDetails []byte
@@ -2233,7 +2239,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 		endCursor = pagination.EncodeCursor(endTime, last.Id)
 	}
 
-	resp := &pb.ListInvoicesResponse{
+	resp := &purserpb.ListInvoicesResponse{
 		Invoices:   invoices,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(invoices)), startCursor, endCursor),
 	}
@@ -2265,7 +2271,7 @@ type cryptoPaymentPlan struct {
 	Asset             string
 }
 
-func (d cryptoPaymentQuoteDetails) apply(resp *pb.PaymentResponse) {
+func (d cryptoPaymentQuoteDetails) apply(resp *purserpb.PaymentResponse) {
 	resp.WalletAddress = d.WalletAddress
 	resp.ExpectedAmountBaseUnits = d.ExpectedAmountBaseUnits
 	resp.ExpectedAmountToken = d.ExpectedAmountToken
@@ -2278,7 +2284,7 @@ func (d cryptoPaymentQuoteDetails) apply(resp *pb.PaymentResponse) {
 }
 
 // CreatePayment initiates a payment for an invoice with tenant isolation
-func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest) (*pb.PaymentResponse, error) {
+func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentRequest) (*purserpb.PaymentResponse, error) {
 	invoiceID := req.GetInvoiceId()
 	method := strings.ToLower(req.GetMethod())
 
@@ -2337,7 +2343,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 		LIMIT 1
 	`, invoiceID, method, invoiceTenantID).Scan(&existingPaymentID, &existingTxID, &existingPaymentURL, &existingCreatedAt)
 	if err == nil {
-		resp := &pb.PaymentResponse{
+		resp := &purserpb.PaymentResponse{
 			Id:        existingPaymentID,
 			Amount:    invoiceAmount,
 			Currency:  invoiceCurrency,
@@ -2385,7 +2391,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	paymentID := uuid.New().String()
 	expiresAt := time.Now().Add(30 * time.Minute)
 
-	resp := &pb.PaymentResponse{
+	resp := &purserpb.PaymentResponse{
 		Id:        paymentID,
 		Amount:    invoiceAmount,
 		Currency:  invoiceCurrency,
@@ -2508,7 +2514,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			}).Error("Failed to store payment record")
 			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
 		}
-		if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+		if _, err = s.EnqueueBillingEventTx(ctx, dbTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
 			PaymentId: paymentID,
 			InvoiceId: invoiceID,
 			Amount:    invoiceAmount,
@@ -2545,7 +2551,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			}).Error("Failed to store payment record")
 			return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
 		}
-		if _, err = s.EnqueueBillingEventTx(ctx, fallbackTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+		if _, err = s.EnqueueBillingEventTx(ctx, fallbackTx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
 			PaymentId: paymentID,
 			InvoiceId: invoiceID,
 			Amount:    invoiceAmount,
@@ -2562,7 +2568,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	}
 
 	if !paymentEventEnqueued {
-		s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+		s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &ipcpb.BillingEvent{
 			PaymentId: paymentID,
 			InvoiceId: invoiceID,
 			Amount:    invoiceAmount,
@@ -2961,16 +2967,16 @@ func loadInvoiceCryptoPaymentQuoteFrom(ctx context.Context, q rowQuerier, invoic
 }
 
 // GetPaymentMethods returns available payment methods for a tenant
-func (s *PurserServer) GetPaymentMethods(ctx context.Context, req *pb.GetPaymentMethodsRequest) (*pb.PaymentMethodResponse, error) {
+func (s *PurserServer) GetPaymentMethods(ctx context.Context, req *purserpb.GetPaymentMethodsRequest) (*purserpb.PaymentMethodResponse, error) {
 	// Return available payment methods based on configured env vars
-	return &pb.PaymentMethodResponse{
+	return &purserpb.PaymentMethodResponse{
 		Methods: s.getAvailablePaymentMethods(ctx),
 	}, nil
 }
 
 // GetBillingStatus returns subscription, tier, pending invoices, recent
 // payments, and available payment methods for a tenant.
-func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingStatusRequest) (*pb.BillingStatusResponse, error) {
+func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBillingStatusRequest) (*purserpb.BillingStatusResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -3011,7 +3017,7 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 	}
 
 	// Build response
-	resp := &pb.BillingStatusResponse{
+	resp := &purserpb.BillingStatusResponse{
 		TenantId:          tenantID,
 		Subscription:      subscription,
 		Tier:              tier,
@@ -3031,11 +3037,11 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 }
 
 // getSubscriptionAndTier fetches full subscription and tier details for a tenant
-func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID string) (*pb.TenantSubscription, *pb.BillingTier, error) {
+func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID string) (*purserpb.TenantSubscription, *purserpb.BillingTier, error) {
 	s.logger.WithField("tenant_id", tenantID).Info("getSubscriptionAndTier: querying subscription for tenant")
 
-	var subscription pb.TenantSubscription
-	var tier pb.BillingTier
+	var subscription purserpb.TenantSubscription
+	var tier purserpb.BillingTier
 
 	// Nullable fields
 	var billingEmail, paymentMethod, paymentReference, taxID sql.NullString
@@ -3234,7 +3240,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 }
 
 // getPendingInvoices fetches invoices that can still be paid by the tenant.
-func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) ([]*pb.Invoice, error) {
+func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) ([]*purserpb.Invoice, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, amount, base_amount, metered_amount, prepaid_credit_applied, currency, status,
 		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end, gross_metered_amount
@@ -3247,9 +3253,9 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var invoices []*pb.Invoice
+	var invoices []*purserpb.Invoice
 	for rows.Next() {
-		var inv pb.Invoice
+		var inv purserpb.Invoice
 		var dueDate, createdAt, updatedAt time.Time
 		var paidAt sql.NullTime
 		var usageDetails []byte
@@ -3306,7 +3312,7 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 }
 
 // getRecentPayments fetches recent payments for a tenant
-func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, limit int) ([]*pb.Payment, error) {
+func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, limit int) ([]*purserpb.Payment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT bp.id, bp.invoice_id, bp.method, bp.amount, bp.currency,
 		       bp.tx_id, bp.status, bp.confirmed_at, bp.created_at, bp.updated_at
@@ -3321,9 +3327,9 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 	}
 	defer func() { _ = rows.Close() }()
 
-	var payments []*pb.Payment
+	var payments []*purserpb.Payment
 	for rows.Next() {
-		var pay pb.Payment
+		var pay purserpb.Payment
 		var txID sql.NullString
 		var confirmedAt sql.NullTime
 		var createdAt, updatedAt time.Time
@@ -3372,7 +3378,7 @@ func (s *PurserServer) getSubscriptionPeriod(ctx context.Context, tenantID strin
 }
 
 // scanBillingAddress scans JSONB into BillingAddress proto
-func scanBillingAddress(data []byte) *pb.BillingAddress {
+func scanBillingAddress(data []byte) *purserpb.BillingAddress {
 	if len(data) == 0 {
 		return nil
 	}
@@ -3386,7 +3392,7 @@ func scanBillingAddress(data []byte) *pb.BillingAddress {
 	if json.Unmarshal(data, &raw) != nil {
 		return nil
 	}
-	return &pb.BillingAddress{
+	return &purserpb.BillingAddress{
 		Street:     raw.Street,
 		City:       raw.City,
 		State:      raw.State,
@@ -3400,7 +3406,7 @@ func scanBillingAddress(data []byte) *pb.BillingAddress {
 // ============================================================================
 
 // GetTenantUsage returns aggregated usage for a tenant
-func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRequest) (*pb.TenantUsageResponse, error) {
+func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantUsageRequest) (*purserpb.TenantUsageResponse, error) {
 	tenantID := req.GetTenantId()
 	startDate := req.GetStartDate()
 	endDate := req.GetEndDate()
@@ -3566,7 +3572,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 	// return a zero-cost response that would mask billing breakage.
 	tier, err := billingpkg.LoadEffectiveTier(ctx, s.db, tenantID)
 	currency := billing.DefaultCurrency()
-	resp := &pb.TenantUsageResponse{
+	resp := &purserpb.TenantUsageResponse{
 		TenantId:      tenantID,
 		BillingPeriod: startDate + " to " + endDate,
 		Usage:         usage,
@@ -3688,13 +3694,13 @@ func formatOptionalMoney(raw sql.NullString) (string, error) {
 }
 
 // GetClusterPricing retrieves pricing configuration for a cluster
-func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetClusterPricingRequest) (*pb.ClusterPricing, error) {
+func (s *PurserServer) GetClusterPricing(ctx context.Context, req *purserpb.GetClusterPricingRequest) (*purserpb.ClusterPricing, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	var pricing pb.ClusterPricing
+	var pricing purserpb.ClusterPricing
 	var basePrice sql.NullString
 	var currency sql.NullString
 	var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
@@ -3718,7 +3724,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Return default pricing for clusters without explicit config
-		defaultPricing := &pb.ClusterPricing{
+		defaultPricing := &purserpb.ClusterPricing{
 			ClusterId:         clusterID,
 			PricingModel:      "tier_inherit",
 			Currency:          "EUR",
@@ -3777,11 +3783,11 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 }
 
 // GetClustersPricingBatch retrieves pricing configuration for multiple clusters
-func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetClustersPricingBatchRequest) (*pb.GetClustersPricingBatchResponse, error) {
+func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *purserpb.GetClustersPricingBatchRequest) (*purserpb.GetClustersPricingBatchResponse, error) {
 	clusterIDs := req.GetClusterIds()
 	if len(clusterIDs) == 0 {
-		return &pb.GetClustersPricingBatchResponse{
-			Pricings: make(map[string]*pb.ClusterPricing),
+		return &purserpb.GetClustersPricingBatchResponse{
+			Pricings: make(map[string]*purserpb.ClusterPricing),
 		}, nil
 	}
 
@@ -3825,10 +3831,10 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := make(map[string]*pb.ClusterPricing)
+	result := make(map[string]*purserpb.ClusterPricing)
 
 	for rows.Next() {
-		var pricing pb.ClusterPricing
+		var pricing purserpb.ClusterPricing
 		var basePrice sql.NullString
 		var currency sql.NullString
 		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
@@ -3890,7 +3896,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 	for _, clusterID := range clusterIDs {
 		if _, found := result[clusterID]; !found {
 			s.logger.WithField("cluster_id", clusterID).Warn("Missing cluster pricing configuration")
-			pricing := &pb.ClusterPricing{
+			pricing := &purserpb.ClusterPricing{
 				ClusterId:    clusterID,
 				PricingModel: "tier_inherit",
 				IsEligible:   false,
@@ -3911,12 +3917,12 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 		s.applyCommercialEligibility(ctx, tenantID, tenantTierLevel, p)
 	}
 
-	return &pb.GetClustersPricingBatchResponse{
+	return &purserpb.GetClustersPricingBatchResponse{
 		Pricings: result,
 	}, nil
 }
 
-func applyEligibility(tenantID string, tenantTierLevel int32, pricing *pb.ClusterPricing) {
+func applyEligibility(tenantID string, tenantTierLevel int32, pricing *purserpb.ClusterPricing) {
 	if pricing == nil {
 		return
 	}
@@ -4000,7 +4006,7 @@ func (s *PurserServer) requireMarketplaceOwnerApproved(ctx context.Context, owne
 	return nil
 }
 
-func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID string, tenantTierLevel int32, pricing *pb.ClusterPricing) {
+func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID string, tenantTierLevel int32, pricing *purserpb.ClusterPricing) {
 	if pricing != nil && !pricing.IsEligible && pricing.DenialReason != nil {
 		return
 	}
@@ -4047,7 +4053,7 @@ func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, 
 		}
 		return nil
 	}
-	if err := s.quartermasterClient.GrantClusterAccess(ctx, &pb.GrantClusterAccessRequest{
+	if err := s.quartermasterClient.GrantClusterAccess(ctx, &quartermasterpb.GrantClusterAccessRequest{
 		TenantId:    tenantID,
 		ClusterId:   clusterID,
 		AccessLevel: "shared",
@@ -4058,7 +4064,7 @@ func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, 
 }
 
 // SetClusterPricing creates or updates pricing configuration for a cluster
-func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetClusterPricingRequest) (*pb.ClusterPricing, error) {
+func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetClusterPricingRequest) (*purserpb.ClusterPricing, error) {
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -4187,11 +4193,11 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetCluster
 	}
 
 	// Return the updated pricing
-	return s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	return s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
 }
 
 // ListClusterPricings returns pricing configs for clusters owned by a tenant
-func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClusterPricingsRequest) (*pb.ListClusterPricingsResponse, error) {
+func (s *PurserServer) ListClusterPricings(ctx context.Context, req *purserpb.ListClusterPricingsRequest) (*purserpb.ListClusterPricingsResponse, error) {
 	ownerTenantID := req.GetOwnerTenantId()
 
 	// Build query - if no owner specified, list all (admin use case)
@@ -4211,7 +4217,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		}
 
 		var clusterIDs []string
-		paginationReq := &pb.CursorPaginationRequest{First: 200}
+		paginationReq := &commonpb.CursorPaginationRequest{First: 200}
 
 		for {
 			clustersResp, err := s.quartermasterClient.ListClustersByOwner(ctx, ownerTenantID, paginationReq)
@@ -4234,7 +4240,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 				break
 			}
 			endCursor := pagination.GetEndCursor()
-			paginationReq = &pb.CursorPaginationRequest{
+			paginationReq = &commonpb.CursorPaginationRequest{
 				First: paginationReq.First,
 				After: &endCursor,
 			}
@@ -4242,7 +4248,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 
 		if len(clusterIDs) == 0 {
 			// No clusters owned by this tenant - legitimate empty result
-			return &pb.ListClusterPricingsResponse{Pricings: []*pb.ClusterPricing{}}, nil
+			return &purserpb.ListClusterPricingsResponse{Pricings: []*purserpb.ClusterPricing{}}, nil
 		}
 
 		query += " WHERE cluster_id = ANY($1)"
@@ -4264,9 +4270,9 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 	}
 	defer func() { _ = rows.Close() }()
 
-	var pricings []*pb.ClusterPricing
+	var pricings []*purserpb.ClusterPricing
 	for rows.Next() {
-		var pricing pb.ClusterPricing
+		var pricing purserpb.ClusterPricing
 		var basePrice sql.NullString
 		var currency sql.NullString
 		var stripeProductID, stripePriceIDMonthly, stripeMeterEventName sql.NullString
@@ -4326,17 +4332,17 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 		}
 	}
 
-	resp := &pb.ListClusterPricingsResponse{Pricings: pricings}
+	resp := &purserpb.ListClusterPricingsResponse{Pricings: pricings}
 	if int32(len(pricings)) > limit {
 		resp.Pricings = pricings[:limit]
-		resp.Pagination = &pb.CursorPaginationResponse{HasNextPage: true}
+		resp.Pagination = &commonpb.CursorPaginationResponse{HasNextPage: true}
 	}
 
 	return resp, nil
 }
 
 // CheckClusterAccess verifies if a tenant can subscribe to a cluster
-func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClusterAccessRequest) (*pb.CheckClusterAccessResponse, error) {
+func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *purserpb.CheckClusterAccessRequest) (*purserpb.CheckClusterAccessResponse, error) {
 	tenantID := req.GetTenantId()
 	clusterID := req.GetClusterId()
 
@@ -4360,12 +4366,12 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClus
 	}
 
 	// Get cluster pricing config
-	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	pricing, err := s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
 	if err != nil {
 		return nil, err
 	}
 
-	resp := &pb.CheckClusterAccessResponse{
+	resp := &purserpb.CheckClusterAccessResponse{
 		TenantTierLevel:   tenantTierLevel,
 		RequiredTierLevel: pricing.RequiredTierLevel,
 		PricingModel:      pricing.PricingModel,
@@ -4429,7 +4435,7 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClus
 
 // CreateClusterSubscription creates a subscription for a tenant to a cluster
 // Note: Invite-based subscriptions go through Quartermaster.AcceptClusterInvite instead
-func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.CreateClusterSubscriptionRequest) (*pb.ClusterSubscriptionResponse, error) {
+func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purserpb.CreateClusterSubscriptionRequest) (*purserpb.ClusterSubscriptionResponse, error) {
 	tenantID := req.GetTenantId()
 	clusterID := req.GetClusterId()
 
@@ -4438,7 +4444,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 	}
 
 	// Check if tenant can access this cluster
-	accessResp, err := s.CheckClusterAccess(ctx, &pb.CheckClusterAccessRequest{
+	accessResp, err := s.CheckClusterAccess(ctx, &purserpb.CheckClusterAccessRequest{
 		TenantId:  tenantID,
 		ClusterId: clusterID,
 	})
@@ -4450,7 +4456,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 	}
 
 	// Get cluster pricing to determine subscription type
-	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	pricing, err := s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
 	if err != nil {
 		return nil, err
 	}
@@ -4470,7 +4476,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 	// Resolve based on pricing model: free/tier_inherit/metered grant
 	// Quartermaster access immediately; monthly redirects to Stripe
 	// checkout (access on webhook); custom requires owner approval.
-	resp := &pb.ClusterSubscriptionResponse{
+	resp := &purserpb.ClusterSubscriptionResponse{
 		ClusterId: clusterID,
 		TenantId:  tenantID,
 	}
@@ -4643,7 +4649,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 }
 
 // CancelClusterSubscription cancels a tenant's subscription to a cluster
-func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.CancelClusterSubscriptionRequest) (*emptypb.Empty, error) {
+func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purserpb.CancelClusterSubscriptionRequest) (*emptypb.Empty, error) {
 	tenantID := req.GetTenantId()
 	clusterID := req.GetClusterId()
 
@@ -4652,7 +4658,7 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.Ca
 	}
 
 	// Get cluster pricing to check if there's a Stripe subscription to cancel
-	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	pricing, err := s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
 	if err != nil {
 		return nil, err
 	}
@@ -4701,7 +4707,7 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.Ca
 			s.logger.WithError(err).Warn("Failed to update cluster subscription after cancellation")
 		}
 	} else if s.quartermasterClient != nil {
-		_, err = s.quartermasterClient.UnsubscribeFromCluster(ctx, &pb.UnsubscribeFromClusterRequest{
+		_, err = s.quartermasterClient.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{
 			TenantId:  tenantID,
 			ClusterId: clusterID,
 		})
@@ -4715,7 +4721,7 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.Ca
 
 // ListMarketplaceClusterPricings returns paginated cluster pricings filtered by tenant tier level.
 // Gateway uses this as the primary marketplace query, then enriches with Quartermaster metadata.
-func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *pb.ListMarketplaceClusterPricingsRequest) (*pb.ListMarketplaceClusterPricingsResponse, error) {
+func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *purserpb.ListMarketplaceClusterPricingsRequest) (*purserpb.ListMarketplaceClusterPricingsResponse, error) {
 	tenantID := req.GetTenantId()
 
 	// Get tenant's billing tier level (0 if not found or no subscription)
@@ -4782,9 +4788,9 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	}
 	defer func() { _ = rows.Close() }()
 
-	var pricings []*pb.MarketplaceClusterPricing
+	var pricings []*purserpb.MarketplaceClusterPricing
 	for rows.Next() {
-		var p pb.MarketplaceClusterPricing
+		var p purserpb.MarketplaceClusterPricing
 		var basePrice sql.NullString
 		var currency sql.NullString
 		var createdAt time.Time
@@ -4842,7 +4848,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ClusterId)
 	}
 
-	return &pb.ListMarketplaceClusterPricingsResponse{
+	return &purserpb.ListMarketplaceClusterPricingsResponse{
 		Pricings:   pricings,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 	}, nil
@@ -4878,7 +4884,7 @@ const (
 // the caller's billing state mutation. Callers that already hold a tx
 // should switch to EnqueueBillingEventTx for strict atomicity. Demo-mode
 // requests still skip the outbox (no events emitted in demo).
-func (s *PurserServer) emitBillingEvent(ctx context.Context, eventType, tenantID, userID, resourceType, resourceID string, payload *pb.BillingEvent) {
+func (s *PurserServer) emitBillingEvent(ctx context.Context, eventType, tenantID, userID, resourceType, resourceID string, payload *ipcpb.BillingEvent) {
 	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
@@ -4901,6 +4907,7 @@ type GRPCServerConfig struct {
 	QuartermasterClient *qmclient.GRPCClient
 	CommodoreClient     handlers.CommodoreClient
 	DecklogClient       *decklogclient.BatchedClient
+	Billing             *handlers.Service
 	CertFile            string
 	KeyFile             string
 	AllowInsecure       bool
@@ -4948,7 +4955,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	}
 
 	server := grpc.NewServer(opts...)
-	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient)
+	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient, cfg.Billing)
 
 	// Drain worker for purser.billing_event_outbox. Replaces the prior
 	// async decklogClient.SendServiceEvent path so Decklog outages don't
@@ -4958,18 +4965,18 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	go purserServer.runBillingOutboxWorker(context.Background())
 
 	// Register all services
-	pb.RegisterBillingServiceServer(server, purserServer)
-	pb.RegisterUsageServiceServer(server, purserServer)
-	pb.RegisterSubscriptionServiceServer(server, purserServer)
-	pb.RegisterInvoiceServiceServer(server, purserServer)
-	pb.RegisterPaymentServiceServer(server, purserServer)
-	pb.RegisterClusterPricingServiceServer(server, purserServer)
-	pb.RegisterOperatorRevenueServiceServer(server, purserServer)
-	pb.RegisterPrepaidServiceServer(server, purserServer)
-	pb.RegisterWebhookServiceServer(server, purserServer)
-	pb.RegisterStripeServiceServer(server, purserServer)
-	pb.RegisterMollieServiceServer(server, purserServer)
-	pb.RegisterX402ServiceServer(server, purserServer)
+	purserpb.RegisterBillingServiceServer(server, purserServer)
+	purserpb.RegisterUsageServiceServer(server, purserServer)
+	purserpb.RegisterSubscriptionServiceServer(server, purserServer)
+	purserpb.RegisterInvoiceServiceServer(server, purserServer)
+	purserpb.RegisterPaymentServiceServer(server, purserServer)
+	purserpb.RegisterClusterPricingServiceServer(server, purserServer)
+	purserpb.RegisterOperatorRevenueServiceServer(server, purserServer)
+	purserpb.RegisterPrepaidServiceServer(server, purserServer)
+	purserpb.RegisterWebhookServiceServer(server, purserServer)
+	purserpb.RegisterStripeServiceServer(server, purserServer)
+	purserpb.RegisterMollieServiceServer(server, purserServer)
+	purserpb.RegisterX402ServiceServer(server, purserServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -4998,7 +5005,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 // ============================================================================
 
 // GetPrepaidBalance retrieves the current prepaid balance for a tenant
-func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *pb.GetPrepaidBalanceRequest) (*pb.PrepaidBalance, error) {
+func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *purserpb.GetPrepaidBalanceRequest) (*purserpb.PrepaidBalance, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5009,7 +5016,7 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *pb.GetPrepaid
 		currency = billing.DefaultCurrency()
 	}
 
-	var balance pb.PrepaidBalance
+	var balance purserpb.PrepaidBalance
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRowContext(ctx, `
@@ -5057,7 +5064,7 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *pb.GetPrepaid
 }
 
 // InitializePrepaidBalance creates a new prepaid balance record for a tenant
-func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *pb.InitializePrepaidBalanceRequest) (*pb.PrepaidBalance, error) {
+func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *purserpb.InitializePrepaidBalanceRequest) (*purserpb.PrepaidBalance, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5087,7 +5094,7 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *pb.Ini
 	}
 
 	// Fetch and return the balance (could be existing if ON CONFLICT hit)
-	return s.GetPrepaidBalance(ctx, &pb.GetPrepaidBalanceRequest{
+	return s.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{
 		TenantId: tenantID,
 		Currency: currency,
 	})
@@ -5126,7 +5133,7 @@ func (s *PurserServer) invalidateTenantCache(ctx context.Context, tenantID, reas
 	return nil
 }
 
-func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.InitializePrepaidAccountRequest) (*pb.InitializePrepaidAccountResponse, error) {
+func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *purserpb.InitializePrepaidAccountRequest) (*purserpb.InitializePrepaidAccountResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5208,7 +5215,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 		"tier_level":      tierLevel,
 	}).Info("Initialized prepaid account")
 
-	return &pb.InitializePrepaidAccountResponse{
+	return &purserpb.InitializePrepaidAccountResponse{
 		SubscriptionId:     actualSubID,
 		BalanceId:          actualBalID,
 		TierLevel:          tierLevel,
@@ -5219,7 +5226,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 
 // InitializePostpaidAccount creates a postpaid subscription for email registration.
 // Resolves the default postpaid tier and provisions cluster access.
-func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *pb.InitializePostpaidAccountRequest) (*pb.InitializePostpaidAccountResponse, error) {
+func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *purserpb.InitializePostpaidAccountRequest) (*purserpb.InitializePostpaidAccountResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5281,7 +5288,7 @@ func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *pb.In
 		"tier_level":      tierLevel,
 	}).Info("Initialized postpaid account")
 
-	return &pb.InitializePostpaidAccountResponse{
+	return &purserpb.InitializePostpaidAccountResponse{
 		SubscriptionId:     actualSubID,
 		TierLevel:          tierLevel,
 		EligibleClusterIds: eligibleClusters,
@@ -5290,7 +5297,7 @@ func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *pb.In
 }
 
 // TopupBalance adds funds to a tenant's prepaid balance
-func (s *PurserServer) TopupBalance(ctx context.Context, req *pb.TopupBalanceRequest) (*pb.BalanceTransaction, error) {
+func (s *PurserServer) TopupBalance(ctx context.Context, req *purserpb.TopupBalanceRequest) (*purserpb.BalanceTransaction, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5310,7 +5317,7 @@ func (s *PurserServer) TopupBalance(ctx context.Context, req *pb.TopupBalanceReq
 }
 
 // DeductBalance removes funds from a tenant's prepaid balance
-func (s *PurserServer) DeductBalance(ctx context.Context, req *pb.DeductBalanceRequest) (*pb.BalanceTransaction, error) {
+func (s *PurserServer) DeductBalance(ctx context.Context, req *purserpb.DeductBalanceRequest) (*purserpb.BalanceTransaction, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5331,7 +5338,7 @@ func (s *PurserServer) DeductBalance(ctx context.Context, req *pb.DeductBalanceR
 }
 
 // AdjustBalance manually adjusts a tenant's prepaid balance (admin)
-func (s *PurserServer) AdjustBalance(ctx context.Context, req *pb.AdjustBalanceRequest) (*pb.BalanceTransaction, error) {
+func (s *PurserServer) AdjustBalance(ctx context.Context, req *purserpb.AdjustBalanceRequest) (*purserpb.BalanceTransaction, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5362,7 +5369,7 @@ func (s *PurserServer) recordBalanceTransaction(
 	amountCents int64,
 	txType, description string,
 	referenceID, referenceType *string,
-) (*pb.BalanceTransaction, error) {
+) (*purserpb.BalanceTransaction, error) {
 	userID := middleware.GetUserID(ctx)
 	actorKind := "system"
 	var actorID any
@@ -5415,7 +5422,7 @@ func (s *PurserServer) recordBalanceTransaction(
 			}
 
 			// Conflict: return the existing transaction (and do NOT mutate balance again).
-			var existingTxn pb.BalanceTransaction
+			var existingTxn purserpb.BalanceTransaction
 			var createdAt time.Time
 			var existingRefID, existingRefType sql.NullString
 			scanErr := tx.QueryRowContext(ctx, `
@@ -5503,7 +5510,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		if referenceID != nil {
 			topupID = *referenceID
 		}
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventTopupCredited, tenantID, userID, "topup", txID, &ipcpb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
@@ -5559,7 +5566,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		}
 	}
 
-	return &pb.BalanceTransaction{
+	return &purserpb.BalanceTransaction{
 		Id:                txID,
 		TenantId:          tenantID,
 		AmountCents:       amountCents,
@@ -5573,7 +5580,7 @@ func (s *PurserServer) recordBalanceTransaction(
 }
 
 // ListBalanceTransactions returns transaction history for a tenant
-func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.ListBalanceTransactionsRequest) (*pb.ListBalanceTransactionsResponse, error) {
+func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *purserpb.ListBalanceTransactionsRequest) (*purserpb.ListBalanceTransactionsResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5615,9 +5622,9 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 	}
 	defer func() { _ = rows.Close() }()
 
-	var transactions []*pb.BalanceTransaction
+	var transactions []*purserpb.BalanceTransaction
 	for rows.Next() {
-		var txn pb.BalanceTransaction
+		var txn purserpb.BalanceTransaction
 		var createdAt time.Time
 		var refID, refType sql.NullString
 
@@ -5648,7 +5655,7 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 		transactions = append(transactions, &txn)
 	}
 
-	return &pb.ListBalanceTransactionsResponse{
+	return &purserpb.ListBalanceTransactionsResponse{
 		Transactions: transactions,
 	}, nil
 }
@@ -5658,7 +5665,7 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 // ============================================================================
 
 // CreateCardTopup creates a Stripe/Mollie checkout session for prepaid balance top-up
-func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTopupRequest) (*pb.CreateCardTopupResponse, error) {
+func (s *PurserServer) CreateCardTopup(ctx context.Context, req *purserpb.CreateCardTopupRequest) (*purserpb.CreateCardTopupResponse, error) {
 	tenantID := req.GetTenantId()
 	amountCents := req.GetAmountCents()
 	currency := req.GetCurrency()
@@ -5750,7 +5757,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 			s.logger.WithError(markErr).WithField("topup_id", topupID).Warn("Failed to mark prepaid top-up failed")
 			return nil, status.Errorf(codes.Internal, "failed to create checkout: %v", err)
 		}
-		if _, enqErr := s.EnqueueBillingEventTx(ctx, failTx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+		if _, enqErr := s.EnqueueBillingEventTx(ctx, failTx, eventTopupFailed, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
@@ -5787,7 +5794,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		s.logger.WithError(err).WithField("checkout_id", result.SessionID).Error("Failed to attach provider checkout to topup")
 		return nil, status.Error(codes.Internal, "failed to attach checkout to topup")
 	}
-	if _, err := s.EnqueueBillingEventTx(ctx, createdTx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+	if _, err := s.EnqueueBillingEventTx(ctx, createdTx, eventTopupCreated, tenantID, userID, "topup", topupID, &ipcpb.BillingEvent{
 		TopupId:  topupID,
 		Amount:   float64(amountCents) / 100.0,
 		Currency: currency,
@@ -5800,7 +5807,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		return nil, status.Errorf(codes.Internal, "commit topup created tx: %v", err)
 	}
 
-	return &pb.CreateCardTopupResponse{
+	return &purserpb.CreateCardTopupResponse{
 		TopupId:     topupID,
 		CheckoutUrl: result.CheckoutURL,
 		CheckoutId:  result.SessionID,
@@ -5812,7 +5819,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 }
 
 // GetPendingTopup returns the status of a pending top-up
-func (s *PurserServer) GetPendingTopup(ctx context.Context, req *pb.GetPendingTopupRequest) (*pb.PendingTopup, error) {
+func (s *PurserServer) GetPendingTopup(ctx context.Context, req *purserpb.GetPendingTopupRequest) (*purserpb.PendingTopup, error) {
 	var query string
 	var args []any
 
@@ -5830,7 +5837,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *pb.GetPendingTo
 		return nil, status.Error(codes.InvalidArgument, "topup_id or (provider + checkout_id) required")
 	}
 
-	var topup pb.PendingTopup
+	var topup purserpb.PendingTopup
 	var expiresAt, createdAt, updatedAt time.Time
 	var completedAt sql.NullTime
 	var balanceTxID sql.NullString
@@ -5861,7 +5868,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *pb.GetPendingTo
 }
 
 // ListPendingTopups returns a list of top-ups for a tenant
-func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendingTopupsRequest) (*pb.ListPendingTopupsResponse, error) {
+func (s *PurserServer) ListPendingTopups(ctx context.Context, req *purserpb.ListPendingTopupsRequest) (*purserpb.ListPendingTopupsResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
@@ -5885,9 +5892,9 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 	}
 	defer func() { _ = rows.Close() }()
 
-	var topups []*pb.PendingTopup
+	var topups []*purserpb.PendingTopup
 	for rows.Next() {
-		var topup pb.PendingTopup
+		var topup purserpb.PendingTopup
 		var expiresAt, createdAt, updatedAt time.Time
 		var completedAt sql.NullTime
 		var balanceTxID sql.NullString
@@ -5914,7 +5921,7 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 		topups = append(topups, &topup)
 	}
 
-	return &pb.ListPendingTopupsResponse{
+	return &purserpb.ListPendingTopupsResponse{
 		Topups: topups,
 	}, nil
 }
@@ -5982,7 +5989,7 @@ func (s *PurserServer) buildDepositQuote(ctx context.Context, network handlers.N
 // non-USDC assets, persist it on the wallet row, and credit
 // `received_amount × locked_price` when the deposit confirms. The user is
 // quoted an exact token amount to send.
-func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryptoTopupRequest) (*pb.CreateCryptoTopupResponse, error) {
+func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *purserpb.CreateCryptoTopupRequest) (*purserpb.CreateCryptoTopupResponse, error) {
 	tenantID := req.GetTenantId()
 	expectedAmountCents := req.GetExpectedAmountCents()
 	asset := req.GetAsset()
@@ -6006,11 +6013,11 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 
 	var assetStr, assetSymbol string
 	switch asset {
-	case pb.CryptoAsset_CRYPTO_ASSET_ETH:
+	case purserpb.CryptoAsset_CRYPTO_ASSET_ETH:
 		assetStr, assetSymbol = "ETH", "ETH"
-	case pb.CryptoAsset_CRYPTO_ASSET_USDC:
+	case purserpb.CryptoAsset_CRYPTO_ASSET_USDC:
 		assetStr, assetSymbol = "USDC", "USDC"
-	case pb.CryptoAsset_CRYPTO_ASSET_LPT:
+	case purserpb.CryptoAsset_CRYPTO_ASSET_LPT:
 		return nil, status.Error(codes.InvalidArgument, "LPT prepaid top-ups are not yet supported")
 	default:
 		return nil, status.Error(codes.InvalidArgument, "asset must be ETH or USDC")
@@ -6062,7 +6069,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 	// "send exactly X" matches what the monitor compares against.
 	expectedAmountToken := decimal.NewFromBigInt(expectedBaseUnits, -tokenDecimals).StringFixedBank(tokenDecimals)
 
-	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
+	if _, err := s.EnqueueBillingEventTx(ctx, tx, eventTopupCreated, tenantID, userID, "topup", walletID, &ipcpb.BillingEvent{
 		TopupId:  walletID,
 		Amount:   float64(expectedAmountCents) / 100.0,
 		Currency: normalizedCurrency,
@@ -6090,7 +6097,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		"quote_source":          quote.QuoteSource,
 	}).Info("Created crypto top-up deposit address")
 
-	return &pb.CreateCryptoTopupResponse{
+	return &purserpb.CreateCryptoTopupResponse{
 		TopupId:                 walletID,
 		DepositAddress:          address,
 		Asset:                   asset,
@@ -6107,7 +6114,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 }
 
 // GetCryptoTopup returns the status of a crypto top-up
-func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopupRequest) (*pb.CryptoTopup, error) {
+func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryptoTopupRequest) (*purserpb.CryptoTopup, error) {
 	topupID := req.GetTopupId()
 	if topupID == "" {
 		return nil, status.Error(codes.InvalidArgument, "topup_id is required")
@@ -6118,7 +6125,7 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 		return nil, status.Error(codes.PermissionDenied, "tenant context required")
 	}
 
-	var topup pb.CryptoTopup
+	var topup purserpb.CryptoTopup
 	var expiresAt, createdAt time.Time
 	var detectedAt, completedAt sql.NullTime
 	var txHash, receivedAmountBaseUnits, creditedAmountCurrency, quoteSource, network sql.NullString
@@ -6159,11 +6166,11 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 
 	switch topup.AssetSymbol {
 	case "ETH":
-		topup.Asset = pb.CryptoAsset_CRYPTO_ASSET_ETH
+		topup.Asset = purserpb.CryptoAsset_CRYPTO_ASSET_ETH
 	case "USDC":
-		topup.Asset = pb.CryptoAsset_CRYPTO_ASSET_USDC
+		topup.Asset = purserpb.CryptoAsset_CRYPTO_ASSET_USDC
 	case "LPT":
-		topup.Asset = pb.CryptoAsset_CRYPTO_ASSET_LPT
+		topup.Asset = purserpb.CryptoAsset_CRYPTO_ASSET_LPT
 	}
 
 	topup.Currency = billing.DefaultCurrency()
@@ -6211,7 +6218,7 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 // provided it must reference an active postpaid tier (tier_level >= 1, not
 // is_default_prepaid); empty selects is_default_postpaid as the floor.
 // Prepaid balance is carried forward as credit.
-func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidRequest) (*pb.PromoteToPaidResponse, error) {
+func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteToPaidRequest) (*purserpb.PromoteToPaidResponse, error) {
 	tenantID := req.GetTenantId()
 
 	if tenantID == "" {
@@ -6327,7 +6334,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		"credit_balance": creditBalanceCents,
 	}).Info("Tenant promoted from prepaid to postpaid")
 
-	return &pb.PromoteToPaidResponse{
+	return &purserpb.PromoteToPaidResponse{
 		Success:            true,
 		Message:            "Switched to postpaid billing",
 		NewBillingModel:    "postpaid",
@@ -6347,7 +6354,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 //
 // Prepaid → postpaid transitions belong on PromoteToPaid (which carries the
 // prepaid balance forward as credit). Returning to prepaid is not supported.
-func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBillingTierRequest) (*pb.ChangeBillingTierResponse, error) {
+func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.ChangeBillingTierRequest) (*purserpb.ChangeBillingTierResponse, error) {
 	tenantID := req.GetTenantId()
 	targetTierID := req.GetTierId()
 	if tenantID == "" || targetTierID == "" {
@@ -6429,7 +6436,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache for unchanged tier")
 			return nil, status.Errorf(codes.Internal, "failed to invalidate tenant cache: %v", invErr)
 		}
-		return &pb.ChangeBillingTierResponse{
+		return &purserpb.ChangeBillingTierResponse{
 			Success:            true,
 			Message:            "Already on requested tier",
 			AppliedTierId:      currentTierID,
@@ -6473,7 +6480,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 			"tier_level": targetTierLevel,
 		}).Info("Billing tier upgraded")
 
-		return &pb.ChangeBillingTierResponse{
+		return &purserpb.ChangeBillingTierResponse{
 			Success:            true,
 			Message:            "Tier upgrade applied",
 			AppliedTierId:      targetTierID,
@@ -6520,7 +6527,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 		"effective_at": effective,
 	}).Info("Billing tier downgrade scheduled")
 
-	return &pb.ChangeBillingTierResponse{
+	return &purserpb.ChangeBillingTierResponse{
 		Success:       true,
 		Message:       "Downgrade scheduled for end of current billing period",
 		PendingTierId: targetTierID,
@@ -6586,7 +6593,7 @@ var _ = pq.Array
 // ProcessWebhook handles incoming webhooks from the Gateway.
 // The Gateway packages raw HTTP (body + headers) into a WebhookRequest and
 // routes it here via gRPC. Signature verification happens in the handlers.
-func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
+func (s *PurserServer) ProcessWebhook(ctx context.Context, req *sharedpb.WebhookRequest) (*sharedpb.WebhookResponse, error) {
 	provider := req.GetProvider()
 	body := req.GetBody()
 	headers := req.GetHeaders()
@@ -6603,19 +6610,19 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 
 	switch provider {
 	case "stripe":
-		success, errMsg, statusCode = handlers.ProcessStripeWebhookGRPC(body, headers)
+		success, errMsg, statusCode = s.billing.ProcessStripeWebhookGRPC(body, headers)
 	case "mollie":
-		success, errMsg, statusCode = handlers.ProcessMollieWebhookGRPC(body, headers)
+		success, errMsg, statusCode = s.billing.ProcessMollieWebhookGRPC(body, headers)
 	default:
 		s.logger.WithField("provider", provider).Warn("Unknown webhook provider")
-		return &pb.WebhookResponse{
+		return &sharedpb.WebhookResponse{
 			Success:    false,
 			Error:      "unknown provider: " + provider,
 			StatusCode: 400,
 		}, nil
 	}
 
-	return &pb.WebhookResponse{
+	return &sharedpb.WebhookResponse{
 		Success:    success,
 		Error:      errMsg,
 		StatusCode: int32(statusCode),
@@ -6627,7 +6634,7 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 // ============================================================================
 
 // CreateCheckoutSession creates a Stripe Checkout Session for subscription
-func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.CreateStripeCheckoutRequest) (*pb.CreateStripeCheckoutResponse, error) {
+func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.CreateStripeCheckoutRequest) (*purserpb.CreateStripeCheckoutResponse, error) {
 	if s.stripeClient == nil {
 		return nil, status.Error(codes.Unavailable, "Stripe not configured")
 	}
@@ -6836,14 +6843,14 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 		"session_id": sess.ID,
 	}).Info("Created Stripe checkout session")
 
-	return &pb.CreateStripeCheckoutResponse{
+	return &purserpb.CreateStripeCheckoutResponse{
 		CheckoutUrl: sess.URL,
 		SessionId:   sess.ID,
 	}, nil
 }
 
 // CreateBillingPortalSession creates a Stripe Billing Portal session
-func (s *PurserServer) CreateBillingPortalSession(ctx context.Context, req *pb.CreateBillingPortalRequest) (*pb.CreateBillingPortalResponse, error) {
+func (s *PurserServer) CreateBillingPortalSession(ctx context.Context, req *purserpb.CreateBillingPortalRequest) (*purserpb.CreateBillingPortalResponse, error) {
 	if s.stripeClient == nil {
 		return nil, status.Error(codes.Unavailable, "Stripe not configured")
 	}
@@ -6878,13 +6885,13 @@ func (s *PurserServer) CreateBillingPortalSession(ctx context.Context, req *pb.C
 		return nil, status.Error(codes.Internal, "failed to create billing portal session")
 	}
 
-	return &pb.CreateBillingPortalResponse{
+	return &purserpb.CreateBillingPortalResponse{
 		PortalUrl: sess.URL,
 	}, nil
 }
 
 // SyncSubscription syncs subscription state from Stripe (admin/debug)
-func (s *PurserServer) SyncSubscription(ctx context.Context, req *pb.SyncStripeSubscriptionRequest) (*pb.TenantSubscription, error) {
+func (s *PurserServer) SyncSubscription(ctx context.Context, req *purserpb.SyncStripeSubscriptionRequest) (*purserpb.TenantSubscription, error) {
 	if s.stripeClient == nil {
 		return nil, status.Error(codes.Unavailable, "Stripe not configured")
 	}
@@ -6943,7 +6950,7 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *pb.SyncStripeS
 	}
 
 	// Return updated subscription
-	resp, err := s.GetSubscription(ctx, &pb.GetSubscriptionRequest{TenantId: tenantID})
+	resp, err := s.GetSubscription(ctx, &purserpb.GetSubscriptionRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
@@ -6955,7 +6962,7 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *pb.SyncStripeS
 // ============================================================================
 
 // CreateFirstPayment creates a Mollie first payment to establish a mandate
-func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMollieFirstPaymentRequest) (*pb.CreateMollieFirstPaymentResponse, error) {
+func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.CreateMollieFirstPaymentRequest) (*purserpb.CreateMollieFirstPaymentResponse, error) {
 	if s.mollieClient == nil {
 		return nil, status.Error(codes.Unavailable, "Mollie not configured")
 	}
@@ -7120,7 +7127,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		"customer_id": mollieCustomerID,
 	}).Info("Created Mollie first payment")
 
-	return &pb.CreateMollieFirstPaymentResponse{
+	return &purserpb.CreateMollieFirstPaymentResponse{
 		PaymentUrl:       payment.Links.Checkout.Href,
 		PaymentId:        payment.ID,
 		MollieCustomerId: mollieCustomerID,
@@ -7128,7 +7135,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 }
 
 // CreateSubscription creates a Mollie subscription after mandate is valid
-func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.CreateMollieSubscriptionRequest) (*pb.CreateMollieSubscriptionResponse, error) {
+func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purserpb.CreateMollieSubscriptionRequest) (*purserpb.CreateMollieSubscriptionResponse, error) {
 	if s.mollieClient == nil {
 		return nil, status.Error(codes.Unavailable, "Mollie not configured")
 	}
@@ -7343,7 +7350,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 		"next_payment":    nextPayment,
 	}).Info("Created Mollie subscription")
 
-	return &pb.CreateMollieSubscriptionResponse{
+	return &purserpb.CreateMollieSubscriptionResponse{
 		SubscriptionId:  sub.ID,
 		Status:          string(sub.Status),
 		NextPaymentDate: nextPayment,
@@ -7351,7 +7358,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 }
 
 // ListMandates lists available Mollie mandates for a tenant
-func (s *PurserServer) ListMandates(ctx context.Context, req *pb.ListMollieMandatesRequest) (*pb.ListMollieMandatesResponse, error) {
+func (s *PurserServer) ListMandates(ctx context.Context, req *purserpb.ListMollieMandatesRequest) (*purserpb.ListMollieMandatesResponse, error) {
 	if s.mollieClient == nil {
 		return nil, status.Error(codes.Unavailable, "Mollie not configured")
 	}
@@ -7367,7 +7374,7 @@ func (s *PurserServer) ListMandates(ctx context.Context, req *pb.ListMollieManda
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return &pb.ListMollieMandatesResponse{Mandates: []*pb.MollieMandate{}}, nil
+		return &purserpb.ListMollieMandatesResponse{Mandates: []*purserpb.MollieMandate{}}, nil
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get Mollie customer")
@@ -7380,11 +7387,11 @@ func (s *PurserServer) ListMandates(ctx context.Context, req *pb.ListMollieManda
 		return nil, status.Error(codes.Internal, "failed to list mandates")
 	}
 
-	result := make([]*pb.MollieMandate, 0, len(mandates))
+	result := make([]*purserpb.MollieMandate, 0, len(mandates))
 	for _, m := range mandates {
 		info := s.mollieClient.ExtractMandateInfo(m, mollieCustomerID)
 		details, _ := structpb.NewStruct(info.Details)
-		result = append(result, &pb.MollieMandate{
+		result = append(result, &purserpb.MollieMandate{
 			MollieMandateId:  info.MollieMandateID,
 			MollieCustomerId: info.MollieCustomerID,
 			Status:           info.Status,
@@ -7394,11 +7401,11 @@ func (s *PurserServer) ListMandates(ctx context.Context, req *pb.ListMollieManda
 		})
 	}
 
-	return &pb.ListMollieMandatesResponse{Mandates: result}, nil
+	return &purserpb.ListMollieMandatesResponse{Mandates: result}, nil
 }
 
 // CancelSubscription cancels a Mollie subscription
-func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *pb.CancelMollieSubscriptionRequest) (*emptypb.Empty, error) {
+func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *purserpb.CancelMollieSubscriptionRequest) (*emptypb.Empty, error) {
 	if s.mollieClient == nil {
 		return nil, status.Error(codes.Unavailable, "Mollie not configured")
 	}
@@ -7464,7 +7471,7 @@ func getMolliePaymentMethod(method string) mollielib.PaymentMethod {
 // ============================================================================
 
 // GetBillingDetails returns billing details for a tenant
-func (s *PurserServer) GetBillingDetails(ctx context.Context, req *pb.GetBillingDetailsRequest) (*pb.BillingDetails, error) {
+func (s *PurserServer) GetBillingDetails(ctx context.Context, req *purserpb.GetBillingDetailsRequest) (*purserpb.BillingDetails, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -7489,7 +7496,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *pb.GetBilling
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	details := &pb.BillingDetails{
+	details := &purserpb.BillingDetails{
 		TenantId:  tenantID,
 		UpdatedAt: timestamppb.New(updatedAt),
 	}
@@ -7514,7 +7521,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *pb.GetBilling
 }
 
 // UpdateBillingDetails updates billing details for a tenant
-func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateBillingDetailsRequest) (*pb.BillingDetails, error) {
+func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *purserpb.UpdateBillingDetailsRequest) (*purserpb.BillingDetails, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -7565,7 +7572,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateB
 
 	if len(updates) == 0 {
 		// No updates provided, just return current details
-		return s.GetBillingDetails(ctx, &pb.GetBillingDetailsRequest{TenantId: tenantID})
+		return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
 	}
 
 	// Always update updated_at
@@ -7596,7 +7603,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateB
 	s.logger.WithField("tenant_id", tenantID).Info("Billing details updated")
 
 	// Return updated billing details
-	return s.GetBillingDetails(ctx, &pb.GetBillingDetailsRequest{TenantId: tenantID})
+	return s.GetBillingDetails(ctx, &purserpb.GetBillingDetailsRequest{TenantId: tenantID})
 }
 
 // ============================================================================
@@ -7607,7 +7614,7 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateB
 // Returns multiple network options (Base + Arbitrum) so clients can choose their preferred network.
 // Per x402 spec, uses the platform-wide payTo address (HD index 0).
 // tenantID is optional - the payer is identified from the signed authorization's `from` field.
-func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPaymentRequirementsRequest) (*pb.PaymentRequirements, error) {
+func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *purserpb.GetPaymentRequirementsRequest) (*purserpb.PaymentRequirements, error) {
 	// tenantID is optional - we use platform-wide payTo address per x402 spec
 	// The payer's identity comes from the authorization signature, not the request
 
@@ -7618,7 +7625,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 			"error": err,
 		}).Error("Failed to get platform x402 address")
 		//nolint:nilerr // error returned in response struct for client handling
-		return &pb.PaymentRequirements{
+		return &purserpb.PaymentRequirements{
 			X402Version: 1,
 			Error:       "failed to get payment address",
 			TopupUrl:    "/account/billing",
@@ -7630,9 +7637,9 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 	resource := req.GetResource()
 
 	// Build accepts list with all supported networks
-	accepts := make([]*pb.PaymentRequirement, 0, len(networks))
+	accepts := make([]*purserpb.PaymentRequirement, 0, len(networks))
 	for _, network := range networks {
-		accepts = append(accepts, &pb.PaymentRequirement{
+		accepts = append(accepts, &purserpb.PaymentRequirement{
 			Scheme:            "exact",
 			Network:           network.Name,
 			MaxAmountRequired: "100000000", // 100 USDC max (6 decimals)
@@ -7644,7 +7651,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 		})
 	}
 
-	return &pb.PaymentRequirements{
+	return &purserpb.PaymentRequirements{
 		X402Version: 1,
 		Accepts:     accepts,
 		TopupUrl:    "/account/billing",
@@ -7654,7 +7661,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 // VerifyX402Payment verifies an x402 payment without settling.
 // tenantID is optional since x402 uses platform-wide payTo address.
 // The payer is identified from the authorization's `from` field.
-func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *pb.VerifyX402PaymentRequest) (*pb.VerifyX402PaymentResponse, error) {
+func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *purserpb.VerifyX402PaymentRequest) (*purserpb.VerifyX402PaymentResponse, error) {
 	// tenantID is optional - verification works without it since we use platform payTo
 	tenantID := req.GetTenantId()
 
@@ -7691,7 +7698,7 @@ func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *pb.VerifyX402
 		return nil, status.Errorf(codes.Internal, "verification failed: %v", err)
 	}
 
-	return &pb.VerifyX402PaymentResponse{
+	return &purserpb.VerifyX402PaymentResponse{
 		Valid:                  result.Valid,
 		Error:                  result.Error,
 		PayerAddress:           result.PayerAddress,
@@ -7703,7 +7710,7 @@ func (s *PurserServer) VerifyX402Payment(ctx context.Context, req *pb.VerifyX402
 
 // SettleX402Payment settles an x402 payment and credits the balance.
 // tenantID is optional for auth-only payments (value=0) - the payer is identified from the authorization.
-func (s *PurserServer) SettleX402Payment(ctx context.Context, req *pb.SettleX402PaymentRequest) (*pb.SettleX402PaymentResponse, error) {
+func (s *PurserServer) SettleX402Payment(ctx context.Context, req *purserpb.SettleX402PaymentRequest) (*purserpb.SettleX402PaymentResponse, error) {
 	// tenantID is optional - for auth-only payments (value=0), the payer is identified from the authorization
 	tenantID := req.GetTenantId()
 
@@ -7773,7 +7780,7 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *pb.SettleX402
 		}
 	}
 
-	return &pb.SettleX402PaymentResponse{
+	return &purserpb.SettleX402PaymentResponse{
 		Success:         result.Success,
 		Error:           result.Error,
 		TxHash:          result.TxHash,
@@ -7787,7 +7794,7 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *pb.SettleX402
 }
 
 // GetTenantX402Address returns the per-tenant x402 deposit address
-func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTenantX402AddressRequest) (*pb.GetTenantX402AddressResponse, error) {
+func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *purserpb.GetTenantX402AddressRequest) (*purserpb.GetTenantX402AddressResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
@@ -7798,7 +7805,7 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 		return nil, status.Errorf(codes.Internal, "failed to get x402 address: %v", err)
 	}
 
-	return &pb.GetTenantX402AddressResponse{
+	return &purserpb.GetTenantX402AddressResponse{
 		Address:         address,
 		DerivationIndex: derivationIndex,
 		NewlyCreated:    newlyCreated,
@@ -7812,7 +7819,7 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 //
 // tenantID is required: line items are tenant-scoped financial-audit rows and
 // reads must filter by tenant per the cross-service tenant rule.
-func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tenantID string) ([]*pb.LineItem, error) {
+func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tenantID string) ([]*purserpb.LineItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT line_key, COALESCE(meter, ''), description,
 		       quantity::text, included_quantity::text, billable_quantity::text,
@@ -7828,9 +7835,9 @@ func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tena
 		return nil, fmt.Errorf("query line items for invoice %s: %w", invoiceID, err)
 	}
 	defer rows.Close()
-	items := []*pb.LineItem{}
+	items := []*purserpb.LineItem{}
 	for rows.Next() {
-		var li pb.LineItem
+		var li purserpb.LineItem
 		if scanErr := rows.Scan(&li.LineKey, &li.Meter, &li.Description,
 			&li.Quantity, &li.IncludedQuantity, &li.BillableQuantity,
 			&li.UnitPrice, &li.Total, &li.Currency,
@@ -7854,7 +7861,7 @@ func (s *PurserServer) loadInvoiceLineItems(ctx context.Context, invoiceID, tena
 // enrichLineItemClusterNames populates LineItem.cluster_name on each item
 // with a non-empty cluster_id by looking up Quartermaster. Idempotent and
 // best-effort.
-func enrichLineItemClusterNames(ctx context.Context, s *PurserServer, items []*pb.LineItem) {
+func enrichLineItemClusterNames(ctx context.Context, s *PurserServer, items []*purserpb.LineItem) {
 	if s.quartermasterClient == nil || len(items) == 0 {
 		return
 	}

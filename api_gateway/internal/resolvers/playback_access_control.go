@@ -13,7 +13,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -102,7 +102,7 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 		return vErr, nil
 	}
 
-	req := &pb.SetPlaybackPolicyRequest{}
+	req := &commodorepb.SetPlaybackPolicyRequest{}
 	switch target.kind {
 	case "stream":
 		req.StreamId = target.id
@@ -131,7 +131,7 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 		if claimErr != nil {
 			return claimErr, nil
 		}
-		req.Jwt = &pb.PlaybackJwtPolicy{
+		req.Jwt = &commodorepb.PlaybackJwtPolicy{
 			AllowedKids:        input.Policy.Jwt.AllowedKids,
 			RequiredAudience:   input.Policy.Jwt.RequiredAudience,
 			RequiredClaimsJson: requiredClaims,
@@ -148,7 +148,7 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 		if input.Policy.Webhook.TimeoutMs != nil {
 			timeout = int32(*input.Policy.Webhook.TimeoutMs)
 		}
-		req.Webhook = &pb.PlaybackWebhookPolicy{
+		req.Webhook = &commodorepb.PlaybackWebhookPolicy{
 			Url:       input.Policy.Webhook.URL,
 			TimeoutMs: timeout,
 			SecretPt:  secret,
@@ -211,7 +211,7 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 // ----------------------------------------------------------------------------
 
 // DoGetSigningKey fetches one signing key, tenant-scoped via Commodore.
-func (r *Resolver) DoGetSigningKey(ctx context.Context, id string) (*pb.SigningKey, error) {
+func (r *Resolver) DoGetSigningKey(ctx context.Context, id string) (*commodorepb.SigningKey, error) {
 	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (r *Resolver) DoListSigningKeys(ctx context.Context, statusFilter *string, 
 			Edges: []*model.SigningKeyEdge{
 				{Cursor: key.GetId(), Node: key},
 			},
-			Nodes:      []*pb.SigningKey{key},
+			Nodes:      []*commodorepb.SigningKey{key},
 			PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
 			TotalCount: 1,
 		}, nil
@@ -265,7 +265,7 @@ func (r *Resolver) DoListSigningKeys(ctx context.Context, statusFilter *string, 
 	}
 
 	edges := make([]*model.SigningKeyEdge, 0, len(resp.GetSigningKeys()))
-	nodes := make([]*pb.SigningKey, 0, len(resp.GetSigningKeys()))
+	nodes := make([]*commodorepb.SigningKey, 0, len(resp.GetSigningKeys()))
 	for _, sk := range resp.GetSigningKeys() {
 		nodes = append(nodes, sk)
 		edges = append(edges, &model.SigningKeyEdge{
@@ -319,9 +319,9 @@ type playbackPolicyTarget struct {
 	id   string
 }
 
-func demoSigningKey(name string, status string) *pb.SigningKey {
+func demoSigningKey(name string, status string) *commodorepb.SigningKey {
 	now := time.Now().UTC().Format(time.RFC3339)
-	return &pb.SigningKey{
+	return &commodorepb.SigningKey{
 		Id:           "signing_key_demo_001",
 		Kid:          "kid_demo_001",
 		Name:         name,
@@ -468,7 +468,7 @@ func canonicalJSONValue(rawValue string) (string, error) {
 // secretMasked / requiredClaimsJson field resolvers handle the
 // proto→GraphQL conversion (including REDACTING the webhook secret) at
 // render time so plaintext never reaches the response payload.
-func policyToModel(resp *pb.ResolvePlaybackPolicyResponse) *model.PlaybackPolicy {
+func policyToModel(resp *commodorepb.ResolvePlaybackPolicyResponse) *model.PlaybackPolicy {
 	if resp == nil {
 		return nil
 	}
@@ -478,8 +478,8 @@ func policyToModel(resp *pb.ResolvePlaybackPolicyResponse) *model.PlaybackPolicy
 	}
 	return &model.PlaybackPolicy{
 		Type:    t,
-		Jwt:     resp.GetJwtPolicy(),     // *proto.PlaybackJwtPolicy
-		Webhook: resp.GetWebhookPolicy(), // *proto.PlaybackWebhookPolicy (secret_pt scrubbed by SecretMasked resolver)
+		Jwt:     resp.GetJwtPolicy(),
+		Webhook: resp.GetWebhookPolicy(), // secret_pt scrubbed by SecretMasked resolver
 	}
 }
 

@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func mapSignalmanStorageEvent(event *pb.SignalmanEvent) *pb.StorageEvent {
+func mapSignalmanStorageEvent(event *signalmanpb.SignalmanEvent) *periscopepb.StorageEvent {
 	if event == nil || event.Data == nil {
 		return nil
 	}
@@ -37,7 +37,7 @@ func mapSignalmanStorageEvent(event *pb.SignalmanEvent) *pb.StorageEvent {
 		tenantID = data.GetTenantId()
 	}
 
-	return &pb.StorageEvent{
+	return &periscopepb.StorageEvent{
 		Id:             eventID,
 		Timestamp:      timestamppb.New(timestamp),
 		TenantId:       tenantID,

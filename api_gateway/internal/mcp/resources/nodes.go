@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -60,7 +60,7 @@ func handleNodesList(ctx context.Context, clients *clients.ServiceClients, logge
 	}
 
 	// Build pagination request
-	pagination := &pb.CursorPaginationRequest{
+	pagination := &commonpb.CursorPaginationRequest{
 		First: 50,
 	}
 

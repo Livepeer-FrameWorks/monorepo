@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // TestFilterRuntimeEnrolled_SplitsPendingAndInProgress covers the
@@ -26,7 +26,7 @@ func TestFilterRuntimeEnrolled_SplitsPendingAndInProgress(t *testing.T) {
 	}
 	manifestClusters := map[string]bool{"cluster-test": true}
 
-	qm := []*pb.InfrastructureNode{
+	qm := []*quartermasterpb.InfrastructureNode{
 		{
 			NodeId:    "qm-already",
 			NodeName:  "already-written",

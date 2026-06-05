@@ -14,7 +14,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/spf13/cobra"
 )
@@ -249,7 +249,7 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-func uniqueExternalIPs(nodes []*pb.InfrastructureNode) []string {
+func uniqueExternalIPs(nodes []*quartermasterpb.InfrastructureNode) []string {
 	seen := make(map[string]struct{}, len(nodes))
 	out := make([]string, 0, len(nodes))
 	for _, node := range nodes {
@@ -267,7 +267,7 @@ func uniqueExternalIPs(nodes []*pb.InfrastructureNode) []string {
 	return out
 }
 
-func clusterExternalIPs(nodes []*pb.InfrastructureNode) map[string][]string {
+func clusterExternalIPs(nodes []*quartermasterpb.InfrastructureNode) map[string][]string {
 	clusterSets := make(map[string]map[string]struct{})
 	for _, node := range nodes {
 		clusterID := node.GetClusterId()

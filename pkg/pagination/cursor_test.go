@@ -1,10 +1,9 @@
 package pagination
 
 import (
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestCursorEncodeDecode(t *testing.T) {
@@ -161,7 +160,7 @@ func TestParse(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		req       *pb.CursorPaginationRequest
+		req       *commonpb.CursorPaginationRequest
 		wantLimit int
 		wantDir   Direction
 		wantErr   bool
@@ -174,49 +173,49 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:      "default limit, no cursor",
-			req:       &pb.CursorPaginationRequest{First: 0},
+			req:       &commonpb.CursorPaginationRequest{First: 0},
 			wantLimit: DefaultLimit,
 			wantDir:   Forward,
 		},
 		{
 			name:      "custom limit, no cursor",
-			req:       &pb.CursorPaginationRequest{First: 25},
+			req:       &commonpb.CursorPaginationRequest{First: 25},
 			wantLimit: 25,
 			wantDir:   Forward,
 		},
 		{
 			name:      "with valid cursor",
-			req:       &pb.CursorPaginationRequest{First: 10, After: &validCursor},
+			req:       &commonpb.CursorPaginationRequest{First: 10, After: &validCursor},
 			wantLimit: 10,
 			wantDir:   Forward,
 		},
 		{
 			name:      "with invalid cursor",
-			req:       &pb.CursorPaginationRequest{First: 10, After: strPtr("invalid-cursor")},
+			req:       &commonpb.CursorPaginationRequest{First: 10, After: strPtr("invalid-cursor")},
 			wantLimit: 0,
 			wantErr:   true,
 		},
 		{
 			name:      "limit over max",
-			req:       &pb.CursorPaginationRequest{First: 1000},
+			req:       &commonpb.CursorPaginationRequest{First: 1000},
 			wantLimit: MaxLimit,
 			wantDir:   Forward,
 		},
 		{
 			name:      "backward pagination with last",
-			req:       &pb.CursorPaginationRequest{Last: 20},
+			req:       &commonpb.CursorPaginationRequest{Last: 20},
 			wantLimit: 20,
 			wantDir:   Backward,
 		},
 		{
 			name:      "backward pagination with before cursor",
-			req:       &pb.CursorPaginationRequest{Last: 15, Before: &validCursor},
+			req:       &commonpb.CursorPaginationRequest{Last: 15, Before: &validCursor},
 			wantLimit: 15,
 			wantDir:   Backward,
 		},
 		{
 			name:      "backward takes precedence over forward",
-			req:       &pb.CursorPaginationRequest{First: 10, Last: 20},
+			req:       &commonpb.CursorPaginationRequest{First: 10, Last: 20},
 			wantLimit: 20,
 			wantDir:   Backward,
 		},
@@ -321,9 +320,9 @@ func TestParseBidirectional(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var req *pb.CursorPaginationRequest
+			var req *commonpb.CursorPaginationRequest
 			if tt.first > 0 || tt.after != nil || tt.last > 0 || tt.before != nil {
-				req = &pb.CursorPaginationRequest{
+				req = &commonpb.CursorPaginationRequest{
 					First:  tt.first,
 					After:  tt.after,
 					Last:   tt.last,

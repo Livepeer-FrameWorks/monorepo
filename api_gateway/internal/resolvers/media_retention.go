@@ -8,7 +8,8 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -29,7 +30,7 @@ func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRete
 	if middleware.IsDemoMode(ctx) {
 		return demoMediaRetentionPolicy(), nil
 	}
-	resp, err := r.Clients.Commodore.GetMediaRetentionPolicy(ctx, &pb.GetMediaRetentionPolicyRequest{})
+	resp, err := r.Clients.Commodore.GetMediaRetentionPolicy(ctx, &commodorepb.GetMediaRetentionPolicyRequest{})
 	if err != nil {
 		r.Logger.WithError(err).Error("MediaRetentionPolicy: Commodore.GetMediaRetentionPolicy failed")
 		return nil, fmt.Errorf("read retention policy: %w", err)
@@ -46,7 +47,7 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 	}
 
 	target := protoTargetType(input.TargetType)
-	if target == pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
+	if target == commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED {
 		return &model.ValidationError{
 			Message: "targetType must be VOD, DVR, or CLIP",
 			Field:   strPtr("targetType"),
@@ -80,7 +81,7 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 		return demoMediaRetentionPolicy(), nil
 	}
 
-	resp, err := r.Clients.Commodore.SetMediaRetentionPolicy(ctx, &pb.SetMediaRetentionPolicyRequest{
+	resp, err := r.Clients.Commodore.SetMediaRetentionPolicy(ctx, &commodorepb.SetMediaRetentionPolicyRequest{
 		TargetType: target,
 		Days:       days,
 		Clear:      clear,
@@ -110,7 +111,7 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 		}, nil
 	}
 
-	req := &pb.SetStreamRetentionOverridesRequest{
+	req := &commodorepb.SetStreamRetentionOverridesRequest{
 		StreamId: input.StreamID,
 	}
 	if input.DvrRetentionDaysOverride != nil {
@@ -203,7 +204,7 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 	if middleware.IsDemoMode(ctx) {
 		return demoEffectiveRetention(input.RetentionDays), nil
 	}
-	req := &pb.UpdateAssetRetentionRequest{
+	req := &commodorepb.UpdateAssetRetentionRequest{
 		TargetType: protoTargetType(input.TargetType),
 		TargetId:   input.TargetID,
 	}
@@ -250,7 +251,7 @@ func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input mode
 	if middleware.IsDemoMode(ctx) {
 		return demoEffectiveRetention(nil), nil
 	}
-	resp, err := r.Clients.Commodore.ResetAssetRetention(ctx, &pb.ResetAssetRetentionRequest{
+	resp, err := r.Clients.Commodore.ResetAssetRetention(ctx, &commodorepb.ResetAssetRetentionRequest{
 		TargetType: protoTargetType(input.TargetType),
 		TargetId:   input.TargetID,
 	})
@@ -276,7 +277,7 @@ func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input mode
 // DoDVRRequestEffectiveRetention is the field resolver for
 // DVRRequest.effectiveRetention. Returns nil while the recording is active
 // (no horizon yet) or when ExpiresAt isn't set (artifact kept forever).
-func (r *Resolver) DoDVRRequestEffectiveRetention(ctx context.Context, info *pb.DVRInfo) (*model.EffectiveRetention, error) {
+func (r *Resolver) DoDVRRequestEffectiveRetention(ctx context.Context, info *sharedpb.DVRInfo) (*model.EffectiveRetention, error) {
 	if info == nil || info.ExpiresAt == nil {
 		return nil, nil
 	}
@@ -293,7 +294,7 @@ func (r *Resolver) DoDVRRequestEffectiveRetention(ctx context.Context, info *pb.
 	}, nil
 }
 
-func mediaRetentionPolicyFromProto(p *pb.GetMediaRetentionPolicyResponse) *model.MediaRetentionPolicy {
+func mediaRetentionPolicyFromProto(p *commodorepb.GetMediaRetentionPolicyResponse) *model.MediaRetentionPolicy {
 	if p == nil {
 		return nil
 	}
@@ -329,7 +330,7 @@ func demoMediaRetentionPolicy() *model.MediaRetentionPolicy {
 	now := time.Now()
 	updatedBy := "demo"
 	return &model.MediaRetentionPolicy{
-		Bounds:                     &pb.MediaRetentionBounds{MaxRecordingRetentionDays: 90},
+		Bounds:                     &commodorepb.MediaRetentionBounds{MaxRecordingRetentionDays: 90},
 		UpdatedBy:                  &updatedBy,
 		UpdatedAt:                  &now,
 		EffectiveVodRetentionDays:  0,
@@ -338,7 +339,7 @@ func demoMediaRetentionPolicy() *model.MediaRetentionPolicy {
 	}
 }
 
-func effectiveRetentionFromProto(p *pb.UpdateAssetRetentionResponse) *model.EffectiveRetention {
+func effectiveRetentionFromProto(p *commodorepb.UpdateAssetRetentionResponse) *model.EffectiveRetention {
 	if p == nil {
 		return nil
 	}
@@ -372,16 +373,16 @@ func demoEffectiveRetention(retentionDays *int) *model.EffectiveRetention {
 // protoTargetType translates the GraphQL string enum to the wire-side proto
 // enum. Unsupported targets fall through to UNSPECIFIED so Commodore returns
 // a clear InvalidArgument instead of silently coercing.
-func protoTargetType(t model.MediaRetentionTarget) pb.MediaRetentionTarget {
+func protoTargetType(t model.MediaRetentionTarget) commodorepb.MediaRetentionTarget {
 	switch t {
 	case model.MediaRetentionTargetDvr:
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR
 	case model.MediaRetentionTargetClip:
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP
 	case model.MediaRetentionTargetVod:
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD
 	default:
-		return pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED
+		return commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_UNSPECIFIED
 	}
 }
 

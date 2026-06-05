@@ -9,7 +9,9 @@ import (
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -68,12 +70,12 @@ func (s *CommodoreServer) fetchEntitlementBound(ctx context.Context, tenantID st
 // systemRetentionDefault returns the per-class system default. 0 = keep
 // forever (paid-tier VOD baseline); 30 = DVR/clip (live recordings are
 // ephemeral by nature). Tier cap clamps this at resolve time on Free.
-func systemRetentionDefault(target pb.MediaRetentionTarget) int32 {
+func systemRetentionDefault(target commodorepb.MediaRetentionTarget) int32 {
 	switch target {
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
 		return 0
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR,
-		pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR,
+		commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
 		return 30
 	}
 	return 30
@@ -81,13 +83,13 @@ func systemRetentionDefault(target pb.MediaRetentionTarget) int32 {
 
 // perClassColumn maps a retention target to the tenant-policy column. ""
 // for UNSPECIFIED.
-func perClassColumn(target pb.MediaRetentionTarget) string {
+func perClassColumn(target commodorepb.MediaRetentionTarget) string {
 	switch target {
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
 		return "default_vod_retention_days"
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
 		return "default_dvr_retention_days"
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
 		return "default_clip_retention_days"
 	}
 	return ""
@@ -95,11 +97,11 @@ func perClassColumn(target pb.MediaRetentionTarget) string {
 
 // streamOverrideColumn maps a retention target to the streams column for
 // per-stream overrides. "" for VOD (uploads aren't stream-bound).
-func streamOverrideColumn(target pb.MediaRetentionTarget) string {
+func streamOverrideColumn(target commodorepb.MediaRetentionTarget) string {
 	switch target {
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
 		return "dvr_retention_days_override"
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
 		return "clip_retention_days_override"
 	}
 	return ""
@@ -107,7 +109,7 @@ func streamOverrideColumn(target pb.MediaRetentionTarget) string {
 
 // readTenantPerClassDefault returns the tenant's default for a specific
 // asset class. (0, false, nil) when the column is NULL or no policy row.
-func (s *CommodoreServer) readTenantPerClassDefault(ctx context.Context, tenantID string, target pb.MediaRetentionTarget) (days int32, set bool, err error) {
+func (s *CommodoreServer) readTenantPerClassDefault(ctx context.Context, tenantID string, target commodorepb.MediaRetentionTarget) (days int32, set bool, err error) {
 	classCol := perClassColumn(target)
 	if classCol == "" {
 		return 0, false, nil
@@ -138,7 +140,7 @@ func (s *CommodoreServer) readTenantPerClassDefault(ctx context.Context, tenantI
 //
 // tenantID is required — the lookup is tenant-scoped (repo invariant:
 // every DB query filters by tenant_id).
-func (s *CommodoreServer) readStreamRetentionOverride(ctx context.Context, tenantID, streamID string, target pb.MediaRetentionTarget) (days int32, set bool, err error) {
+func (s *CommodoreServer) readStreamRetentionOverride(ctx context.Context, tenantID, streamID string, target commodorepb.MediaRetentionTarget) (days int32, set bool, err error) {
 	if streamID == "" || tenantID == "" {
 		return 0, false, nil
 	}
@@ -172,7 +174,7 @@ func (s *CommodoreServer) readStreamRetentionOverride(ctx context.Context, tenan
 // The tier cap (Purser.recording_retention_days; 0 = no cap) clamps the
 // resolved value. Returns int32 days; 0 means "keep forever" (artifact
 // retention_until written as NULL).
-func (s *CommodoreServer) resolveInitialRetention(ctx context.Context, target pb.MediaRetentionTarget, tenantID, streamID string) (int32, error) {
+func (s *CommodoreServer) resolveInitialRetention(ctx context.Context, target commodorepb.MediaRetentionTarget, tenantID, streamID string) (int32, error) {
 	days, set, err := s.readStreamRetentionOverride(ctx, tenantID, streamID, target)
 	if err != nil {
 		return 0, fmt.Errorf("stream override: %w", err)
@@ -206,7 +208,7 @@ func (s *CommodoreServer) resolveInitialRetention(ctx context.Context, target pb
 // cascade would yield for a hypothetical new artifact of `target`, given
 // only tenant-level inputs (no per-stream, no per-asset). Used by
 // GetMediaRetentionPolicy.
-func resolveTenantPerClassEffective(target pb.MediaRetentionTarget, days int32, set bool, cap int32) int32 {
+func resolveTenantPerClassEffective(target commodorepb.MediaRetentionTarget, days int32, set bool, cap int32) int32 {
 	if !set {
 		days = systemRetentionDefault(target)
 	}
@@ -235,7 +237,7 @@ func (s *CommodoreServer) restoreFoghornRetention(ctx context.Context, client *f
 		}).Error("Cannot roll back Foghorn retention after Commodore write failure: previous retention_until was NULL")
 		return
 	}
-	if _, _, err := client.OverrideArtifactRetention(ctx, &pb.OverrideArtifactRetentionRequest{
+	if _, _, err := client.OverrideArtifactRetention(ctx, &foghornpb.OverrideArtifactRetentionRequest{
 		TenantId:       tenantID,
 		DvrHash:        target.hash,
 		ArtifactType:   target.artifactType,
@@ -264,7 +266,7 @@ func foghornRetentionError(err error, operation string) error {
 // GetMediaRetentionPolicy returns the tenant's per-class defaults and the
 // effective horizons the cascade resolves to today for a hypothetical new
 // artifact of each class (without per-stream context).
-func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *pb.GetMediaRetentionPolicyRequest) (*pb.GetMediaRetentionPolicyResponse, error) {
+func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -299,14 +301,14 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *pb.G
 		return nil, status.Errorf(codes.Internal, "policy lookup failed: %v", scanErr)
 	}
 
-	resp := &pb.GetMediaRetentionPolicyResponse{
-		Bounds: &pb.MediaRetentionBounds{MaxRecordingRetentionDays: bound},
+	resp := &commodorepb.GetMediaRetentionPolicyResponse{
+		Bounds: &commodorepb.MediaRetentionBounds{MaxRecordingRetentionDays: bound},
 		EffectiveVodRetentionDays: resolveTenantPerClassEffective(
-			pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, vodDays.Int32, vodDays.Valid, bound),
+			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD, vodDays.Int32, vodDays.Valid, bound),
 		EffectiveDvrRetentionDays: resolveTenantPerClassEffective(
-			pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, dvrDays.Int32, dvrDays.Valid, bound),
+			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, dvrDays.Int32, dvrDays.Valid, bound),
 		EffectiveClipRetentionDays: resolveTenantPerClassEffective(
-			pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, clipDays.Int32, clipDays.Valid, bound),
+			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, clipDays.Int32, clipDays.Valid, bound),
 		UpdatedBy: updatedBy,
 	}
 	if vodDays.Valid {
@@ -332,7 +334,7 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *pb.G
 // falls back to the per-class system default). Free-tier writes of 0
 // ("keep forever") are clamped up to the tier cap; paid-tier writes accept
 // any non-negative value.
-func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *pb.SetMediaRetentionPolicyRequest) (*pb.SetMediaRetentionPolicyResponse, error) {
+func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -412,18 +414,18 @@ func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *pb.S
 	}).Info("Media retention policy updated")
 	s.emitRetentionPolicyEvent(ctx, tenantID, userID, column)
 
-	policy, err := s.GetMediaRetentionPolicy(ctx, &pb.GetMediaRetentionPolicyRequest{TenantId: tenantID})
+	policy, err := s.GetMediaRetentionPolicy(ctx, &commodorepb.GetMediaRetentionPolicyRequest{TenantId: tenantID})
 	if err != nil {
 		return nil, err
 	}
-	return &pb.SetMediaRetentionPolicyResponse{Policy: policy}, nil
+	return &commodorepb.SetMediaRetentionPolicyResponse{Policy: policy}, nil
 }
 
 // SetStreamRetentionOverrides writes per-stream DVR/clip retention
 // overrides. Each pair (override, clear_*_override) governs one column:
 // clear takes precedence; otherwise the optional override value writes;
 // otherwise the column is left alone.
-func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *pb.SetStreamRetentionOverridesRequest) (*pb.SetStreamRetentionOverridesResponse, error) {
+func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *commodorepb.SetStreamRetentionOverridesRequest) (*commodorepb.SetStreamRetentionOverridesResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -515,7 +517,7 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 	).Scan(&dvrCol, &clipCol); scanErr != nil {
 		return nil, status.Errorf(codes.Internal, "stream override readback failed: %v", scanErr)
 	}
-	resp := &pb.SetStreamRetentionOverridesResponse{StreamId: streamID}
+	resp := &commodorepb.SetStreamRetentionOverridesResponse{StreamId: streamID}
 	if dvrCol.Valid {
 		v := dvrCol.Int32
 		resp.DvrRetentionDaysOverride = &v
@@ -536,14 +538,14 @@ type assetRetentionTarget struct {
 	artifactType    string
 	hash            string
 	originClusterID string
-	mediaTarget     pb.MediaRetentionTarget
+	mediaTarget     commodorepb.MediaRetentionTarget
 }
 
 // resolveAssetTarget validates tenant ownership of the asset and returns
 // the routing context Foghorn needs.
-func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType pb.MediaRetentionTarget, targetID, tenantID string) (*assetRetentionTarget, error) {
+func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType commodorepb.MediaRetentionTarget, targetID, tenantID string) (*assetRetentionTarget, error) {
 	switch targetType {
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
 		originClusterID, dvrHash, err := s.assertDVRTenant(ctx, targetID, tenantID)
 		if err != nil {
 			return nil, err
@@ -555,7 +557,7 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType pb.
 			originClusterID: originClusterID,
 			mediaTarget:     targetType,
 		}, nil
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
 		originClusterID, clipHash, err := s.assertClipTenant(ctx, targetID, tenantID)
 		if err != nil {
 			return nil, err
@@ -567,7 +569,7 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType pb.
 			originClusterID: originClusterID,
 			mediaTarget:     targetType,
 		}, nil
-	case pb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
 		originClusterID, vodHash, err := s.assertVodTenant(ctx, targetID, tenantID)
 		if err != nil {
 			return nil, err
@@ -709,7 +711,7 @@ func (t *assetRetentionTarget) readRetentionUntil(ctx context.Context, db *sql.D
 // the new horizon to Foghorn. retention_days = 0 (set explicitly via the
 // optional field) means "keep forever" — Commodore writes NULL retention_until
 // and Foghorn's RetentionJob skips the artifact.
-func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *pb.UpdateAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -777,7 +779,7 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *pb.Upda
 		return nil, err
 	}
 
-	overrideReq := &pb.OverrideArtifactRetentionRequest{
+	overrideReq := &foghornpb.OverrideArtifactRetentionRequest{
 		TenantId:         tenantID,
 		DvrHash:          target.hash,
 		ArtifactType:     target.artifactType,
@@ -850,7 +852,7 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *pb.Upda
 	}).Info("Per-asset retention override applied")
 	s.emitRetentionArtifactEvent(ctx, eventRetentionOverrideApplied, tenantID, userID, target, retentionUntil, keepForever)
 
-	out := &pb.UpdateAssetRetentionResponse{
+	out := &commodorepb.UpdateAssetRetentionResponse{
 		TargetId:      target.hash,
 		RetentionDays: retentionDays,
 		Source:        retentionSourceAsset,
@@ -864,7 +866,7 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *pb.Upda
 // ResetAssetRetention clears any per-asset override and recomputes the
 // horizon from the per-class cascade for the artifact's source stream.
 // VOD uses the tenant per-class default (no stream context).
-func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *pb.ResetAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -916,7 +918,7 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *pb.Reset
 
 	// Anchor reset to ended_at for ALL asset types so a 60-day-old clip
 	// reset to a 30-day default doesn't grant another 30 days from now.
-	overrideReq := &pb.OverrideArtifactRetentionRequest{
+	overrideReq := &foghornpb.OverrideArtifactRetentionRequest{
 		TenantId:         tenantID,
 		DvrHash:          target.hash,
 		ArtifactType:     target.artifactType,
@@ -980,7 +982,7 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *pb.Reset
 	}
 	s.emitRetentionArtifactEvent(ctx, eventRetentionOverrideReset, tenantID, userID, target, newUntil, keepForever)
 
-	out := &pb.UpdateAssetRetentionResponse{
+	out := &commodorepb.UpdateAssetRetentionResponse{
 		TargetId:      target.hash,
 		RetentionDays: retentionDays,
 		Source:        source,
@@ -992,7 +994,7 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *pb.Reset
 }
 
 func (s *CommodoreServer) emitRetentionPolicyEvent(ctx context.Context, tenantID, userID, column string) {
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventRetentionPolicyChanged,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -1000,7 +1002,7 @@ func (s *CommodoreServer) emitRetentionPolicyEvent(ctx context.Context, tenantID
 		UserId:       userID,
 		ResourceType: "tenant",
 		ResourceId:   tenantID,
-		Payload: &pb.ServiceEvent_TenantEvent{TenantEvent: &pb.TenantEvent{
+		Payload: &ipcpb.ServiceEvent_TenantEvent{TenantEvent: &ipcpb.TenantEvent{
 			TenantId:      tenantID,
 			ChangedFields: []string{column},
 		}},
@@ -1012,7 +1014,7 @@ func (s *CommodoreServer) emitRetentionArtifactEvent(ctx context.Context, eventT
 	if target == nil {
 		return
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType:    eventType,
 		Timestamp:    timestamppb.Now(),
 		Source:       "commodore",
@@ -1020,7 +1022,7 @@ func (s *CommodoreServer) emitRetentionArtifactEvent(ctx context.Context, eventT
 		UserId:       userID,
 		ResourceType: "artifact",
 		ResourceId:   target.hash,
-		Payload: &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: &pb.ArtifactEvent{
+		Payload: &ipcpb.ServiceEvent_ArtifactEvent{ArtifactEvent: &ipcpb.ArtifactEvent{
 			ArtifactType: retentionArtifactType(target.artifactType),
 			ArtifactId:   target.hash,
 			Status:       eventType,
@@ -1033,15 +1035,15 @@ func (s *CommodoreServer) emitRetentionArtifactEvent(ctx context.Context, eventT
 	s.emitServiceEvent(ctx, event)
 }
 
-func retentionArtifactType(t string) pb.ArtifactEvent_ArtifactType {
+func retentionArtifactType(t string) ipcpb.ArtifactEvent_ArtifactType {
 	switch t {
 	case "clip":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP
 	case "dvr":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR
 	case "vod":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD
 	default:
-		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
 }

@@ -27,7 +27,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -55,7 +56,7 @@ type ServerMetrics struct {
 
 // NavigatorServer holds dependencies for the gRPC and HTTP server
 type NavigatorServer struct {
-	pb.UnimplementedNavigatorServiceServer
+	dnspb.UnimplementedNavigatorServiceServer
 	DNSManager        *logic.DNSManager
 	CertManager       *logic.CertManager
 	InternalCAManager *logic.InternalCAManager
@@ -275,12 +276,12 @@ func main() {
 			serverOpts = append(serverOpts, grpcTLSOpt)
 		}
 		grpcServer := grpc.NewServer(serverOpts...)
-		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
+		dnspb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
 
 		// gRPC health service so external probes can use gRPC health checks
 		hs := health.NewServer()
 		hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-		hs.SetServingStatus(pb.NavigatorService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+		hs.SetServingStatus(dnspb.NavigatorService_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
 		grpc_health_v1.RegisterHealthServer(grpcServer, hs)
 		reflection.Register(grpcServer)
 
@@ -342,7 +343,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("NAVIGATOR_HOST", "navigator")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:          "navigator",
 			Version:       version.Version,
 			Protocol:      "grpc",
@@ -422,7 +423,7 @@ func isPrivateClientIP(raw string) bool {
 // refresh the matching root entrypoint. Unscoped Bunny requests refresh only
 // the root entrypoint; unscoped Cloudflare requests use the root service sync
 // path.
-func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
+func (s *NavigatorServer) SyncDNS(ctx context.Context, req *dnspb.SyncDNSRequest) (*dnspb.SyncDNSResponse, error) {
 	log := s.Logger.WithField("service_type", req.GetServiceType())
 	if req.ClusterId != nil {
 		log = log.WithField("cluster_id", req.GetClusterId())
@@ -469,7 +470,7 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (
 	}
 	if err != nil {
 		log.WithError(err).Error("DNS sync failed")
-		return &pb.SyncDNSResponse{
+		return &dnspb.SyncDNSResponse{
 			Success: false,
 			Message: fmt.Sprintf("Sync failed: %v", err),
 			Errors:  partialErrors,
@@ -477,21 +478,21 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (
 	}
 
 	if len(partialErrors) > 0 {
-		return &pb.SyncDNSResponse{
+		return &dnspb.SyncDNSResponse{
 			Success: false,
 			Message: "Sync completed with errors",
 			Errors:  partialErrors,
 		}, nil
 	}
 
-	return &pb.SyncDNSResponse{
+	return &dnspb.SyncDNSResponse{
 		Success: true,
 		Message: "DNS sync completed successfully",
 	}, nil
 }
 
 // IssueCertificate implements the gRPC IssueCertificate method
-func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *pb.IssueCertificateRequest) (*pb.IssueCertificateResponse, error) {
+func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *dnspb.IssueCertificateRequest) (*dnspb.IssueCertificateResponse, error) {
 	// Extract optional tenant_id from request
 	tenantID := ""
 	if req.TenantId != nil {
@@ -507,13 +508,13 @@ func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *pb.IssueCer
 	certPEM, keyPEM, expiresAt, err := s.CertManager.IssueCertificate(ctx, tenantID, req.GetDomain(), req.GetEmail())
 	if err != nil {
 		log.WithError(err).Error("Certificate issuance failed")
-		return &pb.IssueCertificateResponse{
+		return &dnspb.IssueCertificateResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
 
-	return &pb.IssueCertificateResponse{
+	return &dnspb.IssueCertificateResponse{
 		Success:   true,
 		Message:   "Certificate issued successfully",
 		TenantId:  req.TenantId,
@@ -525,7 +526,7 @@ func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *pb.IssueCer
 }
 
 // GetCertificate implements the gRPC GetCertificate method
-func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertificateRequest) (*pb.GetCertificateResponse, error) {
+func (s *NavigatorServer) GetCertificate(ctx context.Context, req *dnspb.GetCertificateRequest) (*dnspb.GetCertificateResponse, error) {
 	// Extract optional tenant_id from request
 	tenantID := ""
 	if req.TenantId != nil {
@@ -541,7 +542,7 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 	cert, err := s.CertManager.GetCertificate(ctx, tenantID, req.GetDomain())
 	if err != nil {
 		log.WithError(err).Info("Certificate not found")
-		return &pb.GetCertificateResponse{
+		return &dnspb.GetCertificateResponse{
 			Found: false,
 			Error: err.Error(),
 		}, nil
@@ -553,7 +554,7 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 		respTenantID = &cert.TenantID.String
 	}
 
-	return &pb.GetCertificateResponse{
+	return &dnspb.GetCertificateResponse{
 		Found:     true,
 		TenantId:  respTenantID,
 		Domain:    cert.Domain,
@@ -563,21 +564,21 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 	}, nil
 }
 
-func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundleRequest) (*pb.GetTLSBundleResponse, error) {
+func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBundleRequest) (*dnspb.GetTLSBundleResponse, error) {
 	log := s.Logger.WithField("bundle_id", req.GetBundleId())
 	log.Info("Received GetTLSBundle request")
 
 	bundle, err := s.CertManager.GetTLSBundle(ctx, req.GetBundleId())
 	if err != nil {
 		log.WithError(err).Info("TLS bundle not found")
-		return &pb.GetTLSBundleResponse{
+		return &dnspb.GetTLSBundleResponse{
 			Found: false,
 			Error: err.Error(),
 		}, nil
 	}
 
 	hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
-	return &pb.GetTLSBundleResponse{
+	return &dnspb.GetTLSBundleResponse{
 		Found:     true,
 		BundleId:  bundle.BundleID,
 		Domains:   bundle.Domains,
@@ -588,17 +589,17 @@ func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *pb.GetTLSBundle
 	}, nil
 }
 
-func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *pb.GetCABundleRequest) (*pb.GetCABundleResponse, error) {
+func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error) {
 	caPEM, err := s.InternalCAManager.GetCABundle(ctx)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to get internal CA bundle")
-		return &pb.GetCABundleResponse{
+		return &dnspb.GetCABundleResponse{
 			Found: false,
 			Error: err.Error(),
 		}, nil
 	}
 
-	return &pb.GetCABundleResponse{
+	return &dnspb.GetCABundleResponse{
 		Found: true,
 		CaPem: caPEM,
 	}, nil
@@ -606,7 +607,7 @@ func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *pb.GetCABundleRequ
 
 // EnsureTenantAlias implements the gRPC EnsureTenantAlias method.
 // Idempotent: persists alias intent and queues async ACME work.
-func (s *NavigatorServer) EnsureTenantAlias(ctx context.Context, req *pb.EnsureTenantAliasRequest) (*pb.EnsureTenantAliasResponse, error) {
+func (s *NavigatorServer) EnsureTenantAlias(ctx context.Context, req *dnspb.EnsureTenantAliasRequest) (*dnspb.EnsureTenantAliasResponse, error) {
 	tenantID := req.GetTenantId()
 	subdomain := req.GetSubdomain()
 	log := s.Logger.WithField("tenant_id", tenantID).WithField("subdomain", subdomain)
@@ -615,9 +616,9 @@ func (s *NavigatorServer) EnsureTenantAlias(ctx context.Context, req *pb.EnsureT
 	alias, err := s.CertManager.EnsureTenantAlias(ctx, tenantID, subdomain)
 	if err != nil {
 		log.WithError(err).Warn("Failed to persist tenant alias intent")
-		return &pb.EnsureTenantAliasResponse{Error: err.Error()}, nil
+		return &dnspb.EnsureTenantAliasResponse{Error: err.Error()}, nil
 	}
-	return &pb.EnsureTenantAliasResponse{
+	return &dnspb.EnsureTenantAliasResponse{
 		Accepted: true,
 		Status:   alias.Status,
 	}, nil
@@ -625,28 +626,28 @@ func (s *NavigatorServer) EnsureTenantAlias(ctx context.Context, req *pb.EnsureT
 
 // RemoveTenantAlias implements the gRPC RemoveTenantAlias method.
 // Idempotent: marks alias for teardown; worker cleans up DNS + state.
-func (s *NavigatorServer) RemoveTenantAlias(ctx context.Context, req *pb.RemoveTenantAliasRequest) (*pb.RemoveTenantAliasResponse, error) {
+func (s *NavigatorServer) RemoveTenantAlias(ctx context.Context, req *dnspb.RemoveTenantAliasRequest) (*dnspb.RemoveTenantAliasResponse, error) {
 	if err := s.CertManager.RemoveTenantAlias(ctx, req.GetTenantId()); err != nil {
 		s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to mark tenant alias for teardown")
-		return &pb.RemoveTenantAliasResponse{}, nil
+		return &dnspb.RemoveTenantAliasResponse{}, nil
 	}
-	return &pb.RemoveTenantAliasResponse{Accepted: true}, nil
+	return &dnspb.RemoveTenantAliasResponse{Accepted: true}, nil
 }
 
 // GetTenantAliasStatus implements the gRPC GetTenantAliasStatus method.
 // Returns found=false for tenants without an alias intent (the
 // not-found case is treated as a normal "no row" response, not an
 // error; callers like the webapp check Found to decide what to show).
-func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *pb.GetTenantAliasStatusRequest) (*pb.GetTenantAliasStatusResponse, error) {
+func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *dnspb.GetTenantAliasStatusRequest) (*dnspb.GetTenantAliasStatusResponse, error) {
 	alias, err := s.CertManager.GetTenantAlias(ctx, req.GetTenantId())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return &pb.GetTenantAliasStatusResponse{Found: false}, nil
+			return &dnspb.GetTenantAliasStatusResponse{Found: false}, nil
 		}
 		s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("GetTenantAliasStatus lookup failed")
 		return nil, status.Errorf(codes.Internal, "lookup failed: %v", err)
 	}
-	resp := &pb.GetTenantAliasStatusResponse{
+	resp := &dnspb.GetTenantAliasStatusResponse{
 		Found:     true,
 		TenantId:  alias.TenantID,
 		Subdomain: alias.Subdomain,
@@ -674,20 +675,20 @@ func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *pb.GetT
 // RemoveTenantAliasSubdomain retires one specific label's Bunny records
 // without disturbing the tenant's active alias. Idempotent; the alias
 // worker performs the actual cleanup asynchronously.
-func (s *NavigatorServer) RemoveTenantAliasSubdomain(ctx context.Context, req *pb.RemoveTenantAliasSubdomainRequest) (*pb.RemoveTenantAliasSubdomainResponse, error) {
+func (s *NavigatorServer) RemoveTenantAliasSubdomain(ctx context.Context, req *dnspb.RemoveTenantAliasSubdomainRequest) (*dnspb.RemoveTenantAliasSubdomainResponse, error) {
 	if err := s.CertManager.RemoveTenantAliasSubdomain(ctx, req.GetTenantId(), req.GetSubdomain()); err != nil {
 		s.Logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": req.GetTenantId(),
 			"subdomain": req.GetSubdomain(),
 		}).Warn("Failed to enqueue tenant alias subdomain retirement")
-		return &pb.RemoveTenantAliasSubdomainResponse{Error: err.Error()}, nil
+		return &dnspb.RemoveTenantAliasSubdomainResponse{Error: err.Error()}, nil
 	}
-	return &pb.RemoveTenantAliasSubdomainResponse{Accepted: true}, nil
+	return &dnspb.RemoveTenantAliasSubdomainResponse{Accepted: true}, nil
 }
 
 // ReportConfigSeedApplyResult persists edge cert readiness ACKs observed
 // by Foghorn, then reconciles affected tenant DNS immediately.
-func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *pb.ReportConfigSeedApplyResultRequest) (*pb.ReportConfigSeedApplyResultResponse, error) {
+func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *dnspb.ReportConfigSeedApplyResultRequest) (*dnspb.ReportConfigSeedApplyResultResponse, error) {
 	appliedAt := time.Unix(req.GetAppliedAt(), 0).UTC()
 	appliedBundleIDs, failedBundleIDs := s.filterTenantBundlesForCluster(ctx, req.GetClusterId(), req.GetAppliedBundleIds(), req.GetFailedBundleIds())
 	affected, err := s.CertManager.RecordConfigSeedApplyResult(ctx,
@@ -709,7 +710,7 @@ func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *
 			}
 		}
 	}
-	return &pb.ReportConfigSeedApplyResultResponse{
+	return &dnspb.ReportConfigSeedApplyResultResponse{
 		Accepted:          true,
 		AffectedTenantIds: affected,
 	}, nil
@@ -760,7 +761,7 @@ func filterNonTenantBundles(bundleIDs []string) []string {
 
 // RemoveTenantAliasCluster drops one cluster's edges from a tenant's DNS
 // eligibility before future ConfigSeeds omit that tenant cert.
-func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *pb.RemoveTenantAliasClusterRequest) (*pb.RemoveTenantAliasClusterResponse, error) {
+func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *dnspb.RemoveTenantAliasClusterRequest) (*dnspb.RemoveTenantAliasClusterResponse, error) {
 	if err := s.CertManager.RemoveTenantAliasCluster(ctx, req.GetTenantId(), req.GetClusterId()); err != nil {
 		s.Logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":  req.GetTenantId(),
@@ -773,14 +774,14 @@ func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *pb.
 			s.Logger.WithError(err).WithField("tenant_id", req.GetTenantId()).Warn("Failed to republish tenant alias after cluster removal")
 		}
 	}
-	return &pb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
+	return &dnspb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
 }
 
 // EnsureCustomDomain persists tenant custom-domain intent and queues async
 // verification + ACME issuance. Returns the CNAMEs the customer must set
 // (stable across the lifecycle so the dashboard can render them
 // idempotently).
-func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.EnsureCustomDomainRequest) (*pb.EnsureCustomDomainResponse, error) {
+func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *dnspb.EnsureCustomDomainRequest) (*dnspb.EnsureCustomDomainResponse, error) {
 	tenantID := req.GetTenantId()
 	domain := req.GetDomain()
 	log := s.Logger.WithFields(logging.Fields{"tenant_id": tenantID, "domain": domain})
@@ -789,7 +790,7 @@ func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.Ensure
 	row, err := s.CertManager.EnsureCustomDomain(ctx, tenantID, domain)
 	if err != nil {
 		log.WithError(err).Warn("Failed to persist custom domain intent")
-		return &pb.EnsureCustomDomainResponse{Error: err.Error()}, nil
+		return &dnspb.EnsureCustomDomainResponse{Error: err.Error()}, nil
 	}
 	alias, aliasErr := s.CertManager.GetTenantAlias(ctx, tenantID)
 	if aliasErr != nil && !errors.Is(aliasErr, store.ErrNotFound) {
@@ -797,7 +798,7 @@ func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.Ensure
 		return nil, status.Errorf(codes.Internal, "tenant alias lookup: %v", aliasErr)
 	}
 	if alias == nil || alias.Subdomain == "" {
-		return &pb.EnsureCustomDomainResponse{
+		return &dnspb.EnsureCustomDomainResponse{
 			Accepted: false,
 			Status:   row.Status,
 			Error:    "tenant alias not provisioned; configure the paid tenant alias first",
@@ -805,7 +806,7 @@ func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.Ensure
 	}
 	traffic := alias.Subdomain + "." + logic.TenantAliasZoneLabel + "." + s.RootDomain + "."
 	acme := row.AcmeDNSSubdomain + "." + logic.AcmeDNSZoneLabel + "." + s.RootDomain + "."
-	return &pb.EnsureCustomDomainResponse{
+	return &dnspb.EnsureCustomDomainResponse{
 		Accepted:                   true,
 		Status:                     row.Status,
 		RequiredTrafficCname:       traffic,
@@ -814,7 +815,7 @@ func (s *NavigatorServer) EnsureCustomDomain(ctx context.Context, req *pb.Ensure
 }
 
 // RemoveCustomDomain signals teardown.
-func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *pb.RemoveCustomDomainRequest) (*pb.RemoveCustomDomainResponse, error) {
+func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *dnspb.RemoveCustomDomainRequest) (*dnspb.RemoveCustomDomainResponse, error) {
 	if err := s.CertManager.RemoveCustomDomain(ctx, req.GetTenantId(), req.GetDomain()); err != nil {
 		s.Logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": req.GetTenantId(),
@@ -822,16 +823,16 @@ func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *pb.Remove
 		}).Warn("Failed to mark custom domain for teardown")
 		return nil, status.Errorf(codes.Internal, "remove custom domain: %v", err)
 	}
-	return &pb.RemoveCustomDomainResponse{Accepted: true}, nil
+	return &dnspb.RemoveCustomDomainResponse{Accepted: true}, nil
 }
 
 // GetCustomDomainStatus returns lifecycle state for a single (tenant_id,
 // domain) pair plus the canonical CNAMEs to display in the dashboard.
-func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *pb.GetCustomDomainStatusRequest) (*pb.GetCustomDomainStatusResponse, error) {
+func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *dnspb.GetCustomDomainStatusRequest) (*dnspb.GetCustomDomainStatusResponse, error) {
 	row, err := s.CertManager.GetTenantCustomDomain(ctx, req.GetTenantId(), req.GetDomain())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return &pb.GetCustomDomainStatusResponse{Found: false}, nil
+			return &dnspb.GetCustomDomainStatusResponse{Found: false}, nil
 		}
 		s.Logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": req.GetTenantId(),
@@ -839,7 +840,7 @@ func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *pb.Get
 		}).Warn("GetCustomDomainStatus lookup failed")
 		return nil, status.Errorf(codes.Internal, "lookup failed: %v", err)
 	}
-	resp := &pb.GetCustomDomainStatusResponse{
+	resp := &dnspb.GetCustomDomainStatusResponse{
 		Found:    true,
 		TenantId: row.TenantID,
 		Domain:   row.Domain,
@@ -864,7 +865,7 @@ func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *pb.Get
 	return resp, nil
 }
 
-func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueInternalCertRequest) (*pb.IssueInternalCertResponse, error) {
+func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *dnspb.IssueInternalCertRequest) (*dnspb.IssueInternalCertResponse, error) {
 	log := s.Logger.WithFields(logging.Fields{
 		"node_id":      req.GetNodeId(),
 		"service_type": req.GetServiceType(),
@@ -872,7 +873,7 @@ func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueIn
 	cert, err := s.InternalCAManager.IssueInternalCert(ctx, req.GetNodeId(), req.GetServiceType(), req.GetIssueToken())
 	if err != nil {
 		log.WithError(err).Error("Failed to issue internal certificate")
-		return &pb.IssueInternalCertResponse{
+		return &dnspb.IssueInternalCertResponse{
 			Success:     false,
 			NodeId:      req.GetNodeId(),
 			ServiceType: req.GetServiceType(),
@@ -880,7 +881,7 @@ func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *pb.IssueIn
 		}, nil
 	}
 
-	return &pb.IssueInternalCertResponse{
+	return &dnspb.IssueInternalCertResponse{
 		Success:     true,
 		NodeId:      cert.NodeID,
 		ServiceType: cert.ServiceType,

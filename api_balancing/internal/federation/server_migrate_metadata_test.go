@@ -5,8 +5,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 func TestUpsertMigratedArtifactMetadata_InsertsNewRow(t *testing.T) {
@@ -16,7 +15,7 @@ func TestUpsertMigratedArtifactMetadata_InsertsNewRow(t *testing.T) {
 	}
 	defer db.Close()
 
-	artifact := &pb.ArtifactMetadata{ArtifactHash: "hash-1", ArtifactType: "clip", InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4", StorageLocation: "s3", SyncStatus: "synced", S3Url: "s3://bucket/key", SizeBytes: 1024}
+	artifact := &foghornfederationpb.ArtifactMetadata{ArtifactHash: "hash-1", ArtifactType: "clip", InternalName: "stream-a", StreamInternalName: "source-stream-a", Format: "mp4", StorageLocation: "s3", SyncStatus: "synced", S3Url: "s3://bucket/key", SizeBytes: 1024}
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs("hash-1", "clip", "tenant-1", "stream-a", "mp4", "s3", "synced", "s3://bucket/key", uint64(1024), "cluster-origin", "source-stream-a").
@@ -41,7 +40,7 @@ func TestUpsertMigratedArtifactMetadata_BackfillsExistingOrigin(t *testing.T) {
 	}
 	defer db.Close()
 
-	artifact := &pb.ArtifactMetadata{ArtifactHash: "hash-2", ArtifactType: "dvr", InternalName: "stream-b", StreamInternalName: "source-stream-b", Format: "m3u8", StorageLocation: "s3", SyncStatus: "synced", S3Url: "s3://bucket/dvr", SizeBytes: 2048}
+	artifact := &foghornfederationpb.ArtifactMetadata{ArtifactHash: "hash-2", ArtifactType: "dvr", InternalName: "stream-b", StreamInternalName: "source-stream-b", Format: "m3u8", StorageLocation: "s3", SyncStatus: "synced", S3Url: "s3://bucket/dvr", SizeBytes: 2048}
 
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs("hash-2", "dvr", "tenant-2", "stream-b", "m3u8", "s3", "synced", "s3://bucket/dvr", uint64(2048), "cluster-origin", "source-stream-b").

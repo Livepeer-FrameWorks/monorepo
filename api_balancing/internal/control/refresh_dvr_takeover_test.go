@@ -8,7 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // TestRefreshActiveDVRSourceOnTakeover_GuardClauses_NoDB covers the
@@ -88,11 +88,11 @@ func TestRefreshActiveDVRSourceOnTakeover_DispatchHappyPath(t *testing.T) {
 	t.Cleanup(func() { StreamRegistryInstance = prevRegistry })
 
 	// Capture the dispatch instead of going out over the real conn.
-	var captured *pb.DVRUpdateSourceRequest
+	var captured *ipcpb.DVRUpdateSourceRequest
 	var capturedNode string
 	var mu sync.Mutex
 	prevDispatch := sendDVRUpdateSourceFn
-	sendDVRUpdateSourceFn = func(nodeID string, req *pb.DVRUpdateSourceRequest) error {
+	sendDVRUpdateSourceFn = func(nodeID string, req *ipcpb.DVRUpdateSourceRequest) error {
 		mu.Lock()
 		defer mu.Unlock()
 		capturedNode = nodeID

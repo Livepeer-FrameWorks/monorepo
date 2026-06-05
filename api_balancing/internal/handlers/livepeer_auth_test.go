@@ -10,20 +10,22 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/sirupsen/logrus"
 )
 
 type stubCommodore struct {
-	resp *pb.ResolveInternalNameResponse
+	resp *commodorepb.ResolveInternalNameResponse
 	err  error
 
 	mu    sync.Mutex
 	calls int
 }
 
-func (s *stubCommodore) ResolveInternalName(_ context.Context, _ string) (*pb.ResolveInternalNameResponse, error) {
+func (s *stubCommodore) ResolveInternalName(_ context.Context, _ string) (*commodorepb.ResolveInternalNameResponse, error) {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
@@ -37,14 +39,14 @@ func (s *stubCommodore) callCount() int {
 }
 
 type stubFederation struct {
-	respByCluster map[string]*pb.QueryStreamResponse
+	respByCluster map[string]*foghornfederationpb.QueryStreamResponse
 	errByCluster  map[string]error
 
 	mu    sync.Mutex
 	calls map[string]int
 }
 
-func (s *stubFederation) QueryStream(_ context.Context, clusterID, _ string, _ *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (s *stubFederation) QueryStream(_ context.Context, clusterID, _ string, _ *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	s.mu.Lock()
 	if s.calls == nil {
 		s.calls = map[string]int{}
@@ -329,7 +331,7 @@ func TestLivepeerAuth_ProcessingSessionManifestFallsThroughWhenJobMissing(t *tes
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.ProcessingJob = func(context.Context, string, livepeerAuthRequest) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{TenantId: ""}}
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{TenantId: ""}}
 
 	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")
 	if authCtx != nil {
@@ -344,7 +346,7 @@ func TestLivepeerAuth_CommodoreNotFoundReturnsStreamNotFound(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	// Empty TenantId means "Commodore doesn't recognise this manifest".
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{TenantId: ""}}
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{TenantId: ""}}
 
 	authCtx, reason := r.Authorize(context.Background(), "ghost-manifest")
 	if authCtx != nil {
@@ -372,7 +374,7 @@ func TestLivepeerAuth_CommodoreErrorReturnsCommodoreUnreachable(t *testing.T) {
 func TestLivepeerAuth_NoClusterPeersReturnsPeerContextMissing(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId:     "tenant-a",
 		ClusterPeers: nil,
 	}}
@@ -389,15 +391,15 @@ func TestLivepeerAuth_NoClusterPeersReturnsPeerContextMissing(t *testing.T) {
 func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		StreamId: "stream-a",
-		ClusterPeers: []*pb.TenantClusterPeer{
+		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
-	r.Federation = &stubFederation{respByCluster: map[string]*pb.QueryStreamResponse{
-		"peer-cluster": {Candidates: []*pb.EdgeCandidate{{NodeId: "edge-1"}}},
+	r.Federation = &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
+		"peer-cluster": {Candidates: []*foghornfederationpb.EdgeCandidate{{NodeId: "edge-1"}}},
 	}}
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
 
@@ -430,14 +432,14 @@ func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*pb.TenantClusterPeer{
+		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
 	// Peer reachable but reports zero candidates → not live anywhere.
-	r.Federation = &stubFederation{respByCluster: map[string]*pb.QueryStreamResponse{
+	r.Federation = &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
 		"peer-cluster": {Candidates: nil},
 	}}
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
@@ -454,9 +456,9 @@ func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*pb.TenantClusterPeer{
+		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster-a"},
 			{ClusterId: "peer-cluster-b"},
 		},
@@ -485,9 +487,9 @@ func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*pb.TenantClusterPeer{
+		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
@@ -507,15 +509,15 @@ func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.
 func TestLivepeerAuth_LocalClusterPeerIsSkipped(t *testing.T) {
 	r := newAuthResolver(t)
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &pb.ResolveInternalNameResponse{
+	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*pb.TenantClusterPeer{
+		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: r.LocalCluster}, // local cluster — must be skipped from fan-out
 			{ClusterId: "peer-cluster"},
 		},
 	}}
-	fed := &stubFederation{respByCluster: map[string]*pb.QueryStreamResponse{
-		"peer-cluster": {Candidates: []*pb.EdgeCandidate{{NodeId: "edge-1"}}},
+	fed := &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
+		"peer-cluster": {Candidates: []*foghornfederationpb.EdgeCandidate{{NodeId: "edge-1"}}},
 	}}
 	r.Federation = fed
 	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{

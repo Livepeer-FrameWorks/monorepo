@@ -9,25 +9,25 @@ import (
 
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
 type stubX402Service struct {
-	pb.UnimplementedX402ServiceServer
-	verifyResponse *pb.VerifyX402PaymentResponse
+	purserpb.UnimplementedX402ServiceServer
+	verifyResponse *purserpb.VerifyX402PaymentResponse
 	verifyErr      error
-	settleResponse *pb.SettleX402PaymentResponse
+	settleResponse *purserpb.SettleX402PaymentResponse
 	settleErr      error
 }
 
-func (s *stubX402Service) VerifyX402Payment(ctx context.Context, req *pb.VerifyX402PaymentRequest) (*pb.VerifyX402PaymentResponse, error) {
+func (s *stubX402Service) VerifyX402Payment(ctx context.Context, req *purserpb.VerifyX402PaymentRequest) (*purserpb.VerifyX402PaymentResponse, error) {
 	return s.verifyResponse, s.verifyErr
 }
 
-func (s *stubX402Service) SettleX402Payment(ctx context.Context, req *pb.SettleX402PaymentRequest) (*pb.SettleX402PaymentResponse, error) {
+func (s *stubX402Service) SettleX402Payment(ctx context.Context, req *purserpb.SettleX402PaymentRequest) (*purserpb.SettleX402PaymentResponse, error) {
 	return s.settleResponse, s.settleErr
 }
 
@@ -40,7 +40,7 @@ func setupPurserClient(t *testing.T, service *stubX402Service) (*purserclient.GR
 	}
 
 	server := grpc.NewServer()
-	pb.RegisterX402ServiceServer(server, service)
+	purserpb.RegisterX402ServiceServer(server, service)
 
 	go func() {
 		_ = server.Serve(listener)
@@ -111,10 +111,10 @@ func TestSettleX402PaymentForPlayback_SkipsWithoutPrereqs(t *testing.T) {
 
 func TestSettleX402PaymentForPlayback_Success(t *testing.T) {
 	service := &stubX402Service{
-		verifyResponse: &pb.VerifyX402PaymentResponse{
+		verifyResponse: &purserpb.VerifyX402PaymentResponse{
 			Valid: true,
 		},
-		settleResponse: &pb.SettleX402PaymentResponse{
+		settleResponse: &purserpb.SettleX402PaymentResponse{
 			Success: true,
 		},
 	}
@@ -138,8 +138,8 @@ func TestSettleX402PaymentForPlayback_Success(t *testing.T) {
 
 func TestSettleX402PaymentForPlayback_InvalidHeader(t *testing.T) {
 	service := &stubX402Service{
-		verifyResponse: &pb.VerifyX402PaymentResponse{Valid: true},
-		settleResponse: &pb.SettleX402PaymentResponse{Success: true},
+		verifyResponse: &purserpb.VerifyX402PaymentResponse{Valid: true},
+		settleResponse: &purserpb.SettleX402PaymentResponse{Success: true},
 	}
 	client, cleanup := setupPurserClient(t, service)
 	t.Cleanup(cleanup)
@@ -167,10 +167,10 @@ func TestSettleX402PaymentForPlayback_InvalidHeader(t *testing.T) {
 
 func TestSettleX402PaymentForPlayback_SettleFailure(t *testing.T) {
 	service := &stubX402Service{
-		verifyResponse: &pb.VerifyX402PaymentResponse{
+		verifyResponse: &purserpb.VerifyX402PaymentResponse{
 			Valid: true,
 		},
-		settleResponse: &pb.SettleX402PaymentResponse{
+		settleResponse: &purserpb.SettleX402PaymentResponse{
 			Success: false,
 			Error:   "settlement failed",
 		},
@@ -201,7 +201,7 @@ func TestSettleX402PaymentForPlayback_SettleFailure(t *testing.T) {
 
 func TestSettleX402PaymentForPlayback_BillingDetailsRequired(t *testing.T) {
 	service := &stubX402Service{
-		verifyResponse: &pb.VerifyX402PaymentResponse{
+		verifyResponse: &purserpb.VerifyX402PaymentResponse{
 			Valid:                  true,
 			RequiresBillingDetails: true,
 		},
@@ -232,7 +232,7 @@ func TestSettleX402PaymentForPlayback_BillingDetailsRequired(t *testing.T) {
 
 func TestSettleX402PaymentForPlayback_AuthOnlyPayment(t *testing.T) {
 	service := &stubX402Service{
-		verifyResponse: &pb.VerifyX402PaymentResponse{
+		verifyResponse: &purserpb.VerifyX402PaymentResponse{
 			Valid:      true,
 			IsAuthOnly: true,
 		},

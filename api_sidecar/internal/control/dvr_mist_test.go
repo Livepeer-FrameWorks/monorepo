@@ -9,7 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // fakeMistClient implements DVRMistClient for testing
@@ -171,7 +171,7 @@ func TestStartRecording_CreatesDirectories(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 42}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-create", "stream-1", "test-internal", "live+test-internal", "http://source", &pb.DVRConfig{
+	err := dm.StartRecording("hash-create", "stream-1", "test-internal", "live+test-internal", "http://source", &ipcpb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -195,7 +195,7 @@ func TestStartRecording_PushStartCalled(t *testing.T) {
 	dm := newDVRManagerWithMist(t, mc)
 	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
 
-	err := dm.StartRecording("hash-push", "stream-1", "test-stream", "live+test-stream", "http://source", &pb.DVRConfig{
+	err := dm.StartRecording("hash-push", "stream-1", "test-stream", "live+test-stream", "http://source", &ipcpb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -223,7 +223,7 @@ func TestStartRecording_UsesSourceRuntimeNameVerbatim(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 11}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-local", "stream-1", "test-stream", "test-stream", "", &pb.DVRConfig{
+	err := dm.StartRecording("hash-local", "stream-1", "test-stream", "test-stream", "", &ipcpb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestStartRecording_RetriesInitialPushWarmup(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 12, failStarts: 2}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "live+test-stream", "dtsc://source/live+test-stream", &pb.DVRConfig{
+	err := dm.StartRecording("hash-retry", "stream-1", "test-stream", "live+test-stream", "dtsc://source/live+test-stream", &ipcpb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -265,7 +265,7 @@ func TestStartRecording_RegistersSourceOverrideUnderRuntimeName(t *testing.T) {
 
 	const sourceURL = "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+test-stream"
 	t.Cleanup(func() { ClearDVRSourceOverride("live+test-stream") })
-	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", "live+test-stream", sourceURL, &pb.DVRConfig{
+	err := dm.StartRecording("hash-dtsc", "stream-1", "test-stream", "live+test-stream", sourceURL, &ipcpb.DVRConfig{
 		SegmentDuration: 6,
 	}, nil)
 	if err != nil {
@@ -288,7 +288,7 @@ func TestStartRecording_PushStartError(t *testing.T) {
 	}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-fail", "stream-1", "test-stream", "live+test-stream", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-fail", "stream-1", "test-stream", "live+test-stream", "http://source", &ipcpb.DVRConfig{}, nil)
 	if err == nil {
 		t.Fatal("expected error for PushStart failure")
 	}
@@ -304,7 +304,7 @@ func TestStopRecording_PushStopCalled(t *testing.T) {
 	mc := &startAwareFakeMist{pushIDToReturn: 77}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-stop", "stream-1", "test-stop", "live+test-stop", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-stop", "stream-1", "test-stop", "live+test-stop", "http://source", &ipcpb.DVRConfig{}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestStopRecording_PushStopError(t *testing.T) {
 	}
 	dm := newDVRManagerWithMist(t, mc)
 
-	err := dm.StartRecording("hash-stoperr", "stream-1", "test-stoperr", "live+test-stoperr", "http://source", &pb.DVRConfig{}, nil)
+	err := dm.StartRecording("hash-stoperr", "stream-1", "test-stoperr", "live+test-stoperr", "http://source", &ipcpb.DVRConfig{}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestMaintainPushStatus_CompletedNaturally(t *testing.T) {
 		RetryCount:   10,
 		SegmentCount: 5,
 		Logger:       logging.NewLogger(),
-		SendFunc: func(_ *pb.ControlMessage) {
+		SendFunc: func(_ *ipcpb.ControlMessage) {
 			completionSent = true
 		},
 	}

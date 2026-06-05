@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 // preCachedRoute installs a clusterRoute in the server's routeCache so
@@ -18,7 +18,7 @@ func preCachedRoute(s *CommodoreServer, tenantID, routeClusterID string) {
 	s.routeCacheTTL = time.Hour
 	s.routeCache[tenantID] = &clusterRoute{
 		clusterID: routeClusterID,
-		clusterPeers: []*pb.TenantClusterPeer{
+		clusterPeers: []*quartermasterpb.TenantClusterPeer{
 			{ClusterId: routeClusterID, RegionId: "eu-west"},
 		},
 		resolvedAt: time.Now(),
@@ -57,7 +57,7 @@ func TestResolvePlaybackID_ActiveIngestClusterOverridesOriginCluster(t *testing.
 			"id", "internal_name", "tenant_id", "requires_auth", "ingest_mode", "active_ingest_cluster_id",
 		}).AddRow("stream-1", "internal-1", "tenant-1", false, "mist_native", "media-us-1"))
 
-	resp, err := srv.ResolvePlaybackID(context.Background(), &pb.ResolvePlaybackIDRequest{PlaybackId: "pb-managed"})
+	resp, err := srv.ResolvePlaybackID(context.Background(), &commodorepb.ResolvePlaybackIDRequest{PlaybackId: "pb-managed"})
 	if err != nil {
 		t.Fatalf("ResolvePlaybackID: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestResolvePlaybackID_NullActiveClusterFallsBackToRoute(t *testing.T) {
 			"id", "internal_name", "tenant_id", "requires_auth", "ingest_mode", "active_ingest_cluster_id",
 		}).AddRow("stream-2", "internal-2", "tenant-1", false, "push", nil))
 
-	resp, err := srv.ResolvePlaybackID(context.Background(), &pb.ResolvePlaybackIDRequest{PlaybackId: "pb-push"})
+	resp, err := srv.ResolvePlaybackID(context.Background(), &commodorepb.ResolvePlaybackIDRequest{PlaybackId: "pb-push"})
 	if err != nil {
 		t.Fatalf("ResolvePlaybackID: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestResolveInternalName_ActiveIngestClusterOverridesOriginCluster(t *testin
 			"id", "tenant_id", "user_id", "is_recording_enabled", "requires_auth", "active_ingest_cluster_id",
 		}).AddRow("stream-1", "tenant-1", "user-1", false, false, "media-us-1"))
 
-	resp, err := srv.ResolveInternalName(context.Background(), &pb.ResolveInternalNameRequest{InternalName: "internal-managed"})
+	resp, err := srv.ResolveInternalName(context.Background(), &commodorepb.ResolveInternalNameRequest{InternalName: "internal-managed"})
 	if err != nil {
 		t.Fatalf("ResolveInternalName: %v", err)
 	}

@@ -9,7 +9,8 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/google/uuid"
 )
@@ -48,18 +49,18 @@ func (e *SettlementError) Error() string {
 }
 
 type PurserClient interface {
-	VerifyX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error)
-	SettleX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error)
+	VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 }
 
 type CommodoreClient interface {
-	ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error)
-	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error)
-	ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error)
-	ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error)
-	ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error)
-	ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error)
-	ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*pb.ValidateStreamKeyResponse, error)
+	ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
+	ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
+	ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
+	ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error)
+	ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
+	ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error)
 }
 
 type ResourceResolution struct {
@@ -71,7 +72,7 @@ type ResourceResolution struct {
 
 type SettlementOptions struct {
 	PaymentHeader          string
-	Payload                *pb.X402PaymentPayload
+	Payload                *purserpb.X402PaymentPayload
 	Resource               string
 	AuthTenantID           string
 	ClientIP               string
@@ -86,12 +87,12 @@ type SettlementResult struct {
 	TargetTenantID string
 	Resource       string
 	ResourceKind   string
-	Verify         *pb.VerifyX402PaymentResponse
-	Settle         *pb.SettleX402PaymentResponse
+	Verify         *purserpb.VerifyX402PaymentResponse
+	Settle         *purserpb.SettleX402PaymentResponse
 	PayerAddress   string
 }
 
-func IsAuthOnlyPayment(payload *pb.X402PaymentPayload) bool {
+func IsAuthOnlyPayment(payload *purserpb.X402PaymentPayload) bool {
 	if payload == nil || payload.Payload == nil || payload.Payload.Authorization == nil {
 		return false
 	}

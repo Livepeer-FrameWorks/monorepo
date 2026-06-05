@@ -1,13 +1,12 @@
 package control
 
 import (
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestDedupeNodeLifecycleUpdatesKeepsLastPerNode(t *testing.T) {
-	updates := []*pb.NodeLifecycleUpdate{
+	updates := []*ipcpb.NodeLifecycleUpdate{
 		nil,
 		{NodeId: ""},
 		{NodeId: "edge-1", EventType: "old"},
@@ -28,12 +27,12 @@ func TestDedupeNodeLifecycleUpdatesKeepsLastPerNode(t *testing.T) {
 }
 
 func TestDedupeNodeComponentUpdatesKeepsLastPerNodeComponent(t *testing.T) {
-	updates := []*pb.NodeLifecycleUpdate{
+	updates := []*ipcpb.NodeLifecycleUpdate{
 		nil,
 		{NodeId: ""},
 		{
 			NodeId: "edge-1",
-			ComponentVersions: []*pb.EdgeComponentVersion{
+			ComponentVersions: []*ipcpb.EdgeComponentVersion{
 				nil,
 				{Component: "", Version: "ignored"},
 				{Component: "helmsman", Version: "v1"},
@@ -42,13 +41,13 @@ func TestDedupeNodeComponentUpdatesKeepsLastPerNodeComponent(t *testing.T) {
 		},
 		{
 			NodeId: "edge-1",
-			ComponentVersions: []*pb.EdgeComponentVersion{
+			ComponentVersions: []*ipcpb.EdgeComponentVersion{
 				{Component: "helmsman", Version: "v2"},
 			},
 		},
 		{
 			NodeId: "edge-2",
-			ComponentVersions: []*pb.EdgeComponentVersion{
+			ComponentVersions: []*ipcpb.EdgeComponentVersion{
 				{Component: "helmsman", Version: "v3"},
 			},
 		},

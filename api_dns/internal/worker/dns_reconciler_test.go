@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/logic"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 )
 
@@ -16,33 +17,33 @@ type trackingQMClient struct {
 	listClustersCount int
 }
 
-func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ int, _ string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (t *trackingQMClient) ListHealthyNodesForDNS(_ context.Context, _ int, _ string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	return nil, errors.New("intentional test stub")
 }
 
-func (t *trackingQMClient) ListHealthyNodesForDNSForCluster(_ context.Context, _ int, _ string, _ string) (*proto.ListHealthyNodesForDNSResponse, error) {
+func (t *trackingQMClient) ListHealthyNodesForDNSForCluster(_ context.Context, _ int, _ string, _ string) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
 	return nil, errors.New("intentional test stub")
 }
 
-func (t *trackingQMClient) ListClusters(_ context.Context, _ *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error) {
+func (t *trackingQMClient) ListClusters(_ context.Context, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
 	t.listClustersCount++
-	return &proto.ListClustersResponse{}, nil
+	return &quartermasterpb.ListClustersResponse{}, nil
 }
 
-func (t *trackingQMClient) GetCluster(_ context.Context, _ string) (*proto.ClusterResponse, error) {
-	return &proto.ClusterResponse{}, nil
+func (t *trackingQMClient) GetCluster(_ context.Context, _ string) (*quartermasterpb.ClusterResponse, error) {
+	return &quartermasterpb.ClusterResponse{}, nil
 }
 
-func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *proto.CursorPaginationRequest) (*proto.ListTLSBundlesResponse, error) {
-	return &proto.ListTLSBundlesResponse{}, nil
+func (t *trackingQMClient) ListTLSBundles(_ context.Context, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+	return &quartermasterpb.ListTLSBundlesResponse{}, nil
 }
 
-func (t *trackingQMClient) ListServiceInstancesByType(_ context.Context, _ string, _ string, _ int32) (*proto.ListServiceInstancesByTypeResponse, error) {
-	return &proto.ListServiceInstancesByTypeResponse{}, nil
+func (t *trackingQMClient) ListServiceInstancesByType(_ context.Context, _ string, _ string, _ int32) (*quartermasterpb.ListServiceInstancesByTypeResponse, error) {
+	return &quartermasterpb.ListServiceInstancesByTypeResponse{}, nil
 }
 
-func (t *trackingQMClient) ListIngressSites(_ context.Context, _ string, _ string, _ *proto.CursorPaginationRequest) (*proto.ListIngressSitesResponse, error) {
-	return &proto.ListIngressSitesResponse{}, nil
+func (t *trackingQMClient) ListIngressSites(_ context.Context, _ string, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListIngressSitesResponse, error) {
+	return &quartermasterpb.ListIngressSitesResponse{}, nil
 }
 
 func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T) {
@@ -74,10 +75,10 @@ func TestReconciler_CallsSyncServiceByClusterForClusterScopedTypes(t *testing.T)
 }
 
 func TestUsesBunnyClusterDNSOnlyForEdgeClusters(t *testing.T) {
-	if !usesBunnyClusterDNS(&proto.InfrastructureCluster{ClusterType: "edge"}) {
+	if !usesBunnyClusterDNS(&quartermasterpb.InfrastructureCluster{ClusterType: "edge"}) {
 		t.Fatal("expected edge cluster to use Bunny DNS")
 	}
-	if usesBunnyClusterDNS(&proto.InfrastructureCluster{ClusterType: "central"}) {
+	if usesBunnyClusterDNS(&quartermasterpb.InfrastructureCluster{ClusterType: "central"}) {
 		t.Fatal("expected central cluster to stay out of Bunny DNS")
 	}
 }

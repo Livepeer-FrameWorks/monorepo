@@ -27,7 +27,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -48,7 +48,7 @@ type DeleteDVRFunc func(dvrHash string) (uint64, error)
 type DeleteVodFunc func(vodHash string) (uint64, error)
 
 type streamConn struct {
-	stream pb.HelmsmanControl_ConnectClient
+	stream ipcpb.HelmsmanControl_ConnectClient
 	nodeID string
 }
 
@@ -61,11 +61,11 @@ type streamConn struct {
 // changes. Recv stays on the embedded stream: gRPC allows concurrent Send+Recv,
 // only Send+Send is unsafe.
 type lockedClientStream struct {
-	pb.HelmsmanControl_ConnectClient
+	ipcpb.HelmsmanControl_ConnectClient
 	sendMu sync.Mutex
 }
 
-func (s *lockedClientStream) Send(msg *pb.ControlMessage) error {
+func (s *lockedClientStream) Send(msg *ipcpb.ControlMessage) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	return s.HelmsmanControl_ConnectClient.Send(msg)
@@ -73,7 +73,7 @@ func (s *lockedClientStream) Send(msg *pb.ControlMessage) error {
 
 var activeConn atomic.Pointer[streamConn]
 
-func getStream() pb.HelmsmanControl_ConnectClient {
+func getStream() ipcpb.HelmsmanControl_ConnectClient {
 	c := activeConn.Load()
 	if c == nil {
 		return nil
@@ -94,7 +94,7 @@ func GetNodeID() string {
 	return getNodeID()
 }
 
-func storeConn(stream pb.HelmsmanControl_ConnectClient, nodeID string) {
+func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) {
 	activeConn.Store(&streamConn{stream: stream, nodeID: nodeID})
 }
 
@@ -130,7 +130,7 @@ var (
 	// Outbox for messages that failed to send during disconnect.
 	// Drained on reconnect after successful re-registration.
 	outboxMu  sync.Mutex
-	outbox    []*pb.ControlMessage
+	outbox    []*ipcpb.ControlMessage
 	maxOutbox = 100
 )
 
@@ -223,15 +223,15 @@ func GetCurrentNodeID() string {
 type MistTriggerResult struct {
 	Response  string
 	Abort     bool
-	ErrorCode pb.IngestErrorCode
+	ErrorCode ipcpb.IngestErrorCode
 }
 
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
-func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
+func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
 	if !mistTrigger.Blocking {
 		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
-			return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, err
+			return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL}, err
 		}
 		return &MistTriggerResult{}, nil
 	}
@@ -266,7 +266,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 
 		// Register response channel BEFORE send — same pattern as RequestFreezePermission.
 		// The buffered channel catches Foghorn's reply even if it arrives before the select.
-		responseCh := make(chan *pb.MistTriggerResponse, 1)
+		responseCh := make(chan *ipcpb.MistTriggerResponse, 1)
 		pendingMutex <- struct{}{}
 		pendingMistTriggers[mistTrigger.RequestId] = responseCh
 		<-pendingMutex
@@ -303,27 +303,27 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 	if lastErr == nil {
 		lastErr = fmt.Errorf("blocking trigger attempts exhausted")
 	}
-	return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, lastErr
+	return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, lastErr
 }
 
 // pendingMistTriggers tracks blocking trigger requests waiting for responses
 var (
-	pendingMistTriggers = make(map[string]chan *pb.MistTriggerResponse)
+	pendingMistTriggers = make(map[string]chan *ipcpb.MistTriggerResponse)
 	pendingMutex        = make(chan struct{}, 1) // Simple mutex using buffered channel
 )
 
 var errStreamDisconnected = errors.New("gRPC control stream disconnected")
 
-func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error {
+func sendMistTriggerOnce(triggerType string, mistTrigger *ipcpb.MistTrigger) error {
 	stream := getStream()
 	if stream == nil {
 		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
 		return fmt.Errorf("gRPC control stream not connected")
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
+		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
 	}
 
 	if err := stream.Send(msg); err != nil {
@@ -338,7 +338,7 @@ func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error 
 // awaitMistTriggerResponse waits on a pre-registered response channel.
 // The channel must be created and inserted into pendingMistTriggers BEFORE
 // the trigger is sent — otherwise a fast Foghorn reply races the registration.
-func awaitMistTriggerResponse(responseCh chan *pb.MistTriggerResponse, requestID string, timeout time.Duration) (*MistTriggerResult, error) {
+func awaitMistTriggerResponse(responseCh chan *ipcpb.MistTriggerResponse, requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	disconnectNotifyMu.Lock()
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
@@ -370,7 +370,7 @@ func awaitMistTriggerResponse(responseCh chan *pb.MistTriggerResponse, requestID
 
 		return &MistTriggerResult{
 			Abort:     true,
-			ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+			ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL,
 		}, errStreamDisconnected
 	case <-time.After(timeout):
 		pendingMutex <- struct{}{}
@@ -379,13 +379,13 @@ func awaitMistTriggerResponse(responseCh chan *pb.MistTriggerResponse, requestID
 
 		return &MistTriggerResult{
 			Abort:     true,
-			ErrorCode: pb.IngestErrorCode_INGEST_ERROR_TIMEOUT,
+			ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT,
 		}, fmt.Errorf("timeout waiting for MistTrigger response")
 	}
 }
 
 // handleMistTriggerResponse processes MistTriggerResponse messages from the stream
-func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
+func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
 	pendingMutex <- struct{}{}
 	responseChan, exists := pendingMistTriggers[response.RequestId]
 	<-pendingMutex
@@ -395,11 +395,11 @@ func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
 	}
 }
 
-func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, requestID string, update *pb.DesiredStateUpdate, send func(*pb.ControlMessage) error) {
+func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, requestID string, update *ipcpb.DesiredStateUpdate, send func(*ipcpb.ControlMessage) error) {
 	if update == nil {
 		return
 	}
-	result := &pb.UpdateApplyResult{
+	result := &ipcpb.UpdateApplyResult{
 		NodeId:        update.GetNodeId(),
 		TargetRelease: update.GetTargetRelease(),
 	}
@@ -408,7 +408,7 @@ func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, reques
 		if component == nil {
 			continue
 		}
-		applyResult := &pb.ComponentApplyResult{
+		applyResult := &ipcpb.ComponentApplyResult{
 			Component: component.GetComponent(),
 			Version:   component.GetVersion(),
 		}
@@ -445,17 +445,17 @@ func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, reques
 			"components":     len(result.GetComponents()),
 		}).Info("Processed desired state update")
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_UpdateApplyResult{UpdateApplyResult: result},
+		Payload:   &ipcpb.ControlMessage_UpdateApplyResult{UpdateApplyResult: result},
 	}
 	if sendDesiredStateResult(msg, restartSelf, logger, send) {
 		scheduleSelfRestart(logger)
 	}
 }
 
-func sendDesiredStateResult(msg *pb.ControlMessage, restartSelf bool, logger logging.Logger, send func(*pb.ControlMessage) error) bool {
+func sendDesiredStateResult(msg *ipcpb.ControlMessage, restartSelf bool, logger logging.Logger, send func(*ipcpb.ControlMessage) error) bool {
 	err := send(msg)
 	if err == nil {
 		return restartSelf
@@ -494,7 +494,7 @@ func notifyDisconnect() {
 	disconnectNotifyMu.Unlock()
 }
 
-func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient {
+func waitForReconnection(timeout time.Duration) ipcpb.HelmsmanControl_ConnectClient {
 	if s := getStream(); s != nil {
 		return s
 	}
@@ -512,7 +512,7 @@ func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient
 }
 
 // enqueueOutbox saves a message for retry on reconnect.
-func enqueueOutbox(msg *pb.ControlMessage) {
+func enqueueOutbox(msg *ipcpb.ControlMessage) {
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	if len(outbox) >= maxOutbox {
@@ -525,7 +525,7 @@ func enqueueOutbox(msg *pb.ControlMessage) {
 }
 
 // drainOutbox re-sends all queued messages on the current stream.
-func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
+func drainOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
 	drainDurableOutbox(stream)
 
 	outboxMu.Lock()
@@ -542,7 +542,7 @@ func drainOutbox(stream pb.HelmsmanControl_ConnectClient) {
 	}
 }
 
-func enqueueDurableOutbox(msg *pb.ControlMessage) error {
+func enqueueDurableOutbox(msg *ipcpb.ControlMessage) error {
 	dir := durableOutboxDir()
 	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
 		return mkdirErr
@@ -560,7 +560,7 @@ func enqueueDurableOutbox(msg *pb.ControlMessage) error {
 	return os.Rename(tmp, path)
 }
 
-func drainDurableOutbox(stream pb.HelmsmanControl_ConnectClient) {
+func drainDurableOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
 	dir := durableOutboxDir()
 	files, err := filepath.Glob(filepath.Join(dir, "*.pb"))
 	if err != nil {
@@ -578,7 +578,7 @@ func drainDurableOutbox(stream pb.HelmsmanControl_ConnectClient) {
 			}
 			return
 		}
-		var msg pb.ControlMessage
+		var msg ipcpb.ControlMessage
 		if err := proto.Unmarshal(payload, &msg); err != nil {
 			if pkgLogger != nil {
 				pkgLogger.WithError(err).WithField("path", path).Warn("Dropping unreadable durable control outbox message")
@@ -636,7 +636,7 @@ func safeOutboxID(id string) string {
 
 // sendOrEnqueue attempts to send a message on the active stream.
 // If the stream is disconnected, the message is saved to the outbox for retry on reconnect.
-func sendOrEnqueue(msg *pb.ControlMessage) error {
+func sendOrEnqueue(msg *ipcpb.ControlMessage) error {
 	stream := getStream()
 	if stream == nil {
 		enqueueOutbox(msg)
@@ -670,7 +670,7 @@ func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, si
 		return fmt.Errorf("gRPC control stream not connected")
 	}
 
-	artifactDeleted := &pb.ArtifactDeleted{
+	artifactDeleted := &ipcpb.ArtifactDeleted{
 		ArtifactHash: artifactHash,
 		ArtifactType: artifactType,
 		FilePath:     filePath,
@@ -679,22 +679,22 @@ func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, si
 		SizeBytes:    sizeBytes,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
 	return stream.Send(msg)
 }
 
 // SendModeChangeRequest sends an operational mode change request upstream to Foghorn.
 // Called by the local HTTP API when an agent or CLI requests a mode change.
-func SendModeChangeRequest(mode pb.NodeOperationalMode, reason string) error {
+func SendModeChangeRequest(mode ipcpb.NodeOperationalMode, reason string) error {
 	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
-		Payload: &pb.ControlMessage_ModeChangeRequest{
-			ModeChangeRequest: &pb.ModeChangeRequest{
+		Payload: &ipcpb.ControlMessage_ModeChangeRequest{
+			ModeChangeRequest: &ipcpb.ModeChangeRequest{
 				RequestedMode: mode,
 				Reason:        reason,
 			},
@@ -765,7 +765,7 @@ func runClient(addr string, logger logging.Logger) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	client := pb.NewHelmsmanControlClient(conn)
+	client := ipcpb.NewHelmsmanControlClient(conn)
 	stream, err := client.Connect(context.Background())
 	if err != nil {
 		return err
@@ -784,7 +784,7 @@ func runClient(addr string, logger logging.Logger) error {
 	// Detect hardware specs at startup
 	hwSpecs := sidecarcfg.DetectHardware(cfg.StorageLocalPath)
 
-	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
+	reg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{
 		NodeId:                nodeID,
 		Roles:                 roles,
 		CapIngest:             cfg.CapIngest,
@@ -845,21 +845,21 @@ func runClient(addr string, logger logging.Logger) error {
 				return
 			}
 			switch x := msg.GetPayload().(type) {
-			case *pb.ControlMessage_DvrStartRequest:
-				go handleDVRStart(logger, x.DvrStartRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_DvrStopRequest:
-				go handleDVRStop(logger, x.DvrStopRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_ClipDelete:
-				go handleClipDelete(logger, x.ClipDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_DvrDelete:
-				go handleDVRDelete(logger, x.DvrDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_VodDelete:
-				go handleVodDelete(logger, x.VodDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_MistTriggerResponse:
+			case *ipcpb.ControlMessage_DvrStartRequest:
+				go handleDVRStart(logger, x.DvrStartRequest, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_DvrStopRequest:
+				go handleDVRStop(logger, x.DvrStopRequest, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_ClipDelete:
+				go handleClipDelete(logger, x.ClipDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_DvrDelete:
+				go handleDVRDelete(logger, x.DvrDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_VodDelete:
+				go handleVodDelete(logger, x.VodDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_MistTriggerResponse:
 				go handleMistTriggerResponse(x.MistTriggerResponse)
-			case *pb.ControlMessage_MistTriggerAck:
+			case *ipcpb.ControlMessage_MistTriggerAck:
 				go handleMistTriggerAck(x.MistTriggerAck)
-			case *pb.ControlMessage_Error:
+			case *ipcpb.ControlMessage_Error:
 				if errMsg := x.Error; errMsg != nil {
 					code := errMsg.GetCode()
 					message := errMsg.GetMessage()
@@ -873,7 +873,7 @@ func runClient(addr string, logger logging.Logger) error {
 						return
 					}
 				}
-			case *pb.ControlMessage_MistTrigger:
+			case *ipcpb.ControlMessage_MistTrigger:
 				// Foghorn-initiated command: seed immediate JSON poll/upload
 				if x.MistTrigger != nil {
 					if t := x.MistTrigger.GetTriggerType(); t == "seed_poll" || t == "seed_request" {
@@ -882,13 +882,13 @@ func runClient(addr string, logger logging.Logger) error {
 						}
 					}
 				}
-			case *pb.ControlMessage_ConfigSeed:
+			case *ipcpb.ControlMessage_ConfigSeed:
 				// Receive desired config seed and trigger reconcile.
 				// The sender callback lets Helmsman ACK back over the
 				// existing bidi stream after TLS bundles are applied and
 				// Caddy is reloaded; Foghorn gates DNS publishing on this.
 				if x.ConfigSeed != nil {
-					ackSender := func(m *pb.ControlMessage) {
+					ackSender := func(m *ipcpb.ControlMessage) {
 						if sendErr := stream.Send(m); sendErr != nil {
 							logger.WithError(sendErr).Debug("Failed to send ConfigSeedApplyResult ACK")
 						}
@@ -899,87 +899,87 @@ func runClient(addr string, logger logging.Logger) error {
 						storeConn(getStream(), nid)
 					}
 				}
-			case *pb.ControlMessage_DesiredStateUpdate:
+			case *ipcpb.ControlMessage_DesiredStateUpdate:
 				go handleDesiredStateUpdate(stream.Context(), logger, msg.GetRequestId(), x.DesiredStateUpdate, stream.Send)
-			case *pb.ControlMessage_FreezePermissionResponse:
+			case *ipcpb.ControlMessage_FreezePermissionResponse:
 				// Handle freeze permission response from Foghorn
 				go handleFreezePermissionResponse(x.FreezePermissionResponse)
-			case *pb.ControlMessage_RecordDvrSegmentResponse:
+			case *ipcpb.ControlMessage_RecordDvrSegmentResponse:
 				go handleRecordDVRSegmentResponse(x.RecordDvrSegmentResponse)
-			case *pb.ControlMessage_EvictableSegmentsResponse:
+			case *ipcpb.ControlMessage_EvictableSegmentsResponse:
 				go handleEvictableSegmentsResponse(x.EvictableSegmentsResponse)
-			case *pb.ControlMessage_RestoreLocalSegmentIndexResponse:
+			case *ipcpb.ControlMessage_RestoreLocalSegmentIndexResponse:
 				go handleRestoreLocalSegmentIndexResponse(x.RestoreLocalSegmentIndexResponse)
-			case *pb.ControlMessage_RetryDvrSegmentUpload:
+			case *ipcpb.ControlMessage_RetryDvrSegmentUpload:
 				if retryDVRSegmentHandler != nil {
 					go retryDVRSegmentHandler(x.RetryDvrSegmentUpload)
 				}
-			case *pb.ControlMessage_ReclaimDvrSegment:
+			case *ipcpb.ControlMessage_ReclaimDvrSegment:
 				if reclaimDVRSegmentHandler != nil {
 					go reclaimDVRSegmentHandler(x.ReclaimDvrSegment)
 				}
-			case *pb.ControlMessage_FreezeRequest:
+			case *ipcpb.ControlMessage_FreezeRequest:
 				if freezeRequestHandler != nil {
 					go freezeRequestHandler(x.FreezeRequest)
 				}
-			case *pb.ControlMessage_CanDeleteResponse:
+			case *ipcpb.ControlMessage_CanDeleteResponse:
 				// Handle can-delete response from Foghorn
 				go handleCanDeleteResponse(x.CanDeleteResponse)
-			case *pb.ControlMessage_RelayResolveResponse:
+			case *ipcpb.ControlMessage_RelayResolveResponse:
 				// Relay resolve response: route to the waiting goroutine keyed
 				// by request_id.
 				go handleRelayResolveResponse(x.RelayResolveResponse)
-			case *pb.ControlMessage_AuthorizeRelayPullResponse:
+			case *ipcpb.ControlMessage_AuthorizeRelayPullResponse:
 				// Authorize-relay-pull response: route to the waiting goroutine.
 				go handleAuthorizeRelayPullResponse(x.AuthorizeRelayPullResponse)
-			case *pb.ControlMessage_DtshSyncRequest:
+			case *ipcpb.ControlMessage_DtshSyncRequest:
 				// Handle incremental .dtsh sync request from Foghorn
 				if dtshSyncRequestHandler != nil {
 					go dtshSyncRequestHandler(x.DtshSyncRequest)
 				}
-			case *pb.ControlMessage_StopSessionsRequest:
+			case *ipcpb.ControlMessage_StopSessionsRequest:
 				// Handle stop sessions request from Foghorn (billing suspension)
 				go handleStopSessions(logger, x.StopSessionsRequest)
-			case *pb.ControlMessage_InvalidateSessionsRequest:
+			case *ipcpb.ControlMessage_InvalidateSessionsRequest:
 				// Re-run USER_NEW for active sessions after a playback policy
 				// or signing-key change. Does NOT disconnect viewers.
 				go handleInvalidateSessions(logger, x.InvalidateSessionsRequest)
-			case *pb.ControlMessage_DrainStreamRequest:
+			case *ipcpb.ControlMessage_DrainStreamRequest:
 				// Old-owner drain on publisher takeover: unload lingering
 				// buffer + disconnect viewers so they reselect via the new
 				// owner. Idempotent.
-				go handleDrainStream(logger, x.DrainStreamRequest, func(m *pb.ControlMessage) {
+				go handleDrainStream(logger, x.DrainStreamRequest, func(m *ipcpb.ControlMessage) {
 					if err := stream.Send(m); err != nil {
 						logger.WithError(err).Warn("Failed to send DrainStreamResponse")
 					}
 				})
-			case *pb.ControlMessage_DvrUpdateSourceRequest:
+			case *ipcpb.ControlMessage_DvrUpdateSourceRequest:
 				// Storage-node DVR source refresh on publisher takeover:
 				// the source moved to a different ingest node, so the
 				// recorded override URL is stale. Refresh + force-recreate
 				// the push so the next pull lands on the new source.
-				go handleDVRUpdateSource(logger, x.DvrUpdateSourceRequest, func(m *pb.ControlMessage) {
+				go handleDVRUpdateSource(logger, x.DvrUpdateSourceRequest, func(m *ipcpb.ControlMessage) {
 					if err := stream.Send(m); err != nil {
 						logger.WithError(err).Warn("Failed to send DVRUpdateSourceResponse")
 					}
 				})
-			case *pb.ControlMessage_ActivatePushTargets:
+			case *ipcpb.ControlMessage_ActivatePushTargets:
 				go handleActivatePushTargets(logger, x.ActivatePushTargets)
-			case *pb.ControlMessage_DeactivatePushTargets:
+			case *ipcpb.ControlMessage_DeactivatePushTargets:
 				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
-			case *pb.ControlMessage_ApplyManagedStream:
+			case *ipcpb.ControlMessage_ApplyManagedStream:
 				go handleApplyManagedStream(logger, x.ApplyManagedStream)
-			case *pb.ControlMessage_RetractManagedStream:
+			case *ipcpb.ControlMessage_RetractManagedStream:
 				go handleRetractManagedStream(logger, x.RetractManagedStream)
-			case *pb.ControlMessage_ValidateEdgeTokenResponse:
+			case *ipcpb.ControlMessage_ValidateEdgeTokenResponse:
 				handleValidateEdgeTokenResponse(msg.GetRequestId(), x.ValidateEdgeTokenResponse)
-			case *pb.ControlMessage_EdgeMistAdminSessionResponse:
+			case *ipcpb.ControlMessage_EdgeMistAdminSessionResponse:
 				handleEdgeMistAdminSessionResponse(msg.GetRequestId(), x.EdgeMistAdminSessionResponse)
-			case *pb.ControlMessage_ThumbnailUploadResponse:
-				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *pb.ControlMessage) { _ = stream.Send(m) })
-			case *pb.ControlMessage_ProcessingJobRequest:
+			case *ipcpb.ControlMessage_ThumbnailUploadResponse:
+				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+			case *ipcpb.ControlMessage_ProcessingJobRequest:
 				if processingJobHandler != nil {
-					go processingJobHandler(x.ProcessingJobRequest, func(m *pb.ControlMessage) {
+					go processingJobHandler(x.ProcessingJobRequest, func(m *ipcpb.ControlMessage) {
 						if err := sendOrEnqueue(m); err != nil {
 							logger.WithError(err).WithField("job_id", x.ProcessingJobRequest.GetJobId()).Warn("Processing job message queued for retry")
 						}
@@ -997,9 +997,9 @@ func runClient(addr string, logger logging.Logger) error {
 			// A Send error means the bidi stream is broken; surface it
 			// so the outer Start loop reconnects (Foghorn will then
 			// receive a fresh snapshot via the new Register).
-			if err := stream.Send(&pb.ControlMessage{
+			if err := stream.Send(&ipcpb.ControlMessage{
 				SentAt: timestamppb.Now(),
-				Payload: &pb.ControlMessage_Heartbeat{Heartbeat: &pb.Heartbeat{
+				Payload: &ipcpb.ControlMessage_Heartbeat{Heartbeat: &ipcpb.Heartbeat{
 					NodeId:                nodeID,
 					AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
 				}},
@@ -1140,8 +1140,8 @@ func deriveRolesFromConfig(cfg *sidecarcfg.HelmsmanConfig) []string {
 }
 
 // collectNodeFingerprint builds a stable fingerprint from local network/machine info.
-func collectNodeFingerprint() *pb.NodeFingerprint {
-	fp := &pb.NodeFingerprint{}
+func collectNodeFingerprint() *ipcpb.NodeFingerprint {
+	fp := &ipcpb.NodeFingerprint{}
 	ifaces, _ := net.Interfaces()
 	// Collect local IPs (exclude loopback, link-local)
 	for _, iface := range ifaces {
@@ -1200,7 +1200,7 @@ func urlEscape(s string) string {
 }
 
 // handleDVRStart handles DVR start requests from Foghorn (for storage nodes)
-func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*pb.ControlMessage)) {
+func handleDVRStart(logger logging.Logger, req *ipcpb.DVRStartRequest, send func(*ipcpb.ControlMessage)) {
 	dvrHash := req.GetDvrHash()
 	streamID := req.GetStreamId()
 	internalName := req.GetInternalName()
@@ -1234,7 +1234,7 @@ func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*p
 
 		// Send failure notification
 		if send != nil {
-			send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopped{DvrStopped: &pb.DVRStopped{
+			send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_DvrStopped{DvrStopped: &ipcpb.DVRStopped{
 				RequestId:       requestID,
 				DvrHash:         dvrHash,
 				Status:          "failed",
@@ -1251,7 +1251,7 @@ func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*p
 }
 
 // handleDVRStop handles DVR stop requests from Foghorn
-func handleDVRStop(logger logging.Logger, req *pb.DVRStopRequest, send func(*pb.ControlMessage)) {
+func handleDVRStop(logger logging.Logger, req *ipcpb.DVRStopRequest, send func(*ipcpb.ControlMessage)) {
 	dvrHash := req.GetDvrHash()
 	requestID := req.GetRequestId()
 
@@ -1272,7 +1272,7 @@ func handleDVRStop(logger logging.Logger, req *pb.DVRStopRequest, send func(*pb.
 
 		// Send failure notification
 		if send != nil {
-			send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopped{DvrStopped: &pb.DVRStopped{
+			send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_DvrStopped{DvrStopped: &ipcpb.DVRStopped{
 				RequestId:       requestID,
 				DvrHash:         dvrHash,
 				Status:          "failed",
@@ -1289,7 +1289,7 @@ func handleDVRStop(logger logging.Logger, req *pb.DVRStopRequest, send func(*pb.
 }
 
 // handleClipDelete handles a clip delete request from Foghorn
-func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send func(*pb.ControlMessage)) {
+func handleClipDelete(logger logging.Logger, req *ipcpb.ClipDeleteRequest, send func(*ipcpb.ControlMessage)) {
 	clipHash := req.GetClipHash()
 	requestID := req.GetRequestId()
 
@@ -1322,7 +1322,7 @@ func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send fun
 
 	// Send artifact deleted notification back to Foghorn
 	if send != nil {
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &pb.ArtifactDeleted{
+		send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{
 			ArtifactHash: clipHash,
 			ArtifactType: "clip",
 			Reason:       "manual",
@@ -1338,7 +1338,7 @@ func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send fun
 }
 
 // handleDVRDelete handles a DVR delete request from Foghorn
-func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(*pb.ControlMessage)) {
+func handleDVRDelete(logger logging.Logger, req *ipcpb.DVRDeleteRequest, send func(*ipcpb.ControlMessage)) {
 	dvrHash := req.GetDvrHash()
 	requestID := req.GetRequestId()
 
@@ -1374,7 +1374,7 @@ func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(
 
 	// Send DVR stopped notification with deleted status
 	if send != nil {
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopped{DvrStopped: &pb.DVRStopped{
+		send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_DvrStopped{DvrStopped: &ipcpb.DVRStopped{
 			RequestId: requestID,
 			DvrHash:   dvrHash,
 			Status:    "deleted",
@@ -1388,7 +1388,7 @@ func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(
 }
 
 // handleVodDelete handles a VOD delete request from Foghorn
-func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(*pb.ControlMessage)) {
+func handleVodDelete(logger logging.Logger, req *ipcpb.VodDeleteRequest, send func(*ipcpb.ControlMessage)) {
 	vodHash := req.GetVodHash()
 	requestID := req.GetRequestId()
 
@@ -1418,7 +1418,7 @@ func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(
 
 	// Send artifact deleted notification back to Foghorn
 	if send != nil {
-		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &pb.ArtifactDeleted{
+		send(&ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{
 			ArtifactHash: vodHash,
 			ArtifactType: "vod",
 			Reason:       "manual",
@@ -1441,49 +1441,49 @@ func SendDVRStreamEndNotification(internalName, nodeID string) error {
 	}
 
 	// Create a DVR stop request with stream context
-	dvrStopRequest := &pb.DVRStopRequest{
+	dvrStopRequest := &ipcpb.DVRStopRequest{
 		DvrHash:      "", // Empty hash means stop all recordings for this stream
 		RequestId:    uuid.New().String(),
 		InternalName: &internalName,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopRequest{DvrStopRequest: dvrStopRequest}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_DvrStopRequest{DvrStopRequest: dvrStopRequest}}
 	return stream.Send(msg)
 }
 
 // FreezePermissionHandler is called when Foghorn responds to a freeze permission request
-type FreezePermissionHandler func(*pb.FreezePermissionResponse)
+type FreezePermissionHandler func(*ipcpb.FreezePermissionResponse)
 
 // FreezeRequestHandler is called when Foghorn proactively requests a freeze/sync
-type FreezeRequestHandler func(*pb.FreezeRequest)
+type FreezeRequestHandler func(*ipcpb.FreezeRequest)
 
 // DtshSyncRequestHandler is called when Foghorn sends a request to sync just the .dtsh file
-type DtshSyncRequestHandler func(*pb.DtshSyncRequest)
+type DtshSyncRequestHandler func(*ipcpb.DtshSyncRequest)
 
 // ProcessingJobHandler is called when Foghorn sends a VOD processing job request
-type ProcessingJobHandler func(*pb.ProcessingJobRequest, func(*pb.ControlMessage))
+type ProcessingJobHandler func(*ipcpb.ProcessingJobRequest, func(*ipcpb.ControlMessage))
 
 var (
-	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
+	freezePermissionHandlers = make(map[string]chan *ipcpb.FreezePermissionResponse)
 	freezePermissionMutex    = make(chan struct{}, 1)
 	freezeRequestHandler     FreezeRequestHandler
 	dtshSyncRequestHandler   DtshSyncRequestHandler
 	processingJobHandler     ProcessingJobHandler
 
 	// CanDelete request/response tracking
-	canDeleteHandlers = make(map[string]chan *pb.CanDeleteResponse)
+	canDeleteHandlers = make(map[string]chan *ipcpb.CanDeleteResponse)
 	canDeleteMutex    = make(chan struct{}, 1)
 
 	// RelayResolve request/response tracking. Keyed by request_id (the relay
 	// generates a UUID per outstanding resolve) because the same asset can be
 	// resolved concurrently for different sessions.
-	relayResolveHandlers = make(map[string]chan *pb.RelayResolveResponse)
+	relayResolveHandlers = make(map[string]chan *ipcpb.RelayResolveResponse)
 	relayResolveMutex    = make(chan struct{}, 1)
 
 	// AuthorizeRelayPull request/response tracking (serving edge asks Foghorn
 	// to authorize an inbound peer-relay pull). Same keyed-by-request_id model
 	// as RelayResolve.
-	authorizeRelayPullHandlers = make(map[string]chan *pb.AuthorizeRelayPullResponse)
+	authorizeRelayPullHandlers = make(map[string]chan *ipcpb.AuthorizeRelayPullResponse)
 	authorizeRelayPullMutex    = make(chan struct{}, 1)
 )
 
@@ -1504,14 +1504,14 @@ func SetProcessingJobHandler(handler ProcessingJobHandler) {
 
 // RequestFreezePermission asks Foghorn for permission and presigned URL to freeze an asset.
 // This is a blocking call that waits for Foghorn's response.
-func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error) {
+func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*ipcpb.FreezePermissionResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
 	}
 
 	requestID := uuid.New().String()
-	responseChan := make(chan *pb.FreezePermissionResponse, 1)
+	responseChan := make(chan *ipcpb.FreezePermissionResponse, 1)
 
 	// Register for response
 	freezePermissionMutex <- struct{}{}
@@ -1519,7 +1519,7 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPat
 	<-freezePermissionMutex
 
 	// Send request
-	req := &pb.FreezePermissionRequest{
+	req := &ipcpb.FreezePermissionRequest{
 		RequestId: requestID,
 		AssetType: assetType,
 		AssetHash: assetHash,
@@ -1529,7 +1529,7 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPat
 		Filenames: filenames,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezePermissionRequest{FreezePermissionRequest: req}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_FreezePermissionRequest{FreezePermissionRequest: req}}
 	if err := stream.Send(msg); err != nil {
 		// Cleanup
 		freezePermissionMutex <- struct{}{}
@@ -1562,7 +1562,7 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPat
 }
 
 // handleFreezePermissionResponse processes FreezePermissionResponse messages from the stream
-func handleFreezePermissionResponse(response *pb.FreezePermissionResponse) {
+func handleFreezePermissionResponse(response *ipcpb.FreezePermissionResponse) {
 	freezePermissionMutex <- struct{}{}
 	responseChan, exists := freezePermissionHandlers[response.RequestId]
 	<-freezePermissionMutex
@@ -1574,18 +1574,18 @@ func handleFreezePermissionResponse(response *pb.FreezePermissionResponse) {
 
 // RetryDVRSegmentUploadHandler is invoked when Foghorn asks the recording
 // node to re-attempt upload of specific segments during finalization.
-type RetryDVRSegmentUploadHandler func(*pb.RetryDVRSegmentUpload)
+type RetryDVRSegmentUploadHandler func(*ipcpb.RetryDVRSegmentUpload)
 
 // ReclaimDVRSegmentHandler is invoked when Foghorn issues a reclaim
 // order for local DVR segment files after every overlapping chapter
 // has reached state='frozen'. The handler MUST be idempotent
 // (missing-file is success).
-type ReclaimDVRSegmentHandler func(*pb.ReclaimDVRSegment)
+type ReclaimDVRSegmentHandler func(*ipcpb.ReclaimDVRSegment)
 
 var (
-	recordDVRSegmentHandlers  = make(map[string]chan *pb.RecordDVRSegmentResponse)
+	recordDVRSegmentHandlers  = make(map[string]chan *ipcpb.RecordDVRSegmentResponse)
 	recordDVRSegmentMutex     = make(chan struct{}, 1)
-	evictableSegmentsHandlers = make(map[string]chan *pb.EvictableSegmentsResponse)
+	evictableSegmentsHandlers = make(map[string]chan *ipcpb.EvictableSegmentsResponse)
 	evictableSegmentsMutex    = make(chan struct{}, 1)
 	retryDVRSegmentHandler    RetryDVRSegmentUploadHandler
 	reclaimDVRSegmentHandler  ReclaimDVRSegmentHandler
@@ -1616,7 +1616,7 @@ func RecordDVRSegment(
 	ctx context.Context,
 	dvrHash, segmentName, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,
-) (*pb.RecordDVRSegmentResponse, error) {
+) (*ipcpb.RecordDVRSegmentResponse, error) {
 	return recordDVRSegment(ctx, dvrHash, segmentName, localPath, mediaStartMs, mediaEndMs, durationMs, false)
 }
 
@@ -1628,7 +1628,7 @@ func RecordRecoveredDVRSegment(
 	ctx context.Context,
 	dvrHash, segmentName, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,
-) (*pb.RecordDVRSegmentResponse, error) {
+) (*ipcpb.RecordDVRSegmentResponse, error) {
 	return recordDVRSegment(ctx, dvrHash, segmentName, localPath, mediaStartMs, mediaEndMs, durationMs, true)
 }
 
@@ -1637,13 +1637,13 @@ func recordDVRSegment(
 	dvrHash, segmentName, localPath string,
 	mediaStartMs, mediaEndMs, durationMs int64,
 	recoveryInsert bool,
-) (*pb.RecordDVRSegmentResponse, error) {
+) (*ipcpb.RecordDVRSegmentResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
 	}
 	requestID := uuid.New().String()
-	ch := make(chan *pb.RecordDVRSegmentResponse, 1)
+	ch := make(chan *ipcpb.RecordDVRSegmentResponse, 1)
 
 	recordDVRSegmentMutex <- struct{}{}
 	recordDVRSegmentHandlers[requestID] = ch
@@ -1655,7 +1655,7 @@ func recordDVRSegment(
 		<-recordDVRSegmentMutex
 	}
 
-	req := &pb.RecordDVRSegmentRequest{
+	req := &ipcpb.RecordDVRSegmentRequest{
 		RequestId:      requestID,
 		DvrHash:        dvrHash,
 		SegmentName:    segmentName,
@@ -1666,7 +1666,7 @@ func recordDVRSegment(
 		NodeId:         getNodeID(),
 		RecoveryInsert: recoveryInsert,
 	}
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_RecordDvrSegmentRequest{RecordDvrSegmentRequest: req}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_RecordDvrSegmentRequest{RecordDvrSegmentRequest: req}}
 	if err := stream.Send(msg); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("failed to send record_dvr_segment_request: %w", err)
@@ -1684,7 +1684,7 @@ func recordDVRSegment(
 	}
 }
 
-func handleRecordDVRSegmentResponse(resp *pb.RecordDVRSegmentResponse) {
+func handleRecordDVRSegmentResponse(resp *ipcpb.RecordDVRSegmentResponse) {
 	recordDVRSegmentMutex <- struct{}{}
 	ch, exists := recordDVRSegmentHandlers[resp.GetRequestId()]
 	<-recordDVRSegmentMutex
@@ -1700,9 +1700,9 @@ func SendMarkDVRSegmentUploaded(dvrHash, segmentName string, sizeBytes uint64) e
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
-		Payload: &pb.ControlMessage_MarkDvrSegmentUploaded{MarkDvrSegmentUploaded: &pb.MarkDVRSegmentUploaded{
+		Payload: &ipcpb.ControlMessage_MarkDvrSegmentUploaded{MarkDvrSegmentUploaded: &ipcpb.MarkDVRSegmentUploaded{
 			RequestId:   uuid.New().String(),
 			DvrHash:     dvrHash,
 			SegmentName: segmentName,
@@ -1726,9 +1726,9 @@ func SendDVRSegmentDropped(
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
-		Payload: &pb.ControlMessage_DvrSegmentDropped{DvrSegmentDropped: &pb.DVRSegmentDropped{
+		Payload: &ipcpb.ControlMessage_DvrSegmentDropped{DvrSegmentDropped: &ipcpb.DVRSegmentDropped{
 			RequestId:    uuid.New().String(),
 			DvrHash:      dvrHash,
 			SegmentName:  segmentName,
@@ -1748,13 +1748,13 @@ func SendDVRSegmentDropped(
 // RequestEvictableSegments asks Foghorn for the authoritative list of
 // segments safe to delete locally for a DVR. Blocking; returns the
 // response or an error / timeout.
-func RequestEvictableSegments(ctx context.Context, dvrHash string, maxCount int32) (*pb.EvictableSegmentsResponse, error) {
+func RequestEvictableSegments(ctx context.Context, dvrHash string, maxCount int32) (*ipcpb.EvictableSegmentsResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
 	}
 	requestID := uuid.New().String()
-	ch := make(chan *pb.EvictableSegmentsResponse, 1)
+	ch := make(chan *ipcpb.EvictableSegmentsResponse, 1)
 
 	evictableSegmentsMutex <- struct{}{}
 	evictableSegmentsHandlers[requestID] = ch
@@ -1766,12 +1766,12 @@ func RequestEvictableSegments(ctx context.Context, dvrHash string, maxCount int3
 		<-evictableSegmentsMutex
 	}
 
-	req := &pb.EvictableSegmentsRequest{
+	req := &ipcpb.EvictableSegmentsRequest{
 		RequestId: requestID,
 		DvrHash:   dvrHash,
 		MaxCount:  maxCount,
 	}
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_EvictableSegmentsRequest{EvictableSegmentsRequest: req}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_EvictableSegmentsRequest{EvictableSegmentsRequest: req}}
 	if err := stream.Send(msg); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("failed to send evictable_segments_request: %w", err)
@@ -1789,7 +1789,7 @@ func RequestEvictableSegments(ctx context.Context, dvrHash string, maxCount int3
 	}
 }
 
-func handleEvictableSegmentsResponse(resp *pb.EvictableSegmentsResponse) {
+func handleEvictableSegmentsResponse(resp *ipcpb.EvictableSegmentsResponse) {
 	evictableSegmentsMutex <- struct{}{}
 	ch, exists := evictableSegmentsHandlers[resp.GetRequestId()]
 	<-evictableSegmentsMutex
@@ -1799,7 +1799,7 @@ func handleEvictableSegmentsResponse(resp *pb.EvictableSegmentsResponse) {
 }
 
 var (
-	restoreLocalSegmentIndexHandlers = make(map[string]chan *pb.RestoreLocalSegmentIndexResponse)
+	restoreLocalSegmentIndexHandlers = make(map[string]chan *ipcpb.RestoreLocalSegmentIndexResponse)
 	restoreLocalSegmentIndexMutex    = make(chan struct{}, 1)
 )
 
@@ -1811,16 +1811,16 @@ var (
 // This is the only sanctioned restart-reconciliation RPC — there is no
 // "give me all segments for this DVR" call, in keeping with the
 // bounded-operations invariant for unbounded artifact lifetime.
-func SendRestoreLocalSegmentIndex(ctx context.Context, dvrHash string, segmentNames []string) (*pb.RestoreLocalSegmentIndexResponse, error) {
+func SendRestoreLocalSegmentIndex(ctx context.Context, dvrHash string, segmentNames []string) (*ipcpb.RestoreLocalSegmentIndexResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
 	}
 	if len(segmentNames) == 0 {
-		return &pb.RestoreLocalSegmentIndexResponse{DvrHash: dvrHash}, nil
+		return &ipcpb.RestoreLocalSegmentIndexResponse{DvrHash: dvrHash}, nil
 	}
 	requestID := uuid.New().String()
-	ch := make(chan *pb.RestoreLocalSegmentIndexResponse, 1)
+	ch := make(chan *ipcpb.RestoreLocalSegmentIndexResponse, 1)
 
 	restoreLocalSegmentIndexMutex <- struct{}{}
 	restoreLocalSegmentIndexHandlers[requestID] = ch
@@ -1832,13 +1832,13 @@ func SendRestoreLocalSegmentIndex(ctx context.Context, dvrHash string, segmentNa
 		<-restoreLocalSegmentIndexMutex
 	}
 
-	req := &pb.RestoreLocalSegmentIndexRequest{
+	req := &ipcpb.RestoreLocalSegmentIndexRequest{
 		RequestId:    requestID,
 		DvrHash:      dvrHash,
 		SegmentNames: segmentNames,
 		NodeId:       getNodeID(),
 	}
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_RestoreLocalSegmentIndexRequest{RestoreLocalSegmentIndexRequest: req}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_RestoreLocalSegmentIndexRequest{RestoreLocalSegmentIndexRequest: req}}
 	if err := stream.Send(msg); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("failed to send restore_local_segment_index_request: %w", err)
@@ -1856,7 +1856,7 @@ func SendRestoreLocalSegmentIndex(ctx context.Context, dvrHash string, segmentNa
 	}
 }
 
-func handleRestoreLocalSegmentIndexResponse(resp *pb.RestoreLocalSegmentIndexResponse) {
+func handleRestoreLocalSegmentIndexResponse(resp *ipcpb.RestoreLocalSegmentIndexResponse) {
 	restoreLocalSegmentIndexMutex <- struct{}{}
 	ch, exists := restoreLocalSegmentIndexHandlers[resp.GetRequestId()]
 	<-restoreLocalSegmentIndexMutex
@@ -1872,14 +1872,14 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 		return fmt.Errorf("gRPC control stream not connected")
 	}
 
-	progress := &pb.FreezeProgress{
+	progress := &ipcpb.FreezeProgress{
 		RequestId:     requestID,
 		AssetHash:     assetHash,
 		Percent:       percent,
 		BytesUploaded: bytesUploaded,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeProgress{FreezeProgress: progress}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_FreezeProgress{FreezeProgress: progress}}
 	return stream.Send(msg)
 }
 
@@ -1887,7 +1887,7 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 // Set localMissing=true when the local source file is gone (ENOENT) so Foghorn
 // can transition the row to sync_status='lost_local' and stop retrying.
 func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, localMissing bool) error {
-	complete := &pb.FreezeComplete{
+	complete := &ipcpb.FreezeComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
 		Status:       status,
@@ -1897,30 +1897,30 @@ func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes ui
 		LocalMissing: localMissing,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
 	return sendOrEnqueue(msg)
 }
 
 // SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
 // Queued for retry on disconnect since these feed ClickHouse storage_events.
-func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
-	trigger := &pb.MistTrigger{
+func SendStorageLifecycle(data *ipcpb.StorageLifecycleData) error {
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "storage_lifecycle",
 		RequestId:   uuid.New().String(),
 		NodeId:      getNodeID(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
+		TriggerPayload: &ipcpb.MistTrigger_StorageLifecycleData{
 			StorageLifecycleData: data,
 		},
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger}}
 	return sendOrEnqueue(msg)
 }
 
 // SendProcessBillingEvent sends a process billing event to Foghorn (for analytics/billing)
 // ProcessBillingEvent tracks transcoding usage for Livepeer and native processes
-func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
+func SendProcessBillingEvent(event *ipcpb.ProcessBillingEvent) error {
 	processType := event.ProcessType
 	stream := getStream()
 	if stream == nil {
@@ -1933,17 +1933,17 @@ func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 		event.NodeId = getNodeID()
 	}
 
-	trigger := &pb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		TriggerType: "process_billing",
 		RequestId:   uuid.New().String(),
 		NodeId:      getNodeID(),
 		Blocking:    false,
-		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
 			ProcessBilling: event,
 		},
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger}}
 	if err := stream.Send(msg); err != nil {
 		BillingEventsSent.WithLabelValues(processType, "error").Inc()
 		return err
@@ -1978,7 +1978,7 @@ func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int6
 		return false, "", 0, fmt.Errorf("gRPC control stream not connected")
 	}
 
-	responseChan := make(chan *pb.CanDeleteResponse, 1)
+	responseChan := make(chan *ipcpb.CanDeleteResponse, 1)
 
 	// Register for response
 	canDeleteMutex <- struct{}{}
@@ -1986,12 +1986,12 @@ func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int6
 	<-canDeleteMutex
 
 	// Send request
-	req := &pb.CanDeleteRequest{
+	req := &ipcpb.CanDeleteRequest{
 		AssetHash: assetHash,
 		NodeId:    getNodeID(),
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_CanDeleteRequest{CanDeleteRequest: req}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_CanDeleteRequest{CanDeleteRequest: req}}
 	if err := stream.Send(msg); err != nil {
 		// Cleanup
 		canDeleteMutex <- struct{}{}
@@ -2024,7 +2024,7 @@ func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int6
 }
 
 // handleCanDeleteResponse processes CanDeleteResponse messages from the stream
-func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
+func handleCanDeleteResponse(response *ipcpb.CanDeleteResponse) {
 	canDeleteMutex <- struct{}{}
 	responseChan, exists := canDeleteHandlers[response.AssetHash]
 	<-canDeleteMutex
@@ -2047,7 +2047,7 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 //   - state != PLAYABLE means the relay should not attempt to fetch S3 —
 //     handle SOURCE_MISSING (404/500), ACTIVE_DVR (refuse + retry-after),
 //     and GAP (HLS gap marker) at the HTTP layer.
-func RequestRelayResolve(ctx context.Context, req *pb.RelayResolveRequest) (*pb.RelayResolveResponse, error) {
+func RequestRelayResolve(ctx context.Context, req *ipcpb.RelayResolveRequest) (*ipcpb.RelayResolveResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
@@ -2059,16 +2059,16 @@ func RequestRelayResolve(ctx context.Context, req *pb.RelayResolveRequest) (*pb.
 		req.NodeId = getNodeID()
 	}
 
-	responseChan := make(chan *pb.RelayResolveResponse, 1)
+	responseChan := make(chan *ipcpb.RelayResolveResponse, 1)
 
 	relayResolveMutex <- struct{}{}
 	relayResolveHandlers[req.GetRequestId()] = responseChan
 	<-relayResolveMutex
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: req.GetRequestId(),
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_RelayResolveRequest{RelayResolveRequest: req},
+		Payload:   &ipcpb.ControlMessage_RelayResolveRequest{RelayResolveRequest: req},
 	}
 	if err := stream.Send(msg); err != nil {
 		relayResolveMutex <- struct{}{}
@@ -2096,7 +2096,7 @@ func RequestRelayResolve(ctx context.Context, req *pb.RelayResolveRequest) (*pb.
 // handleRelayResolveResponse routes inbound RelayResolveResponse messages to
 // the waiting goroutine. Keyed by request_id (NOT asset_hash) because the
 // same asset is resolved concurrently per session.
-func handleRelayResolveResponse(response *pb.RelayResolveResponse) {
+func handleRelayResolveResponse(response *ipcpb.RelayResolveResponse) {
 	if response == nil || response.GetRequestId() == "" {
 		return
 	}
@@ -2113,7 +2113,7 @@ func handleRelayResolveResponse(response *pb.RelayResolveResponse) {
 // no signing key; Foghorn matches the grant it minted at resolve time against
 // the artifact + exact request path. Fail-closed: any error/timeout is the
 // caller's cue to deny.
-func RequestAuthorizeRelayPull(ctx context.Context, req *pb.AuthorizeRelayPullRequest) (*pb.AuthorizeRelayPullResponse, error) {
+func RequestAuthorizeRelayPull(ctx context.Context, req *ipcpb.AuthorizeRelayPullRequest) (*ipcpb.AuthorizeRelayPullResponse, error) {
 	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
@@ -2122,7 +2122,7 @@ func RequestAuthorizeRelayPull(ctx context.Context, req *pb.AuthorizeRelayPullRe
 		return nil, fmt.Errorf("authorize relay pull request must have a request_id")
 	}
 
-	responseChan := make(chan *pb.AuthorizeRelayPullResponse, 1)
+	responseChan := make(chan *ipcpb.AuthorizeRelayPullResponse, 1)
 
 	authorizeRelayPullMutex <- struct{}{}
 	authorizeRelayPullHandlers[req.GetRequestId()] = responseChan
@@ -2134,10 +2134,10 @@ func RequestAuthorizeRelayPull(ctx context.Context, req *pb.AuthorizeRelayPullRe
 		<-authorizeRelayPullMutex
 	}()
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: req.GetRequestId(),
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_AuthorizeRelayPullRequest{AuthorizeRelayPullRequest: req},
+		Payload:   &ipcpb.ControlMessage_AuthorizeRelayPullRequest{AuthorizeRelayPullRequest: req},
 	}
 	if err := stream.Send(msg); err != nil {
 		return nil, fmt.Errorf("failed to send authorize relay pull request: %w", err)
@@ -2155,7 +2155,7 @@ func RequestAuthorizeRelayPull(ctx context.Context, req *pb.AuthorizeRelayPullRe
 
 // handleAuthorizeRelayPullResponse routes inbound responses to the waiting
 // goroutine, keyed by request_id.
-func handleAuthorizeRelayPullResponse(response *pb.AuthorizeRelayPullResponse) {
+func handleAuthorizeRelayPullResponse(response *ipcpb.AuthorizeRelayPullResponse) {
 	if response == nil || response.GetRequestId() == "" {
 		return
 	}
@@ -2179,7 +2179,7 @@ func handleAuthorizeRelayPullResponse(response *pb.AuthorizeRelayPullResponse) {
 // localMissing=true signals the local source file is gone (ENOENT) before sync;
 // Foghorn marks the row sync_status='lost_local' (terminal) and stops retries.
 func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool, localMissing bool) error {
-	complete := &pb.SyncComplete{
+	complete := &ipcpb.SyncComplete{
 		RequestId:    requestID,
 		AssetHash:    assetHash,
 		Status:       status,
@@ -2191,13 +2191,13 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 		LocalMissing: localMissing,
 	}
 
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}
+	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_SyncComplete{SyncComplete: complete}}
 	return sendOrEnqueue(msg)
 }
 
 // handleStopSessions terminates all sessions for the given streams on this node
 // Called when a tenant is suspended due to insufficient balance
-func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
+func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 	if len(req.StreamNames) == 0 {
 		return
 	}
@@ -2244,7 +2244,7 @@ func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
 //
 // Maps to MistServer's `invalidate_sessions` JSON API. Distinct from
 // handleStopSessions — stop disconnects, invalidate re-evaluates.
-func handleInvalidateSessions(logger logging.Logger, req *pb.InvalidateSessionsRequest) {
+func handleInvalidateSessions(logger logging.Logger, req *ipcpb.InvalidateSessionsRequest) {
 	if req == nil || len(req.StreamNames) == 0 {
 		return
 	}
@@ -2290,7 +2290,7 @@ func handleInvalidateSessions(logger logging.Logger, req *pb.InvalidateSessionsR
 // admitted, so viewers don't keep talking to a stale buffer after the
 // publisher moves nodes. Idempotent — when the stream is absent we still
 // return success with unloaded=false.
-func handleDrainStream(logger logging.Logger, req *pb.DrainStreamRequest, send func(*pb.ControlMessage)) {
+func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, send func(*ipcpb.ControlMessage)) {
 	runtimeName := strings.TrimSpace(req.GetRuntimeName())
 	if runtimeName == "" {
 		return
@@ -2300,8 +2300,8 @@ func handleDrainStream(logger logging.Logger, req *pb.DrainStreamRequest, send f
 	if cfg == nil {
 		logger.WithField("runtime_name", runtimeName).Warn("config not initialized; cannot drain stream")
 		if send != nil {
-			send(&pb.ControlMessage{Payload: &pb.ControlMessage_DrainStreamResponse{
-				DrainStreamResponse: &pb.DrainStreamResponse{
+			send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
+				DrainStreamResponse: &ipcpb.DrainStreamResponse{
 					RuntimeName: runtimeName,
 					Error:       "config not initialized",
 				},
@@ -2359,8 +2359,8 @@ func handleDrainStream(logger logging.Logger, req *pb.DrainStreamRequest, send f
 	ClearDVRSourceOverride(runtimeName)
 
 	if send != nil {
-		send(&pb.ControlMessage{Payload: &pb.ControlMessage_DrainStreamResponse{
-			DrainStreamResponse: &pb.DrainStreamResponse{
+		send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DrainStreamResponse{
+			DrainStreamResponse: &ipcpb.DrainStreamResponse{
 				RuntimeName: runtimeName,
 				Unloaded:    unloaded,
 				Error:       partialErr,
@@ -2376,7 +2376,7 @@ func handleDrainStream(logger logging.Logger, req *pb.DrainStreamRequest, send f
 // recorded sourceURL points at the now-empty old source and the push
 // stalls until retry budget exhausts. Idempotent: missing job returns
 // refreshed=false with no error.
-func handleDVRUpdateSource(logger logging.Logger, req *pb.DVRUpdateSourceRequest, send func(*pb.ControlMessage)) {
+func handleDVRUpdateSource(logger logging.Logger, req *ipcpb.DVRUpdateSourceRequest, send func(*ipcpb.ControlMessage)) {
 	dvrHash := strings.TrimSpace(req.GetDvrHash())
 	if dvrHash == "" {
 		return
@@ -2394,8 +2394,8 @@ func handleDVRUpdateSource(logger logging.Logger, req *pb.DVRUpdateSourceRequest
 		errMsg = err.Error()
 	}
 	if send != nil {
-		send(&pb.ControlMessage{Payload: &pb.ControlMessage_DvrUpdateSourceResponse{
-			DvrUpdateSourceResponse: &pb.DVRUpdateSourceResponse{
+		send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DvrUpdateSourceResponse{
+			DvrUpdateSourceResponse: &ipcpb.DVRUpdateSourceResponse{
 				DvrHash:   dvrHash,
 				Refreshed: refreshed,
 				Error:     errMsg,
@@ -2411,7 +2411,7 @@ var (
 	activePushes   = map[string]map[string]int{}
 )
 
-func handleActivatePushTargets(logger logging.Logger, req *pb.ActivatePushTargets) {
+func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets) {
 	if req == nil || len(req.Targets) == 0 {
 		return
 	}
@@ -2458,7 +2458,7 @@ func handleActivatePushTargets(logger logging.Logger, req *pb.ActivatePushTarget
 	}
 }
 
-func handleDeactivatePushTargets(logger logging.Logger, req *pb.DeactivatePushTargets) {
+func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePushTargets) {
 	if req == nil || req.StreamName == "" {
 		return
 	}
@@ -2514,18 +2514,18 @@ func handleDeactivatePushTargets(logger logging.Logger, req *pb.DeactivatePushTa
 // Edge API token validation — Helmsman asks Foghorn, caches results with TTL.
 
 type edgeTokenResult struct {
-	resp      *pb.ValidateEdgeTokenResponse
+	resp      *ipcpb.ValidateEdgeTokenResponse
 	expiresAt time.Time
 }
 
 var (
-	pendingEdgeTokenValidations = make(map[string]chan *pb.ValidateEdgeTokenResponse)
+	pendingEdgeTokenValidations = make(map[string]chan *ipcpb.ValidateEdgeTokenResponse)
 	pendingEdgeTokenMutex       = make(chan struct{}, 1)
 	edgeTokenCache              sync.Map // token string -> *edgeTokenResult
 	edgeTokenCacheTTL           = 5 * time.Minute
 )
 
-func handleValidateEdgeTokenResponse(requestID string, resp *pb.ValidateEdgeTokenResponse) {
+func handleValidateEdgeTokenResponse(requestID string, resp *ipcpb.ValidateEdgeTokenResponse) {
 	pendingEdgeTokenMutex <- struct{}{}
 	ch, exists := pendingEdgeTokenValidations[requestID]
 	<-pendingEdgeTokenMutex
@@ -2537,7 +2537,7 @@ func handleValidateEdgeTokenResponse(requestID string, resp *pb.ValidateEdgeToke
 
 // ValidateEdgeToken sends a token to Foghorn for validation and returns the result.
 // Results are cached with a TTL to avoid round-tripping on every request.
-func ValidateEdgeToken(ctx context.Context, token string) (*pb.ValidateEdgeTokenResponse, error) {
+func ValidateEdgeToken(ctx context.Context, token string) (*ipcpb.ValidateEdgeTokenResponse, error) {
 	// Check cache first
 	if cached, ok := edgeTokenCache.Load(token); ok {
 		entry, _ := cached.(*edgeTokenResult)
@@ -2553,17 +2553,17 @@ func ValidateEdgeToken(ctx context.Context, token string) (*pb.ValidateEdgeToken
 	}
 
 	requestID := uuid.New().String()
-	responseCh := make(chan *pb.ValidateEdgeTokenResponse, 1)
+	responseCh := make(chan *ipcpb.ValidateEdgeTokenResponse, 1)
 
 	pendingEdgeTokenMutex <- struct{}{}
 	pendingEdgeTokenValidations[requestID] = responseCh
 	<-pendingEdgeTokenMutex
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload: &pb.ControlMessage_ValidateEdgeTokenRequest{
-			ValidateEdgeTokenRequest: &pb.ValidateEdgeTokenRequest{Token: token},
+		Payload: &ipcpb.ControlMessage_ValidateEdgeTokenRequest{
+			ValidateEdgeTokenRequest: &ipcpb.ValidateEdgeTokenRequest{Token: token},
 		},
 	}
 	if err := stream.Send(msg); err != nil {
@@ -2602,18 +2602,18 @@ func ValidateEdgeToken(ctx context.Context, token string) (*pb.ValidateEdgeToken
 // and the opaque API token never share a cache slot.
 
 type mistAdminSessionResult struct {
-	resp      *pb.EdgeMistAdminSessionResponse
+	resp      *ipcpb.EdgeMistAdminSessionResponse
 	expiresAt time.Time
 }
 
 var (
-	pendingMistAdminSessions = make(map[string]chan *pb.EdgeMistAdminSessionResponse)
+	pendingMistAdminSessions = make(map[string]chan *ipcpb.EdgeMistAdminSessionResponse)
 	pendingMistAdminMutex    = make(chan struct{}, 1)
 	mistAdminSessionCache    sync.Map // token string -> *mistAdminSessionResult
 	mistAdminSessionCacheTTL = 1 * time.Minute
 )
 
-func handleEdgeMistAdminSessionResponse(requestID string, resp *pb.EdgeMistAdminSessionResponse) {
+func handleEdgeMistAdminSessionResponse(requestID string, resp *ipcpb.EdgeMistAdminSessionResponse) {
 	pendingMistAdminMutex <- struct{}{}
 	ch, exists := pendingMistAdminSessions[requestID]
 	<-pendingMistAdminMutex
@@ -2626,7 +2626,7 @@ func handleEdgeMistAdminSessionResponse(requestID string, resp *pb.EdgeMistAdmin
 // connected nodeID is injected at the Foghorn relay so this client side
 // passes only the token. Result cached briefly (well below the JWT exp)
 // so a flurry of LSP asset requests does not round-trip per file.
-func ValidateMistAdminSession(ctx context.Context, token string) (*pb.EdgeMistAdminSessionResponse, error) {
+func ValidateMistAdminSession(ctx context.Context, token string) (*ipcpb.EdgeMistAdminSessionResponse, error) {
 	if cached, ok := mistAdminSessionCache.Load(token); ok {
 		entry, ok := cached.(*mistAdminSessionResult)
 		if ok && entry != nil && time.Now().Before(entry.expiresAt) {
@@ -2641,17 +2641,17 @@ func ValidateMistAdminSession(ctx context.Context, token string) (*pb.EdgeMistAd
 	}
 
 	requestID := uuid.New().String()
-	responseCh := make(chan *pb.EdgeMistAdminSessionResponse, 1)
+	responseCh := make(chan *ipcpb.EdgeMistAdminSessionResponse, 1)
 
 	pendingMistAdminMutex <- struct{}{}
 	pendingMistAdminSessions[requestID] = responseCh
 	<-pendingMistAdminMutex
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload: &pb.ControlMessage_EdgeMistAdminSessionRequest{
-			EdgeMistAdminSessionRequest: &pb.EdgeMistAdminSessionRequest{Token: token},
+		Payload: &ipcpb.ControlMessage_EdgeMistAdminSessionRequest{
+			EdgeMistAdminSessionRequest: &ipcpb.EdgeMistAdminSessionRequest{Token: token},
 		},
 	}
 	if err := stream.Send(msg); err != nil {
@@ -2696,16 +2696,16 @@ func ValidateMistAdminSession(ctx context.Context, token string) (*pb.EdgeMistAd
 	}
 }
 
-func parseRequestedMode(mode string) pb.NodeOperationalMode {
+func parseRequestedMode(mode string) ipcpb.NodeOperationalMode {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "draining", "drain":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
 	case "maintenance", "maint":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
 	case "", "normal":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
 	default:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
 	}
 }
 
@@ -2718,22 +2718,22 @@ func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 	}
 
 	requestID := uuid.New().String()
-	req := &pb.ThumbnailUploadRequest{
+	req := &ipcpb.ThumbnailUploadRequest{
 		InternalName: internalName,
 		FilePaths:    filePaths,
 	}
 
-	msg := &pb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		RequestId: requestID,
 		SentAt:    timestamppb.Now(),
-		Payload:   &pb.ControlMessage_ThumbnailUploadRequest{ThumbnailUploadRequest: req},
+		Payload:   &ipcpb.ControlMessage_ThumbnailUploadRequest{ThumbnailUploadRequest: req},
 	}
 	return stream.Send(msg)
 }
 
 // handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs
 // from Foghorn, then sends a ThumbnailUploaded confirmation.
-func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUploadResponse, send func(*pb.ControlMessage)) {
+func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailUploadResponse, send func(*ipcpb.ControlMessage)) {
 	thumbnailKey := resp.GetThumbnailKey()
 	uploads := resp.GetUploads()
 
@@ -2797,13 +2797,13 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *pb.ThumbnailUplo
 	}
 
 	// Notify Foghorn that upload is complete
-	uploaded := &pb.ThumbnailUploaded{
+	uploaded := &ipcpb.ThumbnailUploaded{
 		ThumbnailKey: thumbnailKey,
 		S3Keys:       uploadedKeys,
 	}
-	send(&pb.ControlMessage{
+	send(&ipcpb.ControlMessage{
 		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
+		Payload: &ipcpb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
 	})
 }
 

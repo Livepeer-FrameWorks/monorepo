@@ -10,24 +10,25 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/google/uuid"
 )
 
 type mockPurser struct {
-	verifyFn func(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error)
-	settleFn func(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error)
+	verifyFn func(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	settleFn func(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 }
 
-func (m *mockPurser) VerifyX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error) {
+func (m *mockPurser) VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
 	if m.verifyFn == nil {
 		return nil, nil
 	}
 	return m.verifyFn(ctx, tenantID, payment, clientIP)
 }
 
-func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error) {
+func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
 	if m.settleFn == nil {
 		return nil, nil
 	}
@@ -35,58 +36,58 @@ func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, pay
 }
 
 type mockCommodore struct {
-	resolvePlaybackIDFn         func(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error)
-	resolveArtifactPlaybackIDFn func(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error)
-	resolveClipHashFn           func(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error)
-	resolveDVRHashFn            func(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error)
-	resolveIdentifierFn         func(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error)
-	resolveVodIDFn              func(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error)
-	validateStreamKeyFn         func(ctx context.Context, streamKey string) (*pb.ValidateStreamKeyResponse, error)
+	resolvePlaybackIDFn         func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
+	resolveArtifactPlaybackIDFn func(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	resolveClipHashFn           func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
+	resolveDVRHashFn            func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
+	resolveIdentifierFn         func(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error)
+	resolveVodIDFn              func(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
+	validateStreamKeyFn         func(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
 }
 
-func (m *mockCommodore) ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error) {
+func (m *mockCommodore) ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error) {
 	if m.resolvePlaybackIDFn == nil {
 		return nil, nil
 	}
 	return m.resolvePlaybackIDFn(ctx, playbackID)
 }
 
-func (m *mockCommodore) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+func (m *mockCommodore) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	if m.resolveArtifactPlaybackIDFn == nil {
 		return nil, nil
 	}
 	return m.resolveArtifactPlaybackIDFn(ctx, playbackID)
 }
 
-func (m *mockCommodore) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
+func (m *mockCommodore) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
 	if m.resolveClipHashFn == nil {
 		return nil, nil
 	}
 	return m.resolveClipHashFn(ctx, clipHash)
 }
 
-func (m *mockCommodore) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
+func (m *mockCommodore) ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error) {
 	if m.resolveDVRHashFn == nil {
 		return nil, nil
 	}
 	return m.resolveDVRHashFn(ctx, dvrHash)
 }
 
-func (m *mockCommodore) ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
+func (m *mockCommodore) ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
 	if m.resolveIdentifierFn == nil {
 		return nil, nil
 	}
 	return m.resolveIdentifierFn(ctx, identifier)
 }
 
-func (m *mockCommodore) ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error) {
+func (m *mockCommodore) ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error) {
 	if m.resolveVodIDFn == nil {
 		return nil, nil
 	}
 	return m.resolveVodIDFn(ctx, vodID)
 }
 
-func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*pb.ValidateStreamKeyResponse, error) {
+func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string, _ ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	if m.validateStreamKeyFn == nil {
 		return nil, nil
 	}
@@ -96,7 +97,7 @@ func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string,
 func TestIsAuthOnlyPayment(t *testing.T) {
 	tests := []struct {
 		name    string
-		payload *pb.X402PaymentPayload
+		payload *purserpb.X402PaymentPayload
 		want    bool
 	}{
 		{
@@ -106,32 +107,32 @@ func TestIsAuthOnlyPayment(t *testing.T) {
 		},
 		{
 			name:    "nil inner payload",
-			payload: &pb.X402PaymentPayload{},
+			payload: &purserpb.X402PaymentPayload{},
 			want:    false,
 		},
 		{
 			name:    "nil authorization",
-			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{}},
+			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{}},
 			want:    false,
 		},
 		{
 			name:    "empty value",
-			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{Authorization: &pb.X402Authorization{Value: ""}}},
+			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: ""}}},
 			want:    false,
 		},
 		{
 			name:    "non-numeric",
-			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{Authorization: &pb.X402Authorization{Value: "abc"}}},
+			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "abc"}}},
 			want:    false,
 		},
 		{
 			name:    "zero value",
-			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{Authorization: &pb.X402Authorization{Value: "0"}}},
+			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "0"}}},
 			want:    true,
 		},
 		{
 			name:    "non-zero value",
-			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{Authorization: &pb.X402Authorization{Value: "10"}}},
+			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "10"}}},
 			want:    false,
 		},
 	}
@@ -191,11 +192,11 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("ingest resolves stream key", func(t *testing.T) {
 		commodore := &mockCommodore{
-			validateStreamKeyFn: func(_ context.Context, key string) (*pb.ValidateStreamKeyResponse, error) {
+			validateStreamKeyFn: func(_ context.Context, key string) (*commodorepb.ValidateStreamKeyResponse, error) {
 				if key != "stream-key" {
 					return nil, errors.New("unexpected key")
 				}
-				return &pb.ValidateStreamKeyResponse{Valid: true, TenantId: "tenant-1", StreamId: "stream-1"}, nil
+				return &commodorepb.ValidateStreamKeyResponse{Valid: true, TenantId: "tenant-1", StreamId: "stream-1"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "ingest:stream-key", commodore)
@@ -212,8 +213,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("ingest stream key invalid", func(t *testing.T) {
 		commodore := &mockCommodore{
-			validateStreamKeyFn: func(_ context.Context, key string) (*pb.ValidateStreamKeyResponse, error) {
-				return &pb.ValidateStreamKeyResponse{Valid: false}, nil
+			validateStreamKeyFn: func(_ context.Context, key string) (*commodorepb.ValidateStreamKeyResponse, error) {
+				return &commodorepb.ValidateStreamKeyResponse{Valid: false}, nil
 			},
 		}
 		_, err := ResolveResource(ctx, "ingest:bad-key", commodore)
@@ -224,8 +225,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("ingest stream key with empty tenant", func(t *testing.T) {
 		commodore := &mockCommodore{
-			validateStreamKeyFn: func(_ context.Context, key string) (*pb.ValidateStreamKeyResponse, error) {
-				return &pb.ValidateStreamKeyResponse{Valid: true, TenantId: "", StreamId: "stream-1"}, nil
+			validateStreamKeyFn: func(_ context.Context, key string) (*commodorepb.ValidateStreamKeyResponse, error) {
+				return &commodorepb.ValidateStreamKeyResponse{Valid: true, TenantId: "", StreamId: "stream-1"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "ingest:stream-key", commodore)
@@ -239,8 +240,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("viewer resolves artifact playback", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveArtifactPlaybackIDFn: func(_ context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
-				return &pb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "tenant-1"}, nil
+			resolveArtifactPlaybackIDFn: func(_ context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+				return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "tenant-1"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "viewer://playback", commodore)
@@ -262,11 +263,11 @@ func TestResolveResource(t *testing.T) {
 	t.Run("clip relay id resolves", func(t *testing.T) {
 		clipID := globalid.Encode(globalid.TypeClip, "clip-hash")
 		commodore := &mockCommodore{
-			resolveClipHashFn: func(_ context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
+			resolveClipHashFn: func(_ context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
 				if clipHash != "clip-hash" {
 					return nil, errors.New("unexpected clip hash")
 				}
-				return &pb.ResolveClipHashResponse{TenantId: "tenant-1"}, nil
+				return &commodorepb.ResolveClipHashResponse{TenantId: "tenant-1"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "clip://"+clipID, commodore)
@@ -280,8 +281,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("dvr resource", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveDVRHashFn: func(_ context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
-				return &pb.ResolveDVRHashResponse{TenantId: "tenant-5"}, nil
+			resolveDVRHashFn: func(_ context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error) {
+				return &commodorepb.ResolveDVRHashResponse{TenantId: "tenant-5"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "dvr://dvr-hash", commodore)
@@ -295,8 +296,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("stream identifier resolves", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveIdentifierFn: func(_ context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
-				return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "tenant-2"}, nil
+			resolveIdentifierFn: func(_ context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
+				return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "tenant-2"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "stream://stream-id", commodore)
@@ -313,8 +314,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("stream identifier with empty tenant", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveIdentifierFn: func(_ context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
-				return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""}, nil
+			resolveIdentifierFn: func(_ context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
+				return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "stream://stream-id", commodore)
@@ -329,11 +330,11 @@ func TestResolveResource(t *testing.T) {
 	t.Run("vod id resolves", func(t *testing.T) {
 		vodID := uuid.New().String()
 		commodore := &mockCommodore{
-			resolveVodIDFn: func(_ context.Context, id string) (*pb.ResolveVodIDResponse, error) {
+			resolveVodIDFn: func(_ context.Context, id string) (*commodorepb.ResolveVodIDResponse, error) {
 				if id != vodID {
 					return nil, errors.New("unexpected vod id")
 				}
-				return &pb.ResolveVodIDResponse{Found: true, TenantId: "tenant-3"}, nil
+				return &commodorepb.ResolveVodIDResponse{Found: true, TenantId: "tenant-3"}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "vod://"+vodID, commodore)
@@ -351,8 +352,8 @@ func TestResolveResource(t *testing.T) {
 	t.Run("vod id with empty tenant", func(t *testing.T) {
 		vodID := uuid.New().String()
 		commodore := &mockCommodore{
-			resolveVodIDFn: func(_ context.Context, id string) (*pb.ResolveVodIDResponse, error) {
-				return &pb.ResolveVodIDResponse{Found: true, TenantId: ""}, nil
+			resolveVodIDFn: func(_ context.Context, id string) (*commodorepb.ResolveVodIDResponse, error) {
+				return &commodorepb.ResolveVodIDResponse{Found: true, TenantId: ""}, nil
 			},
 		}
 		resolution, err := ResolveResource(ctx, "vod://"+vodID, commodore)
@@ -366,8 +367,8 @@ func TestResolveResource(t *testing.T) {
 
 	t.Run("internal routing identifier rejected", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveIdentifierFn: func(_ context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
-				return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream"}, nil
+			resolveIdentifierFn: func(_ context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
+				return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream"}, nil
 			},
 		}
 		_, err := ResolveResource(ctx, "internal-name", commodore)
@@ -406,14 +407,14 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("valid header parses successfully", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, p *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, p *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if p == nil {
 					return nil, errors.New("payload not parsed from header")
 				}
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
 		header := validPaymentHeader()
@@ -500,14 +501,14 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("viewer fully resolved succeeds", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "viewer-tenant" {
 					t.Errorf("expected tenant viewer-tenant, got %s", tenantID)
 				}
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
@@ -583,8 +584,8 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("resource resolution not found without allow", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveIdentifierFn: func(_ context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
-				return &pb.ResolveIdentifierResponse{Found: false}, nil
+			resolveIdentifierFn: func(_ context.Context, _ string) (*commodorepb.ResolveIdentifierResponse, error) {
+				return &commodorepb.ResolveIdentifierResponse{Found: false}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -601,14 +602,14 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("unresolved creator allowed with provided resolution", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					t.Errorf("expected tenant tenant-1, got %s", tenantID)
 				}
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -630,7 +631,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification error", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return nil, errors.New("bad verify")
 			},
 		}
@@ -646,8 +647,8 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification invalid response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: false, Error: "custom verify error"}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: false, Error: "custom verify error"}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -665,7 +666,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification nil response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return nil, nil
 			},
 		}
@@ -681,8 +682,8 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("billing details required", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true, RequiresBillingDetails: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, RequiresBillingDetails: true}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -697,8 +698,8 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verify auth-only", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true, IsAuthOnly: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, IsAuthOnly: true}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -713,10 +714,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle error", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return nil, errors.New("bad settle")
 			},
 		}
@@ -732,11 +733,11 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle invalid response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: false, Error: "custom settle error"}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: false, Error: "custom settle error"}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -754,10 +755,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle nil response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return nil, nil
 			},
 		}
@@ -773,11 +774,11 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle auth-only", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true, IsAuthOnly: true}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true, IsAuthOnly: true}, nil
 			},
 		}
 		_, err := SettleX402Payment(ctx, SettlementOptions{
@@ -792,16 +793,16 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("allow unresolved creator with auth", func(t *testing.T) {
 		commodore := &mockCommodore{
-			resolveIdentifierFn: func(_ context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
-				return &pb.ResolveIdentifierResponse{Found: false}, nil
+			resolveIdentifierFn: func(_ context.Context, _ string) (*commodorepb.ResolveIdentifierResponse, error) {
+				return &commodorepb.ResolveIdentifierResponse{Found: false}, nil
 			},
 		}
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
@@ -822,11 +823,11 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address from verify response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify-addr"}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify-addr"}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
@@ -844,11 +845,11 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address from payload when responses empty", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
@@ -866,16 +867,16 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address empty when payload missing auth", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-				return &pb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
+			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-				return &pb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
+			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
 			Purser:       purser,
-			Payload:      &pb.X402PaymentPayload{X402Version: 1, Scheme: "exact", Network: "base"},
+			Payload:      &purserpb.X402PaymentPayload{X402Version: 1, Scheme: "exact", Network: "base"},
 			AuthTenantID: "tenant-1",
 		})
 		if err != nil {
@@ -888,20 +889,20 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("happy path", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, payment *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, payment *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					return nil, errors.New("unexpected tenant")
 				}
 				if payment == nil {
 					return nil, errors.New("missing payment")
 				}
-				return &pb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify"}, nil
+				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify"}, nil
 			},
-			settleFn: func(_ context.Context, tenantID string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					return nil, errors.New("unexpected tenant")
 				}
-				return &pb.SettleX402PaymentResponse{Success: true, PayerAddress: "0xsettle"}, nil
+				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: "0xsettle"}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
@@ -922,7 +923,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("stream resource with empty tenant returns unresolved", func(t *testing.T) {
 		commodore := &MockCommodoreClient{
-			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""},
+			IdentifierResponse: &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""},
 		}
 		res, err := ResolveResource(context.Background(), "stream://stream-id", commodore)
 		if err != nil {
@@ -935,7 +936,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("ingest key with empty tenant returns unresolved", func(t *testing.T) {
 		commodore := &MockCommodoreClient{
-			StreamKeyResponse: &pb.ValidateStreamKeyResponse{Valid: true, StreamId: "stream-id", TenantId: ""},
+			StreamKeyResponse: &commodorepb.ValidateStreamKeyResponse{Valid: true, StreamId: "stream-id", TenantId: ""},
 		}
 		res, err := ResolveResource(context.Background(), "ingest:stream-key", commodore)
 		if err != nil {
@@ -948,7 +949,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("vod resource with empty tenant returns unresolved", func(t *testing.T) {
 		commodore := &MockCommodoreClient{
-			VodResponse: &pb.ResolveVodIDResponse{Found: true, TenantId: ""},
+			VodResponse: &commodorepb.ResolveVodIDResponse{Found: true, TenantId: ""},
 		}
 		res, err := ResolveResource(context.Background(), "vod://4c0883a6-9102-4937-9d62-31471b5dbb62", commodore)
 		if err != nil {
@@ -961,7 +962,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("vod hash with empty tenant returns unresolved", func(t *testing.T) {
 		commodore := &MockCommodoreClient{
-			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "vod_hash", TenantId: ""},
+			IdentifierResponse: &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "vod_hash", TenantId: ""},
 		}
 		res, err := ResolveResource(context.Background(), "vod://some-hash", commodore)
 		if err != nil {
@@ -973,14 +974,14 @@ func TestSettleX402Payment(t *testing.T) {
 	})
 }
 
-func paymentPayload(value string) *pb.X402PaymentPayload {
-	return &pb.X402PaymentPayload{
+func paymentPayload(value string) *purserpb.X402PaymentPayload {
+	return &purserpb.X402PaymentPayload{
 		X402Version: 1,
 		Scheme:      "exact",
 		Network:     "base",
-		Payload: &pb.X402ExactPayload{
+		Payload: &purserpb.X402ExactPayload{
 			Signature: "0xsignature",
-			Authorization: &pb.X402Authorization{
+			Authorization: &purserpb.X402Authorization{
 				From:        "0xfrom",
 				To:          "0xto",
 				Value:       value,
@@ -1032,12 +1033,12 @@ func assertCtxTimeout(t *testing.T, ctx context.Context, expected time.Duration)
 
 func TestSettleX402Payment_VerifyTimeout(t *testing.T) {
 	purser := &mockPurser{
-		verifyFn: func(ctx context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+		verifyFn: func(ctx context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 			assertCtxTimeout(t, ctx, 10*time.Second)
-			return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 		},
-		settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
-			return &pb.SettleX402PaymentResponse{Success: true}, nil
+		settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 		},
 	}
 	_, err := SettleX402Payment(context.Background(), SettlementOptions{
@@ -1052,12 +1053,12 @@ func TestSettleX402Payment_VerifyTimeout(t *testing.T) {
 
 func TestSettleX402Payment_SettleTimeout(t *testing.T) {
 	purser := &mockPurser{
-		verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
-			return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+		verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 		},
-		settleFn: func(ctx context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+		settleFn: func(ctx context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 			assertCtxTimeout(t, ctx, 30*time.Second)
-			return &pb.SettleX402PaymentResponse{Success: true}, nil
+			return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 		},
 	}
 	_, err := SettleX402Payment(context.Background(), SettlementOptions{
@@ -1072,9 +1073,9 @@ func TestSettleX402Payment_SettleTimeout(t *testing.T) {
 
 func TestResolveResource_IngestTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		validateStreamKeyFn: func(ctx context.Context, _ string) (*pb.ValidateStreamKeyResponse, error) {
+		validateStreamKeyFn: func(ctx context.Context, _ string) (*commodorepb.ValidateStreamKeyResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ValidateStreamKeyResponse{Valid: true, TenantId: "t1", StreamId: "s1"}, nil
+			return &commodorepb.ValidateStreamKeyResponse{Valid: true, TenantId: "t1", StreamId: "s1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "ingest:key", commodore)
@@ -1085,9 +1086,9 @@ func TestResolveResource_IngestTimeout(t *testing.T) {
 
 func TestResolveResource_ViewerTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveArtifactPlaybackIDFn: func(ctx context.Context, _ string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+		resolveArtifactPlaybackIDFn: func(ctx context.Context, _ string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "t1"}, nil
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "t1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "viewer://pb-id", commodore)
@@ -1098,9 +1099,9 @@ func TestResolveResource_ViewerTimeout(t *testing.T) {
 
 func TestResolveResource_ClipTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveClipHashFn: func(ctx context.Context, _ string) (*pb.ResolveClipHashResponse, error) {
+		resolveClipHashFn: func(ctx context.Context, _ string) (*commodorepb.ResolveClipHashResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveClipHashResponse{TenantId: "t1"}, nil
+			return &commodorepb.ResolveClipHashResponse{TenantId: "t1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "clip://clip-hash", commodore)
@@ -1111,9 +1112,9 @@ func TestResolveResource_ClipTimeout(t *testing.T) {
 
 func TestResolveResource_DVRTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveDVRHashFn: func(ctx context.Context, _ string) (*pb.ResolveDVRHashResponse, error) {
+		resolveDVRHashFn: func(ctx context.Context, _ string) (*commodorepb.ResolveDVRHashResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveDVRHashResponse{TenantId: "t1"}, nil
+			return &commodorepb.ResolveDVRHashResponse{TenantId: "t1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "dvr://dvr-hash", commodore)
@@ -1124,9 +1125,9 @@ func TestResolveResource_DVRTimeout(t *testing.T) {
 
 func TestResolveResource_StreamTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveIdentifierFn: func(ctx context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+		resolveIdentifierFn: func(ctx context.Context, _ string) (*commodorepb.ResolveIdentifierResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
+			return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "stream://s1", commodore)
@@ -1138,9 +1139,9 @@ func TestResolveResource_StreamTimeout(t *testing.T) {
 func TestResolveResource_VodTimeout(t *testing.T) {
 	vodID := uuid.New().String()
 	commodore := &mockCommodore{
-		resolveVodIDFn: func(ctx context.Context, _ string) (*pb.ResolveVodIDResponse, error) {
+		resolveVodIDFn: func(ctx context.Context, _ string) (*commodorepb.ResolveVodIDResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveVodIDResponse{Found: true, TenantId: "t1"}, nil
+			return &commodorepb.ResolveVodIDResponse{Found: true, TenantId: "t1"}, nil
 		},
 	}
 	_, err := ResolveResource(context.Background(), "vod://"+vodID, commodore)
@@ -1151,9 +1152,9 @@ func TestResolveResource_VodTimeout(t *testing.T) {
 
 func TestResolveResource_FallbackIdentifierTimeout(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveIdentifierFn: func(ctx context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+		resolveIdentifierFn: func(ctx context.Context, _ string) (*commodorepb.ResolveIdentifierResponse, error) {
 			assertCtxTimeout(t, ctx, 2*time.Second)
-			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
+			return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
 		},
 	}
 	// Pass a bare identifier (no scheme prefix) that is not a relay ID.
@@ -1168,8 +1169,8 @@ func TestResolveResource_FallbackIdentifierTimeout(t *testing.T) {
 
 func TestResolveResource_FallbackIdentifierEmptyTenant(t *testing.T) {
 	commodore := &mockCommodore{
-		resolveIdentifierFn: func(_ context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
-			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""}, nil
+		resolveIdentifierFn: func(_ context.Context, _ string) (*commodorepb.ResolveIdentifierResponse, error) {
+			return &commodorepb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""}, nil
 		},
 	}
 	res, err := ResolveResource(context.Background(), "some-bare-identifier", commodore)

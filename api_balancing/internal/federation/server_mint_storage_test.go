@@ -11,7 +11,8 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 // fakeMintS3Client captures presigned PUT calls so the tests can assert
@@ -85,12 +86,12 @@ func mintTestServer(t *testing.T, fake *fakeMintS3Client, db *sqlmock.Sqlmock) *
 
 func TestMintStorageURLs_RequiresAuth(t *testing.T) {
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	_, err := srv.MintStorageURLs(context.Background(), &pb.MintStorageURLsRequest{
+	_, err := srv.MintStorageURLs(context.Background(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "thumbnail",
 		ArtifactKey:     "stream-uuid/poster.jpg",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied without service auth, got %v", err)
@@ -99,12 +100,12 @@ func TestMintStorageURLs_RequiresAuth(t *testing.T) {
 
 func TestMintStorageURLs_RejectsTargetWeDoNotOwn(t *testing.T) {
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "selfhost-x", // not served + not advertised here
 		ArtifactType:    "thumbnail",
 		ArtifactKey:     "stream-uuid/poster.jpg",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 	})
 	if err != nil {
 		t.Fatalf("unexpected RPC error: %v", err)
@@ -130,12 +131,12 @@ func TestMintStorageURLs_LiveThumbnail_HappyPath(t *testing.T) {
 	fake := &fakeMintS3Client{}
 	srv := mintTestServer(t, fake, nil)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
 		TargetClusterId:    "platform-eu",
 		ArtifactType:       "thumbnail",
 		ArtifactKey:        "stream-uuid/poster.jpg",
-		Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		StreamInternalName: "stream-a",
 		ContentType:        "image/jpeg",
 	})
@@ -158,35 +159,35 @@ func TestMintStorageURLs_LiveThumbnail_HappyPath(t *testing.T) {
 // from in-memory tables so MintStorageURLs' Commodore-fallback branch can be
 // exercised without a real Commodore process.
 type fakeMintResolver struct {
-	internalNames map[string]*pb.ResolveInternalNameResponse
-	clipHashes    map[string]*pb.ResolveClipHashResponse
-	dvrHashes     map[string]*pb.ResolveDVRHashResponse
-	vodHashes     map[string]*pb.ResolveVodHashResponse
+	internalNames map[string]*commodorepb.ResolveInternalNameResponse
+	clipHashes    map[string]*commodorepb.ResolveClipHashResponse
+	dvrHashes     map[string]*commodorepb.ResolveDVRHashResponse
+	vodHashes     map[string]*commodorepb.ResolveVodHashResponse
 }
 
-func (f *fakeMintResolver) ResolveInternalName(_ context.Context, n string) (*pb.ResolveInternalNameResponse, error) {
+func (f *fakeMintResolver) ResolveInternalName(_ context.Context, n string) (*commodorepb.ResolveInternalNameResponse, error) {
 	if r, ok := f.internalNames[n]; ok {
 		return r, nil
 	}
 	return nil, nil
 }
-func (f *fakeMintResolver) ResolveClipHash(_ context.Context, h string) (*pb.ResolveClipHashResponse, error) {
+func (f *fakeMintResolver) ResolveClipHash(_ context.Context, h string) (*commodorepb.ResolveClipHashResponse, error) {
 	if r, ok := f.clipHashes[h]; ok {
 		return r, nil
 	}
-	return &pb.ResolveClipHashResponse{Found: false}, nil
+	return &commodorepb.ResolveClipHashResponse{Found: false}, nil
 }
-func (f *fakeMintResolver) ResolveDVRHash(_ context.Context, h string) (*pb.ResolveDVRHashResponse, error) {
+func (f *fakeMintResolver) ResolveDVRHash(_ context.Context, h string) (*commodorepb.ResolveDVRHashResponse, error) {
 	if r, ok := f.dvrHashes[h]; ok {
 		return r, nil
 	}
-	return &pb.ResolveDVRHashResponse{Found: false}, nil
+	return &commodorepb.ResolveDVRHashResponse{Found: false}, nil
 }
-func (f *fakeMintResolver) ResolveVodHash(_ context.Context, h string) (*pb.ResolveVodHashResponse, error) {
+func (f *fakeMintResolver) ResolveVodHash(_ context.Context, h string) (*commodorepb.ResolveVodHashResponse, error) {
 	if r, ok := f.vodHashes[h]; ok {
 		return r, nil
 	}
-	return &pb.ResolveVodHashResponse{Found: false}, nil
+	return &commodorepb.ResolveVodHashResponse{Found: false}, nil
 }
 
 // TestMintStorageURLs_LiveThumbnail_CommodoreFallback covers the cross-pool
@@ -199,7 +200,7 @@ func TestMintStorageURLs_LiveThumbnail_CommodoreFallback(t *testing.T) {
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 
 	resolver := &fakeMintResolver{
-		internalNames: map[string]*pb.ResolveInternalNameResponse{
+		internalNames: map[string]*commodorepb.ResolveInternalNameResponse{
 			"stream-a": {
 				TenantId: "tenant-a",
 				StreamId: "stream-uuid",
@@ -211,12 +212,12 @@ func TestMintStorageURLs_LiveThumbnail_CommodoreFallback(t *testing.T) {
 	srv := mintTestServer(t, fake, nil)
 	srv.SetMintArtifactResolver(resolver)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
 		TargetClusterId:    "platform-eu",
 		ArtifactType:       "thumbnail",
 		ArtifactKey:        "stream-uuid/poster.jpg",
-		Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		StreamInternalName: "stream-a",
 		ContentType:        "image/jpeg",
 	})
@@ -244,12 +245,12 @@ func TestMintStorageURLs_LiveThumbnail_RejectsWithoutCommodore(t *testing.T) {
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
 	// No resolver wired — fallback path returns false.
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
 		TargetClusterId:    "platform-eu",
 		ArtifactType:       "thumbnail",
 		ArtifactKey:        "stream-uuid/poster.jpg",
-		Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		StreamInternalName: "stream-a",
 	})
 	if err != nil {
@@ -270,7 +271,7 @@ func TestMintStorageURLs_LiveThumbnail_RejectsArtifactKeyStreamIDMismatch(t *tes
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 
 	resolver := &fakeMintResolver{
-		internalNames: map[string]*pb.ResolveInternalNameResponse{
+		internalNames: map[string]*commodorepb.ResolveInternalNameResponse{
 			"stream-a": {
 				TenantId: "tenant-a",
 				StreamId: "actual-stream-uuid",
@@ -281,12 +282,12 @@ func TestMintStorageURLs_LiveThumbnail_RejectsArtifactKeyStreamIDMismatch(t *tes
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
 	srv.SetMintArtifactResolver(resolver)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a",
 		TargetClusterId:    "platform-eu",
 		ArtifactType:       "thumbnail",
 		ArtifactKey:        "other-stream-uuid/poster.jpg", // forged
-		Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		StreamInternalName: "stream-a",
 	})
 	if err != nil {
@@ -310,12 +311,12 @@ func TestMintStorageURLs_LiveThumbnail_TenantMismatch(t *testing.T) {
 	}
 
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:           "tenant-a", // doesn't match the stream's owner
 		TargetClusterId:    "platform-eu",
 		ArtifactType:       "thumbnail",
 		ArtifactKey:        "stream-uuid/poster.jpg",
-		Op:                 pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:                 foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		StreamInternalName: "stream-a",
 	})
 	if err != nil {
@@ -331,12 +332,12 @@ func TestMintStorageURLs_LiveThumbnail_TenantMismatch(t *testing.T) {
 
 func TestMintStorageURLs_VodRejectsMultipart(t *testing.T) {
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "vod",
 		ArtifactKey:     "abcd1234",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET, // wrong op for vod
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET, // wrong op for vod
 	})
 	if err != nil {
 		t.Fatalf("unexpected RPC error: %v", err)
@@ -355,7 +356,7 @@ func TestMintStorageURLs_VodRejectsMultipart(t *testing.T) {
 // keys end up as ".../{hash}{filename}" instead of ".../{hash}/{filename}".
 func TestMintStorageURLs_DvrSet_KeyShape(t *testing.T) {
 	resolver := &fakeMintResolver{
-		dvrHashes: map[string]*pb.ResolveDVRHashResponse{
+		dvrHashes: map[string]*commodorepb.ResolveDVRHashResponse{
 			"dvr-abcd": {
 				Found:              true,
 				TenantId:           "tenant-a",
@@ -369,12 +370,12 @@ func TestMintStorageURLs_DvrSet_KeyShape(t *testing.T) {
 	srv := mintTestServer(t, fake, nil)
 	srv.SetMintArtifactResolver(resolver)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:         "tenant-a",
 		TargetClusterId:  "platform-eu",
 		ArtifactType:     "dvr",
 		ArtifactKey:      "dvr-abcd",
-		Op:               pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
+		Op:               foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
 		SegmentFilenames: []string{"segments/0.ts", "playlist.m3u8"},
 	})
 	if err != nil {
@@ -406,7 +407,7 @@ func TestMintStorageURLs_DvrSet_KeyShape(t *testing.T) {
 // branch (incremental segment uploads). Same slash-separator invariant.
 func TestMintStorageURLs_DvrSegment_KeyShape(t *testing.T) {
 	resolver := &fakeMintResolver{
-		dvrHashes: map[string]*pb.ResolveDVRHashResponse{
+		dvrHashes: map[string]*commodorepb.ResolveDVRHashResponse{
 			"dvr-abcd": {
 				Found:              true,
 				TenantId:           "tenant-a",
@@ -420,12 +421,12 @@ func TestMintStorageURLs_DvrSegment_KeyShape(t *testing.T) {
 	srv := mintTestServer(t, fake, nil)
 	srv.SetMintArtifactResolver(resolver)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "dvr_segment",
 		ArtifactKey:     "dvr-abcd/segments/42.ts",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 	})
 	if err != nil {
 		t.Fatalf("unexpected RPC error: %v", err)
@@ -479,12 +480,12 @@ func TestMintStorageURLs_FastPath_RejectsCrossTypeHash(t *testing.T) {
 	}
 	srv := NewFederationServer(cfg)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "clip", // wrong: row is dvr
 		ArtifactKey:     "dvr-abcd",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 	})
 	if err != nil {
 		t.Fatalf("unexpected RPC error: %v", err)
@@ -521,7 +522,7 @@ func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 		WillReturnRows(rows)
 
 	resolver := &fakeMintResolver{
-		clipHashes: map[string]*pb.ResolveClipHashResponse{
+		clipHashes: map[string]*commodorepb.ResolveClipHashResponse{
 			"clip-abcd": {
 				Found:              true,
 				TenantId:           "tenant-a",
@@ -551,12 +552,12 @@ func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 	srv := NewFederationServer(cfg)
 	srv.SetMintArtifactResolver(resolver)
 
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "clip",
 		ArtifactKey:     "clip-abcd",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_SINGLE,
 		ContentType:     "video/mp4",
 	})
 	if err != nil {
@@ -576,12 +577,12 @@ func TestMintStorageURLs_FastPath_FallsThroughOnEmptyStreamName(t *testing.T) {
 
 func TestMintStorageURLs_DvrSet_RequiresFilenames(t *testing.T) {
 	srv := mintTestServer(t, &fakeMintS3Client{}, nil)
-	resp, err := srv.MintStorageURLs(serviceAuthContext(), &pb.MintStorageURLsRequest{
+	resp, err := srv.MintStorageURLs(serviceAuthContext(), &foghornfederationpb.MintStorageURLsRequest{
 		TenantId:        "tenant-a",
 		TargetClusterId: "platform-eu",
 		ArtifactType:    "dvr",
 		ArtifactKey:     "abcd1234",
-		Op:              pb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
+		Op:              foghornfederationpb.MintStorageURLsRequest_OPERATION_PUT_DVR_SET,
 		// SegmentFilenames intentionally empty
 	})
 	if err != nil {
@@ -622,7 +623,7 @@ func TestPrepareArtifact_RedirectsWhenStorageOwnedElsewhere(t *testing.T) {
 	}
 	srv := NewFederationServer(cfg)
 
-	resp, err := srv.PrepareArtifact(serviceAuthContext(), &pb.PrepareArtifactRequest{
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId: "hash-x",
 		TenantId:   "tenant-a",
 	})

@@ -8,7 +8,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -45,7 +45,7 @@ type UsageTracker struct {
 }
 
 type failedBatch struct {
-	event          *pb.ServiceEvent
+	event          *ipcpb.ServiceEvent
 	aggregateCount int
 	attempts       int
 }
@@ -163,7 +163,7 @@ func (ut *UsageTracker) flush() {
 	ut.retryFailedBatches()
 
 	// Collect all aggregates
-	var aggregates []*pb.APIRequestAggregate
+	var aggregates []*ipcpb.APIRequestAggregate
 
 	ut.aggregates.Range(func(keyI, valueI interface{}) bool {
 		key := keyI.(aggregateKey) //nolint:errcheck // type guaranteed by sync.Map usage
@@ -185,7 +185,7 @@ func (ut *UsageTracker) flush() {
 			tokenHashes = append(tokenHashes, h)
 		}
 
-		protoAgg := &pb.APIRequestAggregate{
+		protoAgg := &ipcpb.APIRequestAggregate{
 			TenantId:        key.TenantID,
 			AuthType:        key.AuthType,
 			OperationType:   key.OperationType,
@@ -218,7 +218,7 @@ func (ut *UsageTracker) flush() {
 	}
 
 	// Build batch payload
-	batch := &pb.APIRequestBatch{
+	batch := &ipcpb.APIRequestBatch{
 		Timestamp:  time.Now().Unix(),
 		SourceNode: ut.config.SourceNode,
 		Aggregates: aggregates,
@@ -237,12 +237,12 @@ func (ut *UsageTracker) flush() {
 				Debug("Usage tracker using system tenant for service event batch")
 		}
 	}
-	event := &pb.ServiceEvent{
+	event := &ipcpb.ServiceEvent{
 		EventType: "api_request_batch",
 		Timestamp: timestamppb.New(time.Unix(batch.GetTimestamp(), 0)),
 		Source:    "bridge",
 		TenantId:  tenantID,
-		Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
+		Payload:   &ipcpb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 	}
 
 	if err := ut.sendServiceEvent(event, len(aggregates)); err != nil {
@@ -250,7 +250,7 @@ func (ut *UsageTracker) flush() {
 	}
 }
 
-func (ut *UsageTracker) enqueueFailedBatch(event *pb.ServiceEvent, aggregateCount int) {
+func (ut *UsageTracker) enqueueFailedBatch(event *ipcpb.ServiceEvent, aggregateCount int) {
 	if ut.config.Decklog == nil || event == nil {
 		return
 	}
@@ -303,7 +303,7 @@ func (ut *UsageTracker) retryFailedBatches() {
 	}
 }
 
-func (ut *UsageTracker) sendServiceEvent(event *pb.ServiceEvent, aggregateCount int) error {
+func (ut *UsageTracker) sendServiceEvent(event *ipcpb.ServiceEvent, aggregateCount int) error {
 	if ut.config.Decklog == nil || event == nil {
 		return nil
 	}

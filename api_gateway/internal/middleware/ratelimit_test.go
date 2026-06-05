@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"reflect"
 )
 
@@ -143,19 +143,19 @@ func (f fakeBillingChecker) IsSuspended(string) bool       { return f.isSuspende
 func (f fakeBillingChecker) GetBillingModel(string) string { return f.billingModel }
 
 type fakeX402Provider struct {
-	requirements *pb.PaymentRequirements
+	requirements *purserpb.PaymentRequirements
 	err          error
 }
 
-func (f fakeX402Provider) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*pb.PaymentRequirements, error) {
+func (f fakeX402Provider) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error) {
 	return f.requirements, f.err
 }
 
 func TestBuild402ResponseIncludesRequirements(t *testing.T) {
 	provider := fakeX402Provider{
-		requirements: &pb.PaymentRequirements{
+		requirements: &purserpb.PaymentRequirements{
 			X402Version: 1,
-			Accepts: []*pb.PaymentRequirement{
+			Accepts: []*purserpb.PaymentRequirement{
 				{
 					Scheme:            "x402",
 					Network:           "base",

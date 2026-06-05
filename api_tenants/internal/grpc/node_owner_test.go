@@ -6,10 +6,9 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestGetNodeOwner_FormatsIPv6FoghornAddress(t *testing.T) {
@@ -25,7 +24,7 @@ func TestGetNodeOwner_FormatsIPv6FoghornAddress(t *testing.T) {
 			AddRow("node-v6", "cluster-1", "Cluster One", "tenant-1", "Tenant One", "2001:db8::20", int32(50051)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetNodeOwner(context.Background(), &pb.GetNodeOwnerRequest{NodeId: "node-v6"})
+	resp, err := server.GetNodeOwner(context.Background(), &quartermasterpb.GetNodeOwnerRequest{NodeId: "node-v6"})
 	if err != nil {
 		t.Fatalf("GetNodeOwner returned error: %v", err)
 	}
@@ -53,7 +52,7 @@ func TestGetNodeOwnerReturnsFoghornControlListener(t *testing.T) {
 			AddRow("edge-eu-1", "media-eu-1", "Media EU", "tenant-1", "Tenant One", "10.88.158.227", int32(18019)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetNodeOwner(context.Background(), &pb.GetNodeOwnerRequest{NodeId: "edge-eu-1"})
+	resp, err := server.GetNodeOwner(context.Background(), &quartermasterpb.GetNodeOwnerRequest{NodeId: "edge-eu-1"})
 	if err != nil {
 		t.Fatalf("GetNodeOwner returned error: %v", err)
 	}
@@ -78,7 +77,7 @@ func TestGetNodeOwner_NotFound(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	_, err = server.GetNodeOwner(context.Background(), &pb.GetNodeOwnerRequest{NodeId: "node-missing"})
+	_, err = server.GetNodeOwner(context.Background(), &quartermasterpb.GetNodeOwnerRequest{NodeId: "node-missing"})
 	assertGRPCCode(t, err, codes.NotFound)
 
 	if err := mock.ExpectationsWereMet(); err != nil {

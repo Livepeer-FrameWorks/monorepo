@@ -18,7 +18,7 @@ import (
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // Reconciler computes desired cluster access from Purser-owned data and
@@ -171,7 +171,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 			primaryClusterID = currentPrimary
 		}
 		if primaryClusterID != currentPrimary {
-			if _, err := r.qm.UpdateTenant(ctx, &pb.UpdateTenantRequest{
+			if _, err := r.qm.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
 				TenantId:         tenantID,
 				PrimaryClusterId: &primaryClusterID,
 			}); err != nil {

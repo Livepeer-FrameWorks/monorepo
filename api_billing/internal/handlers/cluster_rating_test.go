@@ -29,7 +29,7 @@ func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
@@ -65,7 +65,7 @@ func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger()}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 

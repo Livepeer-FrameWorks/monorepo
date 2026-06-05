@@ -9,12 +9,12 @@ import (
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // DoLogin handles user authentication business logic
 // Note: Auth is typically handled via REST (/auth/login), not GraphQL
-func (r *Resolver) DoLogin(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
+func (r *Resolver) DoLogin(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -39,7 +39,7 @@ func (r *Resolver) DoLogin(ctx context.Context, req *pb.LoginRequest) (*pb.AuthR
 }
 
 // DoRegister handles user registration business logic
-func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, lastName string) (*pb.RegisterResponse, error) {
+func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, lastName string) (*commodorepb.RegisterResponse, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -48,7 +48,7 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 	}()
 
 	// Call Commodore register endpoint
-	authResp, err := r.Clients.Commodore.Register(ctx, &pb.RegisterRequest{
+	authResp, err := r.Clients.Commodore.Register(ctx, &commodorepb.RegisterRequest{
 		Email:     email,
 		Password:  password,
 		FirstName: firstName,
@@ -69,7 +69,7 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 }
 
 // DoGetMe retrieves current user information
-func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
+func (r *Resolver) DoGetMe(ctx context.Context) (*commodorepb.User, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -83,7 +83,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 			r.Metrics.Operations.WithLabelValues("getMe", "demo").Inc()
 		}
 		demoEmail := "developer@frameworks.demo"
-		return &pb.User{
+		return &commodorepb.User{
 			Id:        "5eedface-5e1f-da7a-face-5e1fda7a0001",
 			Email:     &demoEmail,
 			FirstName: "Demo",
@@ -291,7 +291,7 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 }
 
 // protoToWalletIdentity converts proto WalletIdentity to model WalletIdentity
-func protoToWalletIdentity(w *pb.WalletIdentity) model.WalletIdentity {
+func protoToWalletIdentity(w *commodorepb.WalletIdentity) model.WalletIdentity {
 	result := model.WalletIdentity{
 		ID:        w.Id,
 		Address:   w.WalletAddress,

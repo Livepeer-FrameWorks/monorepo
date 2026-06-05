@@ -6,7 +6,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -31,7 +31,7 @@ func TestListNodes_ServiceAuthUsesAllActiveClusters(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(nodeColumns).
 			AddRow(newNodeRow("uuid-1", "node-1", "core-central-primary", "node-1", "core", "1.2.3.4")...))
 
-	resp, err := server.ListNodes(ctx, &pb.ListNodesRequest{})
+	resp, err := server.ListNodes(ctx, &quartermasterpb.ListNodesRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestListNodes_AnonymousUsesPublicTopologyClusters(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(nodeColumns).
 			AddRow(newNodeRow("uuid-1", "node-1", "media-central-primary", "node-1", "edge", "1.2.3.4")...))
 
-	resp, err := server.ListNodes(context.Background(), &pb.ListNodesRequest{})
+	resp, err := server.ListNodes(context.Background(), &quartermasterpb.ListNodesRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

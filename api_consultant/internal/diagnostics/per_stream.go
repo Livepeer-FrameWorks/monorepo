@@ -2,9 +2,8 @@ package diagnostics
 
 import (
 	"context"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"sort"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 const maxAnomalousStreams = 20
@@ -31,7 +30,7 @@ func NewPerStreamAnalyzer(evaluator *BaselineEvaluator) *PerStreamAnalyzer {
 // Analyze groups per-stream metrics, compares each against the tenant-wide
 // baseline (stream_id=""), runs correlation on outliers, and returns the top
 // anomalous streams capped at maxAnomalousStreams.
-func (a *PerStreamAnalyzer) Analyze(ctx context.Context, tenantID string, metrics []*pb.StreamHealthMetric) ([]StreamAnomaly, error) {
+func (a *PerStreamAnalyzer) Analyze(ctx context.Context, tenantID string, metrics []*periscopepb.StreamHealthMetric) ([]StreamAnomaly, error) {
 	if a == nil || a.evaluator == nil || len(metrics) == 0 {
 		return nil, nil
 	}
@@ -74,7 +73,7 @@ func (a *PerStreamAnalyzer) Analyze(ctx context.Context, tenantID string, metric
 }
 
 // groupByStream computes average metric values per stream from raw data points.
-func groupByStream(metrics []*pb.StreamHealthMetric) map[string]map[string]float64 {
+func groupByStream(metrics []*periscopepb.StreamHealthMetric) map[string]map[string]float64 {
 	type accum struct {
 		sum   map[string]float64
 		count int

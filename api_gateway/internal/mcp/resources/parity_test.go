@@ -6,7 +6,8 @@ import (
 
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -24,13 +25,13 @@ func TestProtoToVODAssetInfo_ParityWithGraphQLMapper(t *testing.T) {
 	updatedAt := time.Date(2026, 2, 10, 12, 13, 14, 0, time.UTC)
 	expiresAt := time.Date(2026, 3, 10, 8, 9, 10, 0, time.UTC)
 
-	input := &pb.VodAssetInfo{
+	input := &sharedpb.VodAssetInfo{
 		Id:              "vod-raw-id",
 		ArtifactHash:    "",
 		Title:           "Demo",
 		Description:     "Parity fixture",
 		Filename:        "demo.mp4",
-		Status:          pb.VodStatus_VOD_STATUS_READY,
+		Status:          sharedpb.VodStatus_VOD_STATUS_READY,
 		StorageLocation: "s3",
 		SizeBytes:       &sizeBytes,
 		DurationMs:      &durationMs,
@@ -43,7 +44,7 @@ func TestProtoToVODAssetInfo_ParityWithGraphQLMapper(t *testing.T) {
 		ExpiresAt:       timestamppb.New(expiresAt),
 		ErrorMessage:    &errorMessage,
 		PlaybackId:      &playbackID,
-		ThumbnailAssets: &pb.ThumbnailAssets{
+		ThumbnailAssets: &sharedpb.ThumbnailAssets{
 			PosterUrl:    "https://chandler.us.example/poster.jpg",
 			SpriteVttUrl: "https://chandler.us.example/sprite.vtt",
 			SpriteJpgUrl: "https://chandler.us.example/sprite.jpg",
@@ -106,18 +107,18 @@ func TestSupportMapperParityWithGraphQLMapper(t *testing.T) {
 	updatedAt := time.Date(2026, 2, 11, 4, 5, 6, 0, time.UTC)
 	lastCreatedAt := time.Date(2026, 2, 11, 4, 4, 0, 0, time.UTC)
 
-	conv := &pb.DeckhandConversation{
+	conv := &deckhandpb.DeckhandConversation{
 		Id:          "conv-1",
 		Subject:     "Parity conversation",
-		Status:      pb.ConversationStatus_CONVERSATION_STATUS_OPEN,
+		Status:      deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN,
 		UnreadCount: 5,
 		CreatedAt:   timestamppb.New(createdAt),
 		UpdatedAt:   timestamppb.New(updatedAt),
-		LastMessage: &pb.DeckhandMessage{
+		LastMessage: &deckhandpb.DeckhandMessage{
 			Id:             "msg-1",
 			ConversationId: "conv-1",
 			Content:        "Try reducing source bitrate",
-			Sender:         pb.MessageSender_MESSAGE_SENDER_AGENT,
+			Sender:         deckhandpb.MessageSender_MESSAGE_SENDER_AGENT,
 			CreatedAt:      timestamppb.New(lastCreatedAt),
 		},
 	}
@@ -169,24 +170,24 @@ func TestSupportMapperParityWithGraphQLMapper(t *testing.T) {
 	}
 }
 
-func conversationStatusLabel(status pb.ConversationStatus) string {
+func conversationStatusLabel(status deckhandpb.ConversationStatus) string {
 	switch status {
-	case pb.ConversationStatus_CONVERSATION_STATUS_OPEN:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_OPEN:
 		return "open"
-	case pb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_RESOLVED:
 		return "resolved"
-	case pb.ConversationStatus_CONVERSATION_STATUS_PENDING:
+	case deckhandpb.ConversationStatus_CONVERSATION_STATUS_PENDING:
 		return "pending"
 	default:
 		return "unknown"
 	}
 }
 
-func messageSenderLabel(sender pb.MessageSender) string {
+func messageSenderLabel(sender deckhandpb.MessageSender) string {
 	switch sender {
-	case pb.MessageSender_MESSAGE_SENDER_USER:
+	case deckhandpb.MessageSender_MESSAGE_SENDER_USER:
 		return "user"
-	case pb.MessageSender_MESSAGE_SENDER_AGENT:
+	case deckhandpb.MessageSender_MESSAGE_SENDER_AGENT:
 		return "agent"
 	default:
 		return "unknown"

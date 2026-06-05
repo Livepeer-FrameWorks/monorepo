@@ -15,7 +15,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -96,7 +99,7 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 		// Note: Pagination handled by Quartermaster, here we just want the list.
 		// If user has >100 subscriptions, we might miss some providers here without paging loop.
 		// For now, assume <100 subscriptions.
-		subs, subsErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+		subs, subsErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 			TenantId: user.TenantID,
 		})
 		if subsErr == nil && subs != nil {
@@ -151,7 +154,7 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.RoutingEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.RoutingEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -249,7 +252,7 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ConnectionEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ConnectionEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -360,7 +363,7 @@ func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ClipEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ClipEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -442,7 +445,7 @@ func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *strin
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.NodeMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -524,7 +527,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.NodeMetricHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetricHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -540,7 +543,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *
 }
 
 // DoGetNodeMetricsAggregated returns per-node aggregates for a time range.
-func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, noCache *bool) ([]*pb.NodeMetricsAggregated, error) {
+func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, noCache *bool) ([]*periscopepb.NodeMetricsAggregated, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -575,7 +578,7 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetNodeMetricsAggregatedResponse)
+	resp, ok := val.(*periscopepb.GetNodeMetricsAggregatedResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for node metrics aggregated: %T", val)
 	}
@@ -663,7 +666,7 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamHealthMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamHealthMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -678,7 +681,7 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 	}, nil
 }
 
-func normalizeStreamHealthMetrics(metrics []*pb.StreamHealthMetric) {
+func normalizeStreamHealthMetrics(metrics []*periscopepb.StreamHealthMetric) {
 	for _, metric := range metrics {
 		if metric == nil || metric.HasIssues != nil {
 			continue
@@ -763,7 +766,7 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.TrackListEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.TrackListEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -949,7 +952,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 	if err != nil {
 		return nil, err
 	}
-	response, ok := val.(*pb.GetBufferEventsResponse)
+	response, ok := val.(*periscopepb.GetBufferEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for buffer events: %T", val)
 	}
@@ -989,7 +992,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.BufferEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.BufferEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1005,7 +1008,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 }
 
 // DoGetStreamHealthConnection returns a connection-style payload for stream health metrics.
-func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error) {
+func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *commodorepb.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -1069,7 +1072,7 @@ func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stre
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamHealthMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamHealthMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1085,7 +1088,7 @@ func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stre
 }
 
 // DoGetNodeMetricsConnectionForNode returns a connection-style payload for node metrics (for node resolver).
-func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *pb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetricsConnection, error) {
+func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *quartermasterpb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetricsConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -1143,7 +1146,7 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *p
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.NodeMetric, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetric, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1159,7 +1162,7 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *p
 }
 
 // DoGetNodeMetrics1hConnectionForNode returns a connection-style payload for 1h node metrics (for node resolver).
-func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj *pb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetrics1hConnection, error) {
+func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj *quartermasterpb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetrics1hConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -1217,7 +1220,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj 
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.NodeMetricHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodeMetricHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1234,7 +1237,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj 
 
 // DoGetLiveNodeState returns the real-time state of a node from live_nodes.
 // Supports multi-tenant access for subscribed clusters.
-func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.LiveNode, error) {
+func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*periscopepb.LiveNode, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -1245,7 +1248,7 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.L
 
 	// Build related tenant IDs from subscribed clusters (for multi-tenant infra access)
 	var relatedTenantIDs []string
-	subs, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+	subs, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 		TenantId: user.TenantID,
 	})
 	if err == nil && subs != nil {
@@ -1272,7 +1275,7 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.L
 }
 
 // DoGetArtifactState returns the current state of a single artifact (clip/DVR).
-func (r *Resolver) DoGetArtifactState(ctx context.Context, requestID string) (*pb.ArtifactState, error) {
+func (r *Resolver) DoGetArtifactState(ctx context.Context, requestID string) (*periscopepb.ArtifactState, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -1369,7 +1372,7 @@ func (r *Resolver) DoGetArtifactStatesConnection(ctx context.Context, streamId *
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ArtifactState, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ArtifactState, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1468,7 +1471,7 @@ func (r *Resolver) DoGetStreamConnectionHourlyConnection(ctx context.Context, st
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamConnectionHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamConnectionHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1562,7 +1565,7 @@ func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *s
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ClientMetrics5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ClientMetrics5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1657,7 +1660,7 @@ func (r *Resolver) DoGetQualityTierDailyConnection(ctx context.Context, stream *
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.QualityTierDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.QualityTierDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1740,7 +1743,7 @@ func (r *Resolver) DoGetStorageUsageConnection(ctx context.Context, nodeID *stri
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StorageUsageRecord, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StorageUsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1839,7 +1842,7 @@ func (r *Resolver) DoGetStorageEventsConnection(ctx context.Context, streamId *s
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StorageEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StorageEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -1929,7 +1932,7 @@ func (r *Resolver) DoGetNodePerformance5mConnection(ctx context.Context, nodeID 
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.NodePerformance5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.NodePerformance5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2024,7 +2027,7 @@ func (r *Resolver) DoGetViewerHoursHourlyConnection(ctx context.Context, stream 
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ViewerHoursHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerHoursHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2107,7 +2110,7 @@ func (r *Resolver) DoGetViewerGeoHourlyConnection(ctx context.Context, timeRange
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ViewerGeoHourly, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerGeoHourly, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2202,7 +2205,7 @@ func (r *Resolver) DoGetStreamHealth5mConnection(ctx context.Context, streamId s
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamHealth5M, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamHealth5M, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2298,7 +2301,7 @@ func (r *Resolver) DoGetViewerSessionsConnection(ctx context.Context, stream *st
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ViewerSession, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerSession, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2337,7 +2340,7 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 			pageInfo.StartCursor = &edges[0].Cursor
 			pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 		}
-		edgeNodes := make([]*pb.ConnectionEvent, 0, len(edges))
+		edgeNodes := make([]*periscopepb.ConnectionEvent, 0, len(edges))
 		for _, edge := range edges {
 			if edge != nil {
 				edgeNodes = append(edgeNodes, edge.Node)
@@ -2425,7 +2428,7 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ConnectionEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ConnectionEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2468,7 +2471,7 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 			pageInfo.StartCursor = &edges[0].Cursor
 			pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 		}
-		edgeNodes := make([]*pb.ViewerCountBucket, 0, len(edges))
+		edgeNodes := make([]*periscopepb.ViewerCountBucket, 0, len(edges))
 		for _, edge := range edges {
 			if edge != nil {
 				edgeNodes = append(edgeNodes, edge.Node)
@@ -2551,7 +2554,7 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 
 	// Slice the buckets
 	if startIdx >= totalCount {
-		buckets = []*pb.ViewerCountBucket{}
+		buckets = []*periscopepb.ViewerCountBucket{}
 	} else {
 		buckets = buckets[startIdx:endIdx]
 	}
@@ -2582,7 +2585,7 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
-	edgeNodes := make([]*pb.ViewerCountBucket, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ViewerCountBucket, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2665,7 +2668,7 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 	}
 
 	// Build summaries (proto → model via binding)
-	summaries := make([]*pb.ProcessingUsageSummary, len(response.Summaries))
+	summaries := make([]*periscopepb.ProcessingUsageSummary, len(response.Summaries))
 	copy(summaries, response.Summaries)
 
 	totalCount := 0
@@ -2684,7 +2687,7 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.ProcessingUsageRecord, 0, len(edges))
+	edgeNodes := make([]*periscopepb.ProcessingUsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2784,7 +2787,7 @@ func (r *Resolver) DoGetRebufferingEventsConnection(ctx context.Context, streamI
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.RebufferingEvent, 0, len(edges))
+	edgeNodes := make([]*periscopepb.RebufferingEvent, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2867,7 +2870,7 @@ func (r *Resolver) DoGetTenantAnalyticsDailyConnection(ctx context.Context, time
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.TenantAnalyticsDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.TenantAnalyticsDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -2962,7 +2965,7 @@ func (r *Resolver) DoGetStreamAnalyticsDailyConnection(ctx context.Context, stre
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamAnalyticsDaily, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamAnalyticsDaily, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3030,9 +3033,9 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 		}
 	}
 
-	summaries := make([]*pb.APIUsageSummary, len(response.Summaries))
+	summaries := make([]*periscopepb.APIUsageSummary, len(response.Summaries))
 	copy(summaries, response.Summaries)
-	operationSummaries := make([]*pb.APIUsageOperationSummary, len(response.OperationSummaries))
+	operationSummaries := make([]*periscopepb.APIUsageOperationSummary, len(response.OperationSummaries))
 	copy(operationSummaries, response.OperationSummaries)
 
 	totalCount := 0
@@ -3051,7 +3054,7 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.APIUsageRecord, 0, len(edges))
+	edgeNodes := make([]*periscopepb.APIUsageRecord, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3069,7 +3072,7 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 }
 
 // DoGetStreamAnalyticsSummariesConnection returns pre-aggregated summaries for multiple streams.
-func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, page *model.ConnectionInput, timeRange *model.TimeRangeInput, sortBy *pb.StreamSummarySortField, sortOrder *pb.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
+func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, page *model.ConnectionInput, timeRange *model.TimeRangeInput, sortBy *periscopepb.StreamSummarySortField, sortOrder *commonpb.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -3112,17 +3115,17 @@ func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, 
 	clientSortBy := periscopeclient.StreamSummarySortFieldEgressGB
 	if sortBy != nil {
 		switch *sortBy {
-		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
+		case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
 			clientSortBy = periscopeclient.StreamSummarySortFieldUniqueViewers
-		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
+		case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
 			clientSortBy = periscopeclient.StreamSummarySortFieldTotalViews
-		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
+		case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
 			clientSortBy = periscopeclient.StreamSummarySortFieldViewerHours
 		}
 	}
 
 	clientSortOrder := periscopeclient.SortOrderDesc
-	if sortOrder != nil && *sortOrder == pb.SortOrder_SORT_ORDER_ASC {
+	if sortOrder != nil && *sortOrder == commonpb.SortOrder_SORT_ORDER_ASC {
 		clientSortOrder = periscopeclient.SortOrderAsc
 	}
 
@@ -3163,7 +3166,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, 
 		pageInfo.EndCursor = response.Pagination.EndCursor
 	}
 
-	edgeNodes := make([]*pb.StreamAnalyticsSummary, 0, len(edges))
+	edgeNodes := make([]*periscopepb.StreamAnalyticsSummary, 0, len(edges))
 	for _, edge := range edges {
 		if edge != nil {
 			edgeNodes = append(edgeNodes, edge.Node)
@@ -3180,7 +3183,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, 
 
 // buildStreamSummaryCursor creates a keyset cursor for a stream summary.
 // Uses raw integer fields (RangeEgressBytes, RangeViewerSeconds) for precision.
-func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortBy periscopeclient.StreamSummarySortField) string {
+func buildStreamSummaryCursor(summary *periscopepb.StreamAnalyticsSummary, sortBy periscopeclient.StreamSummarySortField) string {
 	var sortKey int64
 	switch sortBy {
 	case periscopeclient.StreamSummarySortFieldEgressGB:
@@ -3226,7 +3229,7 @@ func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string,
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetRoutingEfficiencyResponse)
+	resp, ok := val.(*periscopepb.GetRoutingEfficiencyResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for routing efficiency: %T", val)
 	}
@@ -3279,7 +3282,7 @@ func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *strin
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetStreamHealthSummaryResponse)
+	resp, ok := val.(*periscopepb.GetStreamHealthSummaryResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for stream health summary: %T", val)
 	}
@@ -3331,7 +3334,7 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetClientQoeSummaryResponse)
+	resp, ok := val.(*periscopepb.GetClientQoeSummaryResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for client QoE summary: %T", val)
 	}
@@ -3350,7 +3353,7 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 // DoGetPlayerBootSummary returns the tenant-scoped player startup summary. The
 // GraphQL PlayerBootSummary type is autobound to the proto message, so this
 // returns the proto summary directly.
-func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*pb.PlayerBootSummary, error) {
+func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.PlayerBootSummary, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -3388,12 +3391,12 @@ func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string,
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetPlayerBootSummaryResponse)
+	resp, ok := val.(*periscopepb.GetPlayerBootSummaryResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for player boot summary: %T", val)
 	}
 	if resp.GetSummary() == nil {
-		return &pb.PlayerBootSummary{}, nil
+		return &periscopepb.PlayerBootSummary{}, nil
 	}
 	return resp.GetSummary(), nil
 }
@@ -3401,7 +3404,7 @@ func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string,
 // DoGetClusterBootOps returns the redacted operator boot aggregate for clusters
 // the caller owns. Requires cluster-operator access; an optional clusterId
 // narrows the result to a single owned cluster.
-func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*pb.ClusterBootOps, error) {
+func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterBootOps, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -3439,7 +3442,7 @@ func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, t
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetClusterBootOpsResponse)
+	resp, ok := val.(*periscopepb.GetClusterBootOpsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for cluster boot ops: %T", val)
 	}
@@ -3447,7 +3450,7 @@ func (r *Resolver) DoGetClusterBootOps(ctx context.Context, clusterID *string, t
 }
 
 // DoGetClusterTrafficMatrix returns cross-cluster routing traffic.
-func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) ([]*pb.ClusterPairTraffic, error) {
+func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) ([]*periscopepb.ClusterPairTraffic, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -3470,7 +3473,7 @@ func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *mod
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetClusterTrafficMatrixResponse)
+	resp, ok := val.(*periscopepb.GetClusterTrafficMatrixResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for cluster traffic matrix: %T", val)
 	}
@@ -3480,7 +3483,7 @@ func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *mod
 	return pairs, nil
 }
 
-func computeClusterGeo(nodes []*pb.InfrastructureNode, clusterFilter map[string]struct{}) map[string]struct{ lat, lon float64 } {
+func computeClusterGeo(nodes []*quartermasterpb.InfrastructureNode, clusterFilter map[string]struct{}) map[string]struct{ lat, lon float64 } {
 	type acc struct {
 		latSum, lonSum float64
 		n              int
@@ -3517,7 +3520,7 @@ func computeClusterGeo(nodes []*pb.InfrastructureNode, clusterFilter map[string]
 	return out
 }
 
-func applyTrafficGeo(pairs []*pb.ClusterPairTraffic, clusterGeo map[string]struct{ lat, lon float64 }) {
+func applyTrafficGeo(pairs []*periscopepb.ClusterPairTraffic, clusterGeo map[string]struct{ lat, lon float64 }) {
 	for _, p := range pairs {
 		if p == nil {
 			continue
@@ -3544,7 +3547,7 @@ type networkClusterGeo struct {
 	region       string
 }
 
-func addNetworkClusterGeo(cg *networkClusterGeo, n *pb.InfrastructureNode) bool {
+func addNetworkClusterGeo(cg *networkClusterGeo, n *quartermasterpb.InfrastructureNode) bool {
 	if cg == nil || n == nil || n.Latitude == nil || n.Longitude == nil {
 		return false
 	}
@@ -3554,7 +3557,7 @@ func addNetworkClusterGeo(cg *networkClusterGeo, n *pb.InfrastructureNode) bool 
 	return true
 }
 
-func addAssignedPoolClusterGeo(nodesByCluster map[string]*networkClusterGeo, nodesByID map[string]*pb.InfrastructureNode, instancesByID map[string]*pb.ServiceInstance, poolStatuses []*pb.GetServicePoolStatusResponse) {
+func addAssignedPoolClusterGeo(nodesByCluster map[string]*networkClusterGeo, nodesByID map[string]*quartermasterpb.InfrastructureNode, instancesByID map[string]*quartermasterpb.ServiceInstance, poolStatuses []*quartermasterpb.GetServicePoolStatusResponse) {
 	seenClusterNode := make(map[string]bool)
 	clustersWithDirectGeo := make(map[string]bool)
 	for clusterID, cg := range nodesByCluster {
@@ -3602,7 +3605,7 @@ func addAssignedPoolClusterGeo(nodesByCluster map[string]*networkClusterGeo, nod
 
 // enrichTrafficMatrixGeo attaches cluster lat/lon to traffic matrix pairs
 // by averaging node geo per cluster.
-func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.ClusterPairTraffic) {
+func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*periscopepb.ClusterPairTraffic) {
 	if len(pairs) == 0 {
 		return
 	}
@@ -3619,11 +3622,11 @@ func (r *Resolver) enrichTrafficMatrixGeo(ctx context.Context, pairs []*pb.Clust
 		}
 	}
 
-	nodes := make([]*pb.InfrastructureNode, 0)
+	nodes := make([]*quartermasterpb.InfrastructureNode, 0)
 	for clusterID := range clusterIDs {
 		var after *string
 		for {
-			resp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &pb.CursorPaginationRequest{First: 500, After: after})
+			resp, err := r.Clients.Quartermaster.ListNodes(ctx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 500, After: after})
 			if err != nil || resp == nil {
 				break
 			}
@@ -3676,7 +3679,7 @@ func (r *Resolver) DoGetFederationEventsConnection(ctx context.Context, timeRang
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetFederationEventsResponse)
+	resp, ok := val.(*periscopepb.GetFederationEventsResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for federation events: %T", val)
 	}
@@ -3710,7 +3713,7 @@ func (r *Resolver) DoGetFederationEventsConnection(ctx context.Context, timeRang
 }
 
 // DoGetFederationSummary returns aggregated federation event counts.
-func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) (*pb.FederationSummary, error) {
+func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.TimeRangeInput, noCache *bool) (*periscopepb.FederationSummary, error) {
 	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
 		return nil, err
 	}
@@ -3733,14 +3736,14 @@ func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := val.(*pb.GetFederationSummaryResponse)
+	resp, ok := val.(*periscopepb.GetFederationSummaryResponse)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for federation summary: %T", val)
 	}
 	return resp.GetSummary(), nil
 }
 
-func (r *Resolver) listPublicNetworkClusters(ctx context.Context) (*pb.ListClustersResponse, context.Context, error) {
+func (r *Resolver) listPublicNetworkClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, context.Context, error) {
 	publicCtx := publicTopologyReadContext(ctx)
 	clustersResp, err := r.Clients.Quartermaster.ListPublicTopologyClusters(publicCtx)
 	if err != nil {
@@ -3769,13 +3772,13 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		operatorView = len(ownedClusters) > 0
 	}
 
-	clustersResp := &pb.ListClustersResponse{}
+	clustersResp := &quartermasterpb.ListClustersResponse{}
 	seenClusters := make(map[string]struct{})
 	topologyClusterIDs := make(map[string]struct{})
 	publicTopologyClusterIDs := make(map[string]struct{})
 	exposedServiceInstanceClusterIDs := make(map[string]struct{})
 	publicClustersResp, publicCtx, err := r.listPublicNetworkClusters(ctx)
-	appendClusters := func(clusters []*pb.InfrastructureCluster, exposeTopology bool, publicTopology bool, exposeServiceInventory bool) {
+	appendClusters := func(clusters []*quartermasterpb.InfrastructureCluster, exposeTopology bool, publicTopology bool, exposeServiceInventory bool) {
 		for _, cluster := range clusters {
 			if cluster == nil || cluster.GetClusterId() == "" {
 				continue
@@ -3810,9 +3813,9 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	if tenantID != "" {
-		accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+		accessResp, accessErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
 			TenantId:   tenantID,
-			Pagination: &pb.CursorPaginationRequest{First: 500},
+			Pagination: &commonpb.CursorPaginationRequest{First: 500},
 		})
 		if accessErr != nil {
 			r.Logger.WithError(accessErr).Warn("networkStatus: failed to list tenant cluster access")
@@ -3822,7 +3825,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 
 	if operatorView {
-		ownedClustersResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &pb.CursorPaginationRequest{First: 500})
+		ownedClustersResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: 500})
 		if ownedErr != nil {
 			r.Logger.WithError(ownedErr).Error("networkStatus: owned cluster topology unavailable")
 			return nil, fmt.Errorf("owned network topology unavailable: %w", ownedErr)
@@ -3838,7 +3841,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	if err != nil {
 		r.Logger.WithError(err).Warn("networkStatus: failed to get foghorn pool status")
 	}
-	poolStatuses := []*pb.GetServicePoolStatusResponse{poolStatus}
+	poolStatuses := []*quartermasterpb.GetServicePoolStatusResponse{poolStatus}
 	for _, serviceType := range pkgdns.PoolAssignedServiceTypes() {
 		if serviceType == "foghorn" {
 			continue
@@ -3858,7 +3861,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 
-	networkNodesRaw := make([]*pb.InfrastructureNode, 0)
+	networkNodesRaw := make([]*quartermasterpb.InfrastructureNode, 0)
 	for clusterID := range topologyClusterIDs {
 		if _, visible := visibleClusterIDs[clusterID]; !visible {
 			continue
@@ -3867,7 +3870,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if _, publicTopology := publicTopologyClusterIDs[clusterID]; publicTopology {
 			readCtx = publicCtx
 		}
-		nodesResp, nodeErr := r.Clients.Quartermaster.ListNodes(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		nodesResp, nodeErr := r.Clients.Quartermaster.ListNodes(readCtx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 2000})
 		if nodeErr != nil {
 			r.Logger.WithError(nodeErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list nodes")
 			continue
@@ -3875,8 +3878,8 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		networkNodesRaw = append(networkNodesRaw, nodesResp.GetNodes()...)
 	}
 
-	topologyServiceInstancesRaw := make([]*pb.ServiceInstance, 0)
-	exposedServiceInstancesRaw := make([]*pb.ServiceInstance, 0)
+	topologyServiceInstancesRaw := make([]*quartermasterpb.ServiceInstance, 0)
+	exposedServiceInstancesRaw := make([]*quartermasterpb.ServiceInstance, 0)
 	for clusterID := range topologyClusterIDs {
 		if _, visible := visibleClusterIDs[clusterID]; !visible {
 			continue
@@ -3885,7 +3888,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if _, publicTopology := publicTopologyClusterIDs[clusterID]; publicTopology {
 			readCtx = publicCtx
 		}
-		instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &pb.CursorPaginationRequest{First: 2000})
+		instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 2000})
 		if instanceErr != nil {
 			r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("networkStatus: failed to list service instances")
 			continue
@@ -3897,7 +3900,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 	}
 
-	liveStatsByCluster := make(map[string]*pb.NetworkClusterLiveStats)
+	liveStatsByCluster := make(map[string]*periscopepb.NetworkClusterLiveStats)
 	liveStatsResp, err := r.Clients.Periscope.GetNetworkLiveStats(ctx)
 	if err != nil {
 		r.Logger.WithError(err).Warn("networkStatus: failed to get live stats from Periscope")
@@ -3939,7 +3942,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 
 	// Group nodes by cluster: count, healthy count, average geo, and region
 	nodesByCluster := make(map[string]*networkClusterGeo)
-	nodesByID := make(map[string]*pb.InfrastructureNode)
+	nodesByID := make(map[string]*quartermasterpb.InfrastructureNode)
 	var networkNodes []*model.NetworkNode
 	for _, n := range networkNodesRaw {
 		if n == nil {
@@ -3976,7 +3979,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			ClusterID: n.ClusterId,
 		})
 	}
-	instancesByID := make(map[string]*pb.ServiceInstance)
+	instancesByID := make(map[string]*quartermasterpb.ServiceInstance)
 	for _, si := range topologyServiceInstancesRaw {
 		if si != nil && si.Id != "" {
 			instancesByID[si.Id] = si
@@ -3984,7 +3987,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	}
 	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, poolStatuses)
 
-	activeClusters := make(map[string]*pb.InfrastructureCluster)
+	activeClusters := make(map[string]*quartermasterpb.InfrastructureCluster)
 	for _, c := range clustersResp.Clusters {
 		if c != nil && c.IsActive {
 			activeClusters[c.ClusterId] = c

@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
 )
 
-func newTrigger(t *testing.T, nodeID, triggerType string, body []byte) *pb.MistTrigger {
+func newTrigger(t *testing.T, nodeID, triggerType string, body []byte) *ipcpb.MistTrigger {
 	t.Helper()
-	return &pb.MistTrigger{
+	return &ipcpb.MistTrigger{
 		TriggerType: triggerType,
 		NodeId:      nodeID,
 		Timestamp:   1700000000123,
@@ -274,9 +274,9 @@ func writeFile(t *testing.T, path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func protoClone(t *testing.T, trigger *pb.MistTrigger) *pb.MistTrigger {
+func protoClone(t *testing.T, trigger *ipcpb.MistTrigger) *ipcpb.MistTrigger {
 	t.Helper()
-	cloned, ok := proto.Clone(trigger).(*pb.MistTrigger)
+	cloned, ok := proto.Clone(trigger).(*ipcpb.MistTrigger)
 	if !ok {
 		t.Fatal("clone did not return MistTrigger")
 	}

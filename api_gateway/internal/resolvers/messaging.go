@@ -8,7 +8,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -234,10 +234,10 @@ func (r *Resolver) SendMessage(ctx context.Context, input model.SendMessageInput
 }
 
 // protoConversationToModel converts a proto Conversation to a GraphQL model
-func protoConversationToModel(conv *pb.DeckhandConversation) *model.Conversation {
+func protoConversationToModel(conv *deckhandpb.DeckhandConversation) *model.Conversation {
 	result := &model.Conversation{
 		ID:          globalid.Encode(globalid.TypeConversation, conv.Id),
-		Status:      conv.Status, // Uses proto.ConversationStatus directly
+		Status:      conv.Status,
 		UnreadCount: int(conv.UnreadCount),
 	}
 
@@ -262,12 +262,12 @@ func protoConversationToModel(conv *pb.DeckhandConversation) *model.Conversation
 }
 
 // protoMessageToModel converts a proto Message to a GraphQL model
-func protoMessageToModel(msg *pb.DeckhandMessage) *model.Message {
+func protoMessageToModel(msg *deckhandpb.DeckhandMessage) *model.Message {
 	result := &model.Message{
 		ID:             globalid.EncodeComposite(globalid.TypeMessage, msg.ConversationId, msg.Id),
 		ConversationID: globalid.Encode(globalid.TypeConversation, msg.ConversationId),
 		Content:        msg.Content,
-		Sender:         msg.Sender, // Uses proto.MessageSender directly
+		Sender:         msg.Sender,
 	}
 
 	// Timestamp

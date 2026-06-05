@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -19,7 +19,7 @@ import (
 // that matches all three. Active artifacts are rejected — retention applies
 // post-finalize, and changing retention_until on an active recording would
 // make the cleanup loop race with the recorder.
-func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *pb.OverrideArtifactRetentionRequest) (*pb.OverrideArtifactRetentionResponse, error) {
+func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *foghornpb.OverrideArtifactRetentionRequest) (*foghornpb.OverrideArtifactRetentionResponse, error) {
 	tenantID := req.GetTenantId()
 	artifactHash := req.GetDvrHash()
 	if tenantID == "" {
@@ -61,13 +61,13 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"%s artifact is active or not found; retention overrides apply only to finalized assets", artifactType)
 	}
-	return &pb.OverrideArtifactRetentionResponse{
+	return &foghornpb.OverrideArtifactRetentionResponse{
 		Applied:        true,
 		RetentionUntil: timestamppb.New(until),
 	}, nil
 }
 
-func (s *FoghornGRPCServer) resolveRetentionUntil(ctx context.Context, tenantID, artifactHash, artifactType string, req *pb.OverrideArtifactRetentionRequest) (time.Time, error) {
+func (s *FoghornGRPCServer) resolveRetentionUntil(ctx context.Context, tenantID, artifactHash, artifactType string, req *foghornpb.OverrideArtifactRetentionRequest) (time.Time, error) {
 	var until time.Time
 	var endedAt time.Time
 	var endedAtSet bool

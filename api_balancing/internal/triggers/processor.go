@@ -25,7 +25,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
@@ -41,16 +47,16 @@ type streamContext struct {
 	Source            string
 	UpdatedAt         time.Time
 	LastError         string
-	BillingModel      string                  // "postpaid" or "prepaid" - affects cache TTL
-	IsSuspended       bool                    // true if tenant is suspended (balance < -$10)
-	IsBalanceNegative bool                    // true if prepaid balance <= 0 (should return 402)
-	OfficialClusterID string                  // billing-tier cluster for coverage routing
-	OriginClusterID   string                  // cluster where stream was originally ingested (for federation attribution)
-	ClusterPeers      []*pb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
-	ProcessesJSON     string                  // MistServer process config for STREAM_PROCESS trigger
-	RequiresAuth      bool                    // true when this playback object has a protected playback policy
-	RequiresAuthKnown bool                    // false means the local marker could not be resolved
-	DVRPolicy         *pb.DVRPolicy           // tier DVR policy bundle (live window, segment, max entries)
+	BillingModel      string                               // "postpaid" or "prepaid" - affects cache TTL
+	IsSuspended       bool                                 // true if tenant is suspended (balance < -$10)
+	IsBalanceNegative bool                                 // true if prepaid balance <= 0 (should return 402)
+	OfficialClusterID string                               // billing-tier cluster for coverage routing
+	OriginClusterID   string                               // cluster where stream was originally ingested (for federation attribution)
+	ClusterPeers      []*quartermasterpb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
+	ProcessesJSON     string                               // MistServer process config for STREAM_PROCESS trigger
+	RequiresAuth      bool                                 // true when this playback object has a protected playback policy
+	RequiresAuthKnown bool                                 // false means the local marker could not be resolved
+	DVRPolicy         *sharedpb.DVRPolicy                  // tier DVR policy bundle (live window, segment, max entries)
 	// Broadcaster billing-allowance state, cached at PUSH_REWRITE so USER_NEW
 	// can apply the viewer-side load gate without a fresh Commodore round-trip.
 	// IsFreeTier is the tier-identity flag from Purser (tier_name == 'free'),
@@ -69,7 +75,7 @@ type streamContext struct {
 // Covers peer discovery, stream tracking, and cross-cluster ingest dedup.
 // Implemented by PeerManager which delegates reads to Redis internally.
 type PeerNotifier interface {
-	NotifyPeers(peers []*pb.TenantClusterPeer, tenantID string)
+	NotifyPeers(peers []*quartermasterpb.TenantClusterPeer, tenantID string)
 	TrackStream(streamName string, clusterIDs []string)
 	UntrackStream(streamName string)
 	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
@@ -79,11 +85,11 @@ type PeerNotifier interface {
 // DVRStarter handles DVR recording orchestration.
 // Implemented by FoghornGRPCServer to allow direct internal DVR start without Commodore hop.
 type DVRStarter interface {
-	StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error)
+	StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)
 }
 
 type DVRStarterWithSourceHint interface {
-	StartDVRWithSourceHint(ctx context.Context, req *pb.StartDVRRequest, sourceNodeID string) (*pb.StartDVRResponse, error)
+	StartDVRWithSourceHint(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (*sharedpb.StartDVRResponse, error)
 }
 
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
@@ -171,7 +177,7 @@ type gatewayCacheEntry struct {
 // resolver depends on, scoped to a single Quartermaster method so tests can
 // substitute an in-memory stub without spinning up a gRPC server.
 type livepeerGatewayDiscoverer interface {
-	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *pb.CursorPaginationRequest) (*pb.ServiceDiscoveryResponse, error)
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
 }
 
 // NewProcessor creates a new MistServer trigger processor
@@ -328,7 +334,7 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string 
 // without a physical endpoint return "" and are skipped — a pooled name cannot
 // pin an instance for failover, and falling back to it would silently defeat
 // the contract.
-func livepeerGatewayURLFromInstance(inst *pb.ServiceInstance) string {
+func livepeerGatewayURLFromInstance(inst *quartermasterpb.ServiceInstance) string {
 	if inst == nil {
 		return ""
 	}
@@ -525,7 +531,7 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 }
 
 // GetClusterPeers returns the cached cluster peers for a stream, if available.
-func (p *Processor) GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer {
+func (p *Processor) GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer {
 	if p.streamCache == nil || internalName == "" || tenantID == "" {
 		return nil
 	}
@@ -773,7 +779,7 @@ func (p *Processor) SetOwnerTenantID(tenantID string) {
 	p.ownerTenantID = tenantID
 }
 
-func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
+func (p *Processor) ensureTriggerTenantID(trigger *ipcpb.MistTrigger) string {
 	if trigger == nil {
 		return ""
 	}
@@ -784,42 +790,42 @@ func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
 	// Some trigger types carry tenant_id only inside the payload; accept/mirror it to the envelope
 	// before enforcing the decklog send guard.
 	switch tp := trigger.GetTriggerPayload().(type) {
-	case *pb.MistTrigger_StreamLifecycleUpdate:
+	case *ipcpb.MistTrigger_StreamLifecycleUpdate:
 		if tid := strings.TrimSpace(tp.StreamLifecycleUpdate.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_ClientLifecycleUpdate:
+	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
 		if tid := strings.TrimSpace(tp.ClientLifecycleUpdate.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_ClipLifecycleData:
+	case *ipcpb.MistTrigger_ClipLifecycleData:
 		if tid := strings.TrimSpace(tp.ClipLifecycleData.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_DvrLifecycleData:
+	case *ipcpb.MistTrigger_DvrLifecycleData:
 		if tid := strings.TrimSpace(tp.DvrLifecycleData.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_VodLifecycleData:
+	case *ipcpb.MistTrigger_VodLifecycleData:
 		if tid := strings.TrimSpace(tp.VodLifecycleData.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_StorageLifecycleData:
+	case *ipcpb.MistTrigger_StorageLifecycleData:
 		if tid := strings.TrimSpace(tp.StorageLifecycleData.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_StorageSnapshot:
+	case *ipcpb.MistTrigger_StorageSnapshot:
 		if tid := strings.TrimSpace(tp.StorageSnapshot.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
 		}
-	case *pb.MistTrigger_ProcessBilling:
+	case *ipcpb.MistTrigger_ProcessBilling:
 		if tid := strings.TrimSpace(tp.ProcessBilling.GetTenantId()); tid != "" {
 			trigger.TenantId = &tid
 			return tid
@@ -829,17 +835,17 @@ func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
 	return ""
 }
 
-func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
+func (p *Processor) sendTriggerToDecklog(trigger *ipcpb.MistTrigger) error {
 	return p.sendTriggerToDecklogContext(context.Background(), trigger)
 }
 
-func (p *Processor) sendClientLifecycleBatchToDecklog(trigger *pb.MistTrigger) error {
+func (p *Processor) sendClientLifecycleBatchToDecklog(trigger *ipcpb.MistTrigger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), clientBatchSendTimeout)
 	defer cancel()
 	return p.sendTriggerToDecklogContext(ctx, trigger)
 }
 
-func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *pb.MistTrigger) error {
+func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *ipcpb.MistTrigger) error {
 	if trigger == nil {
 		return fmt.Errorf("nil trigger")
 	}
@@ -879,7 +885,7 @@ func (p *Processor) sendTriggerToDecklogContext(ctx context.Context, trigger *pb
 	return nil
 }
 
-func shouldSurfaceDecklogError(trigger *pb.MistTrigger) bool {
+func shouldSurfaceDecklogError(trigger *ipcpb.MistTrigger) bool {
 	switch trigger.GetTriggerType() {
 	case string(mist.TriggerUserEnd),
 		string(mist.TriggerStreamEnd),
@@ -895,60 +901,60 @@ func shouldSurfaceDecklogError(trigger *pb.MistTrigger) bool {
 }
 
 // ProcessTypedTrigger processes a typed protobuf MistTrigger directly
-func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	if trigger == nil {
 		return "", true, fmt.Errorf("nil trigger")
 	}
 	switch trigger.GetTriggerPayload().(type) {
-	case *pb.MistTrigger_PushRewrite:
+	case *ipcpb.MistTrigger_PushRewrite:
 		return p.handlePushRewrite(trigger)
-	case *pb.MistTrigger_PlayRewrite:
+	case *ipcpb.MistTrigger_PlayRewrite:
 		return p.handlePlayRewrite(trigger)
-	case *pb.MistTrigger_StreamSource:
+	case *ipcpb.MistTrigger_StreamSource:
 		return p.handleStreamSource(trigger)
-	case *pb.MistTrigger_StreamProcess:
+	case *ipcpb.MistTrigger_StreamProcess:
 		return p.handleStreamProcess(trigger)
-	case *pb.MistTrigger_PushOutStart:
+	case *ipcpb.MistTrigger_PushOutStart:
 		return p.handlePushOutStart(trigger)
-	case *pb.MistTrigger_PushEnd:
+	case *ipcpb.MistTrigger_PushEnd:
 		return p.handlePushEnd(trigger)
-	case *pb.MistTrigger_PushInputClose:
+	case *ipcpb.MistTrigger_PushInputClose:
 		return p.handlePushInputClose(trigger)
-	case *pb.MistTrigger_ViewerConnect:
+	case *ipcpb.MistTrigger_ViewerConnect:
 		return p.handleUserNew(trigger)
-	case *pb.MistTrigger_ViewerDisconnect:
+	case *ipcpb.MistTrigger_ViewerDisconnect:
 		return p.handleUserEnd(trigger)
-	case *pb.MistTrigger_StreamBuffer:
+	case *ipcpb.MistTrigger_StreamBuffer:
 		return p.handleStreamBuffer(trigger)
-	case *pb.MistTrigger_StreamEnd:
+	case *ipcpb.MistTrigger_StreamEnd:
 		return p.handleStreamEnd(trigger)
-	case *pb.MistTrigger_TrackList:
+	case *ipcpb.MistTrigger_TrackList:
 		return p.handleLiveTrackList(trigger)
-	case *pb.MistTrigger_RecordingComplete:
+	case *ipcpb.MistTrigger_RecordingComplete:
 		return p.handleRecordingEnd(trigger)
-	case *pb.MistTrigger_RecordingSegment:
+	case *ipcpb.MistTrigger_RecordingSegment:
 		return p.handleRecordingSegment(trigger)
-	case *pb.MistTrigger_StreamLifecycleUpdate:
+	case *ipcpb.MistTrigger_StreamLifecycleUpdate:
 		return p.handleStreamLifecycleUpdate(trigger)
-	case *pb.MistTrigger_ClientLifecycleUpdate:
+	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
 		return p.handleClientLifecycleUpdate(trigger)
-	case *pb.MistTrigger_NodeLifecycleUpdate:
+	case *ipcpb.MistTrigger_NodeLifecycleUpdate:
 		return p.handleNodeLifecycleUpdate(trigger)
-	case *pb.MistTrigger_DvrLifecycleData:
+	case *ipcpb.MistTrigger_DvrLifecycleData:
 		return p.handleDVRLifecycleData(trigger)
-	case *pb.MistTrigger_StorageLifecycleData:
+	case *ipcpb.MistTrigger_StorageLifecycleData:
 		return p.handleStorageLifecycleData(trigger)
-	case *pb.MistTrigger_ProcessBilling:
+	case *ipcpb.MistTrigger_ProcessBilling:
 		return p.handleProcessBilling(trigger)
-	case *pb.MistTrigger_RawMistWebhook:
+	case *ipcpb.MistTrigger_RawMistWebhook:
 		return p.handleRawMistWebhook(trigger)
 	default:
 		return "", trigger.GetBlocking(), fmt.Errorf("unsupported trigger payload type")
 	}
 }
 
-func (p *Processor) handleRawMistWebhook(trigger *pb.MistTrigger) (string, bool, error) {
-	if _, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_RawMistWebhook); !ok {
+func (p *Processor) handleRawMistWebhook(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	if _, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_RawMistWebhook); !ok {
 		return "", false, fmt.Errorf("unexpected payload type for RawMistWebhook: %T", trigger.GetTriggerPayload())
 	}
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
@@ -965,8 +971,8 @@ func (p *Processor) handleRawMistWebhook(trigger *pb.MistTrigger) (string, bool,
 }
 
 // handleProcessBilling forwards ProcessBillingEvent to Decklog
-func (p *Processor) handleProcessBilling(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ProcessBilling)
+func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ProcessBilling)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for ProcessBilling: %T", trigger.GetTriggerPayload())
 	}
@@ -1029,8 +1035,8 @@ func (p *Processor) ProcessTrigger(triggerType string, rawPayload []byte, nodeID
 }
 
 // handleStorageLifecycleData forwards StorageLifecycleData to Decklog
-func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData)
+func (p *Processor) handleStorageLifecycleData(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_StorageLifecycleData)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for StorageLifecycleData: %T", trigger.GetTriggerPayload())
 	}
@@ -1064,8 +1070,8 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 }
 
 // handleDVRLifecycleData forwards DVRLifecycleData to Decklog
-func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData)
+func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_DvrLifecycleData)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for DVRLifecycleData: %T", trigger.GetTriggerPayload())
 	}
@@ -1102,8 +1108,8 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 }
 
 // handlePushRewrite processes PUSH_REWRITE trigger (blocking)
-func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushRewrite)
+func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushRewrite: %T", trigger.GetTriggerPayload())
 	}
@@ -1129,7 +1135,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"error":      err,
 		}).Error("Failed to validate stream key with Commodore")
-		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
 	}
 
 	if !streamValidation.Valid {
@@ -1137,7 +1143,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		if message == "" {
 			message = "invalid stream key"
 		}
-		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
@@ -1147,7 +1153,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: tenant suspended due to negative balance")
-		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED, "account suspended - please top up your balance")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED, "account suspended - please top up your balance")
 	}
 
 	// Check if balance is negative (balance <= 0, but not yet suspended)
@@ -1157,7 +1163,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: insufficient balance (402 Payment Required)")
-		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
 	}
 
 	// Load-aware free-tier admission: if the tenant has exhausted a free-tier
@@ -1171,7 +1177,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"tenant_id":  streamValidation.TenantId,
 			"reason":     reason,
 		}).Warn("Rejecting ingest: free-tier allowance exhausted under cluster load")
-		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED, reason)
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED, reason)
 	}
 
 	// Per-tenant concurrent-stream cap. Hard limit independent of cluster
@@ -1196,7 +1202,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				"max_streams": caps.GetMaxStreams(),
 			}).Warn("Rejecting ingest: tenant concurrent-stream cap reached")
 			return "", true, ingesterrors.New(
-				pb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
+				ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
 				fmt.Sprintf("concurrent stream cap reached (%d/%d) — close another stream or upgrade", current, caps.GetMaxStreams()),
 			)
 		}
@@ -1210,7 +1216,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				"internal_name":  streamValidation.InternalName,
 				"remote_cluster": remoteCluster,
 			}).Warn("Rejecting duplicate ingest — stream already live on peer cluster")
-			return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, "stream already live on cluster "+remoteCluster)
+			return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, "stream already live on cluster "+remoteCluster)
 		}
 	}
 
@@ -1232,7 +1238,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"candidate_node": trigger.GetNodeId(),
 		}).Error("Refusing ingest: stream registry not initialized")
 		return "", true, ingesterrors.New(
-			pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+			ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL,
 			"ingest admission unavailable",
 		)
 	}
@@ -1256,7 +1262,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				"candidate_node": trigger.GetNodeId(),
 			}).Warn("Rejecting duplicate ingest — publisher already active on this stream")
 			return "", true, ingesterrors.New(
-				pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
+				ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
 				"another publisher is currently active on this stream",
 			)
 		}
@@ -1422,7 +1428,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 	// Get geographic data from node configuration
 	var latitude, longitude *float64
 	var location string
-	var nodeBucket *pb.GeoBucket
+	var nodeBucket *ipcpb.GeoBucket
 	if nodeConfig := p.getNodeConfig(trigger.GetNodeId()); nodeConfig != nil {
 		if nodeConfig.Latitude != 0 {
 			latitude = &nodeConfig.Latitude
@@ -1502,7 +1508,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			userID := streamValidation.UserId
 			dvrCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			dvrReq := &pb.StartDVRRequest{
+			dvrReq := &sharedpb.StartDVRRequest{
 				TenantId:      streamValidation.TenantId,
 				InternalName:  streamValidation.InternalName,
 				UserId:        &userID,
@@ -1510,7 +1516,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				DvrPolicy:     streamValidation.GetDvrPolicy(),
 				ProcessesJson: streamValidation.GetDvrProcessesJson(),
 			}
-			var dvrResponse *pb.StartDVRResponse
+			var dvrResponse *sharedpb.StartDVRResponse
 			var err error
 			if hinted, ok := p.dvrService.(DVRStarterWithSourceHint); ok {
 				dvrResponse, err = hinted.StartDVRWithSourceHint(dvrCtx, dvrReq, trigger.GetNodeId())
@@ -1568,8 +1574,8 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 }
 
 // handlePlayRewrite processes PLAY_REWRITE trigger (blocking)
-func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PlayRewrite)
+func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PlayRewrite)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PlayRewrite: %T", trigger.GetTriggerPayload())
 	}
@@ -1690,7 +1696,7 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}
 	}
 
-	go func(tr *pb.MistTrigger, requested string) {
+	go func(tr *ipcpb.MistTrigger, requested string) {
 		if err := p.sendTriggerToDecklog(tr); err != nil {
 			p.logger.WithFields(logging.Fields{
 				"requested_stream": requested,
@@ -1790,8 +1796,8 @@ func (p *Processor) federationOriginPullDTSC(ctx context.Context, streamName, no
 }
 
 // handleStreamSource processes STREAM_SOURCE trigger (blocking)
-func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamSource)
+func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_StreamSource)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for StreamSource: %T", trigger.GetTriggerPayload())
 	}
@@ -2010,7 +2016,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	contentType := ""
 	originClusterID := ""
 	tenantID := ""
-	var clusterPeers []*pb.TenantClusterPeer
+	var clusterPeers []*quartermasterpb.TenantClusterPeer
 	if control.CommodoreClient != nil && artifactInternal != "" {
 		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
 			artifactHash = resp.ArtifactHash
@@ -2146,7 +2152,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			return control.OfflineUnavailable, false, nil
 		}
 
-		go func(tr *pb.MistTrigger, name string) {
+		go func(tr *ipcpb.MistTrigger, name string) {
 			if err := p.sendTriggerToDecklog(tr); err != nil {
 				p.logger.WithFields(logging.Fields{
 					"stream_name":  name,
@@ -2170,7 +2176,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"stream_name":   streamName,
 	}).Warn("Artifact not found")
 
-	go func(tr *pb.MistTrigger, name string) {
+	go func(tr *ipcpb.MistTrigger, name string) {
 		if err := p.sendTriggerToDecklog(tr); err != nil {
 			p.logger.WithFields(logging.Fields{
 				"stream_name":  name,
@@ -2198,7 +2204,7 @@ func ValidatePullSourceURI(uri string) bool {
 // to pick the actual origin (active in-cluster DTSC node vs the upstream URI).
 // The stored upstream URI is never embedded in the returned string — /source
 // re-resolves it server-side from Commodore.
-func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) resolvePullSource(streamName string, trigger *ipcpb.MistTrigger) (string, bool, error) {
 	internalName := strings.TrimPrefix(streamName, "pull+")
 	if internalName == "" {
 		return control.OfflineInvalidToken, false, nil
@@ -2322,7 +2328,7 @@ func (p *Processor) resolvePullSource(streamName string, trigger *pb.MistTrigger
 	return "balance:" + base, false, nil
 }
 
-func (p *Processor) resolveBareManagedStreamContext(streamName string) (*pb.ResolveStreamContextResponse, string, error) {
+func (p *Processor) resolveBareManagedStreamContext(streamName string) (*commodorepb.ResolveStreamContextResponse, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	resp, err := p.commodoreClient.ResolveStreamContext(ctx, "", "", streamName, p.clusterID)
 	cancel()
@@ -2362,7 +2368,7 @@ func formatTriggerPlacementRejects(rejects []pullsource.PlacementReject, trigger
 	return strings.Join(parts, ";")
 }
 
-func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNameResponse, internalName, kind, detail string) {
+func (p *Processor) recordPullSourceEvent(resp *commodorepb.ResolvePullSourceByInternalNameResponse, internalName, kind, detail string) {
 	if control.CommodoreClient == nil || internalName == "" || kind == "" {
 		return
 	}
@@ -2377,7 +2383,7 @@ func (p *Processor) recordPullSourceEvent(resp *pb.ResolvePullSourceByInternalNa
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := control.CommodoreClient.RecordPullSourceEvent(ctx, &pb.RecordPullSourceEventRequest{
+		if err := control.CommodoreClient.RecordPullSourceEvent(ctx, &commodorepb.RecordPullSourceEventRequest{
 			TenantId:     tenantID,
 			StreamId:     streamID,
 			InternalName: internalName,
@@ -2502,7 +2508,7 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 //     before job dispatch.
 //   - vod+            : read-only file playback. MistProc does not
 //     support VOD mode — NEVER returns config here.
-func (p *Processor) handleStreamProcess(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	streamName := trigger.GetStreamProcess().GetStreamName()
 	internalName := mist.ExtractInternalName(streamName)
 
@@ -2605,8 +2611,8 @@ func (p *Processor) resolveRollingDVRProcessConfig(dvrInternalName string) strin
 }
 
 // handlePushEnd processes PUSH_END trigger (non-blocking)
-func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd)
+func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushEnd)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushEnd: %T", trigger.GetTriggerPayload())
 	}
@@ -2665,8 +2671,8 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 // the AdmitAndReserve admission state machine relies on. Non-blocking:
 // the response is ignored by Mist (this is an async trigger). Failure to
 // flip registry state still forwards the trigger to Decklog for audit.
-func (p *Processor) handlePushInputClose(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushInputClose)
+func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushInputClose)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushInputClose: %T", trigger.GetTriggerPayload())
 	}
@@ -2722,8 +2728,8 @@ func (p *Processor) handlePushInputClose(trigger *pb.MistTrigger) (string, bool,
 }
 
 // handlePushOutStart processes PUSH_OUT_START trigger (blocking)
-func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_PushOutStart)
+func (p *Processor) handlePushOutStart(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushOutStart)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for PushOutStart: %T", trigger.GetTriggerPayload())
 	}
@@ -2755,8 +2761,8 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 }
 
 // handleUserNew processes USER_NEW trigger (blocking)
-func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect)
+func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ViewerConnect)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for ViewerConnect: %T", trigger.GetTriggerPayload())
 	}
@@ -2908,9 +2914,9 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 
 // handleStreamBuffer processes STREAM_BUFFER trigger (non-blocking)
 // Forwards the original StreamBufferTrigger to Decklog with full track data and health metrics.
-func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	// Extract StreamBuffer payload from protobuf
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer)
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_StreamBuffer)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for StreamBuffer: %T", trigger.GetTriggerPayload())
 	}
@@ -2960,9 +2966,9 @@ func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, e
 }
 
 // handleStreamEnd processes STREAM_END trigger (non-blocking)
-func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	// Extract StreamEnd payload from protobuf
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamEnd)
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_StreamEnd)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for StreamEnd: %T", trigger.GetTriggerPayload())
 	}
@@ -3036,8 +3042,8 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 }
 
 // handleUserEnd processes USER_END trigger (non-blocking)
-func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerDisconnect)
+func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ViewerDisconnect)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for ViewerDisconnect: %T", trigger.GetTriggerPayload())
 	}
@@ -3140,9 +3146,9 @@ func extractCorrelationID(requestURL string) string {
 }
 
 // handleLiveTrackList processes LIVE_TRACK_LIST trigger (non-blocking)
-func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleLiveTrackList(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	// Extract LiveTrackList payload from protobuf
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_TrackList)
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_TrackList)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for TrackList: %T", trigger.GetTriggerPayload())
 	}
@@ -3187,9 +3193,9 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 }
 
 // handleRecordingEnd processes RECORDING_END trigger (non-blocking)
-func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleRecordingEnd(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	// Extract RecordingEnd payload from protobuf
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingComplete)
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_RecordingComplete)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for RecordingComplete: %T", trigger.GetTriggerPayload())
 	}
@@ -3232,9 +3238,9 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 }
 
 // handleRecordingSegment processes RECORDING_SEGMENT trigger (non-blocking)
-func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, bool, error) {
+func (p *Processor) handleRecordingSegment(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	// Extract RecordingSegment payload from protobuf
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingSegment)
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_RecordingSegment)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for RecordingSegment: %T", trigger.GetTriggerPayload())
 	}
@@ -3270,8 +3276,8 @@ func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, boo
 }
 
 // handleStreamLifecycleUpdate forwards StreamLifecycleUpdate to Decklog and updates state
-func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate)
+func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_StreamLifecycleUpdate)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for StreamLifecycleUpdate: %T", trigger.GetTriggerPayload())
 	}
@@ -3334,8 +3340,8 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 
 // handleClientLifecycleUpdate enriches ClientLifecycleUpdate and queues it for
 // batched forwarding to Decklog.
-func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate)
+func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_ClientLifecycleUpdate)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for ClientLifecycleUpdate: %T", trigger.GetTriggerPayload())
 	}
@@ -3380,8 +3386,8 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string
 }
 
 // handleNodeLifecycleUpdate processes NODE_LIFECYCLE_UPDATE triggers using protobuf directly
-func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	payload, ok := trigger.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate)
+func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_NodeLifecycleUpdate)
 	if !ok {
 		return "", false, fmt.Errorf("unexpected payload type for NodeLifecycleUpdate: %T", trigger.GetTriggerPayload())
 	}
@@ -3528,7 +3534,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		}
 	}
 
-	previousArtifacts := func() []*pb.StoredArtifact {
+	previousArtifacts := func() []*ipcpb.StoredArtifact {
 		nodeState := state.DefaultManager().GetNodeState(nu.GetNodeId())
 		if nodeState == nil {
 			return nil
@@ -3578,20 +3584,20 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	return "", false, nil
 }
 
-func mapOperationalMode(mode pb.NodeOperationalMode) (state.NodeOperationalMode, bool) {
+func mapOperationalMode(mode ipcpb.NodeOperationalMode) (state.NodeOperationalMode, bool) {
 	switch mode {
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
 		return state.NodeModeNormal, true
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
 		return state.NodeModeDraining, true
-	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+	case ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
 		return state.NodeModeMaintenance, true
 	default:
 		return "", false
 	}
 }
 
-func artifactMapsEqual(current, incoming []*pb.StoredArtifact) bool {
+func artifactMapsEqual(current, incoming []*ipcpb.StoredArtifact) bool {
 	if len(current) != len(incoming) {
 		return false
 	}
@@ -3618,7 +3624,7 @@ func artifactMapsEqual(current, incoming []*pb.StoredArtifact) bool {
 	return len(counts) == 0
 }
 
-func artifactMapKey(artifact *pb.StoredArtifact) string {
+func artifactMapKey(artifact *ipcpb.StoredArtifact) string {
 	if artifact == nil {
 		return "<nil>"
 	}
@@ -3798,7 +3804,7 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 	}
 	result, arrangeErr := federation.DefaultArrange(ctx, federation.ArrangeOriginPullRequest{
 		InternalName: runtimeName,
-		Remote: &pb.EdgeCandidate{
+		Remote: &foghornfederationpb.EdgeCandidate{
 			NodeId: recordingNode,
 		},
 		RemoteCluster:   peerCluster,
@@ -3915,7 +3921,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			nodeOwnerTenantID = t
 		}
 		nodeLocation := nodeState.Location
-		nodeCapabilities := &pb.NodeCapabilities{
+		nodeCapabilities := &ipcpb.NodeCapabilities{
 			Ingest:     nodeState.CapIngest,
 			Edge:       nodeState.CapEdge,
 			Storage:    nodeState.CapStorage,
@@ -3924,7 +3930,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		}
 
 		// Map to store aggregated usage per tenant for this node
-		tenantUsageMap := make(map[string]*pb.TenantStorageUsage)
+		tenantUsageMap := make(map[string]*ipcpb.TenantStorageUsage)
 
 		// Iterate through artifacts to sum up usage per tenant
 		for _, artifact := range nodeState.Artifacts {
@@ -3951,7 +3957,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 
 			usage := tenantUsageMap[tenantID]
 			if usage == nil {
-				usage = &pb.TenantStorageUsage{TenantId: tenantID}
+				usage = &ipcpb.TenantStorageUsage{TenantId: tenantID}
 				tenantUsageMap[tenantID] = usage
 			}
 
@@ -3977,7 +3983,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		}
 
 		// Construct the StorageSnapshot message
-		var tenantUsages []*pb.TenantStorageUsage
+		var tenantUsages []*ipcpb.TenantStorageUsage
 		for _, tu := range tenantUsageMap {
 			tenantUsages = append(tenantUsages, tu)
 		}
@@ -3989,7 +3995,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		// is the on-disk edge cache. Settlement rating uses these to
 		// route marketplace payouts. See docs/architecture/meter-contracts.md.
 		hotProviderTenantID := p.ownerTenantID
-		storageSnapshot := &pb.StorageSnapshot{
+		storageSnapshot := &ipcpb.StorageSnapshot{
 			NodeId:                   nodeSnap.NodeID,
 			Timestamp:                time.Now().Unix(),
 			TenantId:                 func() *string { s := snapshotTenantID; return &s }(),
@@ -4003,13 +4009,13 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		}
 
 		// Send to Decklog
-		trigger := &pb.MistTrigger{
+		trigger := &ipcpb.MistTrigger{
 			TriggerType: "STORAGE_SNAPSHOT",
 			NodeId:      nodeSnap.NodeID,
 			Timestamp:   time.Now().Unix(),
 			TenantId:    func() *string { s := snapshotTenantID; return &s }(),
 			ClusterId:   func() *string { s := p.clusterID; return &s }(),
-			TriggerPayload: &pb.MistTrigger_StorageSnapshot{
+			TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
 				StorageSnapshot: storageSnapshot,
 			},
 		}
@@ -4031,10 +4037,10 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		return nil
 	}
 
-	var coldUsages []*pb.TenantStorageUsage
+	var coldUsages []*ipcpb.TenantStorageUsage
 	for _, usage := range coldUsageMap {
 		totalBytes := usage.DvrBytes + usage.ClipBytes + usage.VodBytes
-		coldUsages = append(coldUsages, &pb.TenantStorageUsage{
+		coldUsages = append(coldUsages, &ipcpb.TenantStorageUsage{
 			TenantId:        usage.TenantID,
 			TotalBytes:      totalBytes,
 			FileCount:       usage.FileCount,
@@ -4052,7 +4058,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	// tenant (FrameWorks for the platform clusters; the marketplace
 	// cluster operator for third-party clusters). Customer billing rates the
 	// usage tenant; settlement views can route by these provider fields.
-	coldSnapshot := &pb.StorageSnapshot{
+	coldSnapshot := &ipcpb.StorageSnapshot{
 		NodeId:                   "s3",
 		Timestamp:                time.Now().Unix(),
 		TenantId:                 func() *string { s := coldTenantID; return &s }(),
@@ -4063,13 +4069,13 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		StorageBackend:           stringPtr("s3"),
 	}
 
-	coldTrigger := &pb.MistTrigger{
+	coldTrigger := &ipcpb.MistTrigger{
 		TriggerType: "STORAGE_SNAPSHOT",
 		NodeId:      "s3",
 		Timestamp:   time.Now().Unix(),
 		TenantId:    func() *string { s := coldTenantID; return &s }(),
 		ClusterId:   func() *string { s := p.clusterID; return &s }(),
-		TriggerPayload: &pb.MistTrigger_StorageSnapshot{
+		TriggerPayload: &ipcpb.MistTrigger_StorageSnapshot{
 			StorageSnapshot: coldSnapshot,
 		},
 	}
@@ -4249,7 +4255,7 @@ func (p *Processor) getStreamContext(ctx context.Context, streamName, tenantIDHi
 // cache. Source lookups consult the unified registry first for a warm-
 // cache fast path; on miss, both kinds fall through to getStreamContext
 // which goes via Commodore and seeds both streamCache and the registry.
-func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName string) streamContext {
+func (p *Processor) applyStreamContext(trigger *ipcpb.MistTrigger, streamName string) streamContext {
 	tenantHint := ""
 	if trigger != nil && trigger.TenantId != nil {
 		tenantHint = *trigger.TenantId
@@ -4363,7 +4369,7 @@ var (
 
 // trackPushTargets stores push target metadata so PUSH_OUT_START/PUSH_END
 // can map target URIs back to push target IDs for status updates.
-func trackPushTargets(streamName, tenantID string, targets []*pb.PushTargetInternal) {
+func trackPushTargets(streamName, tenantID string, targets []*commodorepb.PushTargetInternal) {
 	activePushTargetsMu.Lock()
 	defer activePushTargetsMu.Unlock()
 	m := make(map[string]pushTargetInfo, len(targets))
@@ -4394,10 +4400,10 @@ func lookupPushTarget(streamName, targetURI string) (pushTargetInfo, bool) {
 
 // activatePushTargets sends push targets (from ValidateStreamKeyResponse) to the
 // origin node's Helmsman for activation. Called asynchronously from handlePushRewrite.
-func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, targets []*pb.PushTargetInternal) {
-	specs := make([]*pb.PushTargetSpec, 0, len(targets))
+func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, targets []*commodorepb.PushTargetInternal) {
+	specs := make([]*ipcpb.PushTargetSpec, 0, len(targets))
 	for _, t := range targets {
-		specs = append(specs, &pb.PushTargetSpec{
+		specs = append(specs, &ipcpb.PushTargetSpec{
 			TargetId:  t.GetId(),
 			TargetUri: t.GetTargetUri(),
 			Name:      t.GetName(),
@@ -4409,7 +4415,7 @@ func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, t
 	// Track targets so PUSH_OUT_START/PUSH_END can update status
 	trackPushTargets(streamName, tenantID, targets)
 
-	if err := control.SendActivatePushTargets(nodeID, &pb.ActivatePushTargets{
+	if err := control.SendActivatePushTargets(nodeID, &ipcpb.ActivatePushTargets{
 		StreamName: streamName,
 		Targets:    specs,
 	}); err != nil {
@@ -4433,7 +4439,7 @@ func (p *Processor) activatePushTargets(nodeID, internalName, tenantID string, t
 func (p *Processor) deactivatePushTargets(nodeID, streamName string) {
 	untrackPushTargets(streamName)
 
-	if err := control.SendDeactivatePushTargets(nodeID, &pb.DeactivatePushTargets{
+	if err := control.SendDeactivatePushTargets(nodeID, &ipcpb.DeactivatePushTargets{
 		StreamName: streamName,
 	}); err != nil {
 		p.logger.WithFields(logging.Fields{
@@ -4488,7 +4494,7 @@ type loadThresholds struct {
 // exhausted any free-tier allowance. IsFreeTier comes from tier-identity in
 // Purser (tier_name == 'free'); a paid tenant with a zero-priced meter is
 // not "free" for admission purposes.
-func freeTierAllowanceState(allowances []*pb.MeterAllowance) (isFreeTier, exhausted bool) {
+func freeTierAllowanceState(allowances []*purserpb.MeterAllowance) (isFreeTier, exhausted bool) {
 	for _, a := range allowances {
 		if a == nil {
 			continue
@@ -4588,7 +4594,7 @@ func clusterLoadFraction(clusterID string) (frac float64, ok bool) {
 // past their allowance are rejected at 50% cluster load; all free tenants are
 // rejected at the 95% redline. Existing live streams are never killed —
 // rejection applies only to new PUSH_REWRITE admissions.
-func (p *Processor) evaluateFreeTierAdmission(streamValidation *pb.ValidateStreamKeyResponse, clusterID string) (string, bool) {
+func (p *Processor) evaluateFreeTierAdmission(streamValidation *commodorepb.ValidateStreamKeyResponse, clusterID string) (string, bool) {
 	if streamValidation == nil {
 		return "", false
 	}

@@ -17,7 +17,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Metrics hooks (optional)
@@ -184,7 +184,7 @@ type NodeState struct {
 	AddBandwidth  uint64   `json:"add_bandwidth,omitempty"`  // Bandwidth penalty tracking
 
 	// Artifacts stored on this node
-	Artifacts []*pb.StoredArtifact `json:"artifacts,omitempty"`
+	Artifacts []*ipcpb.StoredArtifact `json:"artifacts,omitempty"`
 
 	// Cached scoring helpers (computed on update)
 	CPUScore      uint64    `json:"-"` // Pre-computed CPU score component
@@ -251,7 +251,7 @@ type StreamStateManager struct {
 	reconcileTicker *time.Ticker
 
 	nodeLifecycleBatchMu            sync.Mutex
-	nodeLifecycleBatch              []*pb.NodeLifecycleUpdate
+	nodeLifecycleBatch              []*ipcpb.NodeLifecycleUpdate
 	nodeLifecycleBatchTimer         *time.Timer
 	nodeLifecycleBatchSize          int
 	nodeLifecycleBatchFlushInterval time.Duration
@@ -1682,7 +1682,7 @@ type ArtifactNodeInfo struct {
 	NodeID       string
 	Host         string // Base URL
 	Score        int64  // Load balancing score (lower is better)
-	Artifact     *pb.StoredArtifact
+	Artifact     *ipcpb.StoredArtifact
 	GeoLatitude  float64
 	GeoLongitude float64
 }
@@ -1723,7 +1723,7 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 // FindNodeByArtifactHash searches for a node hosting the specified artifact (Clip/DVR).
 // Returns the best node's host/base URL and the artifact details if found.
 // For multi-node support with load balancing, use FindNodesByArtifactHash instead.
-func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.StoredArtifact) {
+func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *ipcpb.StoredArtifact) {
 	nodes := sm.FindNodesByArtifactHash(hash)
 	if len(nodes) == 0 {
 		return "", nil
@@ -1742,14 +1742,14 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.S
 
 // FindNodeByArtifactInternalName searches for a node hosting an artifact by its routing name.
 // StoredArtifact.StreamName is "vod+{internal_name}" — this matches the suffix after "+".
-func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string) (string, *pb.StoredArtifact) {
+func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string) (string, *ipcpb.StoredArtifact) {
 	snapshot := sm.GetBalancerSnapshotAtomic()
 	if snapshot == nil || internalName == "" {
 		return "", nil
 	}
 
 	var bestHost string
-	var bestArtifact *pb.StoredArtifact
+	var bestArtifact *ipcpb.StoredArtifact
 	bestScore := int64(1<<63 - 1)
 
 	for _, node := range snapshot.Nodes {
@@ -1795,7 +1795,7 @@ func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uin
 }
 
 // SetNodeArtifacts updates the artifacts stored on a node (in-memory and persistent)
-func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.StoredArtifact) {
+func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb.StoredArtifact) {
 	sm.mu.Lock()
 
 	n := sm.nodes[nodeID]
@@ -1805,7 +1805,7 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	}
 
 	// Deep copy artifacts to avoid shared slices
-	n.Artifacts = make([]*pb.StoredArtifact, len(artifacts))
+	n.Artifacts = make([]*ipcpb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	n.LastUpdate = time.Now()
 
@@ -1881,7 +1881,7 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 }
 
 // AddNodeArtifact adds or updates a single artifact in the in-memory node state.
-func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.StoredArtifact) {
+func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *ipcpb.StoredArtifact) {
 	if artifact == nil {
 		return
 	}
@@ -1898,7 +1898,7 @@ func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.Stored
 		if existing.GetClipHash() == artifact.GetClipHash() {
 			n.Artifacts[i] = artifact
 			n.LastUpdate = time.Now()
-			artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+			artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
 			sm.mu.Unlock()
 			sm.SetNodeArtifacts(nodeID, artifactsCopy)
 			return
@@ -1907,14 +1907,14 @@ func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.Stored
 
 	n.Artifacts = append(n.Artifacts, artifact)
 	n.LastUpdate = time.Now()
-	artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+	artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
 	sm.mu.Unlock()
 	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
 
 // setNodeArtifactsMemoryOnly updates artifacts in memory without persisting to DB.
 // Used during rehydration to avoid corrupting warm-cache state.
-func (sm *StreamStateManager) setNodeArtifactsMemoryOnly(nodeID string, artifacts []*pb.StoredArtifact) {
+func (sm *StreamStateManager) setNodeArtifactsMemoryOnly(nodeID string, artifacts []*ipcpb.StoredArtifact) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -1924,7 +1924,7 @@ func (sm *StreamStateManager) setNodeArtifactsMemoryOnly(nodeID string, artifact
 		sm.nodes[nodeID] = n
 	}
 
-	n.Artifacts = make([]*pb.StoredArtifact, len(artifacts))
+	n.Artifacts = make([]*ipcpb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	// Don't update LastUpdate - this is stale data from DB, not a fresh node report
 }
@@ -1940,37 +1940,37 @@ func inferArtifactType(filePath string) string {
 	return "clip"
 }
 
-func artifactTypeToString(artifactType pb.ArtifactEvent_ArtifactType) string {
+func artifactTypeToString(artifactType ipcpb.ArtifactEvent_ArtifactType) string {
 	switch artifactType {
-	case pb.ArtifactEvent_ARTIFACT_TYPE_CLIP:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP:
 		return "clip"
-	case pb.ArtifactEvent_ARTIFACT_TYPE_DVR:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR:
 		return "dvr"
-	case pb.ArtifactEvent_ARTIFACT_TYPE_VOD:
+	case ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD:
 		return "vod"
 	default:
 		return ""
 	}
 }
 
-func artifactTypeFromString(s string) pb.ArtifactEvent_ArtifactType {
+func artifactTypeFromString(s string) ipcpb.ArtifactEvent_ArtifactType {
 	switch s {
 	case "clip":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_CLIP
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP
 	case "dvr":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_DVR
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR
 	case "vod":
-		return pb.ArtifactEvent_ARTIFACT_TYPE_VOD
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD
 	default:
-		return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 	}
 }
 
 // storedArtifactRoleToString maps the heartbeat proto enum to the DB
 // role token. Polling-reported rows default to "cache"; ORIGIN is only
 // stamped by sidecar finalizer RPCs.
-func storedArtifactRoleToString(role pb.StoredArtifact_Role) string {
-	if role == pb.StoredArtifact_ROLE_ORIGIN {
+func storedArtifactRoleToString(role ipcpb.StoredArtifact_Role) string {
+	if role == ipcpb.StoredArtifact_ROLE_ORIGIN {
 		return "origin"
 	}
 	return "cache"
@@ -1978,7 +1978,7 @@ func storedArtifactRoleToString(role pb.StoredArtifact_Role) string {
 
 // checkAndTriggerDtshSync checks for artifacts that have .dtsh locally but weren't synced with it
 // This catches the race condition where .dtsh is created after the initial sync
-func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts []*pb.StoredArtifact) {
+func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts []*ipcpb.StoredArtifact) {
 	sm.mu.RLock()
 	clipsRepo := sm.repos.Clips
 	dvrRepo := sm.repos.DVR
@@ -2039,7 +2039,7 @@ func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string)
 	}
 
 	// Filter out the deleted artifact
-	newArtifacts := make([]*pb.StoredArtifact, 0, len(n.Artifacts))
+	newArtifacts := make([]*ipcpb.StoredArtifact, 0, len(n.Artifacts))
 	for _, a := range n.Artifacts {
 		if a.ClipHash != clipHash {
 			newArtifacts = append(newArtifacts, a)
@@ -2048,7 +2048,7 @@ func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string)
 
 	n.Artifacts = newArtifacts
 	n.LastUpdate = time.Now()
-	artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+	artifactsCopy := append([]*ipcpb.StoredArtifact(nil), n.Artifacts...)
 	sm.mu.Unlock()
 	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
@@ -2235,7 +2235,7 @@ type EnhancedBalancerNodeSnapshot struct {
 	CurrentTranscodes int `json:"current_transcodes"`
 
 	// Artifacts stored on this node
-	Artifacts []*pb.StoredArtifact `json:"artifacts"`
+	Artifacts []*ipcpb.StoredArtifact `json:"artifacts"`
 
 	// Stream summaries for this node
 	Streams map[string]BalancerStreamSummary `json:"streams"`
@@ -2390,7 +2390,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			CurrentTranscodes: n.CurrentTranscodes,
 
 			// Artifacts stored on this node
-			Artifacts: append([]*pb.StoredArtifact(nil), n.Artifacts...),
+			Artifacts: append([]*ipcpb.StoredArtifact(nil), n.Artifacts...),
 
 			// Stream summaries
 			Streams: nodeStreams[nodeID],
@@ -2784,9 +2784,9 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 			}
 		} else {
 			for nodeID, records := range nodeArtifacts {
-				artifacts := make([]*pb.StoredArtifact, 0, len(records))
+				artifacts := make([]*ipcpb.StoredArtifact, 0, len(records))
 				for _, r := range records {
-					artifacts = append(artifacts, &pb.StoredArtifact{
+					artifacts = append(artifacts, &ipcpb.StoredArtifact{
 						ClipHash:     r.ArtifactHash,
 						StreamName:   r.StreamName,
 						FilePath:     r.FilePath,
@@ -2866,7 +2866,7 @@ func (sm *StreamStateManager) ApplyDVRStopped(ctx context.Context, dvrHash strin
 }
 
 // ApplyNodeLifecycle updates node info/metrics and persists outputs/base_url if configured
-func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error {
+func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ipcpb.NodeLifecycleUpdate) error {
 	if update == nil {
 		return nil
 	}
@@ -2975,7 +2975,7 @@ func (sm *StreamStateManager) SetNodeRuntimeInfo(nodeID, deployMode, osName, arc
 	}
 }
 
-func (sm *StreamStateManager) queueNodeLifecycleWrite(update *pb.NodeLifecycleUpdate) {
+func (sm *StreamStateManager) queueNodeLifecycleWrite(update *ipcpb.NodeLifecycleUpdate) {
 	if sm.nodeRepo == nil || update == nil {
 		return
 	}
@@ -3004,7 +3004,7 @@ func (sm *StreamStateManager) flushNodeLifecycleBatchFromTimer() {
 	sm.flushNodeLifecycleBatch(nil)
 }
 
-func (sm *StreamStateManager) flushNodeLifecycleBatch(batch []*pb.NodeLifecycleUpdate) {
+func (sm *StreamStateManager) flushNodeLifecycleBatch(batch []*ipcpb.NodeLifecycleUpdate) {
 	if sm.nodeRepo == nil {
 		return
 	}
@@ -3136,8 +3136,8 @@ type NodeRepository interface {
 	ListAllNodes(ctx context.Context) ([]NodeRecord, error)
 	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
-	UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
-	UpsertNodeComponents(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
+	UpsertNodeLifecycles(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error
+	UpsertNodeComponents(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error
 	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
 

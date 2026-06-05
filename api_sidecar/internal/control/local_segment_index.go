@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // Per-segment local cache index — sidecar
@@ -310,7 +310,7 @@ func (idx *LocalSegmentIndex) flushRestoreBatch(
 	if err != nil {
 		return err
 	}
-	known := make(map[string]*pb.DVRSegmentRef, len(resp.GetSegments()))
+	known := make(map[string]*ipcpb.DVRSegmentRef, len(resp.GetSegments()))
 	for _, s := range resp.GetSegments() {
 		known[s.GetSegmentName()] = s
 	}

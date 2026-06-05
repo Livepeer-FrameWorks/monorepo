@@ -1,15 +1,15 @@
 package resolvers
 
 import (
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func floatPtr(v float64) *float64 { return &v }
 
 func TestComputeClusterGeoFiltersClusters(t *testing.T) {
-	nodes := []*pb.InfrastructureNode{
+	nodes := []*quartermasterpb.InfrastructureNode{
 		{ClusterId: "cluster-a", Latitude: floatPtr(10), Longitude: floatPtr(20)},
 		{ClusterId: "cluster-a", Latitude: floatPtr(14), Longitude: floatPtr(24)},
 		{ClusterId: "cluster-b", Latitude: floatPtr(30), Longitude: floatPtr(40)},
@@ -31,7 +31,7 @@ func TestComputeClusterGeoFiltersClusters(t *testing.T) {
 }
 
 func TestApplyTrafficGeoOnlySetsKnownClusters(t *testing.T) {
-	pairs := []*pb.ClusterPairTraffic{
+	pairs := []*periscopepb.ClusterPairTraffic{
 		{ClusterId: "cluster-a", RemoteClusterId: "cluster-b"},
 		{ClusterId: "cluster-a", RemoteClusterId: "cluster-z"},
 	}
@@ -61,17 +61,17 @@ func TestAddAssignedPoolClusterGeoUsesPhysicalNodeGeoForVirtualCluster(t *testin
 			geoCount:  2,
 		},
 	}
-	nodesByID := map[string]*pb.InfrastructureNode{
+	nodesByID := map[string]*quartermasterpb.InfrastructureNode{
 		"node-a": {NodeId: "node-a", ClusterId: "core", Latitude: floatPtr(10), Longitude: floatPtr(20), Region: stringPtr("eu")},
 		"node-b": {NodeId: "node-b", ClusterId: "core", Latitude: floatPtr(30), Longitude: floatPtr(60), Region: stringPtr("eu")},
 	}
-	instancesByID := map[string]*pb.ServiceInstance{
+	instancesByID := map[string]*quartermasterpb.ServiceInstance{
 		"inst-a": {Id: "inst-a", NodeId: stringPtr("node-a")},
 		"inst-b": {Id: "inst-b", NodeId: stringPtr("node-b")},
 	}
 
-	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{{
-		Assignments: []*pb.ServiceInstanceAssignment{
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*quartermasterpb.GetServicePoolStatusResponse{{
+		Assignments: []*quartermasterpb.ServiceInstanceAssignment{
 			{InstanceId: "inst-a", ClusterId: "media"},
 			{InstanceId: "inst-b", ClusterId: "media"},
 		},
@@ -100,15 +100,15 @@ func TestAddAssignedPoolClusterGeoDoesNotOverrideDirectClusterGeo(t *testing.T) 
 			geoCount: 1,
 		},
 	}
-	nodesByID := map[string]*pb.InfrastructureNode{
+	nodesByID := map[string]*quartermasterpb.InfrastructureNode{
 		"node-a": {NodeId: "node-a", Latitude: floatPtr(30), Longitude: floatPtr(60)},
 	}
-	instancesByID := map[string]*pb.ServiceInstance{
+	instancesByID := map[string]*quartermasterpb.ServiceInstance{
 		"inst-a": {Id: "inst-a", NodeId: stringPtr("node-a")},
 	}
 
-	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{{
-		Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "inst-a", ClusterId: "media"}},
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*quartermasterpb.GetServicePoolStatusResponse{{
+		Assignments: []*quartermasterpb.ServiceInstanceAssignment{{InstanceId: "inst-a", ClusterId: "media"}},
 	}})
 
 	media := nodesByCluster["media"]
@@ -119,17 +119,17 @@ func TestAddAssignedPoolClusterGeoDoesNotOverrideDirectClusterGeo(t *testing.T) 
 
 func TestAddAssignedPoolClusterGeoDeduplicatesNodeAcrossPoolServices(t *testing.T) {
 	nodesByCluster := map[string]*networkClusterGeo{}
-	nodesByID := map[string]*pb.InfrastructureNode{
+	nodesByID := map[string]*quartermasterpb.InfrastructureNode{
 		"node-a": {NodeId: "node-a", Latitude: floatPtr(30), Longitude: floatPtr(60)},
 	}
-	instancesByID := map[string]*pb.ServiceInstance{
+	instancesByID := map[string]*quartermasterpb.ServiceInstance{
 		"foghorn-a":  {Id: "foghorn-a", NodeId: stringPtr("node-a")},
 		"chandler-a": {Id: "chandler-a", NodeId: stringPtr("node-a")},
 	}
 
-	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*pb.GetServicePoolStatusResponse{
-		{Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "foghorn-a", ClusterId: "media"}}},
-		{Assignments: []*pb.ServiceInstanceAssignment{{InstanceId: "chandler-a", ClusterId: "media"}}},
+	addAssignedPoolClusterGeo(nodesByCluster, nodesByID, instancesByID, []*quartermasterpb.GetServicePoolStatusResponse{
+		{Assignments: []*quartermasterpb.ServiceInstanceAssignment{{InstanceId: "foghorn-a", ClusterId: "media"}}},
+		{Assignments: []*quartermasterpb.ServiceInstanceAssignment{{InstanceId: "chandler-a", ClusterId: "media"}}},
 	})
 
 	media := nodesByCluster["media"]

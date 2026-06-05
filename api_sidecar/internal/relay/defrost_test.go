@@ -1,15 +1,14 @@
 package relay
 
 import (
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
 	"time"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestDefrostAggregatorFlushesQuietWindow(t *testing.T) {
-	emitted := make(chan *pb.StorageLifecycleData, 1)
-	agg := newDefrostAggregatorWithInterval(5*time.Millisecond, func(data *pb.StorageLifecycleData) error {
+	emitted := make(chan *ipcpb.StorageLifecycleData, 1)
+	agg := newDefrostAggregatorWithInterval(5*time.Millisecond, func(data *ipcpb.StorageLifecycleData) error {
 		emitted <- data
 		return nil
 	})
@@ -18,7 +17,7 @@ func TestDefrostAggregatorFlushesQuietWindow(t *testing.T) {
 
 	select {
 	case got := <-emitted:
-		if got.GetAction() != pb.StorageLifecycleData_ACTION_CACHED {
+		if got.GetAction() != ipcpb.StorageLifecycleData_ACTION_CACHED {
 			t.Fatalf("action = %s, want ACTION_CACHED", got.GetAction())
 		}
 		if got.GetAssetType() != "vod" || got.GetAssetHash() != "asset-hash" {

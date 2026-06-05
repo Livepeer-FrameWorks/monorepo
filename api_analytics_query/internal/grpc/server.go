@@ -19,7 +19,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -35,17 +37,17 @@ import (
 // PeriscopeServer implements all Periscope gRPC services
 // All queries use ClickHouse only - no PostgreSQL dependency
 type PeriscopeServer struct {
-	pb.UnimplementedStreamAnalyticsServiceServer
-	pb.UnimplementedViewerAnalyticsServiceServer
-	pb.UnimplementedTrackAnalyticsServiceServer
-	pb.UnimplementedConnectionAnalyticsServiceServer
-	pb.UnimplementedNodeAnalyticsServiceServer
-	pb.UnimplementedRoutingAnalyticsServiceServer
-	pb.UnimplementedFederationAnalyticsServiceServer
-	pb.UnimplementedPlatformAnalyticsServiceServer
-	pb.UnimplementedClipAnalyticsServiceServer
-	pb.UnimplementedAggregatedAnalyticsServiceServer
-	pb.UnimplementedOrchestratorAnalyticsServiceServer
+	periscopepb.UnimplementedStreamAnalyticsServiceServer
+	periscopepb.UnimplementedViewerAnalyticsServiceServer
+	periscopepb.UnimplementedTrackAnalyticsServiceServer
+	periscopepb.UnimplementedConnectionAnalyticsServiceServer
+	periscopepb.UnimplementedNodeAnalyticsServiceServer
+	periscopepb.UnimplementedRoutingAnalyticsServiceServer
+	periscopepb.UnimplementedFederationAnalyticsServiceServer
+	periscopepb.UnimplementedPlatformAnalyticsServiceServer
+	periscopepb.UnimplementedClipAnalyticsServiceServer
+	periscopepb.UnimplementedAggregatedAnalyticsServiceServer
+	periscopepb.UnimplementedOrchestratorAnalyticsServiceServer
 
 	clickhouse database.ClickHouseConn
 	logger     logging.Logger
@@ -111,7 +113,7 @@ func validateRelatedTenantIDs(ctx context.Context, relatedIDs []string) error {
 }
 
 // validateTimeRangeProto validates time range from proto message
-func validateTimeRangeProto(tr *pb.TimeRange) (time.Time, time.Time, error) {
+func validateTimeRangeProto(tr *commonpb.TimeRange) (time.Time, time.Time, error) {
 	if tr == nil {
 		// Default to last 24 hours
 		return time.Now().Add(-24 * time.Hour), time.Now(), nil
@@ -241,14 +243,14 @@ func wrapClickhouseError(err error, message string) error {
 
 // getCursorPagination extracts cursor pagination with defaults.
 // Supports bidirectional pagination: forward (first/after) and backward (last/before).
-func getCursorPagination(req *pb.CursorPaginationRequest) (*pagination.Params, error) {
+func getCursorPagination(req *commonpb.CursorPaginationRequest) (*pagination.Params, error) {
 	return pagination.Parse(req)
 }
 
 // buildCursorResponse creates a CursorPaginationResponse from results.
 // resultsLen: length before trimming, limit: requested limit
 // direction: pagination direction, totalCount: from COUNT query
-func buildCursorResponse(resultsLen, limit int, direction pagination.Direction, totalCount int32, startCursor, endCursor string) *pb.CursorPaginationResponse {
+func buildCursorResponse(resultsLen, limit int, direction pagination.Direction, totalCount int32, startCursor, endCursor string) *commonpb.CursorPaginationResponse {
 	return pagination.BuildResponse(resultsLen, limit, direction, totalCount, startCursor, endCursor)
 }
 
@@ -389,7 +391,7 @@ func (s *PeriscopeServer) countAsync(ctx context.Context, query string, args ...
 // StreamAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStreamEventsRequest) (*pb.GetStreamEventsResponse, error) {
+func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.GetStreamEventsRequest) (*periscopepb.GetStreamEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -438,9 +440,9 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.StreamEvent
+	var events []*periscopepb.StreamEvent
 	for rows.Next() {
-		var event pb.StreamEvent
+		var event periscopepb.StreamEvent
 		var ts time.Time
 		var eventData string
 		var bufferState, qualityTier, primaryCodec, requestURL, protocol, location, countryCode, city *string
@@ -571,13 +573,13 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].EventId)
 	}
 
-	return &pb.GetStreamEventsResponse{
+	return &periscopepb.GetStreamEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBufferEventsRequest) (*pb.GetBufferEventsResponse, error) {
+func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *periscopepb.GetBufferEventsRequest) (*periscopepb.GetBufferEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -622,9 +624,9 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.BufferEvent
+	var events []*periscopepb.BufferEvent
 	for rows.Next() {
-		var event pb.BufferEvent
+		var event periscopepb.BufferEvent
 		var ts time.Time
 		var eventData string
 		var eventID uuid.UUID
@@ -684,13 +686,13 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].EventId)
 	}
 
-	return &pb.GetBufferEventsResponse{
+	return &periscopepb.GetBufferEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.GetStreamHealthMetricsRequest) (*pb.GetStreamHealthMetricsResponse, error) {
+func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *periscopepb.GetStreamHealthMetricsRequest) (*periscopepb.GetStreamHealthMetricsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -738,9 +740,9 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 	}
 	defer func() { _ = rows.Close() }()
 
-	var metrics []*pb.StreamHealthMetric
+	var metrics []*periscopepb.StreamHealthMetric
 	for rows.Next() {
-		var m pb.StreamHealthMetric
+		var m periscopepb.StreamHealthMetric
 		var ts time.Time
 		var metricTenantID string
 		var trackMetadata string
@@ -854,7 +856,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), fmt.Sprintf("%s:%s", metrics[len(metrics)-1].StreamId, metrics[len(metrics)-1].NodeId))
 	}
 
-	return &pb.GetStreamHealthMetricsResponse{
+	return &periscopepb.GetStreamHealthMetricsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Metrics:    metrics,
 	}, nil
@@ -862,7 +864,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 
 // GetStreamStatus returns operational state for a single stream (Control/Data plane separation)
 // This is the source of truth for stream status - queries stream_state_current directly
-func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStreamStatusRequest) (*pb.StreamStatusResponse, error) {
+func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *periscopepb.GetStreamStatusRequest) (*periscopepb.StreamStatusResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -873,7 +875,7 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	resp := &pb.StreamStatusResponse{
+	resp := &periscopepb.StreamStatusResponse{
 		StreamId: streamID,
 		Status:   "offline", // Default
 	}
@@ -950,7 +952,7 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 
 // GetStreamsStatus returns operational state for multiple streams (batch lookup)
 // Queries stream_state_current directly - no JOINs needed
-func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStreamsStatusRequest) (*pb.StreamsStatusResponse, error) {
+func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *periscopepb.GetStreamsStatusRequest) (*periscopepb.StreamsStatusResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -958,7 +960,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 
 	streamIDs := req.GetStreamIds()
 	if len(streamIDs) == 0 {
-		return &pb.StreamsStatusResponse{Statuses: make(map[string]*pb.StreamStatusResponse)}, nil
+		return &periscopepb.StreamsStatusResponse{Statuses: make(map[string]*periscopepb.StreamStatusResponse)}, nil
 	}
 
 	// Initialize response with defaults. UpdatedAt is set to the snapshot time
@@ -966,9 +968,9 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 	// analytics events (Periscope reads ClickHouse stream_state_current and has
 	// no access to commodore.streams.created_at).
 	now := timestamppb.Now()
-	statuses := make(map[string]*pb.StreamStatusResponse, len(streamIDs))
+	statuses := make(map[string]*periscopepb.StreamStatusResponse, len(streamIDs))
 	for _, id := range streamIDs {
-		statuses[id] = &pb.StreamStatusResponse{
+		statuses[id] = &periscopepb.StreamStatusResponse{
 			StreamId:  id,
 			Status:    "offline",
 			UpdatedAt: now,
@@ -996,7 +998,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to batch query stream status from ClickHouse")
-		return &pb.StreamsStatusResponse{Statuses: statuses}, nil
+		return &periscopepb.StreamsStatusResponse{Statuses: statuses}, nil
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -1017,7 +1019,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 			continue
 		}
 
-		resp := &pb.StreamStatusResponse{
+		resp := &periscopepb.StreamStatusResponse{
 			StreamId:       streamID,
 			Status:         streamStatus,
 			CurrentViewers: int64(currentViewers),
@@ -1053,7 +1055,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		statuses[streamID] = resp
 	}
 
-	return &pb.StreamsStatusResponse{Statuses: statuses}, nil
+	return &periscopepb.StreamsStatusResponse{Statuses: statuses}, nil
 }
 
 // joinStrings joins strings with a separator (helper for SQL IN clause)
@@ -1164,7 +1166,7 @@ func nullInt64Value(v sql.NullInt64) int64 {
 // ViewerAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewerMetricsRequest) (*pb.GetViewerMetricsResponse, error) {
+func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *periscopepb.GetViewerMetricsRequest) (*periscopepb.GetViewerMetricsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1222,9 +1224,9 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var sessions []*pb.ViewerSession
+	var sessions []*periscopepb.ViewerSession
 	for rows.Next() {
-		var session pb.ViewerSession
+		var session periscopepb.ViewerSession
 		var sessionStart time.Time
 		var connectedAt *time.Time
 		var disconnectedAt *time.Time
@@ -1274,13 +1276,13 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 		endCursor = pagination.EncodeCursor(sessions[len(sessions)-1].Timestamp.AsTime(), sessions[len(sessions)-1].SessionId)
 	}
 
-	return &pb.GetViewerMetricsResponse{
+	return &periscopepb.GetViewerMetricsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Sessions:   sessions,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.GetViewerCountTimeSeriesRequest) (*pb.GetViewerCountTimeSeriesResponse, error) {
+func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *periscopepb.GetViewerCountTimeSeriesRequest) (*periscopepb.GetViewerCountTimeSeriesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1336,7 +1338,7 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 	}
 	defer func() { _ = rows.Close() }()
 
-	var buckets []*pb.ViewerCountBucket
+	var buckets []*periscopepb.ViewerCountBucket
 	for rows.Next() {
 		var bucket time.Time
 		var streamID string
@@ -1347,19 +1349,19 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 			continue
 		}
 
-		buckets = append(buckets, &pb.ViewerCountBucket{
+		buckets = append(buckets, &periscopepb.ViewerCountBucket{
 			Timestamp:   timestamppb.New(bucket),
 			StreamId:    streamID,
 			ViewerCount: viewerCount,
 		})
 	}
 
-	return &pb.GetViewerCountTimeSeriesResponse{
+	return &periscopepb.GetViewerCountTimeSeriesResponse{
 		Buckets: buckets,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb.GetGeographicDistributionRequest) (*pb.GetGeographicDistributionResponse, error) {
+func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *periscopepb.GetGeographicDistributionRequest) (*periscopepb.GetGeographicDistributionResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1400,7 +1402,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	}
 	defer func() { _ = countryRows.Close() }()
 
-	var topCountries []*pb.CountryMetric
+	var topCountries []*periscopepb.CountryMetric
 	var totalViewersForPercent uint64
 	for countryRows.Next() {
 		var countryCode string
@@ -1408,7 +1410,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		if scanErr := countryRows.Scan(&countryCode, &count); scanErr != nil {
 			return nil, wrapClickhouseError(scanErr, "database error (countries)")
 		}
-		topCountries = append(topCountries, &pb.CountryMetric{
+		topCountries = append(topCountries, &periscopepb.CountryMetric{
 			CountryCode: countryCode,
 			ViewerCount: int32(min(count, uint64(1<<31-1))),
 		})
@@ -1449,7 +1451,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	}
 	defer func() { _ = cityRows.Close() }()
 
-	var topCities []*pb.CityMetric
+	var topCities []*periscopepb.CityMetric
 	for cityRows.Next() {
 		var city, countryCode string
 		var count uint64
@@ -1461,7 +1463,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		if totalViewersForPercent > 0 {
 			percentage = float32(count) / float32(totalViewersForPercent) * 100
 		}
-		topCities = append(topCities, &pb.CityMetric{
+		topCities = append(topCities, &periscopepb.CityMetric{
 			City:        city,
 			CountryCode: countryCode,
 			ViewerCount: int32(min(count, uint64(1<<31-1))),
@@ -1500,7 +1502,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 
 	uniqueCountriesVal := int32(min(uniqueCountries, uint64(1<<31-1)))
 
-	return &pb.GetGeographicDistributionResponse{
+	return &periscopepb.GetGeographicDistributionResponse{
 		TopCountries:    topCountries,
 		TopCities:       topCities,
 		UniqueCountries: uniqueCountriesVal,
@@ -1513,7 +1515,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 // TrackAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTrackListEventsRequest) (*pb.GetTrackListEventsResponse, error) {
+func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *periscopepb.GetTrackListEventsRequest) (*periscopepb.GetTrackListEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1562,9 +1564,9 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.TrackListEvent
+	var events []*periscopepb.TrackListEvent
 	for rows.Next() {
-		var event pb.TrackListEvent
+		var event periscopepb.TrackListEvent
 		var ts time.Time
 		var trackListJSON string
 		var eventID uuid.UUID
@@ -1583,7 +1585,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		var tracks []map[string]any
 		if err := json.Unmarshal([]byte(trackListJSON), &tracks); err == nil {
 			for _, t := range tracks {
-				track := &pb.StreamTrack{}
+				track := &ipcpb.StreamTrack{}
 				if name, ok := t["name"].(string); ok {
 					track.TrackName = name
 				}
@@ -1630,7 +1632,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].Id)
 	}
 
-	return &pb.GetTrackListEventsResponse{
+	return &periscopepb.GetTrackListEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
@@ -1640,7 +1642,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 // ConnectionAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetConnectionEventsRequest) (*pb.GetConnectionEventsResponse, error) {
+func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *periscopepb.GetConnectionEventsRequest) (*periscopepb.GetConnectionEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1697,9 +1699,9 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.ConnectionEvent
+	var events []*periscopepb.ConnectionEvent
 	for rows.Next() {
-		var event pb.ConnectionEvent
+		var event periscopepb.ConnectionEvent
 		var ts time.Time
 
 		var clientBucketH3, nodeBucketH3 *uint64
@@ -1718,7 +1720,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 		}
 
 		if clientBucketH3 != nil {
-			event.ClientBucket = &pb.GeoBucket{
+			event.ClientBucket = &ipcpb.GeoBucket{
 				H3Index: *clientBucketH3,
 				Resolution: func() uint32 {
 					if clientBucketRes != nil {
@@ -1729,7 +1731,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 			}
 		}
 		if nodeBucketH3 != nil {
-			event.NodeBucket = &pb.GeoBucket{
+			event.NodeBucket = &ipcpb.GeoBucket{
 				H3Index: *nodeBucketH3,
 				Resolution: func() uint32 {
 					if nodeBucketRes != nil {
@@ -1775,7 +1777,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].EventId)
 	}
 
-	return &pb.GetConnectionEventsResponse{
+	return &periscopepb.GetConnectionEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
@@ -1785,7 +1787,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 // NodeAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMetricsRequest) (*pb.GetNodeMetricsResponse, error) {
+func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *periscopepb.GetNodeMetricsRequest) (*periscopepb.GetNodeMetricsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1842,9 +1844,9 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 	}
 	defer func() { _ = rows.Close() }()
 
-	var metrics []*pb.NodeMetric
+	var metrics []*periscopepb.NodeMetric
 	for rows.Next() {
-		var m pb.NodeMetric
+		var m periscopepb.NodeMetric
 		var ts time.Time
 		var clusterID string
 
@@ -1884,13 +1886,13 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), metrics[len(metrics)-1].Id)
 	}
 
-	return &pb.GetNodeMetricsResponse{
+	return &periscopepb.GetNodeMetricsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Metrics:    metrics,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeMetrics1HRequest) (*pb.GetNodeMetrics1HResponse, error) {
+func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *periscopepb.GetNodeMetrics1HRequest) (*periscopepb.GetNodeMetrics1HResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -1952,9 +1954,9 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 	}
 	defer func() { _ = rows.Close() }()
 
-	var metrics []*pb.NodeMetricHourly
+	var metrics []*periscopepb.NodeMetricHourly
 	for rows.Next() {
-		var m pb.NodeMetricHourly
+		var m periscopepb.NodeMetricHourly
 		var ts time.Time
 		var clusterID string
 		var wasHealthy uint8
@@ -1993,14 +1995,14 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), metrics[len(metrics)-1].Id)
 	}
 
-	return &pb.GetNodeMetrics1HResponse{
+	return &periscopepb.GetNodeMetrics1HResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Metrics:    metrics,
 	}, nil
 }
 
 // GetNodeMetricsAggregated returns per-node aggregates for the requested time range.
-func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.GetNodeMetricsAggregatedRequest) (*pb.GetNodeMetricsAggregatedResponse, error) {
+func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *periscopepb.GetNodeMetricsAggregatedRequest) (*periscopepb.GetNodeMetricsAggregatedResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2044,9 +2046,9 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.
 	}
 	defer func() { _ = rows.Close() }()
 
-	var metrics []*pb.NodeMetricsAggregated
+	var metrics []*periscopepb.NodeMetricsAggregated
 	for rows.Next() {
-		var m pb.NodeMetricsAggregated
+		var m periscopepb.NodeMetricsAggregated
 		var sampleCount uint64
 		if err := rows.Scan(
 			&m.ClusterId,
@@ -2066,13 +2068,13 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.
 		metrics = append(metrics, &m)
 	}
 
-	return &pb.GetNodeMetricsAggregatedResponse{Metrics: metrics}, nil
+	return &periscopepb.GetNodeMetricsAggregatedResponse{Metrics: metrics}, nil
 }
 
 // GetLiveNodes returns current state of nodes from node_state_current (ReplacingMergeTree)
 // This is the source of truth for real-time node status - simple SELECT, no time-series
 // Supports multi-tenant access for subscribed clusters via related_tenant_ids
-func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodesRequest) (*pb.GetLiveNodesResponse, error) {
+func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *periscopepb.GetLiveNodesRequest) (*periscopepb.GetLiveNodesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2119,9 +2121,9 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 	}
 	defer func() { _ = rows.Close() }()
 
-	var nodes []*pb.LiveNode
+	var nodes []*periscopepb.LiveNode
 	for rows.Next() {
-		var n pb.LiveNode
+		var n periscopepb.LiveNode
 		var updatedAt time.Time
 		var isHealthy uint8
 		var metadataJSON string
@@ -2151,7 +2153,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 		nodes = append(nodes, &n)
 	}
 
-	return &pb.GetLiveNodesResponse{
+	return &periscopepb.GetLiveNodesResponse{
 		Nodes: nodes,
 		Count: int32(len(nodes)),
 	}, nil
@@ -2161,7 +2163,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 // RoutingAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRoutingEventsRequest) (*pb.GetRoutingEventsResponse, error) {
+func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb.GetRoutingEventsRequest) (*periscopepb.GetRoutingEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2275,7 +2277,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.RoutingEvent
+	var events []*periscopepb.RoutingEvent
 	for rows.Next() {
 		var ts time.Time
 		var streamID, selectedNode, statusStr, rowTenantID string
@@ -2306,7 +2308,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 			continue
 		}
 
-		event := &pb.RoutingEvent{
+		event := &periscopepb.RoutingEvent{
 			Id:           fmt.Sprintf("%d-%s-%s", ts.UnixNano(), streamID, selectedNode),
 			Timestamp:    timestamppb.New(ts),
 			StreamId:     streamID,
@@ -2344,7 +2346,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 			event.ClientLongitude = clientLon
 		}
 		if clientBucketH3 != nil {
-			event.ClientBucket = &pb.GeoBucket{
+			event.ClientBucket = &ipcpb.GeoBucket{
 				H3Index: *clientBucketH3,
 				Resolution: func() uint32 {
 					if clientBucketRes != nil {
@@ -2361,7 +2363,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 			event.NodeLongitude = nodeLon
 		}
 		if nodeBucketH3 != nil {
-			event.NodeBucket = &pb.GeoBucket{
+			event.NodeBucket = &ipcpb.GeoBucket{
 				H3Index: *nodeBucketH3,
 				Resolution: func() uint32 {
 					if nodeBucketRes != nil {
@@ -2411,14 +2413,14 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		endCursor = pagination.EncodeCursor(last.Timestamp.AsTime(), last.TenantId+"|"+last.StreamId+"|"+last.SelectedNode)
 	}
 
-	return &pb.GetRoutingEventsResponse{
+	return &periscopepb.GetRoutingEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
 }
 
 // GetRoutingEfficiency returns pre-aggregated routing decision stats from routing_decisions.
-func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetRoutingEfficiencyRequest) (*pb.GetRoutingEfficiencyResponse, error) {
+func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *periscopepb.GetRoutingEfficiencyRequest) (*periscopepb.GetRoutingEfficiencyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2475,21 +2477,21 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetR
 	}
 	defer func() { _ = rows.Close() }()
 
-	var countries []*pb.RoutingCountryStat
+	var countries []*periscopepb.RoutingCountryStat
 	for rows.Next() {
 		var code string
 		var cnt int64
 		if err := rows.Scan(&code, &cnt); err != nil {
 			continue
 		}
-		countries = append(countries, &pb.RoutingCountryStat{
+		countries = append(countries, &periscopepb.RoutingCountryStat{
 			CountryCode:  code,
 			RequestCount: cnt,
 		})
 	}
 
-	return &pb.GetRoutingEfficiencyResponse{
-		Summary: &pb.RoutingEfficiencySummary{
+	return &periscopepb.GetRoutingEfficiencyResponse{
+		Summary: &periscopepb.RoutingEfficiencySummary{
 			TotalDecisions:     total,
 			SuccessCount:       successes,
 			SuccessRate:        successRate,
@@ -2504,7 +2506,7 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetR
 // Cluster Traffic Matrix (routing_cluster_hourly MV)
 // ============================================================================
 
-func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.GetClusterTrafficMatrixRequest) (*pb.GetClusterTrafficMatrixResponse, error) {
+func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *periscopepb.GetClusterTrafficMatrixRequest) (*periscopepb.GetClusterTrafficMatrixResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2535,7 +2537,7 @@ func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.G
 	}
 	defer func() { _ = rows.Close() }()
 
-	var pairs []*pb.ClusterPairTraffic
+	var pairs []*periscopepb.ClusterPairTraffic
 	for rows.Next() {
 		var clusterID, remoteClusterID string
 		var eventCount, successCount uint64
@@ -2548,7 +2550,7 @@ func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.G
 		if eventCount > 0 {
 			successRate = float64(successCount) / float64(eventCount)
 		}
-		pairs = append(pairs, &pb.ClusterPairTraffic{
+		pairs = append(pairs, &periscopepb.ClusterPairTraffic{
 			ClusterId:       clusterID,
 			RemoteClusterId: remoteClusterID,
 			EventCount:      eventCount,
@@ -2560,14 +2562,14 @@ func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *pb.G
 		})
 	}
 
-	return &pb.GetClusterTrafficMatrixResponse{Pairs: pairs}, nil
+	return &periscopepb.GetClusterTrafficMatrixResponse{Pairs: pairs}, nil
 }
 
 // ============================================================================
 // FederationAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFederationEventsRequest) (*pb.GetFederationEventsResponse, error) {
+func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscopepb.GetFederationEventsRequest) (*periscopepb.GetFederationEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2622,7 +2624,7 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.FederationEvent
+	var events []*periscopepb.FederationEvent
 	for rows.Next() {
 		var ts time.Time
 		var eventType, localCluster, remoteCluster string
@@ -2646,7 +2648,7 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 			continue
 		}
 
-		evt := &pb.FederationEvent{
+		evt := &periscopepb.FederationEvent{
 			Timestamp:     timestamppb.New(ts),
 			EventType:     eventType,
 			LocalCluster:  localCluster,
@@ -2717,13 +2719,13 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *pb.GetFe
 		events = append(events, evt)
 	}
 
-	return &pb.GetFederationEventsResponse{
+	return &periscopepb.GetFederationEventsResponse{
 		Events:     events,
 		TotalCount: totalCount,
 	}, nil
 }
 
-func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetFederationSummaryRequest) (*pb.GetFederationSummaryResponse, error) {
+func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *periscopepb.GetFederationSummaryRequest) (*periscopepb.GetFederationSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2752,7 +2754,7 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetF
 	}
 	defer func() { _ = rows.Close() }()
 
-	var counts []*pb.FederationEventCount
+	var counts []*periscopepb.FederationEventCount
 	var totalEvents, totalFailures uint64
 	var totalLatencyWeighted float64
 	for rows.Next() {
@@ -2763,7 +2765,7 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetF
 			s.logger.WithError(err).Warn("Failed to scan federation summary row")
 			continue
 		}
-		counts = append(counts, &pb.FederationEventCount{
+		counts = append(counts, &periscopepb.FederationEventCount{
 			EventType:    eventType,
 			Count:        total,
 			FailureCount: failures,
@@ -2780,8 +2782,8 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetF
 		overallFailureRate = float64(totalFailures) / float64(totalEvents)
 	}
 
-	return &pb.GetFederationSummaryResponse{
-		Summary: &pb.FederationSummary{
+	return &periscopepb.GetFederationSummaryResponse{
+		Summary: &periscopepb.FederationSummary{
 			EventCounts:         counts,
 			TotalEvents:         totalEvents,
 			OverallAvgLatencyMs: overallAvgLatency,
@@ -2794,7 +2796,7 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *pb.GetF
 // PlatformAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPlatformOverviewRequest) (*pb.GetPlatformOverviewResponse, error) {
+func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscopepb.GetPlatformOverviewRequest) (*periscopepb.GetPlatformOverviewResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -2806,10 +2808,10 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
-	resp := &pb.GetPlatformOverviewResponse{
+	resp := &periscopepb.GetPlatformOverviewResponse{
 		TenantId:    tenantID,
 		GeneratedAt: timestamppb.Now(),
-		TimeRange:   &pb.TimeRange{Start: timestamppb.New(startTime), End: timestamppb.New(endTime)},
+		TimeRange:   &commonpb.TimeRange{Start: timestamppb.New(startTime), End: timestamppb.New(endTime)},
 	}
 
 	// Get current stream stats from stream_state_current (real-time snapshot)
@@ -2899,7 +2901,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 	return resp, nil
 }
 
-func sanitizePlatformOverviewResponse(resp *pb.GetPlatformOverviewResponse) {
+func sanitizePlatformOverviewResponse(resp *periscopepb.GetPlatformOverviewResponse) {
 	if resp == nil {
 		return
 	}
@@ -2913,7 +2915,7 @@ func sanitizePlatformOverviewResponse(resp *pb.GetPlatformOverviewResponse) {
 }
 
 // GetNetworkLiveStats returns platform-wide live stats per cluster (no tenant filter).
-func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetworkLiveStatsRequest) (*pb.GetNetworkLiveStatsResponse, error) {
+func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopepb.GetNetworkLiveStatsRequest) (*periscopepb.GetNetworkLiveStatsResponse, error) {
 	type clusterStats struct {
 		activeStreams     int32
 		viewers           int32
@@ -2983,9 +2985,9 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 		}
 	}
 
-	resp := &pb.GetNetworkLiveStatsResponse{}
+	resp := &periscopepb.GetNetworkLiveStatsResponse{}
 	for id, cs := range statsMap {
-		resp.Clusters = append(resp.Clusters, &pb.NetworkClusterLiveStats{
+		resp.Clusters = append(resp.Clusters, &periscopepb.NetworkClusterLiveStats{
 			ClusterId:           id,
 			ActiveStreams:       cs.activeStreams,
 			CurrentViewers:      cs.viewers,
@@ -2999,7 +3001,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *pb.GetNetw
 	return resp, nil
 }
 
-func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEventsRequest) (*pb.GetClipEventsResponse, error) {
+func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.GetClipEventsRequest) (*periscopepb.GetClipEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3073,9 +3075,9 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.ClipEvent
+	var events []*periscopepb.ClipEvent
 	for rows.Next() {
-		var event pb.ClipEvent
+		var event periscopepb.ClipEvent
 		var ts time.Time
 		var contentType, ingestNodeID, message, filePath, s3URL *string
 		var startUnix, stopUnix *int64
@@ -3124,14 +3126,14 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].RequestId)
 	}
 
-	return &pb.GetClipEventsResponse{
+	return &periscopepb.GetClipEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
 }
 
 // GetArtifactState returns the current state of a single artifact (clip/DVR)
-func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtifactStateRequest) (*pb.GetArtifactStateResponse, error) {
+func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb.GetArtifactStateRequest) (*periscopepb.GetArtifactStateResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3152,7 +3154,7 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 		WHERE tenant_id = ? AND request_id = ?
 	`
 
-	var artifact pb.ArtifactState
+	var artifact periscopepb.ArtifactState
 	var errorMessage, manifestPath, filePath, s3URL, processingNodeID, storageLocation, syncStatus *string
 	var startedAt, completedAt *time.Time
 	var clipStartUnix, clipStopUnix *int64
@@ -3203,13 +3205,13 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	artifact.IsFinalized = isFinalized
 	artifact.IsFrozen = isFrozen
 
-	return &pb.GetArtifactStateResponse{
+	return &periscopepb.GetArtifactStateResponse{
 		Artifact: &artifact,
 	}, nil
 }
 
 // GetArtifactStates returns a list of artifact states with optional filtering
-func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArtifactStatesRequest) (*pb.GetArtifactStatesResponse, error) {
+func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopepb.GetArtifactStatesRequest) (*periscopepb.GetArtifactStatesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3292,10 +3294,10 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	}
 	defer func() { _ = rows.Close() }()
 
-	var artifacts []*pb.ArtifactState
+	var artifacts []*periscopepb.ArtifactState
 	artifactIndex := make(map[string]int)
 	for rows.Next() {
-		artifact := &pb.ArtifactState{}
+		artifact := &periscopepb.ArtifactState{}
 		var errorMessage, manifestPath, filePath, s3URL, processingNodeID, storageLocation, syncStatus *string
 		var startedAt, completedAt *time.Time
 		var clipStartUnix, clipStopUnix *int64
@@ -3374,13 +3376,13 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		endCursor = pagination.EncodeCursor(artifacts[len(artifacts)-1].UpdatedAt.AsTime(), artifacts[len(artifacts)-1].RequestId)
 	}
 
-	return &pb.GetArtifactStatesResponse{
+	return &periscopepb.GetArtifactStatesResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Artifacts:  artifacts,
 	}, nil
 }
 
-func preferArtifactState(candidate, current *pb.ArtifactState) bool {
+func preferArtifactState(candidate, current *periscopepb.ArtifactState) bool {
 	if candidate == nil {
 		return false
 	}
@@ -3395,7 +3397,7 @@ func preferArtifactState(candidate, current *pb.ArtifactState) bool {
 	return artifactStageRank(candidate.GetStage()) > artifactStageRank(current.GetStage())
 }
 
-func artifactUpdatedAt(artifact *pb.ArtifactState) time.Time {
+func artifactUpdatedAt(artifact *periscopepb.ArtifactState) time.Time {
 	if artifact == nil || artifact.GetUpdatedAt() == nil {
 		return time.Time{}
 	}
@@ -3424,7 +3426,7 @@ func artifactStageRank(stage string) int {
 // ============================================================================
 
 // GetStreamConnectionHourly returns hourly connection aggregates from stream_connection_hourly MV
-func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb.GetStreamConnectionHourlyRequest) (*pb.GetStreamConnectionHourlyResponse, error) {
+func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *periscopepb.GetStreamConnectionHourlyRequest) (*periscopepb.GetStreamConnectionHourlyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3491,7 +3493,7 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.StreamConnectionHourly
+	var records []*periscopepb.StreamConnectionHourly
 	for rows.Next() {
 		var hour time.Time
 		var tenantIDStr, streamID string
@@ -3503,7 +3505,7 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 			continue
 		}
 
-		records = append(records, &pb.StreamConnectionHourly{
+		records = append(records, &periscopepb.StreamConnectionHourly{
 			Id:            fmt.Sprintf("%s_%s", hour.Format(time.RFC3339), streamID),
 			Hour:          timestamppb.New(hour),
 			TenantId:      tenantIDStr,
@@ -3531,14 +3533,14 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].StreamId)
 	}
 
-	return &pb.GetStreamConnectionHourlyResponse{
+	return &periscopepb.GetStreamConnectionHourlyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetClientMetrics5M returns 5-minute client metrics aggregates from client_qoe_5m MV
-func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetClientMetrics5MRequest) (*pb.GetClientMetrics5MResponse, error) {
+func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *periscopepb.GetClientMetrics5MRequest) (*periscopepb.GetClientMetrics5MResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3617,7 +3619,7 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.ClientMetrics5M
+	var records []*periscopepb.ClientMetrics5M
 	for rows.Next() {
 		var timestamp time.Time
 		var tenantIDStr, streamIDStr, nodeIDStr string
@@ -3633,7 +3635,7 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 			continue
 		}
 
-		record := &pb.ClientMetrics5M{
+		record := &periscopepb.ClientMetrics5M{
 			Id:                fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), streamIDStr, nodeIDStr),
 			Timestamp:         timestamppb.New(timestamp),
 			TenantId:          tenantIDStr,
@@ -3669,14 +3671,14 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamId+"|"+records[len(records)-1].NodeId)
 	}
 
-	return &pb.GetClientMetrics5MResponse{
+	return &periscopepb.GetClientMetrics5MResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetQualityTierDaily returns daily quality tier distribution from quality_tier_daily MV
-func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQualityTierDailyRequest) (*pb.GetQualityTierDailyResponse, error) {
+func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *periscopepb.GetQualityTierDailyRequest) (*periscopepb.GetQualityTierDailyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3745,7 +3747,7 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.QualityTierDaily
+	var records []*periscopepb.QualityTierDaily
 	for rows.Next() {
 		var day time.Time
 		var tenantIDStr, streamIDStr, primaryTier string
@@ -3759,7 +3761,7 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 			continue
 		}
 
-		records = append(records, &pb.QualityTierDaily{
+		records = append(records, &periscopepb.QualityTierDaily{
 			Id:                fmt.Sprintf("%s_%s", day.Format("2006-01-02"), streamIDStr),
 			Day:               timestamppb.New(day),
 			TenantId:          tenantIDStr,
@@ -3797,14 +3799,14 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].StreamId)
 	}
 
-	return &pb.GetQualityTierDailyResponse{
+	return &periscopepb.GetQualityTierDailyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetStreamAnalyticsSummary returns range aggregates derived from materialized views only.
-func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb.GetStreamAnalyticsSummaryRequest) (*pb.GetStreamAnalyticsSummaryResponse, error) {
+func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *periscopepb.GetStreamAnalyticsSummaryRequest) (*periscopepb.GetStreamAnalyticsSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -3820,13 +3822,13 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
-	summary := &pb.StreamAnalyticsSummary{
+	summary := &periscopepb.StreamAnalyticsSummary{
 		TenantId:  tenantID,
 		StreamId:  streamID,
 		TimeRange: req.GetTimeRange(),
 	}
 	// Ensure non-null GraphQL contract for rangeQuality even if the query returns no rows.
-	summary.RangeQuality = &pb.QualityTierSummary{}
+	summary.RangeQuality = &periscopepb.QualityTierSummary{}
 	var totalSessionsVal int64
 	var totalSessionSecondsVal int64
 	var totalBytesVal int64
@@ -4001,7 +4003,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 			WHERE tenant_id = ? AND stream_id = ? AND day >= toDate(?) AND day <= toDate(?)
 		`, tenantID, streamID, startTime, endTime).Scan(&tier2160p, &tier1440p, &tier1080p, &tier720p, &tier480p, &tierSD, &codecH264, &codecH265, &codecVp9, &codecAv1)
 		if err == nil {
-			summary.RangeQuality = &pb.QualityTierSummary{
+			summary.RangeQuality = &periscopepb.QualityTierSummary{
 				Tier_2160PMinutes: uint32(nullInt64Value(tier2160p)),
 				Tier_1440PMinutes: uint32(nullInt64Value(tier1440p)),
 				Tier_1080PMinutes: uint32(nullInt64Value(tier1080p)),
@@ -4016,13 +4018,13 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 		}
 	}
 
-	return &pb.GetStreamAnalyticsSummaryResponse{Summary: summary}, nil
+	return &periscopepb.GetStreamAnalyticsSummaryResponse{Summary: summary}, nil
 }
 
 // GetStreamAnalyticsSummaries returns bulk stream analytics summaries with share percentages.
 // This aggregates finalized viewer usage facts for all streams in a tenant, sorted by the requested field.
 // Uses keyset pagination with raw integer sort keys (egress_bytes, viewer_seconds) for precision.
-func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *pb.GetStreamAnalyticsSummariesRequest) (*pb.GetStreamAnalyticsSummariesResponse, error) {
+func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *periscopepb.GetStreamAnalyticsSummariesRequest) (*periscopepb.GetStreamAnalyticsSummariesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4042,17 +4044,17 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 	// Display values (egress_gb, viewer_hours) are derived but we sort/cursor by raw integers
 	var sortField string
 	switch req.GetSortBy() {
-	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
+	case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
 		sortField = "unique_viewers"
-	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
+	case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
 		sortField = "total_views"
-	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
+	case periscopepb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
 		sortField = "viewer_seconds"
 	default:
 		sortField = "egress_bytes"
 	}
 
-	sortDesc := req.GetSortOrder() != pb.SortOrder_SORT_ORDER_ASC
+	sortDesc := req.GetSortOrder() != commonpb.SortOrder_SORT_ORDER_ASC
 	sortOrder := "DESC"
 	if !sortDesc {
 		sortOrder = "ASC"
@@ -4153,7 +4155,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 	}
 	defer func() { _ = rows.Close() }()
 
-	var summaries []*pb.StreamAnalyticsSummary
+	var summaries []*periscopepb.StreamAnalyticsSummary
 
 	for rows.Next() {
 		var streamID string
@@ -4167,7 +4169,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 			continue
 		}
 
-		summary := &pb.StreamAnalyticsSummary{
+		summary := &periscopepb.StreamAnalyticsSummary{
 			TenantId:           tenantID,
 			StreamId:           streamID,
 			TimeRange:          req.GetTimeRange(),
@@ -4175,7 +4177,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 			RangeUniqueViewers: uniqueViewers,
 			RangeEgressBytes:   egressBytes,
 			RangeViewerSeconds: viewerSeconds,
-			RangeQuality:       &pb.QualityTierSummary{},
+			RangeQuality:       &periscopepb.QualityTierSummary{},
 		}
 
 		if egressGb.Valid {
@@ -4237,8 +4239,8 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 		hasPrevious, hasMore = hasMore, hasPrevious
 	}
 
-	resp := &pb.GetStreamAnalyticsSummariesResponse{
-		Pagination: &pb.CursorPaginationResponse{
+	resp := &periscopepb.GetStreamAnalyticsSummariesResponse{
+		Pagination: &commonpb.CursorPaginationResponse{
 			TotalCount:      int32(totalCount),
 			HasNextPage:     hasMore,
 			HasPreviousPage: hasPrevious,
@@ -4257,7 +4259,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 }
 
 // buildStreamSummaryCursor creates a keyset cursor using raw integer sort keys from proto fields.
-func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortField string) string {
+func buildStreamSummaryCursor(summary *periscopepb.StreamAnalyticsSummary, sortField string) string {
 	var sortKey int64
 	switch sortField {
 	case "egress_bytes":
@@ -4273,7 +4275,7 @@ func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortField stri
 }
 
 // GetStorageUsage returns storage usage records from storage_snapshots table
-func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorageUsageRequest) (*pb.GetStorageUsageResponse, error) {
+func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *periscopepb.GetStorageUsageRequest) (*periscopepb.GetStorageUsageResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4338,7 +4340,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.StorageUsageRecord
+	var records []*periscopepb.StorageUsageRecord
 	for rows.Next() {
 		var timestamp time.Time
 		var tenantIDStr, nodeIDStr, storageScopeStr string
@@ -4354,7 +4356,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 		}
 
 		idKey := fmt.Sprintf("%s:%s", storageScopeStr, nodeIDStr)
-		records = append(records, &pb.StorageUsageRecord{
+		records = append(records, &periscopepb.StorageUsageRecord{
 			Id:              idKey,
 			Timestamp:       timestamppb.New(timestamp),
 			TenantId:        tenantIDStr,
@@ -4393,14 +4395,14 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), endID)
 	}
 
-	return &pb.GetStorageUsageResponse{
+	return &periscopepb.GetStorageUsageResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetStorageEvents returns storage lifecycle events (freeze + read-through cache fill operations) from storage_events table
-func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStorageEventsRequest) (*pb.GetStorageEventsResponse, error) {
+func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *periscopepb.GetStorageEventsRequest) (*periscopepb.GetStorageEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4464,7 +4466,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.StorageEvent
+	var events []*periscopepb.StorageEvent
 	for rows.Next() {
 		var timestamp time.Time
 		var tenantIDStr, streamIDStr, assetHash, action, assetTypeStr, nodeID string
@@ -4479,7 +4481,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 			continue
 		}
 
-		event := &pb.StorageEvent{
+		event := &periscopepb.StorageEvent{
 			Id:        fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339), assetHash),
 			Timestamp: timestamppb.New(timestamp),
 			TenantId:  tenantIDStr,
@@ -4526,7 +4528,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].AssetHash)
 	}
 
-	return &pb.GetStorageEventsResponse{
+	return &periscopepb.GetStorageEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
@@ -4537,7 +4539,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 // ============================================================================
 
 // GetStreamHealth5M returns 5-minute aggregated health metrics from stream_health_5m MV
-func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStreamHealth5MRequest) (*pb.GetStreamHealth5MResponse, error) {
+func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *periscopepb.GetStreamHealth5MRequest) (*periscopepb.GetStreamHealth5MResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4585,7 +4587,7 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.StreamHealth5M
+	var records []*periscopepb.StreamHealth5M
 	for rows.Next() {
 		var timestamp time.Time
 		var tenantIDStr, streamIDStr, nodeID, qualityTier string
@@ -4601,7 +4603,7 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 			continue
 		}
 
-		record := &pb.StreamHealth5M{
+		record := &periscopepb.StreamHealth5M{
 			Id:              fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), streamIDStr, nodeID),
 			Timestamp:       timestamppb.New(timestamp),
 			TenantId:        tenantIDStr,
@@ -4647,14 +4649,14 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].Id)
 	}
 
-	return &pb.GetStreamHealth5MResponse{
+	return &periscopepb.GetStreamHealth5MResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetStreamHealthSummary returns pre-aggregated health stats from stream_health_5m.
-func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.GetStreamHealthSummaryRequest) (*pb.GetStreamHealthSummaryResponse, error) {
+func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *periscopepb.GetStreamHealthSummaryRequest) (*periscopepb.GetStreamHealthSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4695,8 +4697,8 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.Ge
 		return nil, wrapClickhouseError(err, "database error")
 	}
 
-	return &pb.GetStreamHealthSummaryResponse{
-		Summary: &pb.StreamHealthSummary{
+	return &periscopepb.GetStreamHealthSummaryResponse{
+		Summary: &periscopepb.StreamHealthSummary{
 			AvgBitrate:         avgBitrate,
 			AvgFps:             avgFps,
 			AvgBufferHealth:    avgBufferHealth,
@@ -4710,7 +4712,7 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.Ge
 }
 
 // GetClientQoeSummary returns pre-aggregated client QoE stats from client_qoe_5m.
-func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetClientQoeSummaryRequest) (*pb.GetClientQoeSummaryResponse, error) {
+func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *periscopepb.GetClientQoeSummaryRequest) (*periscopepb.GetClientQoeSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4748,7 +4750,7 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 		return nil, wrapClickhouseError(err, "database error")
 	}
 
-	summary := &pb.ClientQoeSummary{
+	summary := &periscopepb.ClientQoeSummary{
 		AvgBandwidthIn:      sanitizeFloat64(avgBwIn),
 		AvgBandwidthOut:     sanitizeFloat64(avgBwOut),
 		AvgConnectionTime:   sanitizeFloat64(avgConnTime),
@@ -4763,7 +4765,7 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 		summary.PeakPacketLossRate = &v
 	}
 
-	return &pb.GetClientQoeSummaryResponse{
+	return &periscopepb.GetClientQoeSummaryResponse{
 		Summary: summary,
 	}, nil
 }
@@ -4773,7 +4775,7 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 // (no rollup MV — quantile() is not mergeable in a plain MergeTree). Percentiles
 // consider only boots that reached first frame (total_ttf_ms > 0); error/abandon
 // counts cover all rows. Diagnostic only.
-func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *pb.GetPlayerBootSummaryRequest) (*pb.GetPlayerBootSummaryResponse, error) {
+func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *periscopepb.GetPlayerBootSummaryRequest) (*periscopepb.GetPlayerBootSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4822,8 +4824,8 @@ func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *pb.GetP
 		return nil, wrapClickhouseError(err, "database error")
 	}
 
-	return &pb.GetPlayerBootSummaryResponse{
-		Summary: &pb.PlayerBootSummary{
+	return &periscopepb.GetPlayerBootSummaryResponse{
+		Summary: &periscopepb.PlayerBootSummary{
 			BootCount:           bootCount,
 			ErrorCount:          errorCount,
 			P50TtfMs:            sanitizeFloat64(p50.Float64),
@@ -4844,7 +4846,7 @@ func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *pb.GetP
 // projects no content/stream/session/url/tenant identifiers — it is intentionally
 // redacted. Cluster ownership is authorized at the API layer; this method trusts
 // the cluster_ids it is given.
-func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClusterBootOpsRequest) (*pb.GetClusterBootOpsResponse, error) {
+func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *periscopepb.GetClusterBootOpsRequest) (*periscopepb.GetClusterBootOpsResponse, error) {
 	if _, err := requireTenantID(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
@@ -4857,7 +4859,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClus
 	clusterIDs := req.GetClusterIds()
 	if len(clusterIDs) == 0 {
 		// No owned clusters → nothing to aggregate.
-		return &pb.GetClusterBootOpsResponse{}, nil
+		return &periscopepb.GetClusterBootOpsResponse{}, nil
 	}
 
 	placeholders := make([]string, len(clusterIDs))
@@ -4891,7 +4893,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClus
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []*pb.ClusterBootOps
+	var out []*periscopepb.ClusterBootOps
 	for rows.Next() {
 		var servingClusterID, nodeID, protocol string
 		var bootCount, errorCount int64
@@ -4900,7 +4902,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClus
 			s.logger.WithError(err).Error("Failed to scan player_boot_samples cluster-ops row")
 			continue
 		}
-		out = append(out, &pb.ClusterBootOps{
+		out = append(out, &periscopepb.ClusterBootOps{
 			ServingClusterId: servingClusterID,
 			NodeId:           nodeID,
 			Protocol:         protocol,
@@ -4911,7 +4913,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClus
 		})
 	}
 
-	return &pb.GetClusterBootOpsResponse{Rows: out}, nil
+	return &periscopepb.GetClusterBootOpsResponse{Rows: out}, nil
 }
 
 // ============================================================================
@@ -4919,7 +4921,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *pb.GetClus
 // ============================================================================
 
 // GetNodePerformance5M returns 5-minute aggregated node performance from node_performance_5m MV
-func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetNodePerformance5MRequest) (*pb.GetNodePerformance5MResponse, error) {
+func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *periscopepb.GetNodePerformance5MRequest) (*periscopepb.GetNodePerformance5MResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -4982,7 +4984,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.NodePerformance5M
+	var records []*periscopepb.NodePerformance5M
 	for rows.Next() {
 		var timestamp time.Time
 		var clusterID string
@@ -4999,7 +5001,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 			continue
 		}
 
-		records = append(records, &pb.NodePerformance5M{
+		records = append(records, &periscopepb.NodePerformance5M{
 			Id:             fmt.Sprintf("%s:%s", clusterID, nodeIDStr),
 			Timestamp:      timestamppb.New(timestamp),
 			NodeId:         nodeIDStr,
@@ -5030,7 +5032,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].Id)
 	}
 
-	return &pb.GetNodePerformance5MResponse{
+	return &periscopepb.GetNodePerformance5MResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
@@ -5041,7 +5043,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 // ============================================================================
 
 // GetViewerHoursHourly returns hourly viewer hours aggregates from canonical viewer usage windows.
-func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetViewerHoursHourlyRequest) (*pb.GetViewerHoursHourlyResponse, error) {
+func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *periscopepb.GetViewerHoursHourlyRequest) (*periscopepb.GetViewerHoursHourlyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -5101,7 +5103,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.ViewerHoursHourly
+	var records []*periscopepb.ViewerHoursHourly
 	for rows.Next() {
 		var hour time.Time
 		var tenantIDStr, streamIDStr, countryCode string
@@ -5115,7 +5117,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 			continue
 		}
 
-		records = append(records, &pb.ViewerHoursHourly{
+		records = append(records, &periscopepb.ViewerHoursHourly{
 			Id:                  fmt.Sprintf("%s_%s_%s", hour.Format(time.RFC3339), streamIDStr, countryCode),
 			Hour:                timestamppb.New(hour),
 			TenantId:            tenantIDStr,
@@ -5145,7 +5147,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), fmt.Sprintf("%s:%s", records[len(records)-1].StreamId, records[len(records)-1].CountryCode))
 	}
 
-	return &pb.GetViewerHoursHourlyResponse{
+	return &periscopepb.GetViewerHoursHourlyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
@@ -5156,7 +5158,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 // ============================================================================
 
 // GetViewerGeoHourly returns hourly geographic breakdown from viewer_geo_hourly MV
-func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetViewerGeoHourlyRequest) (*pb.GetViewerGeoHourlyResponse, error) {
+func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *periscopepb.GetViewerGeoHourlyRequest) (*periscopepb.GetViewerGeoHourlyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -5200,7 +5202,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.ViewerGeoHourly
+	var records []*periscopepb.ViewerGeoHourly
 	for rows.Next() {
 		var hour time.Time
 		var tenantIDStr, countryCode string
@@ -5213,7 +5215,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 			continue
 		}
 
-		records = append(records, &pb.ViewerGeoHourly{
+		records = append(records, &periscopepb.ViewerGeoHourly{
 			Id:          fmt.Sprintf("%s_%s", hour.Format(time.RFC3339), countryCode),
 			Hour:        timestamppb.New(hour),
 			TenantId:    tenantIDStr,
@@ -5241,7 +5243,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].CountryCode)
 	}
 
-	return &pb.GetViewerGeoHourlyResponse{
+	return &periscopepb.GetViewerGeoHourlyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
@@ -5252,7 +5254,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 // ============================================================================
 
 // GetTenantDailyStats returns daily tenant statistics from finalized viewer facts for PlatformOverview.dailyStats
-func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTenantDailyStatsRequest) (*pb.GetTenantDailyStatsResponse, error) {
+func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *periscopepb.GetTenantDailyStatsRequest) (*periscopepb.GetTenantDailyStatsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -5290,7 +5292,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var stats []*pb.TenantDailyStat
+	var stats []*periscopepb.TenantDailyStat
 	for rows.Next() {
 		var day time.Time
 		var tenantIDStr string
@@ -5304,7 +5306,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 			continue
 		}
 
-		stats = append(stats, &pb.TenantDailyStat{
+		stats = append(stats, &periscopepb.TenantDailyStat{
 			Id:            fmt.Sprintf("%s_%s", day.Format("2006-01-02"), tenantIDStr),
 			Date:          timestamppb.New(day),
 			TenantId:      tenantIDStr,
@@ -5316,7 +5318,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 		})
 	}
 
-	return &pb.GetTenantDailyStatsResponse{
+	return &periscopepb.GetTenantDailyStatsResponse{
 		Stats: stats,
 	}, nil
 }
@@ -5326,7 +5328,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 // ============================================================================
 
 // GetProcessingUsage returns processing usage records and/or daily summaries for billing
-func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetProcessingUsageRequest) (*pb.GetProcessingUsageResponse, error) {
+func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscopepb.GetProcessingUsageRequest) (*periscopepb.GetProcessingUsageResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -5346,7 +5348,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	processType := req.GetProcessType()
 	summaryOnly := req.GetSummaryOnly()
 
-	response := &pb.GetProcessingUsageResponse{}
+	response := &periscopepb.GetProcessingUsageResponse{}
 
 	// processing_5m_v stores finalized per-window processing facts. Pivot to
 	// the per-day per-codec summary shape the proto response exposes.
@@ -5415,7 +5417,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 				continue
 			}
 
-			response.Summaries = append(response.Summaries, &pb.ProcessingUsageSummary{
+			response.Summaries = append(response.Summaries, &periscopepb.ProcessingUsageSummary{
 				Date:                  timestamppb.New(day),
 				TenantId:              tenantIDStr,
 				LivepeerSeconds:       livepeerSeconds,
@@ -5518,7 +5520,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.ProcessingUsageRecord
+	var records []*periscopepb.ProcessingUsageRecord
 	for rows.Next() {
 		var timestamp time.Time
 		var tenantIDStr, nodeID, streamIDStr, processTypeStr string
@@ -5569,7 +5571,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 			continue
 		}
 
-		record := &pb.ProcessingUsageRecord{
+		record := &periscopepb.ProcessingUsageRecord{
 			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
 			Timestamp:   timestamppb.New(timestamp),
 			TenantId:    tenantIDStr,
@@ -5663,7 +5665,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 
 // GetLiveUsageSummary returns a near-real-time usage summary for billing dashboards.
 // Structure matches UsageSummary for consistency between live and finalized invoices.
-func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLiveUsageSummaryRequest) (*pb.GetLiveUsageSummaryResponse, error) {
+func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscopepb.GetLiveUsageSummaryRequest) (*periscopepb.GetLiveUsageSummaryResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -5674,7 +5676,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
-	summary := &pb.LiveUsageSummary{
+	summary := &periscopepb.LiveUsageSummary{
 		TenantId:    tenantID,
 		PeriodStart: timestamppb.New(startTime),
 		PeriodEnd:   timestamppb.New(endTime),
@@ -5938,7 +5940,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 				recordQueryError(scanErr, "Failed to scan geo breakdown row")
 				continue
 			}
-			summary.GeoBreakdown = append(summary.GeoBreakdown, &pb.CountryMetric{
+			summary.GeoBreakdown = append(summary.GeoBreakdown, &periscopepb.CountryMetric{
 				CountryCode: countryCode,
 				ViewerCount: viewerCount,
 				ViewerHours: viewerHours,
@@ -6041,7 +6043,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		return nil, wrapClickhouseError(lastErr, "database error")
 	}
 
-	return &pb.GetLiveUsageSummaryResponse{Summary: summary}, nil
+	return &periscopepb.GetLiveUsageSummaryResponse{Summary: summary}, nil
 }
 
 // ============================================================================
@@ -6049,7 +6051,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 // ============================================================================
 
 // GetRebufferingEvents returns buffer state transition events
-func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetRebufferingEventsRequest) (*pb.GetRebufferingEventsResponse, error) {
+func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *periscopepb.GetRebufferingEventsRequest) (*periscopepb.GetRebufferingEventsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -6117,7 +6119,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 	}
 	defer func() { _ = rows.Close() }()
 
-	var events []*pb.RebufferingEvent
+	var events []*periscopepb.RebufferingEvent
 	for rows.Next() {
 		var timestamp, rebufferStart, rebufferEnd time.Time
 		var tenantIDStr, streamIDStr, nodeID, bufferState, prevState string
@@ -6128,7 +6130,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 			continue
 		}
 
-		events = append(events, &pb.RebufferingEvent{
+		events = append(events, &periscopepb.RebufferingEvent{
 			Id:            fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
 			Timestamp:     timestamppb.New(timestamp),
 			TenantId:      tenantIDStr,
@@ -6158,7 +6160,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].StreamId+"|"+events[len(events)-1].NodeId)
 	}
 
-	return &pb.GetRebufferingEventsResponse{
+	return &periscopepb.GetRebufferingEventsResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Events:     events,
 	}, nil
@@ -6169,7 +6171,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 // ============================================================================
 
 // GetTenantAnalyticsDaily returns daily tenant-level analytics rollups
-func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.GetTenantAnalyticsDailyRequest) (*pb.GetTenantAnalyticsDailyResponse, error) {
+func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *periscopepb.GetTenantAnalyticsDailyRequest) (*periscopepb.GetTenantAnalyticsDailyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -6225,7 +6227,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.TenantAnalyticsDaily
+	var records []*periscopepb.TenantAnalyticsDaily
 	for rows.Next() {
 		var day time.Time
 		var tenantIDStr string
@@ -6240,7 +6242,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 			continue
 		}
 
-		records = append(records, &pb.TenantAnalyticsDaily{
+		records = append(records, &periscopepb.TenantAnalyticsDaily{
 			Id:            fmt.Sprintf("%s_%s", day.Format("2006-01-02"), tenantIDStr),
 			Day:           timestamppb.New(day),
 			TenantId:      tenantIDStr,
@@ -6268,7 +6270,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), "")
 	}
 
-	return &pb.GetTenantAnalyticsDailyResponse{
+	return &periscopepb.GetTenantAnalyticsDailyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
@@ -6279,7 +6281,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 // ============================================================================
 
 // GetStreamAnalyticsDaily returns daily stream-level analytics rollups
-func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.GetStreamAnalyticsDailyRequest) (*pb.GetStreamAnalyticsDailyResponse, error) {
+func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *periscopepb.GetStreamAnalyticsDailyRequest) (*periscopepb.GetStreamAnalyticsDailyResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -6348,7 +6350,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.StreamAnalyticsDaily
+	var records []*periscopepb.StreamAnalyticsDaily
 	for rows.Next() {
 		var day time.Time
 		var tenantIDStr, streamIDStr string
@@ -6362,7 +6364,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 			continue
 		}
 
-		records = append(records, &pb.StreamAnalyticsDaily{
+		records = append(records, &periscopepb.StreamAnalyticsDaily{
 			Id:              fmt.Sprintf("%s_%s", day.Format("2006-01-02"), streamIDStr),
 			Day:             timestamppb.New(day),
 			TenantId:        tenantIDStr,
@@ -6392,14 +6394,14 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].StreamId)
 	}
 
-	return &pb.GetStreamAnalyticsDailyResponse{
+	return &periscopepb.GetStreamAnalyticsDailyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
 }
 
 // GetAPIUsage returns API usage records and/or daily summaries
-func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRequest) (*pb.GetAPIUsageResponse, error) {
+func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *periscopepb.GetAPIUsageRequest) (*periscopepb.GetAPIUsageResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
@@ -6420,7 +6422,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 	operationName := req.GetOperationName()
 	summaryOnly := req.GetSummaryOnly()
 
-	response := &pb.GetAPIUsageResponse{}
+	response := &periscopepb.GetAPIUsageResponse{}
 
 	// Get daily summaries (aggregated by auth_type)
 	if operationName == "" {
@@ -6469,7 +6471,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 					avgDuration = float64(totalDurationMs) / float64(totalRequests)
 				}
 
-				response.Summaries = append(response.Summaries, &pb.APIUsageSummary{
+				response.Summaries = append(response.Summaries, &periscopepb.APIUsageSummary{
 					Date:            timestamppb.New(day),
 					TenantId:        tenantIDStr,
 					AuthType:        authTypeStr,
@@ -6528,7 +6530,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 				avgDuration = float64(totalDurationMs) / float64(totalRequests)
 			}
 
-			response.OperationSummaries = append(response.OperationSummaries, &pb.APIUsageOperationSummary{
+			response.OperationSummaries = append(response.OperationSummaries, &periscopepb.APIUsageOperationSummary{
 				OperationType:    opTypeStr,
 				TotalRequests:    totalRequests,
 				TotalErrors:      totalErrors,
@@ -6620,7 +6622,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []*pb.APIUsageRecord
+	var records []*periscopepb.APIUsageRecord
 	for rows.Next() {
 		var hour time.Time
 		var tenantIDStr, authTypeStr, operationTypeStr string
@@ -6643,7 +6645,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 		// Composite ID for cursor pagination (timestamp handled separately).
 		id := fmt.Sprintf("%s|%s|%s", authTypeStr, operationTypeStr, opName)
 
-		records = append(records, &pb.APIUsageRecord{
+		records = append(records, &periscopepb.APIUsageRecord{
 			Id:              id,
 			Timestamp:       timestamppb.New(hour),
 			TenantId:        tenantIDStr,
@@ -6743,17 +6745,17 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	}
 
 	// Register all services
-	pb.RegisterStreamAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterViewerAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterTrackAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterConnectionAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterNodeAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterRoutingAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterFederationAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterPlatformAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterClipAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterAggregatedAnalyticsServiceServer(server, periscopeServer)
-	pb.RegisterOrchestratorAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterStreamAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterViewerAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterTrackAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterConnectionAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterNodeAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterRoutingAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterFederationAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterPlatformAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterClipAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterAggregatedAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterOrchestratorAnalyticsServiceServer(server, periscopeServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -6778,7 +6780,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 }
 
 // GetNetworkUsage returns network-wide usage totals grouped by period.
-func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetworkUsageRequest) (*pb.GetNetworkUsageResponse, error) {
+func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *periscopepb.GetNetworkUsageRequest) (*periscopepb.GetNetworkUsageResponse, error) {
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
@@ -6786,11 +6788,11 @@ func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetwor
 
 	periodExpr := "toStartOfDay(window_start)"
 	switch req.GetGroupBy() {
-	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_WEEK:
+	case periscopepb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_WEEK:
 		periodExpr = "toStartOfWeek(window_start)"
-	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_MONTH:
+	case periscopepb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_MONTH:
 		periodExpr = "toStartOfMonth(window_start)"
-	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_DAY, pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_UNSPECIFIED:
+	case periscopepb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_DAY, periscopepb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_UNSPECIFIED:
 		periodExpr = "toStartOfDay(window_start)"
 	}
 
@@ -6846,7 +6848,7 @@ func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetwor
 	}
 	defer func() { _ = rows.Close() }()
 
-	resp := &pb.GetNetworkUsageResponse{}
+	resp := &periscopepb.GetNetworkUsageResponse{}
 	for rows.Next() {
 		var period time.Time
 		var viewerHours, egressGb, livepeerSeconds, nativeAvSeconds float64
@@ -6854,7 +6856,7 @@ func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetwor
 		if err := rows.Scan(&period, &viewerHours, &egressGb, &totalSessions, &uniqueViewers, &livepeerSeconds, &nativeAvSeconds, &totalRequests, &totalErrors); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to scan network usage row: %v", err)
 		}
-		resp.Records = append(resp.Records, &pb.NetworkUsageRecord{
+		resp.Records = append(resp.Records, &periscopepb.NetworkUsageRecord{
 			PeriodStart:      timestamppb.New(period),
 			ViewerHours:      viewerHours,
 			EgressGb:         egressGb,
@@ -6875,7 +6877,7 @@ func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetwor
 }
 
 // GetAcquisitionFunnel returns signup counts grouped by channel/method/UTM/referral.
-func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *pb.GetAcquisitionFunnelRequest) (*pb.GetAcquisitionFunnelResponse, error) {
+func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *periscopepb.GetAcquisitionFunnelRequest) (*periscopepb.GetAcquisitionFunnelResponse, error) {
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
@@ -6903,7 +6905,7 @@ func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *pb.GetA
 	}
 	defer func() { _ = rows.Close() }()
 
-	resp := &pb.GetAcquisitionFunnelResponse{}
+	resp := &periscopepb.GetAcquisitionFunnelResponse{}
 	for rows.Next() {
 		var signupChannel, signupMethod string
 		var utmSource, utmMedium, utmCampaign, referralCode sql.NullString
@@ -6912,7 +6914,7 @@ func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *pb.GetA
 		if err := rows.Scan(&signupChannel, &signupMethod, &utmSource, &utmMedium, &utmCampaign, &referralCode, &isAgent, &tenantCount); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to scan acquisition funnel row: %v", err)
 		}
-		entry := &pb.AcquisitionFunnelEntry{
+		entry := &periscopepb.AcquisitionFunnelEntry{
 			SignupChannel: signupChannel,
 			SignupMethod:  signupMethod,
 			UtmSource:     utmSource.String,
@@ -6933,7 +6935,7 @@ func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *pb.GetA
 }
 
 // GetAcquisitionCohortUsage returns usage totals grouped by acquisition cohorts.
-func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *pb.GetAcquisitionCohortUsageRequest) (*pb.GetAcquisitionCohortUsageResponse, error) {
+func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *periscopepb.GetAcquisitionCohortUsageRequest) (*periscopepb.GetAcquisitionCohortUsageResponse, error) {
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
@@ -7000,7 +7002,7 @@ func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *pb
 	}
 	defer func() { _ = rows.Close() }()
 
-	resp := &pb.GetAcquisitionCohortUsageResponse{}
+	resp := &periscopepb.GetAcquisitionCohortUsageResponse{}
 	for rows.Next() {
 		var day time.Time
 		var signupChannel string
@@ -7009,7 +7011,7 @@ func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *pb
 		if err := rows.Scan(&day, &signupChannel, &cohortMonth, &viewerHours, &egressGb, &mediaSeconds); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to scan acquisition cohort usage row: %v", err)
 		}
-		resp.Records = append(resp.Records, &pb.AcquisitionCohortUsageRecord{
+		resp.Records = append(resp.Records, &periscopepb.AcquisitionCohortUsageRecord{
 			Day:           timestamppb.New(day),
 			SignupChannel: signupChannel,
 			CohortMonth:   timestamppb.New(cohortMonth),

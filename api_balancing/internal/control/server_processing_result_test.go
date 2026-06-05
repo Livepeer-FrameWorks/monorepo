@@ -8,7 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -18,7 +18,7 @@ func TestProcessProcessingJobResult_NilDB(t *testing.T) {
 	db = nil
 	logger := logging.NewLogger()
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-1",
 		Status: "completed",
 	}, "node-1", logger)
@@ -37,7 +37,7 @@ func TestProcessProcessingJobProgress_ChapterFinalizeUsesChapterLedger(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
 			AddRow("chapter-artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
 
-	processProcessingJobProgress(&pb.ProcessingJobProgress{
+	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
 		JobId:       "chapter-finalize-chapter-1",
 		ProgressPct: 42,
 	}, logger)
@@ -55,7 +55,7 @@ func TestProcessProcessingJobResult_Completed_NoOutput(t *testing.T) {
 		WithArgs("job-1", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-1",
 		Status: "completed",
 	}, "node-1", logger)
@@ -73,7 +73,7 @@ func TestProcessProcessingJobResult_Completed_WithOutputMeta(t *testing.T) {
 		WithArgs("job-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:   "job-1",
 		Status:  "completed",
 		Outputs: map[string]string{"resolution": "1080p"},
@@ -104,7 +104,7 @@ func TestProcessProcessingJobResult_Completed_RegistersProcessedOutput(t *testin
 		WithArgs("mp4", "art-hash", int64(5000)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:           "job-1",
 		Status:          "completed",
 		OutputPath:      "/data/processed/output.mp4",
@@ -168,7 +168,7 @@ func TestProcessProcessingJobResult_Completed_SkipsRegistrationWhenArtifactTermi
 		WithArgs("mp4", "art-deleted", int64(5000)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:           "job-del",
 		Status:          "completed",
 		OutputPath:      "/data/processed/output.mp4",
@@ -217,7 +217,7 @@ func TestProcessProcessingJobResult_Completed_DoesNotDeleteOldS3UploadBeforeRepl
 		WithArgs("mp4", "art-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:      "job-1",
 		Status:     "completed",
 		OutputPath: "/data/output.mp4",
@@ -248,7 +248,7 @@ func TestProcessProcessingJobResult_Completed_SetsS3URLToNull(t *testing.T) {
 		WithArgs("mp4", "art-hash", int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:      "job-1",
 		Status:     "completed",
 		OutputPath: "/data/output.mp4",
@@ -270,7 +270,7 @@ func TestProcessProcessingJobResult_Failed(t *testing.T) {
 		WithArgs("job-fail", "ffmpeg crashed").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-fail",
 		Status: "failed",
 		Error:  "ffmpeg crashed",
@@ -299,7 +299,7 @@ func TestProcessProcessingJobResult_CallsHandler(t *testing.T) {
 		WithArgs("job-1", nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-1",
 		Status: "completed",
 	}, "node-1", logger)
@@ -313,7 +313,7 @@ func TestProcessProcessingJobResult_UnknownStatus(t *testing.T) {
 	_, _, _ = setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	processProcessingJobResult(&pb.ProcessingJobResult{
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-1",
 		Status: "unknown_status",
 	}, "node-1", logger)

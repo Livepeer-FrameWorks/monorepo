@@ -6,12 +6,12 @@ import (
 	"strings"
 	"sync"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 )
 
 // ParseX402PaymentHeader decodes and parses an X-PAYMENT header value.
-func ParseX402PaymentHeader(header string) (*pb.X402PaymentPayload, error) {
+func ParseX402PaymentHeader(header string) (*purserpb.X402PaymentPayload, error) {
 	return x402.ParsePaymentHeader(header)
 }
 

@@ -10,7 +10,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -21,15 +25,15 @@ const InternalServerName = "foghorn.internal"
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
 	conn       *grpc.ClientConn
-	clip       pb.ClipControlServiceClient
-	dvr        pb.DVRControlServiceClient
-	viewer     pb.ViewerControlServiceClient
-	vod        pb.VodControlServiceClient
-	tenant     pb.TenantControlServiceClient
-	edge       pb.EdgeProvisioningServiceClient
-	nodeMgmt   pb.NodeControlServiceClient
-	federation pb.FoghornFederationClient
-	relay      pb.FoghornRelayClient
+	clip       foghornpb.ClipControlServiceClient
+	dvr        foghornpb.DVRControlServiceClient
+	viewer     foghornpb.ViewerControlServiceClient
+	vod        foghornpb.VodControlServiceClient
+	tenant     foghornpb.TenantControlServiceClient
+	edge       foghornpb.EdgeProvisioningServiceClient
+	nodeMgmt   foghornpb.NodeControlServiceClient
+	federation foghornfederationpb.FoghornFederationClient
+	relay      foghornrelaypb.FoghornRelayClient
 	logger     logging.Logger
 	timeout    time.Duration
 }
@@ -146,15 +150,15 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	return &GRPCClient{
 		conn:       conn,
-		clip:       pb.NewClipControlServiceClient(conn),
-		dvr:        pb.NewDVRControlServiceClient(conn),
-		viewer:     pb.NewViewerControlServiceClient(conn),
-		vod:        pb.NewVodControlServiceClient(conn),
-		tenant:     pb.NewTenantControlServiceClient(conn),
-		edge:       pb.NewEdgeProvisioningServiceClient(conn),
-		nodeMgmt:   pb.NewNodeControlServiceClient(conn),
-		federation: pb.NewFoghornFederationClient(conn),
-		relay:      pb.NewFoghornRelayClient(conn),
+		clip:       foghornpb.NewClipControlServiceClient(conn),
+		dvr:        foghornpb.NewDVRControlServiceClient(conn),
+		viewer:     foghornpb.NewViewerControlServiceClient(conn),
+		vod:        foghornpb.NewVodControlServiceClient(conn),
+		tenant:     foghornpb.NewTenantControlServiceClient(conn),
+		edge:       foghornpb.NewEdgeProvisioningServiceClient(conn),
+		nodeMgmt:   foghornpb.NewNodeControlServiceClient(conn),
+		federation: foghornfederationpb.NewFoghornFederationClient(conn),
+		relay:      foghornrelaypb.NewFoghornRelayClient(conn),
 		logger:     config.Logger,
 		timeout:    config.Timeout,
 	}, nil
@@ -178,12 +182,12 @@ func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 }
 
 // Federation returns the FoghornFederation client for cross-cluster RPCs.
-func (c *GRPCClient) Federation() pb.FoghornFederationClient {
+func (c *GRPCClient) Federation() foghornfederationpb.FoghornFederationClient {
 	return c.federation
 }
 
 // Relay returns the FoghornRelay client for intra-cluster HA command forwarding.
-func (c *GRPCClient) Relay() pb.FoghornRelayClient {
+func (c *GRPCClient) Relay() foghornrelaypb.FoghornRelayClient {
 	return c.relay
 }
 
@@ -201,7 +205,7 @@ func (c *GRPCClient) Close() error {
 
 // CreateClip creates a new clip from a stream.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, metadata.MD, error) {
+func (c *GRPCClient) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -212,11 +216,11 @@ func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) 
 
 // DeleteClip deletes a clip.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*pb.DeleteClipResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*sharedpb.DeleteClipResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req := &pb.DeleteClipRequest{
+	req := &sharedpb.DeleteClipRequest{
 		ClipHash: clipHash,
 	}
 	if tenantID != nil {
@@ -233,7 +237,7 @@ func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *
 
 // StartDVR initiates DVR recording for a stream.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, metadata.MD, error) {
+func (c *GRPCClient) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -244,7 +248,7 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb
 
 // RetrieveDVRChapter returns the chapter row, including the canonical
 // VOD playback_id once finalization has completed. UTC-only.
-func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, metadata.MD, error) {
+func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -255,7 +259,7 @@ func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVR
 // ListDVRChapters paginates chapter rows for player navigation. Bounded
 // by page_size (default 200, max 1000) per the bounded-operations
 // invariant for unbounded artifact lifetime.
-func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, metadata.MD, error) {
+func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -266,7 +270,7 @@ func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChapter
 // OverrideArtifactRetention pushes a per-asset retention horizon onto an
 // existing foghorn.artifacts row so the next RetentionJob tick uses the new
 // value. Called by Commodore.UpdateAssetRetention / ResetAssetRetention.
-func (c *GRPCClient) OverrideArtifactRetention(ctx context.Context, req *pb.OverrideArtifactRetentionRequest) (*pb.OverrideArtifactRetentionResponse, metadata.MD, error) {
+func (c *GRPCClient) OverrideArtifactRetention(ctx context.Context, req *foghornpb.OverrideArtifactRetentionRequest) (*foghornpb.OverrideArtifactRetentionResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -278,7 +282,7 @@ func (c *GRPCClient) OverrideArtifactRetention(ctx context.Context, req *pb.Over
 // supplied JWT (or webhook test). Webhook mode (req.FireWebhook=true) makes
 // a real outbound HTTPS call to the customer URL — Commodore validates
 // tenant ownership upstream before forwarding here.
-func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, metadata.MD, error) {
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, metadata.MD, error) {
 	// Webhook mode can take up to ~10s if the customer endpoint is slow;
 	// give the call its own headroom rather than tripping the default
 	// client timeout.
@@ -295,11 +299,11 @@ func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybac
 
 // StopDVR stops an active DVR recording.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*pb.StopDVRResponse, metadata.MD, error) {
+func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*sharedpb.StopDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req := &pb.StopDVRRequest{
+	req := &sharedpb.StopDVRRequest{
 		DvrHash: dvrHash,
 	}
 	if tenantID != nil {
@@ -315,11 +319,11 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *stri
 
 // DeleteDVR deletes a DVR recording and its files.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.DeleteDVRResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*sharedpb.DeleteDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req := &pb.DeleteDVRRequest{
+	req := &sharedpb.DeleteDVRRequest{
 		DvrHash: dvrHash,
 	}
 	if tenantID != nil {
@@ -336,11 +340,11 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP, viewerToken *string) (*pb.ViewerEndpointResponse, metadata.MD, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP, viewerToken *string) (*sharedpb.ViewerEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req := &pb.ViewerEndpointRequest{
+	req := &sharedpb.ViewerEndpointRequest{
 		ContentId:   contentID,
 		ViewerIp:    viewerIP,
 		ViewerToken: viewerToken,
@@ -352,11 +356,11 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string
 
 // ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, metadata.MD, error) {
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*sharedpb.IngestEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	req := &pb.IngestEndpointRequest{
+	req := &sharedpb.IngestEndpointRequest{
 		StreamKey: streamKey,
 		ViewerIp:  viewerIP,
 	}
@@ -371,7 +375,7 @@ func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string
 
 // CreateVodUpload initiates a multipart upload and returns presigned URLs.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, metadata.MD, error) {
+func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -382,7 +386,7 @@ func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploa
 
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, metadata.MD, error) {
+func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -393,12 +397,12 @@ func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodU
 
 // AbortVodUpload cancels an in-progress multipart upload.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, metadata.MD, error) {
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
+	resp, err := c.vod.AbortVodUpload(ctx, &sharedpb.AbortVodUploadRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
 	}, grpc.Trailer(&trailers))
@@ -407,12 +411,12 @@ func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID stri
 
 // GetVodUploadStatus reads server-authoritative state of an in-flight multipart upload.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*pb.GetVodUploadStatusResponse, metadata.MD, error) {
+func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*sharedpb.GetVodUploadStatusResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.vod.GetVodUploadStatus(ctx, &pb.GetVodUploadStatusRequest{
+	resp, err := c.vod.GetVodUploadStatus(ctx, &sharedpb.GetVodUploadStatusRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
 	}, grpc.Trailer(&trailers))
@@ -421,12 +425,12 @@ func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID 
 
 // GetVodAsset returns a single VOD asset by hash.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, metadata.MD, error) {
+func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
+	resp, err := c.vod.GetVodAsset(ctx, &sharedpb.GetVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
 	}, grpc.Trailer(&trailers))
@@ -435,12 +439,12 @@ func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash str
 
 // ListVodAssets returns paginated list of VOD assets for a tenant.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, metadata.MD, error) {
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*sharedpb.ListVodAssetsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
+	resp, err := c.vod.ListVodAssets(ctx, &sharedpb.ListVodAssetsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	}, grpc.Trailer(&trailers))
@@ -449,12 +453,12 @@ func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, paginat
 
 // DeleteVodAsset deletes a VOD asset.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, metadata.MD, error) {
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+	resp, err := c.vod.DeleteVodAsset(ctx, &sharedpb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
 	}, grpc.Trailer(&trailers))
@@ -465,7 +469,7 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 // Helmsman nodes that hold the listed live streams or artifacts. Empty
 // internalNames lets Foghorn fan out across the tenant's known live streams
 // and artifact sessions. The re-fired USER_NEW decides allow/deny per session.
-func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reason string, internalNames []string) (*pb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
+func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reason string, internalNames []string) (*foghornpb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
 	return c.InvalidatePlaybackAuthWithBundle(ctx, tenantID, reason, internalNames, "", 0)
 }
 
@@ -474,12 +478,12 @@ func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reaso
 // policy-bundle cache watermark on bundle_revoke entries. When streamID
 // is empty + bundleMinVersion is 0, the call is equivalent to
 // InvalidatePlaybackAuth.
-func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenantID, reason string, internalNames []string, streamID string, bundleMinVersion int64) (*pb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
+func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenantID, reason string, internalNames []string, streamID string, bundleMinVersion int64) (*foghornpb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.tenant.InvalidatePlaybackAuth(ctx, &pb.InvalidatePlaybackAuthRequest{
+	resp, err := c.tenant.InvalidatePlaybackAuth(ctx, &foghornpb.InvalidatePlaybackAuthRequest{
 		TenantId:         tenantID,
 		InternalNames:    internalNames,
 		Reason:           reason,
@@ -491,12 +495,12 @@ func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenan
 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, metadata.MD, error) {
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.tenant.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
+	resp, err := c.tenant.TerminateTenantStreams(ctx, &foghornpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	}, grpc.Trailer(&trailers))
@@ -505,12 +509,12 @@ func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reaso
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation).
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, metadata.MD, error) {
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.tenant.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
+	resp, err := c.tenant.InvalidateTenantCache(ctx, &foghornpb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	}, grpc.Trailer(&trailers))
@@ -522,7 +526,7 @@ func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason
 // =============================================================================
 
 // PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
-func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *pb.PreRegisterEdgeRequest) (*pb.PreRegisterEdgeResponse, error) {
+func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	return c.edge.PreRegisterEdge(ctx, req)
@@ -533,7 +537,7 @@ func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *pb.PreRegisterEdg
 // =============================================================================
 
 // SetNodeMode changes the operational mode of a node (normal, draining, maintenance).
-func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, metadata.MD, error) {
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -542,7 +546,7 @@ func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest
 }
 
 // GetNodeHealth returns real-time health and routing state for a node.
-func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, metadata.MD, error) {
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD

@@ -1,15 +1,14 @@
 package tools
 
 import (
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestSummarizeTrackInventoryIncludesExpectedDerivedTracks(t *testing.T) {
 	trackCount := int32(5)
 	primaryAudio := "aac"
-	summary := summarizeTrackInventory([]*pb.StreamHealthMetric{
+	summary := summarizeTrackInventory([]*periscopepb.StreamHealthMetric{
 		{
 			TrackCount:        &trackCount,
 			PrimaryAudioCodec: &primaryAudio,

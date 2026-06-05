@@ -3,12 +3,12 @@ package resolvers
 import (
 	"fmt"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func mapSignalmanConnectionEvent(event *pb.SignalmanEvent) *pb.ConnectionEvent {
+func mapSignalmanConnectionEvent(event *signalmanpb.SignalmanEvent) *periscopepb.ConnectionEvent {
 	if event == nil || event.Data == nil {
 		return nil
 	}
@@ -19,13 +19,13 @@ func mapSignalmanConnectionEvent(event *pb.SignalmanEvent) *pb.ConnectionEvent {
 	}
 
 	switch event.EventType {
-	case pb.EventType_EVENT_TYPE_VIEWER_CONNECT:
+	case signalmanpb.EventType_EVENT_TYPE_VIEWER_CONNECT:
 		vc := event.Data.GetViewerConnect()
 		if vc == nil {
 			return nil
 		}
 		streamID := vc.GetStreamId()
-		return &pb.ConnectionEvent{
+		return &periscopepb.ConnectionEvent{
 			EventId:        buildLiveConnectionEventID(streamID, vc.GetSessionId(), ts),
 			Timestamp:      ts,
 			TenantId:       event.GetTenantId(),
@@ -43,7 +43,7 @@ func mapSignalmanConnectionEvent(event *pb.SignalmanEvent) *pb.ConnectionEvent {
 			NodeBucket:     vc.GetNodeBucket(),
 		}
 
-	case pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
+	case signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
 		vd := event.Data.GetViewerDisconnect()
 		if vd == nil {
 			return nil
@@ -63,7 +63,7 @@ func mapSignalmanConnectionEvent(event *pb.SignalmanEvent) *pb.ConnectionEvent {
 			bytesTransferred += uint64(vd.GetDownBytes())
 		}
 
-		return &pb.ConnectionEvent{
+		return &periscopepb.ConnectionEvent{
 			EventId:                buildLiveConnectionEventID(streamID, vd.GetSessionId(), ts),
 			Timestamp:              ts,
 			TenantId:               event.GetTenantId(),

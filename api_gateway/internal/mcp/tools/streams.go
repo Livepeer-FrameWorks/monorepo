@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -156,7 +156,7 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 	}
 
 	// Call Commodore to create stream (tenantID is in context metadata)
-	resp, err := clients.Commodore.CreateStream(ctx, &pb.CreateStreamRequest{
+	resp, err := clients.Commodore.CreateStream(ctx, &commodorepb.CreateStreamRequest{
 		Title:       args.Name,
 		Description: args.Description,
 		IsPublic:    args.Public,
@@ -231,7 +231,7 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 	}
 
 	// Call Commodore to update stream
-	stream, err := clients.Commodore.UpdateStream(ctx, &pb.UpdateStreamRequest{
+	stream, err := clients.Commodore.UpdateStream(ctx, &commodorepb.UpdateStreamRequest{
 		StreamId:    streamID,
 		Name:        args.Name,
 		Description: args.Description,
@@ -256,17 +256,17 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 	return toolSuccess(result)
 }
 
-func toProtoPullSource(input *PullSourceToolInput) *pb.PullSourceInput {
+func toProtoPullSource(input *PullSourceToolInput) *commodorepb.PullSourceInput {
 	if input == nil {
 		return nil
 	}
-	return &pb.PullSourceInput{
+	return &commodorepb.PullSourceInput{
 		SourceUri: input.SourceURI,
 		Enabled:   input.Enabled,
 	}
 }
 
-func fromProtoPullSource(input *pb.PullSourceView) *PullSourceToolResult {
+func fromProtoPullSource(input *commodorepb.PullSourceView) *PullSourceToolResult {
 	if input == nil {
 		return nil
 	}
@@ -506,7 +506,7 @@ func handleValidateStreamKey(ctx context.Context, args ValidateStreamKeyInput, c
 	return toolSuccess(ValidateStreamKeyResult{Status: "VALID"})
 }
 
-func streamKeyToToolResult(k *pb.StreamKey, includeSecret bool) StreamKeyToolResult {
+func streamKeyToToolResult(k *commodorepb.StreamKey, includeSecret bool) StreamKeyToolResult {
 	if k == nil {
 		return StreamKeyToolResult{}
 	}

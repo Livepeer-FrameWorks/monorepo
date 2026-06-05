@@ -11,7 +11,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -22,18 +26,18 @@ const DefaultServerName = "commodore.internal"
 // GRPCClient is the gRPC client for Commodore
 type GRPCClient struct {
 	conn         *grpc.ClientConn
-	internal     pb.InternalServiceClient
-	stream       pb.StreamServiceClient
-	streamKey    pb.StreamKeyServiceClient
-	user         pb.UserServiceClient
-	developer    pb.DeveloperServiceClient
-	clip         pb.ClipServiceClient
-	dvr          pb.DVRServiceClient
-	viewer       pb.ViewerServiceClient
-	vod          pb.VodServiceClient
-	nodeMgmt     pb.NodeManagementServiceClient
-	pushTarget   pb.PushTargetServiceClient
-	playbackAuth pb.PlaybackAccessControlServiceClient
+	internal     commodorepb.InternalServiceClient
+	stream       commodorepb.StreamServiceClient
+	streamKey    commodorepb.StreamKeyServiceClient
+	user         commodorepb.UserServiceClient
+	developer    commodorepb.DeveloperServiceClient
+	clip         commodorepb.ClipServiceClient
+	dvr          commodorepb.DVRServiceClient
+	viewer       commodorepb.ViewerServiceClient
+	vod          commodorepb.VodServiceClient
+	nodeMgmt     commodorepb.NodeManagementServiceClient
+	pushTarget   commodorepb.PushTargetServiceClient
+	playbackAuth commodorepb.PlaybackAccessControlServiceClient
 	logger       logging.Logger
 	cache        *cache.Cache
 }
@@ -132,18 +136,18 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 
 	return &GRPCClient{
 		conn:         conn,
-		internal:     pb.NewInternalServiceClient(conn),
-		stream:       pb.NewStreamServiceClient(conn),
-		streamKey:    pb.NewStreamKeyServiceClient(conn),
-		user:         pb.NewUserServiceClient(conn),
-		developer:    pb.NewDeveloperServiceClient(conn),
-		clip:         pb.NewClipServiceClient(conn),
-		dvr:          pb.NewDVRServiceClient(conn),
-		viewer:       pb.NewViewerServiceClient(conn),
-		vod:          pb.NewVodServiceClient(conn),
-		nodeMgmt:     pb.NewNodeManagementServiceClient(conn),
-		pushTarget:   pb.NewPushTargetServiceClient(conn),
-		playbackAuth: pb.NewPlaybackAccessControlServiceClient(conn),
+		internal:     commodorepb.NewInternalServiceClient(conn),
+		stream:       commodorepb.NewStreamServiceClient(conn),
+		streamKey:    commodorepb.NewStreamKeyServiceClient(conn),
+		user:         commodorepb.NewUserServiceClient(conn),
+		developer:    commodorepb.NewDeveloperServiceClient(conn),
+		clip:         commodorepb.NewClipServiceClient(conn),
+		dvr:          commodorepb.NewDVRServiceClient(conn),
+		viewer:       commodorepb.NewViewerServiceClient(conn),
+		vod:          commodorepb.NewVodServiceClient(conn),
+		nodeMgmt:     commodorepb.NewNodeManagementServiceClient(conn),
+		pushTarget:   commodorepb.NewPushTargetServiceClient(conn),
+		playbackAuth: commodorepb.NewPlaybackAccessControlServiceClient(conn),
 		logger:       config.Logger,
 		cache:        config.Cache,
 	}, nil
@@ -183,13 +187,13 @@ func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
 
 // ValidateStreamKey validates a stream key (called by Foghorn on PUSH_REWRITE).
 // clusterID is optional — when provided, Commodore records which cluster the stream is ingesting on.
-func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*pb.ValidateStreamKeyResponse, error) {
+func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, clusterID ...string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	cid := ""
 	if len(clusterID) > 0 {
 		cid = clusterID[0]
 	}
 	cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
-	resp, err := c.internal.ValidateStreamKey(ctx, &pb.ValidateStreamKeyRequest{
+	resp, err := c.internal.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: streamKey,
 		ClusterId: cid,
 	})
@@ -202,7 +206,7 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, cl
 
 	if c.cache != nil {
 		if cached, ok := c.cache.Peek(cacheKey); ok {
-			if cachedResp, ok := cached.(*pb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
+			if cachedResp, ok := cached.(*commodorepb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
 				return cachedResp, nil
 			}
 		}
@@ -215,8 +219,8 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string, cl
 // run on the requested cluster. Foghorn's managed-stream reconciler calls
 // this each tick to build desired state; per-stream admission + cache writes
 // then go through ResolveStreamContext below.
-func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (*pb.ListManagedStreamsResponse, error) {
-	return c.internal.ListManagedStreams(ctx, &pb.ListManagedStreamsRequest{ClusterId: clusterID})
+func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (*commodorepb.ListManagedStreamsResponse, error) {
+	return c.internal.ListManagedStreams(ctx, &commodorepb.ListManagedStreamsRequest{ClusterId: clusterID})
 }
 
 // RecordStreamActiveCluster pins the cluster currently serving a managed
@@ -224,8 +228,8 @@ func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (
 // elected placement. Called by Foghorn's reconciler after a successful
 // ApplyManagedStream; routing for public playback/control consults the
 // same column.
-func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, clusterID string) (*pb.RecordStreamActiveClusterResponse, error) {
-	return c.internal.RecordStreamActiveCluster(ctx, &pb.RecordStreamActiveClusterRequest{
+func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, clusterID string) (*commodorepb.RecordStreamActiveClusterResponse, error) {
+	return c.internal.RecordStreamActiveCluster(ctx, &commodorepb.RecordStreamActiveClusterRequest{
 		StreamId:  streamID,
 		ClusterId: clusterID,
 	})
@@ -236,8 +240,8 @@ func (c *GRPCClient) RecordStreamActiveCluster(ctx context.Context, streamID, cl
 // expected_cluster_id is the cluster the caller believes is currently
 // recorded; the update is conditional so a stale retract cannot wipe a
 // fresher claim from a peer cluster.
-func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*pb.ClearStreamActiveClusterResponse, error) {
-	return c.internal.ClearStreamActiveCluster(ctx, &pb.ClearStreamActiveClusterRequest{
+func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, expectedClusterID string) (*commodorepb.ClearStreamActiveClusterResponse, error) {
+	return c.internal.ClearStreamActiveCluster(ctx, &commodorepb.ClearStreamActiveClusterRequest{
 		StreamId:          streamID,
 		ExpectedClusterId: expectedClusterID,
 	})
@@ -250,17 +254,17 @@ func (c *GRPCClient) ClearStreamActiveCluster(ctx context.Context, streamID, exp
 // writes can happen without a stream key.
 //
 // Pass exactly one identifier; the others must be empty.
-func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*pb.ResolveStreamContextResponse, error) {
-	req := &pb.ResolveStreamContextRequest{
+func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbackID, internalName, clusterID string) (*commodorepb.ResolveStreamContextResponse, error) {
+	req := &commodorepb.ResolveStreamContextRequest{
 		ClusterId: clusterID,
 	}
 	switch {
 	case streamID != "":
-		req.Identifier = &pb.ResolveStreamContextRequest_StreamId{StreamId: streamID}
+		req.Identifier = &commodorepb.ResolveStreamContextRequest_StreamId{StreamId: streamID}
 	case playbackID != "":
-		req.Identifier = &pb.ResolveStreamContextRequest_PlaybackId{PlaybackId: playbackID}
+		req.Identifier = &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: playbackID}
 	case internalName != "":
-		req.Identifier = &pb.ResolveStreamContextRequest_InternalName{InternalName: internalName}
+		req.Identifier = &commodorepb.ResolveStreamContextRequest_InternalName{InternalName: internalName}
 	default:
 		return nil, fmt.Errorf("ResolveStreamContext requires exactly one of stream_id / playback_id / internal_name")
 	}
@@ -268,13 +272,13 @@ func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbac
 }
 
 // ResolvePlaybackID resolves a playback ID to internal stream name
-func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error) {
+func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error) {
 	// Check cache first
 	if c.cache != nil {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			cacheKey := tenantID + ":commodore:resolve:" + playbackID
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolvePlaybackID(ctx, &pb.ResolvePlaybackIDRequest{
+				resp, err := c.internal.ResolvePlaybackID(ctx, &commodorepb.ResolvePlaybackIDRequest{
 					PlaybackId: playbackID,
 				})
 				if err != nil {
@@ -282,23 +286,23 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 				}
 				return resp, true, nil
 			}); ok {
-				return v.(*pb.ResolvePlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
+				return v.(*commodorepb.ResolvePlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
 		}
 	}
 
-	return c.internal.ResolvePlaybackID(ctx, &pb.ResolvePlaybackIDRequest{
+	return c.internal.ResolvePlaybackID(ctx, &commodorepb.ResolvePlaybackIDRequest{
 		PlaybackId: playbackID,
 	})
 }
 
 // ResolveInternalName resolves an internal name to tenant context
-func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error) {
+func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error) {
 	if c.cache != nil {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			cacheKey := tenantID + ":commodore:internal:" + internalName
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
+				resp, err := c.internal.ResolveInternalName(ctx, &commodorepb.ResolveInternalNameRequest{
 					InternalName: internalName,
 				})
 				if err != nil {
@@ -309,7 +313,7 @@ func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName strin
 				if v == nil {
 					return nil, fmt.Errorf("cached ResolveInternalName response is nil")
 				}
-				resp, ok := v.(*pb.ResolveInternalNameResponse)
+				resp, ok := v.(*commodorepb.ResolveInternalNameResponse)
 				if !ok {
 					return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
 				}
@@ -318,18 +322,18 @@ func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName strin
 		}
 	}
 
-	return c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
+	return c.internal.ResolveInternalName(ctx, &commodorepb.ResolveInternalNameRequest{
 		InternalName: internalName,
 	})
 }
 
 // ResolveArtifactPlaybackID resolves an artifact playback ID to artifact identity
-func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
 	if c.cache != nil {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			cacheKey := tenantID + ":commodore:artifact:playback:" + playbackID
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
+				resp, err := c.internal.ResolveArtifactPlaybackID(ctx, &commodorepb.ResolveArtifactPlaybackIDRequest{
 					PlaybackId: playbackID,
 				})
 				if err != nil || !resp.Found {
@@ -337,23 +341,23 @@ func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID s
 				}
 				return resp, true, nil
 			}); ok {
-				return v.(*pb.ResolveArtifactPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
+				return v.(*commodorepb.ResolveArtifactPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
 		}
 	}
 
-	return c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
+	return c.internal.ResolveArtifactPlaybackID(ctx, &commodorepb.ResolveArtifactPlaybackIDRequest{
 		PlaybackId: playbackID,
 	})
 }
 
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
-func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalName string) (*pb.ResolveArtifactInternalNameResponse, error) {
+func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
 	if c.cache != nil {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			cacheKey := tenantID + ":commodore:artifact:internal:" + internalName
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
+				resp, err := c.internal.ResolveArtifactInternalName(ctx, &commodorepb.ResolveArtifactInternalNameRequest{
 					InternalName: internalName,
 				})
 				if err != nil || !resp.Found {
@@ -361,12 +365,12 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 				}
 				return resp, true, nil
 			}); ok {
-				return v.(*pb.ResolveArtifactInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
+				return v.(*commodorepb.ResolveArtifactInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
 		}
 	}
 
-	return c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
+	return c.internal.ResolveArtifactInternalName(ctx, &commodorepb.ResolveArtifactInternalNameRequest{
 		InternalName: internalName,
 	})
 }
@@ -375,15 +379,15 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 // pull-mode stream. Used by Foghorn STREAM_SOURCE handling and /source origin
 // selection. No tenant-scoped caching here — the value is tenant-attributed in
 // the response and Foghorn caches per process if needed.
-func (c *GRPCClient) ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*pb.ResolvePullSourceByInternalNameResponse, error) {
-	return c.internal.ResolvePullSourceByInternalName(ctx, &pb.ResolvePullSourceByInternalNameRequest{
+func (c *GRPCClient) ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {
+	return c.internal.ResolvePullSourceByInternalName(ctx, &commodorepb.ResolvePullSourceByInternalNameRequest{
 		InternalName: internalName,
 	})
 }
 
 // ValidateAPIToken validates a developer API token
-func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*pb.ValidateAPITokenResponse, error) {
-	return c.internal.ValidateAPIToken(ctx, &pb.ValidateAPITokenRequest{
+func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*commodorepb.ValidateAPITokenResponse, error) {
+	return c.internal.ValidateAPIToken(ctx, &commodorepb.ValidateAPITokenRequest{
 		Token: token,
 	})
 }
@@ -391,18 +395,18 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*pb.Va
 // MintMistAdminSession mints a short-TTL session token bound to a single
 // edge node. Caller is expected to have authorized the operator at the
 // Gateway resolver level — this RPC is the mint primitive only.
-func (c *GRPCClient) MintMistAdminSession(ctx context.Context, req *pb.MintMistAdminSessionRequest) (*pb.MintMistAdminSessionResponse, error) {
+func (c *GRPCClient) MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error) {
 	return c.internal.MintMistAdminSession(ctx, req)
 }
 
 // ValidateMistAdminSession verifies a session token; expected_node_id MUST
 // be set to the connected Helmsman's nodeID by the relay (Foghorn).
-func (c *GRPCClient) ValidateMistAdminSession(ctx context.Context, req *pb.ValidateMistAdminSessionRequest) (*pb.ValidateMistAdminSessionResponse, error) {
+func (c *GRPCClient) ValidateMistAdminSession(ctx context.Context, req *commodorepb.ValidateMistAdminSessionRequest) (*commodorepb.ValidateMistAdminSessionResponse, error) {
 	return c.internal.ValidateMistAdminSession(ctx, req)
 }
 
 // StartDVR initiates DVR recording for a stream (internal, called by Foghorn)
-func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+func (c *GRPCClient) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
 	return c.internal.StartDVR(ctx, req)
 }
 
@@ -414,13 +418,13 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb
 
 // RegisterClip registers a new clip in the business registry
 // Called by Foghorn during the CreateClip flow
-func (c *GRPCClient) RegisterClip(ctx context.Context, req *pb.RegisterClipRequest) (*pb.RegisterClipResponse, error) {
+func (c *GRPCClient) RegisterClip(ctx context.Context, req *commodorepb.RegisterClipRequest) (*commodorepb.RegisterClipResponse, error) {
 	return c.internal.RegisterClip(ctx, req)
 }
 
 // RegisterDVR registers a new DVR recording in the business registry
 // Called by Foghorn during the StartDVR flow
-func (c *GRPCClient) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest) (*pb.RegisterDVRResponse, error) {
+func (c *GRPCClient) RegisterDVR(ctx context.Context, req *commodorepb.RegisterDVRRequest) (*commodorepb.RegisterDVRResponse, error) {
 	return c.internal.RegisterDVR(ctx, req)
 }
 
@@ -428,8 +432,8 @@ func (c *GRPCClient) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest
 // storage_cluster_id on the commodore.{clips, dvr_recordings, vod_assets}
 // row matching (tenant_id, asset_key). Idempotent. Called from Foghorn's
 // processThumbnailUploaded confirmation site.
-func (c *GRPCClient) MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.MarkArtifactThumbnailsReadyResponse, error) {
-	return c.internal.MarkArtifactThumbnailsReady(ctx, &pb.MarkArtifactThumbnailsReadyRequest{
+func (c *GRPCClient) MarkArtifactThumbnailsReady(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.MarkArtifactThumbnailsReadyResponse, error) {
+	return c.internal.MarkArtifactThumbnailsReady(ctx, &commodorepb.MarkArtifactThumbnailsReadyRequest{
 		TenantId:         tenantID,
 		AssetType:        assetType,
 		AssetKey:         assetKey,
@@ -440,8 +444,8 @@ func (c *GRPCClient) MarkArtifactThumbnailsReady(ctx context.Context, tenantID s
 // UpdateArtifactStorageCluster updates storage_cluster_id only — never
 // touches has_thumbnails. Called whenever Foghorn mutates
 // foghorn.artifacts.storage_cluster_id.
-func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey, storageClusterID string) (*pb.UpdateArtifactStorageClusterResponse, error) {
-	return c.internal.UpdateArtifactStorageCluster(ctx, &pb.UpdateArtifactStorageClusterRequest{
+func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey, storageClusterID string) (*commodorepb.UpdateArtifactStorageClusterResponse, error) {
+	return c.internal.UpdateArtifactStorageCluster(ctx, &commodorepb.UpdateArtifactStorageClusterRequest{
 		TenantId:         tenantID,
 		AssetType:        assetType,
 		AssetKey:         assetKey,
@@ -451,8 +455,8 @@ func (c *GRPCClient) UpdateArtifactStorageCluster(ctx context.Context, tenantID 
 
 // UpdateArtifactSize projects Foghorn's authoritative artifact byte count into
 // the Commodore registry row used for catalog pagination and sorting.
-func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, assetType pb.ArtifactAssetType, assetKey string, sizeBytes int64) (*pb.UpdateArtifactSizeResponse, error) {
-	return c.internal.UpdateArtifactSize(ctx, &pb.UpdateArtifactSizeRequest{
+func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, assetType commodorepb.ArtifactAssetType, assetKey string, sizeBytes int64) (*commodorepb.UpdateArtifactSizeResponse, error) {
+	return c.internal.UpdateArtifactSize(ctx, &commodorepb.UpdateArtifactSizeRequest{
 		TenantId:  tenantID,
 		AssetType: assetType,
 		AssetKey:  assetKey,
@@ -465,7 +469,7 @@ func (c *GRPCClient) UpdateArtifactSize(ctx context.Context, tenantID string, as
 // from the persisted policy snapshot at FinalizeDVR time and pushes it
 // here so commodore.dvr_recordings.retention_until reflects post-end
 // retention. Active recordings carry NULL until they finalize.
-func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRetentionRequest) (*pb.UpdateDVRRetentionResponse, error) {
+func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *commodorepb.UpdateDVRRetentionRequest) (*commodorepb.UpdateDVRRetentionResponse, error) {
 	return c.internal.UpdateDVRRetention(ctx, req)
 }
 
@@ -474,57 +478,57 @@ func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *pb.UpdateDVRRe
 // Customer-tunable retention defaults + per-asset overrides.
 // ============================================================================
 
-func (c *GRPCClient) GetMediaRetentionPolicy(ctx context.Context, req *pb.GetMediaRetentionPolicyRequest) (*pb.GetMediaRetentionPolicyResponse, error) {
+func (c *GRPCClient) GetMediaRetentionPolicy(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error) {
 	return c.internal.GetMediaRetentionPolicy(ctx, req)
 }
 
-func (c *GRPCClient) SetMediaRetentionPolicy(ctx context.Context, req *pb.SetMediaRetentionPolicyRequest) (*pb.SetMediaRetentionPolicyResponse, error) {
+func (c *GRPCClient) SetMediaRetentionPolicy(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error) {
 	return c.internal.SetMediaRetentionPolicy(ctx, req)
 }
 
-func (c *GRPCClient) UpdateAssetRetention(ctx context.Context, req *pb.UpdateAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+func (c *GRPCClient) UpdateAssetRetention(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
 	return c.internal.UpdateAssetRetention(ctx, req)
 }
 
-func (c *GRPCClient) ResetAssetRetention(ctx context.Context, req *pb.ResetAssetRetentionRequest) (*pb.UpdateAssetRetentionResponse, error) {
+func (c *GRPCClient) ResetAssetRetention(ctx context.Context, req *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error) {
 	return c.internal.ResetAssetRetention(ctx, req)
 }
 
 // SetStreamRetentionOverrides writes per-stream DVR/clip retention overrides.
 // Commodore clamps positive values down to the tier cap and treats -1 as a
 // clear sentinel; the response reports the resolved post-write state.
-func (c *GRPCClient) SetStreamRetentionOverrides(ctx context.Context, req *pb.SetStreamRetentionOverridesRequest) (*pb.SetStreamRetentionOverridesResponse, error) {
+func (c *GRPCClient) SetStreamRetentionOverrides(ctx context.Context, req *commodorepb.SetStreamRetentionOverridesRequest) (*commodorepb.SetStreamRetentionOverridesResponse, error) {
 	return c.internal.SetStreamRetentionOverrides(ctx, req)
 }
 
 // TestPlaybackAccess facades Foghorn's dry-run evaluator. Webhook mode can
 // take up to ~10s for the customer endpoint to respond — keep timeouts
 // generous on the caller side.
-func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *pb.TestPlaybackAccessRequest) (*pb.TestPlaybackAccessResponse, error) {
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, error) {
 	return c.internal.TestPlaybackAccess(ctx, req)
 }
 
 // RecordPullSourceEvent appends a row to commodore.pull_source_events. Used
 // by Foghorn's STREAM_SOURCE handler to audit pull resolution outcomes.
-func (c *GRPCClient) RecordPullSourceEvent(ctx context.Context, req *pb.RecordPullSourceEventRequest) error {
+func (c *GRPCClient) RecordPullSourceEvent(ctx context.Context, req *commodorepb.RecordPullSourceEventRequest) error {
 	_, err := c.internal.RecordPullSourceEvent(ctx, req)
 	return err
 }
 
 // ListPullSourceEvents returns the most recent N pull-source resolution
 // events for a stream. Tenant-scoped via the JWT.
-func (c *GRPCClient) ListPullSourceEvents(ctx context.Context, req *pb.ListPullSourceEventsRequest) (*pb.ListPullSourceEventsResponse, error) {
+func (c *GRPCClient) ListPullSourceEvents(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error) {
 	return c.internal.ListPullSourceEvents(ctx, req)
 }
 
 // ResolveClipHash resolves a clip hash to tenant context
 // Used for analytics enrichment and playback authorization
-func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
+func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error) {
 	// Use cache for context lookups (high frequency during playback/events)
 	if c.cache != nil {
 		cacheKey := "commodore:clip:" + clipHash
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveClipHash(ctx, &pb.ResolveClipHashRequest{
+			resp, err := c.internal.ResolveClipHash(ctx, &commodorepb.ResolveClipHashRequest{
 				ClipHash: clipHash,
 			})
 			if err != nil || !resp.Found {
@@ -532,23 +536,23 @@ func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveClipHashResponse), nil //nolint:errcheck // type guaranteed by cache
+			return v.(*commodorepb.ResolveClipHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
-	return c.internal.ResolveClipHash(ctx, &pb.ResolveClipHashRequest{
+	return c.internal.ResolveClipHash(ctx, &commodorepb.ResolveClipHashRequest{
 		ClipHash: clipHash,
 	})
 }
 
 // ResolveDVRHash resolves a DVR hash to tenant context
 // Used for analytics enrichment and playback authorization
-func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
+func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error) {
 	// Use cache for context lookups (high frequency during playback/events)
 	if c.cache != nil {
 		cacheKey := "commodore:dvr:" + dvrHash
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveDVRHash(ctx, &pb.ResolveDVRHashRequest{
+			resp, err := c.internal.ResolveDVRHash(ctx, &commodorepb.ResolveDVRHashRequest{
 				DvrHash: dvrHash,
 			})
 			if err != nil || !resp.Found {
@@ -556,11 +560,11 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveDVRHashResponse), nil //nolint:errcheck // type guaranteed by cache
+			return v.(*commodorepb.ResolveDVRHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
-	return c.internal.ResolveDVRHash(ctx, &pb.ResolveDVRHashRequest{
+	return c.internal.ResolveDVRHash(ctx, &commodorepb.ResolveDVRHashRequest{
 		DvrHash: dvrHash,
 	})
 }
@@ -568,13 +572,13 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 // ResolveIdentifier provides unified resolution across all Commodore registries
 // Checks: streams (internal_name), streams (playback_id), clips, DVR, VOD
 // Used by Foghorn for analytics enrichment when local state cache misses
-func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
+func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error) {
 	// Use cache for context lookups (high frequency during playback/events)
 	if c.cache != nil {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			cacheKey := tenantID + ":commodore:id:" + identifier
 			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
+				resp, err := c.internal.ResolveIdentifier(ctx, &commodorepb.ResolveIdentifierRequest{
 					Identifier: identifier,
 				})
 				if err != nil || !resp.Found {
@@ -582,20 +586,20 @@ func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (
 				}
 				return resp, true, nil
 			}); ok {
-				return v.(*pb.ResolveIdentifierResponse), nil //nolint:errcheck // type guaranteed by cache
+				return v.(*commodorepb.ResolveIdentifierResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
 		}
 	}
 
-	return c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
+	return c.internal.ResolveIdentifier(ctx, &commodorepb.ResolveIdentifierRequest{
 		Identifier: identifier,
 	})
 }
 
 // RegisterVod registers a new VOD asset in the business registry
 // Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
-func (c *GRPCClient) RegisterVod(ctx context.Context, tenantID, userID, filename string, title, description, contentType *string, sizeBytes *int64) (*pb.RegisterVodResponse, error) {
-	req := &pb.RegisterVodRequest{
+func (c *GRPCClient) RegisterVod(ctx context.Context, tenantID, userID, filename string, title, description, contentType *string, sizeBytes *int64) (*commodorepb.RegisterVodResponse, error) {
+	req := &commodorepb.RegisterVodRequest{
 		TenantId: tenantID,
 		UserId:   userID,
 		Filename: filename,
@@ -617,12 +621,12 @@ func (c *GRPCClient) RegisterVod(ctx context.Context, tenantID, userID, filename
 
 // ResolveVodHash resolves a VOD hash to tenant context
 // Used for analytics enrichment, playback authorization, and lifecycle operations
-func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.ResolveVodHashResponse, error) {
+func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error) {
 	// Use cache for context lookups (high frequency during playback/events)
 	if c.cache != nil {
 		cacheKey := "commodore:vod:" + vodHash
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveVodHash(ctx, &pb.ResolveVodHashRequest{
+			resp, err := c.internal.ResolveVodHash(ctx, &commodorepb.ResolveVodHashRequest{
 				VodHash: vodHash,
 			})
 			if err != nil || !resp.Found {
@@ -630,18 +634,18 @@ func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.Re
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveVodHashResponse), nil //nolint:errcheck // type guaranteed by cache
+			return v.(*commodorepb.ResolveVodHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
-	return c.internal.ResolveVodHash(ctx, &pb.ResolveVodHashRequest{
+	return c.internal.ResolveVodHash(ctx, &commodorepb.ResolveVodHashRequest{
 		VodHash: vodHash,
 	})
 }
 
 // ResolveVodID resolves a VOD relay ID (vod_assets.id) to VOD hash + tenant context
-func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error) {
-	return c.internal.ResolveVodID(ctx, &pb.ResolveVodIDRequest{
+func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error) {
+	return c.internal.ResolveVodID(ctx, &commodorepb.ResolveVodIDRequest{
 		VodId: vodID,
 	})
 }
@@ -649,8 +653,8 @@ func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*pb.Resolv
 // MintChapterPlaybackID asks Commodore to mint (or return the existing)
 // public playback_id for a hidden chapter artifact. Idempotent on
 // chapter_id.
-func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID string) (*pb.MintChapterPlaybackIDResponse, error) {
-	return c.internal.MintChapterPlaybackID(ctx, &pb.MintChapterPlaybackIDRequest{
+func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID string) (*commodorepb.MintChapterPlaybackIDResponse, error) {
+	return c.internal.MintChapterPlaybackID(ctx, &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId:        chapterID,
 		TenantId:         tenantID,
 		ArtifactHash:     artifactHash,
@@ -664,21 +668,21 @@ func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenan
 
 // GetTenantProcessesJSON returns the tenant-level MistServer process config
 // JSON for the given legacy stream type ("live" | "vod").
-func (c *GRPCClient) GetTenantProcessesJSON(ctx context.Context, tenantID, streamType, clusterID string) (*pb.GetTenantProcessesJSONResponse, error) {
+func (c *GRPCClient) GetTenantProcessesJSON(ctx context.Context, tenantID, streamType, clusterID string) (*commodorepb.GetTenantProcessesJSONResponse, error) {
 	return c.GetTenantProcessesJSONForStream(ctx, tenantID, streamType, clusterID, "")
 }
 
 // GetTenantProcessesJSONForStream returns the stream-aware MistServer process
 // config JSON for the given legacy stream type ("live" | "vod").
-func (c *GRPCClient) GetTenantProcessesJSONForStream(ctx context.Context, tenantID, streamType, clusterID, streamID string) (*pb.GetTenantProcessesJSONResponse, error) {
+func (c *GRPCClient) GetTenantProcessesJSONForStream(ctx context.Context, tenantID, streamType, clusterID, streamID string) (*commodorepb.GetTenantProcessesJSONResponse, error) {
 	return c.GetTenantProcessesJSONForLifecycle(ctx, tenantID, streamType, clusterID, streamID)
 }
 
 // GetTenantProcessesJSONForLifecycle returns the stream-aware MistServer
 // process config JSON for a lifecycle ("live", "dvr", "clip",
 // "dvr_finalize", or "vod").
-func (c *GRPCClient) GetTenantProcessesJSONForLifecycle(ctx context.Context, tenantID, lifecycle, clusterID, streamID string) (*pb.GetTenantProcessesJSONResponse, error) {
-	return c.internal.GetTenantProcessesJSON(ctx, &pb.GetTenantProcessesJSONRequest{
+func (c *GRPCClient) GetTenantProcessesJSONForLifecycle(ctx context.Context, tenantID, lifecycle, clusterID, streamID string) (*commodorepb.GetTenantProcessesJSONResponse, error) {
+	return c.internal.GetTenantProcessesJSON(ctx, &commodorepb.GetTenantProcessesJSONRequest{
 		TenantId:   tenantID,
 		StreamType: lifecycle,
 		ClusterId:  clusterID,
@@ -690,11 +694,11 @@ func (c *GRPCClient) GetTenantProcessesJSONForLifecycle(ctx context.Context, ten
 // ResolveChapterPlaybackID maps a public chapter playback_id back to its
 // internal identity (chapter_id, tenant_id, artifact_hash). Cached
 // because chapter playback lookups happen on every viewer connect.
-func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveChapterPlaybackIDResponse, error) {
+func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error) {
 	if c.cache != nil {
 		cacheKey := "commodore:chapter_pb:" + playbackID
 		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) { //nolint:errcheck // miss is recovered by the direct call below
-			resp, err := c.internal.ResolveChapterPlaybackID(ctx, &pb.ResolveChapterPlaybackIDRequest{
+			resp, err := c.internal.ResolveChapterPlaybackID(ctx, &commodorepb.ResolveChapterPlaybackIDRequest{
 				PlaybackId: playbackID,
 			})
 			if err != nil || !resp.GetFound() {
@@ -702,10 +706,10 @@ func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID st
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveChapterPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
+			return v.(*commodorepb.ResolveChapterPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
-	return c.internal.ResolveChapterPlaybackID(ctx, &pb.ResolveChapterPlaybackIDRequest{
+	return c.internal.ResolveChapterPlaybackID(ctx, &commodorepb.ResolveChapterPlaybackIDRequest{
 		PlaybackId: playbackID,
 	})
 }
@@ -717,8 +721,8 @@ func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID st
 // GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
 // This is called by x402 middleware after verifying the ERC-3009 payment signature.
 // If the wallet is unknown, Commodore creates: tenant (prepaid) + user (email=NULL) + wallet_identity.
-func (c *GRPCClient) GetOrCreateWalletUser(ctx context.Context, chainType, walletAddress string) (*pb.GetOrCreateWalletUserResponse, error) {
-	return c.internal.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+func (c *GRPCClient) GetOrCreateWalletUser(ctx context.Context, chainType, walletAddress string) (*commodorepb.GetOrCreateWalletUserResponse, error) {
+	return c.internal.GetOrCreateWalletUser(ctx, &commodorepb.GetOrCreateWalletUserRequest{
 		ChainType:     chainType,
 		WalletAddress: walletAddress,
 	})
@@ -729,44 +733,44 @@ func (c *GRPCClient) GetOrCreateWalletUser(ctx context.Context, chainType, walle
 // ============================================================================
 
 // CreateStream creates a new stream
-func (c *GRPCClient) CreateStream(ctx context.Context, req *pb.CreateStreamRequest) (*pb.CreateStreamResponse, error) {
+func (c *GRPCClient) CreateStream(ctx context.Context, req *commodorepb.CreateStreamRequest) (*commodorepb.CreateStreamResponse, error) {
 	return c.stream.CreateStream(ctx, req)
 }
 
 // GetStream gets a stream by ID
-func (c *GRPCClient) GetStream(ctx context.Context, streamID string) (*pb.Stream, error) {
-	return c.stream.GetStream(ctx, &pb.GetStreamRequest{
+func (c *GRPCClient) GetStream(ctx context.Context, streamID string) (*commodorepb.Stream, error) {
+	return c.stream.GetStream(ctx, &commodorepb.GetStreamRequest{
 		StreamId: streamID,
 	})
 }
 
 // GetStreamsBatch fetches multiple streams by IDs in a single batch call
-func (c *GRPCClient) GetStreamsBatch(ctx context.Context, streamIDs []string) (*pb.GetStreamsBatchResponse, error) {
-	return c.stream.GetStreamsBatch(ctx, &pb.GetStreamsBatchRequest{StreamIds: streamIDs})
+func (c *GRPCClient) GetStreamsBatch(ctx context.Context, streamIDs []string) (*commodorepb.GetStreamsBatchResponse, error) {
+	return c.stream.GetStreamsBatch(ctx, &commodorepb.GetStreamsBatchRequest{StreamIds: streamIDs})
 }
 
 // ListStreams lists streams with cursor pagination
-func (c *GRPCClient) ListStreams(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListStreamsResponse, error) {
-	return c.stream.ListStreams(ctx, &pb.ListStreamsRequest{
+func (c *GRPCClient) ListStreams(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamsResponse, error) {
+	return c.stream.ListStreams(ctx, &commodorepb.ListStreamsRequest{
 		Pagination: pagination,
 	})
 }
 
 // UpdateStream updates a stream
-func (c *GRPCClient) UpdateStream(ctx context.Context, req *pb.UpdateStreamRequest) (*pb.Stream, error) {
+func (c *GRPCClient) UpdateStream(ctx context.Context, req *commodorepb.UpdateStreamRequest) (*commodorepb.Stream, error) {
 	return c.stream.UpdateStream(ctx, req)
 }
 
 // DeleteStream deletes a stream
-func (c *GRPCClient) DeleteStream(ctx context.Context, streamID string) (*pb.DeleteStreamResponse, error) {
-	return c.stream.DeleteStream(ctx, &pb.DeleteStreamRequest{
+func (c *GRPCClient) DeleteStream(ctx context.Context, streamID string) (*commodorepb.DeleteStreamResponse, error) {
+	return c.stream.DeleteStream(ctx, &commodorepb.DeleteStreamRequest{
 		StreamId: streamID,
 	})
 }
 
 // RefreshStreamKey refreshes a stream key
-func (c *GRPCClient) RefreshStreamKey(ctx context.Context, streamID string) (*pb.RefreshStreamKeyResponse, error) {
-	return c.stream.RefreshStreamKey(ctx, &pb.RefreshStreamKeyRequest{
+func (c *GRPCClient) RefreshStreamKey(ctx context.Context, streamID string) (*commodorepb.RefreshStreamKeyResponse, error) {
+	return c.stream.RefreshStreamKey(ctx, &commodorepb.RefreshStreamKeyRequest{
 		StreamId: streamID,
 	})
 }
@@ -776,16 +780,16 @@ func (c *GRPCClient) RefreshStreamKey(ctx context.Context, streamID string) (*pb
 // ============================================================================
 
 // CreateStreamKey creates a new stream key
-func (c *GRPCClient) CreateStreamKey(ctx context.Context, streamID, keyName string) (*pb.StreamKeyResponse, error) {
-	return c.streamKey.CreateStreamKey(ctx, &pb.CreateStreamKeyRequest{
+func (c *GRPCClient) CreateStreamKey(ctx context.Context, streamID, keyName string) (*commodorepb.StreamKeyResponse, error) {
+	return c.streamKey.CreateStreamKey(ctx, &commodorepb.CreateStreamKeyRequest{
 		StreamId: streamID,
 		KeyName:  keyName,
 	})
 }
 
 // ListStreamKeys lists stream keys for a stream
-func (c *GRPCClient) ListStreamKeys(ctx context.Context, streamID string, pagination *pb.CursorPaginationRequest) (*pb.ListStreamKeysResponse, error) {
-	return c.streamKey.ListStreamKeys(ctx, &pb.ListStreamKeysRequest{
+func (c *GRPCClient) ListStreamKeys(ctx context.Context, streamID string, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListStreamKeysResponse, error) {
+	return c.streamKey.ListStreamKeys(ctx, &commodorepb.ListStreamKeysRequest{
 		StreamId:   streamID,
 		Pagination: pagination,
 	})
@@ -793,7 +797,7 @@ func (c *GRPCClient) ListStreamKeys(ctx context.Context, streamID string, pagina
 
 // DeactivateStreamKey deactivates a stream key
 func (c *GRPCClient) DeactivateStreamKey(ctx context.Context, streamID, keyID string) error {
-	_, err := c.streamKey.DeactivateStreamKey(ctx, &pb.DeactivateStreamKeyRequest{
+	_, err := c.streamKey.DeactivateStreamKey(ctx, &commodorepb.DeactivateStreamKeyRequest{
 		StreamId: streamID,
 		KeyId:    keyID,
 	})
@@ -805,66 +809,66 @@ func (c *GRPCClient) DeactivateStreamKey(ctx context.Context, streamID, keyID st
 // ============================================================================
 
 // Login authenticates a user
-func (c *GRPCClient) Login(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
+func (c *GRPCClient) Login(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
 	return c.user.Login(ctx, req)
 }
 
 // Register creates a new user
-func (c *GRPCClient) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+func (c *GRPCClient) Register(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error) {
 	return c.user.Register(ctx, req)
 }
 
 // GetMe gets the current user profile
-func (c *GRPCClient) GetMe(ctx context.Context) (*pb.User, error) {
-	return c.user.GetMe(ctx, &pb.GetMeRequest{})
+func (c *GRPCClient) GetMe(ctx context.Context) (*commodorepb.User, error) {
+	return c.user.GetMe(ctx, &commodorepb.GetMeRequest{})
 }
 
 // Logout logs out a user (invalidates token)
-func (c *GRPCClient) Logout(ctx context.Context, token string) (*pb.LogoutResponse, error) {
-	return c.user.Logout(ctx, &pb.LogoutRequest{Token: token})
+func (c *GRPCClient) Logout(ctx context.Context, token string) (*commodorepb.LogoutResponse, error) {
+	return c.user.Logout(ctx, &commodorepb.LogoutRequest{Token: token})
 }
 
 // RefreshToken refreshes an authentication token
-func (c *GRPCClient) RefreshToken(ctx context.Context, refreshToken string) (*pb.AuthResponse, error) {
-	return c.user.RefreshToken(ctx, &pb.RefreshTokenRequest{RefreshToken: refreshToken})
+func (c *GRPCClient) RefreshToken(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error) {
+	return c.user.RefreshToken(ctx, &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
 }
 
 // VerifyEmail verifies a user's email with a token
-func (c *GRPCClient) VerifyEmail(ctx context.Context, token string) (*pb.VerifyEmailResponse, error) {
-	return c.user.VerifyEmail(ctx, &pb.VerifyEmailRequest{Token: token})
+func (c *GRPCClient) VerifyEmail(ctx context.Context, token string) (*commodorepb.VerifyEmailResponse, error) {
+	return c.user.VerifyEmail(ctx, &commodorepb.VerifyEmailRequest{Token: token})
 }
 
 // ResendVerification resends the email verification link
-func (c *GRPCClient) ResendVerification(ctx context.Context, email, turnstileToken string) (*pb.ResendVerificationResponse, error) {
-	return c.user.ResendVerification(ctx, &pb.ResendVerificationRequest{
+func (c *GRPCClient) ResendVerification(ctx context.Context, email, turnstileToken string) (*commodorepb.ResendVerificationResponse, error) {
+	return c.user.ResendVerification(ctx, &commodorepb.ResendVerificationRequest{
 		Email:          email,
 		TurnstileToken: turnstileToken,
 	})
 }
 
 // ForgotPassword initiates password reset flow
-func (c *GRPCClient) ForgotPassword(ctx context.Context, email string) (*pb.ForgotPasswordResponse, error) {
-	return c.user.ForgotPassword(ctx, &pb.ForgotPasswordRequest{Email: email})
+func (c *GRPCClient) ForgotPassword(ctx context.Context, email string) (*commodorepb.ForgotPasswordResponse, error) {
+	return c.user.ForgotPassword(ctx, &commodorepb.ForgotPasswordRequest{Email: email})
 }
 
 // ResetPassword resets a user's password with a token
-func (c *GRPCClient) ResetPassword(ctx context.Context, token, password string) (*pb.ResetPasswordResponse, error) {
-	return c.user.ResetPassword(ctx, &pb.ResetPasswordRequest{Token: token, Password: password})
+func (c *GRPCClient) ResetPassword(ctx context.Context, token, password string) (*commodorepb.ResetPasswordResponse, error) {
+	return c.user.ResetPassword(ctx, &commodorepb.ResetPasswordRequest{Token: token, Password: password})
 }
 
 // UpdateMe updates the current user's profile
-func (c *GRPCClient) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest) (*pb.User, error) {
+func (c *GRPCClient) UpdateMe(ctx context.Context, req *commodorepb.UpdateMeRequest) (*commodorepb.User, error) {
 	return c.user.UpdateMe(ctx, req)
 }
 
 // UpdateNewsletter updates the user's newsletter subscription
-func (c *GRPCClient) UpdateNewsletter(ctx context.Context, subscribed bool) (*pb.UpdateNewsletterResponse, error) {
-	return c.user.UpdateNewsletter(ctx, &pb.UpdateNewsletterRequest{Subscribed: subscribed})
+func (c *GRPCClient) UpdateNewsletter(ctx context.Context, subscribed bool) (*commodorepb.UpdateNewsletterResponse, error) {
+	return c.user.UpdateNewsletter(ctx, &commodorepb.UpdateNewsletterRequest{Subscribed: subscribed})
 }
 
 // GetNewsletterStatus returns the user's current newsletter subscription status
 func (c *GRPCClient) GetNewsletterStatus(ctx context.Context) (bool, error) {
-	resp, err := c.user.GetNewsletterStatus(ctx, &pb.GetNewsletterStatusRequest{})
+	resp, err := c.user.GetNewsletterStatus(ctx, &commodorepb.GetNewsletterStatusRequest{})
 	if err != nil {
 		return false, err
 	}
@@ -876,8 +880,8 @@ func (c *GRPCClient) GetNewsletterStatus(ctx context.Context) (bool, error) {
 // ============================================================================
 
 // WalletLogin authenticates a user via wallet signature, auto-provisioning if new
-func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string, attribution *pb.SignupAttribution) (*pb.AuthResponse, error) {
-	return c.user.WalletLogin(ctx, &pb.WalletLoginRequest{
+func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error) {
+	return c.user.WalletLogin(ctx, &commodorepb.WalletLoginRequest{
 		WalletAddress: address,
 		Message:       message,
 		Signature:     signature,
@@ -886,8 +890,8 @@ func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signatur
 }
 
 // WalletLoginWithX402 authenticates via x402 payload and returns session token + payment info.
-func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *pb.X402PaymentPayload, clientIP, targetTenantID string, attribution *pb.SignupAttribution) (*pb.WalletLoginWithX402Response, error) {
-	req := &pb.WalletLoginWithX402Request{
+func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *purserpb.X402PaymentPayload, clientIP, targetTenantID string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletLoginWithX402Response, error) {
+	req := &commodorepb.WalletLoginWithX402Request{
 		Payment:     payment,
 		ClientIp:    clientIP,
 		Attribution: attribution,
@@ -899,8 +903,8 @@ func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *pb.X402Pa
 }
 
 // LinkWallet links a wallet to the current user's account
-func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature string) (*pb.WalletIdentity, error) {
-	return c.user.LinkWallet(ctx, &pb.LinkWalletRequest{
+func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error) {
+	return c.user.LinkWallet(ctx, &commodorepb.LinkWalletRequest{
 		WalletAddress: address,
 		Message:       message,
 		Signature:     signature,
@@ -908,20 +912,20 @@ func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature
 }
 
 // UnlinkWallet removes a wallet from the current user's account
-func (c *GRPCClient) UnlinkWallet(ctx context.Context, walletID string) (*pb.UnlinkWalletResponse, error) {
-	return c.user.UnlinkWallet(ctx, &pb.UnlinkWalletRequest{
+func (c *GRPCClient) UnlinkWallet(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error) {
+	return c.user.UnlinkWallet(ctx, &commodorepb.UnlinkWalletRequest{
 		WalletId: walletID,
 	})
 }
 
 // ListWallets lists wallets linked to the current user
-func (c *GRPCClient) ListWallets(ctx context.Context) (*pb.ListWalletsResponse, error) {
-	return c.user.ListWallets(ctx, &pb.ListWalletsRequest{})
+func (c *GRPCClient) ListWallets(ctx context.Context) (*commodorepb.ListWalletsResponse, error) {
+	return c.user.ListWallets(ctx, &commodorepb.ListWalletsRequest{})
 }
 
 // LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
-func (c *GRPCClient) LinkEmail(ctx context.Context, email, password string) (*pb.LinkEmailResponse, error) {
-	return c.user.LinkEmail(ctx, &pb.LinkEmailRequest{
+func (c *GRPCClient) LinkEmail(ctx context.Context, email, password string) (*commodorepb.LinkEmailResponse, error) {
+	return c.user.LinkEmail(ctx, &commodorepb.LinkEmailRequest{
 		Email:    email,
 		Password: password,
 	})
@@ -930,39 +934,39 @@ func (c *GRPCClient) LinkEmail(ctx context.Context, email, password string) (*pb
 // CompleteAuthorization mints a single-use PKCE authorization code for the
 // signed-in user. Called by the gateway on behalf of the webapp /authorize
 // page; identity fields come from the gateway session, not the client body.
-func (c *GRPCClient) CompleteAuthorization(ctx context.Context, req *pb.CompleteAuthorizationRequest) (*pb.CompleteAuthorizationResponse, error) {
+func (c *GRPCClient) CompleteAuthorization(ctx context.Context, req *commodorepb.CompleteAuthorizationRequest) (*commodorepb.CompleteAuthorizationResponse, error) {
 	return c.user.CompleteAuthorization(ctx, req)
 }
 
 // ExchangeAuthorizationCode redeems a PKCE authorization code + verifier for
 // a session (access + refresh tokens). Called from the native client's
 // loopback receiver.
-func (c *GRPCClient) ExchangeAuthorizationCode(ctx context.Context, req *pb.ExchangeAuthorizationCodeRequest) (*pb.AuthResponse, error) {
+func (c *GRPCClient) ExchangeAuthorizationCode(ctx context.Context, req *commodorepb.ExchangeAuthorizationCodeRequest) (*commodorepb.AuthResponse, error) {
 	return c.user.ExchangeAuthorizationCode(ctx, req)
 }
 
 // StartDeviceAuthorization initiates a RFC 8628 device-code grant.
-func (c *GRPCClient) StartDeviceAuthorization(ctx context.Context, req *pb.StartDeviceAuthorizationRequest) (*pb.StartDeviceAuthorizationResponse, error) {
+func (c *GRPCClient) StartDeviceAuthorization(ctx context.Context, req *commodorepb.StartDeviceAuthorizationRequest) (*commodorepb.StartDeviceAuthorizationResponse, error) {
 	return c.user.StartDeviceAuthorization(ctx, req)
 }
 
 // PollDeviceAuthorization polls for completion of a device-code grant. While
 // pending, the gRPC error carries one of the RFC 8628 §3.5 markers as its
 // message: AUTHORIZATION_PENDING, SLOW_DOWN, ACCESS_DENIED, EXPIRED_TOKEN.
-func (c *GRPCClient) PollDeviceAuthorization(ctx context.Context, req *pb.PollDeviceAuthorizationRequest) (*pb.AuthResponse, error) {
+func (c *GRPCClient) PollDeviceAuthorization(ctx context.Context, req *commodorepb.PollDeviceAuthorizationRequest) (*commodorepb.AuthResponse, error) {
 	return c.user.PollDeviceAuthorization(ctx, req)
 }
 
 // LookupDeviceAuthorization returns pending device-code metadata for the
 // consent page before the user approves it.
-func (c *GRPCClient) LookupDeviceAuthorization(ctx context.Context, req *pb.LookupDeviceAuthorizationRequest) (*pb.LookupDeviceAuthorizationResponse, error) {
+func (c *GRPCClient) LookupDeviceAuthorization(ctx context.Context, req *commodorepb.LookupDeviceAuthorizationRequest) (*commodorepb.LookupDeviceAuthorizationResponse, error) {
 	return c.user.LookupDeviceAuthorization(ctx, req)
 }
 
 // ApproveDeviceAuthorization stamps the signed-in user's identity onto a
 // pending device-code row. Called by the gateway on behalf of the webapp
 // /device page after the user confirms the displayed user_code.
-func (c *GRPCClient) ApproveDeviceAuthorization(ctx context.Context, req *pb.ApproveDeviceAuthorizationRequest) (*pb.ApproveDeviceAuthorizationResponse, error) {
+func (c *GRPCClient) ApproveDeviceAuthorization(ctx context.Context, req *commodorepb.ApproveDeviceAuthorizationRequest) (*commodorepb.ApproveDeviceAuthorizationResponse, error) {
 	return c.user.ApproveDeviceAuthorization(ctx, req)
 }
 
@@ -971,20 +975,20 @@ func (c *GRPCClient) ApproveDeviceAuthorization(ctx context.Context, req *pb.App
 // ============================================================================
 
 // CreateAPIToken creates a new API token
-func (c *GRPCClient) CreateAPIToken(ctx context.Context, req *pb.CreateAPITokenRequest) (*pb.CreateAPITokenResponse, error) {
+func (c *GRPCClient) CreateAPIToken(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
 	return c.developer.CreateAPIToken(ctx, req)
 }
 
 // ListAPITokens lists API tokens
-func (c *GRPCClient) ListAPITokens(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListAPITokensResponse, error) {
-	return c.developer.ListAPITokens(ctx, &pb.ListAPITokensRequest{
+func (c *GRPCClient) ListAPITokens(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error) {
+	return c.developer.ListAPITokens(ctx, &commodorepb.ListAPITokensRequest{
 		Pagination: pagination,
 	})
 }
 
 // RevokeAPIToken revokes an API token
-func (c *GRPCClient) RevokeAPIToken(ctx context.Context, tokenID string) (*pb.RevokeAPITokenResponse, error) {
-	return c.developer.RevokeAPIToken(ctx, &pb.RevokeAPITokenRequest{
+func (c *GRPCClient) RevokeAPIToken(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error) {
+	return c.developer.RevokeAPIToken(ctx, &commodorepb.RevokeAPITokenRequest{
 		TokenId: tokenID,
 	})
 }
@@ -1001,13 +1005,13 @@ type MediaListOptions struct {
 }
 
 // CreateClip creates a new clip
-func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+func (c *GRPCClient) CreateClip(ctx context.Context, req *sharedpb.CreateClipRequest) (*sharedpb.CreateClipResponse, error) {
 	return c.clip.CreateClip(ctx, req)
 }
 
 // GetClips lists clips with optional stream_id filter
-func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest, opts ...MediaListOptions) (*pb.GetClipsResponse, error) {
-	req := &pb.GetClipsRequest{
+func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...MediaListOptions) (*sharedpb.GetClipsResponse, error) {
+	req := &sharedpb.GetClipsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	}
@@ -1019,15 +1023,15 @@ func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *st
 }
 
 // GetClip gets a single clip by hash
-func (c *GRPCClient) GetClip(ctx context.Context, clipHash string) (*pb.ClipInfo, error) {
-	return c.clip.GetClip(ctx, &pb.GetClipRequest{
+func (c *GRPCClient) GetClip(ctx context.Context, clipHash string) (*sharedpb.ClipInfo, error) {
+	return c.clip.GetClip(ctx, &sharedpb.GetClipRequest{
 		ClipHash: clipHash,
 	})
 }
 
 // DeleteClip deletes a clip
 func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string) error {
-	_, err := c.clip.DeleteClip(ctx, &pb.DeleteClipRequest{
+	_, err := c.clip.DeleteClip(ctx, &sharedpb.DeleteClipRequest{
 		ClipHash: clipHash,
 	})
 	return err
@@ -1039,7 +1043,7 @@ func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string) error {
 
 // StopDVR stops a DVR recording
 func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string) error {
-	_, err := c.dvr.StopDVR(ctx, &pb.StopDVRRequest{
+	_, err := c.dvr.StopDVR(ctx, &sharedpb.StopDVRRequest{
 		DvrHash: dvrHash,
 	})
 	return err
@@ -1047,7 +1051,7 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string) error {
 
 // DeleteDVR deletes a DVR recording
 func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
-	_, err := c.dvr.DeleteDVR(ctx, &pb.DeleteDVRRequest{
+	_, err := c.dvr.DeleteDVR(ctx, &sharedpb.DeleteDVRRequest{
 		DvrHash: dvrHash,
 	})
 	return err
@@ -1056,23 +1060,23 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
 // RetrieveDVRChapter returns chapter metadata (state, range, public
 // playback_id) for a single chapter. Customer-facing path:
 // api_gateway → Commodore → Foghorn.
-func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *pb.RetrieveDVRChapterRequest) (*pb.RetrieveDVRChapterResponse, error) {
+func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, error) {
 	return c.internal.RetrieveDVRChapter(ctx, req)
 }
 
 // ListDVRChapters paginates chapter rows for player navigation.
-func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *pb.ListDVRChaptersRequest) (*pb.ListDVRChaptersResponse, error) {
+func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, error) {
 	return c.internal.ListDVRChapters(ctx, req)
 }
 
 // ListStorageArtifacts returns the unified account storage browser projection.
-func (c *GRPCClient) ListStorageArtifacts(ctx context.Context, req *pb.ListStorageArtifactsRequest) (*pb.ListStorageArtifactsResponse, error) {
+func (c *GRPCClient) ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error) {
 	return c.internal.ListStorageArtifacts(ctx, req)
 }
 
 // ListDVRRequests lists DVR recordings with filters
-func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest, opts ...MediaListOptions) (*pb.ListDVRRecordingsResponse, error) {
-	req := &pb.ListDVRRecordingsRequest{
+func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *commonpb.CursorPaginationRequest, opts ...MediaListOptions) (*sharedpb.ListDVRRecordingsResponse, error) {
+	req := &sharedpb.ListDVRRecordingsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	}
@@ -1088,14 +1092,14 @@ func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, strea
 // ============================================================================
 
 // ResolveViewerEndpoint resolves the best endpoint for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*pb.ViewerEndpointResponse, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
 	if c.viewer == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
 	}
-	req := &pb.ViewerEndpointRequest{
+	req := &sharedpb.ViewerEndpointRequest{
 		ContentId: contentID,
 	}
 	if viewerIP != "" {
@@ -1108,14 +1112,14 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewe
 }
 
 // ResolveIngestEndpoint resolves the best ingest endpoint for StreamCrafter
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*pb.IngestEndpointResponse, error) {
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
 	if c.viewer == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
 	}
-	req := &pb.IngestEndpointRequest{
+	req := &sharedpb.IngestEndpointRequest{
 		StreamKey: streamKey,
 	}
 	if viewerIP != "" {
@@ -1130,42 +1134,42 @@ func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewe
 // ============================================================================
 
 // CreateVodUpload initiates a multipart upload for a VOD asset
-func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
 	return c.vod.CreateVodUpload(ctx, req)
 }
 
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded
-func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
 	return c.vod.CompleteVodUpload(ctx, req)
 }
 
 // AbortVodUpload cancels an in-progress multipart upload
-func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, error) {
-	return c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, error) {
+	return c.vod.AbortVodUpload(ctx, &sharedpb.AbortVodUploadRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
 	})
 }
 
 // GetVodUploadStatus reads server-authoritative state of an in-flight multipart upload.
-func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*pb.GetVodUploadStatusResponse, error) {
-	return c.vod.GetVodUploadStatus(ctx, &pb.GetVodUploadStatusRequest{
+func (c *GRPCClient) GetVodUploadStatus(ctx context.Context, tenantID, uploadID string) (*sharedpb.GetVodUploadStatusResponse, error) {
+	return c.vod.GetVodUploadStatus(ctx, &sharedpb.GetVodUploadStatusRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
 	})
 }
 
 // GetVodAsset gets a single VOD asset by hash
-func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, error) {
-	return c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
+func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.VodAssetInfo, error) {
+	return c.vod.GetVodAsset(ctx, &sharedpb.GetVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
 	})
 }
 
 // ListVodAssets lists VOD assets with pagination
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest, streamID *string, opts ...MediaListOptions) (*pb.ListVodAssetsResponse, error) {
-	req := &pb.ListVodAssetsRequest{
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest, streamID *string, opts ...MediaListOptions) (*sharedpb.ListVodAssetsResponse, error) {
+	req := &sharedpb.ListVodAssetsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 		StreamId:   streamID,
@@ -1174,7 +1178,7 @@ func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, paginat
 	return c.vod.ListVodAssets(ctx, req)
 }
 
-func applyMediaListOptionsToClips(req *pb.GetClipsRequest, opts ...MediaListOptions) {
+func applyMediaListOptionsToClips(req *sharedpb.GetClipsRequest, opts ...MediaListOptions) {
 	if len(opts) == 0 {
 		return
 	}
@@ -1185,7 +1189,7 @@ func applyMediaListOptionsToClips(req *pb.GetClipsRequest, opts ...MediaListOpti
 	req.Offset = opt.Offset
 }
 
-func applyMediaListOptionsToDVR(req *pb.ListDVRRecordingsRequest, opts ...MediaListOptions) {
+func applyMediaListOptionsToDVR(req *sharedpb.ListDVRRecordingsRequest, opts ...MediaListOptions) {
 	if len(opts) == 0 {
 		return
 	}
@@ -1196,7 +1200,7 @@ func applyMediaListOptionsToDVR(req *pb.ListDVRRecordingsRequest, opts ...MediaL
 	req.Offset = opt.Offset
 }
 
-func applyMediaListOptionsToVod(req *pb.ListVodAssetsRequest, opts ...MediaListOptions) {
+func applyMediaListOptionsToVod(req *sharedpb.ListVodAssetsRequest, opts ...MediaListOptions) {
 	if len(opts) == 0 {
 		return
 	}
@@ -1208,8 +1212,8 @@ func applyMediaListOptionsToVod(req *pb.ListVodAssetsRequest, opts ...MediaListO
 }
 
 // DeleteVodAsset deletes a VOD asset
-func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, error) {
-	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, error) {
+	return c.vod.DeleteVodAsset(ctx, &sharedpb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
 	})
@@ -1217,8 +1221,8 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below threshold.
-func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error) {
-	return c.internal.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, error) {
+	return c.internal.TerminateTenantStreams(ctx, &foghornpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1226,8 +1230,8 @@ func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reaso
 
 // InvalidateTenantCache clears cached suspension status for a tenant.
 // Called by Purser when a tenant is reactivated after payment.
-func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error) {
-	return c.internal.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, error) {
+	return c.internal.InvalidateTenantCache(ctx, &foghornpb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1240,23 +1244,23 @@ func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason
 
 // GetTenantUserCount returns active and total user counts for a tenant.
 // Called by Purser billing job for user-based billing calculations.
-func (c *GRPCClient) GetTenantUserCount(ctx context.Context, tenantID string) (*pb.GetTenantUserCountResponse, error) {
-	return c.internal.GetTenantUserCount(ctx, &pb.GetTenantUserCountRequest{
+func (c *GRPCClient) GetTenantUserCount(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error) {
+	return c.internal.GetTenantUserCount(ctx, &commodorepb.GetTenantUserCountRequest{
 		TenantId: tenantID,
 	})
 }
 
 // GetTenantPrimaryUser returns the primary user info for a tenant.
 // Called by Purser billing job for billing notifications and invoices.
-func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error) {
-	return c.internal.GetTenantPrimaryUser(ctx, &pb.GetTenantPrimaryUserRequest{
+func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*commodorepb.GetTenantPrimaryUserResponse, error) {
+	return c.internal.GetTenantPrimaryUser(ctx, &commodorepb.GetTenantPrimaryUserRequest{
 		TenantId: tenantID,
 	})
 }
 
 // CreateUserInTenant creates a user in an existing tenant.
 // Used by CLI provisioning and admin operations. Requires service token auth.
-func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *pb.CreateUserInTenantRequest) (*pb.CreateUserInTenantResponse, error) {
+func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *commodorepb.CreateUserInTenantRequest) (*commodorepb.CreateUserInTenantResponse, error) {
 	return c.internal.CreateUserInTenant(ctx, req)
 }
 
@@ -1265,12 +1269,12 @@ func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *pb.CreateUserI
 // ============================================================================
 
 // SetNodeMode sets a node's operational mode via Foghorn.
-func (c *GRPCClient) SetNodeMode(ctx context.Context, req *pb.SetNodeModeRequest) (*pb.SetNodeModeResponse, error) {
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
 	return c.nodeMgmt.SetNodeOperationalMode(ctx, req)
 }
 
 // GetNodeHealth returns real-time health for a node via Foghorn.
-func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthRequest) (*pb.GetNodeHealthResponse, error) {
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
 	return c.nodeMgmt.GetNodeHealth(ctx, req)
 }
 
@@ -1279,8 +1283,8 @@ func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *pb.GetNodeHealthReq
 // ============================================================================
 
 // GetStreamPushTargets fetches enabled push targets for a stream (internal, used by Foghorn).
-func (c *GRPCClient) GetStreamPushTargets(ctx context.Context, streamID, tenantID string) ([]*pb.PushTargetInternal, error) {
-	resp, err := c.pushTarget.GetStreamPushTargets(ctx, &pb.GetStreamPushTargetsRequest{
+func (c *GRPCClient) GetStreamPushTargets(ctx context.Context, streamID, tenantID string) ([]*commodorepb.PushTargetInternal, error) {
+	resp, err := c.pushTarget.GetStreamPushTargets(ctx, &commodorepb.GetStreamPushTargetsRequest{
 		StreamId: streamID,
 		TenantId: tenantID,
 	})
@@ -1292,7 +1296,7 @@ func (c *GRPCClient) GetStreamPushTargets(ctx context.Context, streamID, tenantI
 
 // UpdatePushTargetStatus updates the status of a push target (internal, used by Foghorn).
 func (c *GRPCClient) UpdatePushTargetStatus(ctx context.Context, id, tenantID, status string, lastError *string) error {
-	req := &pb.UpdatePushTargetStatusRequest{
+	req := &commodorepb.UpdatePushTargetStatusRequest{
 		Id:       id,
 		TenantId: tenantID,
 		Status:   status,
@@ -1305,39 +1309,39 @@ func (c *GRPCClient) UpdatePushTargetStatus(ctx context.Context, id, tenantID, s
 }
 
 // CreatePushTarget creates a new push target (Gateway → Commodore).
-func (c *GRPCClient) CreatePushTarget(ctx context.Context, req *pb.CreatePushTargetRequest) (*pb.PushTarget, error) {
+func (c *GRPCClient) CreatePushTarget(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error) {
 	return c.pushTarget.CreatePushTarget(ctx, req)
 }
 
 // ListPushTargets lists push targets for a stream (Gateway → Commodore).
-func (c *GRPCClient) ListPushTargets(ctx context.Context, streamID string) (*pb.ListPushTargetsResponse, error) {
-	return c.pushTarget.ListPushTargets(ctx, &pb.ListPushTargetsRequest{StreamId: streamID})
+func (c *GRPCClient) ListPushTargets(ctx context.Context, streamID string) (*commodorepb.ListPushTargetsResponse, error) {
+	return c.pushTarget.ListPushTargets(ctx, &commodorepb.ListPushTargetsRequest{StreamId: streamID})
 }
 
 // UpdatePushTarget updates a push target (Gateway → Commodore).
-func (c *GRPCClient) UpdatePushTarget(ctx context.Context, req *pb.UpdatePushTargetRequest) (*pb.PushTarget, error) {
+func (c *GRPCClient) UpdatePushTarget(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error) {
 	return c.pushTarget.UpdatePushTarget(ctx, req)
 }
 
 // DeletePushTarget deletes a push target (Gateway → Commodore).
-func (c *GRPCClient) DeletePushTarget(ctx context.Context, id string) (*pb.DeletePushTargetResponse, error) {
-	return c.pushTarget.DeletePushTarget(ctx, &pb.DeletePushTargetRequest{Id: id})
+func (c *GRPCClient) DeletePushTarget(ctx context.Context, id string) (*commodorepb.DeletePushTargetResponse, error) {
+	return c.pushTarget.DeletePushTarget(ctx, &commodorepb.DeletePushTargetRequest{Id: id})
 }
 
 // CreateSigningKey generates a new ES256 keypair. The private PEM in the
 // response is shown to the customer ONCE; FrameWorks stores only the public.
-func (c *GRPCClient) CreateSigningKey(ctx context.Context, name string) (*pb.CreateSigningKeyResponse, error) {
-	return c.playbackAuth.CreateSigningKey(ctx, &pb.CreateSigningKeyRequest{Name: name})
+func (c *GRPCClient) CreateSigningKey(ctx context.Context, name string) (*commodorepb.CreateSigningKeyResponse, error) {
+	return c.playbackAuth.CreateSigningKey(ctx, &commodorepb.CreateSigningKeyRequest{Name: name})
 }
 
 // GetSigningKey fetches a single signing key. Tenant-scoped.
-func (c *GRPCClient) GetSigningKey(ctx context.Context, id string) (*pb.SigningKey, error) {
-	return c.playbackAuth.GetSigningKey(ctx, &pb.GetSigningKeyRequest{Id: id})
+func (c *GRPCClient) GetSigningKey(ctx context.Context, id string) (*commodorepb.SigningKey, error) {
+	return c.playbackAuth.GetSigningKey(ctx, &commodorepb.GetSigningKeyRequest{Id: id})
 }
 
 // ListSigningKeys lists signing keys for the tenant with optional status filter.
-func (c *GRPCClient) ListSigningKeys(ctx context.Context, statusFilter string, limit int32, afterID string) (*pb.ListSigningKeysResponse, error) {
-	return c.playbackAuth.ListSigningKeys(ctx, &pb.ListSigningKeysRequest{
+func (c *GRPCClient) ListSigningKeys(ctx context.Context, statusFilter string, limit int32, afterID string) (*commodorepb.ListSigningKeysResponse, error) {
+	return c.playbackAuth.ListSigningKeys(ctx, &commodorepb.ListSigningKeysRequest{
 		StatusFilter: statusFilter,
 		Limit:        limit,
 		AfterId:      afterID,
@@ -1346,26 +1350,26 @@ func (c *GRPCClient) ListSigningKeys(ctx context.Context, statusFilter string, l
 
 // RevokeSigningKey marks a signing key revoked. Triggers cache + session
 // invalidation across the tenant's protected playback objects.
-func (c *GRPCClient) RevokeSigningKey(ctx context.Context, id string) (*pb.SigningKey, error) {
-	return c.playbackAuth.RevokeSigningKey(ctx, &pb.RevokeSigningKeyRequest{Id: id})
+func (c *GRPCClient) RevokeSigningKey(ctx context.Context, id string) (*commodorepb.SigningKey, error) {
+	return c.playbackAuth.RevokeSigningKey(ctx, &commodorepb.RevokeSigningKeyRequest{Id: id})
 }
 
 // SetPlaybackPolicy persists a per-object playback access policy and triggers
 // the cache-invalidate + invalidate_sessions fanout.
-func (c *GRPCClient) SetPlaybackPolicy(ctx context.Context, req *pb.SetPlaybackPolicyRequest) (*pb.SetPlaybackPolicyResponse, error) {
+func (c *GRPCClient) SetPlaybackPolicy(ctx context.Context, req *commodorepb.SetPlaybackPolicyRequest) (*commodorepb.SetPlaybackPolicyResponse, error) {
 	return c.playbackAuth.SetPlaybackPolicy(ctx, req)
 }
 
 // ResolvePlaybackPolicy returns policy data for public reads. Webhook secrets
 // are intentionally omitted.
-func (c *GRPCClient) ResolvePlaybackPolicy(ctx context.Context, playbackID string) (*pb.ResolvePlaybackPolicyResponse, error) {
-	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{PlaybackId: playbackID})
+func (c *GRPCClient) ResolvePlaybackPolicy(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: playbackID})
 }
 
 // ResolvePlaybackPolicyForEnforcement returns policy data needed to make an
 // allow/deny decision, including the decrypted webhook secret.
-func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, playbackID string) (*pb.ResolvePlaybackPolicyResponse, error) {
-	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{
+func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{
 		PlaybackId:           playbackID,
 		IncludeWebhookSecret: true,
 	})
@@ -1374,8 +1378,8 @@ func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, pl
 // ResolvePlaybackPolicyByInternalName is the same RPC keyed by MistServer's
 // internal stream name — used by Foghorn's USER_NEW handler, which has the
 // internal_name from the trigger payload but not the public playback_id.
-func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, internalName string) (*pb.ResolvePlaybackPolicyResponse, error) {
-	return c.internal.ResolvePlaybackPolicy(ctx, &pb.ResolvePlaybackPolicyRequest{
+func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{
 		InternalName:         internalName,
 		IncludeWebhookSecret: true,
 	})
@@ -1385,8 +1389,8 @@ func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, in
 // (tenant_id, stream_id) pair. Foghorn caches the returned bundle with the
 // soft/hard TTLs encoded in the response; revocation arrives separately via
 // playback_policy_invalidation_outbox 'bundle_revoke' entries.
-func (c *GRPCClient) GetSignedPolicyBundle(ctx context.Context, tenantID, streamID string) (*pb.GetSignedPolicyBundleResponse, error) {
-	return c.internal.GetSignedPolicyBundle(ctx, &pb.GetSignedPolicyBundleRequest{
+func (c *GRPCClient) GetSignedPolicyBundle(ctx context.Context, tenantID, streamID string) (*commodorepb.GetSignedPolicyBundleResponse, error) {
+	return c.internal.GetSignedPolicyBundle(ctx, &commodorepb.GetSignedPolicyBundleRequest{
 		TenantId: tenantID,
 		StreamId: streamID,
 	})
@@ -1394,7 +1398,7 @@ func (c *GRPCClient) GetSignedPolicyBundle(ctx context.Context, tenantID, stream
 
 // RecordSigningKeyUse records successful JWT use for rotation/audit metadata.
 func (c *GRPCClient) RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error {
-	_, err := c.internal.RecordSigningKeyUse(ctx, &pb.RecordSigningKeyUseRequest{
+	_, err := c.internal.RecordSigningKeyUse(ctx, &commodorepb.RecordSigningKeyUseRequest{
 		TenantId: tenantID,
 		Kid:      kid,
 	})

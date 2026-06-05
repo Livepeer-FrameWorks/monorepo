@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 )
 
@@ -136,7 +136,7 @@ func hasPlaybackRequestMarker(req string) bool {
 }
 
 // ParseTriggerToProtobuf parses raw MistServer trigger payload and returns a protobuf MistTrigger
-func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID string, logger logging.Logger) (*pb.MistTrigger, error) {
+func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID string, logger logging.Logger) (*ipcpb.MistTrigger, error) {
 	// Parse parameters from newline-separated format
 	// Handle both \n and \r\n line endings
 	payloadStr := strings.TrimSpace(string(rawPayload))
@@ -147,7 +147,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		params = strings.Split(payloadStr, "\n")
 	}
 
-	mistTrigger := &pb.MistTrigger{
+	mistTrigger := &ipcpb.MistTrigger{
 		TriggerType: string(triggerType),
 		NodeId:      nodeID,
 		Timestamp:   time.Now().UnixMilli(),
@@ -160,8 +160,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 3 {
 			return nil, fmt.Errorf("PUSH_REWRITE requires 3 parameters, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_PushRewrite{
-			PushRewrite: &pb.PushRewriteTrigger{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushRewrite{
+			PushRewrite: &ipcpb.PushRewriteTrigger{
 				PushUrl:    params[0],
 				Hostname:   params[1],
 				StreamName: params[2],
@@ -174,13 +174,13 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 		// Map to ViewerResolveTrigger (viewer-side resolve)
 		// PLAY_REWRITE params: stream_name, ip, connector, request_url
-		trigger := &pb.ViewerResolveTrigger{
+		trigger := &ipcpb.ViewerResolveTrigger{
 			RequestedStream: params[0],
 			ViewerHost:      params[1],
 			OutputType:      params[2],
 			RequestUrl:      params[3],
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_PlayRewrite{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PlayRewrite{
 			PlayRewrite: trigger,
 		}
 
@@ -188,8 +188,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 1 {
 			return nil, fmt.Errorf("STREAM_SOURCE requires at least 1 parameter, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_StreamSource{
+			StreamSource: &ipcpb.StreamSourceTrigger{
 				StreamName: params[0],
 			},
 		}
@@ -198,8 +198,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 1 {
 			return nil, fmt.Errorf("STREAM_PROCESS requires at least 1 parameter, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamProcess{
-			StreamProcess: &pb.StreamProcessTrigger{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_StreamProcess{
+			StreamProcess: &ipcpb.StreamProcessTrigger{
 				StreamName: params[0],
 			},
 		}
@@ -208,8 +208,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 2 {
 			return nil, fmt.Errorf("PUSH_OUT_START requires 2 parameters, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_PushOutStart{
-			PushOutStart: &pb.PushOutStartTrigger{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushOutStart{
+			PushOutStart: &ipcpb.PushOutStartTrigger{
 				StreamName: params[0],
 				PushTarget: params[1],
 			},
@@ -219,7 +219,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 6 {
 			return nil, fmt.Errorf("PUSH_END requires 6 parameters, got %d", len(params))
 		}
-		trigger := &pb.PushEndTrigger{
+		trigger := &ipcpb.PushEndTrigger{
 			StreamName:      params[1],
 			TargetUriBefore: params[2],
 			TargetUriAfter:  params[3],
@@ -229,7 +229,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if pushID, err := strconv.ParseInt(params[0], 10, 64); err == nil {
 			trigger.PushId = pushID
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_PushEnd{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushEnd{
 			PushEnd: trigger,
 		}
 
@@ -241,7 +241,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 7 {
 			return nil, fmt.Errorf("PUSH_INPUT_CLOSE requires 7 parameters, got %d", len(params))
 		}
-		trigger := &pb.PushInputCloseTrigger{
+		trigger := &ipcpb.PushInputCloseTrigger{
 			StreamName:    params[0],
 			RemoteHost:    params[1],
 			BinaryName:    params[2],
@@ -252,7 +252,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if pid, err := strconv.ParseInt(params[3], 10, 64); err == nil {
 			trigger.Pid = pid
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_PushInputClose{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushInputClose{
 			PushInputClose: trigger,
 		}
 
@@ -260,8 +260,8 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 6 {
 			return nil, fmt.Errorf("USER_NEW requires 6 parameters, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_ViewerConnect{
-			ViewerConnect: &pb.ViewerConnectTrigger{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName:  params[0],
 				Host:        params[1],
 				ViewerToken: params[2],
@@ -279,7 +279,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) > 11 && params[11] != "" {
 			sessionID = params[11]
 		}
-		trigger := &pb.ViewerDisconnectTrigger{
+		trigger := &ipcpb.ViewerDisconnectTrigger{
 			SessionId:  sessionID,
 			StreamName: params[1],
 			Connector:  params[2],
@@ -318,7 +318,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) > 10 && params[10] != "" {
 			trigger.StreamTimes = pairSessionShares(params[1], params[10])
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_ViewerDisconnect{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ViewerDisconnect{
 			ViewerDisconnect: trigger,
 		}
 
@@ -326,7 +326,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 2 {
 			return nil, fmt.Errorf("STREAM_BUFFER requires at least 2 parameters, got %d", len(params))
 		}
-		trigger := &pb.StreamBufferTrigger{
+		trigger := &ipcpb.StreamBufferTrigger{
 			StreamName:  params[0],
 			BufferState: params[1],
 		}
@@ -368,7 +368,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			}
 		}
 
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamBuffer{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_StreamBuffer{
 			StreamBuffer: trigger,
 		}
 
@@ -376,7 +376,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 1 {
 			return nil, fmt.Errorf("STREAM_END requires at least 1 parameter, got %d", len(params))
 		}
-		trigger := &pb.StreamEndTrigger{
+		trigger := &ipcpb.StreamEndTrigger{
 			StreamName: params[0],
 		}
 
@@ -400,7 +400,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 				trigger.ViewerSeconds = &viewerSeconds
 			}
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamEnd{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_StreamEnd{
 			StreamEnd: trigger,
 		}
 
@@ -408,7 +408,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 2 {
 			return nil, fmt.Errorf("LIVE_TRACK_LIST requires 2 parameters, got %d", len(params))
 		}
-		trigger := &pb.StreamTrackListTrigger{
+		trigger := &ipcpb.StreamTrackListTrigger{
 			StreamName: params[0],
 		}
 
@@ -425,7 +425,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			}
 		}
 
-		mistTrigger.TriggerPayload = &pb.MistTrigger_TrackList{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_TrackList{
 			TrackList: trigger,
 		}
 
@@ -433,7 +433,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 13 {
 			return nil, fmt.Errorf("RECORDING_END requires 13 parameters including track summary, got %d", len(params))
 		}
-		trigger := &pb.RecordingCompleteTrigger{
+		trigger := &ipcpb.RecordingCompleteTrigger{
 			StreamName:     params[0],
 			FilePath:       params[1],
 			OutputProtocol: params[2],
@@ -479,7 +479,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		humanParts = humanParts[:len(humanParts)-1]
 		humanExitReason := strings.TrimSpace(strings.Join(humanParts, "\n"))
 		trigger.HumanExitReason = &humanExitReason
-		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingComplete{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_RecordingComplete{
 			RecordingComplete: trigger,
 		}
 
@@ -487,7 +487,7 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		if len(params) < 5 {
 			return nil, fmt.Errorf("RECORDING_SEGMENT requires 5 parameters, got %d", len(params))
 		}
-		trigger := &pb.RecordingSegmentTrigger{
+		trigger := &ipcpb.RecordingSegmentTrigger{
 			StreamName: params[0],
 			FilePath:   params[1],
 		}
@@ -502,35 +502,35 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			trigger.TimeEnded = end
 		}
 
-		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingSegment{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_RecordingSegment{
 			RecordingSegment: trigger,
 		}
 
 	case TriggerStreamLifecycle:
 		// For analytics triggers, directly unmarshal JSON to protobuf
-		var trigger pb.StreamLifecycleUpdate
+		var trigger ipcpb.StreamLifecycleUpdate
 		if err := json.Unmarshal(rawPayload, &trigger); err != nil {
 			return nil, fmt.Errorf("failed to parse STREAM_LIFECYCLE_UPDATE JSON: %w", err)
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamLifecycleUpdate{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &trigger,
 		}
 
 	case TriggerClientLifecycle:
-		var trigger pb.ClientLifecycleUpdate
+		var trigger ipcpb.ClientLifecycleUpdate
 		if err := json.Unmarshal(rawPayload, &trigger); err != nil {
 			return nil, fmt.Errorf("failed to parse CLIENT_LIFECYCLE_UPDATE JSON: %w", err)
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_ClientLifecycleUpdate{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ClientLifecycleUpdate{
 			ClientLifecycleUpdate: &trigger,
 		}
 
 	case TriggerNodeLifecycle:
-		var trigger pb.NodeLifecycleUpdate
+		var trigger ipcpb.NodeLifecycleUpdate
 		if err := json.Unmarshal(rawPayload, &trigger); err != nil {
 			return nil, fmt.Errorf("failed to parse NODE_LIFECYCLE_UPDATE JSON: %w", err)
 		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_NodeLifecycleUpdate{
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_NodeLifecycleUpdate{
 			NodeLifecycleUpdate: &trigger,
 		}
 
@@ -565,19 +565,19 @@ func ExtractInternalName(streamName string) string {
 // into typed SessionTimeShare entries. Returns nil if the two lists
 // disagree on length or any seconds entry fails to parse — the safer
 // default than misattributing time to the wrong element.
-func pairSessionShares(namesCSV, secondsCSV string) []*pb.SessionTimeShare {
+func pairSessionShares(namesCSV, secondsCSV string) []*ipcpb.SessionTimeShare {
 	names := strings.Split(namesCSV, ",")
 	secs := strings.Split(secondsCSV, ",")
 	if len(names) != len(secs) || len(names) == 0 {
 		return nil
 	}
-	out := make([]*pb.SessionTimeShare, 0, len(names))
+	out := make([]*ipcpb.SessionTimeShare, 0, len(names))
 	for i, name := range names {
 		s, err := strconv.ParseUint(strings.TrimSpace(secs[i]), 10, 32)
 		if err != nil {
 			return nil
 		}
-		out = append(out, &pb.SessionTimeShare{
+		out = append(out, &ipcpb.SessionTimeShare{
 			Name:    strings.TrimSpace(name),
 			Seconds: uint32(s),
 		})
@@ -596,8 +596,8 @@ func (t TriggerType) IsBlocking() bool {
 }
 
 // parseTracksFromJSON converts MistServer track JSON data to protobuf StreamTrack messages
-func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
-	var tracks []*pb.StreamTrack
+func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
+	var tracks []*ipcpb.StreamTrack
 
 	for trackName, trackData := range tracksData {
 		trackMap, ok := trackData.(map[string]any)
@@ -611,7 +611,7 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 			continue
 		}
 
-		track := &pb.StreamTrack{
+		track := &ipcpb.StreamTrack{
 			TrackName: trackName,
 			Codec:     codec,
 		}
@@ -735,7 +735,7 @@ func parseTracksFromJSON(tracksData map[string]any) []*pb.StreamTrack {
 	return tracks
 }
 
-func parseRecordingTrackSummary(summary map[string]any) []*pb.StreamTrack {
+func parseRecordingTrackSummary(summary map[string]any) []*ipcpb.StreamTrack {
 	rawTracks, ok := summary["tracks"].([]any)
 	if !ok {
 		return nil

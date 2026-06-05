@@ -7,7 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -29,7 +29,7 @@ func TestGetOperatorRevenueExcludesHeldCredits(t *testing.T) {
 			"cluster_id", "currency", "gross_cents", "platform_fee_cents", "payable_cents", "line_count",
 		}).AddRow("cluster-a", "EUR", int64(1000), int64(200), int64(800), int32(1)))
 
-	resp, err := server.GetOperatorRevenue(context.Background(), &pb.GetOperatorRevenueRequest{
+	resp, err := server.GetOperatorRevenue(context.Background(), &purserpb.GetOperatorRevenueRequest{
 		TenantId:   tenantID,
 		RangeStart: timestamppb.New(start),
 		RangeEnd:   timestamppb.New(end),
@@ -61,7 +61,7 @@ func TestListOperatorClustersExcludesHeldCredits(t *testing.T) {
 			"cluster_id", "currency", "gross_cents", "platform_fee_cents", "payable_cents", "line_count",
 		}).AddRow("cluster-a", "EUR", int64(1000), int64(200), int64(800), int32(1)))
 
-	resp, err := server.ListOperatorClusters(context.Background(), &pb.ListOperatorClustersRequest{
+	resp, err := server.ListOperatorClusters(context.Background(), &purserpb.ListOperatorClustersRequest{
 		TenantId: tenantID,
 	})
 	if err != nil {

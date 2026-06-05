@@ -29,7 +29,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
@@ -553,7 +555,7 @@ func main() {
 	advertiseAddr := ""
 	if qmClient != nil {
 		grpcPort := config.GetEnvInt("FOGHORN_INTERNAL_GRPC_PORT", controlPortFromBindAddr(internalGRPCBindAddr, 18019))
-		bsReq := &pb.BootstrapServiceRequest{
+		bsReq := &quartermasterpb.BootstrapServiceRequest{
 			Type:      "foghorn",
 			Version:   version.Version,
 			Protocol:  "grpc",
@@ -604,14 +606,14 @@ func main() {
 		NegativeTTL:          5 * time.Second,
 		MaxEntries:           10000,
 	}, cache.MetricsHooks{})
-	resolveTenantRouting := func(ctx context.Context, tenantID string) *pb.ClusterRoutingResponse {
+	resolveTenantRouting := func(ctx context.Context, tenantID string) *quartermasterpb.ClusterRoutingResponse {
 		if qmClient == nil || tenantID == "" {
 			return nil
 		}
 		v, ok, cacheErr := tenantRoutingCache.Get(ctx, "tenant:"+tenantID, func(loadCtx context.Context, _ string) (any, bool, error) {
 			rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
 			defer cancel()
-			resp, qErr := qmClient.GetClusterRouting(rctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+			resp, qErr := qmClient.GetClusterRouting(rctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 			if qErr != nil {
 				return nil, false, qErr
 			}
@@ -620,7 +622,7 @@ func main() {
 		if cacheErr != nil || !ok {
 			return nil
 		}
-		routing, ok := v.(*pb.ClusterRoutingResponse)
+		routing, ok := v.(*quartermasterpb.ClusterRoutingResponse)
 		if !ok {
 			return nil
 		}
@@ -749,7 +751,7 @@ func main() {
 	// so a takeover initiated on one Foghorn instance can still drain an
 	// old owner connected to a peer instance.
 	triggerProcessor.SetDrainStreamDispatcher(func(nodeID, runtimeName, reason string) error {
-		return control.SendDrainStream(nodeID, &pb.DrainStreamRequest{
+		return control.SendDrainStream(nodeID, &ipcpb.DrainStreamRequest{
 			RuntimeName: runtimeName,
 			Reason:      reason,
 		})
@@ -964,17 +966,17 @@ func main() {
 		}
 	})
 	if fedClient != nil && peerManager != nil {
-		control.SetStorageMintDelegate(func(ctx context.Context, targetClusterID string, req *pb.MintStorageURLsRequest) (*pb.MintStorageURLsResponse, error) {
+		control.SetStorageMintDelegate(func(ctx context.Context, targetClusterID string, req *foghornfederationpb.MintStorageURLsRequest) (*foghornfederationpb.MintStorageURLsResponse, error) {
 			addr := peerManager.GetPeerAddr(targetClusterID)
 			if addr == "" {
-				return &pb.MintStorageURLsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
+				return &foghornfederationpb.MintStorageURLsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
 			}
 			return fedClient.MintStorageURLs(ctx, targetClusterID, addr, req)
 		})
-		control.SetStorageDeleteDelegate(func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+		control.SetStorageDeleteDelegate(func(ctx context.Context, targetClusterID string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 			addr := peerManager.GetPeerAddr(targetClusterID)
 			if addr == "" {
-				return &pb.DeleteStorageObjectsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
+				return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "peer_unreachable"}, nil
 			}
 			return fedClient.DeleteStorageObjects(ctx, targetClusterID, addr, req)
 		})
@@ -988,7 +990,7 @@ func main() {
 	// cleaned via the delegate.
 	var deleteDelegate artifacts.DeleteDelegate
 	if d := control.GetStorageDeleteDelegate(); d != nil {
-		deleteDelegate = func(ctx context.Context, targetClusterID string, req *pb.DeleteStorageObjectsRequest) (*pb.DeleteStorageObjectsResponse, error) {
+		deleteDelegate = func(ctx context.Context, targetClusterID string, req *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
 			return d(ctx, targetClusterID, req)
 		}
 	}
@@ -1503,7 +1505,7 @@ func publishEdgeHealthSnapshot(qm *qmclient.GRPCClient, log logging.Logger) {
 	if len(snaps) == 0 {
 		return
 	}
-	nodes := make([]*pb.NodeAliveness, 0, len(snaps))
+	nodes := make([]*quartermasterpb.NodeAliveness, 0, len(snaps))
 	for _, s := range snaps {
 		nodes = append(nodes, snapshotToProto(s))
 	}
@@ -1531,7 +1533,7 @@ func publishEdgeDNSDeltas(qm *qmclient.GRPCClient, log logging.Logger) {
 	if len(deltas) == 0 {
 		return
 	}
-	nodes := make([]*pb.NodeAliveness, 0, len(deltas))
+	nodes := make([]*quartermasterpb.NodeAliveness, 0, len(deltas))
 	for _, d := range deltas {
 		nodes = append(nodes, snapshotToProto(d))
 	}
@@ -1543,15 +1545,15 @@ func publishEdgeDNSDeltas(qm *qmclient.GRPCClient, log logging.Logger) {
 	}
 }
 
-func snapshotToProto(s state.NodeDNSSnapshot) *pb.NodeAliveness {
-	return &pb.NodeAliveness{
+func snapshotToProto(s state.NodeDNSSnapshot) *quartermasterpb.NodeAliveness {
+	return &quartermasterpb.NodeAliveness{
 		NodeId:    s.NodeID,
 		IsHealthy: s.IsHealthy,
 		ClusterId: s.ClusterID,
 		// ExternalIp is sent only when Foghorn could parse an IP literal out
 		// of base_url; QM rejects malformed values rather than coerce.
 		ExternalIp: s.ExternalIP,
-		Capabilities: &pb.EdgeCapabilities{
+		Capabilities: &quartermasterpb.EdgeCapabilities{
 			Ingest:     s.CapIngest,
 			Egress:     s.CapEdge,
 			Storage:    s.CapStorage,

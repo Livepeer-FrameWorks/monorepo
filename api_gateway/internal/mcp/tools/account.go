@@ -15,7 +15,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -152,7 +153,7 @@ func handleUpdateTenantSettings(ctx context.Context, args UpdateTenantSettingsIn
 	return toolSuccess(tenantSettingsResult(tenant, "Tenant settings updated."))
 }
 
-func tenantSettingsResult(tenant *pb.Tenant, message string) TenantSettingsResult {
+func tenantSettingsResult(tenant *quartermasterpb.Tenant, message string) TenantSettingsResult {
 	result := TenantSettingsResult{Message: message}
 	if tenant == nil {
 		return result
@@ -186,13 +187,13 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 	}
 
 	// Build address if provided
-	var address *pb.BillingAddress
+	var address *purserpb.BillingAddress
 	if args.Line1 != "" || args.City != "" {
 		street := args.Line1
 		if args.Line2 != "" {
 			street = args.Line1 + "\n" + args.Line2
 		}
-		address = &pb.BillingAddress{
+		address = &purserpb.BillingAddress{
 			Street:     street,
 			City:       args.City,
 			PostalCode: args.PostalCode,
@@ -201,7 +202,7 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 	}
 
 	// Call Purser to update billing details
-	updated, err := clients.Purser.UpdateBillingDetails(ctx, &pb.UpdateBillingDetailsRequest{
+	updated, err := clients.Purser.UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{
 		TenantId:  tenantID,
 		Email:     strPtr(args.Email),
 		Company:   strPtr(args.Company),

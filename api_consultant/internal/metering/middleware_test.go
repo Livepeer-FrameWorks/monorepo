@@ -7,17 +7,17 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/skipper"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/gin-gonic/gin"
 )
 
 type fakeBillingClient struct {
-	status *pb.BillingStatusResponse
+	status *purserpb.BillingStatusResponse
 	err    error
 }
 
-func (f *fakeBillingClient) GetBillingStatus(ctx context.Context, tenantID string) (*pb.BillingStatusResponse, error) {
+func (f *fakeBillingClient) GetBillingStatus(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error) {
 	_ = ctx
 	_ = tenantID
 	return f.status, f.err
@@ -33,8 +33,8 @@ func TestAccessMiddlewareRejectsNonPremium(t *testing.T) {
 
 	router.Use(AccessMiddleware(AccessMiddlewareConfig{
 		Purser: &fakeBillingClient{
-			status: &pb.BillingStatusResponse{
-				Tier: &pb.BillingTier{TierLevel: 1},
+			status: &purserpb.BillingStatusResponse{
+				Tier: &purserpb.BillingTier{TierLevel: 1},
 			},
 		},
 		RequiredTierLevel: 3,
@@ -62,8 +62,8 @@ func TestAccessMiddlewareRateLimits(t *testing.T) {
 
 	router.Use(AccessMiddleware(AccessMiddlewareConfig{
 		Purser: &fakeBillingClient{
-			status: &pb.BillingStatusResponse{
-				Tier: &pb.BillingTier{TierLevel: 3},
+			status: &purserpb.BillingStatusResponse{
+				Tier: &purserpb.BillingTier{TierLevel: 3},
 			},
 		},
 		RequiredTierLevel: 3,

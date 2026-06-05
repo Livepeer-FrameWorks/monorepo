@@ -6,10 +6,10 @@ import (
 	"frameworks/api_gateway/internal/loaders"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
-func (r *Resolver) resolveStreamByID(ctx context.Context, streamID string) (*pb.Stream, error) {
+func (r *Resolver) resolveStreamByID(ctx context.Context, streamID string) (*commodorepb.Stream, error) {
 	if streamID == "" {
 		return nil, nil
 	}
@@ -24,14 +24,14 @@ func (r *Resolver) resolveStreamByID(ctx context.Context, streamID string) (*pb.
 	return r.DoGetStream(ctx, rawID)
 }
 
-func (r *Resolver) resolveStreamByIDPtr(ctx context.Context, streamID *string) (*pb.Stream, error) {
+func (r *Resolver) resolveStreamByIDPtr(ctx context.Context, streamID *string) (*commodorepb.Stream, error) {
 	if streamID == nil || *streamID == "" {
 		return nil, nil
 	}
 	return r.resolveStreamByID(ctx, *streamID)
 }
 
-func (r *Resolver) resolveNullableStreamByRawID(ctx context.Context, rawID string) (*pb.Stream, error) {
+func (r *Resolver) resolveNullableStreamByRawID(ctx context.Context, rawID string) (*commodorepb.Stream, error) {
 	if rawID == "" {
 		return nil, nil
 	}

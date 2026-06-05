@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 const (
@@ -49,7 +49,7 @@ func TestChangeBillingTier_RejectsPrepaid(t *testing.T) {
 	now := time.Now()
 	expectLoadSubscription(mock, tenantID, currentTierID, 0, "prepaid", now, now.Add(time.Hour))
 
-	resp, err := server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   prodTierID,
 	})
@@ -73,7 +73,7 @@ func TestChangeBillingTier_RejectsPrepaidDefaultTier(t *testing.T) {
 	expectLoadSubscription(mock, tenantID, currentTierID, 4, "postpaid", now, now.Add(time.Hour))
 	expectLoadTargetTier(mock, paygTierID, 0, true, true) // is_default_prepaid=true
 
-	_, err = server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	_, err = server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   paygTierID,
 	})
@@ -97,7 +97,7 @@ func TestChangeBillingTier_RejectsInactiveTarget(t *testing.T) {
 	expectLoadSubscription(mock, tenantID, currentTierID, 4, "postpaid", now, now.Add(time.Hour))
 	expectLoadTargetTier(mock, inactiveTierID, 3, false, false)
 
-	_, err = server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	_, err = server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   inactiveTierID,
 	})
@@ -128,7 +128,7 @@ func TestChangeBillingTier_UpgradePathFlipsImmediately(t *testing.T) {
 		WithArgs(prodTierID, tenantID, periodStart, periodEnd).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   prodTierID,
 	})
@@ -163,7 +163,7 @@ func TestChangeBillingTier_DowngradePathStagesPending(t *testing.T) {
 		WithArgs(freeTierID, periodEnd, tenantID, periodStart, periodEnd).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   freeTierID,
 	})
@@ -207,7 +207,7 @@ func TestChangeBillingTier_DowngradeWithoutSubscriptionPeriodUsesOpenDraftPeriod
 		WithArgs(freeTierID, periodEnd, tenantID, periodStart, periodEnd).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   freeTierID,
 	})
@@ -237,7 +237,7 @@ func TestChangeBillingTier_SameTierNoOp(t *testing.T) {
 		WithArgs(tenantID, now, now.Add(time.Hour)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	resp, err := server.ChangeBillingTier(context.Background(), &pb.ChangeBillingTierRequest{
+	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
 		TierId:   prodTierID,
 	})

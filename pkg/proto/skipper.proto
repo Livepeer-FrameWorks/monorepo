@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package skipper;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper;skipperpb";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";

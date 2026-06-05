@@ -9,7 +9,7 @@ import (
 	"frameworks/api_balancing/internal/federation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -17,12 +17,12 @@ import (
 
 // stubFederationService is a controllable FoghornFederation gRPC service for tests.
 type stubFederationService struct {
-	pb.UnimplementedFoghornFederationServer
-	queryResponse *pb.QueryStreamResponse
+	foghornfederationpb.UnimplementedFoghornFederationServer
+	queryResponse *foghornfederationpb.QueryStreamResponse
 	queryErr      error
 }
 
-func (s *stubFederationService) QueryStream(_ context.Context, _ *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error) {
+func (s *stubFederationService) QueryStream(_ context.Context, _ *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
 	return s.queryResponse, s.queryErr
 }
 
@@ -52,7 +52,7 @@ func setupFederationTestDeps(t *testing.T, stub *stubFederationService, peerClus
 	}
 
 	server := grpc.NewServer()
-	pb.RegisterFoghornFederationServer(server, stub)
+	foghornfederationpb.RegisterFoghornFederationServer(server, stub)
 	go func() { _ = server.Serve(listener) }()
 
 	log := logging.Logger(logrus.New())
@@ -93,8 +93,8 @@ func TestConfirmRemoteStream_WithCandidates(t *testing.T) {
 	saveFederationGlobals(t)
 
 	stub := &stubFederationService{
-		queryResponse: &pb.QueryStreamResponse{
-			Candidates: []*pb.EdgeCandidate{
+		queryResponse: &foghornfederationpb.QueryStreamResponse{
+			Candidates: []*foghornfederationpb.EdgeCandidate{
 				{NodeId: "node-1", BaseUrl: "edge1.example.com", BwScore: 100},
 			},
 		},
@@ -115,8 +115,8 @@ func TestConfirmRemoteStream_NoCandidates(t *testing.T) {
 	saveFederationGlobals(t)
 
 	stub := &stubFederationService{
-		queryResponse: &pb.QueryStreamResponse{
-			Candidates: []*pb.EdgeCandidate{},
+		queryResponse: &foghornfederationpb.QueryStreamResponse{
+			Candidates: []*foghornfederationpb.EdgeCandidate{},
 		},
 	}
 
@@ -165,8 +165,8 @@ func TestConfirmRemoteStream_UnknownPeer(t *testing.T) {
 	saveFederationGlobals(t)
 
 	stub := &stubFederationService{
-		queryResponse: &pb.QueryStreamResponse{
-			Candidates: []*pb.EdgeCandidate{
+		queryResponse: &foghornfederationpb.QueryStreamResponse{
+			Candidates: []*foghornfederationpb.EdgeCandidate{
 				{NodeId: "node-1", BaseUrl: "edge1.example.com", BwScore: 100},
 			},
 		},

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package foghorn_relay;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay;foghornrelaypb";
 
 import "ipc.proto";
 

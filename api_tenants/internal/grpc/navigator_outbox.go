@@ -10,7 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 )
 
 const (
@@ -216,7 +216,7 @@ func (s *QuartermasterServer) dispatchNavOutboxRow(ctx context.Context, row navO
 	}
 	switch row.action {
 	case "ensure":
-		resp, err := s.navigatorClient.EnsureCustomDomain(ctx, &pb.EnsureCustomDomainRequest{
+		resp, err := s.navigatorClient.EnsureCustomDomain(ctx, &dnspb.EnsureCustomDomainRequest{
 			TenantId: row.tenantID,
 			Domain:   row.domain,
 		})
@@ -230,7 +230,7 @@ func (s *QuartermasterServer) dispatchNavOutboxRow(ctx context.Context, row navO
 			return []string{"navigator"}, fmt.Errorf("navigator ensure custom domain rejected: %s", resp.GetError())
 		}
 	case "remove":
-		resp, err := s.navigatorClient.RemoveCustomDomain(ctx, &pb.RemoveCustomDomainRequest{
+		resp, err := s.navigatorClient.RemoveCustomDomain(ctx, &dnspb.RemoveCustomDomainRequest{
 			TenantId: row.tenantID,
 			Domain:   row.domain,
 		})

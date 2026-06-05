@@ -6,8 +6,9 @@ import (
 	"strings"
 
 	"frameworks/cli/internal/ux"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/spf13/cobra"
 )
 
@@ -97,7 +98,7 @@ retry-after-SyncMesh message rather than flipping a stale origin.`,
 				return fmt.Errorf("host %q still carries wireguard_private_key_managed: false in hosts.enc.yaml — run `frameworks mesh wg rotate %s` to re-key into SOPS first", hostName, hostName)
 			}
 
-			if _, err := client.SetNodeEnrollmentOrigin(cmd.Context(), &pb.SetNodeEnrollmentOriginRequest{
+			if _, err := client.SetNodeEnrollmentOrigin(cmd.Context(), &quartermasterpb.SetNodeEnrollmentOriginRequest{
 				NodeId:           qmNode.GetNodeId(),
 				EnrollmentOrigin: enrollmentOriginGitopsSeed,
 				ExpectedCurrent:  enrollmentOriginAdoptedLocal,
@@ -116,8 +117,8 @@ retry-after-SyncMesh message rather than flipping a stale origin.`,
 // when provided to disambiguate multi-cluster manifests where the same node
 // name can exist in two clusters.
 func findQMNode(ctx context.Context, client interface {
-	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *pb.CursorPaginationRequest) (*pb.ListNodesResponse, error)
-}, hostName, clusterID string) (*pb.InfrastructureNode, error) {
+	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+}, hostName, clusterID string) (*quartermasterpb.InfrastructureNode, error) {
 	resp, err := client.ListNodes(ctx, clusterID, "", "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("list infrastructure_nodes: %w", err)

@@ -11,7 +11,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
 )
 
 // DoSkipperChat opens a streaming gRPC Chat call to Skipper and relays
@@ -26,7 +26,7 @@ func (r *Resolver) DoSkipperChat(ctx context.Context, input model.SkipperChatInp
 	}
 
 	// Build the gRPC request with user context already on ctx (from middleware).
-	req := &pb.SkipperChatRequest{
+	req := &skipperpb.SkipperChatRequest{
 		Message: input.Message,
 	}
 	if input.ConversationID != nil {
@@ -74,20 +74,20 @@ func (r *Resolver) DoSkipperChat(ctx context.Context, input model.SkipperChatInp
 	return ch, nil
 }
 
-func convertSkipperEvent(evt *pb.SkipperChatEvent) model.SkipperChatEvent {
+func convertSkipperEvent(evt *skipperpb.SkipperChatEvent) model.SkipperChatEvent {
 	switch e := evt.GetEvent().(type) {
-	case *pb.SkipperChatEvent_Token:
+	case *skipperpb.SkipperChatEvent_Token:
 		return model.SkipperToken{Content: e.Token.GetContent()}
-	case *pb.SkipperChatEvent_ToolStart:
+	case *skipperpb.SkipperChatEvent_ToolStart:
 		return model.SkipperToolStartEvent{Tool: e.ToolStart.GetToolName()}
-	case *pb.SkipperChatEvent_ToolEnd:
+	case *skipperpb.SkipperChatEvent_ToolEnd:
 		m := model.SkipperToolEndEvent{Tool: e.ToolEnd.GetToolName()}
 		if e.ToolEnd.GetError() != "" {
 			s := e.ToolEnd.GetError()
 			m.Error = &s
 		}
 		return m
-	case *pb.SkipperChatEvent_Meta:
+	case *skipperpb.SkipperChatEvent_Meta:
 		meta := e.Meta
 		citations := make([]*model.SkipperCitation, 0, len(meta.GetCitations()))
 		for _, c := range meta.GetCitations() {
@@ -129,7 +129,7 @@ func convertSkipperEvent(evt *pb.SkipperChatEvent) model.SkipperChatEvent {
 			Details:       details,
 			Blocks:        blocks,
 		}
-	case *pb.SkipperChatEvent_Done:
+	case *skipperpb.SkipperChatEvent_Done:
 		return model.SkipperDone{
 			ConversationID: e.Done.GetConversationId(),
 			TokensInput:    int(e.Done.GetTokensInput()),
@@ -406,7 +406,7 @@ func (r *Resolver) DoSkipperReports(ctx context.Context, limit, offset *int) (*m
 // DoSkipperReport fetches a single investigation report by id for the current tenant.
 // Lookups are tenant-scoped by the Skipper service, so any failure (including a
 // missing or cross-tenant id) surfaces as an error to the caller.
-func (r *Resolver) DoSkipperReport(ctx context.Context, id string) (*pb.SkipperReport, error) {
+func (r *Resolver) DoSkipperReport(ctx context.Context, id string) (*skipperpb.SkipperReport, error) {
 	if r.Clients.Skipper == nil {
 		return nil, fmt.Errorf("skipper service unavailable")
 	}
@@ -454,7 +454,7 @@ func (r *Resolver) DoMarkSkipperReportsRead(ctx context.Context, ids []string) (
 }
 
 // DoSkipperReportCreatedAt resolves the createdAt timestamp from proto.
-func (r *Resolver) DoSkipperReportCreatedAt(obj *pb.SkipperReport) (*time.Time, error) {
+func (r *Resolver) DoSkipperReportCreatedAt(obj *skipperpb.SkipperReport) (*time.Time, error) {
 	if ts := obj.GetCreatedAt(); ts != nil && ts.IsValid() {
 		t := ts.AsTime()
 		return &t, nil
@@ -463,7 +463,7 @@ func (r *Resolver) DoSkipperReportCreatedAt(obj *pb.SkipperReport) (*time.Time, 
 }
 
 // DoSkipperReportReadAt resolves the readAt timestamp from proto.
-func (r *Resolver) DoSkipperReportReadAt(obj *pb.SkipperReport) (*time.Time, error) {
+func (r *Resolver) DoSkipperReportReadAt(obj *skipperpb.SkipperReport) (*time.Time, error) {
 	if ts := obj.GetReadAt(); ts != nil && ts.IsValid() {
 		t := ts.AsTime()
 		return &t, nil

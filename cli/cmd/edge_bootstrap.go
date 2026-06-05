@@ -6,7 +6,8 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/pkg/clients/bridge"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 )
 
 // bootstrapEdgeViaBridge is the canonical preregistration entry point
@@ -17,7 +18,7 @@ import (
 // Returns the *pb.PreRegisterEdgeResponse shape the existing call sites
 // expect so the rest of the edge bootstrap pipeline (template rendering,
 // cert handling, runtime Foghorn addr) is unchanged.
-func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*pb.PreRegisterEdgeResponse, error) {
+func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*foghornpb.PreRegisterEdgeResponse, error) {
 	if ctxCfg.Endpoints.BridgeURL == "" {
 		return nil, fmt.Errorf("bootstrap requires a Bridge URL on the active context (run 'frameworks setup' or 'frameworks context set-url bridge <url>')")
 	}
@@ -41,7 +42,7 @@ func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmen
 		return nil, err
 	}
 
-	resp := &pb.PreRegisterEdgeResponse{
+	resp := &foghornpb.PreRegisterEdgeResponse{
 		NodeId:           out.NodeID,
 		EdgeDomain:       out.EdgeDomain,
 		PoolDomain:       out.PoolDomain,
@@ -51,7 +52,7 @@ func bootstrapEdgeViaBridge(ctx context.Context, ctxCfg fwcfg.Context, enrollmen
 		InternalCaBundle: []byte(out.InternalCABundle),
 	}
 	if t := out.Telemetry; t != nil {
-		resp.Telemetry = &pb.EdgeTelemetryConfig{
+		resp.Telemetry = &commonpb.EdgeTelemetryConfig{
 			Enabled:     t.Enabled,
 			WriteUrl:    t.WriteURL,
 			BearerToken: t.BearerToken,

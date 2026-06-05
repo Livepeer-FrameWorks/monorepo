@@ -9,19 +9,20 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type fakeControlStream struct {
-	pb.HelmsmanControl_ConnectServer
+	ipcpb.HelmsmanControl_ConnectServer
 	mu   sync.Mutex
-	sent []*pb.ControlMessage
+	sent []*ipcpb.ControlMessage
 }
 
-func (f *fakeControlStream) Send(msg *pb.ControlMessage) error {
+func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, msg)
@@ -39,7 +40,7 @@ func setupLocalRegistry(t *testing.T, nodeID string) *fakeControlStream {
 func TestForwardCommand_MissingNodeID(t *testing.T) {
 	srv := NewRelayServer(logging.NewLogger())
 
-	_, err := srv.ForwardCommand(context.Background(), &pb.ForwardCommandRequest{})
+	_, err := srv.ForwardCommand(context.Background(), &foghornrelaypb.ForwardCommandRequest{})
 	if err == nil {
 		t.Fatal("expected error for empty target_node_id")
 	}
@@ -52,7 +53,7 @@ func TestForwardCommand_MissingNodeID(t *testing.T) {
 func TestForwardCommand_UnknownCommandType(t *testing.T) {
 	srv := NewRelayServer(logging.NewLogger())
 
-	_, err := srv.ForwardCommand(context.Background(), &pb.ForwardCommandRequest{TargetNodeId: "node-1"})
+	_, err := srv.ForwardCommand(context.Background(), &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1"})
 	if err == nil {
 		t.Fatal("expected error for nil command")
 	}
@@ -67,9 +68,9 @@ func TestForwardCommand_NodeNotConnected(t *testing.T) {
 	t.Cleanup(cleanup)
 	srv := NewRelayServer(logging.NewLogger())
 
-	resp, err := srv.ForwardCommand(context.Background(), &pb.ForwardCommandRequest{
+	resp, err := srv.ForwardCommand(context.Background(), &foghornrelaypb.ForwardCommandRequest{
 		TargetNodeId: "node-missing",
-		Command:      &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}},
+		Command:      &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}},
 	})
 	if err != nil {
 		t.Fatalf("expected nil gRPC error (soft failure), got %v", err)
@@ -88,30 +89,30 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 
 	commands := []struct {
 		field   string
-		cmd     *pb.ForwardCommandRequest
+		cmd     *foghornrelaypb.ForwardCommandRequest
 		payload string
 	}{
-		{"config_seed", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ConfigSeed{ConfigSeed: &pb.ConfigSeed{NodeId: "node-1"}}}, "config_seed"},
-		{"dvr_start", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStart{DvrStart: &pb.DVRStartRequest{}}}, "dvr_start_request"},
-		{"dvr_stop", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrStop{DvrStop: &pb.DVRStopRequest{}}}, "dvr_stop_request"},
-		{"clip_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ClipDelete{ClipDelete: &pb.ClipDeleteRequest{}}}, "clip_delete"},
-		{"dvr_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrDelete{DvrDelete: &pb.DVRDeleteRequest{}}}, "dvr_delete"},
-		{"vod_delete", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_VodDelete{VodDelete: &pb.VodDeleteRequest{}}}, "vod_delete"},
-		{"dtsh_sync", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DtshSync{DtshSync: &pb.DtshSyncRequest{}}}, "dtsh_sync_request"},
-		{"stop_sessions", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_StopSessions{StopSessions: &pb.StopSessionsRequest{}}}, "stop_sessions_request"},
-		{"invalidate_sessions", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &pb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
-		{"activate_push_targets", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: &pb.ActivatePushTargets{}}}, "activate_push_targets"},
-		{"deactivate_push_targets", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: &pb.DeactivatePushTargets{}}}, "deactivate_push_targets"},
-		{"processing_job", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &pb.ProcessingJobRequest{}}}, "processing_job_request"},
-		{"freeze", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_Freeze{Freeze: &pb.FreezeRequest{}}}, "freeze_request"},
-		{"desired_state_update", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: &pb.DesiredStateUpdate{}}}, "desired_state_update"},
-		{"apply_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &pb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
-		{"retract_managed_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &pb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
-		{"drain_stream", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DrainStream{DrainStream: &pb.DrainStreamRequest{RuntimeName: "live+demo"}}}, "drain_stream_request"},
-		{"dvr_update_source", &pb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &pb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: &pb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"}}}, "dvr_update_source_request"},
+		{"config_seed", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ConfigSeed{ConfigSeed: &ipcpb.ConfigSeed{NodeId: "node-1"}}}, "config_seed"},
+		{"dvr_start", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrStart{DvrStart: &ipcpb.DVRStartRequest{}}}, "dvr_start_request"},
+		{"dvr_stop", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrStop{DvrStop: &ipcpb.DVRStopRequest{}}}, "dvr_stop_request"},
+		{"clip_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ClipDelete{ClipDelete: &ipcpb.ClipDeleteRequest{}}}, "clip_delete"},
+		{"dvr_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrDelete{DvrDelete: &ipcpb.DVRDeleteRequest{}}}, "dvr_delete"},
+		{"vod_delete", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_VodDelete{VodDelete: &ipcpb.VodDeleteRequest{}}}, "vod_delete"},
+		{"dtsh_sync", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DtshSync{DtshSync: &ipcpb.DtshSyncRequest{}}}, "dtsh_sync_request"},
+		{"stop_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_StopSessions{StopSessions: &ipcpb.StopSessionsRequest{}}}, "stop_sessions_request"},
+		{"invalidate_sessions", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_InvalidateSessions{InvalidateSessions: &ipcpb.InvalidateSessionsRequest{}}}, "invalidate_sessions_request"},
+		{"activate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ActivatePushTargets{ActivatePushTargets: &ipcpb.ActivatePushTargets{}}}, "activate_push_targets"},
+		{"deactivate_push_targets", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DeactivatePushTargets{DeactivatePushTargets: &ipcpb.DeactivatePushTargets{}}}, "deactivate_push_targets"},
+		{"processing_job", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ProcessingJob{ProcessingJob: &ipcpb.ProcessingJobRequest{}}}, "processing_job_request"},
+		{"freeze", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_Freeze{Freeze: &ipcpb.FreezeRequest{}}}, "freeze_request"},
+		{"desired_state_update", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DesiredStateUpdate{DesiredStateUpdate: &ipcpb.DesiredStateUpdate{}}}, "desired_state_update"},
+		{"apply_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &ipcpb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
+		{"retract_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &ipcpb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
+		{"drain_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DrainStream{DrainStream: &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"}}}, "drain_stream_request"},
+		{"dvr_update_source", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DvrUpdateSource{DvrUpdateSource: &ipcpb.DVRUpdateSourceRequest{DvrHash: "abc", SourceRuntimeName: "live+demo"}}}, "dvr_update_source_request"},
 	}
 
-	oneofFields := pb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
+	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
 	protoFields := make(map[string]struct{}, oneofFields.Len())
 	for i := 0; i < oneofFields.Len(); i++ {
 		protoFields[string(oneofFields.Get(i).Name())] = struct{}{}

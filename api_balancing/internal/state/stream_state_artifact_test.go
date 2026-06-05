@@ -1,16 +1,15 @@
 package state
 
 import (
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
-
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
 func TestSetNodeArtifacts_CreatesNode(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("new-node", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("new-node", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4", SizeBytes: 100},
 	})
 
@@ -33,14 +32,14 @@ func TestSetNodeArtifacts_DeepCopiesSlice(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	original := []*pb.StoredArtifact{
+	original := []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 		{ClipHash: "h2", FilePath: "/data/h2.mp4"},
 	}
 	sm.SetNodeArtifacts("node-1", original)
 
 	// Appending to original slice should not affect stored state
-	_ = append(original, &pb.StoredArtifact{ClipHash: "h3"})
+	_ = append(original, &ipcpb.StoredArtifact{ClipHash: "h3"})
 
 	snap := sm.GetAllNodesSnapshot()
 	for _, n := range snap.Nodes {
@@ -56,7 +55,7 @@ func TestSetNodeArtifacts_EmptyClearsArtifacts(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 	})
 	sm.SetNodeArtifacts("node-1", nil)
@@ -75,11 +74,11 @@ func TestSetNodeArtifacts_MultipleSetsReplace(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 		{ClipHash: "h2", FilePath: "/data/h2.mp4"},
 	})
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h3", FilePath: "/data/h3.mp4"},
 	})
 
@@ -100,10 +99,10 @@ func TestAddNodeArtifact_AddsNew(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 	})
-	sm.AddNodeArtifact("node-1", &pb.StoredArtifact{
+	sm.AddNodeArtifact("node-1", &ipcpb.StoredArtifact{
 		ClipHash: "h2", FilePath: "/data/h2.mp4", SizeBytes: 200,
 	})
 
@@ -121,10 +120,10 @@ func TestAddNodeArtifact_ReplacesExistingByHash(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/old/path.mp4", SizeBytes: 100},
 	})
-	sm.AddNodeArtifact("node-1", &pb.StoredArtifact{
+	sm.AddNodeArtifact("node-1", &ipcpb.StoredArtifact{
 		ClipHash: "h1", FilePath: "/new/path.mkv", SizeBytes: 300, Format: "mkv",
 	})
 
@@ -155,7 +154,7 @@ func TestAddNodeArtifact_CreatesNodeIfMissing(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.AddNodeArtifact("new-node", &pb.StoredArtifact{
+	sm.AddNodeArtifact("new-node", &ipcpb.StoredArtifact{
 		ClipHash: "h1", FilePath: "/data/h1.mp4",
 	})
 
@@ -178,7 +177,7 @@ func TestRemoveNodeArtifact_RemovesByHash(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 		{ClipHash: "h2", FilePath: "/data/h2.mp4"},
 	})
@@ -201,7 +200,7 @@ func TestRemoveNodeArtifact_MissingHash_NoChange(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", FilePath: "/data/h1.mp4"},
 	})
 	sm.RemoveNodeArtifact("node-1", "nonexistent")
@@ -227,7 +226,7 @@ func TestFindNodeByArtifactInternalName_MatchesAfterPlus(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-1", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-1", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+my-internal-name", FilePath: "/data/h1.mp4"},
 	})
 	sm.SetNodeInfo("node-1", "http://host-1:8080", true, nil, nil, "", "", nil)
@@ -255,7 +254,7 @@ func TestFindNodeByArtifactInternalName_SkipsInactive(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-inactive", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-inactive", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+target", FilePath: "/data/h1.mp4"},
 	})
 	// Node exists but IsHealthy=false (default), so IsActive=false in snapshot
@@ -270,10 +269,10 @@ func TestFindNodeByArtifactInternalName_PicksLowestScore(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-high", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-high", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+shared", FilePath: "/data/h1.mp4"},
 	})
-	sm.SetNodeArtifacts("node-low", []*pb.StoredArtifact{
+	sm.SetNodeArtifacts("node-low", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+shared", FilePath: "/data/h1.mp4"},
 	})
 
@@ -328,13 +327,13 @@ func TestInferArtifactType(t *testing.T) {
 
 func TestArtifactTypeToString(t *testing.T) {
 	tests := []struct {
-		input pb.ArtifactEvent_ArtifactType
+		input ipcpb.ArtifactEvent_ArtifactType
 		want  string
 	}{
-		{pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
-		{pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED, ""},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, "clip"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, "dvr"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD, "vod"},
+		{ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED, ""},
 	}
 	for _, tc := range tests {
 		got := artifactTypeToString(tc.input)
@@ -347,13 +346,13 @@ func TestArtifactTypeToString(t *testing.T) {
 func TestArtifactTypeFromString(t *testing.T) {
 	tests := []struct {
 		input string
-		want  pb.ArtifactEvent_ArtifactType
+		want  ipcpb.ArtifactEvent_ArtifactType
 	}{
-		{"clip", pb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
-		{"dvr", pb.ArtifactEvent_ARTIFACT_TYPE_DVR},
-		{"vod", pb.ArtifactEvent_ARTIFACT_TYPE_VOD},
-		{"unknown", pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED},
-		{"", pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED},
+		{"clip", ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP},
+		{"dvr", ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR},
+		{"vod", ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD},
+		{"unknown", ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED},
+		{"", ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		got := artifactTypeFromString(tc.input)

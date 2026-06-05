@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,9 +32,9 @@ func TestLogPlaybackDenyEmitsCounters(t *testing.T) {
 	p := testPlaybackAuthProcessor()
 	p.metrics = &ProcessorMetrics{PlaybackDenyTotal: denyTotal, PlaybackWebhookErrors: webhookErr}
 
-	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "jwt-expired", "")
-	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "webhook-timeout", "")
-	p.logPlaybackDeny("stream-a", &pb.ViewerConnectTrigger{}, "webhook-blocked-ssrf", "")
+	p.logPlaybackDeny("stream-a", &ipcpb.ViewerConnectTrigger{}, "jwt-expired", "")
+	p.logPlaybackDeny("stream-a", &ipcpb.ViewerConnectTrigger{}, "webhook-timeout", "")
+	p.logPlaybackDeny("stream-a", &ipcpb.ViewerConnectTrigger{}, "webhook-blocked-ssrf", "")
 
 	if got := counterValue(t, denyTotal.WithLabelValues("jwt-expired")); got != 1 {
 		t.Fatalf("jwt-expired count = %v, want 1", got)
@@ -57,7 +58,7 @@ func TestEnforcePlaybackPolicy_PublicMarkerAllowsWithoutCommodore(t *testing.T) 
 	got, err := p.enforcePlaybackPolicy(context.Background(), "stream-a", streamContext{
 		RequiresAuthKnown: true,
 		RequiresAuth:      false,
-	}, &pb.ViewerConnectTrigger{})
+	}, &ipcpb.ViewerConnectTrigger{})
 	if err != nil {
 		t.Fatalf("enforcePlaybackPolicy returned error: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestEnforcePlaybackPolicy_ProtectedOrUnknownMarkerDenyWithoutCommodore(t *t
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := p.enforcePlaybackPolicy(context.Background(), "stream-a", tc.marker, &pb.ViewerConnectTrigger{})
+			got, err := p.enforcePlaybackPolicy(context.Background(), "stream-a", tc.marker, &ipcpb.ViewerConnectTrigger{})
 			if err != nil {
 				t.Fatalf("enforcePlaybackPolicy returned error: %v", err)
 			}
@@ -89,13 +90,13 @@ func TestEnforcePlaybackPolicy_ProtectedOrUnknownMarkerDenyWithoutCommodore(t *t
 }
 
 func TestEvaluatePlaybackPolicy_JWTMissingTokenDenies(t *testing.T) {
-	policy := &pb.ResolvePlaybackPolicyResponse{
+	policy := &commodorepb.ResolvePlaybackPolicyResponse{
 		Type: "jwt",
-		JwtPolicy: &pb.PlaybackJwtPolicy{
-			ActiveKeys: []*pb.PlaybackSigningKey{{Kid: "kid-1", PublicKeyPem: "pem"}},
+		JwtPolicy: &commodorepb.PlaybackJwtPolicy{
+			ActiveKeys: []*commodorepb.PlaybackSigningKey{{Kid: "kid-1", PublicKeyPem: "pem"}},
 		},
 	}
-	got := EvaluatePlaybackPolicy(context.Background(), testPlaybackAuthProcessor().logger, "stream-a", &pb.ViewerConnectTrigger{}, policy)
+	got := EvaluatePlaybackPolicy(context.Background(), testPlaybackAuthProcessor().logger, "stream-a", &ipcpb.ViewerConnectTrigger{}, policy)
 	if got != "false" {
 		t.Fatalf("missing viewer token should deny, got %q", got)
 	}
@@ -106,16 +107,16 @@ func TestEvaluatePlaybackPolicyWithRecorder_RecordsSuccessfulJWTUse(t *testing.T
 	kid := "kid-record"
 	token := mintPlaybackAuthJWT(t, priv, kid)
 	recorder := &recordingSigningKeyUseRecorder{calls: make(chan signingKeyUseCall, 1)}
-	policy := &pb.ResolvePlaybackPolicyResponse{
+	policy := &commodorepb.ResolvePlaybackPolicyResponse{
 		Type:     "jwt",
 		TenantId: "tenant-record",
-		JwtPolicy: &pb.PlaybackJwtPolicy{
+		JwtPolicy: &commodorepb.PlaybackJwtPolicy{
 			AllowedKids: []string{kid},
-			ActiveKeys:  []*pb.PlaybackSigningKey{{Kid: kid, PublicKeyPem: pubPEM}},
+			ActiveKeys:  []*commodorepb.PlaybackSigningKey{{Kid: kid, PublicKeyPem: pubPEM}},
 		},
 	}
 
-	got := EvaluatePlaybackPolicyWithRecorder(context.Background(), testPlaybackAuthProcessor().logger, "stream-a", &pb.ViewerConnectTrigger{
+	got := EvaluatePlaybackPolicyWithRecorder(context.Background(), testPlaybackAuthProcessor().logger, "stream-a", &ipcpb.ViewerConnectTrigger{
 		ViewerToken: token,
 	}, policy, recorder)
 	if got != "true" {

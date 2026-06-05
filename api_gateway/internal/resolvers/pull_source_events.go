@@ -5,14 +5,14 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/middleware"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // DoStreamRecentPullSourceEvents is the field resolver for
 // Stream.recentPullSourceEvents. Returns nil for push streams (caller can
 // distinguish via Stream.ingestMode); pull streams get the most recent N
 // events from commodore.pull_source_events.
-func (r *Resolver) DoStreamRecentPullSourceEvents(ctx context.Context, stream *pb.Stream, limit *int) ([]*pb.PullSourceEvent, error) {
+func (r *Resolver) DoStreamRecentPullSourceEvents(ctx context.Context, stream *commodorepb.Stream, limit *int) ([]*commodorepb.PullSourceEvent, error) {
 	if stream == nil {
 		return nil, nil
 	}
@@ -26,7 +26,7 @@ func (r *Resolver) DoStreamRecentPullSourceEvents(ctx context.Context, stream *p
 	if limit != nil && *limit > 0 {
 		n = int32(*limit)
 	}
-	resp, err := r.Clients.Commodore.ListPullSourceEvents(ctx, &pb.ListPullSourceEventsRequest{
+	resp, err := r.Clients.Commodore.ListPullSourceEvents(ctx, &commodorepb.ListPullSourceEventsRequest{
 		StreamId: stream.GetStreamId(),
 		Limit:    n,
 	})

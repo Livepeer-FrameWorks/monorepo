@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func mapSignalmanProcessingEvent(event *pb.SignalmanEvent) *pb.ProcessingUsageRecord {
+func mapSignalmanProcessingEvent(event *signalmanpb.SignalmanEvent) *periscopepb.ProcessingUsageRecord {
 	if event == nil || event.Data == nil {
 		return nil
 	}
@@ -36,7 +36,7 @@ func mapSignalmanProcessingEvent(event *pb.SignalmanEvent) *pb.ProcessingUsageRe
 		tenantID = *event.TenantId
 	}
 
-	return &pb.ProcessingUsageRecord{
+	return &periscopepb.ProcessingUsageRecord{
 		Id:                  eventID,
 		Timestamp:           timestamppb.New(timestamp),
 		TenantId:            tenantID,

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"google.golang.org/grpc/codes"
@@ -52,7 +52,7 @@ func TestCreateNode_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
-	resp, err := server.CreateNode(context.Background(), &pb.CreateNodeRequest{
+	resp, err := server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
 		NodeId:    "node-1",
 		ClusterId: "cluster-1",
 		NodeName:  "my-node",
@@ -82,7 +82,7 @@ func TestCreateNode_MissingNodeID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateNode(context.Background(), &pb.CreateNodeRequest{
+	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
 		ClusterId: "cluster-1",
 		NodeName:  "my-node",
 		NodeType:  "core",
@@ -101,7 +101,7 @@ func TestCreateNode_MissingClusterID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateNode(context.Background(), &pb.CreateNodeRequest{
+	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
 		NodeId:   "node-1",
 		NodeName: "my-node",
 		NodeType: "core",
@@ -122,7 +122,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 	now := time.Now()
 	extIP := "1.2.3.4"
 
-	req := &pb.CreateNodeRequest{
+	req := &quartermasterpb.CreateNodeRequest{
 		NodeId:     "node-1",
 		ClusterId:  "cluster-1",
 		NodeName:   "my-node",
@@ -184,7 +184,7 @@ func TestCreateNode_ClusterNotFound(t *testing.T) {
 		WithArgs("nonexistent-cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
-	_, err = server.CreateNode(context.Background(), &pb.CreateNodeRequest{
+	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
 		NodeId:    "node-1",
 		ClusterId: "nonexistent-cluster",
 		NodeName:  "my-node",

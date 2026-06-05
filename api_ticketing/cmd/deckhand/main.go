@@ -18,7 +18,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -221,7 +222,7 @@ func main() {
 			serverOpts = append(serverOpts, tlsOpt)
 		}
 		grpcSrv := grpc.NewServer(serverOpts...)
-		pb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
+		deckhandpb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
 
 		// Register gRPC health checking service
 		hs := health.NewServer()
@@ -269,7 +270,7 @@ func main() {
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("DECKHAND_HOST", "deckhand")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		req := &pb.BootstrapServiceRequest{
+		req := &quartermasterpb.BootstrapServiceRequest{
 			Type:           "deckhand",
 			Version:        version.Version,
 			Protocol:       "http",

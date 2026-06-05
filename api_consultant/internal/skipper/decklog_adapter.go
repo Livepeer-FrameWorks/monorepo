@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -18,7 +18,7 @@ type DecklogUsageLogger struct {
 }
 
 type ServiceEventSender interface {
-	SendServiceEvent(event *pb.ServiceEvent) error
+	SendServiceEvent(event *ipcpb.ServiceEvent) error
 }
 
 func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEvent) {
@@ -35,7 +35,7 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 	if tokenHash == 0 {
 		tokenHash = tokenHashFromContext(ctx)
 	}
-	agg := &pb.APIRequestAggregate{
+	agg := &ipcpb.APIRequestAggregate{
 		TenantId:        event.TenantID,
 		AuthType:        resolveAuthType(ctx),
 		OperationType:   "skipper_chat",
@@ -52,12 +52,12 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 	if tokenHash != 0 {
 		agg.TokenHashes = []uint64{tokenHash}
 	}
-	batch := &pb.APIRequestBatch{
+	batch := &ipcpb.APIRequestBatch{
 		Timestamp:  time.Now().Unix(),
 		SourceNode: "skipper",
-		Aggregates: []*pb.APIRequestAggregate{agg},
+		Aggregates: []*ipcpb.APIRequestAggregate{agg},
 	}
-	svcEvent := &pb.ServiceEvent{
+	svcEvent := &ipcpb.ServiceEvent{
 		EventType: "api_request_batch",
 		Timestamp: timestamppb.Now(),
 		Source:    "skipper",
@@ -70,7 +70,7 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 			return "skipper_conversation"
 		}(),
 		ResourceId: event.ConversationID,
-		Payload:    &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
+		Payload:    &ipcpb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 	}
 	if err := d.Client.SendServiceEvent(svcEvent); err != nil && d.Logger != nil {
 		d.Logger.WithError(err).Warn("Failed to emit Skipper usage event")

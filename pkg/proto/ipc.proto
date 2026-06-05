@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package helmsmancontrol;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc;ipcpb";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";

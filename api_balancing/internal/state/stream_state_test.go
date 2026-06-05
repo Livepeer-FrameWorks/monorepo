@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -420,7 +420,7 @@ func TestApplyNodeLifecyclePreservesZeroCoordinateWithValidPair(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()
 
-	if err := sm.ApplyNodeLifecycle(context.Background(), &pb.NodeLifecycleUpdate{
+	if err := sm.ApplyNodeLifecycle(context.Background(), &ipcpb.NodeLifecycleUpdate{
 		NodeId:    "node-zero",
 		BaseUrl:   "http://node-zero.example",
 		IsHealthy: true,
@@ -446,7 +446,7 @@ func TestApplyNodeLifecycleKeepsDegradedHeartbeatFresh(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()
 
-	if err := sm.ApplyNodeLifecycle(context.Background(), &pb.NodeLifecycleUpdate{
+	if err := sm.ApplyNodeLifecycle(context.Background(), &ipcpb.NodeLifecycleUpdate{
 		NodeId:    "node-degraded",
 		BaseUrl:   "http://node-degraded.example",
 		IsHealthy: false,

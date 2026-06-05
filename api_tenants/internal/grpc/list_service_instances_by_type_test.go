@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -21,7 +21,7 @@ func TestListServiceInstancesByType_DeniesNonServiceCallers(t *testing.T) {
 		context.WithValue(context.Background(), ctxkeys.KeyAuthType, "user"),
 		context.WithValue(context.Background(), ctxkeys.KeyAuthType, "tenant"),
 	} {
-		_, err := s.ListServiceInstancesByType(ctx, &pb.ListServiceInstancesByTypeRequest{
+		_, err := s.ListServiceInstancesByType(ctx, &quartermasterpb.ListServiceInstancesByTypeRequest{
 			ServiceType: "livepeer-gateway",
 		})
 		if status.Code(err) != codes.PermissionDenied {
@@ -34,7 +34,7 @@ func TestListServiceInstancesByType_DeniesNonServiceCallers(t *testing.T) {
 // type that has no physical-endpoint contract.
 func TestListServiceInstancesByType_RejectsNonPhysicalServiceType(t *testing.T) {
 	s := &QuartermasterServer{}
-	_, err := s.ListServiceInstancesByType(serviceCtx(), &pb.ListServiceInstancesByTypeRequest{
+	_, err := s.ListServiceInstancesByType(serviceCtx(), &quartermasterpb.ListServiceInstancesByTypeRequest{
 		ServiceType: "chandler",
 	})
 	if status.Code(err) != codes.InvalidArgument {
@@ -44,7 +44,7 @@ func TestListServiceInstancesByType_RejectsNonPhysicalServiceType(t *testing.T) 
 
 func TestListServiceInstancesByType_RequiresServiceType(t *testing.T) {
 	s := &QuartermasterServer{}
-	_, err := s.ListServiceInstancesByType(serviceCtx(), &pb.ListServiceInstancesByTypeRequest{})
+	_, err := s.ListServiceInstancesByType(serviceCtx(), &quartermasterpb.ListServiceInstancesByTypeRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for empty service_type, got %v", err)
 	}
@@ -65,7 +65,7 @@ func TestListServiceInstancesByType_FailsClosedOnScanError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(cols).
 			AddRow("inst-1", "livepeer-gateway", "media-eu-1", "core-eu-1", "203.0.113.10", "running", "healthy", "NOT_AN_INT", "http"))
 
-	_, err = s.ListServiceInstancesByType(serviceCtx(), &pb.ListServiceInstancesByTypeRequest{
+	_, err = s.ListServiceInstancesByType(serviceCtx(), &quartermasterpb.ListServiceInstancesByTypeRequest{
 		ServiceType: "livepeer-gateway",
 	})
 	if status.Code(err) != codes.Internal {

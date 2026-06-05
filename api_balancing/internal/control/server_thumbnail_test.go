@@ -6,7 +6,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestProcessThumbnailUploadedMarksGeneratedArtifactHash(t *testing.T) {
@@ -30,7 +30,7 @@ func TestProcessThumbnailUploadedMarksGeneratedArtifactHash(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "artifact_type", "storage_cluster_id", "origin_cluster_id"}).
 			AddRow("5eed517e-ba5e-da7a-517e-ba5eda7a0001", "clip", sql.NullString{String: "demo-media", Valid: true}, sql.NullString{}))
 
-	processThumbnailUploaded(&pb.ThumbnailUploaded{
+	processThumbnailUploaded(&ipcpb.ThumbnailUploaded{
 		ThumbnailKey: artifactHash,
 		S3Keys: []string{
 			"thumbnails/" + artifactHash + "/poster.jpg",

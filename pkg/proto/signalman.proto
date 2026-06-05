@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package signalman;
 
-option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto";
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman;signalmanpb";
 
 import "google/protobuf/timestamp.proto";
 import "ipc.proto";  // For MistTrigger payloads

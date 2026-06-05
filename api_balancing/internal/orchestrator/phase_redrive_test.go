@@ -7,9 +7,9 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // installMockDB swaps control's package-level *sql.DB for a sqlmock and
@@ -29,8 +29,8 @@ func installMockDB(t *testing.T) sqlmock.Sqlmock {
 	return mock
 }
 
-func sampleComponents() []*pb.DesiredComponent {
-	return []*pb.DesiredComponent{
+func sampleComponents() []*ipcpb.DesiredComponent {
+	return []*ipcpb.DesiredComponent{
 		{
 			Component:   "mist",
 			Version:     "v1.2.3",

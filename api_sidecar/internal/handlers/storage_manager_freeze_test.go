@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -11,7 +13,7 @@ import (
 
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 type fakePresignedClient struct {
@@ -51,13 +53,13 @@ func newTestStorageManager(t *testing.T) *StorageManager {
 		logger:   logging.NewLogger(),
 		basePath: t.TempDir(),
 
-		requestFreezePermission: func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
+		requestFreezePermission: func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*ipcpb.FreezePermissionResponse, error) {
 			return nil, fmt.Errorf("not connected")
 		},
 		sendSyncComplete:     func(_, _, _, _ string, _ uint64, _ string, _ bool, _ bool) error { return nil },
 		sendFreezeComplete:   func(_, _, _, _ string, _ uint64, _ string, _ bool) error { return nil },
 		sendFreezeProgress:   func(_, _ string, _ uint32, _ uint64) error { return nil },
-		sendStorageLifecycle: func(_ *pb.StorageLifecycleData) error { return nil },
+		sendStorageLifecycle: func(_ *ipcpb.StorageLifecycleData) error { return nil },
 		requestCanDelete:     func(_ context.Context, _ string) (bool, string, int64, error) { return false, "", 0, nil },
 		sendArtifactDeleted:  func(_, _, _, _ string, _ uint64) error { return nil },
 	}
@@ -68,7 +70,7 @@ func newTestStorageManager(t *testing.T) *StorageManager {
 func TestHandleFreezeRequest_FileNotFound(t *testing.T) {
 	sm := newTestStorageManager(t)
 
-	req := &pb.FreezeRequest{
+	req := &ipcpb.FreezeRequest{
 		RequestId: "req-1",
 		AssetHash: "hash-1",
 		AssetType: "clip",
@@ -92,7 +94,7 @@ func TestHandleFreezeRequest_DVRNudge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := &pb.FreezeRequest{
+	req := &ipcpb.FreezeRequest{
 		RequestId:    "req-dvr",
 		AssetHash:    "hash-dvr",
 		AssetType:    "dvr",
@@ -123,7 +125,7 @@ func TestUploadAsset_ClipNoURL(t *testing.T) {
 		SizeBytes: 14,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId:       "req-1",
 		AssetHash:       "hash-clip",
 		Approved:        true,
@@ -156,7 +158,7 @@ func TestUploadAsset_VodNoURL(t *testing.T) {
 		SizeBytes: 13,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId:       "req-2",
 		AssetHash:       "hash-vod",
 		Approved:        true,
@@ -184,7 +186,7 @@ func TestUploadAsset_DVRNoSegmentURLs(t *testing.T) {
 		SizeBytes: 1024,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId:   "req-3",
 		AssetHash:   "hash-dvr",
 		Approved:    true,
@@ -211,7 +213,7 @@ func TestUploadAsset_UnsupportedType(t *testing.T) {
 		SizeBytes: 100,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId: "req-4",
 		Approved:  true,
 	}
@@ -242,7 +244,7 @@ func TestUploadAsset_ClipSegmentURLsMissingMainFile(t *testing.T) {
 	}
 
 	// SegmentUrls provided but doesn't contain the main file name
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId:   "req-5",
 		Approved:    true,
 		SegmentUrls: map[string]string{"other.mp4": "https://example.com/presigned"},
@@ -264,7 +266,7 @@ func TestFreezeTrackerCleansUpOnExit(t *testing.T) {
 		SizeBytes: 100,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId: "req-6",
 		Approved:  true,
 	}
@@ -279,6 +281,50 @@ func TestFreezeTrackerCleansUpOnExit(t *testing.T) {
 
 	if tracked {
 		t.Fatal("expected freeze tracker to clean up after uploadAsset completes")
+	}
+}
+
+func TestSyncDtshOnlyVodRegeneratesInvalidSidecar(t *testing.T) {
+	sm := newTestStorageManager(t)
+	fake := &fakePresignedClient{}
+	sm.presignedClient = fake
+
+	vodPath := filepath.Join(sm.basePath, "artifact123.mkv")
+	dtshPath := vodPath + ".dtsh"
+	if err := os.WriteFile(vodPath, []byte("vod data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dtshPath, []byte{'D', 'T', 'S', 'C', 0, 0, 0, 100, '{'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = os.WriteFile(dtshPath, validDTSHBytes(), 0o644)
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("MISTSERVER_URL", server.URL)
+
+	err := sm.SyncDtshOnly(context.Background(), &ipcpb.DtshSyncRequest{
+		RequestId:       "req-dtsh",
+		AssetType:       "vod",
+		AssetHash:       "artifact123",
+		LocalPath:       vodPath,
+		PresignedPutUrl: "https://s3.example.com/artifact123.mkv.dtsh?presigned",
+	})
+	if err != nil {
+		t.Fatalf("SyncDtshOnly returned error: %v", err)
+	}
+	if gotPath != "/json_vod+artifact123.js" {
+		t.Fatalf("Mist path = %q, want DTSH json endpoint", gotPath)
+	}
+	if atomic.LoadInt64(&fake.uploadFileCalls) != 1 {
+		t.Fatalf("expected 1 upload call, got %d", atomic.LoadInt64(&fake.uploadFileCalls))
+	}
+	if fake.lastUploadedPath != dtshPath {
+		t.Fatalf("uploaded path = %q, want %q", fake.lastUploadedPath, dtshPath)
 	}
 }
 
@@ -298,7 +344,7 @@ func TestHandleFreezeRequest_ClipUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := &pb.FreezeRequest{
+	req := &ipcpb.FreezeRequest{
 		RequestId:       "req-clip",
 		AssetHash:       "hash-clip",
 		AssetType:       "clip",
@@ -343,7 +389,7 @@ func TestHandleFreezeRequest_DVRWithSegments(t *testing.T) {
 		}
 	}
 
-	req := &pb.FreezeRequest{
+	req := &ipcpb.FreezeRequest{
 		RequestId:    "req-dvr-seg",
 		AssetHash:    "dvr-hash",
 		AssetType:    "dvr",
@@ -380,8 +426,8 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 	}
 
 	syncReported := false
-	sm.requestFreezePermission = func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
-		return &pb.FreezePermissionResponse{
+	sm.requestFreezePermission = func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*ipcpb.FreezePermissionResponse, error) {
+		return &ipcpb.FreezePermissionResponse{
 			RequestId:  "req-skip",
 			AssetHash:  "hash-remote",
 			Approved:   true,
@@ -423,8 +469,8 @@ func TestFreezeAsset_SkipUpload(t *testing.T) {
 func TestFreezeAsset_PermissionDenied(t *testing.T) {
 	sm := newTestStorageManager(t)
 
-	sm.requestFreezePermission = func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*pb.FreezePermissionResponse, error) {
-		return &pb.FreezePermissionResponse{
+	sm.requestFreezePermission = func(_ context.Context, _, _, _ string, _ uint64, _ []string) (*ipcpb.FreezePermissionResponse, error) {
+		return &ipcpb.FreezePermissionResponse{
 			Approved: false,
 			Reason:   "quota exceeded",
 		}, nil
@@ -479,7 +525,7 @@ func TestUploadAsset_ClipWithDtsh(t *testing.T) {
 		SizeBytes: 9,
 	}
 
-	permResp := &pb.FreezePermissionResponse{
+	permResp := &ipcpb.FreezePermissionResponse{
 		RequestId: "req-dtsh",
 		AssetHash: "hash-dtsh",
 		Approved:  true,

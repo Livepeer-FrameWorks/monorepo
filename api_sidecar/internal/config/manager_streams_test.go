@@ -5,18 +5,18 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestStreamConfigsFromSeedSkipsWildcardInstances(t *testing.T) {
-	seed := &pb.ConfigSeed{
-		Templates: []*pb.StreamTemplate{
-			{Def: &pb.StreamDef{Name: "live", Tags: []string{"live"}}},
-			{Def: &pb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, Tags: []string{"processing"}}},
-			{Def: &pb.StreamDef{Name: "processing+$", Realtime: true}},
-			{Def: &pb.StreamDef{Name: "processing+artifact-hash", Realtime: true}},
-			{Def: &pb.StreamDef{Name: "dvr", Tags: []string{"dvr"}}},
-			{Def: &pb.StreamDef{Name: "pull", Tags: []string{"pull"}}},
+	seed := &ipcpb.ConfigSeed{
+		Templates: []*ipcpb.StreamTemplate{
+			{Def: &ipcpb.StreamDef{Name: "live", Tags: []string{"live"}}},
+			{Def: &ipcpb.StreamDef{Name: "processing", Realtime: true, ProcessControlledRealtime: true, Tags: []string{"processing"}}},
+			{Def: &ipcpb.StreamDef{Name: "processing+$", Realtime: true}},
+			{Def: &ipcpb.StreamDef{Name: "processing+artifact-hash", Realtime: true}},
+			{Def: &ipcpb.StreamDef{Name: "dvr", Tags: []string{"dvr"}}},
+			{Def: &ipcpb.StreamDef{Name: "pull", Tags: []string{"pull"}}},
 		},
 	}
 
@@ -83,10 +83,10 @@ func TestReconcileConfiguresGlobalStreamProcessTrigger(t *testing.T) {
 	manager := &Manager{
 		mistClient: mist,
 		logger:     logging.NewLogger(),
-		lastSeed: &pb.ConfigSeed{
+		lastSeed: &ipcpb.ConfigSeed{
 			FoghornBalancerBase: "http://foghorn:18008",
-			Templates: []*pb.StreamTemplate{
-				{Def: &pb.StreamDef{Name: "live"}},
+			Templates: []*ipcpb.StreamTemplate{
+				{Def: &ipcpb.StreamDef{Name: "live"}},
 			},
 		},
 	}
@@ -118,10 +118,10 @@ func TestReconcileConfiguresPushInputCloseTrigger(t *testing.T) {
 	manager := &Manager{
 		mistClient: mist,
 		logger:     logging.NewLogger(),
-		lastSeed: &pb.ConfigSeed{
+		lastSeed: &ipcpb.ConfigSeed{
 			FoghornBalancerBase: "http://foghorn:18008",
-			Templates: []*pb.StreamTemplate{
-				{Def: &pb.StreamDef{Name: "live"}},
+			Templates: []*ipcpb.StreamTemplate{
+				{Def: &ipcpb.StreamDef{Name: "live"}},
 			},
 		},
 	}

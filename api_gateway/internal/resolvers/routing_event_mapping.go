@@ -5,12 +5,12 @@ import (
 	"math"
 	"time"
 
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
-
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func mapSignalmanRoutingEvent(event *pb.SignalmanEvent) *pb.RoutingEvent {
+func mapSignalmanRoutingEvent(event *signalmanpb.SignalmanEvent) *periscopepb.RoutingEvent {
 	if event == nil || event.Data == nil {
 		return nil
 	}
@@ -32,7 +32,7 @@ func mapSignalmanRoutingEvent(event *pb.SignalmanEvent) *pb.RoutingEvent {
 
 	eventID := fmt.Sprintf("live:lb:%s:%d", streamID, timestamp.AsTime().UnixNano())
 
-	routing := &pb.RoutingEvent{
+	routing := &periscopepb.RoutingEvent{
 		Id:           eventID,
 		Timestamp:    timestamp,
 		StreamId:     streamID,

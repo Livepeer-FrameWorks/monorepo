@@ -10,7 +10,7 @@ import (
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,7 +21,7 @@ func setupTriggerTest(t *testing.T, tenantID string) {
 	logger = logging.NewLoggerWithService("handlers-test")
 	metrics = nil
 	config.InitManager(logger)
-	config.ApplySeed(&pb.ConfigSeed{TenantId: tenantID}, nil)
+	config.ApplySeed(&ipcpb.ConfigSeed{TenantId: tenantID}, nil)
 }
 
 func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -32,14 +32,14 @@ func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {
 	return ctx, recorder
 }
 
-func stubSendMistTrigger(t *testing.T, fn func(*pb.MistTrigger) (*control.MistTriggerResult, error)) {
+func stubSendMistTrigger(t *testing.T, fn func(*ipcpb.MistTrigger) (*control.MistTriggerResult, error)) {
 	t.Helper()
 	originalSend := sendMistTrigger
 	originalDurable := sendDurableMistTrigger
-	sendMistTrigger = func(trigger *pb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
+	sendMistTrigger = func(trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
 		return fn(trigger)
 	}
-	sendDurableMistTrigger = func(trigger *pb.MistTrigger) error {
+	sendDurableMistTrigger = func(trigger *ipcpb.MistTrigger) error {
 		_, err := fn(trigger)
 		return err
 	}
@@ -88,8 +88,8 @@ func TestTriggerHandlersApplyTenantContext(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			var got *pb.MistTrigger
-			stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+			var got *ipcpb.MistTrigger
+			stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 				got = trigger
 				if test.name == "user_end" {
 					return &control.MistTriggerResult{}, nil
@@ -124,7 +124,7 @@ func TestHandleStreamSourceUsesDVRSourceOverride(t *testing.T) {
 	control.RegisterDVRSourceOverride("live+stream-1", "dtsc://source-node/live+stream-1")
 	t.Cleanup(func() { control.ClearDVRSourceOverride("live+stream-1") })
 
-	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 		t.Fatalf("DVR source override should be resolved locally, forwarded trigger: %+v", trigger)
 		return nil, nil
 	})
@@ -181,7 +181,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			called := false
-			stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+			stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 				called = true
 				if test.raw {
 					if trigger.GetRawMistWebhook() == nil {
@@ -213,7 +213,7 @@ func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 func TestDurableTriggerHandlerRefusesWalFailure(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 
-	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 		return nil, errors.New("wal unavailable")
 	})
 
@@ -258,7 +258,7 @@ func TestUserViewerHandlersIgnoreNonPlaybackConnectors(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			forwarded := false
-			stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+			stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 				forwarded = true
 				return &control.MistTriggerResult{Response: "forwarded"}, nil
 			})
@@ -293,7 +293,7 @@ func TestHandlePlayRewriteAllowsLocalProcessingJob(t *testing.T) {
 	})
 
 	forwarded := false
-	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 		forwarded = true
 		return &control.MistTriggerResult{Response: "should-not-forward"}, nil
 	})
@@ -324,7 +324,7 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	})
 
 	forwarded := false
-	stubSendMistTrigger(t, func(trigger *pb.MistTrigger) (*control.MistTriggerResult, error) {
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 		forwarded = true
 		return &control.MistTriggerResult{Response: "should-not-be-used"}, nil
 	})
