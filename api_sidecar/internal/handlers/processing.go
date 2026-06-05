@@ -307,7 +307,6 @@ const (
 )
 
 type processingActiveStreamsFunc func() (map[string]interface{}, error)
-type processingClientsFunc func() (map[string]interface{}, error)
 
 // drainProcessingGeneration blocks until the stream is no longer active, so a
 // restarted push cannot race the retired generation. A transient stream-status
@@ -339,69 +338,6 @@ func drainProcessingGenerationFromActiveStreams(log *logrus.Entry, streamName st
 	return fmt.Errorf("processing stream %s still active after drain deadline", streamName)
 }
 
-func drainProcessingSessions(log *logrus.Entry, mistClient *mist.Client, streamName string) error {
-	return drainProcessingSessionsFromClients(log, streamName, mistClient.GetClients, processingGenerationDrainTimeout, processingGenerationDrainPollInterval)
-}
-
-func drainProcessingSessionsFromClients(log *logrus.Entry, streamName string, getClients processingClientsFunc, timeout, pollInterval time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := getClients()
-		if err != nil {
-			log.WithError(err).Warn("Failed to check processing session shutdown; retrying")
-			time.Sleep(pollInterval)
-			continue
-		}
-		active, err := processingClientCount(resp, streamName)
-		if err != nil {
-			log.WithError(err).Warn("Failed to parse processing sessions; retrying")
-			time.Sleep(pollInterval)
-			continue
-		}
-		if active == 0 {
-			return nil
-		}
-		time.Sleep(pollInterval)
-	}
-	return fmt.Errorf("processing stream %s still has active sessions after drain deadline", streamName)
-}
-
-func processingClientCount(resp map[string]interface{}, streamName string) (int, error) {
-	clients, ok := resp["clients"].(map[string]interface{})
-	if !ok {
-		return 0, fmt.Errorf("clients missing from Mist response")
-	}
-	fieldsRaw, ok := clients["fields"].([]interface{})
-	if !ok {
-		return 0, fmt.Errorf("client fields missing from Mist response")
-	}
-	streamIdx := -1
-	for i, f := range fieldsRaw {
-		if name, isString := f.(string); isString && name == "stream" {
-			streamIdx = i
-			break
-		}
-	}
-	if streamIdx < 0 {
-		return 0, fmt.Errorf("stream field missing from Mist clients response")
-	}
-	data, ok := clients["data"].([]interface{})
-	if !ok {
-		return 0, fmt.Errorf("client data missing from Mist response")
-	}
-	count := 0
-	for _, rowRaw := range data {
-		row, ok := rowRaw.([]interface{})
-		if !ok || streamIdx >= len(row) {
-			continue
-		}
-		if name, ok := row[streamIdx].(string); ok && name == streamName {
-			count++
-		}
-	}
-	return count, nil
-}
-
 func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
 	return &ProcessingJobHandler{
 		logger:        logger,
@@ -411,7 +347,7 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath s
 }
 
 // Handle executes a processing job: activates the processing+ wildcard stream,
-// starts a push to local disk as MKV, waits for PUSH_END, reports result.
+// starts a push to local disk as MKV, validates RECORDING_END, reports result.
 func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 	log := h.logger.WithFields(logging.Fields{
 		"job_id":        req.GetJobId(),
@@ -595,8 +531,6 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
-	pushEndReceived := false
-	var recordingEndDeadline <-chan time.Time
 	const stallTimeout = 3 * time.Minute
 
 	// restartWithLocalFallback swaps Livepeer for local MistProcAV and restarts
@@ -625,8 +559,6 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		// restarted push produces a fresh one. Without this the post-loop
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
-		pushEndReceived = false
-		recordingEndDeadline = nil
 		var waitErr error
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -652,7 +584,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
 	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
-		if !pushEndReceived || recordingEnd == nil {
+		if recordingEnd == nil {
 			return false, false
 		}
 		srcInfo, srcSpan := sourceFromReadinessOutputs(outputs)
@@ -682,9 +614,7 @@ loop:
 				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
 				return
 			}
-			log.Info("Processing completed (PUSH_END received)")
-			pushEndReceived = true
-			recordingEndDeadline = time.After(5 * time.Second)
+			log.Info("Processing PUSH_END received")
 			if ready, failed := terminalSignalsReady(); failed {
 				return
 			} else if !ready {
@@ -707,7 +637,6 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Processing RECORDING_END received")
-			recordingEndDeadline = nil
 			if ready, failed := terminalSignalsReady(); failed {
 				return
 			} else if !ready {
@@ -778,12 +707,6 @@ loop:
 					fmt.Sprintf("processing stalled at %d%%", progressPct), nil, "", 0)
 				return
 			}
-
-		case <-recordingEndDeadline:
-			log.Error("Processing PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
-			return
 
 		case <-absoluteTimeout:
 			log.Warn("Processing absolute timeout exceeded")
@@ -860,14 +783,6 @@ loop:
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed",
 				fmt.Sprintf("output duration %dms short of source %dms", recordingEnd.MediaDurationMs, authoritativeSpan), nil, "", 0)
-			return
-		}
-	}
-	if clipSource {
-		if err := drainProcessingSessions(log, mistClient, streamName); err != nil {
-			log.WithError(err).Error("Processing session drain failed before clip publication")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip publication drain failed: %v", err), nil, "", 0)
 			return
 		}
 	}

@@ -223,8 +223,6 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	var lastMs int64
 	lastAdvance := time.Now()
 	var recordingEnd *ProcessingRecordingEndEvent
-	pushEndReceived := false
-	var recordingEndDeadline <-chan time.Time
 	const stallTimeout = 3 * time.Minute
 
 	restartWithLocalMistProc := func(reason string) error {
@@ -247,8 +245,6 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		// restarted push produces a fresh one. Otherwise the post-loop
 		// validation would run against the old push's bytes/duration.
 		recordingEnd = nil
-		pushEndReceived = false
-		recordingEndDeadline = nil
 		var waitErr error
 		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -269,7 +265,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
 	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
-		if !pushEndReceived || recordingEnd == nil {
+		if recordingEnd == nil {
 			return false, false
 		}
 		srcInfo, srcSpan := sourceFromReadinessOutputs(streamOutputs)
@@ -302,8 +298,6 @@ loop:
 				return
 			}
 			log.Info("Chapter finalize: PUSH_END received")
-			pushEndReceived = true
-			recordingEndDeadline = time.After(5 * time.Second)
 			if ready, failed := terminalSignalsReady(); failed {
 				return
 			} else if !ready {
@@ -326,7 +320,6 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Chapter finalize: RECORDING_END received")
-			recordingEndDeadline = nil
 			if ready, failed := terminalSignalsReady(); failed {
 				return
 			} else if !ready {
@@ -382,11 +375,6 @@ loop:
 					fmt.Sprintf("chapter finalize stalled at %dms", lastMs), nil, "", 0)
 				return
 			}
-		case <-recordingEndDeadline:
-			log.Error("Chapter finalize: PUSH_END received without matching RECORDING_END; failing job (RECORDING_END is required for push-to-file)")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "RECORDING_END missing after PUSH_END", nil, "", 0)
-			return
 		case <-ctx.Done():
 			// ctx covers the entire job (recovery fetches +
 			// admission + push). Stalls are caught above; this
