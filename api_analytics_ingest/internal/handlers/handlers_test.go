@@ -639,10 +639,20 @@ func TestStorageStateFromAction(t *testing.T) {
 		synced     bool
 		frozen     bool
 	}{
+		{name: "sync started is in-progress local", action: ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED, location: "local", syncStatus: "in_progress", hot: true, synced: false, frozen: false},
 		{name: "synced keeps local hot", action: ipcpb.StorageLifecycleData_ACTION_SYNCED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
 		{name: "evicted is frozen cold", action: ipcpb.StorageLifecycleData_ACTION_EVICTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
+		// Read-through cache fill: S3 stays authoritative, so location is still s3.
+		{name: "cache started stays s3 authoritative", action: ipcpb.StorageLifecycleData_ACTION_CACHE_STARTED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
 		{name: "cached restores hot", action: ipcpb.StorageLifecycleData_ACTION_CACHED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "deleted clears everything", action: ipcpb.StorageLifecycleData_ACTION_DELETED, location: "deleted", syncStatus: "deleted", hot: false, synced: false, frozen: false},
 		{name: "sync failure keeps hot local", action: ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED, location: "local", syncStatus: "failed", hot: true, synced: false, frozen: false},
+		// Eviction failing loses nothing — the asset is still fully synced.
+		{name: "evict failure stays synced", action: ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED, location: "local", syncStatus: "synced", hot: true, synced: true, frozen: false},
+		{name: "cache failure stays s3 synced", action: ipcpb.StorageLifecycleData_ACTION_CACHE_FAILED, location: "s3", syncStatus: "synced", hot: false, synced: true, frozen: true},
+		{name: "local missing is lost_local", action: ipcpb.StorageLifecycleData_ACTION_LOCAL_MISSING, location: "local", syncStatus: "lost_local", hot: false, synced: false, frozen: false},
+		// Unknown action yields empty state so the caller skips the write.
+		{name: "unspecified yields empty state", action: ipcpb.StorageLifecycleData_ACTION_UNSPECIFIED, location: "", syncStatus: "", hot: false, synced: false, frozen: false},
 	}
 
 	for _, tc := range tests {
