@@ -3286,32 +3286,12 @@ func (s *QuartermasterServer) generateAvailableTenantSubdomain(ctx context.Conte
 	extraReserved := s.activeClusterSlugs(ctx)
 	base := dns.SanitizeLabel(name)
 	if base == "default" || dns.IsReservedTenantSlug(base, extraReserved) {
-		base = "tenant-" + base
-	}
-	if dns.IsReservedTenantSlug(base, extraReserved) {
 		base = "tenant"
 	}
 
 	for i := 0; i < 100; i++ {
-		suffix := ""
-		if i > 0 {
-			suffix = fmt.Sprintf("-%d", i+1)
-		}
+		suffix := "-" + uuid.NewString()[:8]
 		candidate := tenantSubdomainCandidate(base, suffix)
-		if dns.IsReservedTenantSlug(candidate, extraReserved) {
-			continue
-		}
-		available, err := s.tenantSubdomainAvailable(ctx, candidate)
-		if err != nil {
-			return "", err
-		}
-		if available {
-			return candidate, nil
-		}
-	}
-
-	for i := 0; i < 10; i++ {
-		candidate := tenantSubdomainCandidate(base, "-"+uuid.NewString()[:8])
 		if dns.IsReservedTenantSlug(candidate, extraReserved) {
 			continue
 		}

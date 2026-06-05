@@ -1,6 +1,10 @@
 package resolvers
 
-import "testing"
+import (
+	"testing"
+
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+)
 
 func TestStreamingConfigDomainNormalizesBaseURL(t *testing.T) {
 	tests := []struct {
@@ -35,6 +39,28 @@ func TestStreamingConfigDomainNormalizesBaseURL(t *testing.T) {
 			got := streamingConfigDomain("edge-ingest", "media-central-primary", tt.baseURL)
 			if got != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestTenantAliasEligibleForStreaming(t *testing.T) {
+	cases := []struct {
+		name   string
+		tenant *quartermasterpb.Tenant
+		want   bool
+	}{
+		{name: "nil", tenant: nil, want: false},
+		{name: "inactive paid", tenant: &quartermasterpb.Tenant{IsActive: false, DeploymentTier: "pro"}, want: false},
+		{name: "active free", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "free"}, want: false},
+		{name: "active missing tier", tenant: &quartermasterpb.Tenant{IsActive: true}, want: false},
+		{name: "active paid", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "creator"}, want: true},
+		{name: "active paid with spaces", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: " Pro "}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tenantAliasEligibleForStreaming(tc.tenant); got != tc.want {
+				t.Fatalf("tenantAliasEligibleForStreaming() = %v, want %v", got, tc.want)
 			}
 		})
 	}

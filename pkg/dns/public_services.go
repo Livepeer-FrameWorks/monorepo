@@ -344,6 +344,7 @@ var reservedPlatformLabels = []string{
 	"www", "api", "mcp", "app", "admin", "status",
 	"mail", "docs", "help", "support", "blog",
 	"cdn", "static", "assets", "auth", "login",
+	"frameworks",
 }
 
 // reservedPrefixes are subdomain prefixes that collide with reserved

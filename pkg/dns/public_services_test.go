@@ -229,6 +229,7 @@ func TestIsReservedTenantSlug(t *testing.T) {
 		{"cdn reserved (the tenant zone label)", "cdn", true},
 		{"api reserved", "api", true},
 		{"mcp reserved", "mcp", true},
+		{"platform brand reserved", "frameworks", true},
 		{"managed service foghorn", "foghorn", true},
 		{"managed service edge-ingest", "edge-ingest", true},
 		{"public subdomain livepeer (label != service name)", "livepeer", true},
@@ -253,7 +254,7 @@ func TestReservedTenantSlugsIncludesEverything(t *testing.T) {
 	mustHave := []string{
 		"foghorn", "chandler", "edge-ingest", "edge-egress", "livepeer",
 		"bridge", "grafana", "logbook", "cdn", "www", "api", "mcp",
-		"media-us-1",
+		"frameworks", "media-us-1",
 	}
 	gotSet := make(map[string]bool)
 	for _, s := range got {

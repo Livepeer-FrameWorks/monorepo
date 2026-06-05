@@ -2797,6 +2797,10 @@ func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *mode
 	}
 	aliasCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	tenantResp, err := r.Clients.Quartermaster.GetTenant(aliasCtx, tenantID)
+	if err != nil || tenantResp == nil || !tenantAliasEligibleForStreaming(tenantResp.GetTenant()) {
+		return
+	}
 	alias, err := r.Clients.Navigator.GetTenantAliasStatus(aliasCtx, &dnspb.GetTenantAliasStatusRequest{TenantId: tenantID})
 	if err != nil || alias == nil || !alias.GetFound() || alias.GetStatus() != "cert_issued" || !alias.GetDnsReady() {
 		return
@@ -2807,6 +2811,14 @@ func (r *Resolver) populateTieredStreamingDomains(ctx context.Context, cfg *mode
 	cfg.TenantPlayDomain = strPtr("foghorn." + apex)
 	cfg.TenantChandlerDomain = strPtr("chandler." + apex)
 	cfg.TenantLivepeerDomain = strPtr("livepeer." + apex)
+}
+
+func tenantAliasEligibleForStreaming(tenant *quartermasterpb.Tenant) bool {
+	if tenant == nil || !tenant.GetIsActive() {
+		return false
+	}
+	tier := strings.ToLower(strings.TrimSpace(tenant.GetDeploymentTier()))
+	return tier != "" && tier != "free"
 }
 
 func streamingConfigDomain(prefix, slug, baseURL string) string {
