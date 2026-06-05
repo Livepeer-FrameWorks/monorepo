@@ -24,6 +24,9 @@ func TestPublishTenantAliasDowngradesUnpublishedInDNSRows(t *testing.T) {
 	dns := &fakeTenantAliasDNS{zoneFound: true}
 	resolver := &fakeTenantEdgeResolver{
 		addrs: map[string][]string{"node-a": {"203.0.113.10"}},
+		serviceAddrs: map[string][]ServiceAddress{
+			"foghorn": {{NodeID: "foghorn-a", IP: "198.51.100.20"}},
+		},
 		active: map[string]bool{
 			"tenant-1/cluster-a": true,
 			"tenant-1/cluster-b": false,
@@ -41,9 +44,24 @@ func TestPublishTenantAliasDowngradesUnpublishedInDNSRows(t *testing.T) {
 	if got := st.stateFor("node-b"); got != "applied" {
 		t.Fatalf("node-b state = %q, want applied", got)
 	}
-	for name, records := range dns.records {
+	for _, name := range []string{"acme", "edge.acme", "edge-ingest.acme", "edge-egress.acme", "edge-storage.acme", "edge-processing.acme"} {
+		records := dns.records[name]
 		if len(records) != 1 || records[0].Value != "203.0.113.10" {
 			t.Fatalf("record %s = %#v, want only node-a address", name, records)
+		}
+		if records[0].SmartRoutingType != bunny.SmartRoutingNone {
+			t.Fatalf("record %s SmartRoutingType = %d, want none without coordinates", name, records[0].SmartRoutingType)
+		}
+		if records[0].GeolocationLatitude != nil || records[0].GeolocationLongitude != nil {
+			t.Fatalf("record %s has unexpected coordinates: %#v", name, records[0])
+		}
+	}
+	if records := dns.records["foghorn.acme"]; len(records) != 1 || records[0].Value != "198.51.100.20" {
+		t.Fatalf("foghorn.acme = %#v, want Foghorn service address", records)
+	}
+	for _, name := range []string{"chandler.acme", "livepeer.acme"} {
+		if records := dns.records[name]; len(records) != 0 {
+			t.Fatalf("%s = %#v, want retired tenant alias label cleared", name, records)
 		}
 	}
 }
@@ -230,13 +248,14 @@ func newTestAliasWorker(st *fakeTenantAliasStore, dns *fakeTenantAliasDNS, resol
 	logger := logging.NewLogger()
 	logger.SetOutput(io.Discard)
 	return &AliasApplyStateWorker{
-		store:           st,
-		bunny:           dns,
-		edges:           resolver,
-		logger:          logger,
-		interval:        time.Second,
-		rootDomain:      "frameworks.network",
-		tenantZoneLabel: "cdn",
+		store:              st,
+		bunny:              dns,
+		edges:              resolver,
+		logger:             logger,
+		interval:           time.Second,
+		rootDomain:         "frameworks.network",
+		tenantZoneLabel:    "cdn",
+		healthStaleSeconds: 300,
 	}
 }
 
@@ -344,12 +363,33 @@ func (s *fakeTenantAliasStore) stateFor(nodeID string) string {
 
 type fakeTenantEdgeResolver struct {
 	addrs          map[string][]string
+	serviceAddrs   map[string][]ServiceAddress
+	serviceErr     error
 	active         map[string]bool
 	eligibilityErr error
 }
 
 func (r *fakeTenantEdgeResolver) ResolveEdgeAddresses(_ context.Context, nodeID string) ([]string, []string, error) {
 	return r.addrs[nodeID], nil, nil
+}
+
+func (r *fakeTenantEdgeResolver) ResolveServiceAddressesForClusters(_ context.Context, serviceType string, _ []string, _ int) ([]ServiceAddress, error) {
+	if r.serviceErr != nil {
+		return nil, r.serviceErr
+	}
+	if addrs, ok := r.serviceAddrs[serviceType]; ok {
+		return addrs, nil
+	}
+	if !isTenantEdgeServiceType(serviceType) {
+		return nil, nil
+	}
+	var out []ServiceAddress
+	for nodeID, ips := range r.addrs {
+		for _, ip := range ips {
+			out = append(out, ServiceAddress{NodeID: nodeID, IP: ip})
+		}
+	}
+	return out, nil
 }
 
 func (r *fakeTenantEdgeResolver) TenantActiveInCluster(_ context.Context, tenantID, clusterID string) (bool, error) {

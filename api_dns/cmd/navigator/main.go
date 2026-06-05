@@ -179,6 +179,7 @@ func main() {
 		time.Duration(aliasWorkerIntervalSeconds)*time.Second,
 		rootDomain,
 		tenantZoneLabel,
+		staleSeconds,
 	)
 	go aliasWorker.Start(context.Background())
 
@@ -916,6 +917,37 @@ func (r quartermasterEdgeResolver) ResolveEdgeAddresses(ctx context.Context, nod
 		ipv4 = []string{v}
 	}
 	return ipv4, nil, nil
+}
+
+func (r quartermasterEdgeResolver) ResolveServiceAddressesForClusters(ctx context.Context, serviceType string, clusterIDs []string, staleThresholdSeconds int) ([]worker.ServiceAddress, error) {
+	if r.qm == nil || strings.TrimSpace(serviceType) == "" {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	out := []worker.ServiceAddress{}
+	for _, clusterID := range clusterIDs {
+		clusterID = strings.TrimSpace(clusterID)
+		if clusterID == "" {
+			continue
+		}
+		resp, err := r.qm.ListHealthyNodesForDNSForCluster(ctx, staleThresholdSeconds, serviceType, clusterID)
+		if err != nil {
+			return nil, err
+		}
+		for _, node := range resp.GetNodes() {
+			ip := strings.TrimSpace(node.GetExternalIp())
+			if ip == "" {
+				continue
+			}
+			key := node.GetNodeId() + "\x00" + ip
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, worker.ServiceAddress{NodeID: node.GetNodeId(), IP: ip})
+		}
+	}
+	return out, nil
 }
 
 func (r quartermasterEdgeResolver) TenantActiveInCluster(ctx context.Context, tenantID, clusterID string) (bool, error) {

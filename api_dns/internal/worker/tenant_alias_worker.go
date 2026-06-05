@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"frameworks/api_dns/internal/bunnyrecords"
 	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/store"
 
@@ -20,6 +22,20 @@ import (
 // Quartermaster, where node-to-address lookup lives.
 type EdgeAddressResolver interface {
 	ResolveEdgeAddresses(ctx context.Context, nodeID string) (ipv4 []string, ipv6 []string, err error)
+}
+
+type ServiceAddress struct {
+	NodeID string
+	IP     string
+}
+
+type tenantAliasAddr struct {
+	ip     string
+	nodeID string
+}
+
+type TenantServiceAddressResolver interface {
+	ResolveServiceAddressesForClusters(ctx context.Context, serviceType string, clusterIDs []string, staleThresholdSeconds int) ([]ServiceAddress, error)
 }
 
 type TenantClusterEligibility interface {
@@ -41,13 +57,14 @@ type tenantAliasDNSProvider interface {
 // AliasApplyStateWorker reconciles Bunny smart record sets in cdn.{root}
 // from Navigator's durable per-edge ACK state.
 type AliasApplyStateWorker struct {
-	store           tenantAliasStore
-	bunny           tenantAliasDNSProvider
-	edges           EdgeAddressResolver
-	logger          logging.Logger
-	interval        time.Duration
-	rootDomain      string
-	tenantZoneLabel string
+	store              tenantAliasStore
+	bunny              tenantAliasDNSProvider
+	edges              EdgeAddressResolver
+	logger             logging.Logger
+	interval           time.Duration
+	rootDomain         string
+	tenantZoneLabel    string
+	healthStaleSeconds int
 }
 
 // tenantAliasStore is the subset of store.Store this worker uses.
@@ -64,15 +81,19 @@ type tenantAliasStore interface {
 	RecordTenantAliasRetirementFailure(ctx context.Context, tenantID, subdomain, errMsg string) error
 }
 
-func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edges EdgeAddressResolver, logger logging.Logger, interval time.Duration, rootDomain, tenantZoneLabel string) *AliasApplyStateWorker {
+func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edges EdgeAddressResolver, logger logging.Logger, interval time.Duration, rootDomain, tenantZoneLabel string, healthStaleSeconds int) *AliasApplyStateWorker {
+	if healthStaleSeconds <= 0 {
+		healthStaleSeconds = 300
+	}
 	return &AliasApplyStateWorker{
-		store:           s,
-		bunny:           bunnyClient,
-		edges:           edges,
-		logger:          logger,
-		interval:        interval,
-		rootDomain:      rootDomain,
-		tenantZoneLabel: tenantZoneLabel,
+		store:              s,
+		bunny:              bunnyClient,
+		edges:              edges,
+		logger:             logger,
+		interval:           interval,
+		rootDomain:         rootDomain,
+		tenantZoneLabel:    tenantZoneLabel,
+		healthStaleSeconds: healthStaleSeconds,
 	}
 }
 
@@ -234,6 +255,7 @@ func (w *AliasApplyStateWorker) clearTenantAliasRecords(ctx context.Context, sub
 		}
 		names = append(names, label+"."+subdomain)
 	}
+	names = append(names, retiredTenantAliasRecordNames(subdomain)...)
 	names = append(names, subdomain) // apex last
 	for _, name := range names {
 		if reconcileErr := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, nil); reconcileErr != nil {
@@ -299,19 +321,14 @@ func (w *AliasApplyStateWorker) processRetirement(ctx context.Context, r store.T
 	}
 }
 
-// publishTenantSmartRecords publishes one Bunny smart record set per
-// per-tenant service alias. Each paying tenant gets:
+// publishTenantSmartRecords publishes one Bunny record set per customer-facing
+// tenant alias. Each paying tenant gets:
 //
 //   - {subdomain}.{tenantZone}                      (apex)
 //   - {service-label}.{subdomain}.{tenantZone}      one per service
 //
 // where {service-label} iterates pkgdns.TenantAliasableServiceTypes()
-// (foghorn, chandler, livepeer, edge, edge-ingest, edge-egress,
-// edge-storage, edge-processing).
-//
-// All record sets resolve to the same set of applied-edge IPs; the
-// cluster-wildcard cert + tenant-wildcard cert ensure TLS works under
-// every label.
+// (foghorn, edge, edge-ingest, edge-egress, edge-storage, edge-processing).
 func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, alias store.TenantAlias, applied, stale []store.TenantEdgeApplyState) error {
 	if w.bunny == nil || w.edges == nil {
 		return nil
@@ -328,67 +345,108 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 		return fmt.Errorf("tenant zone %s not delegated to Bunny yet; see DNSManager.EnsureBunnyZone", zoneFQDN)
 	}
 
-	// Resolve every applied edge to its public IPv4 set once, then
-	// reuse the same value list across every per-service record set.
-	// Only edges with at least one published address are marked in_dns.
-	type addr struct {
-		ip     string
-		nodeID string
-	}
-	var addrs []addr
-	publishedNodes := make(map[string]struct{}, len(applied))
+	appliedNodeIDs := make(map[string]struct{}, len(applied))
+	clusterIDs := make([]string, 0, len(applied))
+	seenClusters := map[string]struct{}{}
 	for _, edge := range applied {
-		ipv4s, _, addrErr := w.edges.ResolveEdgeAddresses(ctx, edge.NodeID)
-		if addrErr != nil {
-			w.logger.WithError(addrErr).WithField("node_id", edge.NodeID).Debug("ResolveEdgeAddresses failed")
+		appliedNodeIDs[edge.NodeID] = struct{}{}
+		if edge.ClusterID == "" {
 			continue
 		}
-		for _, ip := range ipv4s {
-			addrs = append(addrs, addr{ip: ip, nodeID: edge.NodeID})
-			publishedNodes[edge.NodeID] = struct{}{}
+		if _, seen := seenClusters[edge.ClusterID]; seen {
+			continue
 		}
+		seenClusters[edge.ClusterID] = struct{}{}
+		clusterIDs = append(clusterIDs, edge.ClusterID)
 	}
 
-	// recordNames: apex + one per aliasable service. The Name passed
-	// to ReconcileRecordSet is relative to the zone. For zone
-	// "cdn.frameworks.network" and tenant "acme":
-	//   - apex apex record: name="acme"
-	//   - service record:   name="foghorn.acme"
-	recordNames := make([]string, 0, 1+len(pkgdns.TenantAliasableServiceTypes()))
-	recordNames = append(recordNames, alias.Subdomain)
+	resolveByService := func(serviceType string) ([]tenantAliasAddr, error) {
+		if resolver, ok := w.edges.(TenantServiceAddressResolver); ok {
+			serviceAddrs, err := resolver.ResolveServiceAddressesForClusters(ctx, serviceType, clusterIDs, w.healthStaleSeconds)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]tenantAliasAddr, 0, len(serviceAddrs))
+			seen := map[string]struct{}{}
+			for _, a := range serviceAddrs {
+				if a.IP == "" {
+					continue
+				}
+				if isTenantEdgeServiceType(serviceType) {
+					if _, applied := appliedNodeIDs[a.NodeID]; !applied {
+						continue
+					}
+				}
+				key := a.NodeID + "\x00" + a.IP
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, tenantAliasAddr{ip: a.IP, nodeID: a.NodeID})
+			}
+			return out, nil
+		}
+		if serviceType != "edge" {
+			return nil, nil
+		}
+		return w.resolveAppliedEdgeAddresses(ctx, applied)
+	}
+
+	recordsByName := map[string][]tenantAliasAddr{}
+	edgeAddrs, edgeErr := resolveByService("edge")
+	if edgeErr != nil {
+		return fmt.Errorf("resolve tenant edge addresses: %w", edgeErr)
+	}
+	recordsByName[alias.Subdomain] = edgeAddrs
+	if edgeLabel, ok := pkgdns.PublicSubdomain("edge"); ok && edgeLabel != "" {
+		recordsByName[edgeLabel+"."+alias.Subdomain] = edgeAddrs
+	}
 	for _, serviceType := range pkgdns.TenantAliasableServiceTypes() {
+		if serviceType == "edge" {
+			continue
+		}
 		label, ok := pkgdns.PublicSubdomain(serviceType)
 		if !ok || label == "" {
 			continue
 		}
-		recordNames = append(recordNames, label+"."+alias.Subdomain)
+		addrs, resolveErr := resolveByService(serviceType)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve tenant %s addresses: %w", serviceType, resolveErr)
+		}
+		recordsByName[label+"."+alias.Subdomain] = addrs
 	}
 
-	var publishErr error
-	for _, name := range recordNames {
+	publishedNodes := make(map[string]struct{}, len(applied))
+	for _, a := range edgeAddrs {
+		publishedNodes[a.nodeID] = struct{}{}
+	}
+
+	for name, addrs := range recordsByName {
 		desired := make([]bunny.Record, 0, len(addrs))
 		for _, a := range addrs {
-			desired = append(desired, bunny.Record{
-				Type:             bunny.RecordTypeA,
-				TTL:              60,
-				Value:            a.ip,
-				Name:             name,
-				SmartRoutingType: bunny.SmartRoutingGeolocation,
-				MonitorType:      bunny.MonitorTypeNone,
-			})
+			desired = append(desired, bunnyrecords.ARecord(bunnyrecords.ARecordInput{
+				Name:  name,
+				Value: a.ip,
+				TTL:   60,
+				FQDN:  bunnyRecordFQDN(name, zoneFQDN),
+			}))
 		}
 		if err := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, desired); err != nil {
 			w.logger.WithError(err).WithField("record_name", name).Warn("Failed to reconcile tenant smart record set")
-			publishErr = err
+			return err
 		}
 	}
-	if publishErr != nil {
-		return publishErr
+
+	for _, name := range retiredTenantAliasRecordNames(alias.Subdomain) {
+		if err := w.bunny.ReconcileRecordSet(ctx, zone.ID, name, bunny.RecordTypeA, nil); err != nil {
+			w.logger.WithError(err).WithField("record_name", name).Warn("Failed to clear non-customer tenant alias record set")
+			return err
+		}
 	}
 
-	// Keep the durable state aligned with the record set we just
-	// published. Edges without addresses, or no longer eligible, are
-	// downgraded out of in_dns so API readiness reflects DNS reality.
+	// Keep the durable state aligned with edge aggregate DNS. Edges without
+	// addresses, or no longer eligible, are downgraded out of in_dns so API
+	// readiness reflects DNS reality.
 	for _, edge := range applied {
 		if _, ok := publishedNodes[edge.NodeID]; !ok {
 			if edge.State == "in_dns" {
@@ -408,6 +466,44 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 		}
 	}
 	return nil
+}
+
+func (w *AliasApplyStateWorker) resolveAppliedEdgeAddresses(ctx context.Context, applied []store.TenantEdgeApplyState) ([]tenantAliasAddr, error) {
+	var addrs []tenantAliasAddr
+	for _, edge := range applied {
+		ipv4s, _, addrErr := w.edges.ResolveEdgeAddresses(ctx, edge.NodeID)
+		if addrErr != nil {
+			w.logger.WithError(addrErr).WithField("node_id", edge.NodeID).Debug("ResolveEdgeAddresses failed")
+			continue
+		}
+		for _, ip := range ipv4s {
+			addrs = append(addrs, tenantAliasAddr{ip: ip, nodeID: edge.NodeID})
+		}
+	}
+	return addrs, nil
+}
+
+func isTenantEdgeServiceType(serviceType string) bool {
+	return serviceType == "edge" || strings.HasPrefix(serviceType, "edge-")
+}
+
+func retiredTenantAliasRecordNames(subdomain string) []string {
+	out := []string{}
+	for _, serviceType := range []string{"chandler", "livepeer-gateway"} {
+		label, ok := pkgdns.PublicSubdomain(serviceType)
+		if !ok || label == "" {
+			continue
+		}
+		out = append(out, label+"."+subdomain)
+	}
+	return out
+}
+
+func bunnyRecordFQDN(recordName, zoneDomain string) string {
+	if recordName == "" {
+		return zoneDomain
+	}
+	return recordName + "." + zoneDomain
 }
 
 func (w *AliasApplyStateWorker) markEdgeNotInDNS(ctx context.Context, edge store.TenantEdgeApplyState) {

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_dns/internal/bunnyrecords"
 	"frameworks/api_dns/internal/provider/bunny"
 	"frameworks/api_dns/internal/provider/cloudflare"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
@@ -561,16 +562,12 @@ func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain st
 		label := edgeNodeRecordLabel(node.NodeID)
 		fqdn := bunnyRecordFQDN(label, zoneDomain)
 		desiredLabels[label] = struct{}{}
-		records := []bunny.Record{{
-			Type:             bunny.RecordTypeA,
-			Name:             label,
-			Value:            node.ExternalIP,
-			TTL:              m.recordTTL,
-			Weight:           100,
-			MonitorType:      bunny.MonitorTypeNone,
-			SmartRoutingType: bunny.SmartRoutingNone,
-			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
-		}}
+		records := []bunny.Record{bunnyrecords.ARecord(bunnyrecords.ARecordInput{
+			Name:  label,
+			Value: node.ExternalIP,
+			TTL:   m.recordTTL,
+			FQDN:  fqdn,
+		})}
 		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, label, bunny.RecordTypeA, records); reconcileErr != nil {
 			partialErrors[fqdn] = reconcileErr.Error()
 		}
@@ -649,16 +646,12 @@ func (m *DNSManager) SyncPhysicalInstanceEndpoints(ctx context.Context, serviceT
 			continue
 		}
 		desired[recordName] = struct{}{}
-		records := []bunny.Record{{
-			Type:             bunny.RecordTypeA,
-			Name:             recordName,
-			Value:            ep.ExternalIP,
-			TTL:              m.recordTTL,
-			Weight:           100,
-			MonitorType:      bunny.MonitorTypeNone,
-			SmartRoutingType: bunny.SmartRoutingNone,
-			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
-		}}
+		records := []bunny.Record{bunnyrecords.ARecord(bunnyrecords.ARecordInput{
+			Name:  recordName,
+			Value: ep.ExternalIP,
+			TTL:   m.recordTTL,
+			FQDN:  fqdn,
+		})}
 		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, records); reconcileErr != nil {
 			partialErrors[fqdn] = reconcileErr.Error()
 		}
@@ -897,22 +890,16 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 func (m *DNSManager) bunnyRecordsForNodes(nodes []dnsNode, recordName, fqdn string) []bunny.Record {
 	records := make([]bunny.Record, 0, len(nodes))
 	for _, node := range nodes {
-		record := bunny.Record{
-			Type:             bunny.RecordTypeA,
-			Name:             recordName,
-			Value:            node.ExternalIP,
-			TTL:              m.recordTTL,
-			Weight:           100,
-			MonitorType:      bunny.MonitorTypeNone,
-			SmartRoutingType: bunny.SmartRoutingNone,
-			Comment:          fmt.Sprintf("Managed by Navigator for %s", fqdn),
-		}
-		if node.Latitude != nil && node.Longitude != nil {
-			record.SmartRoutingType = bunny.SmartRoutingGeolocation
-			record.GeolocationLatitude = node.Latitude
-			record.GeolocationLongitude = node.Longitude
-		}
-		records = append(records, record)
+		records = append(records, bunnyrecords.ARecord(bunnyrecords.ARecordInput{
+			Name:  recordName,
+			Value: node.ExternalIP,
+			TTL:   m.recordTTL,
+			FQDN:  fqdn,
+			Geography: bunnyrecords.GeoCoordinates{
+				Latitude:  node.Latitude,
+				Longitude: node.Longitude,
+			},
+		}))
 	}
 	return records
 }

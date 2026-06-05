@@ -224,11 +224,22 @@ func BunnyRootServiceFQDN(serviceType, rootDomain string) (string, bool) {
 	return ServiceFQDN(serviceType, rootDomain)
 }
 
-// TenantAliasableServiceTypes returns the public service types that get a
-// per-tenant DNS alias under {tenant}.cdn.frameworks.network. This is the
-// set of services a paid-tier tenant sees branded URLs for. Excludes
-// telemetry (operator-internal) and bridge/decklog (root-scope only).
+// TenantAliasableServiceTypes returns the customer-facing service types that
+// get per-tenant DNS aliases under {tenant}.cdn.frameworks.network. Backing
+// services such as chandler/livepeer stay behind the routing plane unless they
+// become deliberate customer entrypoints.
 func TenantAliasableServiceTypes() []string {
+	return []string{
+		"edge",
+		"edge-egress",
+		"edge-ingest",
+		"edge-storage",
+		"edge-processing",
+		"foghorn",
+	}
+}
+
+func globalRootServiceTypes() []string {
 	return []string{
 		"edge",
 		"edge-egress",
@@ -243,11 +254,12 @@ func TenantAliasableServiceTypes() []string {
 
 // GlobalRootServiceZoneLabels returns the Bunny-delegated root labels used for
 // global media entrypoints. This is product surface, not deployment config:
-// free/default traffic uses these names, and the tenant alias feature layers on
-// top of the same service set.
+// free/default traffic uses these names even when a service is not exposed as a
+// paid-tenant CDN alias.
 func GlobalRootServiceZoneLabels() []string {
-	out := make([]string, 0, len(TenantAliasableServiceTypes()))
-	for _, serviceType := range TenantAliasableServiceTypes() {
+	services := globalRootServiceTypes()
+	out := make([]string, 0, len(services))
+	for _, serviceType := range services {
 		label, ok := PublicSubdomain(serviceType)
 		if !ok || label == "" {
 			continue

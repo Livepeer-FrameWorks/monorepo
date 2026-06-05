@@ -266,6 +266,22 @@ func TestReservedTenantSlugsIncludesEverything(t *testing.T) {
 	}
 }
 
+func TestTenantAliasableServiceTypesAreCustomerFacing(t *testing.T) {
+	got := TenantAliasableServiceTypes()
+	mustHave := []string{"edge", "edge-ingest", "edge-egress", "edge-storage", "edge-processing", "foghorn"}
+	mustNotHave := []string{"chandler", "livepeer-gateway", "telemetry", "bridge"}
+	for _, want := range mustHave {
+		if !slices.Contains(got, want) {
+			t.Fatalf("TenantAliasableServiceTypes missing %q: %v", want, got)
+		}
+	}
+	for _, notWant := range mustNotHave {
+		if slices.Contains(got, notWant) {
+			t.Fatalf("TenantAliasableServiceTypes includes non-customer service %q: %v", notWant, got)
+		}
+	}
+}
+
 // The pooled DNS wake must use the DNS-facing name: vmauth's public record is
 // telemetry.<cluster> (Navigator only remaps telemetry->vmauth for lookup), so a
 // wake passing "vmauth" would produce no record. The rest are identity.
