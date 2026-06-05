@@ -149,6 +149,23 @@ func (h *ProcessingJobHandler) stageProcessingSource(log *logrus.Entry, req *pb.
 	return h.stageSourceToProcessingDir(log, req, sourceURL, processingSourceExt(req), admission.IntentProcessingSourceStage, "processing-source")
 }
 
+func cleanupProcessingStagePath(log *logrus.Entry, path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.WithError(err).WithField("path", path).Warn("Failed to remove processing stage file")
+	}
+	for _, sidecar := range []string{path + ".dtsh", path + ".gop"} {
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			log.WithError(err).WithField("path", sidecar).Warn("Failed to remove processing stage sidecar")
+		}
+	}
+	if err := os.RemoveAll(path + ".blocks"); err != nil && !os.IsNotExist(err) {
+		log.WithError(err).WithField("path", path+".blocks").Warn("Failed to remove processing stage block cache")
+	}
+}
+
 func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req *pb.ProcessingJobRequest, sourceURL, ext string, intent admission.StorageIntent, label string) (string, error) {
 	sourceURL = strings.TrimSpace(sourceURL)
 	if sourceURL == "" {

@@ -366,11 +366,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 	clipSource := isClipProcessingSource(req)
 	var stagedSourcePath string
 	defer func() {
-		if stagedSourcePath != "" {
-			if err := os.Remove(stagedSourcePath); err != nil && !os.IsNotExist(err) {
-				log.WithError(err).Warn("Failed to remove staged processing source")
-			}
-		}
+		cleanupProcessingStagePath(log, stagedSourcePath)
 	}()
 	if clipSource {
 		if sourceURL == "" {
@@ -415,9 +411,7 @@ func (h *ProcessingJobHandler) Handle(req *pb.ProcessingJobRequest, send func(*p
 		}
 		log.WithField("local_manifest", hlsManifestPath).Info("Rewrote HLS manifest for processing")
 		defer func() {
-			if err := os.Remove(hlsManifestPath); err != nil && !os.IsNotExist(err) {
-				log.WithError(err).Warn("Failed to remove rewritten HLS manifest")
-			}
+			cleanupProcessingStagePath(log, hlsManifestPath)
 		}()
 	}
 

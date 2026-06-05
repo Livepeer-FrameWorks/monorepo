@@ -87,6 +87,12 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 			fmt.Sprintf("mkdir recovery dir: %v", err), nil, "", 0)
 		return
 	}
+	defer func() {
+		cleanupProcessingStagePath(log, manifestPath)
+		if err := os.RemoveAll(recoveryDir); err != nil && !os.IsNotExist(err) {
+			log.WithError(err).Warn("Chapter finalize: cleanup recovery dir failed")
+		}
+	}()
 
 	segmentCount, hasGaps, mediaStartMs, mediaEndMs, terminalDetail, buildErr := h.buildChapterHLS(ctx, log, req, manifestPath, recoveryDir)
 	if buildErr != nil {
@@ -98,14 +104,6 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *pb.ProcessingJobReques
 		h.sendResult(send, req.GetJobId(), "failed", buildErr.Error(), outputs, "", 0)
 		return
 	}
-	defer func() {
-		if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
-			log.WithError(err).Warn("Chapter finalize: cleanup manifest failed")
-		}
-		if err := os.RemoveAll(recoveryDir); err != nil && !os.IsNotExist(err) {
-			log.WithError(err).Warn("Chapter finalize: cleanup recovery dir failed")
-		}
-	}()
 
 	doneCh := make(chan ProcessingPushEndEvent, 1)
 	pendingJobsMu.Lock()

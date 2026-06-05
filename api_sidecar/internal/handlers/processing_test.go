@@ -41,6 +41,57 @@ func TestIsHLSSource_RegularFile(t *testing.T) {
 	}
 }
 
+func TestCleanupProcessingStagePathRemovesDerivedSidecars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "processing", "artifact.mkv")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{path, path + ".dtsh", path + ".gop"} {
+		if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(path+".blocks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path+".blocks", "00000000.block"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupProcessingStagePath(logrus.NewEntry(logrus.New()), path)
+
+	for _, file := range []string{path, path + ".dtsh", path + ".gop", path + ".blocks"} {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists or stat failed with %v", file, err)
+		}
+	}
+}
+
+func TestChapterFinalizeCleansProcessingStageOnBuildFailure(t *testing.T) {
+	dir := t.TempDir()
+	h := NewProcessingJobHandler(logrus.New(), "", dir)
+	req := &pb.ProcessingJobRequest{
+		JobId:        "job-1",
+		ArtifactHash: "chapter-fail",
+	}
+	var result *pb.ProcessingJobResult
+
+	h.handleChapterFinalize(req, func(msg *pb.ControlMessage) {
+		if payload := msg.GetProcessingJobResult(); payload != nil {
+			result = payload
+		}
+	})
+
+	if result == nil || result.GetStatus() != "failed" {
+		t.Fatalf("result=%v want failed", result)
+	}
+	recoveryDir := filepath.Join(dir, "processing", "chapter-"+req.GetArtifactHash())
+	if _, err := os.Stat(recoveryDir); !os.IsNotExist(err) {
+		t.Fatalf("recovery dir still exists or stat failed with %v", err)
+	}
+}
+
 func TestExtractTrackMetadata_VideoAudio(t *testing.T) {
 	meta := map[string]interface{}{
 		"meta": map[string]interface{}{
