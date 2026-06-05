@@ -11,14 +11,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/shopspring/decimal"
-	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/billingportal/session"
-	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
-	"github.com/stripe/stripe-go/v82/customer"
-	"github.com/stripe/stripe-go/v82/paymentintent"
-	stripeprice "github.com/stripe/stripe-go/v82/price"
-	stripeproduct "github.com/stripe/stripe-go/v82/product"
-	"github.com/stripe/stripe-go/v82/subscription"
+	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/billingportal/session"
+	checkoutsession "github.com/stripe/stripe-go/v85/checkout/session"
+	"github.com/stripe/stripe-go/v85/customer"
+	"github.com/stripe/stripe-go/v85/paymentintent"
+	stripeprice "github.com/stripe/stripe-go/v85/price"
+	stripeproduct "github.com/stripe/stripe-go/v85/product"
+	"github.com/stripe/stripe-go/v85/subscription"
 )
 
 // Client wraps Stripe API operations for subscription management.
@@ -103,6 +103,26 @@ func (c *Client) CreateOrGetCustomer(ctx context.Context, info CustomerInfo) (*s
 	return cust, nil
 }
 
+// PaymentMethodTypesForCurrency returns the explicit Checkout payment-method
+// allowlist for the given currency. Card is always offered; SEPA Direct Debit,
+// iDEAL, and Bancontact are EUR-only at Stripe, so they are included only for
+// EUR. Pinning the list in code (rather than relying on the dashboard) keeps
+// settlement deterministic, and gating by currency prevents a non-EUR (e.g. USD)
+// checkout from offering a method Stripe would reject. The same list applies to
+// both one-time and subscription Checkout: iDEAL/Bancontact subscribers are
+// collected as a SEPA Direct Debit mandate per Stripe's recurring support.
+func PaymentMethodTypesForCurrency(currency string) []*string {
+	methods := []*string{stripe.String("card")}
+	if strings.EqualFold(currency, "EUR") {
+		methods = append(methods,
+			stripe.String("sepa_debit"),
+			stripe.String("ideal"),
+			stripe.String("bancontact"),
+		)
+	}
+	return methods
+}
+
 // CheckoutSessionParams for creating a checkout session
 type CheckoutSessionParams struct {
 	CustomerID     string // Stripe customer ID
@@ -112,6 +132,7 @@ type CheckoutSessionParams struct {
 	ReferenceID    string // tier_id, cluster_id, etc.
 	ClusterID      string // For cluster subscriptions
 	PriceID        string // Stripe Price ID (monthly or yearly)
+	Currency       string // Price currency; gates the EU payment-method allowlist
 	SuccessURL     string
 	CancelURL      string
 	TrialDays      int64 // Optional trial period
@@ -148,9 +169,10 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 				Quantity: stripe.Int64(1),
 			},
 		},
-		SuccessURL: stripe.String(params.SuccessURL),
-		CancelURL:  stripe.String(params.CancelURL),
-		Metadata:   metadata,
+		SuccessURL:         stripe.String(params.SuccessURL),
+		CancelURL:          stripe.String(params.CancelURL),
+		Metadata:           metadata,
+		PaymentMethodTypes: PaymentMethodTypesForCurrency(params.Currency),
 	}
 
 	// Ensure subscription metadata is set on the created Stripe subscription.

@@ -158,7 +158,7 @@ func newPlaygroundTestServer() playgroundTestHarness {
 func validateWithBridgeSchema(t *testing.T, srv playgroundTestHarness, query string, _ map[string]any, name string) {
 	t.Helper()
 	doc := parseQueryDocument(t, query, name)
-	if errs := validator.Validate(srv.schema, doc); len(errs) > 0 {
+	if errs := validator.ValidateWithRules(srv.schema, doc, nil); len(errs) > 0 {
 		t.Fatalf("subscription validation returned unexpected errors for %s:\n%s", name, errs.Error())
 	}
 }
@@ -172,8 +172,8 @@ func executeGraphQL(t *testing.T, srv playgroundTestHarness, query string, vars 
 	if err != nil {
 		t.Fatalf("marshal GraphQL request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
-	ctx := demoPlaygroundContext(req.Context())
+	ctx := demoPlaygroundContext(context.Background())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/graphql", bytes.NewReader(body))
 	ctx = context.WithValue(ctx, ctxkeys.KeyHTTPRequest, req)
 	req = req.WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")

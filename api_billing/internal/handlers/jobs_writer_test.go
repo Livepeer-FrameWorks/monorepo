@@ -366,8 +366,9 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(0)))
+	// gross_metered_amount ($11) equals metered_amount ("2") with the waiver off.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_invoices`).
-		WithArgs(tenantID, "102", currency, sqlmock.AnyArg(), "100", "2", "0", sqlmock.AnyArg(), periodStart, periodEnd).
+		WithArgs(tenantID, "102", currency, sqlmock.AnyArg(), "100", "2", "0", sqlmock.AnyArg(), periodStart, periodEnd, "2").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("invoice-1"))
 	mock.ExpectExec(`INSERT INTO purser\.invoice_line_items`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -448,8 +449,10 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04").
 		WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(20_000)))
+	// gross_metered_amount ($11) equals metered_amount ("2") with the waiver off;
+	// the prepaid credit clamps the net total but does not touch gross.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_invoices`).
-		WithArgs(tenantID, "0", currency, sqlmock.AnyArg(), "100", "2", "200", sqlmock.AnyArg(), periodStart, periodEnd).
+		WithArgs(tenantID, "0", currency, sqlmock.AnyArg(), "100", "2", "200", sqlmock.AnyArg(), periodStart, periodEnd, "2").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("invoice-1"))
 	mock.ExpectExec(`INSERT INTO purser\.invoice_line_items`).
 		WillReturnResult(sqlmock.NewResult(0, 1))

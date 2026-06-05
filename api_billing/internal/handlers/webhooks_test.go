@@ -110,8 +110,13 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 	mock.ExpectQuery(`SELECT tenant_id FROM purser\.tenant_subscriptions WHERE stripe_subscription_id = \$1`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET stripe_subscription_status = \$1,\s+status = \$2,\s+stripe_current_period_end = \$3,\s+billing_period_start = COALESCE\(\$5, billing_period_start\),\s+billing_period_end = COALESCE\(\$3, billing_period_end\),\s+next_billing_date = COALESCE\(\$3, next_billing_date\)`).
-		WithArgs("active", "active", sqlmock.AnyArg(), tenantID, sqlmock.AnyArg()).
+	// active routes through the activation helper: applies the tier, sets
+	// payment_method=stripe, clears staged state, and backfills the period.
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = COALESCE\(\$6, billing_period_start\)[\s\S]*WHERE tenant_id = \$4`).
+		WithArgs("cus_test", subscriptionID, "", tenantID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents[\s\S]*provider_subscription_id = \$1`).
+		WithArgs(subscriptionID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT id FROM purser\.tenant_subscriptions WHERE tenant_id = \$1`).
 		WithArgs(tenantID).
@@ -122,6 +127,125 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 
 	if err := handleStripeSubscriptionEvent(payload); err != nil {
 		t.Fatalf("handleStripeSubscriptionEvent: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandleStripeCheckoutAsyncPaymentFailedPrepaid asserts a failed delayed
+// top-up payment moves the pending top-up to terminal 'failed' without
+// crediting the balance.
+func TestHandleStripeCheckoutAsyncPaymentFailedPrepaid(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	payload := StripeWebhookPayload{
+		ID:   "evt_async_failed",
+		Type: "checkout.session.async_payment_failed",
+		Data: struct {
+			Object json.RawMessage `json:"object"`
+		}{
+			Object: json.RawMessage(`{"id":"cs_1","metadata":{"purpose":"prepaid","reference_id":"topup-1"}}`),
+		},
+	}
+
+	mock.ExpectExec(`UPDATE purser\.pending_topups\s+SET status = \$1.*WHERE id = \$2 AND status = 'pending'`).
+		WithArgs("failed", "topup-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleStripeCheckoutAsyncPaymentFailed(payload); err != nil {
+		t.Fatalf("handleStripeCheckoutAsyncPaymentFailed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandleStripeCheckoutExpiredSubscription asserts an expired subscription
+// checkout expires the open intent and clears the staged pending tier state so
+// an abandoned upgrade does not strand the tenant.
+func TestHandleStripeCheckoutExpiredSubscription(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	payload := StripeWebhookPayload{
+		ID:   "evt_expired",
+		Type: "checkout.session.expired",
+		Data: struct {
+			Object json.RawMessage `json:"object"`
+		}{
+			Object: json.RawMessage(`{"id":"cs_1","subscription":"sub_1","metadata":{"purpose":"subscription","tenant_id":"t1"}}`),
+		},
+	}
+
+	// expireStripeCheckoutIntent(sess.ID)
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$1`).
+		WithArgs("cs_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// clearStagedStripeCheckout: expire intent by subscription, then clear tier state
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_subscription_id = \$1`).
+		WithArgs("sub_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL.*WHERE tenant_id = \$1 AND pending_reason = 'stripe_checkout'`).
+		WithArgs("t1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleStripeCheckoutExpired(payload); err != nil {
+		t.Fatalf("handleStripeCheckoutExpired: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandleStripeCheckoutExpiredCluster asserts an expired cluster checkout
+// expires the open intent and cancels the staged pending_payment cluster row so
+// stale local state is not left behind.
+func TestHandleStripeCheckoutExpiredCluster(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	payload := StripeWebhookPayload{
+		ID:   "evt_expired_cluster",
+		Type: "checkout.session.expired",
+		Data: struct {
+			Object json.RawMessage `json:"object"`
+		}{
+			Object: json.RawMessage(`{"id":"cs_2","subscription":"sub_2","metadata":{"purpose":"cluster_subscription"}}`),
+		},
+	}
+
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$1`).
+		WithArgs("cs_2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE purser\.cluster_subscriptions\s+SET status = 'cancelled'.*WHERE status = 'pending_payment'`).
+		WithArgs("cs_2", "sub_2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleStripeCheckoutExpired(payload); err != nil {
+		t.Fatalf("handleStripeCheckoutExpired: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

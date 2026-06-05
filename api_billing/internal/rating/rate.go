@@ -79,17 +79,36 @@ func Rate(in Input) (Result, error) {
 		return usageLines[i].LineKey < usageLines[j].LineKey
 	})
 
+	// Stamp each line's pre-waiver amount and total the unwaived metered amount.
+	// Index loop: ranging by value copies the struct and the writes no-op.
+	grossUsageAmount := decimal.Zero
+	for i := range usageLines {
+		usageLines[i].GrossAmount = usageLines[i].Amount
+		grossUsageAmount = grossUsageAmount.Add(usageLines[i].GrossAmount)
+	}
+
+	// Beta waiver: zero every usage line (incl. negative correction lines) so
+	// metered usage cannot charge no matter how wrong the quantity is. Quantities
+	// and unit prices stay real for display; GrossAmount preserves the pre-waiver
+	// value. The base line is untouched.
+	if in.WaiveUsageCharges {
+		for i := range usageLines {
+			usageLines[i].Amount = decimal.Zero
+		}
+	}
+
 	usageAmount := decimal.Zero
 	for _, l := range usageLines {
 		usageAmount = usageAmount.Add(l.Amount)
 	}
 
 	return Result{
-		BaseLine:    base,
-		UsageLines:  usageLines,
-		BaseAmount:  base.Amount,
-		UsageAmount: usageAmount,
-		TotalAmount: base.Amount.Add(usageAmount),
+		BaseLine:         base,
+		UsageLines:       usageLines,
+		BaseAmount:       base.Amount,
+		UsageAmount:      usageAmount,
+		GrossUsageAmount: grossUsageAmount,
+		TotalAmount:      base.Amount.Add(usageAmount),
 	}, nil
 }
 

@@ -62,6 +62,7 @@ query GetBillingStatus {
       amount
       baseAmount
       meteredAmount
+      grossMeteredAmount
       prepaidCreditApplied
       currency
       dueDate

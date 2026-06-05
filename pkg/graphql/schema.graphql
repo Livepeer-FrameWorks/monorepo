@@ -4860,8 +4860,10 @@ type Invoice {
   amount: Money!
   "Base subscription amount."
   baseAmount: Money!
-  "Metered usage charges."
+  "Metered usage charges (net; 0 while usage is waived during beta)."
   meteredAmount: Money!
+  "Unwaived metered total — what usage would have cost. Equals meteredAmount when usage is not waived; the would-have-cost figure when it is."
+  grossMeteredAmount: Money!
   "Prepaid balance credit applied to this invoice."
   prepaidCreditApplied: Money!
   "Invoice currency."

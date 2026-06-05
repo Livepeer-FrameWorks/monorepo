@@ -1307,6 +1307,10 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// columns bind cleanly via $N::numeric. No float64 touches the cents.
 		baseDec := ratingResult.BaseAmount
 		meteredDec := ratingResult.UsageAmount
+		// unwaivedMeteredDec is the would-have-cost usage total (display only;
+		// equals meteredDec when usage is not waived). It must NEVER feed prepaid
+		// credit, provider charges, the meter outbox, or operator credits.
+		unwaivedMeteredDec := ratingResult.GrossUsageAmount
 		grossDec := ratingResult.TotalAmount
 		creditDec := decimal.Zero
 		totalDec := grossDec
@@ -1406,6 +1410,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 			totalAmt := totalDec.Round(2).String()
 			baseAmt := baseDec.Round(2).String()
 			meteredAmt := meteredDec.Round(2).String()
+			grossMeteredAmt := unwaivedMeteredDec.Round(2).String()
 			creditAmt := creditDec.Round(2).String()
 
 			if draftInvoiceID != "" {
@@ -1414,10 +1419,11 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						SET amount = $1::numeric, base_amount = $2::numeric, metered_amount = $3::numeric,
 						    prepaid_credit_applied = $4::numeric, currency = $5,
 						    status = $6, due_date = $7, usage_details = $8,
-						    period_start = $9, period_end = $10, updated_at = NOW()
+						    period_start = $9, period_end = $10, gross_metered_amount = $13::numeric,
+						    updated_at = NOW()
 						WHERE id = $11 AND tenant_id = $12 AND status IN ('draft', 'manual_review')
 						RETURNING id
-					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID).Scan(&invoiceID)
+					`, totalAmt, baseAmt, meteredAmt, creditAmt, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID, tenantID, grossMeteredAmt).Scan(&invoiceID)
 				if txErr != nil {
 					return fmt.Errorf("update invoice: %w", txErr)
 				}
@@ -1426,12 +1432,12 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 					INSERT INTO purser.billing_invoices (
 						id, tenant_id, amount, currency, status, due_date,
 						base_amount, metered_amount, prepaid_credit_applied,
-					usage_details, period_start, period_end,
+					usage_details, period_start, period_end, gross_metered_amount,
 					created_at, updated_at
 					) VALUES (
 						$1, $2, $3::numeric, $4, $5, $6,
 						$7::numeric, $8::numeric, $9::numeric,
-						$10, $11, $12, NOW(), NOW()
+						$10, $11, $12, $13::numeric, NOW(), NOW()
 					)
 					ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
 					DO UPDATE SET
@@ -1444,10 +1450,11 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 						prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
 						usage_details = EXCLUDED.usage_details,
 						period_end = EXCLUDED.period_end,
+						gross_metered_amount = EXCLUDED.gross_metered_amount,
 						updated_at = NOW()
 					WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 					RETURNING id
-					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID)
+					`, invoiceID, tenantID, totalAmt, currency, status, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
 				if txErr != nil {
 					return fmt.Errorf("upsert invoice: %w", txErr)
 				}
@@ -1583,11 +1590,13 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		// is raw/debug JSON only, never rendered to customers.
 		if billingEmail.Valid && billingEmail.String != "" {
 			emailTotal, _ := totalDec.Round(2).Float64()
+			emailMetered, _ := meteredDec.Round(2).Float64()
+			emailGrossMetered, _ := unwaivedMeteredDec.Round(2).Float64()
 			emailLines, emailErr := jm.loadEmailLineItems(ctx, invoiceID, tenantID)
 			if emailErr != nil {
 				jm.logger.WithError(emailErr).WithField("invoice_id", invoiceID).Warn("Failed to load invoice line items for email; sending without breakdown")
 			}
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail.String, "", invoiceID, emailTotal, currency, dueDate, emailLines)
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail.String, "", invoiceID, emailTotal, emailMetered, emailGrossMetered, currency, dueDate, emailLines)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
 					"billing_email": billingEmail.String,
@@ -3019,6 +3028,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	}
 	baseDec := ratingResult.BaseAmount
 	meteredDec := ratingResult.UsageAmount
+	unwaivedMeteredDec := ratingResult.GrossUsageAmount
 	grossDec := ratingResult.TotalAmount
 
 	// manual_review: an unconfigured cluster pricing means we cannot finalize
@@ -3086,17 +3096,18 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		totalAmt := totalDec.Round(2).String()
 		baseAmt := baseDec.Round(2).String()
 		meteredAmt := meteredDec.Round(2).String()
+		grossMeteredAmt := unwaivedMeteredDec.Round(2).String()
 		creditAmt := prepaidCreditDec.Round(2).String()
 
 		txErr = tx.QueryRowContext(ctx, `
 				INSERT INTO purser.billing_invoices (
 					id, tenant_id, amount, currency, status, due_date,
 					base_amount, metered_amount, prepaid_credit_applied, usage_details,
-					period_start, period_end,
+					period_start, period_end, gross_metered_amount,
 					created_at, updated_at
 				) VALUES (
 					gen_random_uuid(), $1, $2::numeric, $3, 'draft', $4,
-					$5::numeric, $6::numeric, $7::numeric, $8, $9, $10, NOW(), NOW()
+					$5::numeric, $6::numeric, $7::numeric, $8, $9, $10, $11::numeric, NOW(), NOW()
 				)
 				ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
 				DO UPDATE SET
@@ -3109,10 +3120,11 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 					prepaid_credit_applied = EXCLUDED.prepaid_credit_applied,
 					usage_details = EXCLUDED.usage_details,
 					period_end = EXCLUDED.period_end,
+					gross_metered_amount = EXCLUDED.gross_metered_amount,
 					updated_at = NOW()
 				WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 				RETURNING id
-			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd).Scan(&invoiceID)
+			`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, usageJSON, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
 		if txErr != nil {
 			return fmt.Errorf("upsert invoice draft: %w", txErr)
 		}

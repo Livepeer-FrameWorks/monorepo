@@ -65,7 +65,7 @@ func postBoot(h *PlaybackTelemetryHandler, body string) *httptest.ResponseRecord
 	router := gin.New()
 	router.POST("/playback/telemetry/boot", h.Handle)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/playback/telemetry/boot", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/playback/telemetry/boot", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 	return w

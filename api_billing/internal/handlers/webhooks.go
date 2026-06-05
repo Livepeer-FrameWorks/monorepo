@@ -99,8 +99,12 @@ type StripeSubscriptionObject struct {
 
 // StripeInvoiceObject for invoice.* events
 type StripeInvoiceObject struct {
-	ID             string `json:"id"`
-	CustomerID     string `json:"customer"`
+	ID         string `json:"id"`
+	CustomerID string `json:"customer"`
+	// SubscriptionID is the legacy top-level linkage. The dahlia invoice
+	// payload carries the subscription id under
+	// parent.subscription_details.subscription instead; resolveSubscriptionID
+	// reads that with this field as the fallback.
 	SubscriptionID string `json:"subscription"`
 	Status         string `json:"status"` // paid, open, draft, uncollectible, void
 	AmountDue      int64  `json:"amount_due"`
@@ -110,11 +114,28 @@ type StripeInvoiceObject struct {
 	// Subscription invoices carry the billing period directly. Used by
 	// the operator credit ledger writer to record the period the payment
 	// covered.
-	PeriodStart int64 `json:"period_start"`
-	PeriodEnd   int64 `json:"period_end"`
-	Metadata    struct {
+	PeriodStart      int64  `json:"period_start"`
+	PeriodEnd        int64  `json:"period_end"`
+	HostedInvoiceURL string `json:"hosted_invoice_url"`
+	Metadata         struct {
 		TenantID string `json:"tenant_id"`
 	} `json:"metadata"`
+	Parent struct {
+		SubscriptionDetails struct {
+			Subscription string `json:"subscription"`
+		} `json:"subscription_details"`
+	} `json:"parent"`
+}
+
+// resolveSubscriptionID returns the Stripe subscription id that generated this
+// invoice, preferring the dahlia location
+// (parent.subscription_details.subscription) and falling back to the top-level
+// subscription field used by older API versions.
+func (o *StripeInvoiceObject) resolveSubscriptionID() string {
+	if o.Parent.SubscriptionDetails.Subscription != "" {
+		return o.Parent.SubscriptionDetails.Subscription
+	}
+	return o.SubscriptionID
 }
 
 // verifyStripeSignature verifies the Stripe webhook signature using HMAC-SHA256
@@ -387,14 +408,22 @@ func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, str
 	switch {
 	case payload.Type == "payment_intent.succeeded" || payload.Type == "payment_intent.payment_failed":
 		err = handleStripePaymentIntentGRPC(payload)
-	case payload.Type == "checkout.session.completed":
+	case payload.Type == "checkout.session.completed" || payload.Type == "checkout.session.async_payment_succeeded":
+		// Both deliver a Checkout Session; async_payment_succeeded carries
+		// payment_status=paid so the dispatcher settles what completed staged.
 		err = DispatchStripeCheckoutCompleted(ctx, payload.Data.Object)
+	case payload.Type == "checkout.session.async_payment_failed":
+		err = handleStripeCheckoutAsyncPaymentFailed(payload)
+	case payload.Type == "checkout.session.expired":
+		err = handleStripeCheckoutExpired(payload)
 	case strings.HasPrefix(payload.Type, "customer.subscription."):
 		err = handleStripeSubscriptionEvent(payload)
 	case payload.Type == "invoice.paid":
 		err = handleStripeInvoicePaid(payload)
 	case payload.Type == "invoice.payment_failed":
 		err = handleStripeInvoiceFailed(payload)
+	case payload.Type == "invoice.payment_action_required":
+		err = handleStripeInvoicePaymentActionRequired(payload)
 	case payload.Type == "charge.refunded":
 		err = handleStripeChargeRefunded(payload)
 	case strings.HasPrefix(payload.Type, "charge.dispute."):
@@ -684,6 +713,11 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 	}
 
 	if obj.Metadata.ClusterID != "" || obj.Metadata.Purpose == "cluster_subscription" {
+		if ourStatus == "active" {
+			// Activation authority for an async cluster subscription: grant
+			// access once Stripe collects the first payment.
+			return activateClusterSubscriptionFromStripe(ctx, obj.Metadata.TenantID, obj.Metadata.ClusterID, obj.CustomerID, obj.ID, "")
+		}
 		if err := updateClusterSubscriptionFromStripe(obj, ourStatus, periodEnd); err != nil {
 			return err
 		}
@@ -712,19 +746,45 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 		}
 	}
 
-	_, err = db.ExecContext(ctx, `
-		UPDATE purser.tenant_subscriptions
-		SET stripe_subscription_status = $1,
-		    status = $2,
-		    stripe_current_period_end = $3,
-		    billing_period_start = COALESCE($5, billing_period_start),
-		    billing_period_end = COALESCE($3, billing_period_end),
-		    next_billing_date = COALESCE($3, next_billing_date),
-		    updated_at = NOW()
-		WHERE tenant_id = $4
-	`, obj.Status, ourStatus, periodEnd, tenantID, periodStart)
-	if err != nil {
-		return fmt.Errorf("failed to update subscription status: %w", err)
+	if ourStatus == "active" {
+		// Activation authority for an async tenant subscription: apply the
+		// purchased tier and clear staged checkout state once funds settle.
+		if _, actErr := activateTenantSubscriptionFromStripe(ctx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd); actErr != nil {
+			return actErr
+		}
+		if _, intentErr := db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
+			    status = 'succeeded',
+			    succeeded_at = COALESCE(succeeded_at, NOW()),
+			    updated_at = NOW()
+			WHERE provider = 'stripe' AND provider_subscription_id = $1
+		`, obj.ID); intentErr != nil {
+			return fmt.Errorf("failed to mark subscription intent succeeded: %w", intentErr)
+		}
+	} else {
+		if _, err = db.ExecContext(ctx, `
+			UPDATE purser.tenant_subscriptions
+			SET stripe_subscription_status = $1,
+			    status = $2,
+			    stripe_current_period_end = $3,
+			    billing_period_start = COALESCE($5, billing_period_start),
+			    billing_period_end = COALESCE($3, billing_period_end),
+			    next_billing_date = COALESCE($3, next_billing_date),
+			    updated_at = NOW()
+			WHERE tenant_id = $4
+		`, obj.Status, ourStatus, periodEnd, tenantID, periodStart); err != nil {
+			return fmt.Errorf("failed to update subscription status: %w", err)
+		}
+		// A subscription that reached a terminal failure (incomplete_expired /
+		// unpaid / canceled all map to "cancelled") without ever activating
+		// leaves staged stripe_checkout state behind; clear it so a failed async
+		// first payment does not strand a pending tier.
+		if ourStatus == "cancelled" {
+			if clearErr := clearStagedStripeCheckout(ctx, tenantID, obj.ID); clearErr != nil {
+				return clearErr
+			}
+		}
 	}
 
 	logger.WithFields(logging.Fields{
@@ -800,6 +860,16 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 		return fmt.Errorf("record monthly cluster credit: %w", err)
 	}
 
+	// Activation authority for an async cluster subscription: a settled invoice
+	// is proof of payment, so grant cluster access. Idempotent and a no-op when
+	// the subscription is not a cluster subscription; converges with the
+	// customer.subscription.updated path regardless of which lands first.
+	if subID := obj.resolveSubscriptionID(); subID != "" {
+		if err := activateClusterSubscriptionFromStripe(ctx, "", "", "", subID, ""); err != nil {
+			return fmt.Errorf("activate cluster subscription from invoice.paid: %w", err)
+		}
+	}
+
 	// Tenant-subscription invariant: provider-managed tenant_subscriptions
 	// produce Purser invoices with base_amount = 0 (the base is represented
 	// as an included_subscription line because the provider's recurring
@@ -821,7 +891,8 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 // for a cluster_subscription and, if so, writes an operator_credit_ledger
 // accrual row. Marketplace launch reads this ledger to compute payouts.
 func recordMonthlyClusterCredit(ctx context.Context, obj *StripeInvoiceObject) error {
-	if obj.SubscriptionID == "" || obj.AmountPaid <= 0 {
+	subscriptionID := obj.resolveSubscriptionID()
+	if subscriptionID == "" || obj.AmountPaid <= 0 {
 		return nil
 	}
 	// Resolve the cluster_subscription + owner from our books.
@@ -833,7 +904,7 @@ func recordMonthlyClusterCredit(ctx context.Context, obj *StripeInvoiceObject) e
 		SELECT cluster_id, tenant_id
 		FROM purser.cluster_subscriptions
 		WHERE stripe_subscription_id = $1
-	`, obj.SubscriptionID).Scan(&clusterID, &consumingTenantID)
+	`, subscriptionID).Scan(&clusterID, &consumingTenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // not a cluster subscription
 	}
@@ -932,6 +1003,112 @@ func handleStripeInvoiceFailed(payload StripeWebhookPayload) error {
 		Status:    "failed",
 	})
 
+	return nil
+}
+
+// stripeCheckoutSessionEvent is the slice of a Checkout Session that the
+// async-failed and expired handlers need to route by purpose.
+type stripeCheckoutSessionEvent struct {
+	ID            string `json:"id"`
+	PaymentIntent string `json:"payment_intent"`
+	Subscription  string `json:"subscription"`
+	Metadata      struct {
+		Purpose     string `json:"purpose"`
+		TenantID    string `json:"tenant_id"`
+		ReferenceID string `json:"reference_id"`
+		ClusterID   string `json:"cluster_id"`
+	} `json:"metadata"`
+}
+
+// handleStripeCheckoutAsyncPaymentFailed records the failure of a delayed
+// Checkout payment (SEPA/iDEAL/Bancontact) that was ultimately declined. No
+// value was granted — the completed handler gated on payment_status — so this
+// only moves the staged one-time payment to a terminal state. Subscription
+// checkouts are reconciled via the customer.subscription.* terminal path.
+func handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPayload) error {
+	var sess stripeCheckoutSessionEvent
+	if err := json.Unmarshal(payload.Data.Object, &sess); err != nil {
+		return fmt.Errorf("failed to parse checkout session: %w", err)
+	}
+	ctx := context.Background()
+	switch CheckoutPurpose(sess.Metadata.Purpose) {
+	case PurposeInvoice:
+		if sess.Metadata.ReferenceID == "" {
+			return nil
+		}
+		txID := sess.PaymentIntent
+		if txID == "" {
+			txID = sess.ID
+		}
+		if _, err := updateInvoicePaymentStatus("stripe", txID, sess.Metadata.ReferenceID, "failed"); err != nil {
+			return err
+		}
+		logger.WithFields(logging.Fields{
+			"session_id": sess.ID,
+			"invoice_id": sess.Metadata.ReferenceID,
+		}).Warn("Stripe async invoice payment failed")
+		return nil
+	case PurposePrepaid:
+		return markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "failed")
+	default:
+		logger.WithFields(logging.Fields{
+			"session_id": sess.ID,
+			"purpose":    sess.Metadata.Purpose,
+		}).Info("Async payment failed for subscription checkout; awaiting subscription terminal event")
+		return nil
+	}
+}
+
+// handleStripeCheckoutExpired cleans up the staged state for a Checkout Session
+// that expired without payment. One-time top-ups are marked expired; staged
+// subscription/cluster checkout state is cleared so an abandoned upgrade does
+// not strand a pending tier. Unpaid invoices are left payable (a new checkout
+// can be created), so only the open intent is expired.
+func handleStripeCheckoutExpired(payload StripeWebhookPayload) error {
+	var sess stripeCheckoutSessionEvent
+	if err := json.Unmarshal(payload.Data.Object, &sess); err != nil {
+		return fmt.Errorf("failed to parse checkout session: %w", err)
+	}
+	ctx := context.Background()
+	if err := expireStripeCheckoutIntent(ctx, sess.ID); err != nil {
+		return err
+	}
+	switch CheckoutPurpose(sess.Metadata.Purpose) {
+	case PurposePrepaid:
+		return markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "expired")
+	case PurposeSubscription:
+		return clearStagedStripeCheckout(ctx, sess.Metadata.TenantID, sess.Subscription)
+	case PurposeClusterSubscription:
+		return clearStagedClusterSubscription(ctx, sess.ID, sess.Subscription)
+	default:
+		logger.WithField("session_id", sess.ID).Debug("Checkout session expired; intent expired")
+		return nil
+	}
+}
+
+// handleStripeInvoicePaymentActionRequired notifies the customer that a
+// recurring charge needs their authentication (SCA) and emails the hosted
+// invoice page where they complete it. It never marks the invoice failed.
+func handleStripeInvoicePaymentActionRequired(payload StripeWebhookPayload) error {
+	var obj StripeInvoiceObject
+	if err := json.Unmarshal(payload.Data.Object, &obj); err != nil {
+		return fmt.Errorf("failed to parse invoice: %w", err)
+	}
+	ctx := context.Background()
+	var tenantID string
+	if err := db.QueryRowContext(ctx, `
+		SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id = $1
+	`, obj.CustomerID).Scan(&tenantID); err != nil {
+		if obj.Metadata.TenantID != "" {
+			tenantID = obj.Metadata.TenantID
+		}
+	}
+	logger.WithFields(logging.Fields{
+		"tenant_id":          tenantID,
+		"invoice_id":         obj.ID,
+		"hosted_invoice_url": obj.HostedInvoiceURL,
+	}).Warn("Stripe invoice requires customer authentication (SCA); notifying customer")
+	go sendTenantActionRequiredEmail(tenantID, obj.ID, float64(obj.AmountDue)/100, obj.Currency, obj.HostedInvoiceURL)
 	return nil
 }
 
@@ -1201,7 +1378,9 @@ func handleMolliePaymentWebhook(parentCtx context.Context, paymentID string, raw
 		if err != nil {
 			return "", err
 		}
-		if err := handlePrepaidCheckoutCompleted(ctx, payment.ID, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie); err != nil {
+		// Mollie reconciliation fetches authoritative payment status before
+		// reaching this branch, so the funds have settled.
+		if err := handlePrepaidCheckoutCompleted(ctx, payment.ID, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie, true); err != nil {
 			return "", err
 		}
 		return eventID, nil

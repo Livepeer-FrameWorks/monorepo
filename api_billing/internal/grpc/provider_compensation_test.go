@@ -9,7 +9,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
-	stripelib "github.com/stripe/stripe-go/v82"
+	stripelib "github.com/stripe/stripe-go/v85"
 
 	billingmollie "frameworks/api_billing/internal/mollie"
 	billingstripe "frameworks/api_billing/internal/stripe"

@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 )
 
@@ -46,12 +47,13 @@ func buildRatingInputForUsage(usage map[string]float64, codecBreakdowns map[stri
 		}
 	}
 	return rating.Input{
-		Currency:     currency,
-		BasePrice:    basePrice,
-		Rules:        rules,
-		Usage:        usageMap,
-		Breakdowns:   breakdowns,
-		CodecSeconds: breakdowns[rating.MeterMediaSeconds],
+		Currency:          currency,
+		BasePrice:         basePrice,
+		Rules:             rules,
+		Usage:             usageMap,
+		Breakdowns:        breakdowns,
+		CodecSeconds:      breakdowns[rating.MeterMediaSeconds],
+		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
 	}
 }
 

@@ -520,10 +520,11 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
 INSERT INTO purser.billing_invoices (
     id, tenant_id, status, currency, amount,
     period_start, period_end, due_date, paid_at,
-    base_amount, metered_amount, usage_details,
+    base_amount, metered_amount, gross_metered_amount, usage_details,
     created_at
 ) VALUES
--- Current month (draft invoice preview)
+-- Current month (draft invoice preview). gross_metered_amount == metered_amount
+-- since usage is not waived in seed data.
 (
     '5eedb111-fee5-da7a-b111-fee5da7a0001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
@@ -536,6 +537,7 @@ INSERT INTO purser.billing_invoices (
     NULL,
     249.00,  -- Developer tier base
     0.71,    -- Storage: 23.5 GiB-hours x EUR 0.030
+    0.71,    -- gross == metered (no waiver)
     '{"delivered_minutes": 250000.2, "storage_gb_seconds_cold": 84600.0, "stream_runtime_seconds": 459000.0, "ingress_gb": 82.0, "egress_gb": 456.78, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW())
 ),
@@ -552,6 +554,7 @@ INSERT INTO purser.billing_invoices (
     DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
     249.00,
     1.36,
+    1.36,    -- gross == metered (no waiver)
     '{"delivered_minutes": 450000.0, "storage_gb_seconds_cold": 162720.0, "stream_runtime_seconds": 1231200.0, "ingress_gb": 214.0, "egress_gb": 1245.6, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '1 month')
 ),
@@ -568,6 +571,7 @@ INSERT INTO purser.billing_invoices (
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
     249.00,
     0.96,
+    0.96,    -- gross == metered (no waiver)
     '{"delivered_minutes": 349999.8, "storage_gb_seconds_cold": 115560.0, "stream_runtime_seconds": 774900.0, "ingress_gb": 156.0, "egress_gb": 890.2, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '2 months')
 )
@@ -576,6 +580,7 @@ ON CONFLICT (id) DO UPDATE SET
     amount = EXCLUDED.amount,
     base_amount = EXCLUDED.base_amount,
     metered_amount = EXCLUDED.metered_amount,
+    gross_metered_amount = EXCLUDED.gross_metered_amount,
     usage_details = EXCLUDED.usage_details,
     paid_at = EXCLUDED.paid_at,
     updated_at = NOW();

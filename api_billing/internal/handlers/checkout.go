@@ -16,9 +16,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 
+	billingstripe "frameworks/api_billing/internal/stripe"
+
 	"github.com/shopspring/decimal"
-	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/checkout/session"
+	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/checkout/session"
 )
 
 // CheckoutPurpose identifies the reason for creating a checkout session.
@@ -147,12 +149,14 @@ func (s *CheckoutService) createStripeCheckout(ctx context.Context, req Checkout
 
 	// Create checkout session
 	params := &stripe.CheckoutSessionParams{
-		Mode:       stripe.String(string(mode)),
-		SuccessURL: stripe.String(req.SuccessURL),
-		CancelURL:  stripe.String(req.CancelURL),
-		LineItems:  lineItems,
-		Metadata:   metadata,
+		Mode:               stripe.String(string(mode)),
+		SuccessURL:         stripe.String(req.SuccessURL),
+		CancelURL:          stripe.String(req.CancelURL),
+		LineItems:          lineItems,
+		Metadata:           metadata,
+		PaymentMethodTypes: billingstripe.PaymentMethodTypesForCurrency(req.Currency),
 	}
+	params.Context = ctx
 	if req.IdempotencyKey != "" {
 		params.SetIdempotencyKey(req.IdempotencyKey)
 	}
@@ -363,6 +367,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 		CustomerID    string `json:"customer"`
 		Subscription  string `json:"subscription"`
 		PaymentIntent string `json:"payment_intent"`
+		PaymentStatus string `json:"payment_status"`
 		Mode          string `json:"mode"`
 		Metadata      struct {
 			Purpose     string `json:"purpose"`
@@ -400,6 +405,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			sess.Metadata.ReferenceID,
 			sess.CustomerID,
 			sess.Subscription,
+			stripeSubscriptionProvisionable(sess.PaymentStatus),
 		)
 	case PurposeInvoice:
 		return handleInvoiceCheckoutCompleted(
@@ -408,6 +414,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			sess.PaymentIntent,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
+			stripeCheckoutPaid(sess.PaymentStatus),
 		)
 	case PurposePrepaid:
 		return handlePrepaidCheckoutCompleted(
@@ -419,6 +426,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			sess.AmountTotal,
 			sess.Currency,
 			ProviderStripe,
+			stripeCheckoutPaid(sess.PaymentStatus),
 		)
 	case PurposeClusterSubscription:
 		clusterID := sess.Metadata.ClusterID
@@ -432,6 +440,7 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 			clusterID,
 			sess.CustomerID,
 			sess.Subscription,
+			stripeSubscriptionProvisionable(sess.PaymentStatus),
 		)
 	default:
 		logger.WithField("purpose", purpose).Warn("Unknown checkout purpose, ignoring")
@@ -439,20 +448,80 @@ func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) er
 	}
 }
 
-// handleSubscriptionCheckoutCompleted handles tier subscription activation.
-// Session metadata is authoritative for the completed checkout. Staged pending
-// fields are cleared only while they still describe this checkout, so a later
-// downgrade or newer checkout cannot be erased by an older webhook delivery.
-func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, subscriptionID string) error {
+// stripeCheckoutPaid reports whether a Checkout Session has actually collected
+// funds. Asynchronous methods (SEPA Direct Debit, iDEAL, Bancontact) report
+// payment_status="unpaid" at checkout.session.completed and settle later via
+// checkout.session.async_payment_succeeded; granting value before then would
+// credit money that has not arrived.
+func stripeCheckoutPaid(paymentStatus string) bool {
+	return paymentStatus == "paid"
+}
+
+// stripeSubscriptionProvisionable reports whether a subscription checkout may
+// activate immediately. Trials and fully-discounted subscriptions report
+// "no_payment_required"; async first payments report "unpaid" and activate
+// later via customer.subscription.updated / invoice.paid.
+func stripeSubscriptionProvisionable(paymentStatus string) bool {
+	return paymentStatus == "paid" || paymentStatus == "no_payment_required"
+}
+
+// handleSubscriptionCheckoutCompleted activates a tenant tier subscription from
+// a Stripe checkout. When the first payment settles asynchronously
+// (settled=false at checkout.session.completed) it stages the provider linkage
+// and stays non-active; activation then arrives via customer.subscription.updated.
+func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, subscriptionID string, settled bool) error {
 	if tenantID == "" {
 		logger.WithField("session_id", sessionID).Warn("No tenant_id in subscription checkout metadata")
 		return nil
 	}
 
+	if !settled {
+		return stageTenantSubscriptionPending(ctx, sessionID, tenantID, customerID, subscriptionID)
+	}
+
+	rows, err := activateTenantSubscriptionFromStripe(ctx, tenantID, customerID, subscriptionID, tierID, nil, nil)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("no tenant_subscriptions row for tenant %s; cannot activate Stripe subscription %s", tenantID, subscriptionID)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
+		    status = 'succeeded',
+		    succeeded_at = COALESCE(succeeded_at, NOW()),
+		    updated_at = NOW()
+		WHERE provider = 'stripe'
+		  AND provider_session_id = $2
+	`, subscriptionID, sessionID); err != nil {
+		return fmt.Errorf("failed to mark subscription checkout intent succeeded: %w", err)
+	}
+
+	logger.WithFields(logging.Fields{
+		"tenant_id":       tenantID,
+		"tier_id":         tierID,
+		"customer_id":     customerID,
+		"subscription_id": subscriptionID,
+	}).Info("Activated subscription from Stripe checkout")
+
+	return nil
+}
+
+// activateTenantSubscriptionFromStripe applies the full activation effect for a
+// tenant tier subscription: sets the row active, applies the purchased tier
+// (preferring the explicit tier, then the staged stripe_checkout pending tier),
+// sets payment_method=stripe, and clears the staged pending fields only while
+// they still describe this checkout so a newer checkout or downgrade is not
+// erased by an older delivery. customer/subscription ids and period bounds are
+// COALESCEd so an event that omits them cannot wipe known values. Idempotent;
+// returns the number of tenant rows updated. Shared by the
+// checkout.session.completed and customer.subscription.updated paths.
+func activateTenantSubscriptionFromStripe(ctx context.Context, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time) (int64, error) {
 	result, err := db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
-		SET stripe_customer_id = $1,
-		    stripe_subscription_id = $2,
+		SET stripe_customer_id = COALESCE(NULLIF($1, ''), stripe_customer_id),
+		    stripe_subscription_id = COALESCE(NULLIF($2, ''), stripe_subscription_id),
 		    stripe_subscription_status = 'active',
 		    status = 'active',
 		    tier_id = COALESCE(
@@ -485,43 +554,57 @@ func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantI
 		        THEN NULL
 		        ELSE pending_intent_id
 		    END,
+		    stripe_current_period_end = COALESCE($5, stripe_current_period_end),
+		    billing_period_start = COALESCE($6, billing_period_start),
+		    billing_period_end = COALESCE($5, billing_period_end),
+		    next_billing_date = COALESCE($5, next_billing_date),
 		    updated_at = NOW()
 		WHERE tenant_id = $4
-	`, customerID, subscriptionID, tierID, tenantID)
+	`, customerID, subscriptionID, tierID, tenantID, periodEnd, periodStart)
 	if err != nil {
-		return fmt.Errorf("failed to update tenant subscription: %w", err)
+		return 0, fmt.Errorf("failed to activate tenant subscription: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("subscription update rows: %w", err)
+		return 0, fmt.Errorf("tenant subscription activation rows: %w", err)
 	}
-	if rows == 0 {
-		return fmt.Errorf("no tenant_subscriptions row for tenant %s; cannot activate Stripe subscription %s", tenantID, subscriptionID)
-	}
-	if _, err := db.ExecContext(ctx, `
-		UPDATE purser.payment_provider_intents
-		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
-		    status = 'succeeded',
-		    succeeded_at = COALESCE(succeeded_at, NOW()),
-		    updated_at = NOW()
-		WHERE provider = 'stripe'
-		  AND provider_session_id = $2
-	`, subscriptionID, sessionID); err != nil {
-		return fmt.Errorf("failed to mark subscription checkout intent succeeded: %w", err)
-	}
+	return rows, nil
+}
 
+// stageTenantSubscriptionPending records the Stripe linkage for a subscription
+// whose first payment is still settling asynchronously. It deliberately does
+// not set status=active or apply the tier; activation arrives later via
+// customer.subscription.updated once Stripe collects the funds. It also stamps
+// the subscription id onto the session-keyed provider intent so that
+// later-by-subscription-id activation can close the intent. The
+// stripe_subscription_status guard preserves an already-active row against a
+// late unpaid re-delivery.
+func stageTenantSubscriptionPending(ctx context.Context, sessionID, tenantID, customerID, subscriptionID string) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET stripe_customer_id = COALESCE(NULLIF($1, ''), stripe_customer_id),
+		    stripe_subscription_id = COALESCE(NULLIF($2, ''), stripe_subscription_id),
+		    stripe_subscription_status = CASE WHEN status = 'active' THEN stripe_subscription_status ELSE 'incomplete' END,
+		    updated_at = NOW()
+		WHERE tenant_id = $3
+	`, customerID, subscriptionID, tenantID); err != nil {
+		return fmt.Errorf("failed to stage pending tenant subscription: %w", err)
+	}
+	if err := linkStripeIntentSubscription(ctx, sessionID, subscriptionID); err != nil {
+		return err
+	}
 	logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
-		"tier_id":         tierID,
-		"customer_id":     customerID,
 		"subscription_id": subscriptionID,
-	}).Info("Activated subscription from Stripe checkout")
-
+	}).Info("Staged subscription pending async settlement; awaiting customer.subscription.updated")
 	return nil
 }
 
-// handleClusterSubscriptionCheckoutCompleted handles paid cluster subscription activation
-func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, clusterID, customerID, subscriptionID string) error {
+// handleClusterSubscriptionCheckoutCompleted handles paid cluster subscription
+// activation. An async first payment (settled=false) stages the row without
+// granting access; activation arrives via customer.subscription.updated /
+// invoice.paid once Stripe collects the funds.
+func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, clusterID, customerID, subscriptionID string, settled bool) error {
 	if tenantID == "" || clusterID == "" {
 		logger.WithFields(logging.Fields{
 			"session_id": sessionID,
@@ -531,12 +614,76 @@ func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, 
 		return nil
 	}
 
-	_, err := db.ExecContext(ctx, `
+	if !settled {
+		return stageClusterSubscriptionPending(ctx, sessionID, tenantID, clusterID, customerID, subscriptionID)
+	}
+	return activateClusterSubscriptionFromStripe(ctx, tenantID, clusterID, customerID, subscriptionID, sessionID)
+}
+
+// activateClusterSubscriptionFromStripe is the single idempotent authority that
+// marks a cluster subscription active and grants cluster access. It is called
+// from checkout.session.completed (paid), customer.subscription.updated
+// (active), and invoice.paid; whichever lands first activates and the rest are
+// no-ops. When tenant/cluster are unknown (invoice.paid carries only the
+// subscription id) it resolves them from the existing row, and returns nil when
+// the subscription is not a cluster subscription.
+func activateClusterSubscriptionFromStripe(ctx context.Context, tenantID, clusterID, customerID, subscriptionID, sessionID string) error {
+	if tenantID == "" || clusterID == "" {
+		if subscriptionID == "" {
+			return nil
+		}
+		var existingCustomer sql.NullString
+		err := db.QueryRowContext(ctx, `
+			SELECT tenant_id, cluster_id, stripe_customer_id
+			FROM purser.cluster_subscriptions
+			WHERE stripe_subscription_id = $1
+		`, subscriptionID).Scan(&tenantID, &clusterID, &existingCustomer)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // not a cluster subscription
+		}
+		if err != nil {
+			return fmt.Errorf("resolve cluster subscription %s: %w", subscriptionID, err)
+		}
+		if customerID == "" && existingCustomer.Valid {
+			customerID = existingCustomer.String
+		}
+	}
+
+	// Skip the grant when the row is already active so duplicate events do not
+	// re-enqueue access work. Best-effort read; the upsert below is the
+	// authority for the row state.
+	var currentStatus sql.NullString
+	if err := db.QueryRowContext(ctx, `
+		SELECT status FROM purser.cluster_subscriptions
+		WHERE tenant_id = $1 AND cluster_id = $2
+	`, tenantID, clusterID).Scan(&currentStatus); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("lookup cluster subscription status: %w", err)
+	}
+	alreadyActive := currentStatus.Valid && currentStatus.String == "active"
+
+	// Grant access BEFORE marking the row active. A failed grant returns an
+	// error and leaves the row non-active, so the webhook retry re-attempts the
+	// grant — there is no active-without-access stranding, and no crash window
+	// can leave the row active but ungranted. Quartermaster's grant is
+	// idempotent, so a rare concurrent double-grant is harmless.
+	if !alreadyActive && qmClient != nil {
+		grantCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := qmClient.GrantClusterAccess(grantCtx, &pb.GrantClusterAccessRequest{
+			TenantId:    tenantID,
+			ClusterId:   clusterID,
+			AccessLevel: "shared",
+		}); err != nil {
+			return fmt.Errorf("failed to grant cluster access: %w", err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, `
 		INSERT INTO purser.cluster_subscriptions (
 			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
 			stripe_subscription_status, checkout_session_id, intent_id, created_at, updated_at
 		) VALUES (
-			$1, $2, 'active', $3, $4, 'active', $5,
+			$1, $2, 'active', NULLIF($3, ''), NULLIF($4, ''), 'active', NULLIF($5, ''),
 			(SELECT id FROM purser.payment_provider_intents
 			 WHERE provider = 'stripe' AND provider_session_id = $5
 			 LIMIT 1),
@@ -544,16 +691,16 @@ func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, 
 		)
 		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 			status = 'active',
-			stripe_customer_id = EXCLUDED.stripe_customer_id,
-			stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+			stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, purser.cluster_subscriptions.stripe_customer_id),
+			stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, purser.cluster_subscriptions.stripe_subscription_id),
 			stripe_subscription_status = 'active',
-			checkout_session_id = EXCLUDED.checkout_session_id,
+			checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, purser.cluster_subscriptions.checkout_session_id),
 			intent_id = COALESCE(purser.cluster_subscriptions.intent_id, EXCLUDED.intent_id),
 			updated_at = NOW()
-	`, tenantID, clusterID, customerID, subscriptionID, sessionID)
-	if err != nil {
-		return fmt.Errorf("failed to update cluster subscription: %w", err)
+	`, tenantID, clusterID, customerID, subscriptionID, sessionID); err != nil {
+		return fmt.Errorf("failed to activate cluster subscription: %w", err)
 	}
+
 	if _, intentErr := db.ExecContext(ctx, `
 		UPDATE purser.payment_provider_intents
 		SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
@@ -561,36 +708,176 @@ func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, 
 		    succeeded_at = COALESCE(succeeded_at, NOW()),
 		    updated_at = NOW()
 		WHERE provider = 'stripe'
-		  AND provider_session_id = $2
+		  AND (provider_session_id = NULLIF($2, '') OR provider_subscription_id = NULLIF($1, ''))
 	`, subscriptionID, sessionID); intentErr != nil {
 		return fmt.Errorf("failed to mark cluster checkout intent succeeded: %w", intentErr)
 	}
 
-	if qmClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err = qmClient.GrantClusterAccess(ctx, &pb.GrantClusterAccessRequest{
-			TenantId:    tenantID,
-			ClusterId:   clusterID,
-			AccessLevel: "shared",
-		})
-		if err != nil {
-			return fmt.Errorf("failed to grant cluster access: %w", err)
-		}
+	if !alreadyActive {
+		logger.WithFields(logging.Fields{
+			"tenant_id":       tenantID,
+			"cluster_id":      clusterID,
+			"customer_id":     customerID,
+			"subscription_id": subscriptionID,
+		}).Info("Activated cluster subscription from Stripe")
 	}
-
-	logger.WithFields(logging.Fields{
-		"tenant_id":       tenantID,
-		"cluster_id":      clusterID,
-		"customer_id":     customerID,
-		"subscription_id": subscriptionID,
-	}).Info("Activated paid cluster subscription from Stripe checkout")
 
 	return nil
 }
 
-// handleInvoiceCheckoutCompleted handles invoice payment completion
-func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentIntentID, tenantID, invoiceID string) error {
+// stageClusterSubscriptionPending records the cluster_subscriptions row for a
+// paid-cluster checkout whose first payment is still settling asynchronously.
+// It does not set status=active or grant access; activation arrives via
+// customer.subscription.updated / invoice.paid. The stripe_subscription_status
+// guard preserves an already-active row against a late unpaid re-delivery.
+func stageClusterSubscriptionPending(ctx context.Context, sessionID, tenantID, clusterID, customerID, subscriptionID string) error {
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO purser.cluster_subscriptions (
+			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
+			stripe_subscription_status, checkout_session_id, intent_id, created_at, updated_at
+		) VALUES (
+			$1, $2, 'pending_payment', NULLIF($3, ''), NULLIF($4, ''), 'incomplete', NULLIF($5, ''),
+			(SELECT id FROM purser.payment_provider_intents
+			 WHERE provider = 'stripe' AND provider_session_id = $5
+			 LIMIT 1),
+			NOW(), NOW()
+		)
+		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+			stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, purser.cluster_subscriptions.stripe_customer_id),
+			stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, purser.cluster_subscriptions.stripe_subscription_id),
+			stripe_subscription_status = CASE
+				WHEN purser.cluster_subscriptions.status = 'active'
+				THEN purser.cluster_subscriptions.stripe_subscription_status
+				ELSE 'incomplete'
+			END,
+			checkout_session_id = COALESCE(EXCLUDED.checkout_session_id, purser.cluster_subscriptions.checkout_session_id),
+			intent_id = COALESCE(purser.cluster_subscriptions.intent_id, EXCLUDED.intent_id),
+			updated_at = NOW()
+	`, tenantID, clusterID, customerID, subscriptionID, sessionID); err != nil {
+		return fmt.Errorf("failed to stage pending cluster subscription: %w", err)
+	}
+	if err := linkStripeIntentSubscription(ctx, sessionID, subscriptionID); err != nil {
+		return err
+	}
+	logger.WithFields(logging.Fields{
+		"tenant_id":       tenantID,
+		"cluster_id":      clusterID,
+		"subscription_id": subscriptionID,
+	}).Info("Staged cluster subscription pending async settlement")
+	return nil
+}
+
+// clearStagedStripeCheckout undoes the staged checkout state for a tenant
+// subscription whose Stripe checkout failed or expired before activating: it
+// expires the still-open provider intent and clears the staged pending tier
+// fields, guarded by pending_reason so an active subscription's tier is never
+// touched. Idempotent.
+func clearStagedStripeCheckout(ctx context.Context, tenantID, subscriptionID string) error {
+	if subscriptionID != "" {
+		if _, err := db.ExecContext(ctx, `
+			UPDATE purser.payment_provider_intents
+			SET status = 'expired', updated_at = NOW()
+			WHERE provider = 'stripe'
+			  AND provider_subscription_id = $1
+			  AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
+		`, subscriptionID); err != nil {
+			return fmt.Errorf("expire staged stripe intent for %s: %w", subscriptionID, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.tenant_subscriptions
+		SET pending_tier_id = NULL,
+		    pending_effective_at = NULL,
+		    pending_reason = NULL,
+		    pending_intent_id = NULL,
+		    updated_at = NOW()
+		WHERE tenant_id = $1 AND pending_reason = 'stripe_checkout'
+	`, tenantID); err != nil {
+		return fmt.Errorf("clear staged stripe checkout for tenant %s: %w", tenantID, err)
+	}
+	return nil
+}
+
+// markPendingTopupTerminal moves a still-pending top-up to a terminal status
+// (failed or expired). Guarded on status='pending' so a completed top-up that
+// already credited the balance is never reverted. Idempotent.
+func markPendingTopupTerminal(ctx context.Context, topupID, status string) error {
+	if topupID == "" {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.pending_topups
+		SET status = $1, updated_at = NOW()
+		WHERE id = $2 AND status = 'pending'
+	`, status, topupID); err != nil {
+		return fmt.Errorf("mark pending top-up %s as %s: %w", topupID, status, err)
+	}
+	return nil
+}
+
+// linkStripeIntentSubscription stamps the Stripe subscription id onto the
+// session-keyed provider intent. Async checkouts stage before the subscription
+// is active, and activation later closes the intent by provider_subscription_id;
+// without this link that update matches zero rows and the intent stays open.
+func linkStripeIntentSubscription(ctx context.Context, sessionID, subscriptionID string) error {
+	if sessionID == "" || subscriptionID == "" {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET provider_subscription_id = COALESCE(provider_subscription_id, $1),
+		    updated_at = NOW()
+		WHERE provider = 'stripe' AND provider_session_id = $2
+	`, subscriptionID, sessionID); err != nil {
+		return fmt.Errorf("link stripe intent %s to subscription %s: %w", sessionID, subscriptionID, err)
+	}
+	return nil
+}
+
+// expireStripeCheckoutIntent marks a still-open provider intent expired when its
+// Checkout Session expires. Guarded so terminal intents are left untouched.
+func expireStripeCheckoutIntent(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.payment_provider_intents
+		SET status = 'expired', updated_at = NOW()
+		WHERE provider = 'stripe'
+		  AND provider_session_id = $1
+		  AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
+	`, sessionID); err != nil {
+		return fmt.Errorf("expire stripe checkout intent %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// clearStagedClusterSubscription cancels a cluster_subscriptions row that was
+// staged pending_payment for a Stripe checkout that expired or failed before
+// activating. Guarded on status='pending_payment' so an active subscription is
+// never touched. Matched by the checkout session id (always set at staging) or
+// the subscription id when one was created. Idempotent.
+func clearStagedClusterSubscription(ctx context.Context, sessionID, subscriptionID string) error {
+	if sessionID == "" && subscriptionID == "" {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.cluster_subscriptions
+		SET status = 'cancelled', stripe_subscription_status = 'incomplete_expired', updated_at = NOW()
+		WHERE status = 'pending_payment'
+		  AND (checkout_session_id = NULLIF($1, '') OR stripe_subscription_id = NULLIF($2, ''))
+	`, sessionID, subscriptionID); err != nil {
+		return fmt.Errorf("clear staged cluster subscription: %w", err)
+	}
+	return nil
+}
+
+// handleInvoiceCheckoutCompleted handles invoice payment completion. The
+// payment_intent is always attached to the pending billing_payment so a later
+// async settlement can match it, but the invoice is confirmed only once funds
+// have actually settled (settled=true); async methods confirm via
+// checkout.session.async_payment_succeeded.
+func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentIntentID, tenantID, invoiceID string, settled bool) error {
 	if invoiceID == "" {
 		logger.WithField("session_id", sessionID).Debug("No invoice_id in checkout metadata, skipping")
 		return nil
@@ -608,6 +895,14 @@ func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentInten
 		`, paymentIntentID, invoiceID, sessionID); err != nil {
 			return fmt.Errorf("attach stripe payment_intent to invoice payment: %w", err)
 		}
+	}
+	if !settled {
+		logger.WithFields(logging.Fields{
+			"session_id": sessionID,
+			"tenant_id":  tenantID,
+			"invoice_id": invoiceID,
+		}).Info("Invoice checkout pending async settlement; awaiting async_payment_succeeded")
+		return nil
 	}
 	updated, err := updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed")
 	if err != nil {
@@ -630,8 +925,11 @@ func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentInten
 	return nil
 }
 
-// handlePrepaidCheckoutCompleted handles prepaid balance top-up completion
-func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, providerPaymentID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider) error {
+// handlePrepaidCheckoutCompleted handles prepaid balance top-up completion. The
+// provider payment id is attached to the pending_topup regardless, but the
+// balance is credited only once funds have settled (settled=true); async
+// methods credit via checkout.session.async_payment_succeeded.
+func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, providerPaymentID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider, settled bool) error {
 	if topupID == "" || tenantID == "" {
 		logger.WithFields(logging.Fields{
 			"session_id": sessionID,
@@ -685,6 +983,19 @@ func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, providerPaym
 		WHERE id = $3
 	`, providerPaymentID, sessionID, topupID); attachErr != nil {
 		return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
+	}
+
+	// Async methods complete the Checkout Session before funds settle; persist
+	// the linkage but do not credit until async_payment_succeeded arrives.
+	if !settled {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return fmt.Errorf("commit pending top-up linkage: %w", commitErr)
+		}
+		logger.WithFields(logging.Fields{
+			"topup_id":  topupID,
+			"tenant_id": tenantID,
+		}).Info("Prepaid top-up pending async settlement; awaiting async_payment_succeeded")
+		return nil
 	}
 
 	// 2. Credit prepaid balance

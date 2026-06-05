@@ -37,7 +37,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
-	stripelib "github.com/stripe/stripe-go/v82"
+	stripelib "github.com/stripe/stripe-go/v85"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -2029,7 +2029,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 	query := `
 		SELECT i.id, i.tenant_id, i.amount, i.base_amount, i.metered_amount, i.prepaid_credit_applied, i.currency, i.status,
 		       i.due_date, i.paid_at, i.usage_details, i.created_at, i.updated_at, s.tier_id,
-		       i.period_start, i.period_end
+		       i.period_start, i.period_end, i.gross_metered_amount
 		FROM purser.billing_invoices i
 		LEFT JOIN purser.tenant_subscriptions s ON i.tenant_id = s.tenant_id AND s.status != 'cancelled'
 		WHERE i.id = $1`
@@ -2044,7 +2044,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		&invoice.Id, &invoice.TenantId, &invoice.Amount, &invoice.BaseAmount,
 		&invoice.MeteredAmount, &invoice.PrepaidCreditApplied, &invoice.Currency, &invoice.Status,
 		&dueDate, &paidAt, &usageDetailsBytes, &createdAt, &updatedAt, &tierID,
-		&periodStart, &periodEnd)
+		&periodStart, &periodEnd, &invoice.GrossMeteredAmount)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invoice not found")
@@ -2146,7 +2146,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, amount, base_amount, metered_amount, prepaid_credit_applied, currency, status,
-		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end
+		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end, gross_metered_amount
 		FROM purser.billing_invoices
 		%s
 		ORDER BY %s %s, id %s
@@ -2170,7 +2170,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 
 		err := rows.Scan(&inv.Id, &inv.TenantId, &inv.Amount, &inv.BaseAmount,
 			&inv.MeteredAmount, &inv.PrepaidCreditApplied, &inv.Currency, &inv.Status,
-			&dueDate, &paidAt, &usageDetails, &createdAt, &updatedAt, &periodStart, &periodEnd)
+			&dueDate, &paidAt, &usageDetails, &createdAt, &updatedAt, &periodStart, &periodEnd, &inv.GrossMeteredAmount)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "scan invoice row: %v", err)
 		}
@@ -3237,7 +3237,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) ([]*pb.Invoice, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, tenant_id, amount, base_amount, metered_amount, prepaid_credit_applied, currency, status,
-		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end
+		       due_date, paid_at, usage_details, created_at, updated_at, period_start, period_end, gross_metered_amount
 		FROM purser.billing_invoices
 		WHERE tenant_id = $1 AND status IN ('pending', 'overdue')
 		ORDER BY due_date ASC
@@ -3253,12 +3253,12 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 		var dueDate, createdAt, updatedAt time.Time
 		var paidAt sql.NullTime
 		var usageDetails []byte
-		var baseAmount, meteredAmount sql.NullFloat64
+		var baseAmount, meteredAmount, grossMeteredAmount sql.NullFloat64
 		var periodStart, periodEnd sql.NullTime
 
 		err := rows.Scan(&inv.Id, &inv.TenantId, &inv.Amount, &baseAmount, &meteredAmount,
 			&inv.PrepaidCreditApplied, &inv.Currency, &inv.Status, &dueDate, &paidAt, &usageDetails,
-			&createdAt, &updatedAt, &periodStart, &periodEnd)
+			&createdAt, &updatedAt, &periodStart, &periodEnd, &grossMeteredAmount)
 		if err != nil {
 			return nil, fmt.Errorf("scan pending invoice row: %w", err)
 		}
@@ -3274,6 +3274,9 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 		}
 		if meteredAmount.Valid {
 			inv.MeteredAmount = meteredAmount.Float64
+		}
+		if grossMeteredAmount.Valid {
+			inv.GrossMeteredAmount = grossMeteredAmount.Float64
 		}
 		if periodStart.Valid {
 			inv.PeriodStart = timestamppb.New(periodStart.Time)
@@ -3639,11 +3642,20 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 				suffixed.LineKey = clusterScopedLineKey(line.LineKey, clusterID, periodSuffix)
 			}
 			protoLine := lineItemToProto(suffixed)
+			clusterKind := ""
 			if clusterID != "" {
+				clusterKind = string(resolved.Kind)
 				protoLine.ClusterId = clusterID
-				protoLine.ClusterKind = string(resolved.Kind)
+				protoLine.ClusterKind = clusterKind
 				protoLine.PricingSource = string(resolved.PricingSource)
-				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, protoLine.ClusterKind)
+				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, clusterKind)
+			}
+			// Usage that rated to a real amount but was waived to €0 is stamped
+			// beta_free regardless of attribution, so platform/unattributed lines
+			// also surface the beta label and the preview matches the invoice.
+			if suffixed.GrossAmount.IsPositive() && suffixed.Amount.IsZero() {
+				protoLine.PricingSource = string(pricing.SourceBetaFree)
+				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, clusterKind)
 			}
 			resp.LineItems = append(resp.LineItems, protoLine)
 			amount, _ := suffixed.Amount.Float64()
@@ -4565,6 +4577,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.Cr
 			ReferenceID:    clusterID,
 			ClusterID:      clusterID,
 			PriceID:        priceID,
+			Currency:       clusterCurrency,
 			SuccessURL:     successURL,
 			CancelURL:      cancelURL,
 			IdempotencyKey: intentKey,
@@ -6471,7 +6484,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *pb.ChangeBill
 
 	// DOWNGRADE — stage for end of period. The post-commit applier in
 	// jobs.go flips tier_id and reconciles after the period's invoice clears.
-	effective := time.Time{}
+	var effective time.Time
 	if stripePeriodEnd.Valid {
 		effective = stripePeriodEnd.Time
 	} else if billingPeriodEnd.Valid {
@@ -6753,6 +6766,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 		Purpose:        "subscription",
 		ReferenceID:    tierID,
 		PriceID:        priceID.String,
+		Currency:       currency,
 		SuccessURL:     successURL,
 		CancelURL:      cancelURL,
 		IdempotencyKey: intentKey,
@@ -7889,6 +7903,8 @@ func pricingLabelFor(pricingSource, clusterKind string) string {
 		return "Self-hosted (no charge)"
 	case "included_subscription":
 		return "Included in subscription"
+	case "beta_free":
+		return "Usage is on us during beta"
 	default:
 		return ""
 	}

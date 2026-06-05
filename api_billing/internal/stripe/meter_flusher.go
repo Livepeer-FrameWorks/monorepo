@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	stripeapi "github.com/stripe/stripe-go/v82"
-	stripemeter "github.com/stripe/stripe-go/v82/billing/meterevent"
+	stripeapi "github.com/stripe/stripe-go/v85"
+	stripemeter "github.com/stripe/stripe-go/v85/billing/meterevent"
 )
 
 // MeterFlusher reads pending stripe_meter_events_outbox rows and pushes

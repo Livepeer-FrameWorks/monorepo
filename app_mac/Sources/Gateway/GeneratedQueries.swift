@@ -970,6 +970,7 @@ enum GQL {
         amount
         baseAmount
         meteredAmount
+        grossMeteredAmount
         prepaidCreditApplied
         currency
         dueDate
@@ -1621,6 +1622,8 @@ enum GQL {
         node {
           id
           amount
+          meteredAmount
+          grossMeteredAmount
           prepaidCreditApplied
           currency
           status

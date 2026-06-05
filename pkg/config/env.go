@@ -94,6 +94,13 @@ func X402IncludeTestnetsEnabled() bool {
 	return GetEnvBool("X402_INCLUDE_TESTNETS", false)
 }
 
+// WaiveUsageChargesEnabled reports whether metered usage should rate to €0 while
+// the monthly subscription still charges. Real prices stay in the DB; flipping
+// this off resumes normal billing with no migration. Beta safety lever.
+func WaiveUsageChargesEnabled() bool {
+	return GetEnvBool("WAIVE_USAGE_CHARGES", false)
+}
+
 // IsProduction reports whether the current process is running with production
 // runtime settings. BUILD_ENV is the repo-wide runtime selector.
 func IsProduction() bool {

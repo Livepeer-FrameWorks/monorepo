@@ -534,3 +534,122 @@ func findLine(t *testing.T, lines []LineItem, key string) LineItem {
 	t.Fatalf("line %q not found in %d lines", key, len(lines))
 	return LineItem{}
 }
+
+// TestRate_WaiveUsageCharges_ZeroesNetPreservesGross is the structural
+// bug-proof test: a metering bug producing garbage usage still rates the net
+// metered amount to 0 while the base subscription charges and the would-have-cost
+// gross is preserved. Quantities and unit prices stay real for display.
+func TestRate_WaiveUsageCharges_ZeroesNetPreservesGross(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:          "EUR",
+		BasePrice:         dec("79.00"),
+		Rules:             supporterRules(),
+		WaiveUsageCharges: true,
+		Usage: map[Meter]decimal.Decimal{
+			MeterDeliveredMinutes:    dec("10000000"), // garbage-huge: 10M minutes
+			MeterStorageGBSecondsCld: dec("360000"),   // 100 GiB-hours
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+
+	// Net usage is structurally zero no matter how wrong the quantity is.
+	if !res.UsageAmount.IsZero() {
+		t.Errorf("UsageAmount = %s, want 0 (waived)", res.UsageAmount)
+	}
+	// Gross is the real would-have-cost: (10_000_000 - 120_000) × 0.00055
+	// + 100 GiB-hours × 0.035 = 5434.00 + 3.50 = 5437.50.
+	wantGross := dec("5437.50")
+	if !res.GrossUsageAmount.Equal(wantGross) {
+		t.Errorf("GrossUsageAmount = %s, want %s", res.GrossUsageAmount, wantGross)
+	}
+	// Base subscription still charges; total is base only.
+	if !res.TotalAmount.Equal(dec("79.00")) {
+		t.Errorf("TotalAmount = %s, want 79.00 (base only)", res.TotalAmount)
+	}
+
+	delivered := findLine(t, res.UsageLines, "meter:delivered_minutes")
+	// Index-loop regression guard: the line amount must actually be zeroed
+	// (a range-by-value loop would silently leave it non-zero).
+	if !delivered.Amount.IsZero() {
+		t.Errorf("delivered Amount = %s, want 0 (waived)", delivered.Amount)
+	}
+	// Unit price and billable quantity stay real for display.
+	if !delivered.UnitPrice.Equal(dec("0.000550")) {
+		t.Errorf("delivered UnitPrice = %s, want 0.000550 (real)", delivered.UnitPrice)
+	}
+	if !delivered.BillableQuantity.Equal(dec("9880000")) {
+		t.Errorf("delivered BillableQuantity = %s, want 9880000 (real)", delivered.BillableQuantity)
+	}
+	// Audit-invariant exemption: for waived lines billable × unit_price equals
+	// GrossAmount (the pre-waiver amount), NOT Amount (which is 0).
+	if !delivered.BillableQuantity.Mul(delivered.UnitPrice).Equal(delivered.GrossAmount) {
+		t.Errorf("waived audit invariant: %s × %s != GrossAmount %s",
+			delivered.BillableQuantity, delivered.UnitPrice, delivered.GrossAmount)
+	}
+	if !delivered.GrossAmount.IsPositive() {
+		t.Errorf("delivered GrossAmount = %s, want > 0", delivered.GrossAmount)
+	}
+}
+
+// TestRate_Waive_FlagOffParity proves the gross column tracks metered_amount
+// exactly when the waiver is off: same input, no waiver → GrossUsageAmount
+// equals UsageAmount and each line's GrossAmount equals its Amount.
+func TestRate_Waive_FlagOffParity(t *testing.T) {
+	in := Input{
+		Currency:  "EUR",
+		BasePrice: dec("79.00"),
+		Rules:     supporterRules(),
+		Usage: map[Meter]decimal.Decimal{
+			MeterDeliveredMinutes:    dec("10000000"),
+			MeterStorageGBSecondsCld: dec("360000"),
+		},
+	}
+	res, err := Rate(in)
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	if !res.GrossUsageAmount.Equal(res.UsageAmount) {
+		t.Errorf("flag-off: GrossUsageAmount %s != UsageAmount %s", res.GrossUsageAmount, res.UsageAmount)
+	}
+	for _, l := range res.UsageLines {
+		if !l.GrossAmount.Equal(l.Amount) {
+			t.Errorf("flag-off line %q: GrossAmount %s != Amount %s", l.LineKey, l.GrossAmount, l.Amount)
+		}
+	}
+}
+
+// TestRate_Waive_NegativeCorrection pins behavior for negative usage credit
+// lines under the waiver: the line is zeroed net like any usage line, and its
+// real negative value still flows into GrossUsageAmount so flag-off parity
+// holds. Its GrossAmount is not positive, so the finalize stamper will not mark
+// it beta_free.
+func TestRate_Waive_NegativeCorrection(t *testing.T) {
+	res, err := Rate(Input{
+		Currency:          "EUR",
+		BasePrice:         dec("79.00"),
+		Rules:             supporterRules(),
+		WaiveUsageCharges: true,
+		Usage: map[Meter]decimal.Decimal{
+			MeterDeliveredMinutes: dec("-1000"), // a correction credit
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	line := findLine(t, res.UsageLines, "meter:delivered_minutes")
+	if !line.Amount.IsZero() {
+		t.Errorf("negative line Amount = %s, want 0 (waived)", line.Amount)
+	}
+	wantGross := dec("-0.55") // -1000 × 0.00055
+	if !line.GrossAmount.Equal(wantGross) {
+		t.Errorf("negative line GrossAmount = %s, want %s", line.GrossAmount, wantGross)
+	}
+	if line.GrossAmount.IsPositive() {
+		t.Errorf("negative line GrossAmount %s must not be positive (no beta_free stamp)", line.GrossAmount)
+	}
+	if !res.GrossUsageAmount.Equal(wantGross) {
+		t.Errorf("GrossUsageAmount = %s, want %s (negative flows into gross)", res.GrossUsageAmount, wantGross)
+	}
+}

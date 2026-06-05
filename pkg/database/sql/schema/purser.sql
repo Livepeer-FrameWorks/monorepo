@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS purser.billing_invoices (
 
     -- ===== AMOUNT BREAKDOWN =====
     base_amount DECIMAL(10,2) NOT NULL DEFAULT 0,    -- Subscription base fee
-    metered_amount DECIMAL(10,2) NOT NULL DEFAULT 0, -- Usage-based charges
+    metered_amount DECIMAL(10,2) NOT NULL DEFAULT 0, -- Usage-based charges (net; 0 when usage is waived)
+    -- Unwaived metered total: what usage would have rated to. Equals metered_amount
+    -- when WAIVE_USAGE_CHARGES is off; the would-have-cost figure when on. Display
+    -- only, never charged. Wider precision than other money columns so a metering
+    -- bug producing garbage usage cannot overflow it and abort invoice generation.
+    gross_metered_amount DECIMAL(20,2) NOT NULL DEFAULT 0,
     prepaid_credit_applied DECIMAL(10,2) NOT NULL DEFAULT 0, -- Credit applied from prepaid balance
     usage_details JSONB NOT NULL DEFAULT '{}',       -- Raw usage breakdown for debug/audit; presentation surfaces (email, dashboard) read invoice_line_items.
 
@@ -456,7 +461,7 @@ CREATE TABLE IF NOT EXISTS purser.invoice_line_items (
     UNIQUE (invoice_id, line_key),
     CONSTRAINT chk_invoice_line_items_pricing_source CHECK (pricing_source IN (
         'tier', 'cluster_metered', 'cluster_monthly', 'cluster_custom',
-        'free_unmetered', 'self_hosted', 'included_subscription'
+        'free_unmetered', 'self_hosted', 'included_subscription', 'beta_free'
     )),
     CONSTRAINT chk_invoice_line_items_cluster_kind CHECK (cluster_kind IS NULL OR cluster_kind IN (
         'platform_official', 'tenant_private', 'third_party_marketplace'

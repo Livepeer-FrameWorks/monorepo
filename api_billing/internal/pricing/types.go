@@ -42,6 +42,10 @@ const (
 	SourceFreeUnmetered        PricingSource = "free_unmetered"
 	SourceSelfHosted           PricingSource = "self_hosted"
 	SourceIncludedSubscription PricingSource = "included_subscription"
+	// SourceBetaFree marks usage that rated to a real amount but was waived to €0
+	// during the billing beta (WAIVE_USAGE_CHARGES). Distinct from free_unmetered
+	// (a permanently-free cluster) so the two never conflate when the beta ends.
+	SourceBetaFree PricingSource = "beta_free"
 )
 
 // Model mirrors purser.cluster_pricing.pricing_model. Kept as a typed string

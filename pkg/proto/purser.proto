@@ -589,6 +589,7 @@ message Invoice {
   reserved 16;
   reserved "usage_summary";
   repeated LineItem line_items = 17;          // Generated invoice line items
+  double gross_metered_amount = 18;           // json:"gross_metered_amount" - unwaived metered total (would-have-cost; equals metered_amount when usage not waived)
 }
 
 message ListInvoicesRequest {

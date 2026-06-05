@@ -3086,6 +3086,7 @@ type Invoice struct {
 	PeriodStart          *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=period_start,json=periodStart,proto3" json:"period_start,omitempty"`                                // json:"period_start"
 	PeriodEnd            *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=period_end,json=periodEnd,proto3" json:"period_end,omitempty"`                                      // json:"period_end"
 	LineItems            []*LineItem            `protobuf:"bytes,17,rep,name=line_items,json=lineItems,proto3" json:"line_items,omitempty"`                                      // Generated invoice line items
+	GrossMeteredAmount   float64                `protobuf:"fixed64,18,opt,name=gross_metered_amount,json=grossMeteredAmount,proto3" json:"gross_metered_amount,omitempty"`       // json:"gross_metered_amount" - unwaived metered total (would-have-cost; equals metered_amount when usage not waived)
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -3230,6 +3231,13 @@ func (x *Invoice) GetLineItems() []*LineItem {
 		return x.LineItems
 	}
 	return nil
+}
+
+func (x *Invoice) GetGrossMeteredAmount() float64 {
+	if x != nil {
+		return x.GrossMeteredAmount
+	}
+	return 0
 }
 
 type ListInvoicesRequest struct {
@@ -10174,7 +10182,7 @@ const file_purser_proto_rawDesc = "" +
 	"\fcluster_name\x18\v \x01(\tR\vclusterName\x12!\n" +
 	"\fcluster_kind\x18\f \x01(\tR\vclusterKind\x12%\n" +
 	"\x0epricing_source\x18\r \x01(\tR\rpricingSource\x12#\n" +
-	"\rpricing_label\x18\x0e \x01(\tR\fpricingLabel\"\xf1\x05\n" +
+	"\rpricing_label\x18\x0e \x01(\tR\fpricingLabel\"\xa3\x06\n" +
 	"\aInvoice\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -10197,7 +10205,8 @@ const file_purser_proto_rawDesc = "" +
 	"\n" +
 	"period_end\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tperiodEnd\x12/\n" +
 	"\n" +
-	"line_items\x18\x11 \x03(\v2\x10.purser.LineItemR\tlineItemsB\n" +
+	"line_items\x18\x11 \x03(\v2\x10.purser.LineItemR\tlineItems\x120\n" +
+	"\x14gross_metered_amount\x18\x12 \x01(\x01R\x12grossMeteredAmountB\n" +
 	"\n" +
 	"\b_paid_atJ\x04\b\x10\x10\x11R\rusage_summary\"\x9b\x01\n" +
 	"\x13ListInvoicesRequest\x12\x1b\n" +

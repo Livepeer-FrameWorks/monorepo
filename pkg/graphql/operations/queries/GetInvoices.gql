@@ -6,6 +6,8 @@ query GetInvoices($first: Int = 50, $after: String) {
       node {
         id
         amount
+        meteredAmount
+        grossMeteredAmount
         prepaidCreditApplied
         currency
         status

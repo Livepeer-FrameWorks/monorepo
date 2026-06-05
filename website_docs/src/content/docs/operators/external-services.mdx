@@ -429,17 +429,35 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 
 **What's Automated:**
 
-- Webhook event handling
-- Subscription management
-- Payment processing
+- Webhook event handling (sync + asynchronous settlement)
+- Subscription management and tier activation
+- Product/price catalog sync on startup
+- Payment processing, refunds, and disputes
 
 **Manual Steps:**
 
 1. Create Stripe account at https://stripe.com
-2. Get API keys from dashboard
-3. Configure webhook endpoint: `https://yourdomain.com/webhooks/billing/stripe`
+2. Get the secret key from **Developers → API keys** (`sk_live_…`)
+3. Add a webhook endpoint at **Developers → Webhooks**:
+   - URL: `https://yourdomain.com/webhooks/billing/stripe`
+   - **Event destination scope: "Your account"** (FrameWorks is not a Stripe Connect platform)
+   - **API version: `2026-05-27.dahlia`** — must match the bundled `stripe-go` SDK. The
+     webhook payloads are parsed against this version; a mismatched endpoint version can
+     silently mis-parse fields.
+   - Subscribe these events:
+     - `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+       `checkout.session.async_payment_failed`, `checkout.session.expired`
+     - `customer.subscription.created`, `.updated`, `.deleted`, `.paused`, `.resumed`
+     - `invoice.paid`, `invoice.payment_failed`, `invoice.payment_action_required`
+     - `payment_intent.succeeded`, `payment_intent.payment_failed`
+     - `charge.refunded`, `charge.dispute.created`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`
+   - Reveal the endpoint **Signing secret** (`whsec_…`)
 4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
-5. Set environment variables:
+5. Enable payment methods (**Settings → Payment methods**). The hosted Checkout pins an
+   explicit, currency-aware allowlist in code: `card` always, plus `sepa_debit`, `ideal`, and
+   `bancontact` for EUR checkouts (these are EUR-only at Stripe; non-EUR checkouts offer card
+   only). The dashboard-enabled set must include the methods you bill in.
+6. Set environment variables:
    ```bash
    export STRIPE_SECRET_KEY="sk_live_..."
    export STRIPE_WEBHOOK_SECRET="whsec_..."
@@ -450,7 +468,10 @@ Auth flows degrade with warnings logged if SMTP is missing, but a degraded auth 
 
 **Optional:** Not required for basic platform operation
 
-**Note:** Stripe webhooks require `STRIPE_WEBHOOK_SECRET` in all environments.
+**Note:** Stripe webhooks require `STRIPE_WEBHOOK_SECRET` in all environments. Asynchronous
+methods (SEPA Direct Debit, iDEAL, Bancontact) settle after checkout completes; value is
+granted only on the confirming event (`async_payment_succeeded` / `invoice.paid` /
+`customer.subscription.updated`), never on `checkout.session.completed` alone.
 
 ---
 

@@ -314,6 +314,7 @@
     clusterId?: string | null;
     clusterName?: string | null;
     clusterKind?: string | null;
+    pricingSource?: string | null;
     pricingLabel?: string | null;
   };
 
@@ -893,7 +894,7 @@
                                           )}</td
                                         >
                                         <td class="py-2 text-right font-mono font-semibold">
-                                          {#if moneyNumber(item.total) === 0}
+                                          {#if moneyNumber(item.total) === 0 && item.pricingSource !== "beta_free"}
                                             <span
                                               class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-emerald-50 text-emerald-700"
                                               >Included</span
@@ -925,6 +926,19 @@
                                   </tr>
                                 </tbody>
                               </table>
+                            {/if}
+                            {#if moneyNumber(invoice.grossMeteredAmount) > 0 && moneyNumber(invoice.meteredAmount) === 0}
+                              <div
+                                class="mt-2 pt-2 border-t border-border/40 text-xs text-emerald-700"
+                              >
+                                Metered usage would have cost {formatCurrency(
+                                  invoice.grossMeteredAmount,
+                                  invoice.currency
+                                )} — usage is on us during beta. Metered total: {formatCurrency(
+                                  0,
+                                  invoice.currency
+                                )}.
+                              </div>
                             {/if}
                           </td>
                         </tr>

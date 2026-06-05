@@ -39,6 +39,11 @@ type EmailData struct {
 	// ActionURL is the hosted or in-app page where the customer completes a
 	// required payment action.
 	ActionURL string
+	// UsageWaived is true when metered usage was waived to €0 during the
+	// billing beta while the subscription still charges. GrossMeteredAmount is
+	// the would-have-cost usage total shown in the waiver callout.
+	UsageWaived        bool
+	GrossMeteredAmount float64
 	// LineItems is the cluster-attributed presentation source of truth for
 	// the invoice. Email renders only from this — usage_details is raw/debug
 	// JSON kept for audit, never read here.
@@ -104,7 +109,7 @@ func (es *EmailService) IsConfigured() bool {
 // lineItems is the cluster-attributed presentation source of truth — the
 // caller queries purser.invoice_line_items and maps to []EmailInvoiceLineItem
 // before invoking. Do not pass usage_details; that JSON is raw/debug only.
-func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error {
+func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping invoice created email")
 		return nil
@@ -113,14 +118,16 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 	subject := fmt.Sprintf("New Invoice %s - FrameWorks", invoiceID)
 
 	data := EmailData{
-		TenantName:     tenantName,
-		InvoiceID:      invoiceID,
-		Amount:         amount,
-		Currency:       currency,
-		DueDate:        dueDate,
-		LoginURL:       os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
-		LineItems:      lineItems,
-		LineItemGroups: groupEmailLineItems(lineItems),
+		TenantName:         tenantName,
+		InvoiceID:          invoiceID,
+		Amount:             amount,
+		Currency:           currency,
+		DueDate:            dueDate,
+		LoginURL:           os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		LineItems:          lineItems,
+		LineItemGroups:     groupEmailLineItems(lineItems),
+		UsageWaived:        grossMeteredAmount > 0 && meteredAmount == 0,
+		GrossMeteredAmount: grossMeteredAmount,
 	}
 
 	body, err := es.renderTemplate("invoice_created", data)
@@ -373,6 +380,12 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
             <p><strong>Due Date:</strong> {{.DueDate.Format "January 2, 2006"}}</p>
         </div>
 
+        {{if .UsageWaived}}
+        <p style="background-color: #e8f8f4; border-left: 3px solid #16a085; padding: 12px 16px; border-radius: 4px; color: #0b6b54;">
+            Metered usage would have cost {{printf "%.2f" .GrossMeteredAmount}} {{.Currency}} — usage is on us during beta. Metered total: 0.00 {{.Currency}}.
+        </p>
+        {{end}}
+
         {{if .LineItemGroups}}
         <h3 style="color: #2c3e50; margin-top: 30px;">Charges</h3>
         {{range .LineItemGroups}}
@@ -398,7 +411,7 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
                 <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.Quantity}}</td>
                 <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.UnitPrice}} {{.Currency}}</td>
                 <td style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee;">
-                    {{if .IsZeroPrice}}<span style="color: #16a085; font-weight: 600;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}
+                    {{if and .IsZeroPrice (ne .PricingSource "beta_free")}}<span style="color: #16a085; font-weight: 600;">Included</span>{{else}}{{.Total}} {{.Currency}}{{end}}
                 </td>
             </tr>
             {{end}}

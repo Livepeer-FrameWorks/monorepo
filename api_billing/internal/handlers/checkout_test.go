@@ -30,7 +30,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "pi-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe); err == nil {
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "pi-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe, true); err == nil {
 		t.Fatal("expected error")
 	}
 
@@ -58,7 +58,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("completed", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe); err != nil {
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe, true); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie); err != nil {
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "pay-3", "tenant-a", "topup-789", 1500, "EUR", ProviderMollie, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 func TestHandlePrepaidCheckoutCompletedRequiresTenantAndTopup(t *testing.T) {
 	logger = logrus.New()
 
-	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "", "", "", 1500, "USD", ProviderStripe); err != nil {
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-3", "", "", "", 1500, "USD", ProviderStripe, true); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	t.Cleanup(func() { db = nil })
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
-		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-a").
+		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-a", nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id`).
 		WithArgs("sub_456", "cs_test_session").
@@ -199,6 +199,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 		"tier-pro",
 		"cus_123",
 		"sub_456",
+		true,
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 	t.Cleanup(func() { db = nil })
 
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
-		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-missing").
+		WithArgs("cus_123", "sub_456", "tier-pro", "tenant-missing", nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = handleSubscriptionCheckoutCompleted(
@@ -230,6 +231,7 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 		"tier-pro",
 		"cus_123",
 		"sub_456",
+		true,
 	)
 	if err == nil || !strings.Contains(err.Error(), "no tenant_subscriptions row") {
 		t.Fatalf("expected missing-row error, got %v", err)
@@ -250,8 +252,126 @@ func TestHandleSubscriptionCheckoutCompletedSkipsWhenTenantMissing(t *testing.T)
 		"tier-pro",
 		"cus_123",
 		"sub_456",
+		true,
 	); err != nil {
 		t.Fatalf("expected nil error when tenant_id empty, got %v", err)
+	}
+}
+
+// TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid asserts that an async
+// (unpaid) subscription checkout records the Stripe linkage without activating
+// the tier — activation must wait for customer.subscription.updated.
+func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	mock.ExpectExec(`(?s)UPDATE purser\.tenant_subscriptions.*stripe_subscription_status = CASE.*WHERE tenant_id = \$3`).
+		WithArgs("cus_123", "sub_456", "tenant-a").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Staging also links the subscription id onto the session-keyed intent so
+	// later activation-by-subscription-id can close it.
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id = COALESCE.*provider_session_id = \$2`).
+		WithArgs("sub_456", "cs_test_session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleSubscriptionCheckoutCompleted(
+		context.Background(),
+		"cs_test_session",
+		"tenant-a",
+		"tier-pro",
+		"cus_123",
+		"sub_456",
+		false,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandleInvoiceCheckoutCompletedPendingWhenUnsettled asserts that an async
+// invoice checkout attaches the payment_intent but does not confirm the invoice
+// until funds settle.
+func TestHandleInvoiceCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	// Only the payment_intent attach runs; no updateInvoicePaymentStatus.
+	mock.ExpectExec(`UPDATE purser\.billing_payments`).
+		WithArgs("pi_1", "inv-1", "cs_test_session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := handleInvoiceCheckoutCompleted(
+		context.Background(),
+		"cs_test_session",
+		"pi_1",
+		"tenant-a",
+		"inv-1",
+		false,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+// TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled asserts that an async
+// top-up persists the provider linkage and commits without crediting the
+// balance until funds settle.
+func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	db = mockDB
+	logger = logrus.New()
+	t.Cleanup(func() { db = nil })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status, tenant_id FROM purser.pending_topups WHERE id = \\$1 FOR UPDATE").
+		WithArgs("topup-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
+	mock.ExpectExec("UPDATE purser.pending_topups").
+		WithArgs("pi_1", "cs_test_session", "topup-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	if err := handlePrepaidCheckoutCompleted(
+		context.Background(),
+		"cs_test_session",
+		"pi_1",
+		"tenant-a",
+		"topup-1",
+		1500,
+		"EUR",
+		ProviderStripe,
+		false,
+	); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

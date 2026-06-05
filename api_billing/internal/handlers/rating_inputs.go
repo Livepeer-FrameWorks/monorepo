@@ -13,6 +13,7 @@ import (
 	"frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 )
 
@@ -51,12 +52,13 @@ func buildRatingInputFromSummary(summary models.UsageSummary, currency string, r
 	}
 
 	return rating.Input{
-		Currency:     currency,
-		BasePrice:    decimal.Zero,
-		Rules:        rules,
-		Usage:        usage,
-		Breakdowns:   map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
-		CodecSeconds: codecSeconds,
+		Currency:          currency,
+		BasePrice:         decimal.Zero,
+		Rules:             rules,
+		Usage:             usage,
+		Breakdowns:        map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
+		CodecSeconds:      codecSeconds,
+		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
 	}
 }
 
@@ -75,12 +77,13 @@ func buildRatingInputFromCanonicalUsage(rows []canonicalUsageDelta, currency str
 		}
 	}
 	return rating.Input{
-		Currency:     currency,
-		BasePrice:    decimal.Zero,
-		Rules:        rules,
-		Usage:        usage,
-		Breakdowns:   map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
-		CodecSeconds: codecSeconds,
+		Currency:          currency,
+		BasePrice:         decimal.Zero,
+		Rules:             rules,
+		Usage:             usage,
+		Breakdowns:        map[rating.Meter]map[string]decimal.Decimal{rating.MeterMediaSeconds: codecSeconds},
+		CodecSeconds:      codecSeconds,
+		WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
 	}
 }
 

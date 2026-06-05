@@ -16,6 +16,8 @@ import (
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 )
 
 // pricedLine is one rating output line annotated with the cluster attribution
@@ -41,7 +43,11 @@ type clusterRatingResult struct {
 	UsageLines  []pricedLine
 	BaseAmount  decimal.Decimal
 	UsageAmount decimal.Decimal
-	TotalAmount decimal.Decimal
+	// GrossUsageAmount is the unwaived metered total across all clusters (what
+	// usage would have rated to). Equals UsageAmount when usage is not waived;
+	// when the beta waiver is on it is the would-have-cost figure for display.
+	GrossUsageAmount decimal.Decimal
+	TotalAmount      decimal.Decimal
 	// ManualReviewReasons is non-empty when at least one cluster's pricing
 	// could not be resolved (e.g. custom model with no metered_rates). The
 	// caller MUST set the invoice status to 'manual_review' and halt
@@ -368,14 +374,15 @@ func (jm *JobManager) rateInvoiceForTenant(
 		// BasePrice is zero — the base subscription is rated once above.
 		breakdowns := codecBreakdownsFromCluster(perClusterCodecBreakdowns[cid])
 		input := rating.Input{
-			Currency:     resolved.Currency,
-			BasePrice:    decimal.Zero,
-			Rules:        resolved.MeteredRules,
-			Usage:        usageMapFromAggregates(usageData),
-			Breakdowns:   breakdowns,
-			CodecSeconds: breakdowns[rating.MeterMediaSeconds],
-			PeriodStart:  periodStart,
-			PeriodEnd:    periodEnd,
+			Currency:          resolved.Currency,
+			BasePrice:         decimal.Zero,
+			Rules:             resolved.MeteredRules,
+			Usage:             usageMapFromAggregates(usageData),
+			Breakdowns:        breakdowns,
+			CodecSeconds:      breakdowns[rating.MeterMediaSeconds],
+			PeriodStart:       periodStart,
+			PeriodEnd:         periodEnd,
+			WaiveUsageCharges: config.WaiveUsageChargesEnabled(),
 		}
 		res, err := rating.Rate(input)
 		if err != nil {
@@ -416,6 +423,12 @@ func (jm *JobManager) rateInvoiceForTenant(
 				PlatformFeeCents:     platformFeeCents,
 				PriceVersionID:       versionCopy,
 			}
+			// A line that rated to a real amount but was waived to €0 by the beta
+			// waiver is stamped beta_free. Lines that were already €0 (within the
+			// included allowance, or included_subscription) keep their real source.
+			if pl.GrossAmount.IsPositive() && pl.Amount.IsZero() {
+				pl.PricingSource = pricing.SourceBetaFree
+			}
 			if cid != "" {
 				pl.ClusterID = &clusterIDCopy
 				pl.ClusterKind = &kindStr
@@ -423,6 +436,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 			out.UsageLines = append(out.UsageLines, pl)
 			out.UsageAmount = out.UsageAmount.Add(suffixed.Amount)
 		}
+		out.GrossUsageAmount = out.GrossUsageAmount.Add(res.GrossUsageAmount)
 	}
 
 	// Sort usage lines by LineKey for deterministic invoice output.
@@ -613,6 +627,8 @@ func emailPricingLabel(pricingSource, clusterKind string) string {
 		return "Self-hosted (no charge)"
 	case "included_subscription":
 		return "Included in subscription"
+	case "beta_free":
+		return "Usage is on us during beta"
 	default:
 		return ""
 	}
@@ -645,6 +661,7 @@ func (jm *JobManager) persistManualReviewDraft(
 	totalAmt := ratingResult.TotalAmount.Round(2).String()
 	baseAmt := ratingResult.BaseAmount.Round(2).String()
 	meteredAmt := ratingResult.UsageAmount.Round(2).String()
+	grossMeteredAmt := ratingResult.GrossUsageAmount.Round(2).String()
 	creditAmt := decimal.Zero.String()
 
 	return withTx(ctx, jm.db, func(tx *sql.Tx) error {
@@ -653,12 +670,12 @@ func (jm *JobManager) persistManualReviewDraft(
 			INSERT INTO purser.billing_invoices (
 				id, tenant_id, amount, currency, status, due_date,
 				base_amount, metered_amount, prepaid_credit_applied, usage_details,
-				period_start, period_end,
+				period_start, period_end, gross_metered_amount,
 				created_at, updated_at
 			) VALUES (
 				gen_random_uuid(), $1, $2::numeric, $3, 'manual_review', $4,
 				$5::numeric, $6::numeric, $7::numeric, '{}'::jsonb, $8, $9,
-				NOW(), NOW()
+				$10::numeric, NOW(), NOW()
 			)
 			ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
 			DO UPDATE SET
@@ -668,10 +685,11 @@ func (jm *JobManager) persistManualReviewDraft(
 				base_amount = EXCLUDED.base_amount,
 				metered_amount = EXCLUDED.metered_amount,
 				period_end = EXCLUDED.period_end,
+				gross_metered_amount = EXCLUDED.gross_metered_amount,
 				updated_at = NOW()
 			WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 			RETURNING id
-		`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, periodStart, periodEnd).Scan(&invoiceID)
+		`, tenantID, totalAmt, currency, dueDate, baseAmt, meteredAmt, creditAmt, periodStart, periodEnd, grossMeteredAmt).Scan(&invoiceID)
 		if txErr != nil {
 			return fmt.Errorf("upsert manual_review draft: %w", txErr)
 		}

@@ -14,7 +14,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.4
-	github.com/stripe/stripe-go/v82 v82.5.1
+	github.com/stripe/stripe-go/v85 v85.2.0
 	golang.org/x/crypto v0.50.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11

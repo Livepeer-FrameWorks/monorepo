@@ -151,6 +151,11 @@ type Input struct {
 	CodecSeconds map[string]decimal.Decimal
 	PeriodStart  time.Time
 	PeriodEnd    time.Time
+	// WaiveUsageCharges zeroes every usage line's Amount (keeping quantities and
+	// unit prices) so metered usage rates to 0 while the base subscription still
+	// charges. Each line's pre-waiver amount is preserved in LineItem.GrossAmount.
+	// Beta safety lever; the base line is never affected.
+	WaiveUsageCharges bool
 }
 
 // LineItem is one charge row. LineKey is the stable identity used for
@@ -164,7 +169,11 @@ type LineItem struct {
 	BillableQuantity decimal.Decimal
 	UnitPrice        decimal.Decimal
 	Amount           decimal.Decimal
-	Currency         string
+	// GrossAmount is the pre-waiver amount (== Amount when usage is not waived).
+	// Internal to rating: drives the genuinely-waived stamping decision and the
+	// invoice-level gross_metered_amount total. Not persisted per-line.
+	GrossAmount decimal.Decimal
+	Currency    string
 }
 
 // LineKeyBaseSubscription is the well-known key for the base subscription line.
@@ -172,9 +181,14 @@ const LineKeyBaseSubscription = "base_subscription"
 
 // Result is the output of Rate.
 type Result struct {
-	BaseLine    LineItem
-	UsageLines  []LineItem
-	BaseAmount  decimal.Decimal
+	BaseLine   LineItem
+	UsageLines []LineItem
+	BaseAmount decimal.Decimal
+	// UsageAmount is the net metered amount (0 when usage is waived).
 	UsageAmount decimal.Decimal
-	TotalAmount decimal.Decimal
+	// GrossUsageAmount is the unwaived metered total across all usage lines
+	// (each line's pre-waiver amount). Equals UsageAmount when usage is not
+	// waived. Display-only; never feeds a charge.
+	GrossUsageAmount decimal.Decimal
+	TotalAmount      decimal.Decimal
 }
