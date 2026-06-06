@@ -45,6 +45,73 @@ func TestSetLivepeerBroadcastersFillsEveryLivepeerEntry(t *testing.T) {
 	}
 }
 
+func TestSetLivepeerWorkloadVODStampsContract(t *testing.T) {
+	input := `[
+		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},
+		{"process":"Livepeer","source_track":"maxbps","target_profiles":[{"name":"360p","height":360}]}
+	]`
+
+	out := SetLivepeerWorkload(input, WorkloadVOD, LivepeerVODSegmentDeadlineMs, LivepeerVODMinSpeed)
+
+	var got []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, p := range got {
+		var name string
+		_ = json.Unmarshal(p["process"], &name)
+		if name != "Livepeer" {
+			// The AV entry must not be stamped.
+			if _, ok := p["workload"]; ok {
+				t.Fatal("workload leaked onto non-Livepeer process")
+			}
+			continue
+		}
+		var workload string
+		if err := json.Unmarshal(p["workload"], &workload); err != nil || workload != WorkloadVOD {
+			t.Fatalf("workload = %q err=%v, want vod", workload, err)
+		}
+		var deadline int
+		if err := json.Unmarshal(p["deadline_ms"], &deadline); err != nil || deadline != LivepeerVODSegmentDeadlineMs {
+			t.Fatalf("deadline_ms = %d err=%v, want %d", deadline, err, LivepeerVODSegmentDeadlineMs)
+		}
+		var minSpeed float64
+		if err := json.Unmarshal(p["min_speed"], &minSpeed); err != nil || minSpeed != LivepeerVODMinSpeed {
+			t.Fatalf("min_speed = %v err=%v, want %v", minSpeed, err, LivepeerVODMinSpeed)
+		}
+	}
+}
+
+func TestSetLivepeerWorkloadLiveOmitsDeadlineAndSpeed(t *testing.T) {
+	input := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`
+
+	out := SetLivepeerWorkload(input, WorkloadLive, 0, 0)
+
+	var got []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	p := got[0]
+	var workload string
+	if err := json.Unmarshal(p["workload"], &workload); err != nil || workload != WorkloadLive {
+		t.Fatalf("workload = %q err=%v, want live", workload, err)
+	}
+	if _, ok := p["deadline_ms"]; ok {
+		t.Fatal("live must not stamp deadline_ms")
+	}
+	if _, ok := p["min_speed"]; ok {
+		t.Fatal("live must not stamp min_speed")
+	}
+}
+
+func TestSetLivepeerWorkloadNoLivepeerIsNoop(t *testing.T) {
+	input := `[{"process":"AV","codec":"AAC"}]`
+	out := SetLivepeerWorkload(input, WorkloadVOD, LivepeerVODSegmentDeadlineMs, LivepeerVODMinSpeed)
+	if out != input {
+		t.Fatalf("expected passthrough, got %s", out)
+	}
+}
+
 func TestSetLivepeerBroadcastersEmptyFallsBackToLocalAV(t *testing.T) {
 	input := `[{"process":"Livepeer","source_track":"maxbps","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264High"}]}]`
 
@@ -124,8 +191,8 @@ func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	if firstLocal["profile"] != "high" {
 		t.Errorf("profile = %v, want high", firstLocal["profile"])
 	}
-	if firstLocal["resolution"] != "640x360" {
-		t.Errorf("resolution = %v, want 640x360", firstLocal["resolution"])
+	if firstLocal["resolution"] != "x360" {
+		t.Errorf("resolution = %v, want x360", firstLocal["resolution"])
 	}
 	if firstLocal["framerate"] != float64(30) {
 		t.Errorf("framerate = %v, want 30", firstLocal["framerate"])
@@ -144,8 +211,8 @@ func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	if secondLocal["profile"] != "main" {
 		t.Errorf("second profile = %v, want main", secondLocal["profile"])
 	}
-	if secondLocal["resolution"] != "854x480" {
-		t.Errorf("second resolution = %v, want 854x480", secondLocal["resolution"])
+	if secondLocal["resolution"] != "x480" {
+		t.Errorf("second resolution = %v, want x480", secondLocal["resolution"])
 	}
 	if _, ok := secondLocal["framerate"]; ok {
 		t.Error("fps=0 should omit framerate")
@@ -177,6 +244,24 @@ func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) 
 	for key, want := range checks {
 		if got := proc[key]; got != want {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
+func TestLivepeerProfileResolutionPreservesSingleDimensionIntent(t *testing.T) {
+	cases := []struct {
+		name string
+		prof map[string]interface{}
+		want string
+	}{
+		{"height only", map[string]interface{}{"height": float64(360)}, "x360"},
+		{"width only", map[string]interface{}{"width": float64(640)}, "640x"},
+		{"both", map[string]interface{}{"width": float64(640), "height": float64(360)}, "640x360"},
+		{"explicit", map[string]interface{}{"resolution": "960x540", "height": float64(360)}, "960x540"},
+	}
+	for _, tc := range cases {
+		if got := livepeerProfileResolution(tc.prof); got != tc.want {
+			t.Fatalf("%s: resolution = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

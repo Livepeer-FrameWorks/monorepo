@@ -17,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
@@ -65,6 +66,7 @@ type ProcessConfigCacher interface {
 // empty candidates falls back to the resolver's local cluster.
 type GatewayResolver interface {
 	ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string
+	ApplyLivepeerWorkload(processesJSON, workload string) string
 }
 
 type processingJob struct {
@@ -340,6 +342,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			// Queue jobs do not carry origin/official cluster IDs; nil candidates
 			// resolves against the resolver's local cluster.
 			resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
+			resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
 		}
 		req.ProcessesJson = resolved
 

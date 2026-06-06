@@ -393,6 +393,46 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 	return mist.ReplaceLivepeerWithLocal(processesJSON)
 }
 
+// ApplyLivepeerWorkload stamps the workload-aware transcode contract onto every
+// Livepeer process entry so the go-livepeer gateway owns deadline/selection/
+// retry policy. vod carries a generous per-segment response budget and tolerates
+// sub-realtime throughput (warmup-friendly, fail-late); live carries only the
+// workload tag and leaves the gateway's existing live timeout untouched
+// (fail-fast). Configs with no Livepeer process — e.g. a local-AV fallback —
+// pass through unchanged.
+func (p *Processor) ApplyLivepeerWorkload(processesJSON, workload string) string {
+	if !mist.HasLivepeerProcesses(processesJSON) {
+		return processesJSON
+	}
+	if workload == mist.WorkloadVOD {
+		return mist.SetLivepeerWorkload(processesJSON, mist.WorkloadVOD, livepeerVODDeadlineMs(), livepeerVODMinSpeed())
+	}
+	return mist.SetLivepeerWorkload(processesJSON, mist.WorkloadLive, 0, 0)
+}
+
+// livepeerVODDeadlineMs is the per-segment gateway response budget stamped onto
+// vod Livepeer configs, overridable via LIVEPEER_VOD_DEADLINE_MS so operators
+// can retune without a code deploy when gateway/orchestrator behavior shifts.
+func livepeerVODDeadlineMs() int {
+	if raw := os.Getenv("LIVEPEER_VOD_DEADLINE_MS"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			return v
+		}
+	}
+	return mist.LivepeerVODSegmentDeadlineMs
+}
+
+// livepeerVODMinSpeed is the minimum sustained speed factor stamped onto vod
+// Livepeer configs, overridable via LIVEPEER_VOD_MIN_SPEED.
+func livepeerVODMinSpeed() float64 {
+	if raw := os.Getenv("LIVEPEER_VOD_MIN_SPEED"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+			return v
+		}
+	}
+	return mist.LivepeerVODMinSpeed
+}
+
 func streamCacheSWR() time.Duration {
 	swr := 30 * time.Second
 	if raw := os.Getenv("STREAM_CACHE_SWR"); raw != "" {
@@ -1388,6 +1428,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 				p.clusterID,
 			}
 			info.ProcessesJSON = p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
+			info.ProcessesJSON = p.ApplyLivepeerWorkload(info.ProcessesJSON, mist.WorkloadLive)
 			p.streamCache.Set("process:"+streamValidation.InternalName, info.ProcessesJSON, cacheTTL)
 		}
 		p.streamCacheMetaMu.Lock()
@@ -2579,6 +2620,7 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 		return ""
 	}
 	cfg = p.ApplyLivepeerBroadcasters(cfg, nil)
+	cfg = p.ApplyLivepeerWorkload(cfg, mist.WorkloadVOD)
 	p.CacheProcessConfig(artifactHash, cfg)
 	return cfg
 }

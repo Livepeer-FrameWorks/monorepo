@@ -15,6 +15,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -333,6 +334,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	// dispatcher's behavior so chapter jobs match the VOD upload flow exactly.
 	if q.gatewayResolver != nil && processesJSON != "" {
 		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
+		processesJSON = q.gatewayResolver.ApplyLivepeerWorkload(processesJSON, mist.WorkloadVOD)
 	}
 	// Cache the resolved config for the STREAM_PROCESS trigger that
 	// fires when Mist boots the processing+<hash> stream. Mirrors the

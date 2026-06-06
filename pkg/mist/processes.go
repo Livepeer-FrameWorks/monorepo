@@ -12,6 +12,30 @@ import (
 // MistServer Livepeer process configs.
 type LivepeerJSONProfile map[string]interface{}
 
+// Workload identifiers stamped onto Livepeer process configs. The go-livepeer
+// gateway uses them to own deadline/selection/retry policy instead of letting
+// MistProcLivepeer's HTTP timeout set transcode policy.
+const (
+	WorkloadLive = "live"
+	WorkloadVOD  = "vod"
+)
+
+// LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
+// budget for VOD/processing transcodes. It is generous versus realtime so a slow
+// first segment or a momentarily-loaded orchestrator does not trip the client,
+// yet bounded so the gateway exhausts its own retry/fallback and returns a
+// definitive result well before the job-level processing timeout. Operators
+// override it at the emitter via LIVEPEER_VOD_DEADLINE_MS (see
+// triggers.livepeerVODDeadlineMs).
+const LivepeerVODSegmentDeadlineMs = 30000
+
+// LivepeerVODMinSpeed is the default minimum sustained speed factor
+// (segment-duration / round-trip) tolerated for a VOD orchestrator before the
+// gateway judges it too slow. Below realtime is acceptable for VOD; the gateway
+// only swaps when an orchestrator drops under this. Operators override it via
+// LIVEPEER_VOD_MIN_SPEED (see triggers.livepeerVODMinSpeed).
+const LivepeerVODMinSpeed = 0.5
+
 // SourceMediaInfo is the source video track metadata MistServer uses when it
 // expands Livepeer target_profiles before sending them to go-livepeer.
 type SourceMediaInfo struct {
@@ -169,6 +193,45 @@ func SetLivepeerBroadcasters(processesJSON string, addrs []string) string {
 	out, err := json.Marshal(processes)
 	if err != nil {
 		return ReplaceLivepeerWithLocal(processesJSON)
+	}
+	return string(out)
+}
+
+// SetLivepeerWorkload stamps the workload-aware transcode contract onto every
+// Livepeer process entry: the workload tag plus, when supplied, a per-segment
+// gateway response budget (deadline_ms) and a minimum sustained speed factor
+// (min_speed). MistProcLivepeer reads these to size its HTTP timeout and folds
+// workload/min_speed into the Livepeer-Transcode-Configuration header; the
+// go-livepeer gateway uses them to own deadline, orchestrator selection, and
+// retry policy. A deadline_ms/min_speed of zero is omitted (live leaves the
+// gateway's existing timeout untouched). Configs without a Livepeer process —
+// e.g. after a local-AV fallback — pass through unchanged.
+func SetLivepeerWorkload(processesJSON, workload string, deadlineMs int, minSpeed float64) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if procType, ok := proc["process"].(string); ok && procType == "Livepeer" {
+			if workload != "" {
+				proc["workload"] = workload
+			}
+			if deadlineMs > 0 {
+				proc["deadline_ms"] = deadlineMs
+			}
+			if minSpeed > 0 {
+				proc["min_speed"] = minSpeed
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
 	}
 	return string(out)
 }
@@ -405,13 +468,17 @@ func livepeerProfileResolution(profile map[string]interface{}) string {
 	}
 	width, widthOK := numberAsInt(profile["width"])
 	height, heightOK := numberAsInt(profile["height"])
-	if !heightOK || height <= 0 {
+	if (!widthOK || width <= 0) && (!heightOK || height <= 0) {
 		return ""
 	}
-	if !widthOK || width <= 0 {
-		width = evenInt(float64(height) * 16 / 9)
+	switch {
+	case widthOK && width > 0 && heightOK && height > 0:
+		return fmt.Sprintf("%dx%d", width, height)
+	case widthOK && width > 0:
+		return fmt.Sprintf("%dx", width)
+	default:
+		return fmt.Sprintf("x%d", height)
 	}
-	return fmt.Sprintf("%dx%d", width, height)
 }
 
 func numberAsInt(v interface{}) (int, bool) {
@@ -433,14 +500,6 @@ func numberAsInt(v interface{}) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func evenInt(v float64) int {
-	n := int(math.Round(v))
-	if n%2 != 0 {
-		n++
-	}
-	return n
 }
 
 func copyProcessOption(dst, src map[string]interface{}, key string) {

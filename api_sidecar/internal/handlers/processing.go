@@ -1102,15 +1102,34 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 // VOD lose many seconds).
 const maxRenditionSpanShortfallMs = 2000
 
-// renditionResolutionTolerance absorbs the ±16px rounding MistProcLivepeer
-// applies when matching a requested profile resolution to a produced track.
-const renditionResolutionTolerance = 16
+// renditionResolutionToleranceMin absorbs codec/profile rounding around requested
+// rendition dimensions while still keeping distinct ladder rungs separate.
+const renditionResolutionToleranceMin = 32
 
 func absInt(v int) int {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+func renditionHeightsClose(actual, expected int) bool {
+	if actual <= 0 || expected <= 0 {
+		return false
+	}
+	tolerance := renditionResolutionToleranceMin
+	if pct := expected / 20; pct > tolerance {
+		tolerance = pct
+	}
+	return absInt(actual-expected) <= tolerance
+}
+
+func videoTrackHeights(tracks []processingMetaVideoTrack) []int {
+	heights := make([]int, 0, len(tracks))
+	for _, t := range tracks {
+		heights = append(heights, t.height)
+	}
+	return heights
 }
 
 // livepeerProfileDim reads an integer dimension (width/height) from a normalized
@@ -1215,7 +1234,7 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expected []mist.LivepeerJSO
 	// authoritative full source duration.
 	srcIdx := -1
 	for i, t := range videoTracks {
-		if srcHeight > 0 && absInt(t.height-srcHeight) <= renditionResolutionTolerance {
+		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
 			if srcIdx < 0 || t.spanMs() > videoTracks[srcIdx].spanMs() {
 				srcIdx = i
 			}
@@ -1261,13 +1280,16 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expected []mist.LivepeerJSO
 		}
 		idx := -1
 		for i, t := range pool {
-			if !consumed[i] && absInt(t.height-eh) <= renditionResolutionTolerance {
+			if !consumed[i] && renditionHeightsClose(t.height, eh) {
 				idx = i
 				break
 			}
 		}
 		if idx < 0 {
-			log.WithField("missing_rendition_height", eh).Warn("Finished processing stream is missing a requested Livepeer rendition")
+			log.WithFields(logrus.Fields{
+				"available_video_heights":  videoTrackHeights(pool),
+				"missing_rendition_height": eh,
+			}).Warn("Finished processing stream is missing a requested Livepeer rendition")
 			return false
 		}
 		consumed[idx] = true
@@ -1316,7 +1338,7 @@ func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMet
 	}
 	sourceTrackSpanMs := int64(-1)
 	for _, t := range tracks {
-		if srcHeight > 0 && absInt(t.height-srcHeight) <= renditionResolutionTolerance {
+		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
 			if span := int64(t.spanMs()); span > sourceTrackSpanMs {
 				sourceTrackSpanMs = span
 			}

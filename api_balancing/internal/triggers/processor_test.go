@@ -2386,7 +2386,7 @@ func TestApplyLivepeerBroadcasters_FallsBackToLocalAVWhenNoCandidateHasGateway(t
 	if !strings.Contains(got, `"process":"AV"`) {
 		t.Fatalf("expected local AV fallback process, got %q", got)
 	}
-	if !strings.Contains(got, `"resolution":"640x360"`) {
+	if !strings.Contains(got, `"resolution":"x360"`) {
 		t.Fatalf("expected target profile to become local AV resolution, got %q", got)
 	}
 	// Each candidate cluster should have been queried exactly once before falling back.

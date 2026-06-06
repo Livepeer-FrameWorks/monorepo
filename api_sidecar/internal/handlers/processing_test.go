@@ -426,6 +426,10 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	if !renditionsCompleteFromTracks(entry, expected, nearFull, source, srcSpan) {
 		t.Fatal("expected renditions within the absolute span tolerance to pass")
 	}
+	roundedHeight := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(680, 392, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, roundedHeight, source, srcSpan) {
+		t.Fatal("expected renditions within the resolution rounding tolerance to pass")
+	}
 
 	// No independent source span: even a "complete-looking" set must fail closed,
 	// because uniform truncation cannot be ruled out without a pre-transcode span.

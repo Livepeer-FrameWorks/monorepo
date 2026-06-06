@@ -8,6 +8,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
@@ -120,6 +121,7 @@ func (m *ManagedStreamMaterializer) PopulateStreamContext(streamCtx *commodorepb
 			m.p.clusterID,
 		}
 		processes := m.p.ApplyLivepeerBroadcasters(info.ProcessesJSON, candidates)
+		processes = m.p.ApplyLivepeerWorkload(processes, mist.WorkloadLive)
 		m.p.streamCache.Set("process:"+internalName, processes, cacheTTL)
 	}
 }
