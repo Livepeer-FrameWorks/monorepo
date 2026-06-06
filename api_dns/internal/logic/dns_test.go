@@ -178,17 +178,18 @@ func (f *fakeCloudflareClient) CreatePool(pool cloudflare.Pool) (*cloudflare.Poo
 }
 
 type fakeQuartermasterClient struct {
-	serviceType      string
-	serviceTypes     []string
-	clusterID        string
-	clusterIDs       []string
-	staleAge         int
-	response         *quartermasterpb.ListHealthyNodesForDNSResponse
-	err              error
-	callCount        int
-	getClusterID     string
-	clustersResponse *quartermasterpb.ListClustersResponse
-	clustersErr      error
+	serviceType       string
+	serviceTypes      []string
+	clusterID         string
+	clusterIDs        []string
+	staleAge          int
+	response          *quartermasterpb.ListHealthyNodesForDNSResponse
+	responseByCluster map[string]*quartermasterpb.ListHealthyNodesForDNSResponse
+	err               error
+	callCount         int
+	getClusterID      string
+	clustersResponse  *quartermasterpb.ListClustersResponse
+	clustersErr       error
 }
 
 type fakeBunnyClient struct {
@@ -234,6 +235,11 @@ func (f *fakeQuartermasterClient) ListHealthyNodesForDNSForCluster(ctx context.C
 	f.clusterID = clusterID
 	f.clusterIDs = append(f.clusterIDs, clusterID)
 	f.staleAge = staleThresholdSeconds
+	if clusterID != "" && f.responseByCluster != nil {
+		if resp, ok := f.responseByCluster[clusterID]; ok {
+			return resp, f.err
+		}
+	}
 	return f.response, f.err
 }
 
@@ -1033,7 +1039,7 @@ func TestSyncBunnyRootServiceAuthoritativeClearsWhenNoPlatformNodes(t *testing.T
 			IsActive:           true,
 			IsPlatformOfficial: true,
 		}}},
-		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{TotalNodes: 1, HealthyNodes: 0},
 	}
 	manager := newTestManager(&fakeCloudflareClient{})
 	manager.qmClient = qm
@@ -1056,6 +1062,96 @@ func TestSyncBunnyRootServiceAuthoritativeClearsWhenNoPlatformNodes(t *testing.T
 	if !cleared {
 		t.Fatal("expected authoritative root sync to clear the Bunny record set")
 	}
+}
+
+func TestSyncBunnyRootServiceAuthoritativePreservesWhenNoCandidatesExist(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+			ClusterId:          "media-eu-1",
+			IsActive:           true,
+			IsPlatformOfficial: true,
+		}}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			t.Fatalf("did not expect authoritative root clear for zero registered candidates")
+			return nil
+		},
+	}
+
+	if _, err := manager.syncBunnyRootService(context.Background(), "edge-ingest", true); err != nil {
+		t.Fatalf("syncBunnyRootService returned error: %v", err)
+	}
+}
+
+func TestSyncServiceByClusterSkipsWarningWhenNoCandidatesExist(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+			ClusterId:   "tenant-private-1",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
+		responseByCluster: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+			"tenant-private-1": {},
+		},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			t.Fatalf("did not expect cluster record reconciliation for zero-candidate polling pass")
+			return nil
+		},
+	}
+	hook := logrustest.NewLocal(manager.logger)
+
+	if partialErrors, err := manager.SyncServiceByCluster(context.Background(), "edge-ingest"); err != nil {
+		t.Fatalf("SyncServiceByCluster returned error: %v", err)
+	} else if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if !slices.Contains(qm.clusterIDs, "tenant-private-1") {
+		t.Fatalf("expected scoped candidate read for private cluster, got cluster IDs %v", qm.clusterIDs)
+	}
+	for _, entry := range hook.AllEntries() {
+		if entry.Level == logrus.WarnLevel && entry.Message == "No healthy nodes for cluster; preserving existing DNS" {
+			t.Fatalf("zero-candidate cluster should not emit unhealthy-node warning: fields=%v", entry.Data)
+		}
+	}
+}
+
+func TestSyncServiceByClusterWarnsWhenCandidatesAreUnhealthy(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+			ClusterId:   "tenant-private-1",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
+		responseByCluster: map[string]*quartermasterpb.ListHealthyNodesForDNSResponse{
+			"tenant-private-1": {TotalNodes: 1, HealthyNodes: 0},
+		},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{}
+	hook := logrustest.NewLocal(manager.logger)
+
+	if partialErrors, err := manager.SyncServiceByCluster(context.Background(), "edge-ingest"); err != nil {
+		t.Fatalf("SyncServiceByCluster returned error: %v", err)
+	} else if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	for _, entry := range hook.AllEntries() {
+		if entry.Level == logrus.WarnLevel && entry.Message == "No healthy nodes for cluster; preserving existing DNS" {
+			return
+		}
+	}
+	t.Fatal("expected unhealthy candidate cluster to emit warning")
 }
 
 func TestSyncBunnyRootServicePublishesOnlyPlatformOfficialNodes(t *testing.T) {
@@ -1124,6 +1220,67 @@ func TestSyncServiceForClusterUsesScopedQuartermasterRead(t *testing.T) {
 	}
 	if qm.getClusterID != "media-eu-1" {
 		t.Fatalf("GetCluster ID = %q, want media-eu-1", qm.getClusterID)
+	}
+}
+
+func TestSyncServiceForClusterPreservesBunnyRecordWhenNoCandidatesExist(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+			ClusterId:   "media-eu-1",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{},
+	}
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			t.Fatalf("did not expect DNS record reconciliation for zero-candidate targeted wake: name=%s desired=%#v", name, desired)
+			return nil
+		},
+	}
+
+	partialErrors, err := manager.SyncServiceForCluster(context.Background(), "edge-ingest", "media-eu-1")
+	if err != nil {
+		t.Fatalf("SyncServiceForCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+}
+
+func TestSyncServiceForClusterClearsBunnyRecordWhenCandidatesAreUnhealthy(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{
+			ClusterId:   "media-eu-1",
+			ClusterType: "edge",
+			IsActive:    true,
+		}}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{TotalNodes: 1, HealthyNodes: 0},
+	}
+	var cleared bool
+	manager := newTestManager(&fakeCloudflareClient{})
+	manager.qmClient = qm
+	manager.bunnyClient = &fakeBunnyClient{
+		reconcileRecordSet: func(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error {
+			if name != "edge-ingest" || recordType != bunny.RecordTypeA || desired != nil {
+				t.Fatalf("unexpected Bunny clear request: name=%s type=%d desired=%#v", name, recordType, desired)
+			}
+			cleared = true
+			return nil
+		},
+	}
+
+	partialErrors, err := manager.SyncServiceForCluster(context.Background(), "edge-ingest", "media-eu-1")
+	if err != nil {
+		t.Fatalf("SyncServiceForCluster returned error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+	if !cleared {
+		t.Fatal("expected unhealthy candidate set to clear cluster service record")
 	}
 }
 

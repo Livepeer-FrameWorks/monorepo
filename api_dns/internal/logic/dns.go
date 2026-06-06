@@ -319,7 +319,15 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 
 	for _, cluster := range clustersResp.Clusters {
 		nodes := dnsNodesFromProto(nodesByCluster[cluster.GetClusterId()])
-		m.syncOneCluster(ctx, serviceType, provider, cluster, nodes, false, partialErrors)
+		candidateCount := int32(0)
+		if len(nodes) == 0 {
+			clusterNodesResp, clusterErr := m.qmClient.ListHealthyNodesForDNSForCluster(ctx, int(m.staleAge.Seconds()), serviceType, cluster.GetClusterId())
+			if clusterErr != nil {
+				return nil, fmt.Errorf("failed to fetch candidate count for cluster %s from Quartermaster: %w", cluster.GetClusterId(), clusterErr)
+			}
+			candidateCount = clusterNodesResp.GetTotalNodes()
+		}
+		m.syncOneCluster(ctx, serviceType, provider, cluster, nodes, false, candidateCount, partialErrors)
 	}
 
 	if provider == pkgdns.ProviderBunny {
@@ -365,7 +373,7 @@ func (m *DNSManager) SyncServiceForCluster(ctx context.Context, serviceType, clu
 		m.logger.WithField("service_type", serviceType).Warn("Bunny DNS is not configured; using Cloudflare cluster-scoped fallback")
 	}
 
-	m.syncOneCluster(ctx, serviceType, provider, target, nodes, true, partialErrors)
+	m.syncOneCluster(ctx, serviceType, provider, target, nodes, true, nodesResp.GetTotalNodes(), partialErrors)
 	if provider == pkgdns.ProviderBunny && target.GetIsPlatformOfficial() && hasGlobalRootLabel(serviceType) {
 		rootPartial, rootErr := m.syncBunnyRootService(ctx, serviceType, true)
 		if rootErr != nil {
@@ -392,8 +400,10 @@ func hasGlobalRootLabel(serviceType string) bool {
 //   - false (polling caller): preserve the cluster service record on empty
 //     healthy set. Transient QM unavailability or first-deploy races would
 //     otherwise blow DNS away.
-//   - true (targeted Navigator wakeup from QM): the empty set IS the
-//     authoritative signal. Clear the cluster service record actively.
+//   - true (targeted Navigator wakeup from QM): an empty healthy set clears
+//     only when QM saw at least one candidate row. When the candidate count is
+//     zero, preserve the record; service rows and assignments may not have
+//     materialized yet during a reprovision.
 //
 // Per-node edge-<node_id> records (edge-egress only) are always reconciled.
 func (m *DNSManager) syncOneCluster(
@@ -403,6 +413,7 @@ func (m *DNSManager) syncOneCluster(
 	cluster *quartermasterpb.InfrastructureCluster,
 	nodes []dnsNode,
 	authoritative bool,
+	candidateCount int32,
 	partialErrors map[string]string,
 ) {
 	clusterSlug := m.clusterSlug(cluster)
@@ -441,6 +452,24 @@ func (m *DNSManager) syncOneCluster(
 	// healthy set must propagate to DNS even if cluster cert state has
 	// regressed since the last create. The cert gate only protects record
 	// creation, not removal.
+	if len(nodes) == 0 && authoritative && candidateCount <= 0 {
+		m.logger.WithFields(logging.Fields{
+			"service_type": serviceType,
+			"cluster":      clusterSlug,
+			"fqdn":         svcFQDN,
+		}).Warn("Authoritative empty set has no registered candidates; preserving cluster service record")
+		return
+	}
+
+	if len(nodes) == 0 && !authoritative && candidateCount <= 0 {
+		m.logger.WithFields(logging.Fields{
+			"service_type": serviceType,
+			"cluster":      clusterSlug,
+			"fqdn":         svcFQDN,
+		}).Debug("No DNS candidates for cluster service; preserving existing DNS")
+		return
+	}
+
 	if len(nodes) == 0 && authoritative {
 		m.logger.WithFields(logging.Fields{
 			"service_type": serviceType,
@@ -811,6 +840,14 @@ func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType strin
 	}
 	nodes := dnsNodesFromProto(filtered)
 	if len(nodes) == 0 {
+		if authoritative && nodesResp.GetTotalNodes() <= 0 {
+			m.logger.WithFields(logging.Fields{
+				"service_type": serviceType,
+				"zone":         zoneDomain,
+				"scope":        "global_root",
+			}).Warn("Authoritative empty set has no registered candidates; preserving global root Bunny DNS")
+			return nil, nil
+		}
 		if authoritative {
 			if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, "", bunny.RecordTypeA, nil); err != nil {
 				return nil, fmt.Errorf("clear root record set: %w", err)
