@@ -510,7 +510,11 @@ WHEN (
     OLD.wireguard_ip IS DISTINCT FROM NEW.wireguard_ip OR
     OLD.wireguard_public_key IS DISTINCT FROM NEW.wireguard_public_key OR
     OLD.wireguard_listen_port IS DISTINCT FROM NEW.wireguard_listen_port OR
-    OLD.metadata IS DISTINCT FROM NEW.metadata
+    OLD.metadata->'desired_service_types' IS DISTINCT FROM NEW.metadata->'desired_service_types' OR
+    OLD.metadata->'service_types' IS DISTINCT FROM NEW.metadata->'service_types' OR
+    OLD.metadata->'desired_cluster_ids' IS DISTINCT FROM NEW.metadata->'desired_cluster_ids' OR
+    OLD.metadata->'service_cluster_ids' IS DISTINCT FROM NEW.metadata->'service_cluster_ids' OR
+    OLD.metadata->'logical_cluster_ids' IS DISTINCT FROM NEW.metadata->'logical_cluster_ids'
 )
 EXECUTE FUNCTION quartermaster.bump_mesh_topology_state();
 
@@ -543,7 +547,8 @@ WHEN (
     OLD.node_id IS DISTINCT FROM NEW.node_id OR
     OLD.service_id IS DISTINCT FROM NEW.service_id OR
     OLD.status IS DISTINCT FROM NEW.status OR
-    OLD.metadata IS DISTINCT FROM NEW.metadata
+    OLD.metadata->'infra_role' IS DISTINCT FROM NEW.metadata->'infra_role' OR
+    OLD.metadata->'infra_name' IS DISTINCT FROM NEW.metadata->'infra_name'
 )
 EXECUTE FUNCTION quartermaster.bump_mesh_topology_state();
 

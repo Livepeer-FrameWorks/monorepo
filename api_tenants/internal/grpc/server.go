@@ -8752,19 +8752,17 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 	}
 	if cacheOK && cfg.TopologySourceHash == currentTopologySourceHash {
 		cacheResult = "hit"
+	} else if cacheOK {
+		cacheResult = "stale_served"
 	} else {
-		if cacheOK {
-			cacheResult = "stale"
-		} else if cacheResult != "unavailable" {
+		if cacheResult != "unavailable" {
 			cacheResult = "miss"
 		}
-		if !cacheOK {
-			currentHash, hashErr := s.currentMeshTopologySourceHash(ctx)
-			if hashErr != nil {
-				return nil, status.Errorf(codes.Internal, "mesh topology revision unavailable: %v", hashErr)
-			}
-			currentTopologySourceHash = currentHash
+		currentHash, hashErr := s.currentMeshTopologySourceHash(ctx)
+		if hashErr != nil {
+			return nil, status.Errorf(codes.Internal, "mesh topology revision unavailable: %v", hashErr)
 		}
+		currentTopologySourceHash = currentHash
 
 		phaseStarted = time.Now()
 		var buildErr error

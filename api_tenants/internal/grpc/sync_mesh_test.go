@@ -107,6 +107,29 @@ func expectMeshConfigStore(mock sqlmock.Sqlmock, nodeID, clusterID, wireguardIP 
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
+func expectMeshWarmClaim(mock sqlmock.Sqlmock, revision int64) {
+	mock.ExpectQuery(`(?s)UPDATE quartermaster\.mesh_topology_state\s+SET warming_started_at = NOW\(\).*RETURNING revision`).
+		WithArgs(meshTopologyPlannerVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(revision))
+}
+
+func expectMeshWarmNoClaim(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`(?s)UPDATE quartermaster\.mesh_topology_state\s+SET warming_started_at = NOW\(\).*RETURNING revision`).
+		WithArgs(meshTopologyPlannerVersion).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}))
+}
+
+func expectMeshWarmFinish(mock sqlmock.Sqlmock, revision int64, success bool) {
+	if success {
+		mock.ExpectExec(`(?s)UPDATE quartermaster\.mesh_topology_state\s+SET warmed_revision = GREATEST\(warmed_revision, \$1\)`).
+			WithArgs(revision, meshTopologyPlannerVersion).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		return
+	}
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.mesh_topology_state\s+SET warming_started_at = NULL`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 func TestMeshServiceRequirementsMarksSkipperBridgeGlobal(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -393,6 +416,108 @@ func TestSyncMeshCacheHitSkipsTopologyQueries(t *testing.T) {
 	if got := resp.GetServiceEndpoints()["quartermaster"].GetIps(); len(got) != 1 || got[0] != "10.200.0.1" {
 		t.Fatalf("cached quartermaster endpoint = %v", got)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshStaleCacheServesStoredConfig(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT host\(wireguard_ip\), wireguard_public_key, host\(external_ip\), host\(internal_ip\), wireguard_listen_port, cluster_id`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
+			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
+	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
+		WithArgs("node-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)SELECT c\.cluster_id,\s+c\.mesh_revision,\s+c\.topology_source_hash.*FROM quartermaster\.mesh_node_configs c\s+WHERE c\.node_id = \$1`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"cluster_id",
+			"mesh_revision",
+			"topology_source_hash",
+			"wireguard_ip",
+			"wireguard_port",
+			"peers",
+			"service_endpoints",
+			"current_topology_source_hash",
+		}).AddRow(
+			"cluster-1",
+			"cached-rev",
+			meshTopologySourceHash(6),
+			"10.200.0.5",
+			int32(51820),
+			[]byte(`[{"node_name":"peer-1","public_key":"peer-pub","endpoint":"203.0.113.10:51820","allowed_ips":["10.200.0.6/32"],"keep_alive":25}]`),
+			[]byte(`{"quartermaster":{"ips":["10.200.0.1"]}}`),
+			int64(7),
+		))
+
+	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	if err != nil {
+		t.Fatalf("sync mesh: %v", err)
+	}
+	if got := resp.GetMeshRevision(); got != "cached-rev" {
+		t.Fatalf("MeshRevision = %q, want cached stale revision", got)
+	}
+	if len(resp.GetPeers()) != 1 || resp.GetPeers()[0].GetNodeName() != "peer-1" {
+		t.Fatalf("cached peers = %#v", resp.GetPeers())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestClaimMeshTopologyWarmSkipsFreshRevision(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	expectMeshWarmNoClaim(mock)
+
+	revision, claimed, err := server.claimMeshTopologyWarm(t.Context())
+	if err != nil {
+		t.Fatalf("claim mesh topology warm: %v", err)
+	}
+	if claimed {
+		t.Fatalf("claimed fresh warm revision %d", revision)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestWarmMeshTopologyConfigsRefreshesActiveNodes(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	expectMeshWarmClaim(mock, 9)
+	mock.ExpectQuery(`(?s)SELECT node_id, cluster_id, host\(wireguard_ip\), wireguard_listen_port\s+FROM quartermaster\.infrastructure_nodes\s+WHERE status = 'active'`).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "wireguard_ip", "wireguard_listen_port"}).
+			AddRow("node-1", "cluster-1", "10.200.0.5", int32(51820)))
+	expectMeshRequirements(mock, "node-1")
+	expectMeshEndpoints(mock, "cluster-1", "node-1", sqlmock.NewRows([]string{"type", "node_id", "wireguard_ip"}))
+	expectReciprocalProvidedServices(mock, "node-1")
+	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
+	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(9))
+	expectMeshWarmFinish(mock, 9, true)
+
+	server.warmMeshTopologyConfigs(t.Context())
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
