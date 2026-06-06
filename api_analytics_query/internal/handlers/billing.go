@@ -142,7 +142,7 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 				"summary_count": len(summaries),
 				"start":         sliceStart,
 				"end":           sliceEnd,
-			}).Info("Successfully sent usage summaries to Purser")
+			}).Debug("Successfully sent usage summaries to Purser")
 		}
 	}
 
@@ -573,7 +573,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		"total_egress_gb": totalEgressGB,
 		"viewer_hours":    totalViewerHours,
 		"total_streams":   totalStreamCount,
-	}).Info("Generated usage summaries for tenant")
+	}).Debug("Generated usage summaries for tenant")
 
 	return summaries, nil
 }
@@ -1503,7 +1503,7 @@ func (bs *BillingSummarizer) sendUsageToPurser(summaries []models.UsageSummary) 
 	bs.logger.WithFields(logging.Fields{
 		"summary_count":   len(summaries),
 		"processed_count": successCount,
-	}).Info("Successfully produced usage summaries to Kafka")
+	}).Debug("Successfully produced usage summaries to Kafka")
 
 	if successCount < len(summaries) {
 		return fmt.Errorf("failed to send some summaries")

@@ -394,7 +394,7 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		"tenant_id":     summary.TenantID,
 		"period":        summary.Period,
 		"billing_model": billingModel,
-	}).Info("Processed usage summary from Kafka")
+	}).Debug("Processed usage summary from Kafka")
 
 	return nil
 }
@@ -3162,7 +3162,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		"gross_amount":           grossDec.String(),
 		"prepaid_credit_applied": prepaidCreditDec.String(),
 		"net_amount":             netDec.String(),
-	}).Info("Updated invoice draft")
+	}).Debug("Updated invoice draft")
 
 	return nil
 }
