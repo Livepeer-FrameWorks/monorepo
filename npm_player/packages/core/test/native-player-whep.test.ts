@@ -36,6 +36,7 @@ class FakeDataChannel {
 class FakeRTCPeerConnection {
   sctp = {};
   iceConnectionState: RTCIceConnectionState = "new";
+  ontrack: ((event: RTCTrackEvent) => void) | null = null;
   createDataChannel = vi.fn(() => {
     lastDataChannel = new FakeDataChannel();
     return lastDataChannel as unknown as RTCDataChannel;
@@ -43,8 +44,22 @@ class FakeRTCPeerConnection {
   addTransceiver = vi.fn();
   createOffer = vi.fn(async () => ({ type: "offer", sdp: "offer-sdp" }));
   setLocalDescription = vi.fn(async () => {});
-  setRemoteDescription = vi.fn(async () => {});
+  setRemoteDescription = vi.fn(async () => {
+    if (autoEmitRemoteTrack) {
+      this.emitRemoteTrack();
+    }
+  });
   close = vi.fn();
+
+  constructor() {
+    lastPeerConnection = this;
+  }
+
+  emitRemoteTrack(): void {
+    const track = { id: "video-track" } as MediaStreamTrack;
+    const stream = new MediaStream([track]);
+    this.ontrack?.({ streams: [stream], track } as RTCTrackEvent);
+  }
 }
 
 class FakeRTCSessionDescription {
@@ -58,6 +73,24 @@ class FakeRTCSessionDescription {
 }
 
 let lastDataChannel: FakeDataChannel | null = null;
+let lastPeerConnection: FakeRTCPeerConnection | null = null;
+let autoEmitRemoteTrack = true;
+
+class FakeMediaStream {
+  private tracks: MediaStreamTrack[];
+
+  constructor(tracks: MediaStreamTrack[] = []) {
+    this.tracks = [...tracks];
+  }
+
+  getTracks(): MediaStreamTrack[] {
+    return this.tracks;
+  }
+
+  addTrack(track: MediaStreamTrack): void {
+    this.tracks.push(track);
+  }
+}
 
 function makeVideoElement(): HTMLVideoElement {
   const listeners = new Map<string, Listener[]>();
@@ -113,11 +146,14 @@ const streamInfo: StreamInfo = {
 describe("NativePlayer WHEP control channel", () => {
   const originalDocument = globalThis.document;
   const originalFetch = globalThis.fetch;
+  const originalMediaStream = globalThis.MediaStream;
   const originalRTCPeerConnection = globalThis.RTCPeerConnection;
   const originalRTCSessionDescription = globalThis.RTCSessionDescription;
 
   beforeEach(() => {
     lastDataChannel = null;
+    lastPeerConnection = null;
+    autoEmitRemoteTrack = true;
     const video = makeVideoElement();
     vi.stubGlobal("document", {
       createElement: vi.fn((tag: string) => {
@@ -134,6 +170,7 @@ describe("NativePlayer WHEP control channel", () => {
         headers: { get: vi.fn(() => null) },
       }))
     );
+    vi.stubGlobal("MediaStream", FakeMediaStream);
     vi.stubGlobal("RTCPeerConnection", FakeRTCPeerConnection);
     vi.stubGlobal("RTCSessionDescription", FakeRTCSessionDescription);
   });
@@ -155,12 +192,44 @@ describe("NativePlayer WHEP control channel", () => {
       configurable: true,
       writable: true,
     });
+    Object.defineProperty(globalThis, "MediaStream", {
+      value: originalMediaStream,
+      configurable: true,
+      writable: true,
+    });
     Object.defineProperty(globalThis, "RTCSessionDescription", {
       value: originalRTCSessionDescription,
       configurable: true,
       writable: true,
     });
     vi.restoreAllMocks();
+  });
+
+  it("waits for remote WHEP media before emitting ready", async () => {
+    autoEmitRemoteTrack = false;
+    const player = new NativePlayerImpl();
+    const container = makeContainer();
+    const onReady = vi.fn();
+
+    const initialized = player.initialize(
+      container,
+      { type: "whep", url: "https://mist.example.test/view/webrtc/live" },
+      {
+        autoplay: true,
+        muted: true,
+        controls: false,
+        onReady,
+      },
+      streamInfo
+    );
+
+    await vi.waitFor(() => expect(lastPeerConnection?.setRemoteDescription).toHaveBeenCalled());
+    expect(onReady).not.toHaveBeenCalled();
+
+    lastPeerConnection?.emitRemoteTrack();
+
+    await initialized;
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
   it("replays a play request made before the MistControl channel exists", async () => {

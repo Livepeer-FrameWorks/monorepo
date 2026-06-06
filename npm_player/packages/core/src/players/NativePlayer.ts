@@ -259,9 +259,6 @@ export class NativePlayerImpl extends BasePlayer {
     this.videoElement = video;
     container.appendChild(video);
 
-    // Set up event listeners
-    this.setupVideoEventListeners(video, options);
-
     // LiveDurationProxy supplies seek and jump-to-live for non-WHEP live streams.
     // WHEP handles live edge through Mist control signaling.
     const isLiveStream = isLiveStreamType(streamInfo?.type);
@@ -306,12 +303,17 @@ export class NativePlayerImpl extends BasePlayer {
         this.currentHeaders = headers;
         this.currentIceServers = iceServers;
         await this.startWhep(video, source.url, headers, iceServers);
+        this.setupVideoEventListeners(video, options);
         return video;
       } else {
+        this.setupVideoEventListeners(video, options);
         video.src = source.url;
         return video;
       }
     } catch (error: any) {
+      if (source.type === "whep") {
+        this.cleanupFailedWhepStartup(video);
+      }
       this.emit("error", error.message || String(error));
       throw error;
     }
@@ -325,6 +327,39 @@ export class NativePlayerImpl extends BasePlayer {
       constrainSeek: true,
       // Duration changes are handled by UI polling getDuration()
     });
+  }
+
+  private cleanupFailedWhepStartup(video: HTMLVideoElement): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.controlOpenTimer) {
+      clearTimeout(this.controlOpenTimer);
+      this.controlOpenTimer = null;
+    }
+    if (this.controlChannel) {
+      try {
+        this.controlChannel.close();
+      } catch {}
+      this.controlChannel = null;
+      this.whepLiveEdge = null;
+    }
+    if (this.sessionUrl) {
+      const url = this.sessionUrl;
+      this.sessionUrl = null;
+      fetch(url, { method: "DELETE" }).catch(() => {});
+    }
+    if (this.peerConnection) {
+      try {
+        this.peerConnection.close();
+      } catch {}
+      this.peerConnection = null;
+    }
+    try {
+      (video as any).srcObject = null;
+    } catch {}
+    this.incomingMediaStream = null;
   }
 
   /**
@@ -828,6 +863,34 @@ export class NativePlayerImpl extends BasePlayer {
     const pc = new RTCPeerConnection({ iceServers });
     this.peerConnection = pc;
     this.incomingMediaStream = null;
+    let mediaReadySettled = false;
+    let mediaReadyTimer: ReturnType<typeof setTimeout> | null = null;
+    let resolveMediaReady: () => void = () => {};
+    let rejectMediaReady: (error: Error) => void = () => {};
+    const finishMediaReady = () => {
+      if (mediaReadySettled) return;
+      mediaReadySettled = true;
+      if (mediaReadyTimer !== null) clearTimeout(mediaReadyTimer);
+      resolveMediaReady();
+    };
+    const failMediaReady = (error: Error) => {
+      if (mediaReadySettled) return;
+      mediaReadySettled = true;
+      if (mediaReadyTimer !== null) clearTimeout(mediaReadyTimer);
+      rejectMediaReady(error);
+    };
+    const cancelMediaReady = () => {
+      if (mediaReadySettled) return;
+      mediaReadySettled = true;
+      if (mediaReadyTimer !== null) clearTimeout(mediaReadyTimer);
+    };
+    const mediaReady = new Promise<void>((resolve, reject) => {
+      resolveMediaReady = resolve;
+      rejectMediaReady = reject;
+    });
+    mediaReadyTimer = setTimeout(() => {
+      failMediaReady(new Error("WHEP media did not arrive"));
+    }, 10000);
 
     // Create MistControl data channel for seeking/DVR.
     // Must be created before createOffer() so it's included in the SDP exchange.
@@ -852,6 +915,7 @@ export class NativePlayerImpl extends BasePlayer {
           aggregate.addTrack(track);
         }
       }
+      finishMediaReady();
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -859,6 +923,7 @@ export class NativePlayerImpl extends BasePlayer {
       const state = pc.iceConnectionState;
       if (state === "failed" || state === "disconnected") {
         this.emit("error", "WHEP connection failed");
+        failMediaReady(new Error("WHEP connection failed before media arrived"));
         if (
           this.reconnectEnabled &&
           this.reconnectAttempts < this.maxReconnectAttempts &&
@@ -885,22 +950,39 @@ export class NativePlayerImpl extends BasePlayer {
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    let response: Response | null = null;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-    const requestHeaders: Record<string, string> = { "Content-Type": "application/sdp" };
-    for (const k in headers) requestHeaders[k] = headers[k];
+      const requestHeaders: Record<string, string> = { "Content-Type": "application/sdp" };
+      for (const k in headers) requestHeaders[k] = headers[k];
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: requestHeaders,
-      body: offer.sdp || "",
-    });
-    if (!response.ok) {
-      throw new Error(`WHEP request failed: ${response.status}`);
+      response = await fetch(url, {
+        method: "POST",
+        headers: requestHeaders,
+        body: offer.sdp || "",
+      });
+      if (!response.ok) {
+        throw new Error(`WHEP request failed: ${response.status}`);
+      }
+      const answerSdp = await response.text();
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
+      const locationHeader = response.headers.get("Location");
+      if (locationHeader) {
+        try {
+          this.sessionUrl = new URL(locationHeader, url).href;
+        } catch {
+          this.sessionUrl = locationHeader;
+        }
+      } else {
+        this.sessionUrl = null;
+      }
+      await mediaReady;
+    } catch (error) {
+      cancelMediaReady();
+      throw error;
     }
-    const answerSdp = await response.text();
-    await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
 
     // WHEP can carry media without negotiating SCTP/DataChannel.
     // When SCTP is absent, MistControl will never open and seeking must stay disabled.
@@ -917,19 +999,6 @@ export class NativePlayerImpl extends BasePlayer {
           );
         }
       }, 5000);
-    }
-
-    // Resolve sessionUrl against the WHEP endpoint URL (Location header may be relative)
-    const locationHeader = response.headers.get("Location");
-    if (locationHeader) {
-      try {
-        // Use URL constructor to resolve relative path against the WHEP endpoint
-        this.sessionUrl = new URL(locationHeader, url).href;
-      } catch {
-        this.sessionUrl = locationHeader;
-      }
-    } else {
-      this.sessionUrl = null;
     }
   }
 }
