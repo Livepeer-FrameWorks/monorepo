@@ -4635,6 +4635,87 @@ func GenerateVodRetention() *periscopepb.VodRetention {
 	}
 }
 
+// GeneratePlayerBootTimeSeries returns a demo boot-startup trend over the last 24
+// hourly buckets, with TTF percentiles that wobble around the scalar summary.
+func GeneratePlayerBootTimeSeries() []*periscopepb.PlayerBootTimeSeriesBucket {
+	now := time.Now().Truncate(time.Hour)
+	bootCounts := []int64{38, 41, 35, 29, 22, 18, 15, 19, 27, 44, 61, 73, 80, 78, 71, 66, 58, 63, 70, 82, 90, 84, 67, 49}
+	p95 := []float64{1820, 1900, 2050, 1980, 1760, 1690, 1720, 1810, 1950, 2100, 2240, 2180, 2020, 1960, 1880, 1840, 1900, 1990, 2060, 2150, 2210, 2080, 1920, 1850}
+	buckets := make([]*periscopepb.PlayerBootTimeSeriesBucket, len(bootCounts))
+	for i := range bootCounts {
+		buckets[i] = &periscopepb.PlayerBootTimeSeriesBucket{
+			Timestamp: timestamppb.New(now.Add(-time.Duration(len(bootCounts)-1-i) * time.Hour)),
+			BootCount: bootCounts[i],
+			P50TtfMs:  p95[i] * 0.42,
+			P95TtfMs:  p95[i],
+			P99TtfMs:  p95[i] * 1.74,
+		}
+	}
+	return buckets
+}
+
+// GenerateSessionQoeTimeSeries returns a demo viewer-QoE trend over the last 24
+// hourly buckets, with ratios that track the scalar summary.
+func GenerateSessionQoeTimeSeries() []*periscopepb.SessionQoeTimeSeriesBucket {
+	now := time.Now().Truncate(time.Hour)
+	sessions := []int64{96, 104, 88, 73, 55, 41, 33, 45, 68, 110, 152, 183, 201, 196, 178, 165, 146, 158, 176, 205, 226, 211, 168, 123}
+	rebuf := []float64{0.0052, 0.0061, 0.0074, 0.0068, 0.0049, 0.0040, 0.0042, 0.0051, 0.0063, 0.0079, 0.0091, 0.0085, 0.0070, 0.0062, 0.0055, 0.0050, 0.0058, 0.0066, 0.0073, 0.0088, 0.0094, 0.0081, 0.0064, 0.0056}
+	bitrate := []float64{4_500_000, 4_420_000, 4_300_000, 4_350_000, 4_600_000, 4_700_000, 4_680_000, 4_550_000, 4_400_000, 4_250_000, 4_100_000, 4_180_000, 4_360_000, 4_460_000, 4_540_000, 4_580_000, 4_500_000, 4_410_000, 4_320_000, 4_200_000, 4_140_000, 4_280_000, 4_470_000, 4_530_000}
+	buckets := make([]*periscopepb.SessionQoeTimeSeriesBucket, len(sessions))
+	for i := range sessions {
+		buckets[i] = &periscopepb.SessionQoeTimeSeriesBucket{
+			Timestamp:        timestamppb.New(now.Add(-time.Duration(len(sessions)-1-i) * time.Hour)),
+			SessionCount:     sessions[i],
+			PlayedHours:      float64(sessions[i]) * 0.15,
+			RebufferingRatio: rebuf[i],
+			FrameDropRatio:   rebuf[i] * 0.14,
+			AvgBitrateBps:    bitrate[i],
+		}
+	}
+	return buckets
+}
+
+// GenerateVodRetentionAssetConnection returns a demo page of eligible VOD assets
+// for the retention picker (with catalog-composed titles).
+func GenerateVodRetentionAssetConnection() *model.VodRetentionAssetConnection {
+	now := time.Now()
+	type seed struct {
+		hash     string
+		title    string
+		sessions int
+		duration int
+		ageHours int
+	}
+	seeds := []seed{
+		{"a1b2c3d4e5f6", "Launch Keynote — Q2 Product Update", 2410, 3600, 2},
+		{"b2c3d4e5f6a1", "How streaming sovereignty works (explainer)", 1875, 540, 9},
+		{"c3d4e5f6a1b2", "Behind the scenes: edge cluster failover", 940, 1280, 27},
+		{"d4e5f6a1b2c3", "Customer story — live sports at scale", 612, 2100, 51},
+		{"e5f6a1b2c3d4", "Webinar: cost modelling for self-hosters", 388, 4200, 96},
+	}
+	nodes := make([]*model.VodRetentionAsset, len(seeds))
+	edges := make([]*model.VodRetentionAssetEdge, len(seeds))
+	for i, s := range seeds {
+		title := s.title
+		playbackID := "play_" + s.hash
+		nodes[i] = &model.VodRetentionAsset{
+			ArtifactHash:  s.hash,
+			TotalSessions: s.sessions,
+			DurationS:     s.duration,
+			LastSeen:      now.Add(-time.Duration(s.ageHours) * time.Hour),
+			Title:         &title,
+			PlaybackID:    &playbackID,
+		}
+		edges[i] = &model.VodRetentionAssetEdge{Cursor: s.hash, Node: nodes[i]}
+	}
+	return &model.VodRetentionAssetConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(nodes),
+	}
+}
+
 // GenerateClusterTrafficMatrix returns demo cross-cluster traffic data.
 func GenerateClusterTrafficMatrix() []*periscopepb.ClusterPairTraffic {
 	centralLat, centralLon := float64Ptr(41.8781), float64Ptr(-87.6298)

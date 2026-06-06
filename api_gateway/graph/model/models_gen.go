@@ -2438,6 +2438,18 @@ type VodAssetsConnection struct {
 	TotalCount int             `json:"totalCount"`
 }
 
+type VodRetentionAssetConnection struct {
+	Edges      []*VodRetentionAssetEdge `json:"edges"`
+	Nodes      []*VodRetentionAsset     `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
+}
+
+type VodRetentionAssetEdge struct {
+	Cursor string             `json:"cursor"`
+	Node   *VodRetentionAsset `json:"node"`
+}
+
 // Completed part info returned by S3 after each part upload.
 type VodUploadCompletedPart struct {
 	// 1-indexed part number.

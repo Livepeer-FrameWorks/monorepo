@@ -2220,6 +2220,34 @@ enum GQL {
   }
   """
 
+  static let GetPlayerBootTimeSeries = """
+  # Player startup (boot) summary bucketed over time — drives the TTF percentile
+  # trend chart on the player-experience Startup tab.
+  query GetPlayerBootTimeSeries(
+    $streamId: ID
+    $artifactHash: String
+    $timeRange: TimeRangeInput
+    $interval: String
+  ) {
+    analytics {
+      health {
+        playerBootTimeSeries(
+          streamId: $streamId
+          artifactHash: $artifactHash
+          timeRange: $timeRange
+          interval: $interval
+        ) {
+          timestamp
+          bootCount
+          p50TtfMs
+          p95TtfMs
+          p99TtfMs
+        }
+      }
+    }
+  }
+  """
+
   static let GetPrepaidBalance = """
   query GetPrepaidBalance($currency: String = "EUR") {
     prepaidBalance(currency: $currency) {
@@ -2589,6 +2617,35 @@ enum GQL {
           avgBitrateBps
           abrSwitchesPerHour
           avgLiveEdgeLatencyMs
+        }
+      }
+    }
+  }
+  """
+
+  static let GetSessionQoeTimeSeries = """
+  # Viewer-experienced QoE bucketed over time — drives the rebuffering/bitrate trend
+  # chart on the player-experience Playback tab.
+  query GetSessionQoeTimeSeries(
+    $streamId: ID
+    $artifactHash: String
+    $timeRange: TimeRangeInput
+    $interval: String
+  ) {
+    analytics {
+      health {
+        sessionQoeTimeSeries(
+          streamId: $streamId
+          artifactHash: $artifactHash
+          timeRange: $timeRange
+          interval: $interval
+        ) {
+          timestamp
+          sessionCount
+          playedHours
+          rebufferingRatio
+          frameDropRatio
+          avgBitrateBps
         }
       }
     }
@@ -3899,6 +3956,35 @@ enum GQL {
       ... on AuthError {
         message
         code
+      }
+    }
+  }
+  """
+
+  static let ListVodRetentionAssets = """
+  # VOD assets that have retention data in the window — backs the clickable asset
+  # picker on the player-experience Retention tab. title/playbackId are composed from
+  # the catalog and may be null for uncatalogued assets (render the hash client-side).
+  query ListVodRetentionAssets($page: ConnectionInput, $timeRange: TimeRangeInput) {
+    analytics {
+      health {
+        vodRetentionAssets(page: $page, timeRange: $timeRange) {
+          nodes {
+            artifactHash
+            totalSessions
+            durationS
+            lastSeen
+            title
+            playbackId
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          totalCount
+        }
       }
     }
   }

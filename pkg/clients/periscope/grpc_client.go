@@ -1049,6 +1049,61 @@ func (c *GRPCClient) GetVodRetention(ctx context.Context, tenantID string, artif
 	return c.aggregated.GetVodRetention(ctx, req)
 }
 
+// GetPlayerBootTimeSeries returns the boot-startup summary bucketed by interval
+// ("5m"/"15m"/"1h"/"1d"; defaults to 5m server-side).
+func (c *GRPCClient) GetPlayerBootTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetPlayerBootTimeSeriesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.GetPlayerBootTimeSeriesRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+		Interval:  interval,
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	if artifactHash != nil {
+		req.ArtifactHash = artifactHash
+	}
+	return c.aggregated.GetPlayerBootTimeSeries(ctx, req)
+}
+
+// GetSessionQoeTimeSeries returns the viewer-experienced QoE summary bucketed by
+// interval ("5m"/"15m"/"1h"/"1d"; defaults to 5m server-side).
+func (c *GRPCClient) GetSessionQoeTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetSessionQoeTimeSeriesResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.GetSessionQoeTimeSeriesRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+		Interval:  interval,
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	if artifactHash != nil {
+		req.ArtifactHash = artifactHash
+	}
+	return c.aggregated.GetSessionQoeTimeSeries(ctx, req)
+}
+
+// ListVodRetentionAssets lists the tenant's VOD assets that have retention data in
+// the window (cursor-paginated). Eligibility is owned by Periscope; the gateway
+// composes human title/playback_id from the catalog by artifact_hash.
+func (c *GRPCClient) ListVodRetentionAssets(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.ListVodRetentionAssetsResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &periscopepb.ListVodRetentionAssetsRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	return c.aggregated.ListVodRetentionAssets(ctx, req)
+}
+
 // ListOrchestrators lists vantage-independent orchestrator state for a tenant.
 // orchAddr empty = full list; non-empty = single-row filter.
 func (c *GRPCClient) ListOrchestrators(ctx context.Context, tenantID string, orchAddr *string, opts *CursorPaginationOpts) (*periscopepb.ListOrchestratorsResponse, error) {

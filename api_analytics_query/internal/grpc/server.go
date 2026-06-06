@@ -342,6 +342,22 @@ func buildOrderBySingle(params *pagination.Params, col string) string {
 	return fmt.Sprintf(" ORDER BY %s DESC", col)
 }
 
+// clickhouseInterval maps a coarse interval token ("5m"/"15m"/"1h"/"1d") to a
+// ClickHouse INTERVAL expression for toStartOfInterval bucketing. Unknown or empty
+// tokens fall back to 5 minutes.
+func clickhouseInterval(token string) string {
+	switch token {
+	case "15m":
+		return "15 MINUTE"
+	case "1h":
+		return "1 HOUR"
+	case "1d":
+		return "1 DAY"
+	default:
+		return "5 MINUTE"
+	}
+}
+
 type cursorCollisionKey struct {
 	Timestamp time.Time
 	ID        string
@@ -1060,14 +1076,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *periscopepb
 
 // joinStrings joins strings with a separator (helper for SQL IN clause)
 func joinStrings(strs []string, sep string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	result := strs[0]
-	for i := 1; i < len(strs); i++ {
-		result += sep + strs[i]
-	}
-	return result
+	return strings.Join(strs, sep)
 }
 
 func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID string, streamIDs []string) map[string]time.Time {
@@ -1293,27 +1302,6 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *per
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
-	// Determine interval - default to 5 minutes
-	interval := req.GetInterval()
-	if interval == "" {
-		interval = "5m"
-	}
-
-	// Map interval string to ClickHouse interval
-	var clickhouseInterval string
-	switch interval {
-	case "5m":
-		clickhouseInterval = "5 MINUTE"
-	case "15m":
-		clickhouseInterval = "15 MINUTE"
-	case "1h":
-		clickhouseInterval = "1 HOUR"
-	case "1d":
-		clickhouseInterval = "1 DAY"
-	default:
-		clickhouseInterval = "5 MINUTE"
-	}
-
 	// Query finalized stream runtime windows instead of legacy stream_event_log rollups.
 	query := fmt.Sprintf(`
 		SELECT
@@ -1322,7 +1310,7 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *per
 			max(peak_viewers) as viewer_count
 		FROM periscope.stream_runtime_5m_v
 		WHERE tenant_id = ? AND window_start >= ? AND window_start < ?
-	`, clickhouseInterval)
+	`, clickhouseInterval(req.GetInterval()))
 	args := []any{tenantID, startTime, endTime}
 
 	if streamID := req.GetStreamId(); streamID != "" {
@@ -4841,6 +4829,71 @@ func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *perisco
 	}, nil
 }
 
+// GetPlayerBootTimeSeries returns the tenant-scoped boot-startup summary bucketed
+// by toStartOfInterval. TTF percentiles are computed at read time per bucket (a
+// single read-time quantile per window — same raw player_boot_samples source as
+// the scalar summary, just grouped). Half-open window [start, end) so a boundary
+// sample lands in exactly one bucket. boot_count is the per-bucket denominator.
+func (s *PeriscopeServer) GetPlayerBootTimeSeries(ctx context.Context, req *periscopepb.GetPlayerBootTimeSeriesRequest) (*periscopepb.GetPlayerBootTimeSeriesResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			toStartOfInterval(timestamp, INTERVAL %s) AS bucket,
+			count() AS boot_count,
+			quantileIf(0.5)(total_ttf_ms, total_ttf_ms > 0) AS p50,
+			quantileIf(0.95)(total_ttf_ms, total_ttf_ms > 0) AS p95,
+			quantileIf(0.99)(total_ttf_ms, total_ttf_ms > 0) AS p99
+		FROM player_boot_samples
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp < ?
+	`, clickhouseInterval(req.GetInterval()))
+	args := []any{tenantID, startTime, endTime}
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+	if artifactHash := req.GetArtifactHash(); artifactHash != "" {
+		query += " AND artifact_hash = ?"
+		args = append(args, artifactHash)
+	}
+	query += " GROUP BY bucket ORDER BY bucket ASC"
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var buckets []*periscopepb.PlayerBootTimeSeriesBucket
+	for rows.Next() {
+		var bucket time.Time
+		var bootCount int64
+		var p50, p95, p99 sql.NullFloat64
+		if err := rows.Scan(&bucket, &bootCount, &p50, &p95, &p99); err != nil {
+			s.logger.WithError(err).Error("Failed to scan player boot time-series row")
+			continue
+		}
+		buckets = append(buckets, &periscopepb.PlayerBootTimeSeriesBucket{
+			Timestamp: timestamppb.New(bucket),
+			BootCount: bootCount,
+			P50TtfMs:  sanitizeFloat64(p50.Float64),
+			P95TtfMs:  sanitizeFloat64(p95.Float64),
+			P99TtfMs:  sanitizeFloat64(p99.Float64),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	return &periscopepb.GetPlayerBootTimeSeriesResponse{Buckets: buckets}, nil
+}
+
 // GetClusterBootOps returns the operator-facing boot aggregate for clusters the
 // caller owns. It reads ONLY token-attributed rows (cluster_attributed = 1) and
 // projects no content/stream/session/url/tenant identifiers — it is intentionally
@@ -4972,7 +5025,7 @@ func (s *PeriscopeServer) GetSessionQoeSummary(ctx context.Context, req *perisco
 				avgIf(live_edge_latency_ms, live_edge_latency_ms > 0) AS s_live_edge
 			FROM client_qoe_session_deltas FINAL
 			WHERE %s
-			GROUP BY session_id
+			GROUP BY content_id, session_id
 		)
 	`, filter)
 
@@ -5003,6 +5056,87 @@ func (s *PeriscopeServer) GetSessionQoeSummary(ctx context.Context, req *perisco
 	}, nil
 }
 
+// GetSessionQoeTimeSeries returns the tenant-scoped viewer-experienced QoE summary
+// bucketed by toStartOfInterval. The inner query rolls additive beacon deltas up
+// per (bucket, session) over client_qoe_session_deltas FINAL — same sum-of-deltas
+// semantics as the scalar summary — then the outer query computes per-bucket
+// ratios. count() over the inner rows is the per-bucket distinct-session count.
+// Half-open window [start, end); a session spanning two windows counts in both.
+func (s *PeriscopeServer) GetSessionQoeTimeSeries(ctx context.Context, req *periscopepb.GetSessionQoeTimeSeriesRequest) (*periscopepb.GetSessionQoeTimeSeriesResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	filter := "tenant_id = ? AND timestamp >= ? AND timestamp < ?"
+	args := []any{tenantID, startTime, endTime}
+	if streamID := req.GetStreamId(); streamID != "" {
+		filter += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+	if artifactHash := req.GetArtifactHash(); artifactHash != "" {
+		filter += " AND artifact_hash = ?"
+		args = append(args, artifactHash)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			bucket,
+			count() AS session_count,
+			toFloat64(sum(s_played_ms)) / 3600000.0 AS played_hours,
+			sum(s_rebuffer_ms) / nullIf(sum(s_played_ms), 0) AS rebuffering_ratio,
+			sum(s_frames_dropped) / nullIf(sum(s_frames_decoded), 0) AS frame_drop_ratio,
+			sum(s_bitrate_bps_seconds) / nullIf(toFloat64(sum(s_played_ms)) / 1000.0, 0) AS avg_bitrate_bps
+		FROM (
+			SELECT
+				toStartOfInterval(timestamp, INTERVAL %s) AS bucket,
+				session_id,
+				sum(played_ms) AS s_played_ms,
+				sum(rebuffer_ms) AS s_rebuffer_ms,
+				sumIf(frames_decoded, frame_stats_supported = 1) AS s_frames_decoded,
+				sumIf(frames_dropped, frame_stats_supported = 1) AS s_frames_dropped,
+				sum(bitrate_bps_seconds) AS s_bitrate_bps_seconds
+			FROM client_qoe_session_deltas FINAL
+			WHERE %s
+			GROUP BY bucket, content_id, session_id
+		)
+		GROUP BY bucket ORDER BY bucket ASC
+	`, clickhouseInterval(req.GetInterval()), filter)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var buckets []*periscopepb.SessionQoeTimeSeriesBucket
+	for rows.Next() {
+		var bucket time.Time
+		var sessionCount int64
+		var playedHours, rebufRatio, frameDropRatio, avgBitrate sql.NullFloat64
+		if err := rows.Scan(&bucket, &sessionCount, &playedHours, &rebufRatio, &frameDropRatio, &avgBitrate); err != nil {
+			s.logger.WithError(err).Error("Failed to scan session QoE time-series row")
+			continue
+		}
+		buckets = append(buckets, &periscopepb.SessionQoeTimeSeriesBucket{
+			Timestamp:        timestamppb.New(bucket),
+			SessionCount:     sessionCount,
+			PlayedHours:      sanitizeFloat64(playedHours.Float64),
+			RebufferingRatio: sanitizeFloat64(rebufRatio.Float64),
+			FrameDropRatio:   sanitizeFloat64(frameDropRatio.Float64),
+			AvgBitrateBps:    sanitizeFloat64(avgBitrate.Float64),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	return &periscopepb.GetSessionQoeTimeSeriesResponse{Buckets: buckets}, nil
+}
+
 // GetClusterQoeOps returns the operator-facing QoE aggregate for clusters the
 // caller owns — token-attributed rows only (cluster_attributed = 1), redacted to
 // serving cluster/node/protocol. Ratios are over the deduped (FINAL) beacon sums.
@@ -5031,7 +5165,7 @@ func (s *PeriscopeServer) GetClusterQoeOps(ctx context.Context, req *periscopepb
 			serving_cluster_id,
 			node_id,
 			protocol,
-			uniqExact(session_id) AS session_count,
+			uniqExact(content_id, session_id) AS session_count,
 			sum(rebuffer_ms) / nullIf(sum(played_ms), 0) AS rebuffering_ratio,
 			sumIf(frames_dropped, frame_stats_supported = 1) / nullIf(sumIf(frames_decoded, frame_stats_supported = 1), 0) AS frame_drop_ratio,
 			sum(bitrate_bps_seconds) / nullIf(toFloat64(sum(played_ms)) / 1000.0, 0) AS avg_bitrate_bps
@@ -5111,7 +5245,7 @@ func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.
 				toInt64(max(asset_duration_s)) AS dur
 			FROM client_qoe_session_deltas FINAL
 			WHERE tenant_id = ? AND artifact_hash = ? AND timestamp >= ? AND timestamp <= ?
-			GROUP BY session_id
+			GROUP BY content_id, session_id
 			HAVING bw > 0
 		) GROUP BY reach, bw, dur ORDER BY reach
 	`, args...)
@@ -5205,6 +5339,104 @@ func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.
 			TotalSessions:  totalSessions,
 			Points:         points,
 		},
+	}, nil
+}
+
+// ListVodRetentionAssets lists the tenant's VOD assets that have retention data in
+// the window — the picker backing the retention tab. Eligibility is owned here:
+// content_type = 'vod' AND at least one real reach sample (bucket_width_s > 0, the
+// same presence gate GetVodRetention uses). Human title/playback_id are composed at
+// the gateway from the catalog. The per-artifact aggregate is wrapped in a subquery
+// so the keyset columns (last_seen, artifact_hash) are concrete in the outer filter.
+func (s *PeriscopeServer) ListVodRetentionAssets(ctx context.Context, req *periscopepb.ListVodRetentionAssetsRequest) (*periscopepb.ListVodRetentionAssetsResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	params, err := getCursorPagination(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	const eligible = `tenant_id = ? AND content_type = 'vod' AND bucket_width_s > 0 AND timestamp >= ? AND timestamp < ?`
+	countCh := s.countAsync(ctx, fmt.Sprintf(`
+		SELECT toInt32(uniqExact(artifact_hash))
+		FROM client_qoe_session_deltas FINAL
+		WHERE %s
+	`, eligible), tenantID, startTime, endTime)
+
+	query := fmt.Sprintf(`
+		SELECT artifact_hash, total_sessions, duration_s, last_seen FROM (
+			SELECT
+				artifact_hash,
+				toInt64(count(DISTINCT content_id, session_id)) AS total_sessions,
+				toInt32(max(asset_duration_s)) AS duration_s,
+				max(timestamp) AS last_seen
+			FROM client_qoe_session_deltas FINAL
+			WHERE %s
+			GROUP BY artifact_hash
+		)
+		WHERE 1 = 1
+	`, eligible)
+	args := []any{tenantID, startTime, endTime}
+
+	keysetCond, keysetArgs := buildKeysetCondition(params, "last_seen", "artifact_hash")
+	if keysetCond != "" {
+		query += keysetCond
+		args = append(args, keysetArgs...)
+	}
+	query += buildOrderBy(params, "last_seen", "artifact_hash")
+	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var assets []*periscopepb.VodRetentionAsset
+	for rows.Next() {
+		var artifactHash string
+		var totalSessions int64
+		var durationS int32
+		var lastSeen time.Time
+		if err := rows.Scan(&artifactHash, &totalSessions, &durationS, &lastSeen); err != nil {
+			s.logger.WithError(err).Error("Failed to scan vod retention asset row")
+			continue
+		}
+		assets = append(assets, &periscopepb.VodRetentionAsset{
+			ArtifactHash:  artifactHash,
+			TotalSessions: totalSessions,
+			DurationS:     durationS,
+			LastSeen:      timestamppb.New(lastSeen),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+
+	resultsLen := len(assets)
+	if resultsLen > params.Limit {
+		assets = assets[:params.Limit]
+	}
+	if params.Direction == pagination.Backward {
+		slices.Reverse(assets)
+	}
+
+	total := <-countCh
+	var startCursor, endCursor string
+	if len(assets) > 0 {
+		startCursor = pagination.EncodeCursor(assets[0].LastSeen.AsTime(), assets[0].ArtifactHash)
+		endCursor = pagination.EncodeCursor(assets[len(assets)-1].LastSeen.AsTime(), assets[len(assets)-1].ArtifactHash)
+	}
+
+	return &periscopepb.ListVodRetentionAssetsResponse{
+		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+		Assets:     assets,
 	}, nil
 }
 

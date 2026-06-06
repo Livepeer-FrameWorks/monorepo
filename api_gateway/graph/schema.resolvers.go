@@ -224,6 +224,22 @@ func (r *analyticsHealthResolver) VodRetention(ctx context.Context, obj *markers
 	return r.DoGetVodRetention(ctx, artifactHash, timeRange, noCache)
 }
 
+// PlayerBootTimeSeries is the resolver for the playerBootTimeSeries field.
+func (r *analyticsHealthResolver) PlayerBootTimeSeries(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.PlayerBootTimeSeriesBucket, error) {
+	return r.DoGetPlayerBootTimeSeries(ctx, streamID, artifactHash, timeRange, interval, noCache)
+}
+
+// SessionQoeTimeSeries is the resolver for the sessionQoeTimeSeries field.
+func (r *analyticsHealthResolver) SessionQoeTimeSeries(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.SessionQoeTimeSeriesBucket, error) {
+	return r.DoGetSessionQoeTimeSeries(ctx, streamID, artifactHash, timeRange, interval, noCache)
+}
+
+// VodRetentionAssets is the resolver for the vodRetentionAssets field.
+func (r *analyticsHealthResolver) VodRetentionAssets(ctx context.Context, obj *markers.AnalyticsHealth, page *model.ConnectionInput, timeRange *model.TimeRangeInput, noCache *bool) (*model.VodRetentionAssetConnection, error) {
+	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
+	return r.DoListVodRetentionAssets(ctx, first, after, last, before, timeRange, noCache)
+}
+
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -3000,6 +3016,15 @@ func (r *playbackWebhookPolicyResolver) SecretMasked(ctx context.Context, obj *c
 	return resolvers.WebhookSecretMask(), nil
 }
 
+// Timestamp is the resolver for the timestamp field.
+func (r *playerBootTimeSeriesBucketResolver) Timestamp(ctx context.Context, obj *periscopepb.PlayerBootTimeSeriesBucket) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
 // ProcessingUsageConnection is the resolver for the processingUsageConnection field.
 func (r *processingUsageResolver) ProcessingUsageConnection(ctx context.Context, obj *markers.ProcessingUsage, page *model.ConnectionInput, streamID *string, processType *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ProcessingUsageConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -4522,6 +4547,15 @@ func (r *serviceInstanceHealthResolver) LastHealthCheck(ctx context.Context, obj
 		return nil, nil
 	}
 	t := obj.LastHealthCheck.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *sessionQoeTimeSeriesBucketResolver) Timestamp(ctx context.Context, obj *periscopepb.SessionQoeTimeSeriesBucket) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
 	return &t, nil
 }
 
@@ -6658,6 +6692,11 @@ func (r *Resolver) PlaybackWebhookPolicy() generated.PlaybackWebhookPolicyResolv
 	return &playbackWebhookPolicyResolver{r}
 }
 
+// PlayerBootTimeSeriesBucket returns generated.PlayerBootTimeSeriesBucketResolver implementation.
+func (r *Resolver) PlayerBootTimeSeriesBucket() generated.PlayerBootTimeSeriesBucketResolver {
+	return &playerBootTimeSeriesBucketResolver{r}
+}
+
 // ProcessingUsage returns generated.ProcessingUsageResolver implementation.
 func (r *Resolver) ProcessingUsage() generated.ProcessingUsageResolver {
 	return &processingUsageResolver{r}
@@ -6710,6 +6749,11 @@ func (r *Resolver) ServiceInstance() generated.ServiceInstanceResolver {
 // ServiceInstanceHealth returns generated.ServiceInstanceHealthResolver implementation.
 func (r *Resolver) ServiceInstanceHealth() generated.ServiceInstanceHealthResolver {
 	return &serviceInstanceHealthResolver{r}
+}
+
+// SessionQoeTimeSeriesBucket returns generated.SessionQoeTimeSeriesBucketResolver implementation.
+func (r *Resolver) SessionQoeTimeSeriesBucket() generated.SessionQoeTimeSeriesBucketResolver {
+	return &sessionQoeTimeSeriesBucketResolver{r}
 }
 
 // SigningKey returns generated.SigningKeyResolver implementation.
@@ -6942,6 +6986,7 @@ type playbackInstanceResolver struct{ *Resolver }
 type playbackJwtPolicyResolver struct{ *Resolver }
 type playbackMetadataResolver struct{ *Resolver }
 type playbackWebhookPolicyResolver struct{ *Resolver }
+type playerBootTimeSeriesBucketResolver struct{ *Resolver }
 type processingUsageResolver struct{ *Resolver }
 type processingUsageRecordResolver struct{ *Resolver }
 type processingUsageSummaryResolver struct{ *Resolver }
@@ -6954,6 +6999,7 @@ type rebufferingEventResolver struct{ *Resolver }
 type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
 type serviceInstanceHealthResolver struct{ *Resolver }
+type sessionQoeTimeSeriesBucketResolver struct{ *Resolver }
 type signingKeyResolver struct{ *Resolver }
 type skipperConfidenceBlockResolver struct{ *Resolver }
 type skipperMessageResolver struct{ *Resolver }

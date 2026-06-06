@@ -1208,6 +1208,12 @@ service AggregatedAnalyticsService {
   rpc GetSessionQoeSummary(GetSessionQoeSummaryRequest) returns (GetSessionQoeSummaryResponse);
   rpc GetClusterQoeOps(GetClusterQoeOpsRequest) returns (GetClusterQoeOpsResponse);
   rpc GetVodRetention(GetVodRetentionRequest) returns (GetVodRetentionResponse);
+  // Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
+  // per toStartOfInterval window) and the eligible-VOD-asset list backing the
+  // retention picker.
+  rpc GetPlayerBootTimeSeries(GetPlayerBootTimeSeriesRequest) returns (GetPlayerBootTimeSeriesResponse);
+  rpc GetSessionQoeTimeSeries(GetSessionQoeTimeSeriesRequest) returns (GetSessionQoeTimeSeriesResponse);
+  rpc ListVodRetentionAssets(ListVodRetentionAssetsRequest) returns (ListVodRetentionAssetsResponse);
   rpc GetNetworkUsage(GetNetworkUsageRequest) returns (GetNetworkUsageResponse);
   rpc GetAcquisitionFunnel(GetAcquisitionFunnelRequest) returns (GetAcquisitionFunnelResponse);
   rpc GetAcquisitionCohortUsage(GetAcquisitionCohortUsageRequest) returns (GetAcquisitionCohortUsageResponse);
@@ -1889,6 +1895,30 @@ message GetPlayerBootSummaryResponse {
   PlayerBootSummary summary = 1;
 }
 
+// One toStartOfInterval window of the boot-startup summary. TTF percentiles are
+// computed at read time per bucket over player_boot_samples (single read-time
+// quantile per window — not a materialized rollup). boot_count is the per-bucket
+// denominator so charts can dim windows backed by too few boots.
+message PlayerBootTimeSeriesBucket {
+  google.protobuf.Timestamp timestamp = 1;
+  int64 boot_count = 2;
+  double p50_ttf_ms = 3;
+  double p95_ttf_ms = 4;
+  double p99_ttf_ms = 5;
+}
+
+message GetPlayerBootTimeSeriesRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  optional string artifact_hash = 3;
+  common.TimeRange time_range = 4;
+  string interval = 5;  // "5m"/"15m"/"1h"/"1d"; defaults to 5m
+}
+
+message GetPlayerBootTimeSeriesResponse {
+  repeated PlayerBootTimeSeriesBucket buckets = 1;
+}
+
 // Cluster-ops boot aggregate — operator view keyed by serving node/protocol.
 // Aggregate/redacted only: never carries content/stream/session/url/tenant
 // identifiers. Populated only from token-attributed rows (cluster_attributed=1).
@@ -1941,6 +1971,32 @@ message GetSessionQoeSummaryResponse {
   SessionQoeSummary summary = 1;
 }
 
+// One toStartOfInterval window of the session-QoE summary. Ratios are computed
+// per bucket over the inner per-session rollup of client_qoe_session_deltas FINAL
+// (same sum-of-deltas semantics as the scalar summary). session_count and
+// played_hours are the per-bucket denominators so charts can dim low-sample
+// windows. A session spanning two windows counts in both (trend semantics).
+message SessionQoeTimeSeriesBucket {
+  google.protobuf.Timestamp timestamp = 1;
+  int64 session_count = 2;
+  double played_hours = 3;
+  double rebuffering_ratio = 4;  // Σrebuffer_ms / Σplayed_ms
+  double frame_drop_ratio = 5;   // Σdropped / Σdecoded over frame-stats-supported beacons
+  double avg_bitrate_bps = 6;    // Σ(bitrate_bps_seconds) / Σplayed_seconds
+}
+
+message GetSessionQoeTimeSeriesRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  optional string artifact_hash = 3;
+  common.TimeRange time_range = 4;
+  string interval = 5;  // "5m"/"15m"/"1h"/"1d"; defaults to 5m
+}
+
+message GetSessionQoeTimeSeriesResponse {
+  repeated SessionQoeTimeSeriesBucket buckets = 1;
+}
+
 // Cluster-ops QoE aggregate — operator view keyed by serving node/protocol.
 // Aggregate/redacted only; token-attributed rows (cluster_attributed = 1).
 message ClusterQoeOps {
@@ -1990,6 +2046,28 @@ message GetVodRetentionRequest {
 
 message GetVodRetentionResponse {
   VodRetention retention = 1;
+}
+
+// One VOD asset that has retention data in the window — the picker backing the
+// retention tab. Eligibility (content_type = 'vod' AND a real reach sample,
+// bucket_width_s > 0) is owned here; human title/playback_id are composed at the
+// gateway from the catalog (Commodore), keyed by artifact_hash.
+message VodRetentionAsset {
+  string artifact_hash = 1;
+  int64 total_sessions = 2;
+  int32 duration_s = 3;
+  google.protobuf.Timestamp last_seen = 4;
+}
+
+message ListVodRetentionAssetsRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListVodRetentionAssetsResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated VodRetentionAsset assets = 2;
 }
 
 // ============================================================================

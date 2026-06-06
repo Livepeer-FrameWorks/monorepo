@@ -88,6 +88,11 @@ models:
   RoutingCountryStat:
     model:
       - frameworks/api_gateway/graph/model.RoutingCountryStat
+  # Proto has VodRetentionAsset (eligibility + stats only); the GraphQL node adds
+  # catalog-composed title/playbackId, so bind to a generated model, not the proto.
+  VodRetentionAsset:
+    model:
+      - frameworks/api_gateway/graph/model.VodRetentionAsset
 
   # Analytics types - bound to proto types
   StreamAnalyticsSummary:

@@ -942,7 +942,6 @@
             "/analytics",
             "/analytics/audience",
             "/analytics/player-experience",
-            "/analytics/qoe",
             "/analytics/usage",
             "/streams/:id/analytics",
             "/streams/:id/health"

@@ -1,0 +1,25 @@
+# Player startup (boot) summary bucketed over time — drives the TTF percentile
+# trend chart on the player-experience Startup tab.
+query GetPlayerBootTimeSeries(
+  $streamId: ID
+  $artifactHash: String
+  $timeRange: TimeRangeInput
+  $interval: String
+) {
+  analytics {
+    health {
+      playerBootTimeSeries(
+        streamId: $streamId
+        artifactHash: $artifactHash
+        timeRange: $timeRange
+        interval: $interval
+      ) {
+        timestamp
+        bootCount
+        p50TtfMs
+        p95TtfMs
+        p99TtfMs
+      }
+    }
+  }
+}

@@ -1544,6 +1544,9 @@ const (
 	AggregatedAnalyticsService_GetSessionQoeSummary_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetSessionQoeSummary"
 	AggregatedAnalyticsService_GetClusterQoeOps_FullMethodName            = "/periscope.AggregatedAnalyticsService/GetClusterQoeOps"
 	AggregatedAnalyticsService_GetVodRetention_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetVodRetention"
+	AggregatedAnalyticsService_GetPlayerBootTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetPlayerBootTimeSeries"
+	AggregatedAnalyticsService_GetSessionQoeTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetSessionQoeTimeSeries"
+	AggregatedAnalyticsService_ListVodRetentionAssets_FullMethodName      = "/periscope.AggregatedAnalyticsService/ListVodRetentionAssets"
 	AggregatedAnalyticsService_GetNetworkUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetNetworkUsage"
 	AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetAcquisitionFunnel"
 	AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetAcquisitionCohortUsage"
@@ -1587,6 +1590,12 @@ type AggregatedAnalyticsServiceClient interface {
 	GetSessionQoeSummary(ctx context.Context, in *GetSessionQoeSummaryRequest, opts ...grpc.CallOption) (*GetSessionQoeSummaryResponse, error)
 	GetClusterQoeOps(ctx context.Context, in *GetClusterQoeOpsRequest, opts ...grpc.CallOption) (*GetClusterQoeOpsResponse, error)
 	GetVodRetention(ctx context.Context, in *GetVodRetentionRequest, opts ...grpc.CallOption) (*GetVodRetentionResponse, error)
+	// Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
+	// per toStartOfInterval window) and the eligible-VOD-asset list backing the
+	// retention picker.
+	GetPlayerBootTimeSeries(ctx context.Context, in *GetPlayerBootTimeSeriesRequest, opts ...grpc.CallOption) (*GetPlayerBootTimeSeriesResponse, error)
+	GetSessionQoeTimeSeries(ctx context.Context, in *GetSessionQoeTimeSeriesRequest, opts ...grpc.CallOption) (*GetSessionQoeTimeSeriesResponse, error)
+	ListVodRetentionAssets(ctx context.Context, in *ListVodRetentionAssetsRequest, opts ...grpc.CallOption) (*ListVodRetentionAssetsResponse, error)
 	GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error)
@@ -1850,6 +1859,36 @@ func (c *aggregatedAnalyticsServiceClient) GetVodRetention(ctx context.Context, 
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetPlayerBootTimeSeries(ctx context.Context, in *GetPlayerBootTimeSeriesRequest, opts ...grpc.CallOption) (*GetPlayerBootTimeSeriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPlayerBootTimeSeriesResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetPlayerBootTimeSeries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetSessionQoeTimeSeries(ctx context.Context, in *GetSessionQoeTimeSeriesRequest, opts ...grpc.CallOption) (*GetSessionQoeTimeSeriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionQoeTimeSeriesResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetSessionQoeTimeSeries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) ListVodRetentionAssets(ctx context.Context, in *ListVodRetentionAssetsRequest, opts ...grpc.CallOption) (*ListVodRetentionAssetsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVodRetentionAssetsResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_ListVodRetentionAssets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *aggregatedAnalyticsServiceClient) GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNetworkUsageResponse)
@@ -1918,6 +1957,12 @@ type AggregatedAnalyticsServiceServer interface {
 	GetSessionQoeSummary(context.Context, *GetSessionQoeSummaryRequest) (*GetSessionQoeSummaryResponse, error)
 	GetClusterQoeOps(context.Context, *GetClusterQoeOpsRequest) (*GetClusterQoeOpsResponse, error)
 	GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error)
+	// Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
+	// per toStartOfInterval window) and the eligible-VOD-asset list backing the
+	// retention picker.
+	GetPlayerBootTimeSeries(context.Context, *GetPlayerBootTimeSeriesRequest) (*GetPlayerBootTimeSeriesResponse, error)
+	GetSessionQoeTimeSeries(context.Context, *GetSessionQoeTimeSeriesRequest) (*GetSessionQoeTimeSeriesResponse, error)
+	ListVodRetentionAssets(context.Context, *ListVodRetentionAssetsRequest) (*ListVodRetentionAssetsResponse, error)
 	GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error)
 	GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error)
 	GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error)
@@ -2005,6 +2050,15 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterQoeOps(context.Co
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodRetention not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetPlayerBootTimeSeries(context.Context, *GetPlayerBootTimeSeriesRequest) (*GetPlayerBootTimeSeriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlayerBootTimeSeries not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetSessionQoeTimeSeries(context.Context, *GetSessionQoeTimeSeriesRequest) (*GetSessionQoeTimeSeriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionQoeTimeSeries not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) ListVodRetentionAssets(context.Context, *ListVodRetentionAssetsRequest) (*ListVodRetentionAssetsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVodRetentionAssets not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNetworkUsage not implemented")
@@ -2487,6 +2541,60 @@ func _AggregatedAnalyticsService_GetVodRetention_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetPlayerBootTimeSeries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlayerBootTimeSeriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetPlayerBootTimeSeries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetPlayerBootTimeSeries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetPlayerBootTimeSeries(ctx, req.(*GetPlayerBootTimeSeriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetSessionQoeTimeSeries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionQoeTimeSeriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetSessionQoeTimeSeries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetSessionQoeTimeSeries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetSessionQoeTimeSeries(ctx, req.(*GetSessionQoeTimeSeriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_ListVodRetentionAssets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVodRetentionAssetsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).ListVodRetentionAssets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_ListVodRetentionAssets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).ListVodRetentionAssets(ctx, req.(*ListVodRetentionAssetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AggregatedAnalyticsService_GetNetworkUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNetworkUsageRequest)
 	if err := dec(in); err != nil {
@@ -2647,6 +2755,18 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVodRetention",
 			Handler:    _AggregatedAnalyticsService_GetVodRetention_Handler,
+		},
+		{
+			MethodName: "GetPlayerBootTimeSeries",
+			Handler:    _AggregatedAnalyticsService_GetPlayerBootTimeSeries_Handler,
+		},
+		{
+			MethodName: "GetSessionQoeTimeSeries",
+			Handler:    _AggregatedAnalyticsService_GetSessionQoeTimeSeries_Handler,
+		},
+		{
+			MethodName: "ListVodRetentionAssets",
+			Handler:    _AggregatedAnalyticsService_ListVodRetentionAssets_Handler,
 		},
 		{
 			MethodName: "GetNetworkUsage",

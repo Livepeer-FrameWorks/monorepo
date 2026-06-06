@@ -1018,6 +1018,40 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): VodRetention!
+  """
+  Player startup summary bucketed over time (read-time TTF percentiles per
+  `interval` window: "5m"/"15m"/"1h"/"1d"). Companion to playerBootSummary for
+  trend charts. `bootCount` per bucket is the denominator for low-sample windows.
+  """
+  playerBootTimeSeries(
+    streamId: ID
+    artifactHash: String
+    timeRange: TimeRangeInput
+    interval: String = "1h"
+    noCache: Boolean = false
+  ): [PlayerBootTimeSeriesBucket!]!
+  """
+  Viewer-experienced QoE bucketed over time (per-`interval` rebuffering/frame-drop/
+  bitrate). Companion to sessionQoeSummary for trend charts. `sessionCount` and
+  `playedHours` per bucket are the denominators for low-sample windows.
+  """
+  sessionQoeTimeSeries(
+    streamId: ID
+    artifactHash: String
+    timeRange: TimeRangeInput
+    interval: String = "1h"
+    noCache: Boolean = false
+  ): [SessionQoeTimeSeriesBucket!]!
+  """
+  VOD assets that have retention data in the window — the picker backing the
+  retention view. Eligibility (VOD content with real reach samples) is owned by
+  analytics; title/playbackId are composed from the catalog by artifactHash.
+  """
+  vodRetentionAssets(
+    page: ConnectionInput
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): VodRetentionAssetConnection!
 }
 
 """
@@ -6415,6 +6449,54 @@ type VodRetention {
   assetDurationS: Int!
   totalSessions: Int!
   points: [VodRetentionPoint!]!
+}
+"""
+One toStartOfInterval window of the boot-startup summary. TTF percentiles are
+computed at read time per bucket; `bootCount` is the per-bucket denominator.
+"""
+type PlayerBootTimeSeriesBucket {
+  timestamp: Time!
+  bootCount: Int!
+  p50TtfMs: Float!
+  p95TtfMs: Float!
+  p99TtfMs: Float!
+}
+"""
+One toStartOfInterval window of the viewer-experienced QoE summary. Ratios are
+sum(numerator)/sum(denominator) over the per-session rollup; `sessionCount` and
+`playedHours` are the per-bucket denominators.
+"""
+type SessionQoeTimeSeriesBucket {
+  timestamp: Time!
+  sessionCount: Int!
+  playedHours: Float!
+  rebufferingRatio: Float!
+  frameDropRatio: Float!
+  avgBitrateBps: Float!
+}
+"""
+A VOD asset with retention data in the window. Eligibility + stats (sessions,
+duration, lastSeen) come from analytics; title/playbackId are composed from the
+catalog by artifactHash — both may be null when the asset is uncatalogued (e.g.
+deleted but retention still within TTL).
+"""
+type VodRetentionAsset {
+  artifactHash: String!
+  totalSessions: Int!
+  durationS: Int!
+  lastSeen: Time!
+  title: String
+  playbackId: String
+}
+type VodRetentionAssetEdge {
+  cursor: String!
+  node: VodRetentionAsset!
+}
+type VodRetentionAssetConnection {
+  edges: [VodRetentionAssetEdge!]!
+  nodes: [VodRetentionAsset!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
 }
 
 # Real-time node state from node_state_current (ReplacingMergeTree - current state snapshot)

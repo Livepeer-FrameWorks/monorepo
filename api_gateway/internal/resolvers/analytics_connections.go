@@ -20,6 +20,7 @@ import (
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -43,6 +44,15 @@ func parseTimeRange(timeRange *model.TimeRangeInput) (startTime *time.Time, endT
 		endTime = &timeRange.End
 	}
 	return startTime, endTime
+}
+
+// resolveInterval resolves the optional time-series bucket interval, defaulting to
+// "1h" when unset. Periscope maps the token to a ClickHouse INTERVAL.
+func resolveInterval(interval *string) string {
+	if interval != nil && *interval != "" {
+		return *interval
+	}
+	return "1h"
 }
 
 func cursorTimeFromProto(ts *timestamppb.Timestamp) time.Time {
@@ -3532,6 +3542,200 @@ func (r *Resolver) DoGetVodRetention(ctx context.Context, artifactHash string, t
 		return &periscopepb.VodRetention{}, nil
 	}
 	return resp.GetRetention(), nil
+}
+
+// DoGetPlayerBootTimeSeries returns the tenant-scoped boot-startup summary bucketed
+// by interval (companion to DoGetPlayerBootSummary for trend charts).
+func (r *Resolver) DoGetPlayerBootTimeSeries(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.PlayerBootTimeSeriesBucket, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GeneratePlayerBootTimeSeries(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+
+	intervalStr := resolveInterval(interval)
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if normalizedStreamID != nil {
+		streamKey = *normalizedStreamID
+	}
+	artifactKey := ""
+	if artifactHash != nil {
+		artifactKey = *artifactHash
+	}
+	keyParts := []string{tenantID, streamKey, artifactKey, intervalStr, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "player_boot_time_series", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetPlayerBootTimeSeries(ctx, tenantID, normalizedStreamID, artifactHash, timePtrsToTimeRangeOpts(startTime, endTime), intervalStr)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*periscopepb.GetPlayerBootTimeSeriesResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for player boot time series: %T", val)
+	}
+	return resp.GetBuckets(), nil
+}
+
+// DoGetSessionQoeTimeSeries returns the tenant-scoped viewer-experienced QoE summary
+// bucketed by interval (companion to DoGetSessionQoeSummary for trend charts).
+func (r *Resolver) DoGetSessionQoeTimeSeries(ctx context.Context, streamID *string, artifactHash *string, timeRange *model.TimeRangeInput, interval *string, noCache *bool) ([]*periscopepb.SessionQoeTimeSeriesBucket, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateSessionQoeTimeSeries(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+
+	intervalStr := resolveInterval(interval)
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if normalizedStreamID != nil {
+		streamKey = *normalizedStreamID
+	}
+	artifactKey := ""
+	if artifactHash != nil {
+		artifactKey = *artifactHash
+	}
+	keyParts := []string{tenantID, streamKey, artifactKey, intervalStr, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "session_qoe_time_series", keyParts, func(ctx context.Context) (any, error) {
+		return r.Clients.Periscope.GetSessionQoeTimeSeries(ctx, tenantID, normalizedStreamID, artifactHash, timePtrsToTimeRangeOpts(startTime, endTime), intervalStr)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*periscopepb.GetSessionQoeTimeSeriesResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for session qoe time series: %T", val)
+	}
+	return resp.GetBuckets(), nil
+}
+
+// DoListVodRetentionAssets lists the tenant's VOD assets that have retention data
+// in the window (cursor-paginated). Eligibility + stats come from Periscope; the
+// human title/playbackId are composed from the catalog by artifact_hash. There is
+// no batch-by-hash catalog API, so enrichment fans out bounded-parallel GetVodAsset
+// calls over the page (page size bounds the fan-out). An uncatalogued asset (e.g.
+// deleted but retention still within TTL) degrades to a null title/playbackId.
+func (r *Resolver) DoListVodRetentionAssets(ctx context.Context, first *int, after *string, last *int, before *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.VodRetentionAssetConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateVodRetentionAssetConnection(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	opts := &periscopeclient.CursorPaginationOpts{First: int32(pagination.DefaultLimit)}
+	if first != nil {
+		opts.First = int32(pagination.ClampLimit(*first))
+	}
+	if after != nil && *after != "" {
+		opts.After = after
+	}
+	if last != nil {
+		opts.Last = int32(pagination.ClampLimit(*last))
+	}
+	if before != nil && *before != "" {
+		opts.Before = before
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+
+	resp, err := r.Clients.Periscope.ListVodRetentionAssets(ctx, tenantID, timePtrsToTimeRangeOpts(startTime, endTime), opts)
+	if err != nil {
+		return nil, err
+	}
+
+	assets := resp.GetAssets()
+	nodes := make([]*model.VodRetentionAsset, len(assets))
+	for i, a := range assets {
+		nodes[i] = &model.VodRetentionAsset{
+			ArtifactHash:  a.GetArtifactHash(),
+			TotalSessions: int(a.GetTotalSessions()),
+			DurationS:     int(a.GetDurationS()),
+			LastSeen:      cursorTimeFromProto(a.GetLastSeen()),
+		}
+	}
+
+	// Compose catalog title/playbackId by artifact_hash. Errors/misses degrade to a
+	// null title (render the hash client-side); they never fail the listing.
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for i := range nodes {
+		g.Go(func() error {
+			asset, err := r.Clients.Commodore.GetVodAsset(gctx, tenantID, nodes[i].ArtifactHash)
+			if err != nil || asset == nil {
+				return nil
+			}
+			if title := asset.GetTitle(); title != "" {
+				nodes[i].Title = &title
+			}
+			if pid := asset.GetPlaybackId(); pid != "" {
+				nodes[i].PlaybackID = &pid
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	edges := make([]*model.VodRetentionAssetEdge, len(nodes))
+	for i, n := range nodes {
+		edges[i] = &model.VodRetentionAssetEdge{
+			Cursor: encodeStableCursor(n.LastSeen, n.ArtifactHash),
+			Node:   n,
+		}
+	}
+
+	totalCount := 0
+	pageInfo := &model.PageInfo{}
+	if resp.Pagination != nil {
+		totalCount = int(resp.Pagination.TotalCount)
+		pageInfo.HasNextPage = resp.Pagination.HasNextPage
+		pageInfo.HasPreviousPage = resp.Pagination.HasPreviousPage
+		pageInfo.StartCursor = resp.Pagination.StartCursor
+		pageInfo.EndCursor = resp.Pagination.EndCursor
+	}
+
+	return &model.VodRetentionAssetConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: totalCount,
+	}, nil
 }
 
 // DoGetClusterQoeOps returns the redacted operator QoE aggregate for owned clusters.

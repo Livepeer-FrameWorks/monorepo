@@ -183,14 +183,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/analytics/player-experience",
         icon: "Rocket",
         active: true,
-        description: "Startup time-to-first-frame and boot waterfall diagnostics",
-      },
-      qoe: {
-        name: "Playback QoE",
-        href: "/analytics/qoe",
-        icon: "Activity",
-        active: true,
-        description: "Viewer-experienced rebuffering, frame drops, and VOD retention",
+        description: "Startup, playback quality (rebuffering, bitrate), and VOD retention",
       },
       usage: {
         name: "Usage & Costs",
