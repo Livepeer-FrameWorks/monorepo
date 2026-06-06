@@ -11,6 +11,12 @@ import type {
 } from "../core/PlayerInterface";
 import type { HlsJsConfig } from "../types";
 
+const DEFAULT_HLS_STARTUP_TIMEOUT_MS = 10_000;
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 // Player implementation class
 export class HlsJsPlayerImpl extends BasePlayer {
   readonly capability: PlayerCapability = {
@@ -151,7 +157,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     video.setAttribute("crossorigin", "anonymous");
 
     // Apply options
-    if (options.autoplay) video.autoplay = true;
+    video.autoplay = false;
     if (options.muted) video.muted = true;
     video.controls = options.controls === true; // Explicit false to hide native controls
     if (options.loop) video.loop = true;
@@ -159,9 +165,6 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     this.videoElement = video;
     container.appendChild(video);
-
-    // Set up event listeners
-    this.setupVideoEventListeners(video, options);
 
     try {
       // Dynamic import of HLS.js
@@ -227,6 +230,33 @@ export class HlsJsPlayerImpl extends BasePlayer {
         }
 
         this.hls = new Hls(hlsConfig);
+        const startupTimeoutMs =
+          positiveNumber(hlsConfig.manifestLoadingTimeOut) ?? DEFAULT_HLS_STARTUP_TIMEOUT_MS;
+        let startupSettled = false;
+        let startupTimer: ReturnType<typeof setTimeout> | null = null;
+        let resolveStartup: (() => void) | null = null;
+        let rejectStartup: ((error: Error) => void) | null = null;
+        const hlsStartup = new Promise<void>((resolve, reject) => {
+          resolveStartup = resolve;
+          rejectStartup = reject;
+          startupTimer = setTimeout(() => {
+            if (startupSettled) return;
+            startupSettled = true;
+            reject(new Error("HLS startup timed out before manifest parsing"));
+          }, startupTimeoutMs);
+        });
+        const finishStartup = () => {
+          if (startupSettled) return;
+          startupSettled = true;
+          if (startupTimer !== null) clearTimeout(startupTimer);
+          resolveStartup?.();
+        };
+        const failStartup = (error: Error) => {
+          if (startupSettled) return;
+          startupSettled = true;
+          if (startupTimer !== null) clearTimeout(startupTimer);
+          rejectStartup?.(error);
+        };
 
         this.hls.attachMedia(video);
 
@@ -237,6 +267,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
         this.hls.on(Hls.Events.ERROR, (_: any, data: any) => {
           if (this.destroyed) return; // Guard against zombie callbacks
           if (data?.fatal) {
+            failStartup(new Error(`HLS fatal error: ${data?.type || "unknown"}`));
             if (this.failureCount < 3) {
               this.failureCount++;
               try {
@@ -265,13 +296,20 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
+          finishStartup();
         });
+        await hlsStartup;
+        if (this.destroyed) {
+          throw new Error("HLS player destroyed during initialization");
+        }
+        this.setupVideoEventListeners(video, options);
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         if (options.playbackHeaders) {
           throw new Error("Native HLS cannot attach playback Authorization headers");
         }
         // Use native HLS support
         video.src = source.url;
+        this.setupVideoEventListeners(video, options);
       } else {
         throw new Error("HLS not supported in this browser");
       }

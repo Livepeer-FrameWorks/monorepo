@@ -3,6 +3,76 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VideoJsPlayerImpl } from "../src/players/VideoJsPlayer";
 import type { StreamInfo, StreamSource } from "../src/core/PlayerInterface";
 
+const videoJsState = vi.hoisted(() => ({
+  factory: vi.fn(),
+  players: [] as any[],
+}));
+
+function createFakeElement(tagName: string): any {
+  const children: any[] = [];
+  return {
+    tagName: tagName.toUpperCase(),
+    children,
+    classList: { add: vi.fn() },
+    setAttribute: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+    appendChild(child: any) {
+      children.push(child);
+      return child;
+    },
+    querySelector(selector: string) {
+      return children.find((child) => child.tagName?.toLowerCase() === selector) ?? null;
+    },
+    canPlayType: vi.fn(() => ""),
+    buffered: { length: 0 },
+    controls: false,
+    autoplay: false,
+    muted: false,
+    currentTime: 0,
+    readyState: 0,
+    networkState: 0,
+    videoWidth: 0,
+    videoHeight: 0,
+  };
+}
+
+vi.mock("video.js", () => {
+  const videojs = vi.fn((video: HTMLVideoElement, options: Record<string, unknown>) => {
+    videoJsState.factory(video, options);
+    const handlers = new Map<string, Array<() => void>>();
+    const readyHandlers: Array<() => void> = [];
+    const element = createFakeElement("div");
+    const player = {
+      on(event: string, handler: () => void): void {
+        const eventHandlers = handlers.get(event) ?? [];
+        eventHandlers.push(handler);
+        handlers.set(event, eventHandlers);
+      },
+      emit(event: string): void {
+        for (const handler of handlers.get(event) ?? []) handler();
+      },
+      ready(handler: () => void): void {
+        readyHandlers.push(handler);
+      },
+      emitReady(): void {
+        for (const handler of readyHandlers) handler();
+      },
+      el: () => element,
+      tech: () => ({ name: "Html5", vhs: null }),
+      duration: () => Infinity,
+      currentTime: () => video.currentTime,
+      error: () => null,
+      dispose: vi.fn(),
+    };
+    videoJsState.players.push(player);
+    return player;
+  });
+
+  return { default: videojs };
+});
+
 describe("VideoJsPlayerImpl", () => {
   const originalDocument = globalThis.document;
   const originalLocation = globalThis.location;
@@ -11,6 +81,9 @@ describe("VideoJsPlayerImpl", () => {
 
   beforeEach(() => {
     vi.spyOn(console, "debug").mockImplementation(() => {});
+
+    videoJsState.factory.mockClear();
+    videoJsState.players.length = 0;
 
     canPlayType = vi.fn((mimeType: string) => {
       if (mimeType === 'video/mp4;codecs="avc1.42E01E"') return "probably";
@@ -108,5 +181,46 @@ describe("VideoJsPlayerImpl", () => {
     expect(result).toEqual(["video"]);
     expect(canPlayType).toHaveBeenCalledWith('video/mp4;codecs="avc1.42E01E"');
     expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
+  });
+
+  it("waits for metadata before emitting ready", async () => {
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        createElement: vi.fn(createFakeElement),
+      },
+    });
+
+    const player = new VideoJsPlayerImpl();
+    const container = document.createElement("div");
+    const onReady = vi.fn();
+
+    const initialization = player.initialize(
+      container,
+      {
+        type: "html5/application/vnd.apple.mpegurl;version=7",
+        url: "https://edge.example/live/index.m3u8",
+      },
+      { autoplay: true, muted: true, onReady },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    await vi.waitFor(() => expect(videoJsState.players).toHaveLength(1));
+    expect(onReady).not.toHaveBeenCalled();
+    expect(videoJsState.factory.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ autoplay: false })
+    );
+
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.autoplay).toBe(false);
+
+    videoJsState.players[0].emitReady();
+    expect(onReady).not.toHaveBeenCalled();
+
+    videoJsState.players[0].emit("loadedmetadata");
+    await initialization;
+
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(onReady).toHaveBeenCalledWith(video);
   });
 });

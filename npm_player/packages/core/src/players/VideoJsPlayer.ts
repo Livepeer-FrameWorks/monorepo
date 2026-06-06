@@ -9,6 +9,25 @@ import type {
   PlayerCapability,
 } from "../core/PlayerInterface";
 
+const DEFAULT_VIDEOJS_STARTUP_TIMEOUT_MS = 10_000;
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function getVhsStartupTimeoutMs(vhsConfig: Record<string, unknown> | undefined): number {
+  const flatTimeout = positiveNumber(vhsConfig?.timeout);
+  if (flatTimeout !== null) return flatTimeout;
+
+  const xhrConfig = vhsConfig?.xhr;
+  if (xhrConfig && typeof xhrConfig === "object") {
+    const xhrTimeout = positiveNumber((xhrConfig as Record<string, unknown>).timeout);
+    if (xhrTimeout !== null) return xhrTimeout;
+  }
+
+  return DEFAULT_VIDEOJS_STARTUP_TIMEOUT_MS;
+}
+
 export class VideoJsPlayerImpl extends BasePlayer {
   readonly capability: PlayerCapability = {
     name: "Video.js Player",
@@ -163,7 +182,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
     video.setAttribute("crossorigin", "anonymous");
     video.className = "video-js vjs-default-skin fw-player-video";
 
-    if (options.autoplay) video.autoplay = true;
+    video.autoplay = false;
     if (options.muted) video.muted = true;
     video.controls = options.controls === true; // Explicit false to hide native controls
     if (options.loop) video.loop = true;
@@ -171,8 +190,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
     this.videoElement = video;
     container.appendChild(video);
-
-    this.setupVideoEventListeners(video, options);
 
     try {
       const mod = await import("video.js");
@@ -188,7 +205,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
       // Build VideoJS options
       // NOTE: We disable UI components but NOT children array - that breaks playback
       const vjsOptions: Record<string, any> = {
-        autoplay: options.autoplay,
+        autoplay: false,
         controls: useVideoJsControls,
         muted: options.muted,
         sources: [{ src: source.url, type: this.getVideoJsType(source.type) }],
@@ -240,6 +257,33 @@ export class VideoJsPlayerImpl extends BasePlayer {
       this.videojsPlayer = videojs(video, vjsOptions);
       console.debug("[VideoJS] Player created");
 
+      const startupTimeoutMs = getVhsStartupTimeoutMs(options.vhsConfig);
+      let startupSettled = false;
+      let startupTimer: ReturnType<typeof setTimeout> | null = null;
+      let resolveStartup: (() => void) | null = null;
+      let rejectStartup: ((error: Error) => void) | null = null;
+      const videoJsStartup = new Promise<void>((resolve, reject) => {
+        resolveStartup = resolve;
+        rejectStartup = reject;
+        startupTimer = setTimeout(() => {
+          if (startupSettled) return;
+          startupSettled = true;
+          reject(new Error("VideoJS startup timed out before metadata"));
+        }, startupTimeoutMs);
+      });
+      const finishStartup = () => {
+        if (startupSettled) return;
+        startupSettled = true;
+        if (startupTimer !== null) clearTimeout(startupTimer);
+        resolveStartup?.();
+      };
+      const failStartup = (error: Error) => {
+        if (startupSettled) return;
+        startupSettled = true;
+        if (startupTimer !== null) clearTimeout(startupTimer);
+        rejectStartup?.(error);
+      };
+
       // Hide VideoJS UI completely when using custom controls
       if (!useVideoJsControls) {
         // Add class to hide all VideoJS chrome
@@ -255,9 +299,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
         const action = VideoJsPlayerImpl.classifyError(this.videojsPlayer?.error());
         if (action.log) console.warn("[VideoJS]", action.log);
         if (action.kind === "reload") {
+          failStartup(new Error(action.reason));
           this.emit("reloadrequested", { reason: action.reason });
           return;
         }
+        failStartup(new Error(action.message));
         this.emit("error", action.message);
       });
 
@@ -321,6 +367,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
           "videoHeight:",
           video.videoHeight
         );
+        finishStartup();
       });
 
       // Debug: Track VHS (video.js http-streaming) state
@@ -371,6 +418,12 @@ export class VideoJsPlayerImpl extends BasePlayer {
           video.videoHeight
         );
       });
+
+      await videoJsStartup;
+      if (this.destroyed) {
+        throw new Error("VideoJS player destroyed during initialization");
+      }
+      this.setupVideoEventListeners(video, options);
 
       return video;
     } catch (error: any) {
