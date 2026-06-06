@@ -1329,3 +1329,38 @@ func TestSanitizePlatformOverviewResponse(t *testing.T) {
 		t.Fatalf("expected finite platform overview fields to be preserved: %+v", resp)
 	}
 }
+
+func TestBuildStreamSummaryCursor(t *testing.T) {
+	// Intent: the cursor's sort key must be drawn from the SAME field the caller
+	// sorted by, so keyset pagination stays monotonic. An unrecognized sortField
+	// silently yields sort key 0 (the encoder default) — pinned so a typo'd or
+	// renamed sort field surfaces here rather than corrupting page boundaries.
+	summary := &periscopepb.StreamAnalyticsSummary{
+		StreamId:           "stream-x",
+		RangeEgressBytes:   111,
+		RangeViewerSeconds: 222,
+		RangeUniqueViewers: 333,
+		RangeTotalViews:    444,
+	}
+
+	cases := []struct {
+		field   string
+		wantKey int64
+	}{
+		{"egress_bytes", 111},
+		{"viewer_seconds", 222},
+		{"unique_viewers", 333},
+		{"total_views", 444},
+		{"unknown_field", 0},
+		{"", 0},
+	}
+	for _, tt := range cases {
+		t.Run(tt.field, func(t *testing.T) {
+			got := buildStreamSummaryCursor(summary, tt.field)
+			want := pagination.EncodeCursorWithSortKey(tt.wantKey, "stream-x")
+			if got != want {
+				t.Fatalf("buildStreamSummaryCursor(%q) = %q, want key %d (%q)", tt.field, got, tt.wantKey, want)
+			}
+		})
+	}
+}

@@ -142,7 +142,7 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 		"edge-eu-1",
 		"media-eu-1",
 		streamID,
-		"vod+demo",
+		"live+demo",
 		"source-event-1",
 		end.UnixMilli(),
 		end.UnixMilli(),
@@ -178,7 +178,7 @@ func TestStreamRuntimeRebuilderFailsClosedWhenCustomerStreamStartIsMissing(t *te
 		"edge-eu-1",
 		"media-eu-1",
 		uuid.NewString(),
-		"vod+demo",
+		"live+demo",
 		"source-event-1",
 		end.UnixMilli(),
 		end.UnixMilli(),
@@ -194,28 +194,32 @@ func TestStreamRuntimeRebuilderFailsClosedWhenCustomerStreamStartIsMissing(t *te
 	}
 }
 
-func TestStreamRuntimeRebuilderSkipsInternalProcessingBootWithoutStart(t *testing.T) {
-	conn := newFakeClickhouseConn()
-	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+func TestStreamRuntimeRebuilderSkipsArtifactRuntimeWithoutStart(t *testing.T) {
+	for _, streamName := range []string{"vod+artifact", "dvr+artifact", "processing+artifact"} {
+		t.Run(streamName, func(t *testing.T) {
+			conn := newFakeClickhouseConn()
+			handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 
-	end := time.Date(2026, 6, 5, 18, 58, 0, 0, time.UTC)
-	conn.addQueryRow(
-		"periscope.stream_sessions_final",
-		uuid.NewString(),
-		"edge-eu-1",
-		"media-eu-1",
-		uuid.NewString(),
-		"processing+artifact",
-		"source-event-1",
-		end.UnixMilli(),
-		end.UnixMilli(),
-		int64(0),
-	)
+			end := time.Date(2026, 6, 5, 18, 58, 0, 0, time.UTC)
+			conn.addQueryRow(
+				"periscope.stream_sessions_final",
+				uuid.NewString(),
+				"edge-eu-1",
+				"media-eu-1",
+				uuid.NewString(),
+				streamName,
+				"source-event-1",
+				end.UnixMilli(),
+				end.UnixMilli(),
+				int64(0),
+			)
 
-	if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
-		t.Fatalf("internal processing boot should be skipped without failing rebuild: %v", err)
-	}
-	if batch := conn.batches["periscope.stream_runtime_5m"]; batch != nil && len(batch.rows) > 0 {
-		t.Fatalf("unexpected stream_runtime_5m rows for internal processing boot: %#v", batch.rows)
+			if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
+				t.Fatalf("artifact runtime should be skipped without failing rebuild: %v", err)
+			}
+			if batch := conn.batches["periscope.stream_runtime_5m"]; batch != nil && len(batch.rows) > 0 {
+				t.Fatalf("unexpected stream_runtime_5m rows for artifact runtime: %#v", batch.rows)
+			}
+		})
 	}
 }

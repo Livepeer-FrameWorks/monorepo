@@ -10,6 +10,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/google/uuid"
 )
 
@@ -432,7 +433,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			}
 		}
 		if startMS <= 0 || endMS <= startMS {
-			if !isInternalProcessingRuntime(streamName) {
+			if !isArtifactRuntimeStream(streamName) {
 				return fmt.Errorf("stream_runtime_5m missing start for tenant=%s stream=%s node=%s name=%s ended_at_ms=%d", tenantID, streamID, nodeID, streamName, endMS)
 			}
 			continue
@@ -472,9 +473,16 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	return nil
 }
 
-func isInternalProcessingRuntime(streamName string) bool {
-	return strings.HasPrefix(mist.ExtractInternalName(streamName), "processing+") ||
-		strings.HasPrefix(strings.TrimSpace(streamName), "processing+")
+func isArtifactRuntimeStream(streamName string) bool {
+	for _, candidate := range []string{strings.TrimSpace(streamName), strings.TrimSpace(mist.ExtractInternalName(streamName))} {
+		if candidate == "" {
+			continue
+		}
+		if streamident.Parse(candidate).IsArtifact() {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *AnalyticsHandler) lookupStreamRuntimeStartMS(ctx context.Context, tenantID, streamID, nodeID, clusterID, streamName string, fallbackEndedAtMS int64) (int64, error) {
