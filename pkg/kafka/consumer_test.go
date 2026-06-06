@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -78,6 +80,24 @@ func TestConsumerProcessRecordsBlocksPartitionOnFailure(t *testing.T) {
 		if value != expectedCommitKeys[i] {
 			t.Fatalf("commit records = %v, want %v", commitKeys, expectedCommitKeys)
 		}
+	}
+}
+
+func TestIsRecoverableGroupCommitError(t *testing.T) {
+	for _, err := range []error{
+		kerr.UnknownMemberID,
+		kerr.IllegalGeneration,
+		kerr.RebalanceInProgress,
+		kerr.FencedInstanceID,
+		fmt.Errorf("wrapped: %w", kerr.UnknownMemberID),
+	} {
+		if !isRecoverableGroupCommitError(err) {
+			t.Fatalf("expected %v to be classified as recoverable group commit error", err)
+		}
+	}
+
+	if isRecoverableGroupCommitError(errors.New("network timeout")) {
+		t.Fatal("ordinary commit errors should not be classified as group membership loss")
 	}
 }
 

@@ -316,7 +316,7 @@ func main() {
 
 	go func() {
 		if err := consumer.Start(ctx); err != nil {
-			logger.WithError(err).Error("Kafka consumer error")
+			logger.WithError(err).Fatal("Kafka consumer exited")
 		}
 	}()
 

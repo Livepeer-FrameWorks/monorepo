@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -257,11 +259,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 			commitRecords := c.processRecords(ctx, records)
 			if len(commitRecords) > 0 {
 				if err := c.client.CommitRecords(ctx, commitRecords...); err != nil {
+					if isRecoverableGroupCommitError(err) {
+						return fmt.Errorf("kafka consumer group membership lost during commit: %w", err)
+					}
 					c.logger.WithError(err).Error("failed to commit records")
 				}
 			}
 		}
 	}
+}
+
+func isRecoverableGroupCommitError(err error) bool {
+	return errors.Is(err, kerr.UnknownMemberID) ||
+		errors.Is(err, kerr.IllegalGeneration) ||
+		errors.Is(err, kerr.RebalanceInProgress) ||
+		errors.Is(err, kerr.FencedInstanceID)
 }
 
 func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []*kgo.Record {

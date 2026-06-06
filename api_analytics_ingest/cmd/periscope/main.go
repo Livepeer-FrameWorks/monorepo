@@ -378,11 +378,16 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	<-sigChan
+	select {
+	case <-sigChan:
+	case err := <-consumerDone:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.WithError(err).Fatal("Kafka consumer exited")
+		}
+	}
 	logger.Info("Shutting down Periscope-Ingest...")
 
 	// Cleanup
