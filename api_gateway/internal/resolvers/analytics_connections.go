@@ -3696,7 +3696,11 @@ func (r *Resolver) DoListVodRetentionAssets(ctx context.Context, first *int, aft
 	for i := range nodes {
 		g.Go(func() error {
 			asset, err := r.Clients.Commodore.GetVodAsset(gctx, tenantID, nodes[i].ArtifactHash)
-			if err != nil || asset == nil {
+			if err != nil {
+				r.Logger.WithError(err).WithField("artifact_hash", nodes[i].ArtifactHash).Debug("ListVodRetentionAssets: failed to hydrate VOD catalog metadata")
+				return nil
+			}
+			if asset == nil {
 				return nil
 			}
 			if title := asset.GetTitle(); title != "" {
