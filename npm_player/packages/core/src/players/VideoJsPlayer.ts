@@ -423,7 +423,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
       if (this.destroyed) {
         throw new Error("VideoJS player destroyed during initialization");
       }
-      this.setupVideoEventListeners(video, options);
+      this.setupVideoEventListeners(video, options, { readyEvent: "immediate" });
 
       return video;
     } catch (error: any) {

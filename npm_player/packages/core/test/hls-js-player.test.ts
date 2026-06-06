@@ -61,14 +61,22 @@ describe("HlsJsPlayerImpl", () => {
       value: {
         createElement: vi.fn((tagName: string) => {
           const children: any[] = [];
+          const listeners = new Map<string, Array<(event?: Event) => void>>();
           return {
             tagName: tagName.toUpperCase(),
             children,
             classList: { add: vi.fn() },
             setAttribute: vi.fn(),
-            addEventListener: vi.fn(),
+            addEventListener: vi.fn((event: string, handler: (event?: Event) => void) => {
+              const eventHandlers = listeners.get(event) ?? [];
+              eventHandlers.push(handler);
+              listeners.set(event, eventHandlers);
+            }),
             removeEventListener: vi.fn(),
-            dispatchEvent: vi.fn(),
+            dispatchEvent: vi.fn((event: Event) => {
+              for (const handler of listeners.get(event.type) ?? []) handler(event);
+              return true;
+            }),
             appendChild(child: any) {
               children.push(child);
               return child;
@@ -83,6 +91,7 @@ describe("HlsJsPlayerImpl", () => {
             muted: false,
             duration: Infinity,
             currentTime: 0,
+            readyState: 0,
           };
         }),
       },
@@ -125,6 +134,9 @@ describe("HlsJsPlayerImpl", () => {
 
     hls.emit("manifestParsed");
     await initialization;
+    expect(onReady).not.toHaveBeenCalled();
+
+    video.dispatchEvent(new Event("loadedmetadata"));
 
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);

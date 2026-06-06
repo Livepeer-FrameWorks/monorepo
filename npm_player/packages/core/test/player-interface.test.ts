@@ -48,6 +48,7 @@ function createMockVideo() {
     playbackRate: 1,
     videoWidth: 1920,
     videoHeight: 1080,
+    readyState: 0,
     error: null as any,
     textTracks: [] as any,
     buffered: { length: 1, start: () => 0, end: () => 60 },
@@ -107,7 +108,7 @@ describe("BasePlayer", () => {
     expect(goodListener).toHaveBeenCalledTimes(1);
   });
 
-  it("setupVideoEventListeners wires events and fires onReady last", () => {
+  it("setupVideoEventListeners wires events and fires onReady after metadata", () => {
     const player = new TestPlayer();
     const video = createMockVideo();
     const order: string[] = [];
@@ -139,7 +140,7 @@ describe("BasePlayer", () => {
 
     player.callSetupVideoEventListeners(video, callbacks);
 
-    expect(order).toEqual(["emit-ready", "onReady"]);
+    expect(order).toEqual([]);
     expect(video._listeners.has("play")).toBe(true);
     expect(video._listeners.has("pause")).toBe(true);
     expect(video._listeners.has("ended")).toBe(true);
@@ -149,6 +150,9 @@ describe("BasePlayer", () => {
     expect(video._listeners.has("durationchange")).toBe(true);
     expect(video._listeners.has("timeupdate")).toBe(true);
     expect(video._listeners.has("error")).toBe(true);
+
+    video._fire("loadedmetadata");
+    expect(order).toEqual(["emit-ready", "onReady"]);
 
     video._fire("play");
     expect(callbacks.onPlay).toHaveBeenCalledTimes(1);

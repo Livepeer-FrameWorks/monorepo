@@ -168,7 +168,12 @@ describe("DashJsPlayerImpl", () => {
       "https://edge.example/live/index.mpd",
       false
     );
-    expect(onReady).toHaveBeenCalledWith(expect.any(HTMLVideoElement));
+    expect(onReady).not.toHaveBeenCalled();
+
+    const video = container.querySelector("video") as HTMLVideoElement;
+    video.dispatchEvent(new Event("loadedmetadata"));
+
+    expect(onReady).toHaveBeenCalledWith(video);
     expect(dashMocks.initialize.mock.invocationCallOrder[0]).toBeLessThan(
       onReady.mock.invocationCallOrder[0]
     );

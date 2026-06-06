@@ -445,7 +445,11 @@ export abstract class BasePlayer implements IPlayer {
     }
   }
 
-  protected setupVideoEventListeners(video: HTMLVideoElement, options: PlayerOptions): void {
+  protected setupVideoEventListeners(
+    video: HTMLVideoElement,
+    options: PlayerOptions,
+    listenerOptions: { readyEvent?: "immediate" | "loadedmetadata" | "canplay" } = {}
+  ): void {
     const handleEvent = (eventName: keyof PlayerEvents, handler: () => void) => {
       const listener = () => {
         handler();
@@ -481,11 +485,26 @@ export abstract class BasePlayer implements IPlayer {
       this.emit("error", error);
     });
 
-    // Call onReady LAST - after all listeners are attached
-    // This prevents race conditions where events fire before handlers exist
-    this.emit("ready", video);
-    if (options.onReady) {
-      options.onReady(video);
+    // Call onReady LAST - after all listeners are attached and the element has
+    // reached a real media startup boundary. Protocol handlers may still choose
+    // immediate when they already waited on an equivalent library-level event.
+    let readyEmitted = false;
+    const emitReady = () => {
+      if (readyEmitted) return;
+      readyEmitted = true;
+      this.emit("ready", video);
+      options.onReady?.(video);
+    };
+
+    const readyEvent = listenerOptions.readyEvent ?? "loadedmetadata";
+    if (
+      readyEvent === "immediate" ||
+      (readyEvent === "loadedmetadata" && video.readyState >= 1) ||
+      (readyEvent === "canplay" && video.readyState >= 3)
+    ) {
+      emitReady();
+    } else {
+      video.addEventListener(readyEvent, emitReady, { once: true });
     }
   }
 

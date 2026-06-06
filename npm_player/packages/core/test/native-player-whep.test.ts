@@ -75,6 +75,7 @@ class FakeRTCSessionDescription {
 let lastDataChannel: FakeDataChannel | null = null;
 let lastPeerConnection: FakeRTCPeerConnection | null = null;
 let autoEmitRemoteTrack = true;
+let currentVideo: (HTMLVideoElement & { _fire?: (type: string) => void }) | null = null;
 
 class FakeMediaStream {
   private tracks: MediaStreamTrack[];
@@ -121,8 +122,12 @@ function makeVideoElement(): HTMLVideoElement {
     autoplay: false,
     currentTime: 0,
     duration: 0,
+    readyState: 0,
     volume: 1,
     buffered: { length: 0, start: vi.fn(), end: vi.fn() },
+    _fire(type: string) {
+      for (const listener of listeners.get(type) ?? []) listener(new Event(type));
+    },
   };
   return video as unknown as HTMLVideoElement;
 }
@@ -154,10 +159,10 @@ describe("NativePlayer WHEP control channel", () => {
     lastDataChannel = null;
     lastPeerConnection = null;
     autoEmitRemoteTrack = true;
-    const video = makeVideoElement();
+    currentVideo = makeVideoElement() as HTMLVideoElement & { _fire?: (type: string) => void };
     vi.stubGlobal("document", {
       createElement: vi.fn((tag: string) => {
-        if (tag === "video") return video;
+        if (tag === "video") return currentVideo;
         return {};
       }),
       pictureInPictureElement: null,
@@ -229,6 +234,9 @@ describe("NativePlayer WHEP control channel", () => {
     lastPeerConnection?.emitRemoteTrack();
 
     await initialized;
+    expect(onReady).not.toHaveBeenCalled();
+    currentVideo?._fire?.("loadedmetadata");
+
     expect(onReady).toHaveBeenCalledTimes(1);
   });
 
@@ -249,6 +257,7 @@ describe("NativePlayer WHEP control channel", () => {
       },
       streamInfo
     );
+    currentVideo?._fire?.("loadedmetadata");
 
     expect(lastDataChannel).not.toBeNull();
     expect(lastDataChannel?.sent).toEqual([]);
