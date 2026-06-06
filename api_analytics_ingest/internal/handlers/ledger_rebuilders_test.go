@@ -167,11 +167,13 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 	}
 }
 
-func TestStreamRuntimeRebuilderFailsClosedWhenCustomerStreamStartIsMissing(t *testing.T) {
+func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 
 	end := time.Date(2026, 6, 5, 18, 58, 0, 0, time.UTC)
+	validStart := end.Add(-2 * time.Minute)
+	validStreamID := uuid.NewString()
 	conn.addQueryRow(
 		"periscope.stream_sessions_final",
 		uuid.NewString(),
@@ -184,13 +186,29 @@ func TestStreamRuntimeRebuilderFailsClosedWhenCustomerStreamStartIsMissing(t *te
 		end.UnixMilli(),
 		int64(7),
 	)
+	conn.addQueryRow(
+		"periscope.stream_sessions_final",
+		uuid.NewString(),
+		"edge-eu-1",
+		"media-eu-1",
+		validStreamID,
+		"live+valid",
+		"source-event-valid",
+		validStart.UnixMilli(),
+		end.UnixMilli(),
+		int64(3),
+	)
 
-	err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute))
-	if err == nil {
-		t.Fatal("expected missing customer stream start to fail closed")
+	if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
+		t.Fatalf("rebuildStreamRuntime5m: %v", err)
 	}
-	if batch := conn.batches["periscope.stream_runtime_5m"]; batch != nil && len(batch.rows) > 0 {
-		t.Fatalf("unexpected stream_runtime_5m rows after failed rebuild: %#v", batch.rows)
+	batch := conn.batches["periscope.stream_runtime_5m"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected one stream_runtime_5m row for valid stream, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[3] != validStreamID {
+		t.Fatalf("expected valid stream row, got %#v", row)
 	}
 }
 

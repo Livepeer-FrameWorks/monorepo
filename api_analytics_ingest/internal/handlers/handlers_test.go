@@ -1340,11 +1340,14 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
+	startedAt := time.Unix(1710000000, 0).UTC()
+	endedAt := startedAt.Add(10 * time.Minute)
+	conn.addQueryRow("periscope.stream_event_log", startedAt.UnixMilli())
 	trigger := &ipcpb.MistTrigger{
 		NodeId:      "edge-1",
 		TriggerType: "STREAM_END",
 		RequestId:   "source-event-stream-end",
-		Timestamp:   time.Now().UnixMilli(),
+		Timestamp:   endedAt.UnixMilli(),
 		TenantId:    &tenantID,
 		TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
 			StreamEnd: &ipcpb.StreamEndTrigger{
@@ -1380,7 +1383,7 @@ func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	}
 }
 
-func TestRawStreamEndLeavesMissingStartUnknown(t *testing.T) {
+func TestRawStreamEndWithMissingStartWritesAnomalous(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
@@ -1418,16 +1421,19 @@ func TestRawStreamEndLeavesMissingStartUnknown(t *testing.T) {
 		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
 	}
 
-	finalBatch := conn.batches["periscope.stream_sessions_final"]
-	if finalBatch == nil || len(finalBatch.rows) != 1 {
-		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
+	if finalBatch := conn.batches["periscope.stream_sessions_final"]; finalBatch != nil && len(finalBatch.rows) > 0 {
+		t.Fatalf("unexpected stream_sessions_final rows for missing start: %#v", finalBatch.rows)
 	}
-	row := finalBatch.rows[0]
-	if row[12] != int64(0) {
-		t.Fatalf("expected missing source_started_at_ms to stay 0, got %#v", row[12])
+	anomalousBatch := conn.batches["periscope.stream_sessions_anomalous"]
+	if anomalousBatch == nil || len(anomalousBatch.rows) != 1 {
+		t.Fatalf("expected stream_sessions_anomalous row, got %#v", anomalousBatch)
 	}
-	if row[13] != endedAt.UnixMilli() {
-		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	row := anomalousBatch.rows[0]
+	if row[8] != endedAt.UnixMilli() {
+		t.Fatalf("expected closed_at_ms %d, got %#v", endedAt.UnixMilli(), row[8])
+	}
+	if row[9] != "missing_start" {
+		t.Fatalf("expected closed_reason missing_start, got %#v", row[9])
 	}
 }
 

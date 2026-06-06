@@ -251,8 +251,19 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		clusterID:    clusterID,
 		internalName: internalName,
 	}, sourceEndedAtMS)
-	if sourceStartedAtMS < 0 {
-		sourceStartedAtMS = 0
+	if sourceStartedAtMS <= 0 || sourceStartedAtMS >= sourceEndedAtMS {
+		if err := h.projectStreamSessionAnomalous(ctx, tenantID, nodeID, streamID, clusterID, streamName, sourceEndedAtMS, projectionVersionMS, "missing_start", "STREAM_END start could not be resolved"); err != nil {
+			return err
+		}
+		h.logger.WithFields(logging.Fields{
+			"tenant_id":       tenantID.String(),
+			"node_id":         nodeID,
+			"stream_id":       streamID.String(),
+			"source_event_id": sourceEventID,
+			"stream_name":     streamName,
+			"ended_at_ms":     sourceEndedAtMS,
+		}).Warn("Skipping STREAM_END final projection: missing resolved stream start")
+		return nil
 	}
 	viewerSeconds := se.GetViewerSeconds()
 	if viewerSeconds < 0 {
@@ -313,6 +324,46 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	}
 	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_final", "inserted").Inc()
+	}
+	return nil
+}
+
+func (h *AnalyticsHandler) projectStreamSessionAnomalous(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	nodeID string,
+	streamID uuid.UUID,
+	clusterID string,
+	streamName string,
+	closedAtMS int64,
+	projectionVersionMS int64,
+	closedReason string,
+	notes string,
+) error {
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO periscope.stream_sessions_anomalous (
+			tenant_id, node_id, stream_id,
+			cluster_id, stream_name,
+			estimated_duration_seconds, observed_first_at_ms, observed_last_at_ms,
+			closed_at_ms, closed_reason, projection_version_ms, notes
+		)`)
+	if err != nil {
+		return fmt.Errorf("stream_sessions_anomalous prepare: %w", err)
+	}
+	defer closeClickHouseBatch(batch)
+	if err := batch.Append(
+		tenantID, nodeID, streamID,
+		clusterID, streamName,
+		uint32(0), int64(0), int64(0),
+		closedAtMS, closedReason, projectionVersionMS, notes,
+	); err != nil {
+		return fmt.Errorf("stream_sessions_anomalous append: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("stream_sessions_anomalous send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_anomalous", "inserted").Inc()
 	}
 	return nil
 }

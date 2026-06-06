@@ -434,7 +434,15 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		}
 		if startMS <= 0 || endMS <= startMS {
 			if !isArtifactRuntimeStream(streamName) {
-				return fmt.Errorf("stream_runtime_5m missing start for tenant=%s stream=%s node=%s name=%s ended_at_ms=%d", tenantID, streamID, nodeID, streamName, endMS)
+				h.logger.WithFields(logging.Fields{
+					"tenant_id":       tenantID,
+					"stream_id":       streamID,
+					"node_id":         nodeID,
+					"cluster_id":      clusterID,
+					"stream_name":     streamName,
+					"source_event_id": sourceEventID,
+					"ended_at_ms":     endMS,
+				}).Warn("Skipping stream runtime projection: missing resolved stream start")
 			}
 			continue
 		}
