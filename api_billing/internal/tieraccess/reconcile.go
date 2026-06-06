@@ -21,6 +21,19 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
+// quartermasterAPI is the subset of the Quartermaster gRPC client that the
+// reconciler depends on. Declaring it here (consumer-side) lets tests drive
+// the grant/primary/suspend ordering against a fake; *qmclient.GRPCClient
+// satisfies it in production.
+type quartermasterAPI interface {
+	ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error)
+	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
+	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
+	UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *quartermasterpb.TenantResourceLimits) error
+	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
+}
+
 // Reconciler computes desired cluster access from Purser-owned data and
 // applies it via Quartermaster RPCs. Holds a short cache of the
 // platform-official cluster ID set (5 min) to keep reconciles cheap.
@@ -30,7 +43,7 @@ import (
 // from Quartermaster.ListTenantClusterAccess.
 type Reconciler struct {
 	db     *sql.DB
-	qm     *qmclient.GRPCClient
+	qm     quartermasterAPI
 	logger logging.Logger
 
 	mu       sync.RWMutex
