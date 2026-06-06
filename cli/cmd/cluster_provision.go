@@ -3394,18 +3394,20 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		return nil
 	}
 	type metricsScrapeSpec struct {
-		path string
-		port int
+		path        string
+		port        int
+		bindAddrKey string
+		configKey   string
 	}
 	metricsCapableServices := map[string]metricsScrapeSpec{
 		"bridge":           {},
 		"chandler":         {},
 		"commodore":        {},
 		"deckhand":         {},
-		"decklog":          {},
+		"decklog":          {port: 18026, configKey: "metrics_port"},
 		"foghorn":          {},
 		"helmsman":         {},
-		"livepeer-gateway": {},
+		"livepeer-gateway": {port: 7935, bindAddrKey: "cli_addr"},
 		"livepeer-signer":  {},
 		"mistserver":       {},
 		"navigator":        {},
@@ -3474,6 +3476,14 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		}
 		if spec.port != 0 {
 			port = spec.port
+		}
+		if spec.configKey != "" {
+			if configuredPort, parseErr := strconv.Atoi(strings.TrimSpace(svc.Config[spec.configKey])); parseErr == nil && configuredPort > 0 {
+				port = configuredPort
+			}
+		}
+		if spec.bindAddrKey != "" {
+			port = portFromBindAddr(svc.Config[spec.bindAddrKey], spec.port)
 		}
 		labels := map[string]string{
 			"frameworks_service": serviceID,

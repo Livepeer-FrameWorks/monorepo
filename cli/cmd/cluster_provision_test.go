@@ -3117,6 +3117,53 @@ func TestBuildVMAgentScrapeTargetsIncludesMistServer(t *testing.T) {
 	}
 }
 
+func TestBuildVMAgentScrapeTargetsUsesDecklogMetricsPort(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"decklog": {
+				Enabled: true,
+				Host:    "regional-eu-1",
+				Port:    18006,
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "regional-eu-1")
+	target := findScrapeTarget(t, targets, "decklog", "127.0.0.1:18026")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+}
+
+func TestBuildVMAgentScrapeTargetsUsesLivepeerGatewayCLIAddr(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true,
+				Host:    "regional-eu-1",
+				Port:    8935,
+				Config: map[string]string{
+					"cli_addr": ":7935",
+				},
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "regional-eu-1")
+	target := findScrapeTarget(t, targets, "livepeer-gateway", "127.0.0.1:7935")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+}
+
 func TestBuildServiceEnvVarsVMAgentPrefersVMAUTHWriteURL(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "dev",
