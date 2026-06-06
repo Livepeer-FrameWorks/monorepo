@@ -6,6 +6,7 @@ import {
   calculateSeekableRange,
   isLiveContent,
   LATENCY_TIERS,
+  mapPlayerTimeToMistTimeline,
 } from "../src/core/SeekingUtils";
 
 describe("getLatencyTier", () => {
@@ -170,6 +171,50 @@ describe("calculateSeekableRange", () => {
 
     expect(range.seekableStart).toBe(540_000);
     expect(range.liveEdge).toBe(600_000);
+  });
+});
+
+describe("mapPlayerTimeToMistTimeline", () => {
+  it("maps zero-based live player time by distance from live edge", () => {
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: true,
+        playerTimeMs: 2_000,
+        playerSeekableRange: { start: 0, end: 5_000 },
+        mistSeekableRange: { start: 1_950_000, end: 2_000_000 },
+      })
+    ).toBe(1_997_000);
+  });
+
+  it("preserves absolute live ranges through the same live-edge mapping", () => {
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: true,
+        playerTimeMs: 1_997_000,
+        playerSeekableRange: { start: 1_950_000, end: 2_000_000 },
+        mistSeekableRange: { start: 1_950_000, end: 2_000_000 },
+      })
+    ).toBe(1_997_000);
+  });
+
+  it("does not translate VOD or unknown ranges", () => {
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: false,
+        playerTimeMs: 2_000,
+        playerSeekableRange: { start: 0, end: 5_000 },
+        mistSeekableRange: { start: 1_950_000, end: 2_000_000 },
+      })
+    ).toBe(2_000);
+
+    expect(
+      mapPlayerTimeToMistTimeline({
+        isLive: true,
+        playerTimeMs: 2_000,
+        playerSeekableRange: null,
+        mistSeekableRange: { start: 1_950_000, end: 2_000_000 },
+      })
+    ).toBe(2_000);
   });
 });
 

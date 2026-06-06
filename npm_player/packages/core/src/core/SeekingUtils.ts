@@ -58,6 +58,13 @@ export interface CanSeekParams {
   playerSeekableRange?: { start: number; end: number } | null;
 }
 
+export interface PlayerToMistTimeParams {
+  isLive: boolean;
+  playerTimeMs: number;
+  playerSeekableRange?: { start: number; end: number } | null;
+  mistSeekableRange?: { start: number; end: number } | null;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -356,6 +363,39 @@ export function calculateIsNearLive(
 
   // No change
   return currentState;
+}
+
+/**
+ * Map player-native media time into MistServer's metadata timeline.
+ *
+ * HLS.js/VideoJS commonly expose a zero-based MSE timeline while Mist metadata
+ * events use stream timestamps. Preserve subplayer-native media seeking, but
+ * translate metadata socket commands by distance from the active live edge.
+ */
+export function mapPlayerTimeToMistTimeline(params: PlayerToMistTimeParams): number {
+  const { isLive, playerTimeMs, playerSeekableRange, mistSeekableRange } = params;
+  if (!isLive || !Number.isFinite(playerTimeMs)) return playerTimeMs;
+  if (
+    !mistSeekableRange ||
+    !Number.isFinite(mistSeekableRange.start) ||
+    !Number.isFinite(mistSeekableRange.end) ||
+    mistSeekableRange.end <= mistSeekableRange.start
+  ) {
+    return playerTimeMs;
+  }
+
+  if (
+    playerSeekableRange &&
+    Number.isFinite(playerSeekableRange.start) &&
+    Number.isFinite(playerSeekableRange.end) &&
+    playerSeekableRange.end > playerSeekableRange.start
+  ) {
+    const behindLiveMs = Math.max(0, playerSeekableRange.end - playerTimeMs);
+    const mapped = mistSeekableRange.end - behindLiveMs;
+    return Math.max(mistSeekableRange.start, Math.min(mistSeekableRange.end, mapped));
+  }
+
+  return playerTimeMs;
 }
 
 /**

@@ -30,6 +30,7 @@ import {
   calculateIsNearLive,
   canSeekStream,
   isMediaStreamSource,
+  mapPlayerTimeToMistTimeline,
   supportsPlaybackRate,
   getLatencyTier,
   type LatencyTier,
@@ -1944,6 +1945,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     }
     return null;
+  }
+
+  private getBrowserSeekableRange(): { start: number; end: number } | null {
+    const seekable = this.videoElement?.seekable;
+    if (!seekable || seekable.length === 0) return null;
+    const start = seekable.start(0) * 1000;
+    const end = seekable.end(seekable.length - 1) * 1000;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start, end };
+  }
+
+  private getMistMetadataPlaybackTime(): number {
+    return mapPlayerTimeToMistTimeline({
+      isLive: this.isEffectivelyLive(),
+      playerTimeMs: this.getEffectiveCurrentTime(),
+      playerSeekableRange: this.getPlayerSeekableRange() ?? this.getBrowserSeekableRange(),
+      mistSeekableRange: this.getMistTrackSeekRange(),
+    });
   }
 
   private getFrameStepMsFromTracks(): number | undefined {
@@ -4604,7 +4623,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Set initial playback time before connecting so the first seek goes to the
     // correct position (includes lastms offset for NativePlayer live streams)
-    const initialTimeSec = this.getEffectiveCurrentTime() / 1000;
+    const initialTimeSec = this.getMistMetadataPlaybackTime() / 1000;
     if (initialTimeSec > 0) {
       this.metaTrackManager.setPlaybackTime(initialTimeSec);
     }
@@ -4617,12 +4636,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (this.videoElement) {
       const handleTimeUpdate = () => {
         if (this.metaTrackManager) {
-          this.metaTrackManager.setPlaybackTime(this.getEffectiveCurrentTime() / 1000);
+          this.metaTrackManager.setPlaybackTime(this.getMistMetadataPlaybackTime() / 1000);
         }
       };
       const handleSeeking = () => {
         if (this.metaTrackManager) {
-          this.metaTrackManager.onSeek(this.getEffectiveCurrentTime() / 1000);
+          this.metaTrackManager.onSeek(this.getMistMetadataPlaybackTime() / 1000);
         }
       };
 

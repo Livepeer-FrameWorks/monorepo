@@ -105,6 +105,7 @@ exports[`public API snapshot > keeps exported symbol surface stable 1`] = `
   "isMediaStreamSource",
   "isProtocolBlacklisted",
   "isSecureUrl",
+  "mapPlayerTimeToMistTimeline",
   "matchPageProtocol",
   "meetsMinimumScore",
   "parseThumbnailVtt",
