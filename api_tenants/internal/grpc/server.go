@@ -6107,9 +6107,6 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *q
 	// assignment per media cluster it serves.
 	// The physical service_instances row stays bound to the host cluster, so
 	// reads must follow the assignment table to surface the right cluster_id.
-	if serviceLookupType == "foghorn" {
-		return s.listHealthyFoghornServingCellNodes(ctx, baseWhere, baseArgs, staleThreshold)
-	}
 	if dns.IsPoolAssignedServiceType(serviceLookupType) || serviceTypeFilter == "telemetry" {
 		return s.listHealthyAssignedServiceNodes(ctx, baseWhere, baseArgs, serviceLookupType, staleThreshold)
 	}
@@ -6355,93 +6352,6 @@ func (s *QuartermasterServer) listHealthyAssignedServiceNodes(ctx context.Contex
 			// a caller treats as complete — for the DNS readers Navigator would prune
 			// healthy records against it. Same class as the DiscoverServices and
 			// ListServiceInstancesByType inventory reads.
-			return nil, status.Errorf(codes.Internal, "scan node: %v", err)
-		}
-		nodes = append(nodes, node)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate nodes: %v", err)
-	}
-
-	return &quartermasterpb.ListHealthyNodesForDNSResponse{
-		Nodes:        nodes,
-		TotalNodes:   totalNodes,
-		HealthyNodes: healthyNodes,
-	}, nil
-}
-
-// listHealthyFoghornServingCellNodes resolves Foghorn DNS through the logical
-// cluster's serving-cell policy. A target cluster may be served by every healthy
-// Foghorn in its eligible cells, so DNS failover does not depend on a single
-// service_cluster_assignments row.
-func (s *QuartermasterServer) listHealthyFoghornServingCellNodes(ctx context.Context, baseWhere string, baseArgs []any, staleThreshold int32) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
-	where := strings.ReplaceAll(baseWhere, "n.cluster_id", "target.cluster_id")
-	args := append([]any{}, baseArgs...)
-	argIdx := len(args) + 1
-
-	if where == "" {
-		where = "WHERE TRUE"
-	}
-	where += fmt.Sprintf(" AND s.type = $%d AND n.external_ip IS NOT NULL AND n.status = 'active' AND target.is_active = true", argIdx)
-	args = append(args, "foghorn")
-	argIdx++
-
-	joins := `
-		JOIN quartermaster.services s ON si.service_id = s.service_id
-		JOIN quartermaster.infrastructure_nodes n
-			ON si.node_id = n.node_id
-			OR si.advertise_host = host(n.external_ip)
-			OR si.advertise_host = host(n.internal_ip)
-			OR si.advertise_host = host(n.wireguard_ip)
-		JOIN quartermaster.infrastructure_clusters host_cluster ON host_cluster.cluster_id = n.cluster_id
-		JOIN quartermaster.infrastructure_clusters target
-			ON COALESCE(NULLIF(host_cluster.cell_id, ''), host_cluster.cluster_id) = ANY (
-				CASE
-					WHEN cardinality(target.eligible_serving_cell_ids) > 0 THEN target.eligible_serving_cell_ids
-					WHEN COALESCE(target.control_cell_id, '') <> '' THEN ARRAY[target.control_cell_id]::TEXT[]
-					ELSE ARRAY[COALESCE(NULLIF(target.cell_id, ''), target.cluster_id)]::TEXT[]
-				END
-			)`
-
-	var totalNodes int32
-	totalQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, target.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, where)
-	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes)
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	healthArgs := append([]any{}, args...)
-	healthArgs = append(healthArgs, staleThreshold)
-	healthWhere := where + fmt.Sprintf(" AND si.status = 'running' AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", argIdx)
-
-	var healthyNodes int32
-	healthyQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT (n.id, target.cluster_id)) FROM quartermaster.service_instances si %s %s`, joins, healthWhere)
-	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return s.db.QueryRowContext(ctx, healthyQuery, healthArgs...).Scan(&healthyNodes)
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	rows, err := retryQueryContext(ctx, s.db, fmt.Sprintf(`
-		SELECT DISTINCT n.id, n.node_id, target.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
-		       n.wireguard_ip, n.wireguard_public_key, n.wireguard_listen_port, n.region, n.availability_zone,
-		       n.latitude, n.longitude,
-		       n.cpu_cores, n.memory_gb, n.disk_gb,
-		       n.last_heartbeat, n.enrollment_origin, n.applied_mesh_revision, n.status, n.created_at, n.updated_at%s%s
-			FROM quartermaster.service_instances si
-			%s
-			%s
-		`, prefixedTargetNodeOwnerColumn, prefixedNodeSnapshotColumns, joins, healthWhere), healthArgs...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var nodes []*quartermasterpb.InfrastructureNode
-	for rows.Next() {
-		node, err := scanNode(rows)
-		if err != nil {
 			return nil, status.Errorf(codes.Internal, "scan node: %v", err)
 		}
 		nodes = append(nodes, node)
@@ -10441,7 +10351,6 @@ func scanCluster(rows *sql.Rows) (*quartermasterpb.InfrastructureCluster, error)
 const prefixedNodeSnapshotColumns = ", n.snapshot_cpu_percent, n.snapshot_ram_used_bytes, n.snapshot_ram_total_bytes, n.snapshot_disk_used_bytes, n.snapshot_disk_total_bytes, n.snapshot_uptime_seconds, n.snapshot_at"
 const prefixedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = n.cluster_id)"
 const prefixedAssignedNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = sca.cluster_id)"
-const prefixedTargetNodeOwnerColumn = ", (SELECT c.owner_tenant_id::text FROM quartermaster.infrastructure_clusters c WHERE c.cluster_id = target.cluster_id)"
 
 func resourceSnapshotComplete(snap *quartermasterpb.NodeResourceSnapshot) bool {
 	return snap != nil &&

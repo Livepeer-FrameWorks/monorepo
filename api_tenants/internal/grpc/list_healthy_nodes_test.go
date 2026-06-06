@@ -660,12 +660,12 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 }
 
 // TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS pins the
-// generic assignment-aware path: chandler / livepeer-gateway route through
-// listHealthyAssignedServiceNodes. The returned cluster_id comes from
+// generic assignment-aware path: foghorn / chandler / livepeer-gateway route
+// through listHealthyAssignedServiceNodes. The returned cluster_id comes from
 // sca.cluster_id (logical media cluster), not from si.cluster_id
 // (physical/runtime cluster).
 func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testing.T) {
-	for _, svcType := range []string{"chandler", "livepeer-gateway"} {
+	for _, svcType := range []string{"foghorn", "chandler", "livepeer-gateway"} {
 		t.Run(svcType, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 			if err != nil {
@@ -710,52 +710,6 @@ func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testin
 				t.Fatalf("unmet sql expectations: %v", err)
 			}
 		})
-	}
-}
-
-func TestListHealthyNodesForDNS_FoghornUsesEligibleServingCells(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
-	queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.infrastructure_clusters host_cluster.*JOIN quartermaster\.infrastructure_clusters target.*eligible_serving_cell_ids.*s\.type = \$1.*target\.is_active = true`
-
-	mock.ExpectQuery(queryShape).
-		WithArgs("foghorn").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	mock.ExpectQuery(queryShape).
-		WithArgs("foghorn", int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, target\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = target\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.infrastructure_clusters host_cluster.*JOIN quartermaster\.infrastructure_clusters target`).
-		WithArgs("foghorn", int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).
-			AddRow(newNodeRow("uuid-1", "foghorn-eu-1", "selfhosted-1", "foghorn-eu-1", "core", "1.2.3.4")...).
-			AddRow(newNodeRow("uuid-2", "foghorn-eu-2", "selfhosted-1", "foghorn-eu-2", "core", "5.6.7.8")...))
-
-	svc := "foghorn"
-	resp, err := server.ListHealthyNodesForDNS(ctx, &quartermasterpb.ListHealthyNodesForDNSRequest{
-		ServiceType: &svc,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(resp.GetNodes()) != 2 {
-		t.Fatalf("expected 2 Foghorn serving-cell nodes, got %d", len(resp.GetNodes()))
-	}
-	for _, node := range resp.GetNodes() {
-		if got := node.GetClusterId(); got != "selfhosted-1" {
-			t.Fatalf("expected logical cluster selfhosted-1, got %s", got)
-		}
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
 
