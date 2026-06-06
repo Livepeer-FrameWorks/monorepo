@@ -2026,24 +2026,10 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 	// Enrich with tenant info via Commodore
 	var streamTenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
-		bareInternal := mist.ExtractInternalName(streamName)
-		var resolveResp *commodorepb.ResolveInternalNameResponse
-		var err error
-		for attempt := 0; attempt < 2; attempt++ {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			resolveResp, err = commodoreClient.ResolveInternalName(ctx, bareInternal)
-			cancel()
-			if err == nil {
-				break
-			}
-			if attempt == 0 {
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-		if err == nil && resolveResp != nil {
-			streamTenantID = resolveResp.TenantId
-			internalName = resolveResp.InternalName
-			streamID = resolveResp.StreamId
+		if identity, err := resolveRoutingStreamIdentity(streamName); err == nil && identity != nil {
+			streamTenantID = identity.GetTenantId()
+			internalName = identity.GetInternalName()
+			streamID = identity.GetStreamId()
 		} else {
 			logger.WithError(err).WithField("stream_name", streamName).Warn("Failed to resolve tenant via Commodore after retry")
 		}
@@ -2069,6 +2055,38 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 		LatencyMs:       durationMs,
 		RemoteClusterID: remoteClusterID,
 	})
+}
+
+func resolveRoutingStreamIdentity(streamName string) (*commodorepb.ResolveStreamContextResponse, error) {
+	bareInternal := mist.ExtractInternalName(streamName)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp, err := commodoreClient.ResolveStreamContext(ctx, "", "", bareInternal, clusterID)
+		cancel()
+		if err == nil && resp != nil && resp.GetStreamId() != "" {
+			return resp, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+		resp, err = commodoreClient.ResolveStreamContext(ctx, "", streamName, "", clusterID)
+		cancel()
+		if err == nil && resp != nil && resp.GetStreamId() != "" {
+			return resp, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		if attempt == 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("stream identity not found")
 }
 
 // emitViewerRoutingEvent posts a routing decision for viewer playback.
