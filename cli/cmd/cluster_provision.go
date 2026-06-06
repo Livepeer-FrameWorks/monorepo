@@ -560,11 +560,11 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 		runtimeData["service_token"] = token
 	}
 
-	if err := ensureNodeBaseline(ctx, cmd, manifest, plan, sshPool); err != nil {
+	if err := ensureNodeBaseline(ctx, cmd, manifest, plan, sshPool, force); err != nil {
 		return err
 	}
 
-	if err := ensureNodeTuning(ctx, cmd, manifest, plan, sshPool); err != nil {
+	if err := ensureNodeTuning(ctx, cmd, manifest, plan, sshPool, force); err != nil {
 		return err
 	}
 
@@ -1028,6 +1028,22 @@ func serviceEndpointFor(ctx context.Context, manifest *inventory.Manifest, sess 
 		AllowInsecure: insecure,
 		CACertPEM:     caPEM,
 	}, nil
+}
+
+func provisionWouldChange(ctx context.Context, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig, tags []string) (bool, error) {
+	planner, ok := prov.(provisioner.ChangePlanner)
+	if !ok {
+		return true, fmt.Errorf("%s provisioner does not implement change precheck", prov.GetName())
+	}
+	var wouldChange bool
+	if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision precheck", func(phaseCtx context.Context) error {
+		var err error
+		wouldChange, err = planner.WouldChange(phaseCtx, host, config, tags)
+		return err
+	}); err != nil {
+		return true, err
+	}
+	return wouldChange, nil
 }
 
 // resolveServiceGRPCAddr resolves a service's gRPC address from the manifest.
@@ -3146,7 +3162,7 @@ func applyPlatformReleaseVersionDefault(config *provisioner.ServiceConfig, platf
 	}
 }
 
-func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool) error {
+func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool, force bool) error {
 	hostNames := plannedProvisionHosts(plan)
 	if len(hostNames) == 0 {
 		return nil
@@ -3177,11 +3193,23 @@ func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inven
 		g.Go(func() error {
 			hostName := target.name
 			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node baseline on %s...\n", hostName)
+			config := provisioner.ServiceConfig{
+				Mode:     "native",
+				Metadata: map[string]any{},
+				Force:    force,
+			}
+			if !force {
+				wouldChange, checkErr := provisionWouldChange(gCtx, prov, target.host, config, nil)
+				if checkErr != nil {
+					return fmt.Errorf("node baseline %s precheck: %w", hostName, checkErr)
+				}
+				if !wouldChange {
+					fmt.Fprintf(cmd.OutOrStdout(), "    node baseline on %s already matches desired state\n", hostName)
+					return nil
+				}
+			}
 			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node baseline", func(phaseCtx context.Context) error {
-				return prov.Provision(phaseCtx, target.host, provisioner.ServiceConfig{
-					Mode:     "native",
-					Metadata: map[string]any{},
-				})
+				return prov.Provision(phaseCtx, target.host, config)
 			}); err != nil {
 				return fmt.Errorf("node baseline %s: %w", hostName, err)
 			}
@@ -3195,7 +3223,7 @@ func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inven
 	return nil
 }
 
-func ensureNodeTuning(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool) error {
+func ensureNodeTuning(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool, force bool) error {
 	hostNames := plannedProvisionHosts(plan)
 	if len(hostNames) == 0 {
 		return nil
@@ -3230,11 +3258,23 @@ func ensureNodeTuning(ctx context.Context, cmd *cobra.Command, manifest *invento
 		g.Go(func() error {
 			hostName := target.name
 			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node tuning on %s (profile=%s)...\n", hostName, target.profile)
+			config := provisioner.ServiceConfig{
+				Mode:     "native",
+				Metadata: map[string]any{"profile": target.profile},
+				Force:    force,
+			}
+			if !force {
+				wouldChange, checkErr := provisionWouldChange(gCtx, prov, target.host, config, nil)
+				if checkErr != nil {
+					return fmt.Errorf("node tuning %s precheck: %w", hostName, checkErr)
+				}
+				if !wouldChange {
+					fmt.Fprintf(cmd.OutOrStdout(), "    node tuning on %s already matches desired state\n", hostName)
+					return nil
+				}
+			}
 			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node tuning", func(phaseCtx context.Context) error {
-				return prov.Provision(phaseCtx, target.host, provisioner.ServiceConfig{
-					Mode:     "native",
-					Metadata: map[string]any{"profile": target.profile},
-				})
+				return prov.Provision(phaseCtx, target.host, config)
 			}); err != nil {
 				return fmt.Errorf("node tuning %s: %w", hostName, err)
 			}
@@ -3476,9 +3516,6 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			masterLabels := maps.Clone(baseLabels)
 			masterLabels["port"] = "master"
 			addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
-			tserverLabels := maps.Clone(baseLabels)
-			tserverLabels["port"] = "tserver"
-			addTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels, 64*1024*1024)
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.Host == hostName {
@@ -5644,10 +5681,28 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		}
 	}
 
-	if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision", func(phaseCtx context.Context) error {
-		return prov.Provision(phaseCtx, host, config)
-	}); err != nil {
-		return nil, err
+	provisionSkipped := false
+	if !force && serviceExists(beforeState) {
+		wouldChange, checkErr := provisionWouldChange(ctx, prov, host, config, nil)
+		if checkErr != nil {
+			return nil, fmt.Errorf("%s precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
+		}
+		if !wouldChange {
+			if !config.DeferStart && !serviceRunning(beforeState) {
+				fmt.Printf("  %s on %s has unchanged managed files but is not running; running provision to restore service state\n", task.Name, task.Host)
+			} else {
+				provisionSkipped = true
+				fmt.Printf("  %s on %s already matches desired install/config/service state; skipping provision\n", task.Name, task.Host)
+			}
+		}
+	}
+
+	if !provisionSkipped {
+		if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision", func(phaseCtx context.Context) error {
+			return prov.Provision(phaseCtx, host, config)
+		}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Skip validation for deferred services
@@ -5673,10 +5728,23 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	// Infrastructure tasks: run Initialize after Provision/Validate.
 	if task.Phase == orchestrator.PhaseInfrastructure {
 		if !deferInfrastructureInitialize(task.Type) {
-			if initErr := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
-				return prov.Initialize(phaseCtx, host, config)
-			}); initErr != nil {
-				return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, initErr)
+			initSkipped := false
+			if !force {
+				wouldInitChange, checkErr := provisionWouldChange(ctx, prov, host, config, []string{"init"})
+				if checkErr != nil {
+					return nil, fmt.Errorf("%s initialize precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
+				}
+				if !wouldInitChange {
+					initSkipped = true
+					fmt.Printf("  %s on %s already matches desired init state; skipping initialize\n", task.Name, task.Host)
+				}
+			}
+			if !initSkipped {
+				if initErr := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
+					return prov.Initialize(phaseCtx, host, config)
+				}); initErr != nil {
+					return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, initErr)
+				}
 			}
 		}
 	}
@@ -6293,6 +6361,40 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 					}
 				}
 			}
+		}
+		// Durable, regionally-shared orchestrator health + performance scoring.
+		// Point the gateway at its region-local Redis (the same instance Foghorn
+		// uses for HA state — keys are namespaced under orchhealth:/orchperf: so
+		// they never collide). Without this the gateway silently keeps suspension
+		// and performance state in memory and forgets it on every restart.
+		// Sentinel mode (when the instance runs Sentinel) survives a master
+		// failover; the single-node URL is the fallback. Both are best-effort: the
+		// gateway falls back to in-memory if Redis is unreachable.
+		if sentinels := env["REDIS_FOGHORN_SENTINEL_ADDRS"]; sentinels != "" {
+			if env["FRAMEWORKS_ORCH_HEALTH_REDIS_SENTINEL_ADDRS"] == "" {
+				env["FRAMEWORKS_ORCH_HEALTH_REDIS_SENTINEL_ADDRS"] = sentinels
+			}
+			if master := env["REDIS_FOGHORN_MASTER_NAME"]; master != "" && env["FRAMEWORKS_ORCH_HEALTH_REDIS_MASTER_NAME"] == "" {
+				env["FRAMEWORKS_ORCH_HEALTH_REDIS_MASTER_NAME"] = master
+			}
+			if pw := env["REDIS_FOGHORN_PASSWORD"]; pw != "" && env["FRAMEWORKS_ORCH_HEALTH_REDIS_PASSWORD"] == "" {
+				env["FRAMEWORKS_ORCH_HEALTH_REDIS_PASSWORD"] = pw
+			}
+		}
+		if env["FRAMEWORKS_ORCH_HEALTH_REDIS_URL"] == "" {
+			if addr := env["REDIS_FOGHORN_ADDR"]; addr != "" {
+				env["FRAMEWORKS_ORCH_HEALTH_REDIS_URL"] = redisURLWithOptionalPassword(addr, env["REDIS_FOGHORN_PASSWORD"])
+			}
+		}
+		// Performance-dominant selection weights (stake demoted to a tie-break) so
+		// the gateway prefers instances with a proven end-to-end round-trip-speed
+		// EWMA. The go-livepeer binary reads these FRAMEWORKS_SELECT_* env
+		// overrides; sum = 1.
+		if env["FRAMEWORKS_SELECT_PERF_WEIGHT"] == "" {
+			env["FRAMEWORKS_SELECT_PERF_WEIGHT"] = "0.5"
+			env["FRAMEWORKS_SELECT_RAND_WEIGHT"] = "0.2"
+			env["FRAMEWORKS_SELECT_STAKE_WEIGHT"] = "0.2"
+			env["FRAMEWORKS_SELECT_PRICE_WEIGHT"] = "0.1"
 		}
 		decklogPort := defaultGRPCPort("decklog")
 		if decklogSvc, ok := manifest.Services["decklog"]; ok && decklogSvc.GRPCPort != 0 {

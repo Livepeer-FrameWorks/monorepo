@@ -195,6 +195,23 @@ func TestNativeVMAgentUnitDoesNotTemplateRestartIntoBearerTokenPath(t *testing.T
 	}
 }
 
+func TestEdgeVMAgentRoleFilesUseStandardListenerPort(t *testing.T) {
+	for _, path := range []string{
+		"ansible/collections/ansible_collections/frameworks/infra/roles/edge/tasks/install-native-linux-vmagent.yml",
+		"ansible/collections/ansible_collections/frameworks/infra/roles/edge/templates/compose.yml.j2",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := readRepoFile(t, path)
+			if !strings.Contains(content, "-httpListenAddr=:8429") {
+				t.Fatalf("edge vmagent role file should use standard listener :8429:\n%s", content)
+			}
+			if strings.Contains(content, ":8430") {
+				t.Fatalf("edge vmagent role file should not use retired listener :8430:\n%s", content)
+			}
+		})
+	}
+}
+
 // The templates package is still used by `edge init` for operators who
 // render the compose/env/Caddyfile locally before running the role against
 // their own host. These tests pin the bootstrap shape so renames don't

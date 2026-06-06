@@ -56,10 +56,44 @@
     - "{{ kafka_mm_state_dir }}"
     - "{{ kafka_mm_log_dir }}"
 
-- name: Check Kafka install sentinel
+- name: Stat MirrorMaker binary
+  ansible.builtin.stat:
+    path: "{{ kafka_mm_bin_dir }}/connect-mirror-maker.sh"
+  register: kafka_mm_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat MirrorMaker install sentinel
   ansible.builtin.stat:
     path: "{{ kafka_mm_install_sentinel }}"
   register: kafka_mm_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether MirrorMaker reinstall is required
+  ansible.builtin.set_fact:
+    kafka_mm_reinstall_required: >-
+      {{
+        not (kafka_mm_bin_stat.stat.exists | default(false)) or
+        not (kafka_mm_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending MirrorMaker reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      kafka-mirrormaker would reinstall:
+      binary_exists={{ kafka_mm_bin_stat.stat.exists | default(false) }},
+      sentinel={{ kafka_mm_install_sentinel }}
+  changed_when: kafka_mm_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Remove stale MirrorMaker install sentinel before reinstall
+  ansible.builtin.file:
+    path: "{{ kafka_mm_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - kafka_mm_reinstall_required | default(false)
 
 - name: Download Kafka tarball (shared with broker/controller role)
   ansible.builtin.get_url:
@@ -68,7 +102,9 @@
     checksum: "{{ kafka_mm_artifact_checksum }}"
     mode: "0644"
     timeout: 300
-  when: not ansible_check_mode and not kafka_mm_sentinel_stat.stat.exists
+  when:
+    - not ansible_check_mode
+    - kafka_mm_reinstall_required | default(true)
 
 - name: Extract Kafka
   ansible.builtin.unarchive:
@@ -81,6 +117,9 @@
       - --strip-components=1
     creates: "{{ kafka_mm_install_sentinel }}"
   notify: kafka_mirrormaker restart
+  when:
+    - not ansible_check_mode
+    - kafka_mm_reinstall_required | default(true)
 
 - name: Record install sentinel
   ansible.builtin.file:
@@ -90,3 +129,6 @@
     group: "{{ kafka_mm_group }}"
     mode: "0644"
   changed_when: false
+  when:
+    - not ansible_check_mode
+    - kafka_mm_reinstall_required | default(true)

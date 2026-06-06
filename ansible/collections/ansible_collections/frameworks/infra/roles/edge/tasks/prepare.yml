@@ -13,6 +13,54 @@
     - "{{ edge_conf_dir }}/pki"
     - "{{ edge_cert_dir }}"
 
+- name: Read existing native MistServer env
+  ansible.builtin.slurp:
+    src: "{{ edge_conf_dir }}/mistserver.env"
+  register: edge_existing_mistserver_env
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Read existing compose file
+  ansible.builtin.slurp:
+    src: "{{ edge_base_dir }}/docker-compose.yml"
+  register: edge_existing_compose_file
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Extract existing MistServer API password
+  ansible.builtin.set_fact:
+    edge_existing_native_mist_api_password: >-
+      {{
+        (
+          edge_existing_mistserver_env.content | default('') | b64decode
+          | regex_search('(?m)^MIST_API_PASSWORD=[^\r\n]*')
+          | default('', true)
+        ) | regex_replace('^MIST_API_PASSWORD=', '')
+      }}
+    edge_existing_compose_mist_api_password: >-
+      {{
+        (
+          edge_existing_compose_file.content | default('') | b64decode
+          | regex_search('(?m)MIST_API_PASSWORD=[^"\r\n ]*')
+          | default('', true)
+        ) | regex_replace('^.*MIST_API_PASSWORD=', '')
+      }}
+  no_log: true
+
+- name: Select effective MistServer API password
+  ansible.builtin.set_fact:
+    edge_effective_mist_api_password: >-
+      {{
+        [
+          edge_existing_native_mist_api_password | default('', true),
+          edge_existing_compose_mist_api_password | default('', true),
+          edge_mist_api_password | default('', true)
+        ] | map('trim') | reject('equalto', '') | list | first | default('', true)
+      }}
+  no_log: true
+
 - name: Stage internal CA bundle (when provided)
   ansible.builtin.copy:
     dest: "{{ edge_ca_path }}"

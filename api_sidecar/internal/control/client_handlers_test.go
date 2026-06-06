@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
@@ -40,6 +42,75 @@ func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
 	}
 	if result.GetNodeId() != "node-1" || result.GetTargetRelease() != "stable:v1" {
 		t.Fatalf("queued result = node %q target %q", result.GetNodeId(), result.GetTargetRelease())
+	}
+}
+
+func TestHandleDesiredStateUpdateRejectsDrainRequiredWithoutCordonToken(t *testing.T) {
+	var sent []*ipcpb.ControlMessage
+	handleDesiredStateUpdate(context.Background(), logging.NewLogger(), "req-update-1", &ipcpb.DesiredStateUpdate{
+		NodeId:        "node-1",
+		TargetRelease: "stable:v1",
+		Components: []*ipcpb.DesiredComponent{
+			{
+				Component:     "mist",
+				Version:       "v1.2.3",
+				ArtifactUrl:   "https://example.test/mist.tgz",
+				DrainRequired: true,
+			},
+		},
+	}, func(msg *ipcpb.ControlMessage) error {
+		sent = append(sent, msg)
+		return nil
+	})
+
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(sent))
+	}
+	result := sent[0].GetUpdateApplyResult()
+	if result == nil {
+		t.Fatal("sent message has no UpdateApplyResult payload")
+	}
+	if got := len(result.GetComponents()); got != 1 {
+		t.Fatalf("component results = %d, want 1", got)
+	}
+	component := result.GetComponents()[0]
+	if component.GetSuccess() {
+		t.Fatal("drain-required update without cordon token unexpectedly succeeded")
+	}
+	if component.GetDetail() != "drain-required update missing cordon token" {
+		t.Fatalf("detail = %q, want missing cordon token", component.GetDetail())
+	}
+}
+
+func TestHandleDesiredStateUpdateRejectsDrainRequiredExpiredCordonToken(t *testing.T) {
+	var sent []*ipcpb.ControlMessage
+	handleDesiredStateUpdate(context.Background(), logging.NewLogger(), "req-update-1", &ipcpb.DesiredStateUpdate{
+		NodeId:               "node-1",
+		TargetRelease:        "stable:v1",
+		CordonToken:          "token",
+		CordonTokenExpiresAt: timestamppb.New(time.Now().Add(-1 * time.Minute)),
+		Components: []*ipcpb.DesiredComponent{
+			{
+				Component:     "mist",
+				Version:       "v1.2.3",
+				ArtifactUrl:   "https://example.test/mist.tgz",
+				DrainRequired: true,
+			},
+		},
+	}, func(msg *ipcpb.ControlMessage) error {
+		sent = append(sent, msg)
+		return nil
+	})
+
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(sent))
+	}
+	component := sent[0].GetUpdateApplyResult().GetComponents()[0]
+	if component.GetSuccess() {
+		t.Fatal("drain-required update with expired cordon token unexpectedly succeeded")
+	}
+	if component.GetDetail() != "drain-required update cordon token expired" {
+		t.Fatalf("detail = %q, want expired cordon token", component.GetDetail())
 	}
 }
 

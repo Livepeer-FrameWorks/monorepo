@@ -74,6 +74,14 @@ const caddyfileTmpl = `{
 		reverse_proxy {{.HelmsmanUpstream}}
 	}
 
+	@edge_health {
+		host {{.EdgeDomain}}
+		path /health
+	}
+	handle @edge_health {
+		reverse_proxy {{.HelmsmanUpstream}}
+	}
+
 	# Cross-cluster peer-relay reads of hot-but-unsynced artifacts.
 	# Scoped to the per-node edge FQDN so the route is invisible on
 	# tenant/customer hosts. Helmsman's middleware requires an opaque

@@ -26,6 +26,38 @@
     owner: root
     group: root
     mode: "0755"
+  when: not ansible_check_mode
+
+- name: Stat vmauth binary
+  ansible.builtin.stat:
+    path: "{{ vmauth_bin }}"
+  register: vmauth_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat vmauth install sentinel
+  ansible.builtin.stat:
+    path: "{{ vmauth_install_sentinel }}"
+  register: vmauth_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether vmauth reinstall is required
+  ansible.builtin.set_fact:
+    vmauth_reinstall_required: >-
+      {{
+        not (vmauth_bin_stat.stat.exists | default(false)) or
+        not (vmauth_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending vmauth reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      vmauth would reinstall:
+      binary_exists={{ vmauth_bin_stat.stat.exists | default(false) }},
+      sentinel={{ vmauth_install_sentinel }}
+  changed_when: vmauth_reinstall_required | bool
+  when: ansible_check_mode
 
 - name: Download vmauth binary
   ansible.builtin.get_url:
@@ -33,7 +65,9 @@
     dest: /tmp/vmauth.tar.gz
     checksum: "{{ vmauth_artifact_checksum }}"
     mode: "0644"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmauth_reinstall_required | default(true)
 
 - name: Extract vmauth
   ansible.builtin.unarchive:
@@ -42,7 +76,9 @@
     remote_src: true
     mode: "0755"
     creates: "{{ vmauth_extract_dir }}/{{ vmauth_artifact_binary }}"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmauth_reinstall_required | default(true)
 
 - name: Install vmauth binary
   ansible.builtin.copy:
@@ -53,7 +89,21 @@
     group: root
     mode: "0755"
   notify: vmauth restart
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmauth_reinstall_required | default(true)
+
+- name: Record vmauth install sentinel
+  ansible.builtin.file:
+    path: "{{ vmauth_install_sentinel }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - vmauth_reinstall_required | default(true)
 
 - name: Ensure vmauth config directory
   ansible.builtin.file:

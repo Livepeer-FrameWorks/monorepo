@@ -191,7 +191,7 @@ scrape_configs:
     image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
     command:
-      - -httpListenAddr=:8430
+      - -httpListenAddr=:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
       - -remoteWrite.url={{TELEMETRY_URL}}
       - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token

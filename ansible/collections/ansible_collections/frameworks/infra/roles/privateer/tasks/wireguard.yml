@@ -24,7 +24,6 @@
     group: "{{ omit if ansible_check_mode else privateer_group }}"
     mode: "0640"
   notify: privateer restart
-  when: not ansible_check_mode
 
 - name: Privateer | render wg.key (SOPS-managed)
   ansible.builtin.copy:
@@ -35,7 +34,6 @@
     mode: "0600"
   when:
     - privateer_wireguard_private_key | length > 0
-    - not ansible_check_mode
   no_log: true
   notify: privateer restart
 

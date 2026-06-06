@@ -33,7 +33,7 @@ services:
       - -c
       - /etc/mistserver.conf
       - -a
-      - "frameworks:{{ edge_mist_api_password }}"
+      - "frameworks:{{ edge_effective_mist_api_password }}"
     shm_size: "1g"
     ulimits:
       nofile:
@@ -63,7 +63,7 @@ services:
       - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
       - CADDY_CONFIG_PATH=/etc/caddy/Caddyfile
       - MIST_API_USERNAME=frameworks
-      - MIST_API_PASSWORD={{ edge_mist_api_password }}
+      - MIST_API_PASSWORD={{ edge_effective_mist_api_password }}
     volumes:
       - ./certs:/etc/frameworks/certs
       - ./pki:/etc/frameworks/pki
@@ -81,7 +81,7 @@ services:
     image: victoriametrics/vmagent:v1.143.0
     container_name: frameworks-edge-vmagent
     command:
-      - -httpListenAddr=:8430
+      - -httpListenAddr=:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
       - -remoteWrite.url={{ edge_telemetry_url }}
 {% if edge_telemetry_token | length > 0 %}

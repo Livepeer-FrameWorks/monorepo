@@ -39,6 +39,112 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvVarsWiresOrchHealthRedisForGateway(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {Labels: map[string]string{"region": "media-eu-1"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{Name: "foghorn", Cluster: "media-eu-1", Host: "regional-eu-1", Port: 6379},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {
+				Enabled: true,
+				Deploy:  "livepeer-gateway",
+				Hosts:   []string{"regional-eu-1"},
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway-eu@regional-eu-1",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway-eu",
+		Host:      "regional-eu-1",
+		ClusterID: "media-eu-1",
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["FRAMEWORKS_ORCH_HEALTH_REDIS_URL"]; got != "redis://127.0.0.1:6379" {
+		t.Fatalf("expected gateway orch-health Redis to point at region-local instance, got %q", got)
+	}
+	if got := env["FRAMEWORKS_GATEWAY_REGION"]; got != "media-eu-1" {
+		t.Fatalf("expected gateway region to scope orch health/perf state, got %q", got)
+	}
+}
+
+func TestBuildServiceEnvVarsWiresOrchHealthSentinelAndPerfWeightsForGateway(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {Labels: map[string]string{"region": "media-eu-1"}},
+			"regional-eu-2": {Labels: map[string]string{"region": "media-eu-1"}},
+			"regional-eu-3": {Labels: map[string]string{"region": "media-eu-1"}},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Instances: []inventory.RedisInstance{
+					{
+						Name:       "foghorn",
+						Cluster:    "media-eu-1",
+						Mode:       "sentinel",
+						Host:       "regional-eu-1",
+						Port:       6379,
+						MasterName: "foghorn",
+						Sentinels: []inventory.RedisSentinelNode{
+							{Host: "regional-eu-1", Port: 26379},
+							{Host: "regional-eu-2", Port: 26379},
+							{Host: "regional-eu-3", Port: 26379},
+						},
+					},
+				},
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-eu": {
+				Enabled: true,
+				Deploy:  "livepeer-gateway",
+				Hosts:   []string{"regional-eu-1"},
+			},
+		},
+	}
+
+	env, err := buildServiceEnvVars(&orchestrator.Task{
+		Name:      "livepeer-gateway-eu@regional-eu-1",
+		Type:      "livepeer-gateway",
+		ServiceID: "livepeer-gateway-eu",
+		Host:      "regional-eu-1",
+		ClusterID: "media-eu-1",
+	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil)
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars returned error: %v", err)
+	}
+
+	if got := env["FRAMEWORKS_ORCH_HEALTH_REDIS_SENTINEL_ADDRS"]; got == "" {
+		t.Fatal("expected gateway orch-health to receive Sentinel addrs")
+	}
+	if got := env["FRAMEWORKS_ORCH_HEALTH_REDIS_MASTER_NAME"]; got != "foghorn" {
+		t.Fatalf("expected Sentinel master name foghorn, got %q", got)
+	}
+	if got := env["FRAMEWORKS_GATEWAY_REGION"]; got != "media-eu-1" {
+		t.Fatalf("expected gateway region to scope orch health/perf state, got %q", got)
+	}
+	// Perf-dominant selection weights, stake demoted, summing to 1.
+	if got := env["FRAMEWORKS_SELECT_PERF_WEIGHT"]; got != "0.5" {
+		t.Fatalf("expected perf weight 0.5, got %q", got)
+	}
+	if got := env["FRAMEWORKS_SELECT_STAKE_WEIGHT"]; got != "0.2" {
+		t.Fatalf("expected stake weight demoted to 0.2, got %q", got)
+	}
+}
+
 func TestBuildServiceEnvVarsInjectsGeoIPForAliasedLivepeerGateway(t *testing.T) {
 	manifest := &inventory.Manifest{
 		GeoIP: &inventory.GeoIPConfig{

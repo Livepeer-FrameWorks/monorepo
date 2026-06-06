@@ -56,6 +56,45 @@
     - "{{ kafka_role_data_dir }}"
     - "{{ kafka_role_log_dir }}"
 
+- name: Stat Kafka binary
+  ansible.builtin.stat:
+    path: "{{ kafka_bin_dir }}/kafka-storage.sh"
+  register: kafka_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat Kafka install sentinel
+  ansible.builtin.stat:
+    path: "{{ kafka_install_sentinel }}"
+  register: kafka_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether Kafka reinstall is required
+  ansible.builtin.set_fact:
+    kafka_reinstall_required: >-
+      {{
+        not (kafka_bin_stat.stat.exists | default(false)) or
+        not (kafka_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending Kafka reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      {{ kafka_service_name }} would reinstall:
+      binary_exists={{ kafka_bin_stat.stat.exists | default(false) }},
+      sentinel={{ kafka_install_sentinel }}
+  changed_when: kafka_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Remove stale Kafka install sentinel before reinstall
+  ansible.builtin.file:
+    path: "{{ kafka_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - kafka_reinstall_required | default(false)
+
 - name: Download Kafka tarball
   ansible.builtin.get_url:
     url: "{{ kafka_artifact_url }}"
@@ -63,7 +102,9 @@
     checksum: "{{ kafka_artifact_checksum }}"
     mode: "0644"
     timeout: 300
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - kafka_reinstall_required | default(true)
 
 - name: Extract Kafka
   ansible.builtin.unarchive:
@@ -76,6 +117,9 @@
       - --strip-components=1
     creates: "{{ kafka_install_sentinel }}"
   notify: kafka restart
+  when:
+    - not ansible_check_mode
+    - kafka_reinstall_required | default(true)
 
 - name: Record install sentinel
   ansible.builtin.file:
@@ -85,3 +129,6 @@
     group: "{{ kafka_group }}"
     mode: "0644"
   changed_when: false
+  when:
+    - not ansible_check_mode
+    - kafka_reinstall_required | default(true)

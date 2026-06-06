@@ -26,6 +26,41 @@
     - "{{ mistserver_darwin_log_dir }}"
     - "{{ mistserver_darwin_plist_dir }}"
 
+- name: Set install identity
+  ansible.builtin.set_fact:
+    mistserver_install_identity: >-
+      {{ mistserver_artifact_checksum
+         if mistserver_artifact_checksum | length > 0
+         else mistserver_artifact_url }}
+
+- name: Set install sentinel path
+  ansible.builtin.set_fact:
+    mistserver_install_sentinel: "{{ mistserver_darwin_base_dir }}/mistserver/.installed-{{ mistserver_install_identity | hash('sha1') }}"
+
+- name: Inspect MistServer binary
+  ansible.builtin.stat:
+    path: "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController"
+  register: mistserver_binary_stat
+
+- name: Inspect MistServer install sentinel
+  ansible.builtin.stat:
+    path: "{{ mistserver_install_sentinel }}"
+  register: mistserver_sentinel_stat
+
+- name: Determine whether MistServer reinstall is required
+  ansible.builtin.set_fact:
+    mistserver_reinstall_required: >-
+      {{
+        not (mistserver_binary_stat.stat.exists | default(false))
+        or not (mistserver_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report MistServer artifact drift in check mode
+  ansible.builtin.debug:
+    msg: "MistServer artifact would be installed from {{ mistserver_artifact_url }}"
+  changed_when: mistserver_reinstall_required | bool
+  when: ansible_check_mode
+
 - name: Download MistServer tarball
   ansible.builtin.get_url:
     url: "{{ mistserver_artifact_url }}"
@@ -33,10 +68,17 @@
     checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
     mode: "0644"
     timeout: 300
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
 
-- name: Set install sentinel path
-  ansible.builtin.set_fact:
-    mistserver_install_sentinel: "{{ mistserver_darwin_base_dir }}/mistserver/.installed-{{ mistserver_artifact_checksum | default('') | hash('sha1') }}"
+- name: Remove stale MistServer install sentinel before reinstall
+  ansible.builtin.file:
+    path: "{{ mistserver_install_sentinel }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
 
 - name: Extract MistServer
   ansible.builtin.unarchive:
@@ -44,8 +86,10 @@
     dest: "{{ mistserver_darwin_base_dir }}/mistserver"
     remote_src: true
     creates: "{{ mistserver_install_sentinel }}"
-  notify: mistserver restart
-  when: not ansible_check_mode
+  notify: mistserver reload
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
 
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
@@ -55,4 +99,6 @@
     touch "{{ mistserver_install_sentinel }}"
   args:
     creates: "{{ mistserver_install_sentinel }}"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool

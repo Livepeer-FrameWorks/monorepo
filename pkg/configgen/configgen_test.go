@@ -273,3 +273,54 @@ STREAMING_EDGE_URL=https://edge-egress.media-eu.example.com
 		t.Errorf("VITE_AUTH_URL = %q, want derived from gateway", got)
 	}
 }
+
+func TestValidateGatewayBaseURL(t *testing.T) {
+	// Intent: the gateway base URL is a strict base-path-only contract. It must
+	// be http(s) with a host, carry no query/fragment, and must NOT already
+	// include a known endpoint suffix (/graphql, /graphql/ws, /mcp, /webhooks) —
+	// those are appended by callers, so accepting them here would double them.
+	t.Run("rejections", func(t *testing.T) {
+		bad := []struct {
+			name, raw string
+		}{
+			{"non-http scheme", "ftp://gw.example.com"},
+			{"missing host", "https://"},
+			{"has query", "https://gw.example.com/?a=1"},
+			{"has fragment", "https://gw.example.com/#frag"},
+			{"includes /graphql", "https://gw.example.com/graphql"},
+			{"includes /graphql/ws", "https://gw.example.com/graphql/ws"},
+			{"includes /mcp", "https://gw.example.com/mcp"},
+			{"includes /webhooks", "https://gw.example.com/webhooks"},
+			{"suffix /api/graphql", "https://gw.example.com/api/graphql"},
+		}
+		for _, tt := range bad {
+			t.Run(tt.name, func(t *testing.T) {
+				if _, err := validateGatewayBaseURL(tt.raw); err == nil {
+					t.Fatalf("validateGatewayBaseURL(%q) = nil error, want rejection", tt.raw)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts and trims base URLs", func(t *testing.T) {
+		good := []struct {
+			raw, want string
+		}{
+			{"https://gw.example.com", "https://gw.example.com"},
+			{"https://gw.example.com/", "https://gw.example.com"},
+			{"http://localhost:9000", "http://localhost:9000"},
+			{"https://gw.example.com/api/", "https://gw.example.com/api"},
+		}
+		for _, tt := range good {
+			t.Run(tt.raw, func(t *testing.T) {
+				got, err := validateGatewayBaseURL(tt.raw)
+				if err != nil {
+					t.Fatalf("validateGatewayBaseURL(%q) unexpected error: %v", tt.raw, err)
+				}
+				if got != tt.want {
+					t.Fatalf("validateGatewayBaseURL(%q) = %q, want %q", tt.raw, got, tt.want)
+				}
+			})
+		}
+	})
+}

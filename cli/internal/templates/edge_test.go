@@ -63,6 +63,28 @@ func TestRenderEdgeTemplates_dockerModeFullSet(t *testing.T) {
 	}
 }
 
+func TestRenderEdgeTemplates_dockerVMAgentUsesStandardPort(t *testing.T) {
+	t.Parallel()
+	vars := fixedEdgeVars()
+	vars.Mode = "docker"
+
+	files, err := RenderEdgeTemplates(vars)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	compose, ok := fileByPath(files, "docker-compose.edge.yml")
+	if !ok {
+		t.Fatalf("docker-compose.edge.yml missing")
+	}
+	content := string(compose.Content)
+	if !strings.Contains(content, "- -httpListenAddr=:8429") {
+		t.Fatalf("edge vmagent should use standard listener :8429:\n%s", content)
+	}
+	if strings.Contains(content, ":8430") {
+		t.Fatalf("edge vmagent should not use the retired :8430 listener:\n%s", content)
+	}
+}
+
 func TestRenderEdgeTemplates_nativeSkipsCompose(t *testing.T) {
 	t.Parallel()
 	vars := fixedEdgeVars()

@@ -17,6 +17,38 @@
     owner: root
     group: root
     mode: "0755"
+  when: not ansible_check_mode
+
+- name: Stat VictoriaMetrics binary
+  ansible.builtin.stat:
+    path: "{{ victoriametrics_bin }}"
+  register: victoriametrics_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat VictoriaMetrics install sentinel
+  ansible.builtin.stat:
+    path: "{{ victoriametrics_install_sentinel }}"
+  register: victoriametrics_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether VictoriaMetrics reinstall is required
+  ansible.builtin.set_fact:
+    victoriametrics_reinstall_required: >-
+      {{
+        not (victoriametrics_bin_stat.stat.exists | default(false)) or
+        not (victoriametrics_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending VictoriaMetrics reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      victoriametrics would reinstall:
+      binary_exists={{ victoriametrics_bin_stat.stat.exists | default(false) }},
+      sentinel={{ victoriametrics_install_sentinel }}
+  changed_when: victoriametrics_reinstall_required | bool
+  when: ansible_check_mode
 
 - name: Download VictoriaMetrics binary
   ansible.builtin.get_url:
@@ -24,7 +56,9 @@
     dest: /tmp/victoria-metrics.tar.gz
     checksum: "{{ victoriametrics_artifact_checksum }}"
     mode: "0644"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - victoriametrics_reinstall_required | default(true)
 
 - name: Extract VictoriaMetrics
   ansible.builtin.unarchive:
@@ -35,6 +69,7 @@
     creates: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
   when:
     - not ansible_check_mode
+    - victoriametrics_reinstall_required | default(true)
 
 - name: Install VictoriaMetrics binary
   ansible.builtin.copy:
@@ -45,7 +80,21 @@
     group: root
     mode: "0755"
   notify: victoriametrics restart
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - victoriametrics_reinstall_required | default(true)
+
+- name: Record VictoriaMetrics install sentinel
+  ansible.builtin.file:
+    path: "{{ victoriametrics_install_sentinel }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - victoriametrics_reinstall_required | default(true)
 
 - name: Ensure VictoriaMetrics storage dir
   ansible.builtin.file:

@@ -598,9 +598,9 @@ func TestServiceNativeVarsInstallsSkipperSources(t *testing.T) {
 	}
 }
 
-func TestGoServiceInstallSentinelPathMatchesRoleIdentity(t *testing.T) {
-	got := goServiceInstallSentinelPath("foghorn", "v1.2.3", "sha512:abc", "https://example.test/foghorn.tar.gz")
-	want := "/opt/frameworks/foghorn/.installed-3437ce4902b5aff0c5a10a7e3f90c26ba3cd5e1d9c904612512e36bbeeb73c21"
+func TestGoServiceInstallSentinelPathMatchesArtifactIdentity(t *testing.T) {
+	got := goServiceInstallSentinelPath("foghorn", "sha512:abc", "https://example.test/foghorn.tar.gz")
+	want := "/opt/frameworks/foghorn/.installed-24c1d9e46d367916f985c5cb16c7576769a1671490e332bd61a7b7b66356e6c8"
 	if got != want {
 		t.Fatalf("goServiceInstallSentinelPath got %q, want %q", got, want)
 	}

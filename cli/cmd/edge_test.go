@@ -3,6 +3,8 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	fwgitops "frameworks/cli/pkg/gitops"
@@ -192,6 +194,55 @@ func TestEdgeManifestVersionFlagOverridesChannel(t *testing.T) {
 	}
 	if nodeVersion == manifest.Version {
 		t.Fatal("nodeVersion must not equal schema version")
+	}
+}
+
+func TestNativeEdgeRefreshCommandLinuxReloadsMist(t *testing.T) {
+	cmd := nativeEdgeRefreshCommand("linux")
+	for _, want := range []string{
+		"systemctl reload frameworks-mistserver",
+		"systemctl try-restart frameworks-helmsman",
+		"systemctl reload-or-restart frameworks-caddy",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("nativeEdgeRefreshCommand(linux) missing %q: %s", want, cmd)
+		}
+	}
+	if strings.Contains(cmd, "restart frameworks-mistserver") {
+		t.Fatalf("nativeEdgeRefreshCommand(linux) must not restart MistServer: %s", cmd)
+	}
+}
+
+func TestNativeEdgeRefreshCommandDarwinSignalsMist(t *testing.T) {
+	cmd := nativeEdgeRefreshCommand("darwin")
+	for _, want := range []string{
+		"launchctl kill USR1 system/com.livepeer.frameworks.mistserver",
+		"pkill -USR1 -f MistController",
+		"launchctl kickstart -k system/com.livepeer.frameworks.helmsman",
+		"launchctl kickstart -k system/com.livepeer.frameworks.caddy",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("nativeEdgeRefreshCommand(darwin) missing %q: %s", want, cmd)
+		}
+	}
+	if strings.Contains(cmd, "kickstart -k system/com.livepeer.frameworks.mistserver") {
+		t.Fatalf("nativeEdgeRefreshCommand(darwin) must not kickstart MistServer: %s", cmd)
+	}
+}
+
+func TestDockerEdgeUpdateStepsUseComposePullThenUp(t *testing.T) {
+	got := dockerEdgeUpdateSteps("docker-compose.edge.yml", ".edge.env")
+	want := [][]string{
+		{"compose", "-f", "docker-compose.edge.yml", "--env-file", ".edge.env", "pull"},
+		{"compose", "-f", "docker-compose.edge.yml", "--env-file", ".edge.env", "up", "-d"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("steps len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !slices.Equal(got[i], want[i]) {
+			t.Fatalf("step %d = %v, want %v", i, got[i], want[i])
+		}
 	}
 }
 

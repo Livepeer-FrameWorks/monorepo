@@ -66,6 +66,48 @@
     - "{{ yugabyte_data_dir }}"
     - "{{ yugabyte_cores_dir }}"
 
+- name: Stat YugabyteDB binary
+  ansible.builtin.stat:
+    path: "{{ yugabyte_bin_dir }}/yb-master"
+  register: yugabyte_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat YugabyteDB install sentinel
+  ansible.builtin.stat:
+    path: "{{ yugabyte_install_sentinel }}"
+  register: yugabyte_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether YugabyteDB reinstall is required
+  ansible.builtin.set_fact:
+    yugabyte_reinstall_required: >-
+      {{
+        not (yugabyte_bin_stat.stat.exists | default(false)) or
+        not (yugabyte_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending YugabyteDB reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      yugabyte would reinstall:
+      binary_exists={{ yugabyte_bin_stat.stat.exists | default(false) }},
+      sentinel={{ yugabyte_install_sentinel }}
+  changed_when: yugabyte_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Remove stale YugabyteDB install sentinels before reinstall
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ yugabyte_install_sentinel }}"
+    - "{{ yugabyte_post_install_sentinel }}"
+  when:
+    - not ansible_check_mode
+    - yugabyte_reinstall_required | default(false)
+
 - name: Download pinned YugabyteDB tarball
   ansible.builtin.get_url:
     url: "{{ yugabyte_artifact_url }}"
@@ -73,7 +115,9 @@
     checksum: "{{ yugabyte_artifact_checksum }}"
     mode: "0644"
     timeout: 300
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - yugabyte_reinstall_required | default(true)
 
 # Version-keyed sentinel: the archive is re-extracted on a URL/checksum change.
 # On unchanged inputs, `creates:` short-circuits on the sentinel file and the
@@ -91,12 +135,16 @@
   notify:
     - yugabyte restart master
     - yugabyte restart tserver
+  when:
+    - not ansible_check_mode
+    - yugabyte_reinstall_required | default(true)
 
 - name: Run YugabyteDB post_install.sh (relocates embedded absolute paths)
   ansible.builtin.command: "{{ yugabyte_bin_dir }}/post_install.sh"
   args:
     creates: "{{ yugabyte_post_install_sentinel }}"
   register: yugabyte_post_install
+  when: not ansible_check_mode
 
 - name: Record post_install completion marker # noqa: no-handler
   ansible.builtin.file:
@@ -105,7 +153,9 @@
     owner: "{{ yugabyte_user }}"
     group: "{{ yugabyte_group }}"
     mode: "0644"
-  when: yugabyte_post_install is changed
+  when:
+    - not ansible_check_mode
+    - yugabyte_post_install is changed
 
 - name: Record installation sentinel
   ansible.builtin.file:
@@ -115,3 +165,6 @@
     group: "{{ yugabyte_group }}"
     mode: "0644"
   changed_when: false
+  when:
+    - not ansible_check_mode
+    - yugabyte_reinstall_required | default(true)

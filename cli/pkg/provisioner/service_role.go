@@ -310,7 +310,7 @@ func composeRegistryAuthRequired(image string) bool {
 }
 
 func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
-	url, checksum, binaryName, err := resolveGenericBinary(ctx, cfg.ServiceName, host, config, helpers)
+	url, checksum, binaryName, artifactVersion, err := resolveGenericBinary(ctx, cfg.ServiceName, host, config, helpers)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +355,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_name":                             cfg.ServiceName,
 		"go_service_artifact_url":                     url,
 		"go_service_artifact_checksum":                checksum,
-		"go_service_version":                          firstNonEmpty(config.Version, metaString(config.Metadata, "version")),
+		"go_service_version":                          firstNonEmpty(artifactVersion, config.Version, metaString(config.Metadata, "version")),
 		"go_service_port":                             port,
 		"go_service_validate_timeout":                 validateTimeout,
 		"go_service_env":                              envAny,
@@ -628,33 +628,38 @@ func resolveGenericImage(cfg ServiceRoleConfig, config ServiceConfig) (string, e
 	return image, nil
 }
 
-func resolveGenericBinary(ctx context.Context, serviceName string, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (string, string, string, error) {
+func resolveGenericBinary(ctx context.Context, serviceName string, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (string, string, string, string, error) {
 	if config.BinaryURL != "" {
-		return config.BinaryURL, "", serviceName, nil
+		return config.BinaryURL, "", serviceName, firstNonEmpty(config.Version, metaString(config.Metadata, "version")), nil
 	}
 	channel, version := gitops.ResolveVersion(config.Version)
 	manifest, err := fetchGitopsManifest(channel, version, config.Metadata)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	remoteOS, remoteArch, err := helpers.DetectRemoteOS(ctx, host)
 	if err != nil {
-		return "", "", "", fmt.Errorf("detect arch: %w", err)
+		return "", "", "", "", fmt.Errorf("detect arch: %w", err)
 	}
 	svc, err := manifest.GetServiceInfo(serviceName)
 	if err == nil {
 		bin, binErr := svc.GetBinary(remoteOS, remoteArch)
 		if binErr != nil {
-			return "", "", "", binErr
+			return "", "", "", "", binErr
 		}
-		return bin.URL, bin.Checksum, serviceName, nil
+		return bin.URL, bin.Checksum, serviceName, svc.Version, nil
 	}
 	if bin, depName := binaryFromExternalDependency(serviceName, remoteOS, remoteArch, manifest); bin != nil {
-		return bin.URL, bin.Checksum, "livepeer", nil
+		dep := manifest.GetExternalDependency(depName)
+		depVersion := ""
+		if dep != nil {
+			depVersion = dep.ReleaseTag
+		}
+		return bin.URL, bin.Checksum, "livepeer", depVersion, nil
 	} else if depName != "" {
-		return "", "", "", fmt.Errorf("external dependency %s has no %s-%s binary for %s", depName, remoteOS, remoteArch, serviceName)
+		return "", "", "", "", fmt.Errorf("external dependency %s has no %s-%s binary for %s", depName, remoteOS, remoteArch, serviceName)
 	}
-	return "", "", "", err
+	return "", "", "", "", err
 }
 
 func serviceRoleDetect(serviceName string) RoleDetector {
@@ -686,7 +691,6 @@ func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
 
 		artifactURL := stringFromVars(vars, "go_service_artifact_url")
 		artifactChecksum := stringFromVars(vars, "go_service_artifact_checksum")
-		version := stringFromVars(vars, "go_service_version")
 		if artifactURL == "" || artifactChecksum == "" {
 			return nil, fmt.Errorf("binary artifact identity for %s is incomplete", cfg.ServiceName)
 		}
@@ -701,7 +705,7 @@ func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
 
 		files := map[detect.FileKind]detect.ExpectedFile{
 			detect.FileKindBinary: {
-				Path:   goServiceInstallSentinelPath(serviceName, version, artifactChecksum, artifactURL),
+				Path:   goServiceInstallSentinelPath(serviceName, artifactChecksum, artifactURL),
 				SHA256: sha256Hex(""),
 			},
 			detect.FileKindEnv: {
@@ -723,8 +727,8 @@ func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
 	}
 }
 
-func goServiceInstallSentinelPath(serviceName, version, checksum, artifactURL string) string {
-	identity := version + ":" + checksum + ":" + artifactURL
+func goServiceInstallSentinelPath(serviceName, checksum, artifactURL string) string {
+	identity := checksum + ":" + artifactURL
 	return "/opt/frameworks/" + serviceName + "/.installed-" + sha256Hex(identity)
 }
 

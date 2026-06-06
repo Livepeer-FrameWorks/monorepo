@@ -19,6 +19,38 @@
     owner: root
     group: root
     mode: "0755"
+  when: not ansible_check_mode
+
+- name: Stat vmagent binary
+  ansible.builtin.stat:
+    path: "{{ vmagent_bin }}"
+  register: vmagent_bin_stat
+  check_mode: false
+  changed_when: false
+
+- name: Stat vmagent install sentinel
+  ansible.builtin.stat:
+    path: "{{ vmagent_install_sentinel }}"
+  register: vmagent_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Decide whether vmagent reinstall is required
+  ansible.builtin.set_fact:
+    vmagent_reinstall_required: >-
+      {{
+        not (vmagent_bin_stat.stat.exists | default(false)) or
+        not (vmagent_install_sentinel_stat.stat.exists | default(false))
+      }}
+
+- name: Report pending vmagent reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      vmagent would reinstall:
+      binary_exists={{ vmagent_bin_stat.stat.exists | default(false) }},
+      sentinel={{ vmagent_install_sentinel }}
+  changed_when: vmagent_reinstall_required | bool
+  when: ansible_check_mode
 
 - name: Download vmagent binary
   ansible.builtin.get_url:
@@ -26,7 +58,9 @@
     dest: /tmp/vmagent.tar.gz
     checksum: "{{ vmagent_artifact_checksum }}"
     mode: "0644"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmagent_reinstall_required | default(true)
 
 - name: Extract vmagent
   ansible.builtin.unarchive:
@@ -35,7 +69,9 @@
     remote_src: true
     mode: "0755"
     creates: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmagent_reinstall_required | default(true)
 
 - name: Install vmagent binary
   ansible.builtin.copy:
@@ -46,7 +82,21 @@
     group: root
     mode: "0755"
   notify: vmagent restart
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - vmagent_reinstall_required | default(true)
+
+- name: Record vmagent install sentinel
+  ansible.builtin.file:
+    path: "{{ vmagent_install_sentinel }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - vmagent_reinstall_required | default(true)
 
 - name: Ensure vmagent config directory
   ansible.builtin.file:

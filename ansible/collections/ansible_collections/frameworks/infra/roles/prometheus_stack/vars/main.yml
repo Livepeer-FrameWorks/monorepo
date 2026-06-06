@@ -4,3 +4,9 @@ prometheus_stack_group: prometheus
 victoriametrics_bin: /usr/local/bin/victoria-metrics
 vmagent_bin: /usr/local/bin/vmagent
 vmauth_bin: /usr/local/bin/vmauth
+victoriametrics_install_identity: "{{ victoriametrics_artifact_checksum ~ ':' ~ victoriametrics_artifact_url }}"
+victoriametrics_install_sentinel: "/usr/local/bin/.frameworks-victoriametrics-installed-{{ victoriametrics_install_identity | hash('sha256') }}"
+vmagent_install_identity: "{{ vmagent_artifact_checksum ~ ':' ~ vmagent_artifact_url }}"
+vmagent_install_sentinel: "/usr/local/bin/.frameworks-vmagent-installed-{{ vmagent_install_identity | hash('sha256') }}"
+vmauth_install_identity: "{{ vmauth_artifact_checksum ~ ':' ~ vmauth_artifact_url }}"
+vmauth_install_sentinel: "/usr/local/bin/.frameworks-vmauth-installed-{{ vmauth_install_identity | hash('sha256') }}"

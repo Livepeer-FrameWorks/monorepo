@@ -64,7 +64,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
 - name: Apply mistserver configure sub-role (darwin)
@@ -74,7 +74,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
 - name: Flush mistserver handlers before service (darwin)
@@ -87,7 +87,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
 - name: Flush mistserver handlers before validate (darwin)
@@ -100,7 +100,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
 - name: Apply caddy bootstrap (darwin)
@@ -123,7 +123,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -160,7 +160,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -200,7 +200,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -240,7 +240,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"

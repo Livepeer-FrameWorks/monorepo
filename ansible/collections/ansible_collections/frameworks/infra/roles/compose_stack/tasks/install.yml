@@ -222,6 +222,12 @@
   when: compose_stack_env | length > 0
   no_log: true
 
+- name: Remove stale .env file when stack has no env
+  ansible.builtin.file:
+    path: "{{ compose_stack_project_dir }}/.env"
+    state: absent
+  when: compose_stack_env | length == 0
+
 - name: Fail when Docker registry authentication is required
   ansible.builtin.fail:
     msg: >-

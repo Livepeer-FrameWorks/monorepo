@@ -11,7 +11,6 @@
   ansible.builtin.package:
     name: "{{ privateer_network_packages_by_family[ansible_facts.os_family] | default(privateer_network_packages_by_family.RedHat) }}"
     state: present
-  when: not ansible_check_mode
 
 - name: Ensure privateer group
   ansible.builtin.group:
@@ -45,26 +44,19 @@
     - "{{ privateer_conf_dir }}"
     - "{{ privateer_data_dir }}"
 
-- name: Download Privateer artifact
-  ansible.builtin.get_url:
-    url: "{{ privateer_artifact_url }}"
-    dest: "{{ privateer_tarball_path }}"
-    checksum: "{{ privateer_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
-  when: not ansible_check_mode
-
 - name: Stat Privateer binary
   ansible.builtin.stat:
     path: "{{ privateer_bin }}"
   register: privateer_bin_stat
-  when: not ansible_check_mode
+  check_mode: false
+  changed_when: false
 
 - name: Stat Privateer install sentinel
   ansible.builtin.stat:
     path: "{{ privateer_install_sentinel }}"
   register: privateer_install_sentinel_stat
-  when: not ansible_check_mode
+  check_mode: false
+  changed_when: false
 
 - name: Read installed Privateer version
   ansible.builtin.shell: |
@@ -80,27 +72,57 @@
   register: privateer_installed_version
   changed_when: false
   failed_when: false
-  when:
-    - not ansible_check_mode
-    - privateer_bin_stat.stat.exists | default(false)
+  check_mode: false
+  when: privateer_bin_stat.stat.exists | default(false)
 
-- name: Remove stale Privateer install sentinel when binary is missing
+- name: Decide whether Privateer reinstall is required
+  ansible.builtin.set_fact:
+    privateer_reinstall_required: >-
+      {{
+        not (privateer_bin_stat.stat.exists | default(false))
+        or (
+          not (privateer_install_sentinel_stat.stat.exists | default(false))
+          and (
+            (privateer_version | default('') | length == 0)
+            or (privateer_installed_version.stdout | default('')) != privateer_version
+          )
+        )
+        or (
+          (privateer_version | default('') | length > 0)
+          and (privateer_installed_version.stdout | default('') | length > 0)
+          and (privateer_installed_version.stdout | default('')) != privateer_version
+        )
+      }}
+
+- name: Report pending Privateer reinstall under --check
+  ansible.builtin.debug:
+    msg: >-
+      privateer would reinstall:
+      installed={{ privateer_installed_version.stdout | default('(missing)') }},
+      desired={{ privateer_version | default('(unset)') }},
+      binary_exists={{ privateer_bin_stat.stat.exists | default(false) }},
+      sentinel={{ privateer_install_sentinel }}
+  changed_when: privateer_reinstall_required | bool
+  when: ansible_check_mode
+
+- name: Remove stale Privateer install sentinel before reinstall
   ansible.builtin.file:
     path: "{{ privateer_install_sentinel }}"
     state: absent
   when:
     - not ansible_check_mode
-    - not (privateer_bin_stat.stat.exists | default(false))
+    - privateer_reinstall_required | default(false)
 
-- name: Remove stale Privateer install sentinel when binary version differs
-  ansible.builtin.file:
-    path: "{{ privateer_install_sentinel }}"
-    state: absent
+- name: Download Privateer artifact
+  ansible.builtin.get_url:
+    url: "{{ privateer_artifact_url }}"
+    dest: "{{ privateer_tarball_path }}"
+    checksum: "{{ privateer_artifact_checksum }}"
+    mode: "0644"
+    timeout: 300
   when:
     - not ansible_check_mode
-    - privateer_install_sentinel_stat.stat.exists | default(false)
-    - privateer_version | length > 0
-    - privateer_installed_version.stdout | default('') != privateer_version
+    - privateer_reinstall_required | default(true)
 
 - name: Find existing Privateer binary candidates before changed artifact install
   ansible.builtin.find:
@@ -115,12 +137,7 @@
   register: privateer_existing_binary_candidates
   when:
     - not ansible_check_mode
-    - >
-      not (privateer_install_sentinel_stat.stat.exists | default(false)) or
-      (
-        privateer_version | length > 0 and
-        privateer_installed_version.stdout | default('') != privateer_version
-      )
+    - privateer_reinstall_required | default(false)
 
 - name: Remove existing Privateer binary candidates before changed artifact install
   ansible.builtin.file:
@@ -131,12 +148,7 @@
     label: "{{ item.path }}"
   when:
     - not ansible_check_mode
-    - >
-      not (privateer_install_sentinel_stat.stat.exists | default(false)) or
-      (
-        privateer_version | length > 0 and
-        privateer_installed_version.stdout | default('') != privateer_version
-      )
+    - privateer_reinstall_required | default(false)
 
 - name: Extract Privateer
   ansible.builtin.unarchive:

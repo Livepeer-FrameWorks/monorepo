@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func TestWriteComponentVersionRejectsUnsafeVersion(t *testing.T) {
@@ -179,6 +182,57 @@ func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) 
 	}
 	if string(lib) != "new-lib" {
 		t.Fatalf("lib = %q, want new-lib", string(lib))
+	}
+}
+
+func TestWriteMistManagedMetadataStampsProvisionSentinel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	component := &ipcpb.DesiredComponent{
+		Component:   "mist",
+		Version:     "v1.2.3",
+		ArtifactUrl: "https://example.test/mistserver-linux-amd64.tar.gz",
+		Checksum:    "sha256:" + strings.Repeat("a", 64),
+	}
+
+	if err := writeMistManagedMetadata(root, component); err != nil {
+		t.Fatalf("writeMistManagedMetadata: %v", err)
+	}
+	if _, err := os.Stat(componentInstallSentinelPath(root, component.GetChecksum())); err != nil {
+		t.Fatalf("expected install sentinel: %v", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(root, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	for _, want := range []string{
+		`"component": "mistserver"`,
+		`"version": "v1.2.3"`,
+		`"artifact_url": "https://example.test/mistserver-linux-amd64.tar.gz"`,
+		`"artifact_checksum": "sha256:` + strings.Repeat("a", 64) + `"`,
+	} {
+		if !strings.Contains(string(manifest), want) {
+			t.Fatalf("manifest missing %s:\n%s", want, manifest)
+		}
+	}
+}
+
+func TestWriteComponentInstallSentinelFallsBackToArtifactURL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	component := &ipcpb.DesiredComponent{
+		Component:   "helmsman",
+		Version:     "v1.2.3",
+		ArtifactUrl: "https://example.test/helmsman.tar.gz",
+	}
+
+	if err := writeComponentInstallSentinel(root, component); err != nil {
+		t.Fatalf("writeComponentInstallSentinel: %v", err)
+	}
+	if _, err := os.Stat(componentInstallSentinelPath(root, component.GetArtifactUrl())); err != nil {
+		t.Fatalf("expected URL-derived install sentinel: %v", err)
 	}
 }
 

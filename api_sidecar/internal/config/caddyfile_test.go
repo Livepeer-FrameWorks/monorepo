@@ -140,6 +140,54 @@ func TestRenderCaddyfile_MistAdminReverseProxiesToHelmsman(t *testing.T) {
 	}
 }
 
+func TestRenderCaddyfile_EdgeHealthRouteIsHostMatched(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+	p.HelmsmanUpstream = "127.0.0.1:18007"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if !strings.Contains(out, "@edge_health {") {
+		t.Fatalf("expected @edge_health matcher; got:\n%s", out)
+	}
+	if !strings.Contains(out, "host edge-us-1.media-us-1.frameworks.network") {
+		t.Fatalf("expected edge health matcher pinned to edge host; got:\n%s", out)
+	}
+	if !strings.Contains(out, "path /health") {
+		t.Fatalf("expected /health path matcher; got:\n%s", out)
+	}
+	handleStart := strings.Index(out, "handle @edge_health {")
+	if handleStart < 0 {
+		t.Fatalf("missing handle @edge_health block; got:\n%s", out)
+	}
+	handleEnd := strings.Index(out[handleStart:], "}")
+	if handleEnd < 0 {
+		t.Fatalf("unterminated handle @edge_health block; got:\n%s", out)
+	}
+	body := out[handleStart : handleStart+handleEnd]
+	if !strings.Contains(body, "reverse_proxy 127.0.0.1:18007") {
+		t.Fatalf("edge health must proxy to Helmsman; got body:\n%s", body)
+	}
+	if strings.Contains(out, "handle /health") || strings.Contains(out, "handle_path /health") {
+		t.Fatalf("/health must be host-matched through @edge_health; got:\n%s", out)
+	}
+}
+
+func TestRenderCaddyfile_EdgeHealthAbsentWhenEdgeDomainEmpty(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = ""
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if strings.Contains(out, "edge_health") || strings.Contains(out, "path /health") {
+		t.Fatalf("did not expect edge health route without EdgeDomain; got:\n%s", out)
+	}
+}
+
 func TestRenderCaddyfile_ViewRouteStripsPrefixForMist(t *testing.T) {
 	out, err := RenderCaddyfile(baseParams())
 	if err != nil {

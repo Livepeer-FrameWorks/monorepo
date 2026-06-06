@@ -3061,15 +3061,10 @@ func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
 	if got := scrapeTargetLabels(t, master)["port"]; got != "master" {
 		t.Fatalf("master port label = %q, want master", got)
 	}
-	tserver := findScrapeTarget(t, targets, "yugabyte-tserver", "yuga-1.internal:11000")
-	if got := tserver["path"]; got != "/prometheus-metrics" {
-		t.Fatalf("tserver path = %v, want /prometheus-metrics", got)
-	}
-	if got := scrapeTargetLabels(t, tserver)["port"]; got != "tserver" {
-		t.Fatalf("tserver port label = %q, want tserver", got)
-	}
-	if got := tserver["max_scrape_size"]; got != 64*1024*1024 {
-		t.Fatalf("tserver max_scrape_size = %v, want %d", got, 64*1024*1024)
+	for _, target := range targets {
+		if target["job_name"] == "yugabyte-tserver" {
+			t.Fatalf("yugabyte-tserver scrape should not be emitted by default: %#v", target)
+		}
 	}
 }
 

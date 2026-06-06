@@ -12,7 +12,7 @@ func TestRedisSentinelConfigIsRuntimeWritable(t *testing.T) {
 
 	for _, want := range []string{
 		"redis_data_dir ~ '/sentinel.conf' if redis_role == 'sentinel'",
-		`owner: "{{ redis_runtime_user if redis_role == 'sentinel' else 'root' }}"`,
+		`owner: "{{ omit if ansible_check_mode else (redis_runtime_user if redis_role == 'sentinel' else 'root') }}"`,
 		`test -w "{{ redis_config_path }}"`,
 	} {
 		if !strings.Contains(vars+install, want) {

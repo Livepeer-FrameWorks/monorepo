@@ -28,7 +28,7 @@ func privateerRoleVars(ctx context.Context, host inventory.Host, config ServiceC
 	vars := map[string]any{
 		"privateer_artifact_url":      art.URL,
 		"privateer_artifact_checksum": art.Checksum,
-		"privateer_version":           firstNonEmpty(config.Version, art.Version),
+		"privateer_version":           firstNonEmpty(art.Version, config.Version),
 	}
 	if p := config.Port; p > 0 {
 		vars["privateer_port"] = p

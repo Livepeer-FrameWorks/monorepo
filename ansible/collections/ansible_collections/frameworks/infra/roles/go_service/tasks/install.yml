@@ -193,8 +193,19 @@
   ansible.builtin.set_fact:
     go_service_reinstall_required: >-
       {{
-        not (go_service_bin_stat.stat.exists | default(false)) or
-        not (go_service_install_sentinel_stat.stat.exists | default(false))
+        not (go_service_bin_stat.stat.exists | default(false))
+        or (
+          not (go_service_install_sentinel_stat.stat.exists | default(false))
+          and (
+            (go_service_version | default('') | length == 0)
+            or (go_service_installed_version.stdout | default('')) != go_service_version
+          )
+        )
+        or (
+          (go_service_version | default('') | length > 0)
+          and (go_service_installed_version.stdout | default('') | length > 0)
+          and (go_service_installed_version.stdout | default('')) != go_service_version
+        )
       }}
 
 - name: Report pending reinstall under --check

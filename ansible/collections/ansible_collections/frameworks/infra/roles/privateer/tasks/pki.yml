@@ -42,6 +42,29 @@
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0
 
+- name: Privateer | stat internal CA trust bundle for check mode
+  ansible.builtin.stat:
+    path: "{{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}"
+  register: privateer_internal_ca_bundle_stat
+  check_mode: false
+  changed_when: false
+  when: privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | report pending internal CA trust bundle update under --check
+  ansible.builtin.debug:
+    msg: >-
+      privateer would update internal CA trust bundle at
+      {{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}
+  changed_when: >-
+    not (privateer_internal_ca_bundle_stat.stat.exists | default(false))
+    or (
+      privateer_internal_ca_bundle_stat.stat.checksum | default('')
+      != (privateer_internal_ca_bundle_pem | hash('sha1'))
+    )
+  when:
+    - ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
 - name: Privateer | ensure runtime service certificate directory
   ansible.builtin.file:
     path: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"

@@ -1,4 +1,22 @@
 ---
+- name: Stop and disable retired wg-quick mesh unit
+  ansible.builtin.systemd:
+    name: wg-quick@wg0
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Reset retired wg-quick failure state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - reset-failed
+      - wg-quick@wg0.service
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
 - name: Ensure privateer is enabled and running
   ansible.builtin.systemd:
     name: frameworks-privateer

@@ -10,6 +10,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
 )
 
 // RoleVarsBuilder maps a service's manifest entry into the variable bag a
@@ -275,6 +276,28 @@ func (r *RolePlaybookProvisioner) CheckDiff(ctx context.Context, host inventory.
 	})
 }
 
+// WouldChange runs selected tags in Ansible check mode and parses the recap.
+// A false result means the role reported changed=0 and the live step can be
+// skipped without suppressing required restarts or init changes.
+func (r *RolePlaybookProvisioner) WouldChange(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (bool, error) {
+	if len(tags) == 0 {
+		tags = []string{"install", "configure", "service"}
+	}
+	recap := &ansiblerun.RecapOutputer{}
+	if err := r.runWithOptions(ctx, host, config, roleRunOptions{
+		Tags:     tags,
+		Check:    true,
+		Diff:     false,
+		Outputer: recap,
+	}); err != nil {
+		return true, err
+	}
+	if !recap.HasRecap() {
+		return true, fmt.Errorf("%s: ansible check emitted no PLAY RECAP", r.RoleName)
+	}
+	return recap.Changed(), nil
+}
+
 // Restart runs the role's restart tag, which knows the correct unit or
 // compose names for the managed service(s). Used by `cluster restart` so
 // operators don't have to guess frameworks-<service> vs postgresql vs
@@ -284,9 +307,10 @@ func (r *RolePlaybookProvisioner) Restart(ctx context.Context, host inventory.Ho
 }
 
 type roleRunOptions struct {
-	Tags  []string
-	Check bool
-	Diff  bool
+	Tags     []string
+	Check    bool
+	Diff     bool
+	Outputer goansible_result.ResultsOutputer
 }
 
 func (r *RolePlaybookProvisioner) runWithTags(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) error {
@@ -362,6 +386,7 @@ func (r *RolePlaybookProvisioner) runWithOptions(ctx context.Context, host inven
 		Become:     true,
 		WorkDir:    r.AnsibleRoot,
 		EnvVars:    envVars,
+		Outputer:   opts.Outputer,
 	})
 }
 

@@ -19,6 +19,29 @@
     - not ansible_check_mode
     - go_service_internal_ca_bundle_pem | length > 0
 
+- name: Stat internal CA trust bundle for check mode
+  ansible.builtin.stat:
+    path: "{{ go_service_env.GRPC_TLS_CA_PATH | default(go_service_internal_ca_default_path) }}"
+  register: go_service_internal_ca_bundle_stat
+  check_mode: false
+  changed_when: false
+  when: go_service_internal_ca_bundle_pem | length > 0
+
+- name: Report pending internal CA trust bundle update under --check
+  ansible.builtin.debug:
+    msg: >-
+      {{ go_service_name }} would update internal CA trust bundle at
+      {{ go_service_env.GRPC_TLS_CA_PATH | default(go_service_internal_ca_default_path) }}
+  changed_when: >-
+    not (go_service_internal_ca_bundle_stat.stat.exists | default(false))
+    or (
+      go_service_internal_ca_bundle_stat.stat.checksum | default('')
+      != (go_service_internal_ca_bundle_pem | hash('sha1'))
+    )
+  when:
+    - ansible_check_mode
+    - go_service_internal_ca_bundle_pem | length > 0
+
 - name: Set internal gRPC certificate paths
   ansible.builtin.set_fact:
     go_service_internal_tls_cert_path: "{{ go_service_env.GRPC_TLS_CERT_PATH | default(go_service_internal_tls_cert_default_path) }}"
@@ -48,7 +71,6 @@
     path: "{{ go_service_internal_tls_cert_path }}"
   register: go_service_internal_tls_bootstrap_cert_stat
   when:
-    - not ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
 
@@ -57,7 +79,6 @@
     path: "{{ go_service_internal_tls_key_path }}"
   register: go_service_internal_tls_bootstrap_key_stat
   when:
-    - not ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
 
@@ -77,9 +98,9 @@
     executable: /bin/bash
   changed_when: false
   failed_when: false
+  check_mode: false
   register: go_service_internal_tls_existing_pair_check
   when:
-    - not ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
     - go_service_internal_tls_bootstrap_cert_stat.stat.exists | default(false)
@@ -113,6 +134,17 @@
         )
       }}
   when:
+    - go_service_internal_tls_cert_pem | length > 0
+    - go_service_internal_tls_key_pem | length > 0
+
+- name: Report pending bootstrap internal gRPC certificate pair under --check
+  ansible.builtin.debug:
+    msg: >-
+      {{ go_service_name }} would update bootstrap internal gRPC certificate
+      pair at {{ go_service_internal_tls_cert_path }} and {{ go_service_internal_tls_key_path }}
+  changed_when: go_service_internal_tls_render_bootstrap | default(false)
+  when:
+    - ansible_check_mode
     - go_service_internal_tls_cert_pem | length > 0
     - go_service_internal_tls_key_pem | length > 0
 

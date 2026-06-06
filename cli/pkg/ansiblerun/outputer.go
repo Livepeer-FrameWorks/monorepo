@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"strconv"
+	"strings"
 
 	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
 )
@@ -56,4 +58,96 @@ func (o *LineOutputer) Print(ctx context.Context, reader io.Reader, _ io.Writer,
 		}
 	}
 	return scanner.Err()
+}
+
+// RecapHost is the parsed PLAY RECAP summary for one Ansible host.
+type RecapHost struct {
+	Changed int
+}
+
+// RecapOutputer captures Ansible output and parses PLAY RECAP changed counts.
+// When W is nil it is silent, which is useful for live provision prechecks
+// that only need the yes/no change decision.
+type RecapOutputer struct {
+	W      io.Writer
+	Prefix string
+	Hosts  map[string]RecapHost
+}
+
+func (o *RecapOutputer) Print(ctx context.Context, reader io.Reader, _ io.Writer, _ ...goansible_result.OptionsFunc) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		line := scanner.Text()
+		if host, recap, ok := parseRecapLine(line); ok {
+			if o.Hosts == nil {
+				o.Hosts = map[string]RecapHost{}
+			}
+			o.Hosts[host] = recap
+		}
+		if o.W != nil {
+			if o.Prefix != "" {
+				if _, err := io.WriteString(o.W, o.Prefix); err != nil {
+					return err
+				}
+			}
+			if _, err := io.WriteString(o.W, line); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(o.W, "\n"); err != nil {
+				return err
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+func (o *RecapOutputer) HasRecap() bool {
+	return o != nil && len(o.Hosts) > 0
+}
+
+func (o *RecapOutputer) Changed() bool {
+	if o == nil {
+		return false
+	}
+	for _, host := range o.Hosts {
+		if host.Changed > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func parseRecapLine(line string) (string, RecapHost, bool) {
+	before, after, ok := strings.Cut(strings.TrimSpace(line), ":")
+	if !ok {
+		return "", RecapHost{}, false
+	}
+	host := strings.TrimSpace(before)
+	if host == "" {
+		return "", RecapHost{}, false
+	}
+	recap := RecapHost{}
+	foundChanged := false
+	for _, field := range strings.Fields(after) {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok || key != "changed" {
+			continue
+		}
+		changed, err := strconv.Atoi(value)
+		if err != nil {
+			return "", RecapHost{}, false
+		}
+		recap.Changed = changed
+		foundChanged = true
+	}
+	if !foundChanged {
+		return "", RecapHost{}, false
+	}
+	return host, recap, true
 }

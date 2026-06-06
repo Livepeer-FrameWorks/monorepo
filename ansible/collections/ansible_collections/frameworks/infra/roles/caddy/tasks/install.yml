@@ -8,7 +8,6 @@
       - curl
     state: present
     update_cache: true
-  when: not ansible_check_mode
 
 - name: Import Caddy apt signing key
   ansible.builtin.get_url:
@@ -24,7 +23,6 @@
     content: |
       deb [signed-by=/etc/apt/keyrings/caddy-stable.asc] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
       deb-src [signed-by=/etc/apt/keyrings/caddy-stable.asc] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
-  when: not ansible_check_mode
 
 - name: Install pinned Caddy
   ansible.builtin.apt:
@@ -33,4 +31,3 @@
     update_cache: true
     allow_downgrades: true
   notify: caddy restart
-  when: not ansible_check_mode

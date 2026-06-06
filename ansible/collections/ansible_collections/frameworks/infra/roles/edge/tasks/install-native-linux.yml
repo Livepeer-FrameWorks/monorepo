@@ -10,7 +10,7 @@
     mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
     mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
     mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
 
 - name: Ensure edge durable storage directory
   ansible.builtin.file:
@@ -31,7 +31,7 @@
     mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
     mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
     mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
 
 - name: Flush mistserver handlers before service
   ansible.builtin.meta: flush_handlers
@@ -47,7 +47,7 @@
     mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
     mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
     mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
 
 - name: Flush mistserver handlers before validate
   ansible.builtin.meta: flush_handlers
@@ -63,7 +63,7 @@
     mistserver_debug_artifact_url: "{{ edge_mistserver_debug_artifact_url }}"
     mistserver_debug_artifact_checksum: "{{ edge_mistserver_debug_artifact_checksum }}"
     mistserver_install_debug_symbols: "{{ edge_mistserver_install_debug_symbols }}"
-    mistserver_api_password: "{{ edge_mist_api_password }}"
+    mistserver_api_password: "{{ edge_effective_mist_api_password }}"
 
 - name: Apply caddy bootstrap
   ansible.builtin.import_tasks: install-native-linux-caddy.yml
@@ -84,7 +84,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -117,7 +117,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -153,7 +153,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
@@ -189,7 +189,7 @@
     helmsman_mist_api_upstream: "localhost:4242"
     helmsman_mist_http_upstream: "localhost:8080"
     helmsman_webhook_upstream: "localhost:18007"
-    helmsman_mist_api_password: "{{ edge_mist_api_password }}"
+    helmsman_mist_api_password: "{{ edge_effective_mist_api_password }}"
     helmsman_grpc_tls_ca_path: "{{ edge_ca_path if edge_grpc_ca_bundle_stat.stat.exists | default(false) else '' }}"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"

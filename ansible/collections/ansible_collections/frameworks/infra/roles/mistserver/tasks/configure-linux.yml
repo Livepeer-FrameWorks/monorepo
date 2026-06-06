@@ -9,7 +9,7 @@
         import os
         import sys
 
-        path, interface, port_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+        path, interface, port_raw, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
         wanted = {"interface": interface, "port": int(port_raw)}
         data = {}
         if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -18,6 +18,9 @@
         config = data.setdefault("config", {})
         if config.get("controller") == wanted:
             print("unchanged")
+            sys.exit(0)
+        if mode == "check":
+            print("changed")
             sys.exit(0)
         config["controller"] = wanted
         tmp_path = path + ".tmp"
@@ -29,6 +32,7 @@
       - "{{ mistserver_config_file }}"
       - "{{ mistserver_controller_interface }}"
       - "{{ mistserver_controller_port | string }}"
+      - "{{ 'check' if ansible_check_mode else 'apply' }}"
   register: mistserver_controller_config
   changed_when: mistserver_controller_config.stdout == "changed"
   notify: mistserver restart

@@ -19,3 +19,44 @@
   when:
     - not ansible_check_mode
     - ansible_facts.os_family == 'Darwin'
+
+- name: Check mistserver active before reload
+  listen: mistserver reload
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - --quiet
+      - "{{ mistserver_systemd_name }}"
+  register: mistserver_reload_active
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
+
+- name: Reload mistserver
+  listen: mistserver reload
+  ansible.builtin.systemd:
+    name: "{{ mistserver_systemd_name }}"
+    state: reloaded
+  register: mistserver_reloaded
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
+    - mistserver_reload_active.rc | default(1) == 0
+
+- name: Reload mistserver (darwin)
+  listen: mistserver reload
+  ansible.builtin.command:
+    argv:
+      - pkill
+      - -USR1
+      - -f
+      - MistController
+  register: mistserver_reloaded
+  changed_when: mistserver_reloaded.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == 'Darwin'

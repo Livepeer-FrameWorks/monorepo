@@ -128,6 +128,13 @@ type CheckDiffer interface {
 	CheckDiff(ctx context.Context, host inventory.Host, config ServiceConfig) error
 }
 
+// ChangePlanner is the live-provision preflight capability. It runs the
+// selected role tags in check mode and returns true only when Ansible reports
+// that managed state would change.
+type ChangePlanner interface {
+	WouldChange(ctx context.Context, host inventory.Host, config ServiceConfig, tags []string) (bool, error)
+}
+
 // Restarter is the optional capability a Provisioner implements when it can
 // cleanly restart its managed service(s) via Ansible. cluster restart
 // type-asserts to this so services with non-standard unit names

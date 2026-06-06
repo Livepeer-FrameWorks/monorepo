@@ -1941,7 +1941,7 @@ func newEdgeUpdateCmd() *cobra.Command {
 	var dir string
 	var sshTarget string
 	var sshKey string
-	cmd := &cobra.Command{Use: "update", Short: "Pull and restart edge services", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "update", Short: "Refresh edge services", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
 		}
@@ -1956,12 +1956,7 @@ func newEdgeUpdateCmd() *cobra.Command {
 
 		if deployMode == "native" {
 			edgeOS := detectEdgeOS(cmd.Context(), sshTarget, sshKey)
-			var restartCmd string
-			if edgeOS == "darwin" {
-				restartCmd = "launchctl kickstart -k system/com.livepeer.frameworks.mistserver && launchctl kickstart -k system/com.livepeer.frameworks.helmsman && launchctl kickstart -k system/com.livepeer.frameworks.caddy"
-			} else {
-				restartCmd = "systemctl restart frameworks-mistserver frameworks-helmsman frameworks-caddy"
-			}
+			restartCmd := nativeEdgeRefreshCommand(edgeOS)
 			if strings.TrimSpace(sshTarget) != "" {
 				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
 					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("restart: %w", err), "check service state with 'frameworks edge status' and unit/compose file permissions", out, errOut)
@@ -1971,26 +1966,27 @@ func newEdgeUpdateCmd() *cobra.Command {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("restart: %w", err), "check service state with 'frameworks edge status' and unit/compose file permissions", out, errOut)
 				return err
 			}
-			ux.Success(out, "Edge services restarted (native)")
+			ux.Success(out, "Edge services refreshed (native)")
 		} else {
 			compose := "docker-compose.edge.yml"
+			steps := dockerEdgeUpdateSteps(compose, envFile)
 			// pull
 			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", steps[0], dir); err != nil {
 					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
 					return err
 				}
-			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", steps[0], dir); err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in docker-compose.edge.yml are valid", out, errOut)
 				return err
 			}
 			// up -d
 			if strings.TrimSpace(sshTarget) != "" {
-				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+				if _, out, errOut, err := xexec.RunSSHWithKey(cmd.Context(), sshTarget, sshKey, "docker", steps[1], dir); err != nil {
 					ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
 					return err
 				}
-			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+			} else if _, out, errOut, err := xexec.Run(cmd.Context(), "docker", steps[1], dir); err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose up: %w", err), "docker daemon rejected the stack — inspect the output for a specific service error", out, errOut)
 				return err
 			}
@@ -2002,6 +1998,20 @@ func newEdgeUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
+}
+
+func nativeEdgeRefreshCommand(edgeOS string) string {
+	if edgeOS == "darwin" {
+		return "launchctl kill USR1 system/com.livepeer.frameworks.mistserver || pkill -USR1 -f MistController; launchctl kickstart -k system/com.livepeer.frameworks.helmsman; launchctl kickstart -k system/com.livepeer.frameworks.caddy"
+	}
+	return "systemctl is-active --quiet frameworks-mistserver && systemctl reload frameworks-mistserver || systemctl start frameworks-mistserver; systemctl try-restart frameworks-helmsman; systemctl reload-or-restart frameworks-caddy"
+}
+
+func dockerEdgeUpdateSteps(compose, envFile string) [][]string {
+	return [][]string{
+		{"compose", "-f", compose, "--env-file", envFile, "pull"},
+		{"compose", "-f", compose, "--env-file", envFile, "up", "-d"},
+	}
 }
 
 func newEdgeCertCmd() *cobra.Command {

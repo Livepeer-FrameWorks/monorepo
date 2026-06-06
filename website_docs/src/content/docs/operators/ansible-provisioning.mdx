@@ -101,6 +101,11 @@ entirely.
 Edge-node provisioning (`edge provision`, `edge deploy`) runs through the
 `frameworks.infra.edge` meta-role, which composes `frameworks.infra.mistserver`,
 `frameworks.infra.helmsman`, and an edge-shaped Caddy install (plus an optional
-vmagent) in docker, Linux systemd, or macOS launchd mode. Preflight probes and
-post-apply HTTPS verification stay in Go so operators see fast-fail messages
-inline with the role output.
+vmagent) in Linux systemd, macOS launchd, or docker mode. Use native mode for
+production edge nodes: Foghorn's edge release reconciler can roll native
+Helmsman, MistServer, and Caddy components over the existing Helmsman stream,
+including MistServer in-place reloads. Docker mode remains available for local
+or constrained deployments, but Docker edge nodes are not auto-updated by the
+release reconciler yet; update them manually with `frameworks edge update` or a
+compose pull/up workflow. Preflight probes and post-apply HTTPS verification
+stay in Go so operators see fast-fail messages inline with the role output.

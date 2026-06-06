@@ -100,7 +100,6 @@
     owner: root
     group: root
     mode: "0755"
-  when: not ansible_check_mode
 
 - name: Render Nginx systemd limits override
   ansible.builtin.template:
@@ -110,7 +109,6 @@
     group: root
     mode: "0644"
   register: nginx_systemd_override_render
-  when: not ansible_check_mode
 
 - name: Reload systemd after Nginx override change
   ansible.builtin.systemd:

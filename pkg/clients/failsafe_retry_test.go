@@ -127,3 +127,43 @@ func TestIsCircuitBreakerFailure_Boundaries(t *testing.T) {
 		})
 	}
 }
+
+//nolint:bodyclose // test responses have no body
+func TestDefaultShouldRetry(t *testing.T) {
+	// Intent: the default retry classifier treats transport failures (non-nil
+	// err) and a nil response as retryable, retries the transient-server status
+	// set {500,502,503,504,429}, and refuses to retry any other status — notably
+	// 4xx client errors and 501, which won't improve on retry.
+	if !DefaultShouldRetry(nil, errors.New("dial timeout")) {
+		t.Fatal("transport error must be retryable")
+	}
+	if !DefaultShouldRetry(nil, nil) {
+		t.Fatal("nil response must be retryable")
+	}
+
+	retryable := []int{
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+		http.StatusTooManyRequests,
+	}
+	for _, code := range retryable {
+		if !DefaultShouldRetry(&http.Response{StatusCode: code}, nil) {
+			t.Fatalf("status %d must be retryable", code)
+		}
+	}
+
+	notRetryable := []int{
+		http.StatusOK,
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusNotFound,
+		http.StatusNotImplemented,
+	}
+	for _, code := range notRetryable {
+		if DefaultShouldRetry(&http.Response{StatusCode: code}, nil) {
+			t.Fatalf("status %d must not be retryable", code)
+		}
+	}
+}

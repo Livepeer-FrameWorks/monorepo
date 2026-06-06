@@ -80,7 +80,6 @@
     mode: "0600"
   no_log: true
   notify: privateer restart
-  when: not ansible_check_mode
 
 - name: Render systemd unit
   ansible.builtin.template:

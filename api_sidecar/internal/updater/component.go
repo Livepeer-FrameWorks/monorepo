@@ -5,9 +5,11 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -72,9 +74,9 @@ func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 	var restartSelf bool
 	switch name {
 	case "helmsman":
-		restartSelf, err = applyHelmsman(artifact)
+		restartSelf, err = applyHelmsman(artifact, component)
 	case "mist":
-		err = applyMistServer(ctx, artifact)
+		err = applyMistServer(ctx, artifact, component)
 	case "caddy":
 		err = applyCaddy(ctx, artifact)
 	default:
@@ -273,7 +275,7 @@ func validateChecksumDigest(expected string, hexLen int) error {
 	return nil
 }
 
-func applyHelmsman(artifact string) (bool, error) {
+func applyHelmsman(artifact string, component *ipcpb.DesiredComponent) (bool, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return false, err
@@ -286,10 +288,13 @@ func applyHelmsman(artifact string) (bool, error) {
 	if err := installFile(binary, exe, 0o755); err != nil {
 		return false, err
 	}
+	if err := writeComponentInstallSentinel(filepath.Dir(exe), component); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
-func applyMistServer(ctx context.Context, artifact string) error {
+func applyMistServer(ctx context.Context, artifact string, component *ipcpb.DesiredComponent) error {
 	root := componentInstallDir("mistserver")
 	staging, err := extractArtifactSibling(root, artifact)
 	if err != nil {
@@ -304,9 +309,71 @@ func applyMistServer(ctx context.Context, artifact string) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(replacement.src) }()
+	if err := writeMistManagedMetadata(replacement.src, component); err != nil {
+		return err
+	}
 	return replaceDirsAtomically([]dirReplacement{replacement}, func() error {
 		return signalMistController(ctx)
 	})
+}
+
+func writeMistManagedMetadata(root string, component *ipcpb.DesiredComponent) error {
+	if err := writeComponentInstallSentinel(root, component); err != nil {
+		return err
+	}
+	manifest := struct {
+		Component        string `json:"component"`
+		Version          string `json:"version"`
+		ArtifactURL      string `json:"artifact_url"`
+		ArtifactChecksum string `json:"artifact_checksum"`
+		InstallDir       string `json:"install_dir"`
+		ControllerBinary string `json:"controller_binary"`
+	}{
+		Component:        "mistserver",
+		Version:          strings.TrimSpace(component.GetVersion()),
+		ArtifactURL:      strings.TrimSpace(component.GetArtifactUrl()),
+		ArtifactChecksum: strings.TrimSpace(component.GetChecksum()),
+		InstallDir:       root,
+		ControllerBinary: filepath.Join(root, "bin", "MistController"),
+	}
+	payload, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	path := filepath.Join(root, "manifest.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func writeComponentInstallSentinel(root string, component *ipcpb.DesiredComponent) error {
+	if component == nil {
+		return nil
+	}
+	identity := strings.TrimSpace(component.GetChecksum())
+	if identity == "" {
+		identity = strings.TrimSpace(component.GetArtifactUrl())
+	}
+	if identity == "" {
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	path := componentInstallSentinelPath(root, identity)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func componentInstallSentinelPath(root, identity string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(identity)))
+	return filepath.Join(root, ".installed-"+hex.EncodeToString(sum[:]))
 }
 
 func mistPayloadReplacement(staging, root string) (dirReplacement, error) {

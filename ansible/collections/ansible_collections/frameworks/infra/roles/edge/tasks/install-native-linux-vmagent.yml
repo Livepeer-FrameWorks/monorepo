@@ -87,7 +87,7 @@
       Group=frameworks
       WorkingDirectory=/opt/frameworks/vmagent-edge
       ExecStart=/opt/frameworks/vmagent-edge/vmagent \
-        -httpListenAddr=:8430 \
+        -httpListenAddr=:8429 \
         -promscrape.config=/etc/frameworks/vmagent-edge.yml \
         -remoteWrite.url={{ edge_telemetry_url }}{{ edge_vmagent_bearer_token_arg }}
       Restart=always
