@@ -163,6 +163,21 @@ func TestAllLivepeerProfilesFromProcessesJSON_FailClosedVsLegitimatelyEmpty(t *t
 	}
 }
 
+func TestNormalizeLivepeerProfilesPreservesRequestedHeight(t *testing.T) {
+	got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{
+		{"name": "360p", "height": 360, "fps": 0, "profile": "H264ConstrainedHigh"},
+	}, SourceMediaInfo{Width: 2720, Height: 1750, FPS: 24})
+	if len(got) != 1 {
+		t.Fatalf("expected one profile, got %#v", got)
+	}
+	if got[0]["height"] != 360 {
+		t.Fatalf("height = %#v, want 360", got[0]["height"])
+	}
+	if got[0]["width"] != 560 {
+		t.Fatalf("width = %#v, want 560", got[0]["width"])
+	}
+}
+
 func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	input := `[
 		{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"},

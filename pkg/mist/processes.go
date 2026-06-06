@@ -36,8 +36,8 @@ const LivepeerVODSegmentDeadlineMs = 30000
 // LIVEPEER_VOD_MIN_SPEED (see triggers.livepeerVODMinSpeed).
 const LivepeerVODMinSpeed = 0.5
 
-// SourceMediaInfo is the source video track metadata MistServer uses when it
-// expands Livepeer target_profiles before sending them to go-livepeer.
+// SourceMediaInfo is the source video track metadata used to complete
+// height-only or width-only Livepeer target_profiles.
 type SourceMediaInfo struct {
 	Width  int
 	Height int
@@ -352,7 +352,7 @@ func AllLivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMed
 	return out, nil
 }
 
-// NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles mutation
+// NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles defaults
 // before it sets the Livepeer-Transcode-Configuration header.
 func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMediaInfo) []LivepeerJSONProfile {
 	if len(profiles) == 0 {
@@ -385,15 +385,13 @@ func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMedi
 			case !hasWidth || width == 0:
 				if source.Width < source.Height {
 					width = height
-					height = source.Height * width / source.Width
+					height = evenScaledDimension(source.Height, width, source.Width)
 				} else {
-					width = source.Width * height / source.Height
+					width = evenScaledDimension(source.Width, height, source.Height)
 				}
 			case !hasHeight || height == 0:
-				height = source.Height * width / source.Width
+				height = evenScaledDimension(source.Height, width, source.Width)
 			}
-			width = (width / 16) * 16
-			height = (height / 16) * 16
 			if width > 0 {
 				p["width"] = width
 			}
@@ -411,6 +409,17 @@ func NormalizeLivepeerProfiles(profiles []LivepeerJSONProfile, source SourceMedi
 		return nil
 	}
 	return out
+}
+
+func evenScaledDimension(numerator, requested, denominator int) int {
+	if denominator <= 0 || requested <= 0 {
+		return 0
+	}
+	value := int(math.Round(float64(numerator) * float64(requested) / float64(denominator)))
+	if value%2 != 0 {
+		value++
+	}
+	return value
 }
 
 // ValidateProcessConfigShape checks that explicit MistServer process configs use
