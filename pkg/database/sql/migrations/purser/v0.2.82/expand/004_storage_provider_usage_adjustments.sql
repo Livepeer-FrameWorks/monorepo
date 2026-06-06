@@ -73,8 +73,12 @@ CREATE TABLE IF NOT EXISTS purser.usage_adjustments (
 );
 
 ALTER TABLE purser.usage_adjustments
+    DROP CONSTRAINT IF EXISTS chk_usage_adjustments_status;
+ALTER TABLE purser.usage_adjustments
     ADD CONSTRAINT chk_usage_adjustments_status
     CHECK (status IN ('applied', 'ignored', 'pending')) NOT VALID;
+ALTER TABLE purser.usage_adjustments
+    DROP CONSTRAINT IF EXISTS chk_usage_adjustments_value_kind;
 ALTER TABLE purser.usage_adjustments
     ADD CONSTRAINT chk_usage_adjustments_value_kind
     CHECK (value_kind = 'correction_delta') NOT VALID;
