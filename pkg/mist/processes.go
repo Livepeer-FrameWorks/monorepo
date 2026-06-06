@@ -309,22 +309,28 @@ func LivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaI
 	return nil
 }
 
-// AllLivepeerProfilesFromProcessesJSON aggregates the normalized target_profiles
-// across EVERY Livepeer process in the config. Completeness validation must see
-// the full requested rendition set, so a config with more than one Livepeer
-// process can't pass by checking only the first.
+// RequestedRenditionHeights returns the requested rendition-ladder heights across
+// EVERY Livepeer process in the config as the validation intent, deliberately
+// decoupled from the concrete pixel dimensions MistProcLivepeer/MistProcAV
+// resolve. The raw requested height is returned verbatim (a profile asking for
+// height 360 yields 360, never a normalized/even-rounded derivative), so
+// completeness validation can never drift as Mist's aspect math evolves. A
+// width-only profile derives its height from the source aspect; a profile with
+// neither dimension is the source passthrough height. Resolution-bound
+// video=<WxH inhibitors are evaluated at the process and profile level; other
+// selector forms are not evaluated by this validation helper.
 //
 // It returns an error on a MALFORMED config (unparseable JSON, or a Livepeer
 // process with a present-but-invalid target_profiles block) so the caller can
 // fail closed, rather than silently treating it as "no renditions requested".
 // An empty result with a nil error means there is legitimately nothing to
 // produce (no Livepeer process, or every profile inhibited by source dims).
-func AllLivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMediaInfo) ([]LivepeerJSONProfile, error) {
+func RequestedRenditionHeights(processesJSON string, source SourceMediaInfo) ([]int, error) {
 	var processes []map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
 		return nil, fmt.Errorf("parse process config: %w", err)
 	}
-	var out []LivepeerJSONProfile
+	var out []int
 	for _, proc := range processes {
 		var processName string
 		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
@@ -347,9 +353,35 @@ func AllLivepeerProfilesFromProcessesJSON(processesJSON string, source SourceMed
 			// a non-empty set that all gets inhibited by source dims below.
 			return nil, fmt.Errorf("empty target_profiles on Livepeer process")
 		}
-		out = append(out, NormalizeLivepeerProfiles(profiles, source)...)
+		if processTrackInhibited(proc, source) {
+			continue
+		}
+		for _, p := range profiles {
+			if shouldInhibitLivepeerProfile(p, source) {
+				continue
+			}
+			out = append(out, requestedRenditionHeight(p, source))
+		}
 	}
 	return out, nil
+}
+
+// requestedRenditionHeight resolves one profile's ladder-intent height: the raw
+// requested height when set, else derived from a width-only request via the
+// source aspect, else the source passthrough height. Returns 0 when it cannot be
+// determined (width-only with unknown source dims), which the validator treats as
+// fail-closed.
+func requestedRenditionHeight(p LivepeerJSONProfile, source SourceMediaInfo) int {
+	if height, ok := livepeerProfileInt(p, "height"); ok && height > 0 {
+		return height
+	}
+	if width, ok := livepeerProfileInt(p, "width"); ok && width > 0 {
+		if source.Width > 0 && source.Height > 0 {
+			return evenScaledDimension(source.Height, width, source.Width)
+		}
+		return 0
+	}
+	return source.Height
 }
 
 // NormalizeLivepeerProfiles mirrors MistProcLivepeer's target_profiles defaults
@@ -571,12 +603,27 @@ func livepeerProfileFloat(profile LivepeerJSONProfile, key string) (float64, boo
 	}
 }
 
+func processTrackInhibited(proc map[string]json.RawMessage, source SourceMediaInfo) bool {
+	var raw string
+	if err := json.Unmarshal(proc["track_inhibit"], &raw); err != nil {
+		return false
+	}
+	return shouldInhibitLivepeerSelector(raw, source)
+}
+
 func shouldInhibitLivepeerProfile(profile LivepeerJSONProfile, source SourceMediaInfo) bool {
+	raw, ok := profile["track_inhibit"].(string)
+	if !ok {
+		return false
+	}
+	return shouldInhibitLivepeerSelector(raw, source)
+}
+
+func shouldInhibitLivepeerSelector(raw string, source SourceMediaInfo) bool {
 	if source.Width <= 0 || source.Height <= 0 {
 		return false
 	}
-	raw, ok := profile["track_inhibit"].(string)
-	if !ok || !strings.HasPrefix(raw, "video=<") {
+	if !strings.HasPrefix(raw, "video=<") {
 		return false
 	}
 	dims := strings.TrimPrefix(raw, "video=<")

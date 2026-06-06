@@ -129,24 +129,40 @@ func TestSetLivepeerBroadcastersEmptyFallsBackToLocalAV(t *testing.T) {
 	}
 }
 
-func TestAllLivepeerProfilesFromProcessesJSON_FailClosedVsLegitimatelyEmpty(t *testing.T) {
+func TestRequestedRenditionHeights_FailClosedVsLegitimatelyEmpty(t *testing.T) {
 	src := SourceMediaInfo{Width: 1280, Height: 720, FPS: 30}
 
-	// Valid: two renditions, no error.
-	profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360},{"name":"720p","height":720}]}]`, src)
-	if err != nil || len(profs) != 2 {
-		t.Fatalf("valid config: got %d profiles, err %v; want 2, nil", len(profs), err)
+	// Valid: two renditions, raw heights returned verbatim, no error.
+	heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360},{"name":"720p","height":720}]}]`, src)
+	if err != nil || len(heights) != 2 || heights[0] != 360 || heights[1] != 720 {
+		t.Fatalf("valid config: got %v, err %v; want [360 720], nil", heights, err)
+	}
+
+	// Raw height is the contract even when source aspect math would round the
+	// concrete width: a 360 request off a 2720x1750 source stays 360.
+	odd := SourceMediaInfo{Width: 2720, Height: 1750, FPS: 24}
+	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`, odd); err != nil || len(heights) != 1 || heights[0] != 360 {
+		t.Fatalf("raw-height intent: got %v, err %v; want [360], nil", heights, err)
+	}
+
+	// Width-only profile derives its height from the source aspect (Mist owns width;
+	// validation still needs a height target). 640 wide off 1280x720 => 360 high.
+	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"w640","width":640}]}]`, src); err != nil || len(heights) != 1 || heights[0] != 360 {
+		t.Fatalf("width-only derive: got %v, err %v; want [360], nil", heights, err)
 	}
 
 	// No Livepeer process: empty + nil (legitimately nothing to prove).
-	if profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"AV","codec":"AAC"}]`, src); err != nil || len(profs) != 0 {
-		t.Fatalf("no-Livepeer: got %d profiles, err %v; want 0, nil", len(profs), err)
+	if heights, err := RequestedRenditionHeights(`[{"process":"AV","codec":"AAC"}]`, src); err != nil || len(heights) != 0 {
+		t.Fatalf("no-Livepeer: got %v, err %v; want [], nil", heights, err)
 	}
 
 	// Livepeer present but every profile inhibited by a small source: empty + nil.
 	small := SourceMediaInfo{Width: 320, Height: 240}
-	if profs, err := AllLivepeerProfilesFromProcessesJSON(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"track_inhibit":"video=<640x360"}]}]`, small); err != nil || len(profs) != 0 {
-		t.Fatalf("all-inhibited: got %d profiles, err %v; want 0, nil", len(profs), err)
+	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"track_inhibit":"video=<640x360"}]}]`, small); err != nil || len(heights) != 0 {
+		t.Fatalf("all-inhibited: got %v, err %v; want [], nil", heights, err)
+	}
+	if heights, err := RequestedRenditionHeights(`[{"process":"Livepeer","track_inhibit":"video=<640x360","target_profiles":[{"name":"360p","height":360}]}]`, small); err != nil || len(heights) != 0 {
+		t.Fatalf("process-inhibited: got %v, err %v; want [], nil", heights, err)
 	}
 
 	// Fail-closed cases: a Livepeer process we cannot turn into a known rendition
@@ -157,7 +173,7 @@ func TestAllLivepeerProfilesFromProcessesJSON_FailClosedVsLegitimatelyEmpty(t *t
 		"malformed target_profiles": `[{"process":"Livepeer","target_profiles":"notarray"}]`,
 		"malformed config json":     `{not json`,
 	} {
-		if _, err := AllLivepeerProfilesFromProcessesJSON(cfg, src); err == nil {
+		if _, err := RequestedRenditionHeights(cfg, src); err == nil {
 			t.Fatalf("%s: expected error (fail closed), got nil", name)
 		}
 	}

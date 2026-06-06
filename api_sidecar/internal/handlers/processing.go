@@ -1132,24 +1132,6 @@ func videoTrackHeights(tracks []processingMetaVideoTrack) []int {
 	return heights
 }
 
-// livepeerProfileDim reads an integer dimension (width/height) from a normalized
-// Livepeer profile, tolerating int/float64/json.Number encodings.
-func livepeerProfileDim(prof mist.LivepeerJSONProfile, key string) int {
-	switch v := prof[key].(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			return int(n)
-		}
-	}
-	return 0
-}
-
 // processingMetaVideoTrack is one video track from a Mist stream's JSON
 // metadata, carrying the per-track span (firstms/lastms) MistServer emits in
 // DTSC::Meta::toJSON.
@@ -1184,29 +1166,30 @@ func (t processingMetaVideoTrack) spanMs() float64 { return t.lastms - t.firstms
 // possibly-incomplete Livepeer output. "No renditions requested" returns true
 // because there is nothing to prove.
 func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
-	expected, err := mist.AllLivepeerProfilesFromProcessesJSON(processesJSON, source)
+	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
 	if err != nil {
 		log.WithError(err).Warn("Malformed Livepeer process config; treating renditions as incomplete")
 		return false
 	}
-	if len(expected) == 0 {
+	if len(expectedHeights) == 0 {
 		return true
 	}
-	return renditionsCompleteFromTracks(log, expected, tracks, source, sourceSpanMs)
+	return renditionsCompleteFromTracks(log, expectedHeights, tracks, source, sourceSpanMs)
 }
 
 // renditionsCompleteFromTracks is the pure rendition-completeness decision,
-// split out so it can be unit-tested without a MistServer. Renditions are keyed
-// by height (the dimension a Livepeer profile actually specifies; width follows
-// the source aspect), so the check does not depend on width being derivable.
-// Each requested height must map to a DISTINCT output track (one source-height
-// track excluded) whose span covers the source within maxRenditionSpanShortfallMs.
+// split out so it can be unit-tested without a MistServer. It takes the requested
+// ladder INTENT as raw heights (the dimension a Livepeer profile actually
+// specifies; width follows the source aspect and is Mist's authority), so the
+// check never depends on Mist's normalized pixel math. Each requested height must
+// map to a DISTINCT output track (one source-height track excluded) whose span
+// covers the source within maxRenditionSpanShortfallMs.
 //
 // It fails CLOSED on uncertainty: no tracks, no independent source span, a
-// requested height that cannot be determined, or a missing/short track all
+// requested height that cannot be determined (<= 0), or a missing/short track all
 // return false so the caller runs the local-MistProcAV fallback rather than
 // publishing.
-func renditionsCompleteFromTracks(log *logrus.Entry, expected []mist.LivepeerJSONProfile, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
+func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
 	if len(videoTracks) == 0 {
 		log.Warn("Finished processing stream exposes no video tracks; renditions incomplete")
 		return false
@@ -1270,8 +1253,7 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expected []mist.LivepeerJSO
 	}
 
 	consumed := make([]bool, len(pool))
-	for _, prof := range expected {
-		eh := livepeerProfileDim(prof, "height")
+	for _, eh := range expectedHeights {
 		if eh <= 0 {
 			// A requested rendition whose height cannot be determined cannot be
 			// proven present — fail closed rather than skipping it.

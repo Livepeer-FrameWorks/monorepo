@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -389,10 +388,8 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	entry := logrus.NewEntry(log)
 	source := mist.SourceMediaInfo{Width: 1280, Height: 720}
 	const srcSpan = 9000.0
-	expected := []mist.LivepeerJSONProfile{
-		{"width": 1280, "height": 720},
-		{"width": 640, "height": 360},
-	}
+	// Ladder intent is raw requested heights (see RequestedRenditionHeights).
+	expected := []int{720, 360}
 	track := func(w, h int, span float64) processingMetaVideoTrack {
 		return processingMetaVideoTrack{codec: "H264", width: w, height: h, firstms: 0, lastms: span}
 	}
@@ -438,7 +435,7 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	}
 
 	// A height that cannot be determined for a requested profile fails closed.
-	undetermined := []mist.LivepeerJSONProfile{{"width": 640}} // no height
+	undetermined := []int{0}
 	if renditionsCompleteFromTracks(entry, undetermined, full, source, srcSpan) {
 		t.Fatal("expected an undeterminable requested rendition height to fail closed")
 	}
@@ -466,25 +463,6 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	shortSameHeightFirst := []processingMetaVideoTrack{track(1280, 720, 1700), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
 	if renditionsCompleteFromTracks(entry, expected, shortSameHeightFirst, source, srcSpan) {
 		t.Fatal("expected a truncated same-height rendition listed before the source passthrough to fail")
-	}
-}
-
-func TestLivepeerProfileDimHandlesNumericEncodings(t *testing.T) {
-	cases := []struct {
-		name string
-		prof mist.LivepeerJSONProfile
-		want int
-	}{
-		{"int", mist.LivepeerJSONProfile{"width": 1280}, 1280},
-		{"float64", mist.LivepeerJSONProfile{"width": float64(640)}, 640},
-		{"json.Number", mist.LivepeerJSONProfile{"width": json.Number("854")}, 854},
-		{"missing", mist.LivepeerJSONProfile{}, 0},
-		{"non-numeric", mist.LivepeerJSONProfile{"width": "720"}, 0},
-	}
-	for _, c := range cases {
-		if got := livepeerProfileDim(c.prof, "width"); got != c.want {
-			t.Errorf("%s: livepeerProfileDim = %d, want %d", c.name, got, c.want)
-		}
 	}
 }
 
