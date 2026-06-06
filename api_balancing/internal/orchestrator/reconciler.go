@@ -200,17 +200,40 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 		if !hasComponents {
 			continue
 		}
-		if err := ApplyDirectUpdate(ctx, DirectUpdateRequest{
-			NodeID:        node.NodeID,
-			ClusterID:     target.GetClusterId(),
-			TargetRelease: targetRelease,
-			Components:    direct,
-		}); err != nil {
+		if err := applyReleaseUpdate(ctx, node.NodeID, target.GetClusterId(), targetRelease, direct, plan); err != nil {
 			return err
 		}
 		budget--
 	}
 	return nil
+}
+
+func applyReleaseUpdate(ctx context.Context, nodeID, clusterID, targetRelease string, components []*ipcpb.DesiredComponent, plan rolloutPlan) error {
+	if desiredComponentsIncludeMist(components) {
+		return ApplyMistUpdate(ctx, MistUpdateRequest{
+			NodeID:        nodeID,
+			ClusterID:     clusterID,
+			TargetRelease: targetRelease,
+			Components:    components,
+			DrainDeadline: rolloutDrainDeadlineFromPlan(plan),
+			Force:         plan.Force,
+		})
+	}
+	return ApplyDirectUpdate(ctx, DirectUpdateRequest{
+		NodeID:        nodeID,
+		ClusterID:     clusterID,
+		TargetRelease: targetRelease,
+		Components:    components,
+	})
+}
+
+func desiredComponentsIncludeMist(components []*ipcpb.DesiredComponent) bool {
+	for _, component := range components {
+		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), "mist") {
+			return true
+		}
+	}
+	return false
 }
 
 // buildComponentsForNode resolves release components for a single node into
@@ -243,6 +266,7 @@ func buildComponentsForNode(ctx context.Context, components map[string]releaseCo
 		switch component {
 		case "mist":
 			msg.SwapStrategy = "replace-all-usr1"
+			msg.DrainRequired = true
 		case "helmsman":
 			msg.SwapStrategy = "alongside-then-exec"
 		default:

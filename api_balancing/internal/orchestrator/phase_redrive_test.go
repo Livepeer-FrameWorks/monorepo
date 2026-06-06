@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -40,8 +42,70 @@ func sampleComponents() []*ipcpb.DesiredComponent {
 	}
 }
 
+func sampleHelmsmanComponents() []*ipcpb.DesiredComponent {
+	return []*ipcpb.DesiredComponent{
+		{
+			Component:   "helmsman",
+			Version:     "v0.4.5",
+			ArtifactUrl: "https://example.test/helmsman.tgz",
+			Checksum:    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	}
+}
+
 func loadProgressColumns() []string {
 	return []string{"target_release", "phase", "deadline", "updated_at", "expected_components"}
+}
+
+func TestDesiredComponentsIncludeMist(t *testing.T) {
+	t.Parallel()
+
+	if !desiredComponentsIncludeMist(sampleComponents()) {
+		t.Fatal("expected mist component to require Mist update path")
+	}
+	if desiredComponentsIncludeMist(append(sampleHelmsmanComponents(), nil)) {
+		t.Fatal("non-Mist components should use direct update path")
+	}
+}
+
+func TestApplyReleaseUpdateRoutesMistThroughDrainStateMachine(t *testing.T) {
+	prevDB := control.GetDB()
+	control.SetDB(nil)
+	control.Init(logging.NewLogger(), nil, nil)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() {
+		control.SetDB(prevDB)
+		control.Init(logging.NewLogger(), nil, nil)
+		state.ResetDefaultManagerForTests()
+	})
+
+	err := applyReleaseUpdate(context.Background(), "node-1", "cluster-a", "stable:v1.2.3", sampleComponents(), rolloutPlan{})
+	if !errors.Is(err, control.ErrNotConnected) {
+		t.Fatalf("applyReleaseUpdate error = %v, want ErrNotConnected from control stream push", err)
+	}
+	if got := sm.GetNodeOperationalMode("node-1"); got != state.NodeModeDraining {
+		t.Fatalf("node mode = %q, want draining", got)
+	}
+}
+
+func TestApplyReleaseUpdateKeepsNonMistUpdatesDirect(t *testing.T) {
+	prevDB := control.GetDB()
+	control.SetDB(nil)
+	control.Init(logging.NewLogger(), nil, nil)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() {
+		control.SetDB(prevDB)
+		control.Init(logging.NewLogger(), nil, nil)
+		state.ResetDefaultManagerForTests()
+	})
+
+	err := applyReleaseUpdate(context.Background(), "node-1", "cluster-a", "stable:v0.4.5", sampleHelmsmanComponents(), rolloutPlan{})
+	if !errors.Is(err, control.ErrNotConnected) {
+		t.Fatalf("applyReleaseUpdate error = %v, want ErrNotConnected from control stream push", err)
+	}
+	if got := sm.GetNodeOperationalMode("node-1"); got != state.NodeModeNormal {
+		t.Fatalf("node mode = %q, want normal for direct non-Mist update", got)
+	}
 }
 
 // Regression: ApplyMistUpdate must preserve the `updating_restore` phase when
@@ -157,6 +221,12 @@ func TestBuildComponentsForNodeRedriveIncludesAllArtifacts(t *testing.T) {
 	for _, c := range got {
 		if c.GetArtifactUrl() == "" || c.GetChecksum() == "" {
 			t.Fatalf("component %s missing artifact metadata: %+v", c.GetComponent(), c)
+		}
+		if c.GetComponent() == "mist" && !c.GetDrainRequired() {
+			t.Fatal("mist component must require a drain token")
+		}
+		if c.GetComponent() != "mist" && c.GetDrainRequired() {
+			t.Fatalf("component %s unexpectedly requires a drain token", c.GetComponent())
 		}
 	}
 }
