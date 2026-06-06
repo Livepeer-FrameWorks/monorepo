@@ -1961,7 +1961,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       isLive: this.isEffectivelyLive(),
       playerTimeMs: this.getEffectiveCurrentTime(),
       playerSeekableRange: this.getPlayerSeekableRange() ?? this.getBrowserSeekableRange(),
-      mistSeekableRange: this.getMistTrackSeekRange(),
+      // Prefer the metadata socket's live on_time edge; fall back to the HTTP poll until it arrives
+      mistSeekableRange:
+        this.metaTrackManager?.getServerSeekableRange() ?? this.getMistTrackSeekRange(),
     });
   }
 

@@ -161,6 +161,9 @@ export class MetaTrackManager {
   private isFarAhead = false;
   private farAheadTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Latest absolute stream window (ms) from on_time.data.begin/end; null until first on_time
+  private latestServerRange: { start: number; end: number } | null = null;
+
   constructor(config: MetaTrackManagerConfig) {
     this.config = config;
     this.debug = config.debug ?? false;
@@ -213,24 +216,27 @@ export class MetaTrackManager {
    * Internal method to create WebSocket after debounce
    */
   private createWebSocket(connectionId: number): void {
+    this.latestServerRange = null;
+
     try {
       const wsUrl = this.buildWsUrl();
-      this.ws = this.createSocket(wsUrl);
+      const ws = this.createSocket(wsUrl);
+      this.ws = ws;
 
-      this.ws.onopen = () => {
-        this.handleSocketOpen(connectionId);
+      ws.onopen = () => {
+        this.handleSocketOpen(ws, connectionId);
       };
 
-      this.ws.onmessage = (event) => {
-        this.handleSocketMessage(event.data);
+      ws.onmessage = (event) => {
+        this.handleSocketMessage(event.data, ws, connectionId);
       };
 
-      this.ws.onerror = (event) => {
+      ws.onerror = (event) => {
         this.handleSocketError(event);
       };
 
-      this.ws.onclose = () => {
-        this.handleSocketClose();
+      ws.onclose = () => {
+        this.handleSocketClose(ws, connectionId);
       };
     } catch (error) {
       this.log(`Connection error: ${error}`);
@@ -342,6 +348,11 @@ export class MetaTrackManager {
    */
   getPlaybackTime(): number {
     return this.currentPlaybackTime;
+  }
+
+  /** Latest absolute stream window (ms) from the metadata socket's on_time; null until first on_time. */
+  getServerSeekableRange(): { start: number; end: number } | null {
+    return this.latestServerRange;
   }
 
   /**
@@ -632,10 +643,10 @@ export class MetaTrackManager {
     this.ws.send(JSON.stringify(payload));
   }
 
-  private handleSocketOpen(connectionId: number): void {
+  private handleSocketOpen(socket: MetaSocket, connectionId: number): void {
     // Verify still valid
-    if (this.connectionId !== connectionId) {
-      this.ws?.close();
+    if (this.connectionId !== connectionId || this.ws !== socket) {
+      socket.close();
       return;
     }
 
@@ -661,7 +672,9 @@ export class MetaTrackManager {
     this.flushMessageBuffer();
   }
 
-  private handleSocketMessage(data: string): void {
+  private handleSocketMessage(data: string, socket: MetaSocket, connectionId: number): void {
+    // Ignore late messages from a superseded socket so they can't clobber state
+    if (connectionId !== this.connectionId || this.ws !== socket) return;
     this.handleMessage(data);
   }
 
@@ -670,9 +683,12 @@ export class MetaTrackManager {
     console.warn("[MetaTrackManager] WebSocket error:", event);
   }
 
-  private handleSocketClose(): void {
+  private handleSocketClose(socket: MetaSocket, connectionId: number): void {
+    if (connectionId !== this.connectionId || this.ws !== socket) return;
+
     this.log("Disconnected");
     this.ws = null;
+    this.latestServerRange = null;
 
     if (this.state !== "disconnected") {
       this.scheduleReconnect();
@@ -707,7 +723,14 @@ export class MetaTrackManager {
       // Handle server status messages: {type:..., ...}
       if ("type" in parsed) {
         switch (parsed.type) {
-          case "on_time":
+          case "on_time": {
+            // Absolute stream window (ms); anchors metadata-seek mapping to the live edge.
+            // Use begin/end, never current; current is the cursor we drive via sendSeek.
+            const begin = parsed.data?.begin;
+            const end = parsed.data?.end;
+            if (Number.isFinite(begin) && Number.isFinite(end) && end > begin) {
+              this.latestServerRange = { start: begin, end };
+            }
             // Upstream player.js:781-790 — hold/resume/fast_forward choreography
             if (parsed.data?.current) {
               const serverTimeMs = parsed.data.current;
@@ -729,6 +752,7 @@ export class MetaTrackManager {
               }
             }
             break;
+          }
 
           case "seek":
             // Seek completed - clear buffers and cancel any far-ahead timer

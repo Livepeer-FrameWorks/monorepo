@@ -211,6 +211,93 @@ describe("MetaTrackManager", () => {
     expect(ws.send).toHaveBeenCalledTimes(1);
   });
 
+  describe("getServerSeekableRange", () => {
+    const onTime = (begin: unknown, end: unknown) =>
+      JSON.stringify({ type: "on_time", data: { begin, end, current: 1 } });
+
+    it("returns null before any on_time", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      expect(manager.getServerSeekableRange()).toBeNull();
+    });
+
+    it("stores the absolute window from a valid on_time", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      (manager as any).handleMessage(onTime(1_950_000, 2_000_000));
+      expect(manager.getServerSeekableRange()).toEqual({ start: 1_950_000, end: 2_000_000 });
+    });
+
+    it("ignores on_time when end <= begin", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      (manager as any).handleMessage(onTime(2_000_000, 2_000_000));
+      expect(manager.getServerSeekableRange()).toBeNull();
+    });
+
+    it("ignores on_time with missing or non-finite bounds", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      (manager as any).handleMessage(JSON.stringify({ type: "on_time", data: { current: 1 } }));
+      (manager as any).handleMessage(onTime(Infinity, 2_000_000));
+      (manager as any).handleMessage(onTime("nope", 2_000_000));
+      expect(manager.getServerSeekableRange()).toBeNull();
+    });
+
+    it("clears the range on socket close", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      const ws = new MockWebSocket("ws://active");
+      (manager as any).ws = ws as unknown as WebSocket;
+      (manager as any).connectionId = 1;
+      (manager as any).handleMessage(onTime(1_950_000, 2_000_000));
+      (manager as any).state = "disconnected";
+      (manager as any).handleSocketClose(ws, 1);
+      expect(manager.getServerSeekableRange()).toBeNull();
+    });
+
+    it("ignores late on_time from a superseded socket", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      const active = new MockWebSocket("ws://active");
+      const stale = new MockWebSocket("ws://stale");
+      (manager as any).ws = active as unknown as WebSocket;
+      (manager as any).connectionId = 2;
+
+      (manager as any).handleSocketMessage(onTime(1_950_000, 2_000_000), active, 2);
+      expect(manager.getServerSeekableRange()).toEqual({ start: 1_950_000, end: 2_000_000 });
+
+      (manager as any).handleSocketMessage(onTime(5_000_000, 6_000_000), stale, 1);
+      (manager as any).handleSocketMessage(onTime(7_000_000, 8_000_000), stale, 2);
+      expect(manager.getServerSeekableRange()).toEqual({ start: 1_950_000, end: 2_000_000 });
+    });
+
+    it("ignores a close from a superseded socket", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      const active = new MockWebSocket("ws://active");
+      const stale = new MockWebSocket("ws://stale");
+      (manager as any).ws = active as unknown as WebSocket;
+      (manager as any).connectionId = 2;
+      (manager as any).state = "connected";
+
+      (manager as any).handleSocketMessage(onTime(1_950_000, 2_000_000), active, 2);
+      (manager as any).handleSocketClose(stale, 1);
+      (manager as any).handleSocketClose(stale, 2);
+
+      expect((manager as any).ws).toBe(active);
+      expect(manager.getState()).toBe("connected");
+      expect(manager.getServerSeekableRange()).toEqual({ start: 1_950_000, end: 2_000_000 });
+    });
+
+    it("does not let a stale open close the active socket", () => {
+      const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+      const active = new MockWebSocket("ws://active");
+      const stale = new MockWebSocket("ws://stale");
+      (manager as any).ws = active as unknown as WebSocket;
+      (manager as any).connectionId = 2;
+
+      (manager as any).handleSocketOpen(stale, 1);
+
+      expect(stale.close).toHaveBeenCalledTimes(1);
+      expect(active.close).not.toHaveBeenCalled();
+      expect((manager as any).ws).toBe(active);
+    });
+  });
+
   it("reconnects with backoff after close", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     manager.connect();
