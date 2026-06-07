@@ -165,6 +165,17 @@ describe("VideoJsPlayerImpl", () => {
     expect(empty).toEqual({ kind: "error", message: "VideoJS playback error" });
   });
 
+  it("keeps native VHS seekable range instead of controller range hints", () => {
+    const player = new VideoJsPlayerImpl();
+    const video = createFakeElement("video");
+    video.seekable = { length: 1, start: () => 8, end: () => 68 };
+    (player as any).videoElement = video;
+
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+
+    expect(player.getSeekableRange()).toEqual({ start: 8_000, end: 68_000 });
+  });
+
   it("does not trust Mist shorthand codecstring values during browser codec probing", () => {
     const source: StreamSource = {
       type: "html5/application/vnd.apple.mpegurl",

@@ -144,4 +144,15 @@ describe("HlsJsPlayerImpl", () => {
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);
   });
+
+  it("keeps native HLS seekable range instead of controller range hints", () => {
+    const player = new HlsJsPlayerImpl();
+    const video = document.createElement("video") as any;
+    video.seekable = { length: 1, start: () => 4, end: () => 64 };
+    (player as any).videoElement = video;
+
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+
+    expect(player.getSeekableRange()).toEqual({ start: 4_000, end: 64_000 });
+  });
 });

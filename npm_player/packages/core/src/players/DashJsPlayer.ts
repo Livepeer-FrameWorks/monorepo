@@ -593,6 +593,14 @@ export class DashJsPlayerImpl extends BasePlayer {
     return sec * 1000;
   }
 
+  getSeekableRange(): { start: number; end: number } | null {
+    return this.getNativeSeekableRange();
+  }
+
+  setSeekableRangeHint(_range: { start: number; end: number } | null): void {
+    // DASH.js owns its MSE timeline and live/DVR window.
+  }
+
   /**
    * Jump to live edge for live streams.
    * Uses DASH.js seekToLive API when available.

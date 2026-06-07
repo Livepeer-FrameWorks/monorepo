@@ -306,7 +306,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
           const isLive = !isFinite(video.duration) || this.hls.levels?.[0]?.details?.live;
           if (isLive && !this.liveDurationProxy) {
             this.liveDurationProxy = new LiveDurationProxy(video, {
-              constrainSeek: true,
+              constrainSeek: false,
               liveOffset: 0,
             });
             console.debug("[HLS.js] LiveDurationProxy initialized for live stream");
@@ -401,6 +401,14 @@ export class HlsJsPlayerImpl extends BasePlayer {
       : (this.videoElement?.duration ?? 0);
     if (!Number.isFinite(sec)) return sec;
     return sec * 1000;
+  }
+
+  getSeekableRange(): { start: number; end: number } | null {
+    return this.getNativeSeekableRange();
+  }
+
+  setSeekableRangeHint(_range: { start: number; end: number } | null): void {
+    // HLS.js owns its MSE timeline and playlist seek window.
   }
 
   getLiveLatency(): number {

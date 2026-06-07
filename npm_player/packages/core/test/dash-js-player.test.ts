@@ -81,6 +81,20 @@ describe("DashJsPlayerImpl", () => {
     expect(proxy.duration).toBe(42);
   });
 
+  it("keeps native DASH seekable range instead of controller range hints", () => {
+    const player = new DashJsPlayerImpl();
+    const video = document.createElement("video");
+    Object.defineProperty(video, "seekable", {
+      configurable: true,
+      value: { length: 1, start: () => 12, end: () => 72 },
+    });
+    (player as any).videoElement = video;
+
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+
+    expect(player.getSeekableRange()).toEqual({ start: 12_000, end: 72_000 });
+  });
+
   it("routes dash.js live DVR null-range rejections through onError", () => {
     const player = new DashJsPlayerImpl();
     const errors: string[] = [];

@@ -539,6 +539,20 @@ export abstract class BasePlayer implements IPlayer {
     return { start: Math.max(0, durationMs - this._dvrWidthMs), end: durationMs };
   }
 
+  protected getNativeSeekableRange(): { start: number; end: number } | null {
+    const seekable = this.videoElement?.seekable;
+    if (!seekable || seekable.length === 0) return null;
+
+    try {
+      const start = seekable.start(0) * 1000;
+      const end = seekable.end(seekable.length - 1) * 1000;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+      return { start, end };
+    } catch {
+      return null;
+    }
+  }
+
   setSeekableRangeHint(range: { start: number; end: number } | null): void {
     if (!range || !Number.isFinite(range.end) || range.end <= 0) return;
     if (!this.liveSeekEnabled) return;
