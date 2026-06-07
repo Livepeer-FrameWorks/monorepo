@@ -44,6 +44,7 @@ test-results/
 
 # Claude Code per-project local state
 .claude/
+.playwright-cli/
 
 # Houdini (GraphQL client)
 $houdini/
