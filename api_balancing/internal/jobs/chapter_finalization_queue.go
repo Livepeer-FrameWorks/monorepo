@@ -77,6 +77,11 @@ var (
 	chapterFinalizeWakeChans = map[chan struct{}]struct{}{}
 )
 
+// presignArtifactGET is a seam over control.GeneratePresignedGETForArtifact so
+// buildSegmentRefs' status routing (and the transient-failure-is-retryable
+// invariant) can be tested without a live S3 signer.
+var presignArtifactGET = control.GeneratePresignedGETForArtifact
+
 func NewChapterFinalizationQueue(cfg ChapterFinalizationQueueConfig) *ChapterFinalizationQueue {
 	interval := cfg.Interval
 	if interval == 0 {
@@ -464,7 +469,7 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 			// chapter failed_source_missing on a transient. Fail the
 			// whole ref build so the dispatcher rolls the chapter back
 			// to 'closed' for retry.
-			url, err := control.GeneratePresignedGETForArtifact(context.Background(), r.S3Key)
+			url, err := presignArtifactGET(context.Background(), r.S3Key)
 			if err != nil {
 				return nil, 0, fmt.Errorf("presign recovery URL for segment %s: %w", r.SegmentName, err)
 			}
@@ -480,7 +485,7 @@ func (q *ChapterFinalizationQueue) buildSegmentRefs(_ /*tenantID*/, _ /*streamIn
 				missing++
 				break
 			}
-			url, err := control.GeneratePresignedGETForArtifact(context.Background(), r.S3Key)
+			url, err := presignArtifactGET(context.Background(), r.S3Key)
 			if err != nil {
 				return nil, 0, fmt.Errorf("presign recovery URL for lost segment %s: %w", r.SegmentName, err)
 			}

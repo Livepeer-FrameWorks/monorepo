@@ -904,3 +904,27 @@ func TestArtifactTypeFromProto(t *testing.T) {
 		}
 	}
 }
+
+// --- artifactAssetTypeFromString ---
+
+func TestArtifactAssetTypeFromString(t *testing.T) {
+	tests := []struct {
+		input  string
+		want   commodorepb.ArtifactAssetType
+		wantOK bool
+	}{
+		{"clip", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_CLIP, true},
+		{"dvr", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true},
+		{"dvr_segment", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true},
+		{"dvr_manifest", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_DVR, true},
+		{"vod", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_VOD, true},
+		{"unknown", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false},
+		{"", commodorepb.ArtifactAssetType_ARTIFACT_ASSET_TYPE_UNSPECIFIED, false},
+	}
+	for _, tc := range tests {
+		got, ok := artifactAssetTypeFromString(tc.input)
+		if got != tc.want || ok != tc.wantOK {
+			t.Errorf("artifactAssetTypeFromString(%q) = (%v, %v), want (%v, %v)", tc.input, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
