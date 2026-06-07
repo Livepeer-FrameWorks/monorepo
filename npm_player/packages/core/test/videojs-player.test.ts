@@ -230,6 +230,15 @@ describe("VideoJsPlayerImpl", () => {
         }),
       })
     );
+    expect((videoJsState.factory.mock.calls[0][1] as any).html5.vhs).not.toHaveProperty(
+      "liveRangeSafeTimeDelta"
+    );
+    expect((videoJsState.factory.mock.calls[0][1] as any).html5.vhs).not.toHaveProperty(
+      "enableLowInitialPlaylist"
+    );
+    expect((videoJsState.factory.mock.calls[0][1] as any).html5.vhs).not.toHaveProperty(
+      "bandwidth"
+    );
 
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.autoplay).toBe(false);

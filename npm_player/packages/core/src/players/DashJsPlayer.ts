@@ -516,6 +516,14 @@ export class DashJsPlayerImpl extends BasePlayer {
     }
   }
 
+  getCurrentTime(): number {
+    if (this.isLiveStream() && this.dashPlayer && typeof this.dashPlayer.time === "function") {
+      const sec = this.dashPlayer.time();
+      if (Number.isFinite(sec)) return sec * 1000;
+    }
+    return super.getCurrentTime();
+  }
+
   /**
    * Set source URL for seamless source switching.
    * Ported from reference dashjs.js:166-168.
@@ -528,8 +536,8 @@ export class DashJsPlayerImpl extends BasePlayer {
 
   getDuration(): number {
     if (this.isLiveStream()) {
-      const nativeRange = this.getNativeSeekableRange();
-      if (nativeRange) return nativeRange.end;
+      const dvrRange = this.getDashDvrWindow();
+      if (dvrRange) return dvrRange.end;
     }
     const sec = this.videoElement?.duration ?? 0;
     if (!Number.isFinite(sec)) return sec;
@@ -537,11 +545,27 @@ export class DashJsPlayerImpl extends BasePlayer {
   }
 
   getSeekableRange(): { start: number; end: number } | null {
+    if (this.isLiveStream()) {
+      const dvrRange = this.getDashDvrWindow();
+      if (dvrRange) return dvrRange;
+    }
     return this.getNativeSeekableRange();
   }
 
   setSeekableRangeHint(_range: { start: number; end: number } | null): void {
     // DASH.js owns its MSE timeline and live/DVR window.
+  }
+
+  seek(timeMs: number): void {
+    if (
+      this.isLiveStream() &&
+      this.dashPlayer &&
+      typeof this.dashPlayer.seekToPresentationTime === "function"
+    ) {
+      this.dashPlayer.seekToPresentationTime(timeMs / 1000);
+      return;
+    }
+    super.seek(timeMs);
   }
 
   /**
@@ -552,10 +576,9 @@ export class DashJsPlayerImpl extends BasePlayer {
     const video = this.videoElement;
     if (!video || !this.isLiveStream()) return;
 
-    // DASH.js has a seekToLive method for live streams
-    if (this.dashPlayer && typeof this.dashPlayer.seekToLive === "function") {
-      this.debugLog("[DashJS] jumpToLive using seekToLive()");
-      this.dashPlayer.seekToLive();
+    if (this.dashPlayer && typeof this.dashPlayer.seekToOriginalLive === "function") {
+      this.debugLog("[DashJS] jumpToLive using seekToOriginalLive()");
+      this.dashPlayer.seekToOriginalLive();
       return;
     }
 
@@ -566,6 +589,23 @@ export class DashJsPlayerImpl extends BasePlayer {
         this.debugLog("[DashJS] jumpToLive using seekable.end:", liveEdge);
         video.currentTime = liveEdge;
       }
+    }
+  }
+
+  private getDashDvrWindow(): { start: number; end: number } | null {
+    if (!this.dashPlayer || typeof this.dashPlayer.getDvrWindow !== "function") {
+      return null;
+    }
+    try {
+      const dvr = this.dashPlayer.getDvrWindow();
+      const start = dvr?.start;
+      const end = dvr?.end;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        return null;
+      }
+      return { start: start * 1000, end: end * 1000 };
+    } catch {
+      return null;
     }
   }
 

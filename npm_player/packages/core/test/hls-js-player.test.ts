@@ -193,4 +193,50 @@ describe("HlsJsPlayerImpl", () => {
     expect(player.getSeekableRange()).toEqual({ start: 4_000, end: 64_000 });
     expect(player.getDuration()).toBe(64_000);
   });
+
+  it("uses hls.js liveSyncPosition for jump-to-live", () => {
+    const player = new HlsJsPlayerImpl();
+    const video = document.createElement("video") as any;
+    video.currentTime = 12;
+    video.seekable = { length: 1, start: () => 4, end: () => 64 };
+    (player as any).videoElement = video;
+    (player as any).hls = { liveSyncPosition: 58 };
+
+    player.jumpToLive();
+
+    expect(video.currentTime).toBe(58);
+  });
+
+  it("does not override manifest-driven live-edge settings by default", async () => {
+    const player = new HlsJsPlayerImpl();
+    const container = document.createElement("div");
+
+    const initialization = player.initialize(
+      container,
+      {
+        type: "html5/application/vnd.apple.mpegurl;version=7",
+        url: "https://edge.example/live/index.m3u8",
+      },
+      { autoplay: false, muted: true },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    await vi.waitFor(() => expect(hlsState.instances).toHaveLength(1));
+    const hls = hlsState.instances[0];
+    hls.emit("mediaAttached");
+    const video = container.querySelector("video") as HTMLVideoElement;
+    video.dispatchEvent(new Event("loadeddata"));
+    await initialization;
+
+    expect(hls.config).toEqual(
+      expect.objectContaining({
+        lowLatencyMode: true,
+        abrEwmaDefaultEstimate: 5_000_000,
+      })
+    );
+    expect(hls.config).not.toHaveProperty("liveSyncDuration");
+    expect(hls.config).not.toHaveProperty("liveMaxLatencyDuration");
+    expect(hls.config).not.toHaveProperty("maxBufferLength");
+    expect(hls.config).not.toHaveProperty("maxMaxBufferLength");
+  });
 });

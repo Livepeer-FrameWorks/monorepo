@@ -219,24 +219,13 @@ export class VideoJsPlayerImpl extends BasePlayer {
         liveTracker: true,
         // Don't set children: [] - that can break internal VideoJS components
 
-        // VHS (http-streaming) configuration - AGGRESSIVE for fastest startup
+        // VHS (http-streaming) configuration. Keep live-edge policy library/manifest-driven by
+        // default; only force the fMP4 partial-append behavior that affects CMAF parsing.
         html5: {
           vhs: {
-            // AGGRESSIVE: Start with lower quality for instant playback
-            enableLowInitialPlaylist: true,
-
-            // AGGRESSIVE: Assume 5 Mbps initially
-            bandwidth: 5_000_000,
-
-            // Persist bandwidth across sessions for returning users
-            useBandwidthFromLocalStorage: true,
-
             // CMAF/fMP4 must be appended on MP4 box boundaries. VHS partial response appends can split
             // boxes and make Firefox reject the segment as an invalid top-level box.
             handlePartialData: false,
-
-            // AGGRESSIVE: Very tight live range
-            liveRangeSafeTimeDelta: 0.3,
 
             // Allow user overrides via options.vhsConfig
             ...options.vhsConfig,

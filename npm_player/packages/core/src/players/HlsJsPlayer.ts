@@ -180,30 +180,17 @@ export class HlsJsPlayerImpl extends BasePlayer {
           | ((context: unknown, initParams: RequestInit) => Request | Promise<Request>)
           | undefined;
 
-        // Build optimized HLS.js config with user overrides
+        // Keep live-edge policy library/manifest-driven by default. Mist's CMAF
+        // playlists advertise HOLD-BACK/PART-HOLD-BACK; overriding those here can
+        // make hls.js chase partials the server has not made retrievable yet.
         const hlsConfig: HlsJsConfig = {
-          // Worker disabled for lower latency (per HLS.js maintainer recommendation)
-          enableWorker: false,
-
           // LL-HLS support
           lowLatencyMode: true,
 
-          // AGGRESSIVE: Assume 5 Mbps initially (not 500kbps default)
-          // This dramatically improves startup time by selecting appropriate quality faster
+          // Use a realistic initial estimate without overriding live sync, live
+          // max latency, or buffer lengths. Those should follow the manifest and
+          // hls.js defaults unless the caller explicitly supplies hlsConfig.
           abrEwmaDefaultEstimate: 5_000_000,
-
-          // AGGRESSIVE: Minimal buffers for fastest startup
-          maxBufferLength: 6, // Reduced from 15 (just 2 segments @ 3s)
-          maxMaxBufferLength: 15, // Reduced from 60
-          backBufferLength: Infinity, // Let browser manage (per maintainer advice)
-
-          // Stay close to live edge but not too aggressive
-          liveSyncDuration: 4, // Target 4 seconds behind live edge
-          liveMaxLatencyDuration: 8, // Max 8 seconds before seeking to live
-
-          // Faster ABR adaptation for live
-          abrEwmaFastLive: 2.0, // Faster than default 3.0
-          abrEwmaSlowLive: 6.0, // Faster than default 9.0
 
           // Allow user overrides
           ...options.hlsConfig,
@@ -396,6 +383,16 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
   setSeekableRangeHint(_range: { start: number; end: number } | null): void {
     // HLS.js owns its MSE timeline and playlist seek window.
+  }
+
+  jumpToLive(): void {
+    const video = this.videoElement;
+    const liveSyncPosition = this.hls?.liveSyncPosition;
+    if (video && typeof liveSyncPosition === "number" && Number.isFinite(liveSyncPosition)) {
+      video.currentTime = liveSyncPosition;
+      return;
+    }
+    super.jumpToLive();
   }
 
   getLiveLatency(): number {

@@ -21,6 +21,10 @@ const dashMocks = vi.hoisted(() => {
       }
     }),
     updateSettings: vi.fn(),
+    time: vi.fn(() => 64),
+    getDvrWindow: vi.fn(() => ({ start: 12, end: 72, size: 60 })),
+    seekToPresentationTime: vi.fn(),
+    seekToOriginalLive: vi.fn(),
     on: vi.fn((event: string, handler: (event?: unknown) => void) => {
       const eventHandlers = handlers.get(event) ?? [];
       eventHandlers.push(handler);
@@ -43,6 +47,10 @@ vi.mock("dashjs", () => ({
       create: () => ({
         initialize: dashMocks.initialize,
         updateSettings: dashMocks.updateSettings,
+        time: dashMocks.time,
+        getDvrWindow: dashMocks.getDvrWindow,
+        seekToPresentationTime: dashMocks.seekToPresentationTime,
+        seekToOriginalLive: dashMocks.seekToOriginalLive,
         on: dashMocks.on,
         off: dashMocks.off,
         reset: dashMocks.reset,
@@ -57,12 +65,18 @@ describe("DashJsPlayerImpl", () => {
     dashMocks.handlers.clear();
     dashMocks.state.startupEvent = "streamInitialized";
     dashMocks.updateSettings.mockReset();
+    dashMocks.time.mockReset();
+    dashMocks.time.mockReturnValue(64);
+    dashMocks.getDvrWindow.mockReset();
+    dashMocks.getDvrWindow.mockReturnValue({ start: 12, end: 72, size: 60 });
+    dashMocks.seekToPresentationTime.mockReset();
+    dashMocks.seekToOriginalLive.mockReset();
     dashMocks.on.mockReset();
     dashMocks.off.mockReset();
     dashMocks.reset.mockReset();
   });
 
-  it("keeps native DASH seekable range instead of controller range hints", () => {
+  it("uses dash.js DVR window instead of controller range hints for live DASH", () => {
     const player = new DashJsPlayerImpl();
     const video = document.createElement("video");
     Object.defineProperty(video, "duration", { configurable: true, value: Infinity });
@@ -71,11 +85,39 @@ describe("DashJsPlayerImpl", () => {
       value: { length: 1, start: () => 12, end: () => 72 },
     });
     (player as any).videoElement = video;
+    (player as any).dashPlayer = {
+      getDvrWindow: dashMocks.getDvrWindow,
+      seekToPresentationTime: dashMocks.seekToPresentationTime,
+      seekToOriginalLive: dashMocks.seekToOriginalLive,
+      time: dashMocks.time,
+    };
+    (player as any).streamType = "live";
 
     player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
 
     expect(player.getSeekableRange()).toEqual({ start: 12_000, end: 72_000 });
     expect(player.getDuration()).toBe(72_000);
+    expect(player.getCurrentTime()).toBe(64_000);
+  });
+
+  it("routes live DASH seeks and live jumps through dash.js APIs", () => {
+    const player = new DashJsPlayerImpl();
+    const video = document.createElement("video");
+    Object.defineProperty(video, "duration", { configurable: true, value: Infinity });
+    (player as any).videoElement = video;
+    (player as any).dashPlayer = {
+      getDvrWindow: dashMocks.getDvrWindow,
+      seekToPresentationTime: dashMocks.seekToPresentationTime,
+      seekToOriginalLive: dashMocks.seekToOriginalLive,
+      time: dashMocks.time,
+    };
+    (player as any).streamType = "live";
+
+    player.seek(68_500);
+    player.jumpToLive();
+
+    expect(dashMocks.seekToPresentationTime).toHaveBeenCalledWith(68.5);
+    expect(dashMocks.seekToOriginalLive).toHaveBeenCalledTimes(1);
   });
 
   it("routes dash.js live DVR null-range rejections through the player error event", () => {
