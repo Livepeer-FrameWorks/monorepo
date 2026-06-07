@@ -278,20 +278,34 @@ func clearProcessingSourceOverride(streamName string) {
 	processingSourceOverridesMu.Unlock()
 }
 
+type processingRuntimeClient interface {
+	PushList() ([]mist.PushInfo, error)
+	PushKill(pushID int) error
+	NukeStream(name string) error
+	StopSessions(streamName string) error
+	GetActiveStreams() (map[string]interface{}, error)
+}
+
+type processingPushLister interface {
+	PushList() ([]mist.PushInfo, error)
+}
+
 // restartProcessingStreamForLocalFallback tears down the retired generation and
-// clears its broken artifact, in order: stop the push, nuke the stream, confirm
-// the generation has drained, and only THEN remove the output file — so the
-// retired push (still the writer until it is stopped and drained) cannot keep
-// writing the path after it is cleared. Drain or remove failures abort the
-// fallback (returns an error) rather than racing a half-torn-down generation
-// against the local retry.
-func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) error {
-	h.stopProcessingPush(log, mistClient, streamName)
+// clears its broken artifact, in order: kill the push, stop sessions, nuke the
+// stream, confirm the generation has drained, and only THEN remove the output
+// file. The retired push is still the writer until it is stopped and drained;
+// drain or remove failures abort the fallback rather than racing a half-torn-down
+// generation against the local retry.
+func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logrus.Entry, mistClient processingRuntimeClient, streamName, outputPath string, pushID int) error {
+	targetURI := processingMuxTargetURI(outputPath)
+	h.killProcessingPush(log, mistClient, streamName, targetURI, pushID)
+	h.stopProcessingSessions(log, mistClient, streamName)
 	if nukeErr := mistClient.NukeStream(streamName); nukeErr != nil {
 		// Nuke is best-effort: the stream may already be gone. The drain below is
 		// the authoritative teardown confirmation.
 		log.WithError(nukeErr).Warn("NukeStream during fallback returned an error; relying on drain to confirm teardown")
 	}
+	h.stopProcessingSessions(log, mistClient, streamName)
 	if err := drainProcessingGeneration(log, mistClient, streamName); err != nil {
 		return fmt.Errorf("drain retired generation: %w", err)
 	}
@@ -304,6 +318,8 @@ func (h *ProcessingJobHandler) restartProcessingStreamForLocalFallback(log *logr
 const (
 	processingGenerationDrainTimeout      = 30 * time.Second
 	processingGenerationDrainPollInterval = 200 * time.Millisecond
+	processingPushIDLookupTimeout         = 2 * time.Second
+	processingPushIDLookupPollInterval    = 50 * time.Millisecond
 )
 
 type processingActiveStreamsFunc func() (map[string]interface{}, error)
@@ -313,7 +329,7 @@ type processingActiveStreamsFunc func() (map[string]interface{}, error)
 // read is retried within the window; failing to confirm teardown by the deadline
 // returns an error so the caller aborts rather than restarting over a live
 // generation.
-func drainProcessingGeneration(log *logrus.Entry, mistClient *mist.Client, streamName string) error {
+func drainProcessingGeneration(log *logrus.Entry, mistClient processingRuntimeClient, streamName string) error {
 	return drainProcessingGenerationFromActiveStreams(log, streamName, mistClient.GetActiveStreams, processingGenerationDrainTimeout, processingGenerationDrainPollInterval)
 }
 
@@ -477,6 +493,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	fallbackAttempted := false
 	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
 	ignoredProcessExitBootCounts := map[string]int{}
+	activePushID := 0
 
 	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
@@ -487,7 +504,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 			setProcessingProcessOverride(streamName, localConfig)
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback teardown: %v", teardownErr), nil, "", 0)
 				return
@@ -518,7 +535,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// restart a delayed event from the retired push can land in the new channel;
 	// it is rejected by comparing its TimeStarted against this.
 	currentPushStartedAt := time.Now().Unix()
-	if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+	var pushErr error
+	activePushID, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
+	if pushErr != nil {
 		h.sendResult(send, req.GetJobId(), "failed", pushErr.Error(), nil, "", 0)
 		return
 	}
@@ -543,7 +562,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 		setProcessingProcessOverride(streamName, localConfig)
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback teardown: %v", teardownErr), nil, "", 0)
 			return false
@@ -567,7 +586,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			return false
 		}
 		currentPushStartedAt = time.Now().Unix()
-		if pushErr := h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath); pushErr != nil {
+		activePushID, pushErr = h.startProcessingPush(log, mistClient, req, outputDir, streamName, outputPath)
+		if pushErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", pushErr), nil, "", 0)
 			return false
@@ -827,7 +847,7 @@ loop:
 // Returns an error that is safe to surface to the caller's sendResult
 // "failed" path; admission rejection and push failure are both fatal
 // to the job.
-func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, vodDir, streamName, outputPath string) error {
+func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, vodDir, streamName, outputPath string) (int, error) {
 	if sm := GetStorageManager(); sm != nil {
 		var estSize uint64
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -838,19 +858,45 @@ func (h *ProcessingJobHandler) startProcessingPush(log *logrus.Entry, mistClient
 		decision, decErr := sm.Decide(context.Background(), vodDir, admission.IntentProcessingOutput, estSize)
 		if decErr != nil || decision == admission.CacheReject {
 			log.WithError(decErr).WithField("est_size", estSize).Error("Processing output admission rejected")
-			return fmt.Errorf("admission rejected: %w", decErr)
+			return 0, fmt.Errorf("admission rejected: %w", decErr)
 		}
 	}
 	targetURI := processingMuxTargetURI(outputPath)
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		log.WithError(err).Error("Failed to start push")
-		return fmt.Errorf("push_start failed: %w", err)
+		return 0, fmt.Errorf("push_start failed: %w", err)
 	}
+	pushID := findProcessingPushID(log, mistClient, streamName, targetURI)
 	log.WithFields(logrus.Fields{
 		"output_path": outputPath,
 		"target_uri":  targetURI,
+		"push_id":     pushID,
 	}).Info("Started push for processing stream")
-	return nil
+	return pushID, nil
+}
+
+func findProcessingPushID(log *logrus.Entry, mistClient processingPushLister, streamName, targetURI string) int {
+	deadline := time.Now().Add(processingPushIDLookupTimeout)
+	for {
+		pushes, err := mistClient.PushList()
+		if err != nil {
+			log.WithError(err).Warn("Failed to list pushes after push_start")
+		} else {
+			for _, p := range pushes {
+				if p.StreamName == streamName && (p.TargetURI == targetURI || p.ActualURI == targetURI) {
+					return p.ID
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			log.WithFields(logrus.Fields{
+				"stream":     streamName,
+				"target_uri": targetURI,
+			}).Warn("Could not recover processing push id after push_start; fallback teardown will match by stream")
+			return 0
+		}
+		time.Sleep(processingPushIDLookupPollInterval)
+	}
 }
 
 type processingTrackRequirements struct {
@@ -1927,20 +1973,42 @@ func (h *ProcessingJobHandler) cleanupFailedProcessing(log *logrus.Entry, mistCl
 	}
 }
 
-// stopProcessingPush finds and stops the MistServer push for a processing stream.
-func (h *ProcessingJobHandler) stopProcessingPush(log *logrus.Entry, mistClient *mist.Client, streamName string) {
+func (h *ProcessingJobHandler) killProcessingPush(log *logrus.Entry, mistClient processingRuntimeClient, streamName, targetURI string, pushID int) {
+	if pushID > 0 {
+		if killErr := mistClient.PushKill(pushID); killErr == nil {
+			return
+		} else {
+			log.WithError(killErr).WithField("push_id", pushID).Warn("Failed to kill tracked processing push; falling back to stream lookup")
+		}
+	}
 	pushes, err := mistClient.PushList()
 	if err != nil {
 		log.WithError(err).Warn("Failed to list pushes for cleanup")
 		return
 	}
 	for _, p := range pushes {
-		if p.StreamName == streamName {
-			if stopErr := mistClient.PushStop(p.ID); stopErr != nil {
-				log.WithError(stopErr).WithField("push_id", p.ID).Warn("Failed to stop processing push")
+		if p.StreamName == streamName && (p.TargetURI == targetURI || p.ActualURI == targetURI) {
+			if killErr := mistClient.PushKill(p.ID); killErr != nil {
+				log.WithError(killErr).WithField("push_id", p.ID).Warn("Failed to kill processing push")
 			}
 			return
 		}
+	}
+	for _, p := range pushes {
+		if p.StreamName == streamName {
+			if killErr := mistClient.PushKill(p.ID); killErr != nil {
+				log.WithError(killErr).WithField("push_id", p.ID).Warn("Failed to kill processing push by stream fallback")
+			} else {
+				log.WithField("push_id", p.ID).Warn("Killed processing push by stream fallback after target URI lookup missed")
+			}
+			return
+		}
+	}
+}
+
+func (h *ProcessingJobHandler) stopProcessingSessions(log *logrus.Entry, mistClient processingRuntimeClient, streamName string) {
+	if err := mistClient.StopSessions(streamName); err != nil {
+		log.WithError(err).Warn("Failed to stop processing stream sessions during fallback")
 	}
 }
 

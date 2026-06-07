@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1023,6 +1024,114 @@ func TestDrainProcessingGenerationWaitsUntilStreamDisappears(t *testing.T) {
 	}
 	if calls < 3 {
 		t.Fatalf("drain stopped after %d calls, want at least 3", calls)
+	}
+}
+
+type fakeProcessingRuntimeClient struct {
+	calls  []string
+	pushes []mist.PushInfo
+}
+
+func (f *fakeProcessingRuntimeClient) PushList() ([]mist.PushInfo, error) {
+	f.calls = append(f.calls, "push_list")
+	return f.pushes, nil
+}
+
+func (f *fakeProcessingRuntimeClient) PushKill(pushID int) error {
+	f.calls = append(f.calls, "push_kill:"+strconv.Itoa(pushID))
+	return nil
+}
+
+func (f *fakeProcessingRuntimeClient) NukeStream(name string) error {
+	f.calls = append(f.calls, "nuke_stream:"+name)
+	return nil
+}
+
+func (f *fakeProcessingRuntimeClient) StopSessions(streamName string) error {
+	f.calls = append(f.calls, "stop_sessions:"+streamName)
+	return nil
+}
+
+func (f *fakeProcessingRuntimeClient) GetActiveStreams() (map[string]interface{}, error) {
+	f.calls = append(f.calls, "active_streams")
+	return map[string]interface{}{"active_streams": map[string]interface{}{}}, nil
+}
+
+func TestRestartProcessingStreamForLocalFallbackStopsSessionsBeforeDrain(t *testing.T) {
+	const streamName = "processing+fallback"
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "out.mkv")
+	if err := os.WriteFile(outputPath, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeProcessingRuntimeClient{
+		pushes: []mist.PushInfo{{ID: 7, StreamName: streamName}},
+	}
+	h := NewProcessingJobHandler(logrus.New(), "", dir)
+
+	if err := h.restartProcessingStreamForLocalFallback(logrus.NewEntry(logrus.New()), client, streamName, outputPath, 99); err != nil {
+		t.Fatalf("restartProcessingStreamForLocalFallback returned error: %v", err)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("retired output still exists or stat failed with %v", err)
+	}
+
+	want := strings.Join([]string{
+		"push_kill:99",
+		"stop_sessions:" + streamName,
+		"nuke_stream:" + streamName,
+		"stop_sessions:" + streamName,
+		"active_streams",
+	}, ",")
+	if got := strings.Join(client.calls, ","); got != want {
+		t.Fatalf("calls = %s, want %s", got, want)
+	}
+}
+
+func TestRestartProcessingStreamForLocalFallbackFallsBackToStreamLookupWhenPushIDMissing(t *testing.T) {
+	const streamName = "processing+fallback"
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "out.mkv")
+	if err := os.WriteFile(outputPath, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakeProcessingRuntimeClient{
+		pushes: []mist.PushInfo{
+			{ID: 6, StreamName: streamName, TargetURI: "/tmp/other.mkv"},
+			{ID: 7, StreamName: streamName, TargetURI: processingMuxTargetURI(outputPath)},
+		},
+	}
+	h := NewProcessingJobHandler(logrus.New(), "", dir)
+
+	if err := h.restartProcessingStreamForLocalFallback(logrus.NewEntry(logrus.New()), client, streamName, outputPath, 0); err != nil {
+		t.Fatalf("restartProcessingStreamForLocalFallback returned error: %v", err)
+	}
+
+	wantPrefix := strings.Join([]string{
+		"push_list",
+		"push_kill:7",
+	}, ",")
+	if got := strings.Join(client.calls[:2], ","); got != wantPrefix {
+		t.Fatalf("first calls = %s, want %s", got, wantPrefix)
+	}
+}
+
+func TestFindProcessingPushIDMatchesStreamAndTarget(t *testing.T) {
+	const streamName = "processing+find"
+	const targetURI = "/tmp/out.mkv#audio=all&video=all&meta=all&subtitle=all"
+	client := &fakeProcessingRuntimeClient{
+		pushes: []mist.PushInfo{
+			{ID: 3, StreamName: streamName, TargetURI: "/tmp/other.mkv"},
+			{ID: 4, StreamName: "processing+other", TargetURI: targetURI},
+			{ID: 5, StreamName: streamName, TargetURI: targetURI},
+		},
+	}
+
+	got := findProcessingPushID(logrus.NewEntry(logrus.New()), client, streamName, targetURI)
+	if got != 5 {
+		t.Fatalf("push id = %d, want 5", got)
 	}
 }
 

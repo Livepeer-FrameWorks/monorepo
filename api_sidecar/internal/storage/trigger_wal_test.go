@@ -36,6 +36,50 @@ func TestComputeSourceEventIDStable(t *testing.T) {
 	}
 }
 
+// TestComputeSourceEventIDFieldBoundaries pins the NUL separator between
+// node_id and trigger_type. Without it, (node="ab", type="") and
+// (node="a", type="b") would hash identically and collapse two distinct
+// triggers into one WAL entry, silently dropping one.
+func TestComputeSourceEventIDFieldBoundaries(t *testing.T) {
+	payload := []byte("payload")
+	a := ComputeSourceEventID("ab", "", payload)
+	b := ComputeSourceEventID("a", "b", payload)
+	if a == b {
+		t.Fatal("field boundary not preserved: (\"ab\",\"\") and (\"a\",\"b\") must differ")
+	}
+
+	// The separator must also distinguish a payload boundary from a type boundary.
+	c := ComputeSourceEventID("a", "b", []byte("c"))
+	d := ComputeSourceEventID("a", "", []byte("bc"))
+	if c == d {
+		t.Fatal("type/payload boundary not preserved")
+	}
+}
+
+func TestComputeTypedEventID(t *testing.T) {
+	src := ComputeSourceEventID("node-1", "USER_END", []byte("payload"))
+
+	id1 := ComputeTypedEventID(src)
+	id2 := ComputeTypedEventID(src)
+	if id1 != id2 {
+		t.Fatalf("ComputeTypedEventID not deterministic: %q vs %q", id1, id2)
+	}
+
+	other := ComputeTypedEventID(ComputeSourceEventID("node-2", "USER_END", []byte("payload")))
+	if id1 == other {
+		t.Fatal("distinct source ids must yield distinct typed ids")
+	}
+
+	// Stable UUIDv5 (name-based): 36 chars, version nibble '5'. This guards
+	// against an accidental switch to a random UUID, which would break dedup.
+	if len(id1) != 36 {
+		t.Fatalf("typed id = %q, want 36-char UUID", id1)
+	}
+	if id1[14] != '5' {
+		t.Fatalf("typed id %q is not a v5 (name-based) UUID", id1)
+	}
+}
+
 func TestDefaultTriggerWALDirPrefersExplicitEnv(t *testing.T) {
 	explicit := filepath.Join(t.TempDir(), "wal")
 	storagePath := t.TempDir()

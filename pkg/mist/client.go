@@ -290,6 +290,20 @@ func (c *Client) PushStop(pushID int) error {
 	return nil
 }
 
+func (c *Client) PushKill(pushID int) error {
+	command := map[string]interface{}{
+		"push_kill": pushID,
+	}
+
+	_, err := c.makeAPIRequest(command)
+	if err != nil {
+		return fmt.Errorf("push_kill failed: %w", err)
+	}
+
+	c.Logger.WithField("push_id", pushID).Info("Killed MistServer push")
+	return nil
+}
+
 // GetStreamInfo gets information about a specific stream
 func (c *Client) GetStreamInfo(streamName string) (*StreamInfo, error) {
 	command := map[string]interface{}{

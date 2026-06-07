@@ -64,3 +64,30 @@ func TestNukeStreamSendsRuntimeResetCommand(t *testing.T) {
 		t.Fatal("NukeStream must not send deletestream")
 	}
 }
+
+func TestPushKillSendsHardKillCommand(t *testing.T) {
+	var commands []map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.Query().Get("command")
+		var cmd map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &cmd); err != nil {
+			t.Fatalf("command JSON: %v", err)
+		}
+		commands = append(commands, cmd)
+		_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(logging.NewLogger())
+	c.BaseURL = srv.URL
+
+	if err := c.PushKill(42); err != nil {
+		t.Fatalf("PushKill error = %v", err)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("got %d commands, want auth + push_kill", len(commands))
+	}
+	if got := commands[1]["push_kill"]; got != float64(42) {
+		t.Fatalf("push_kill = %#v, want 42", got)
+	}
+}

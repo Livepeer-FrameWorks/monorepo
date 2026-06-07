@@ -165,6 +165,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	fallbackAttempted := false
 	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
 	ignoredProcessExitBootCounts := map[string]int{}
+	activePushID := 0
 
 	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
@@ -178,7 +179,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 			// Stop + nuke + drain the retired generation, then clear its artifact,
 			// before rebooting (mirrors the main fallback) so the old Livepeer boot
 			// can't race the restart or keep writing the cleared output.
-			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
 					fmt.Sprintf("chapter finalize livepeer fallback teardown: %v", teardownErr), nil, "", 0)
@@ -212,7 +213,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	// retired push lands in the fresh channel, so it is rejected by comparing its
 	// TimeStarted against this.
 	currentPushStartedAt := time.Now().Unix()
-	if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
+	activePushID, pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath)
+	if pushErr != nil {
 		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)
 		return
@@ -233,7 +235,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		// Stop + nuke + DRAIN the retired generation, then clear its artifact, before
 		// rebooting, so the old Livepeer generation can't race the restarted local-AV
 		// push or keep writing the cleared output.
-		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath); teardownErr != nil {
+		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 			return fmt.Errorf("%s fallback teardown: %w", reason, teardownErr)
 		}
 		doneCh = make(chan ProcessingPushEndEvent, 1)
@@ -251,7 +253,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 			return fmt.Errorf("%s fallback readiness: %w", reason, waitErr)
 		}
 		currentPushStartedAt = time.Now().Unix()
-		if pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath); pushErr != nil {
+		activePushID, pushErr = h.startChapterFinalizePush(log, mistClient, streamName, outputPath)
+		if pushErr != nil {
 			return fmt.Errorf("%s fallback restart: %w", reason, pushErr)
 		}
 		lastMs = 0
@@ -511,16 +514,18 @@ func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, 
 	log.Warn("Chapter finalize: DTSH generation exhausted retries; chapter remains finalized pending operator triage")
 }
 
-func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) error {
+func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) (int, error) {
 	targetURI := processingMuxTargetURI(outputPath)
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
-		return err
+		return 0, err
 	}
+	pushID := findProcessingPushID(log, mistClient, streamName, targetURI)
 	log.WithFields(logrus.Fields{
 		"output_path": outputPath,
 		"target_uri":  targetURI,
+		"push_id":     pushID,
 	}).Info("Chapter finalize: push started")
-	return nil
+	return pushID, nil
 }
 
 // buildChapterHLS writes a VOD HLS manifest covering the chapter's
