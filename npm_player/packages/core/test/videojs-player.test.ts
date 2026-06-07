@@ -210,6 +210,13 @@ describe("VideoJsPlayerImpl", () => {
     expect(videoJsState.factory.mock.calls[0][1]).toEqual(
       expect.objectContaining({ autoplay: false })
     );
+    expect(videoJsState.factory.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        html5: expect.objectContaining({
+          vhs: expect.objectContaining({ handlePartialData: false }),
+        }),
+      })
+    );
 
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.autoplay).toBe(false);

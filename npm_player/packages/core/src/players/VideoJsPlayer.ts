@@ -233,8 +233,9 @@ export class VideoJsPlayerImpl extends BasePlayer {
             // Persist bandwidth across sessions for returning users
             useBandwidthFromLocalStorage: true,
 
-            // Enable partial segment processing for lower latency
-            handlePartialData: true,
+            // CMAF/fMP4 must be appended on MP4 box boundaries. VHS partial response appends can split
+            // boxes and make Firefox reject the segment as an invalid top-level box.
+            handlePartialData: false,
 
             // AGGRESSIVE: Very tight live range
             liveRangeSafeTimeDelta: 0.3,
