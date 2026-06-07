@@ -655,6 +655,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private metadata: ContentMetadata | null = null;
 
   private cleanupFns: Array<() => void> = [];
+  private mediaCleanupFns: Array<() => void> = [];
+  private playerEventsBoundFor: IPlayer | null = null;
   private isDestroyed: boolean = false;
   private isAttached: boolean = false;
 
@@ -784,6 +786,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private selectedQualityId: string = "auto";
   private bootMs: number = Date.now();
   private playerManagerUnsubs: Array<() => void> = [];
+  private playerSelectedCleanup: (() => void) | null = null;
 
   constructor(config: PlayerControllerConfig) {
     super();
@@ -1480,15 +1483,34 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private bindCurrentPlayerEvents(playerForListener: IPlayer): void {
+    if (this.playerEventsBoundFor === playerForListener) return;
+
     const onSeekableChange = () => {
       this.updateSeekingState();
     };
     const onBufferLow = () => {
       this.qualityMonitor?.recordBufferLow();
     };
+    const onPlayerError = (error: string | Error) => {
+      if (this.isDestroyed) return;
+      const message = typeof error === "string" ? error : error.message || String(error);
+      void this.setPassiveError(message);
+    };
+    const onReloadRequested = ({ reason }: { reason: string }) => {
+      if (this.isDestroyed || this._isTransitioning) return;
+      this.log(`[player:reloadrequested] ${reason}`);
+      if (this.playerManager.canAttemptFallback()) {
+        void this.retryWithFallback();
+      } else {
+        void this.retry();
+      }
+    };
 
     playerForListener.on("seekablechange", onSeekableChange);
     playerForListener.on("bufferlow", onBufferLow);
+    playerForListener.on("error", onPlayerError);
+    playerForListener.on("reloadrequested", onReloadRequested);
+    this.playerEventsBoundFor = playerForListener;
 
     let onDirectRenderTimeUpdate: ((timeMs: number) => void) | null = null;
     if (playerForListener.isDirectRendering) {
@@ -1503,13 +1525,81 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       playerForListener.on("timeupdate", onDirectRenderTimeUpdate);
     }
 
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       playerForListener.off("seekablechange", onSeekableChange);
       playerForListener.off("bufferlow", onBufferLow);
+      playerForListener.off("error", onPlayerError);
+      playerForListener.off("reloadrequested", onReloadRequested);
       if (onDirectRenderTimeUpdate) {
         playerForListener.off("timeupdate", onDirectRenderTimeUpdate);
       }
+      if (this.playerEventsBoundFor === playerForListener) {
+        this.playerEventsBoundFor = null;
+      }
     });
+  }
+
+  private ensurePlayerSelectedListener(): void {
+    if (this.playerSelectedCleanup) return;
+
+    const onSelected = (e: { player: string; source: StreamSource; score: number }) => {
+      // Track current player info
+      const playerImpl = this.playerManager
+        .getRegisteredPlayers()
+        .find((p) => p.capability.shortname === e.player);
+      if (playerImpl) {
+        this._currentPlayerInfo = {
+          name: playerImpl.capability.name,
+          shortname: playerImpl.capability.shortname,
+        };
+      }
+
+      // Track current source info
+      if (e.source) {
+        this._currentSourceInfo = {
+          url: e.source.url,
+          type: e.source.type,
+        };
+      }
+      this._playbackQuality = null;
+
+      this.setState("connecting", {
+        selectedPlayer: e.player,
+        selectedProtocol: (e.source?.type || "").toString(),
+        endpointUrl: e.source?.url,
+      });
+
+      // Bubble up playerSelected event
+      this.emit("playerSelected", { player: e.player, source: e.source, score: e.score });
+    };
+
+    try {
+      const unsubscribe = (this.playerManager as any).on?.("playerSelected", onSelected);
+      this.playerSelectedCleanup =
+        typeof unsubscribe === "function"
+          ? () => {
+              unsubscribe();
+              this.playerSelectedCleanup = null;
+            }
+          : () => {
+              try {
+                (this.playerManager as any).off?.("playerSelected", onSelected);
+              } catch {}
+              this.playerSelectedCleanup = null;
+            };
+      this.cleanupFns.push(() => this.playerSelectedCleanup?.());
+    } catch {}
+  }
+
+  private cleanupMediaAttach(): void {
+    this.mediaCleanupFns.forEach((fn) => {
+      try {
+        fn();
+      } catch {}
+    });
+    this.mediaCleanupFns = [];
+    this.playerEventsBoundFor = null;
+    this.unbindMediaStreamAudioListeners();
   }
 
   /**
@@ -2522,6 +2612,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (this.shouldAttemptFallback(error) && this.playerManager.canAttemptFallback()) {
       this.log("Attempting playback fallback...");
       this._isTransitioning = true;
+      this.cleanupMediaAttach();
 
       const fallbackSucceeded = await this.playerManager.tryPlaybackFallback();
 
@@ -2572,6 +2663,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this._retrySuppressUntil = Date.now() + PlayerController.RETRY_SUPPRESS_MS;
     this._isTransitioning = true;
+    this.cleanupMediaAttach();
     const success = await this.playerManager.tryPlaybackFallback();
     this._isTransitioning = false;
 
@@ -2636,7 +2728,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._retrySuppressUntil = Date.now() + PlayerController.RETRY_SUPPRESS_MS;
 
     try {
-      this.playerManager.destroy();
+      this.cleanupMediaAttach();
+      await this.playerManager.destroy();
     } catch {
       // Ignore cleanup errors
     }
@@ -3537,7 +3630,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     try {
       try {
-        this.playerManager.destroy();
+        this.cleanupMediaAttach();
+        await this.playerManager.destroy();
       } catch {
         // Ignore stale player cleanup failures during cold-start recovery.
       }
@@ -4007,48 +4101,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const poster = this.getLoadingPoster()?.staticUrl;
     this.selectedQualityId = "auto";
 
+    this.cleanupMediaAttach();
+
     // Clear container
     container.innerHTML = "";
 
-    // Listen for player selection
-    const onSelected = (e: { player: string; source: StreamSource; score: number }) => {
-      // Track current player info
-      const playerImpl = this.playerManager
-        .getRegisteredPlayers()
-        .find((p) => p.capability.shortname === e.player);
-      if (playerImpl) {
-        this._currentPlayerInfo = {
-          name: playerImpl.capability.name,
-          shortname: playerImpl.capability.shortname,
-        };
-      }
-
-      // Track current source info
-      if (e.source) {
-        this._currentSourceInfo = {
-          url: e.source.url,
-          type: e.source.type,
-        };
-      }
-      this._playbackQuality = null;
-
-      this.setState("connecting", {
-        selectedPlayer: e.player,
-        selectedProtocol: (e.source?.type || "").toString(),
-        endpointUrl: e.source?.url,
-      });
-
-      // Bubble up playerSelected event
-      this.emit("playerSelected", { player: e.player, source: e.source, score: e.score });
-    };
-    try {
-      (this.playerManager as any).on?.("playerSelected", onSelected);
-    } catch {}
-    this.cleanupFns.push(() => {
-      try {
-        (this.playerManager as any).off?.("playerSelected", onSelected);
-      } catch {}
-    });
+    this.ensurePlayerSelectedListener();
 
     this.setState("selecting_player");
 
@@ -4074,6 +4132,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
             this.container.appendChild(el);
           }
         } catch {}
+        this.cleanupMediaAttach();
         this.videoElement = el;
         this.currentPlayer = this.playerManager.getCurrentPlayer();
         this._seekingLoggedOnce = false;
@@ -4165,7 +4224,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         managerOptions
       );
       this._initializePlayerInFlight = initializePromise;
-      await initializePromise;
+      const initializedElement = await initializePromise;
+      if (!this.videoElement && initializedElement) {
+        this.videoElement = initializedElement;
+      }
+      if (!this.currentPlayer) {
+        this.currentPlayer = this.playerManager.getCurrentPlayer();
+      }
+      if (this.currentPlayer) {
+        this.bindCurrentPlayerEvents(this.currentPlayer);
+      }
       this.log(`[initializePlayer] Player initialized successfully`);
     } catch (e) {
       this.log(`[initializePlayer] Player initialization FAILED: ${e}`);
@@ -4305,7 +4373,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     el.addEventListener("leavepictureinpicture", onLeavePiP);
     document.addEventListener("fullscreenchange", onFullscreenChange);
 
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       el.removeEventListener("waiting", onWaiting);
       el.removeEventListener("playing", onPlaying);
       el.removeEventListener("canplay", onCanPlay);
@@ -4389,7 +4457,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
 
     this.abrController.start(this.videoElement);
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       this.abrController?.stop();
       this.abrController = null;
     });
@@ -4450,6 +4518,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           // Hide stale overlay while transition is in progress.
           this.clearError();
           this.emit("errorCleared", undefined as never);
+          this.cleanupMediaAttach();
           this.playerManager
             .tryPlaybackFallback()
             .catch(() => {
@@ -4494,7 +4563,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Sample quality periodically
     const qualityInterval = setInterval(handleQualityUpdate, 1000);
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       clearInterval(qualityInterval);
       this.qualityMonitor?.stop();
       this.qualityMonitor = null;
@@ -4593,7 +4662,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
 
     this.interactionController.attach();
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       this.interactionController?.detach();
       this.interactionController = null;
     });
@@ -4626,8 +4695,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       });
     }
 
-    this.cleanupFns.push(() => {
-      this.mistReporter?.sendFinalReport("unmount");
+    this.mediaCleanupFns.push(() => {
+      this.mistReporter?.sendFinalReport("player-switch");
       this.mistReporter?.destroy();
       this.mistReporter = null;
     });
@@ -4658,20 +4727,21 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Packaged MSE players emit native `seeking` for their own live-edge/gap handling;
     // only controller/API seeks call MetaTrackManager.onSeek().
     if (this.videoElement) {
+      const video = this.videoElement;
       const handleTimeUpdate = () => {
         if (this.metaTrackManager) {
           this.metaTrackManager.setPlaybackTime(this.getMistMetadataPlaybackTime() / 1000);
         }
       };
 
-      this.videoElement.addEventListener("timeupdate", handleTimeUpdate);
+      video.addEventListener("timeupdate", handleTimeUpdate);
 
-      this.cleanupFns.push(() => {
-        this.videoElement?.removeEventListener("timeupdate", handleTimeUpdate);
+      this.mediaCleanupFns.push(() => {
+        video.removeEventListener("timeupdate", handleTimeUpdate);
       });
     }
 
-    this.cleanupFns.push(() => {
+    this.mediaCleanupFns.push(() => {
       this.metaTrackManager?.disconnect();
       this.metaTrackManager = null;
     });
@@ -4680,6 +4750,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private cleanup(): void {
     this.clearDeferredAutoplayRetry();
     this.clearAutoplayActivationRecovery();
+    this.cleanupMediaAttach();
     // Run all cleanup functions
     this.cleanupFns.forEach((fn) => {
       try {

@@ -78,15 +78,14 @@ describe("DashJsPlayerImpl", () => {
     expect(player.getDuration()).toBe(72_000);
   });
 
-  it("routes dash.js live DVR null-range rejections through onError", () => {
+  it("routes dash.js live DVR null-range rejections through the player error event", () => {
     const player = new DashJsPlayerImpl();
     const errors: string[] = [];
     let prevented = false;
     let stopped = false;
+    player.on("error", (error) => errors.push(String(error)));
 
-    const handler = (player as any).createInternalRejectionHandler({
-      onError: (error: string | Error) => errors.push(String(error)),
-    });
+    const handler = (player as any).createInternalRejectionHandler();
 
     handler({
       reason: new TypeError(`can't access property "range", v.getCurrentDVRInfo() is null`),
@@ -109,10 +108,9 @@ describe("DashJsPlayerImpl", () => {
     const player = new DashJsPlayerImpl();
     const errors: string[] = [];
     let prevented = false;
+    player.on("error", (error) => errors.push(String(error)));
 
-    const handler = (player as any).createInternalRejectionHandler({
-      onError: (error: string | Error) => errors.push(String(error)),
-    });
+    const handler = (player as any).createInternalRejectionHandler();
 
     // A generic null-property rejection with no dash.js signature and no
     // dash.js stack frame must NOT be claimed as a DASH failure — otherwise the
@@ -229,12 +227,13 @@ describe("DashJsPlayerImpl", () => {
   it("reports repeated startup fragment abandonment before playable media", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
-    const onError = vi.fn();
+    const errors: string[] = [];
+    player.on("error", (error) => errors.push(String(error)));
 
     await player.initialize(
       container,
       { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
-      { autoplay: false, muted: true, onError },
+      { autoplay: false, muted: true },
       { source: [], meta: { tracks: [] }, type: "live" }
     );
 
@@ -248,6 +247,6 @@ describe("DashJsPlayerImpl", () => {
       request: { url: "https://edge.example/live/chunk_3.m4s" },
     });
 
-    expect(onError).toHaveBeenCalledWith("DASH fatal startup fragment abandoned repeatedly");
+    expect(errors).toContain("DASH fatal startup fragment abandoned repeatedly");
   });
 });

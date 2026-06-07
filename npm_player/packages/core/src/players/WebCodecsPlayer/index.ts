@@ -722,8 +722,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Initialize metadata WebSocket for subtitle/meta tracks (separate socket)
     this.initMetadataWebSocket(source.url);
 
-    // Set up video event listeners
-    this.setupVideoEventListeners(video, options);
+    // Direct rendering uses the wrapper's canvas/worker pipeline; the hidden
+    // backing video element may never emit browser metadata events.
+    this.setupVideoEventListeners(video, options, {
+      readyEvent: this.useDirectRendering ? "immediate" : "loadedmetadata",
+    });
 
     // Set up requestVideoFrameCallback for accurate frame timing
     this.setupFrameCallback();

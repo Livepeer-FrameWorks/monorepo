@@ -1,5 +1,68 @@
+// @vitest-environment jsdom
+
 import { describe, expect, it, vi } from "vitest";
 import { PlayerController } from "../src/core/PlayerController";
+import type { IPlayer, PlayerOptions, StreamInfo } from "../src/core/PlayerInterface";
+
+function makeStreamInfo(): StreamInfo {
+  return {
+    source: [{ type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" }],
+    meta: { tracks: [{ type: "video", codec: "H264" }] },
+    type: "live",
+  };
+}
+
+function makeEventedPlayer(shortname = "wrapped"): IPlayer & {
+  emit: (event: string, data?: unknown) => void;
+} {
+  const listeners = new Map<string, Set<(data: unknown) => void>>();
+  return {
+    capability: { name: shortname, shortname, priority: 1, mimes: ["dash/video/mp4"] },
+    isMimeSupported: vi.fn(() => true),
+    isBrowserSupported: vi.fn(() => ["video"]),
+    initialize: vi.fn(),
+    destroy: vi.fn(),
+    getVideoElement: vi.fn(() => null),
+    on: vi.fn((event: string, listener: (data: unknown) => void) => {
+      const set = listeners.get(event) ?? new Set();
+      set.add(listener);
+      listeners.set(event, set);
+    }) as any,
+    off: vi.fn((event: string, listener: (data: unknown) => void) => {
+      listeners.get(event)?.delete(listener);
+    }) as any,
+    emit: (event: string, data?: unknown) => {
+      listeners.get(event)?.forEach((listener) => listener(data));
+    },
+  } as IPlayer & { emit: (event: string, data?: unknown) => void };
+}
+
+function makeInitializingController() {
+  const player = makeEventedPlayer();
+  const video = document.createElement("video");
+  let capturedOptions: PlayerOptions | null = null;
+  const manager = {
+    on: vi.fn(() => () => {}),
+    off: vi.fn(),
+    destroy: vi.fn().mockResolvedValue(undefined),
+    getCurrentPlayer: vi.fn(() => player),
+    getRegisteredPlayers: vi.fn(() => [player]),
+    canAttemptFallback: vi.fn(() => true),
+    tryPlaybackFallback: vi.fn().mockResolvedValue(true),
+    initializePlayer: vi.fn(async (_container, _streamInfo, options: PlayerOptions) => {
+      capturedOptions = options;
+      return video;
+    }),
+  };
+  const controller = new PlayerController({
+    contentId: "test-stream",
+    contentType: "live",
+    playerManager: manager as any,
+  });
+  (controller as any).container = document.createElement("div");
+  (controller as any).streamInfo = makeStreamInfo();
+  return { controller, manager, player, video, getOptions: () => capturedOptions };
+}
 
 function makeController(): PlayerController {
   return new PlayerController({
@@ -13,6 +76,69 @@ function makeController(): PlayerController {
 }
 
 describe("PlayerController cold boot recovery", () => {
+  it("tracks an initialized wrapper before its media-ready callback fires", async () => {
+    const { controller, player, video } = makeInitializingController();
+    const ready = vi.fn();
+    controller.on("ready", ready);
+
+    await (controller as any).initializePlayer();
+
+    expect((controller as any).currentPlayer).toBe(player);
+    expect((controller as any).videoElement).toBe(video);
+    expect(player.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(player.on).toHaveBeenCalledWith("reloadrequested", expect.any(Function));
+    expect(ready).not.toHaveBeenCalled();
+    (controller as any).cleanup();
+  });
+
+  it("cleans stale media attachment state before accepting a replacement onReady", async () => {
+    const { controller, video, getOptions } = makeInitializingController();
+    await (controller as any).initializePlayer();
+    const cleanup = vi.fn();
+    (controller as any).mediaCleanupFns.push(cleanup);
+    const previousResizeObserver = (globalThis as any).ResizeObserver;
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      getOptions()?.onReady?.(video);
+    } finally {
+      (globalThis as any).ResizeObserver = previousResizeObserver;
+    }
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect((controller as any).videoElement).toBe(video);
+    (controller as any).cleanup();
+  });
+
+  it("bridges wrapped player errors into controller passive error handling", async () => {
+    const { controller, player } = makeInitializingController();
+    const setPassiveError = vi
+      .spyOn(controller as any, "setPassiveError")
+      .mockResolvedValue(undefined);
+
+    await (controller as any).initializePlayer();
+    player.emit("error", new Error("wrapped player failed"));
+
+    expect(setPassiveError).toHaveBeenCalledWith("wrapped player failed");
+    (controller as any).cleanup();
+  });
+
+  it("routes wrapped reload requests through fallback when available", async () => {
+    const { controller, player } = makeInitializingController();
+    const retryWithFallback = vi
+      .spyOn(controller as any, "retryWithFallback")
+      .mockResolvedValue(true);
+
+    await (controller as any).initializePlayer();
+    player.emit("reloadrequested", { reason: "segment decode overflow" });
+
+    expect(retryWithFallback).toHaveBeenCalledOnce();
+    (controller as any).cleanup();
+  });
+
   it("reinitializes from Mist stream info when an edge-known stream comes online before playback started", async () => {
     const c = makeController();
     (c as any).container = { innerHTML: "" };
