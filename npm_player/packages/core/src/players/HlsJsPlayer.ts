@@ -283,16 +283,20 @@ export class HlsJsPlayerImpl extends BasePlayer {
         this.hls.on(Hls.Events.ERROR, (_: any, data: any) => {
           if (this.destroyed) return; // Guard against zombie callbacks
           if (data?.fatal) {
-            failStartup(new Error(`HLS fatal error: ${data?.type || "unknown"}`));
-            if (this.failureCount < 3) {
+            const error = `HLS fatal error: ${data?.type || "unknown"}${
+              data?.details ? `:${data.details}` : ""
+            }`;
+            const isMediaError =
+              data?.type === Hls.ErrorTypes?.MEDIA_ERROR || data?.type === "mediaError";
+            if (isMediaError && video.error && this.failureCount < 1) {
               this.failureCount++;
               try {
                 this.hls.recoverMediaError();
               } catch {}
-            } else {
-              const error = `HLS fatal error: ${data?.type || "unknown"}`;
-              this.emit("error", error);
+              return;
             }
+            failStartup(new Error(error));
+            this.emit("error", error);
           }
         });
 
@@ -302,11 +306,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
         });
-        this.setupVideoEventListeners(video, options, { readyEvent: "canplay" });
         await hlsStartup;
         if (this.destroyed) {
           throw new Error("HLS player destroyed during initialization");
         }
+        this.setupVideoEventListeners(video, options, { readyEvent: "immediate" });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         if (options.playbackHeaders) {
           throw new Error("Native HLS cannot attach playback Authorization headers");

@@ -267,19 +267,23 @@ export class VideoJsPlayerImpl extends BasePlayer {
         startupTimer = setTimeout(() => {
           if (startupSettled) return;
           startupSettled = true;
+          removeStartupListeners();
           reject(new Error("VideoJS startup timed out before media became playable"));
         }, startupTimeoutMs);
       });
+      let removeStartupListeners = () => {};
       const finishStartup = () => {
         if (startupSettled) return;
         startupSettled = true;
         if (startupTimer !== null) clearTimeout(startupTimer);
+        removeStartupListeners();
         resolveStartup?.();
       };
       const failStartup = (error: Error) => {
         if (startupSettled) return;
         startupSettled = true;
         if (startupTimer !== null) clearTimeout(startupTimer);
+        removeStartupListeners();
         rejectStartup?.(error);
       };
       const failStartupFromVideo = () => {
@@ -287,6 +291,13 @@ export class VideoJsPlayerImpl extends BasePlayer {
         failStartup(new Error(`VideoJS media startup failed: ${message}`));
       };
       const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
+      removeStartupListeners = () => {
+        for (const event of mediaReadyEvents) {
+          this.videojsPlayer?.off?.(event, finishStartup);
+          video.removeEventListener(event, finishStartup);
+        }
+        video.removeEventListener("error", failStartupFromVideo);
+      };
       for (const event of mediaReadyEvents) {
         this.videojsPlayer.on(event, finishStartup);
         video.addEventListener(event, finishStartup, { once: true });

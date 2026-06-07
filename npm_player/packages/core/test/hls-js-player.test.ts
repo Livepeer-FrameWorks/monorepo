@@ -6,6 +6,7 @@ const hlsState = vi.hoisted(() => ({
   instances: [] as any[],
   isSupported: vi.fn(() => true),
   loadSource: vi.fn(),
+  recoverMediaError: vi.fn(),
 }));
 
 vi.mock("hls.js", () => {
@@ -28,6 +29,10 @@ vi.mock("hls.js", () => {
 
     loadSource(url: string): void {
       hlsState.loadSource(url);
+    }
+
+    recoverMediaError(): void {
+      hlsState.recoverMediaError();
     }
 
     on(event: string, handler: (event: string, data?: unknown) => void): void {
@@ -55,6 +60,7 @@ describe("HlsJsPlayerImpl", () => {
     hlsState.instances.length = 0;
     hlsState.isSupported.mockReturnValue(true);
     hlsState.loadSource.mockClear();
+    hlsState.recoverMediaError.mockClear();
 
     Object.defineProperty(globalThis, "document", {
       configurable: true,
@@ -138,11 +144,42 @@ describe("HlsJsPlayerImpl", () => {
     video.dispatchEvent(new Event("loadedmetadata"));
     expect(onReady).not.toHaveBeenCalled();
 
-    video.dispatchEvent(new Event("canplay"));
+    video.dispatchEvent(new Event("loadeddata"));
     await initialization;
 
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);
+  });
+
+  it("only recovers fatal HLS media errors when the media element is in error", async () => {
+    const player = new HlsJsPlayerImpl();
+    const container = document.createElement("div");
+    const onError = vi.fn();
+
+    const initialization = player.initialize(
+      container,
+      {
+        type: "html5/application/vnd.apple.mpegurl;version=7",
+        url: "https://edge.example/live/index.m3u8",
+      },
+      { autoplay: true, muted: true, onError },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    await vi.waitFor(() => expect(hlsState.instances).toHaveLength(1));
+    const hls = hlsState.instances[0];
+    hls.emit("mediaAttached");
+    const video = container.querySelector("video") as HTMLVideoElement & { error: MediaError };
+    video.error = { code: 3, message: "decode" } as MediaError;
+
+    hls.emit("error", { fatal: true, type: "mediaError", details: "bufferAppendError" });
+    expect(hlsState.recoverMediaError).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    hls.emit("error", { fatal: true, type: "mediaError", details: "bufferAppendError" });
+
+    await expect(initialization).rejects.toThrow("HLS fatal error: mediaError:bufferAppendError");
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("keeps native HLS seekable range instead of controller range hints", () => {
