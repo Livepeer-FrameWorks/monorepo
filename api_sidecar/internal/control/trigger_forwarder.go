@@ -216,8 +216,9 @@ func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Lo
 		SentAt:  timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger},
 	}
+	logFields := TriggerSummaryFields(trigger, requestID)
 	if err := stream.Send(msg); err != nil {
-		logger.WithError(err).WithField("source_event_id", requestID).Warn("Stream send failed; will retry from WAL")
+		logger.WithError(err).WithFields(logFields).Warn("Stream send failed; will retry from WAL")
 		return false
 	}
 
@@ -234,29 +235,66 @@ func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Lo
 		}
 		if ack.GetRetryable() {
 			TriggerAckOutcomes.WithLabelValues(triggerType, "retryable").Inc()
-			logger.WithFields(logging.Fields{
-				"source_event_id": requestID,
-				"error_code":      ack.GetErrorCode().String(),
-			}).Warn("Negative retryable ack; will retry on next forwarder pass")
+			logFields["error_code"] = ack.GetErrorCode().String()
+			logger.WithFields(logFields).Warn("Negative retryable ack; will retry on next forwarder pass")
 			return false
 		}
 		TriggerAckOutcomes.WithLabelValues(triggerType, "non_retryable").Inc()
-		logger.WithFields(logging.Fields{
-			"source_event_id": requestID,
-			"error_code":      ack.GetErrorCode().String(),
-			"error_message":   ack.GetErrorMessage(),
-		}).Error("Non-retryable trigger ack; moving entry to dead-letter")
+		logFields["error_code"] = ack.GetErrorCode().String()
+		logFields["error_message"] = ack.GetErrorMessage()
+		logger.WithFields(logFields).Error("Non-retryable trigger ack; moving entry to dead-letter")
 		if err := triggerWAL.DeadLetter(requestID); err != nil {
-			logger.WithError(err).WithField("source_event_id", requestID).Warn("Failed to dead-letter non-retryable WAL entry")
+			logger.WithError(err).WithFields(logFields).Warn("Failed to dead-letter non-retryable WAL entry")
 			return false
 		}
 		updateTriggerWALDepthGauge()
 		return true
 	case <-time.After(triggerAckTimeout):
 		TriggerAckOutcomes.WithLabelValues(triggerType, "timeout").Inc()
-		logger.WithField("source_event_id", requestID).Warn("Timed out waiting for trigger ack; will retry")
+		logger.WithFields(logFields).Warn("Timed out waiting for trigger ack; will retry")
 	}
 	return false
+}
+
+// TriggerSummaryFields returns stable incident-response fields for a Mist trigger.
+func TriggerSummaryFields(trigger *ipcpb.MistTrigger, requestID string) logging.Fields {
+	fields := logging.Fields{
+		"source_event_id": requestID,
+	}
+	if trigger == nil {
+		return fields
+	}
+	fields["trigger_type"] = trigger.GetTriggerType()
+	fields["tenant_id"] = trigger.GetTenantId()
+	fields["node_id"] = trigger.GetNodeId()
+	fields["stream_id"] = trigger.GetStreamId()
+	fields["received_at_ms"] = trigger.GetTimestamp()
+	if trigger.GetTimestamp() > 0 {
+		fields["wal_age_ms"] = time.Now().UnixMilli() - trigger.GetTimestamp()
+	}
+	switch {
+	case trigger.GetViewerDisconnect() != nil:
+		p := trigger.GetViewerDisconnect()
+		fields["stream_name"] = p.GetStreamName()
+		fields["session_id"] = p.GetSessionId()
+	case trigger.GetStreamEnd() != nil:
+		fields["stream_name"] = trigger.GetStreamEnd().GetStreamName()
+	case trigger.GetPushEnd() != nil:
+		p := trigger.GetPushEnd()
+		fields["stream_name"] = p.GetStreamName()
+		fields["push_id"] = p.GetPushId()
+	case trigger.GetRecordingComplete() != nil:
+		fields["stream_name"] = trigger.GetRecordingComplete().GetStreamName()
+	case trigger.GetRecordingSegment() != nil:
+		p := trigger.GetRecordingSegment()
+		fields["stream_name"] = p.GetStreamName()
+		fields["duration_ms"] = p.GetDurationMs()
+	case trigger.GetProcessBilling() != nil:
+		p := trigger.GetProcessBilling()
+		fields["stream_name"] = p.GetStreamName()
+		fields["process_type"] = p.GetProcessType()
+	}
+	return fields
 }
 
 // errTriggerForwarderUnready is returned when SendDurableMistTrigger is

@@ -678,6 +678,20 @@ for unit in $units; do
   journal_unit "$unit" || true
 done
 echo
+echo "== durable trigger WAL diagnostics =="
+if systemctl list-unit-files frameworks-helmsman.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units frameworks-helmsman.service --all --no-legend --no-pager >/dev/null 2>&1; then
+  systemctl show frameworks-helmsman.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
+  echo "-- trigger WAL admin snapshot --"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 2 http://127.0.0.1:18007/triggers/wal 2>&1 || true
+    echo
+  fi
+  echo "-- trigger ack failure context --"
+  journal_unit frameworks-helmsman.service | grep -Ei 'trigger ack|MistTriggerAck|source_event_id|retryable|dead-letter|WAL|timeout|foghorn|unavailable|failed' | tail -n 160 || true
+else
+  echo "(frameworks-helmsman.service not installed)"
+fi
+echo
 echo "== privateer sync diagnostics =="
 if systemctl list-unit-files frameworks-privateer.service --no-legend --no-pager >/dev/null 2>&1 || systemctl list-units frameworks-privateer.service --all --no-legend --no-pager >/dev/null 2>&1; then
   systemctl show frameworks-privateer.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
@@ -728,6 +742,8 @@ for unit in vmauth.service vmagent.service frameworks-vmagent-edge.service; do
     systemctl cat "$unit" 2>/dev/null | redact_snapshot_secrets || true
     echo "-- ${unit} remote write/backend lines --"
     journal_unit "$unit" | grep -Ei 'remote.?write|backend|vmauth|vmagent|victoria|unavailable|502|401|403|5[0-9][0-9]|error|warn|failed|timeout' | tail -n 120 || true
+    echo "-- ${unit} backend failure context --"
+    journal_unit "$unit" | grep -Ei 'all the [0-9]+ backends|backend.*(unavailable|failed|error)|dial|connect|upstream|proxying|api/v1/write|connection refused|no route|timeout|deadline|502|503' | tail -n 160 || true
   fi
 done
 echo "-- telemetry configs --"

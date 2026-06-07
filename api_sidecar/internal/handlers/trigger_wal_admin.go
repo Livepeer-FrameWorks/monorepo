@@ -25,12 +25,11 @@ func HandleTriggerWALStatus(c *gin.Context) {
 	}
 	entries := make([]gin.H, 0, len(pending))
 	for _, trigger := range pending {
-		entries = append(entries, gin.H{
-			"source_event_id": trigger.GetRequestId(),
-			"trigger_type":    trigger.GetTriggerType(),
-			"node_id":         trigger.GetNodeId(),
-			"received_at_ms":  trigger.GetTimestamp(),
-		})
+		entry := gin.H{}
+		for key, value := range control.TriggerSummaryFields(trigger, trigger.GetRequestId()) {
+			entry[key] = value
+		}
+		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		ti, okI := entries[i]["received_at_ms"].(int64)

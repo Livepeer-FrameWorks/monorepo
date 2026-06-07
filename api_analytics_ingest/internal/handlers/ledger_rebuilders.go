@@ -375,6 +375,19 @@ func (h *AnalyticsHandler) viewerUsageTombstones(ctx context.Context, tenantID, 
 // --- stream_runtime_5m ---
 
 func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowStart, windowEnd time.Time) error {
+	projectionVersionMS := time.Now().UnixMilli()
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO periscope.stream_runtime_5m (
+			window_start, tenant_id, cluster_id, stream_id,
+			active_seconds, peak_viewers,
+			source_event_id, projection_version_ms
+		)`)
+	if err != nil {
+		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
+	}
+	defer closeClickHouseBatch(batch)
+
+	rowsEmitted := 0
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH s AS (
 			SELECT
@@ -401,19 +414,6 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	}
 	defer func() { _ = rows.Close() }()
 
-	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.stream_runtime_5m (
-			window_start, tenant_id, cluster_id, stream_id,
-			active_seconds, peak_viewers,
-			source_event_id, projection_version_ms
-		)`)
-	if err != nil {
-		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
-	}
-	defer closeClickHouseBatch(batch)
-
-	rowsEmitted := 0
 	for rows.Next() {
 		var (
 			tenantID, nodeID, clusterID, streamID, streamName, sourceEventID string
@@ -446,29 +446,87 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			}
 			continue
 		}
-		pv := uint32(peakViewers)
-		if peakViewers < 0 {
-			pv = 0
+		sourceEventID = streamRuntimeSessionKey(tenantID, nodeID, streamID, startMS)
+		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, endMS, peakViewers, projectionVersionMS)
+		if err != nil {
+			return err
 		}
-		for windowMS, overlapMS := range windowsForSpan(startMS, endMS) {
-			if overlapMS <= 0 {
-				continue
-			}
-			activeSeconds := uint32(overlapMS / 1000)
-			if err := batch.Append(
-				time.UnixMilli(windowMS).UTC(),
-				tenantID, clusterID, streamID,
-				activeSeconds, pv,
-				sourceEventID, projectionVersionMS,
-			); err != nil {
-				return fmt.Errorf("stream_runtime_5m append: %w", err)
-			}
-			rowsEmitted++
-		}
+		rowsEmitted += emitted
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("stream_runtime_5m iterate: %w", err)
 	}
+
+	liveRows, err := h.clickhouse.Query(ctx, `
+		SELECT
+			toString(s.tenant_id) AS tenant_id,
+			s.node_id AS node_id,
+			ifNull(nullIf(e.cluster_id, ''), '') AS cluster_id,
+			toString(s.stream_id) AS stream_id,
+			s.internal_name AS stream_name,
+			ifNull(s.started_at, s.updated_at) AS started_at,
+			toInt64(s.current_viewers) AS peak_viewers
+		FROM periscope.stream_state_current FINAL AS s
+		LEFT JOIN (
+			SELECT
+				tenant_id,
+				stream_id,
+				node_id,
+				internal_name,
+				argMaxIf(cluster_id, timestamp, cluster_id != '') AS cluster_id
+			FROM periscope.stream_event_log
+			WHERE status = 'live'
+			  AND event_type IN ('stream_start', 'stream_lifecycle', 'stream_buffer', 'track_list_update')
+			GROUP BY tenant_id, stream_id, node_id, internal_name
+		) AS e
+			ON e.tenant_id = s.tenant_id
+		   AND e.stream_id = s.stream_id
+		   AND e.node_id = s.node_id
+		   AND e.internal_name = s.internal_name
+		WHERE s.status = 'live'
+		  AND ifNull(s.started_at, s.updated_at) < ?
+		  AND now() >= ?`,
+		windowEnd, windowStart)
+	if err != nil {
+		return fmt.Errorf("stream_runtime_5m live source query: %w", err)
+	}
+	defer func() { _ = liveRows.Close() }()
+
+	liveEndMS := time.Now().UTC().UnixMilli()
+	if windowEndMS := windowEnd.UnixMilli(); liveEndMS > windowEndMS {
+		liveEndMS = windowEndMS
+	}
+	for liveRows.Next() {
+		var (
+			tenantID, nodeID, clusterID, streamID, streamName string
+			startedAt                                         time.Time
+			peakViewers                                       int64
+		)
+		if err := liveRows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &startedAt, &peakViewers); err != nil {
+			return fmt.Errorf("stream_runtime_5m live scan: %w", err)
+		}
+		if clusterID == "" || isArtifactRuntimeStream(streamName) {
+			continue
+		}
+		sessionStartMS := startedAt.UTC().UnixMilli()
+		startMS := sessionStartMS
+		if windowStartMS := windowStart.UnixMilli(); startMS < windowStartMS {
+			startMS = windowStartMS
+		}
+		if startMS <= 0 || liveEndMS <= startMS {
+			continue
+		}
+		sourceEventID := streamRuntimeSessionKey(tenantID, nodeID, streamID, sessionStartMS)
+		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, liveEndMS, peakViewers, projectionVersionMS)
+		if err != nil {
+			return err
+		}
+		rowsEmitted += emitted
+	}
+	if err := liveRows.Err(); err != nil {
+		return fmt.Errorf("stream_runtime_5m live iterate: %w", err)
+	}
+
 	if rowsEmitted == 0 {
 		return nil
 	}
@@ -479,6 +537,37 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_runtime_5m", "inserted").Add(float64(rowsEmitted))
 	}
 	return nil
+}
+
+func streamRuntimeSessionKey(tenantID, nodeID, streamID string, sourceStartedAtMS int64) string {
+	return fmt.Sprintf("stream-runtime:%s:%s:%s:%d", tenantID, nodeID, streamID, sourceStartedAtMS)
+}
+
+func appendStreamRuntimeSpan(batch clickhouseBatch, tenantID, clusterID, streamID, sourceEventID string, startMS, endMS, peakViewers, projectionVersionMS int64) (int, error) {
+	if startMS <= 0 || endMS <= startMS || clusterID == "" || streamID == "" {
+		return 0, nil
+	}
+	pv := uint32(peakViewers)
+	if peakViewers < 0 {
+		pv = 0
+	}
+	rowsEmitted := 0
+	for windowMS, overlapMS := range windowsForSpan(startMS, endMS) {
+		if overlapMS <= 0 {
+			continue
+		}
+		activeSeconds := uint32(overlapMS / 1000)
+		if err := batch.Append(
+			time.UnixMilli(windowMS).UTC(),
+			tenantID, clusterID, streamID,
+			activeSeconds, pv,
+			sourceEventID, projectionVersionMS,
+		); err != nil {
+			return rowsEmitted, fmt.Errorf("stream_runtime_5m append: %w", err)
+		}
+		rowsEmitted++
+	}
+	return rowsEmitted, nil
 }
 
 func isArtifactRuntimeStream(streamName string) bool {

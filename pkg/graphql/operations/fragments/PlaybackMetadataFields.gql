@@ -34,6 +34,7 @@ fragment PlaybackMetadataFields on PlaybackMetadata {
   recordingSizeBytes
   clipSource
   createdAt
+  telemetryToken
   thumbnailAssets {
     posterUrl
     spriteVttUrl

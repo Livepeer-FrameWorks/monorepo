@@ -96,19 +96,20 @@ func TestGetSessionQoeTimeSeriesInnerSessionRollup(t *testing.T) {
 	}
 }
 
-// The retention-asset list is gated to VOD content with a real reach sample
-// (content_type = 'vod' AND bucket_width_s > 0) over a half-open range.
+// The retention-asset list is gated to retained artifact content with a real
+// reach sample over a half-open range; clips and VODs both have retention
+// curves.
 func TestListVodRetentionAssetsEligibilityGate(t *testing.T) {
 	server, mock, cleanup := newTimeSeriesServer(t)
 	defer cleanup()
 	// count + main queries run concurrently (countAsync), so don't enforce order.
 	mock.MatchExpectationsInOrder(false)
 
-	mock.ExpectQuery(`(?s)uniqExact\(artifact_hash\).*content_type = 'vod' AND bucket_width_s > 0.*timestamp >= \? AND timestamp < \?`).
+	mock.ExpectQuery(`(?s)uniqExact\(artifact_hash\).*content_type IN \('vod', 'clip'\) AND bucket_width_s > 0.*timestamp >= \? AND timestamp < \?`).
 		WillReturnRows(sqlmock.NewRows([]string{"cnt"}).AddRow(int32(1)))
 
 	lastSeen := time.Date(2026, 6, 1, 18, 30, 0, 0, time.UTC)
-	mock.ExpectQuery(`(?s)content_type = 'vod' AND bucket_width_s > 0.*timestamp >= \? AND timestamp < \?.*GROUP BY artifact_hash`).
+	mock.ExpectQuery(`(?s)content_type IN \('vod', 'clip'\) AND bucket_width_s > 0.*timestamp >= \? AND timestamp < \?.*GROUP BY artifact_hash`).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "total_sessions", "duration_s", "last_seen"}).
 			AddRow("hash-abc", int64(2410), int32(3600), lastSeen))
 

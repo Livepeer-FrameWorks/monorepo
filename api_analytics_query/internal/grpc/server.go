@@ -5342,12 +5342,12 @@ func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.
 	}, nil
 }
 
-// ListVodRetentionAssets lists the tenant's VOD assets that have retention data in
-// the window — the picker backing the retention tab. Eligibility is owned here:
-// content_type = 'vod' AND at least one real reach sample (bucket_width_s > 0, the
-// same presence gate GetVodRetention uses). Human title/playback_id are composed at
-// the gateway from the catalog. The per-artifact aggregate is wrapped in a subquery
-// so the keyset columns (last_seen, artifact_hash) are concrete in the outer filter.
+// ListVodRetentionAssets lists retained playback artifacts with retention data in
+// the window. Eligibility is owned here: VOD or clip content with at least one
+// real reach sample (bucket_width_s > 0), matching GetVodRetention's presence
+// gate. Human title/playback_id are composed at the gateway from the catalog.
+// The per-artifact aggregate is wrapped in a subquery so the keyset columns
+// (last_seen, artifact_hash) are concrete in the outer filter.
 func (s *PeriscopeServer) ListVodRetentionAssets(ctx context.Context, req *periscopepb.ListVodRetentionAssetsRequest) (*periscopepb.ListVodRetentionAssetsResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -5362,7 +5362,7 @@ func (s *PeriscopeServer) ListVodRetentionAssets(ctx context.Context, req *peris
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	const eligible = `tenant_id = ? AND content_type = 'vod' AND bucket_width_s > 0 AND timestamp >= ? AND timestamp < ?`
+	const eligible = `tenant_id = ? AND content_type IN ('vod', 'clip') AND bucket_width_s > 0 AND timestamp >= ? AND timestamp < ?`
 	countCh := s.countAsync(ctx, fmt.Sprintf(`
 		SELECT toInt32(uniqExact(artifact_hash))
 		FROM client_qoe_session_deltas FINAL

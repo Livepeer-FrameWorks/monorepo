@@ -212,6 +212,48 @@ func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
 	}
 }
 
+func TestStreamRuntimeRebuilderEmitsLiveStateWindow(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	windowStart := time.Date(2026, 6, 5, 19, 0, 0, 0, time.UTC)
+	windowEnd := windowStart.Add(5 * time.Minute)
+	startedAt := windowStart.Add(-2 * time.Minute)
+
+	conn.addQueryRow(
+		"periscope.stream_state_current",
+		tenantID,
+		"edge-eu-1",
+		"media-eu-1",
+		streamID,
+		"live+demo",
+		startedAt,
+		int64(5),
+	)
+
+	if err := handler.rebuildStreamRuntime5m(context.Background(), windowStart, windowEnd); err != nil {
+		t.Fatalf("rebuildStreamRuntime5m: %v", err)
+	}
+
+	batch := conn.batches["periscope.stream_runtime_5m"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected one stream_runtime_5m row for live state, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[2] != "media-eu-1" || row[3] != streamID {
+		t.Fatalf("unexpected stream runtime identity row: %#v", row)
+	}
+	if got := row[4]; got != uint32(300) {
+		t.Fatalf("active_seconds = %#v, want 300", got)
+	}
+	wantKey := streamRuntimeSessionKey(tenantID, "edge-eu-1", streamID, startedAt.UnixMilli())
+	if row[6] != wantKey {
+		t.Fatalf("source_event_id = %#v, want %q", row[6], wantKey)
+	}
+}
+
 func TestStreamRuntimeRebuilderSkipsArtifactRuntimeWithoutStart(t *testing.T) {
 	for _, streamName := range []string{"vod+artifact", "dvr+artifact", "processing+artifact"} {
 		t.Run(streamName, func(t *testing.T) {

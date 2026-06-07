@@ -2109,7 +2109,7 @@ CREATE TABLE IF NOT EXISTS stream_runtime_5m (
     tenant_id UUID,
     cluster_id LowCardinality(String) DEFAULT '',
     stream_id UUID,
-    source_event_id String,             -- STREAM_END source_event_id
+    source_event_id String,             -- stable stream-runtime session key
 
     active_seconds UInt32 DEFAULT 0,
     peak_viewers UInt32 DEFAULT 0,
