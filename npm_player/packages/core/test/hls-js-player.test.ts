@@ -154,5 +154,6 @@ describe("HlsJsPlayerImpl", () => {
     player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
 
     expect(player.getSeekableRange()).toEqual({ start: 4_000, end: 64_000 });
+    expect(player.getDuration()).toBe(64_000);
   });
 });

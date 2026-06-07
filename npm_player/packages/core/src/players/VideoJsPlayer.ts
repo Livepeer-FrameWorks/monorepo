@@ -1,5 +1,4 @@
 import { BasePlayer } from "../core/PlayerInterface";
-import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import { isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
 import type {
@@ -41,7 +40,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
   private videojsPlayer: any = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
-  private liveDurationProxy: LiveDurationProxy | null = null;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
@@ -338,18 +336,10 @@ export class VideoJsPlayerImpl extends BasePlayer {
           video.networkState
         );
 
-        // Check if live stream and set up LiveDurationProxy for duration tracking.
         // DVR seeking is handled natively by VHS through the HLS playlist —
         // no startunix URL rewriting needed (that's only for progressive formats).
         const duration = this.videojsPlayer.duration();
         const isLive = !isFinite(duration);
-        if (isLive && !this.liveDurationProxy) {
-          this.liveDurationProxy = new LiveDurationProxy(video, {
-            constrainSeek: false,
-            liveOffset: 0,
-          });
-          console.debug("[VideoJS] LiveDurationProxy initialized for live stream");
-        }
 
         // Live streams may not emit canplay; synthesize it after a short delay
         if (isLive) {
@@ -517,10 +507,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
   // ============================================================================
 
   getDuration(): number {
-    // LiveDurationProxy provides finite duration for live HLS streams
-    const sec = this.liveDurationProxy
-      ? this.liveDurationProxy.getDuration()
-      : (this.videoElement?.duration ?? 0);
+    const sec = this.videoElement?.duration ?? 0;
+    if (!Number.isFinite(sec)) {
+      const nativeRange = this.getNativeSeekableRange();
+      return nativeRange?.end ?? sec;
+    }
     if (!Number.isFinite(sec)) return sec;
     return sec * 1000;
   }
@@ -560,8 +551,9 @@ export class VideoJsPlayerImpl extends BasePlayer {
       }
     }
 
-    if (this.liveDurationProxy) {
-      return this.liveDurationProxy.getLatency() * 1000;
+    const nativeRange = this.getNativeSeekableRange();
+    if (nativeRange) {
+      return Math.max(0, nativeRange.end - video.currentTime * 1000);
     }
 
     return 0;
@@ -569,11 +561,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
-
-    if (this.liveDurationProxy) {
-      this.liveDurationProxy.destroy();
-      this.liveDurationProxy = null;
-    }
 
     if (this.videojsPlayer) {
       try {

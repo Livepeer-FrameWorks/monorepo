@@ -2,7 +2,6 @@ import { BasePlayer } from "../core/PlayerInterface";
 import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
 import { formatQualityLabel } from "../core/TimeFormat";
-import { LiveDurationProxy } from "../core/LiveDurationProxy";
 import type {
   StreamSource,
   StreamInfo,
@@ -30,7 +29,6 @@ export class HlsJsPlayerImpl extends BasePlayer {
   private container: HTMLElement | null = null;
   private failureCount = 0;
   private destroyed = false;
-  private liveDurationProxy: LiveDurationProxy | null = null;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
@@ -301,17 +299,6 @@ export class HlsJsPlayerImpl extends BasePlayer {
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (this.destroyed) return; // Guard against zombie callbacks
 
-          // Set up LiveDurationProxy for live streams
-          // HLS.js sets video.duration to Infinity for live streams
-          const isLive = !isFinite(video.duration) || this.hls.levels?.[0]?.details?.live;
-          if (isLive && !this.liveDurationProxy) {
-            this.liveDurationProxy = new LiveDurationProxy(video, {
-              constrainSeek: false,
-              liveOffset: 0,
-            });
-            console.debug("[HLS.js] LiveDurationProxy initialized for live stream");
-          }
-
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
         });
@@ -363,11 +350,6 @@ export class HlsJsPlayerImpl extends BasePlayer {
     console.debug("[HLS.js] destroy() called");
     this.destroyed = true;
 
-    if (this.liveDurationProxy) {
-      this.liveDurationProxy.destroy();
-      this.liveDurationProxy = null;
-    }
-
     if (this.hls) {
       try {
         this.hls.destroy();
@@ -395,10 +377,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
   // ============================================================================
 
   getDuration(): number {
-    // LiveDurationProxy provides finite duration for live HLS streams
-    const sec = this.liveDurationProxy
-      ? this.liveDurationProxy.getDuration()
-      : (this.videoElement?.duration ?? 0);
+    const sec = this.videoElement?.duration ?? 0;
+    if (!Number.isFinite(sec)) {
+      const nativeRange = this.getNativeSeekableRange();
+      return nativeRange?.end ?? sec;
+    }
     if (!Number.isFinite(sec)) return sec;
     return sec * 1000;
   }
@@ -420,9 +403,9 @@ export class HlsJsPlayerImpl extends BasePlayer {
       return Math.max(0, (this.hls.liveSyncPosition - video.currentTime) * 1000);
     }
 
-    // Fall back to proxy
-    if (this.liveDurationProxy) {
-      return this.liveDurationProxy.getLatency() * 1000;
+    const nativeRange = this.getNativeSeekableRange();
+    if (nativeRange) {
+      return Math.max(0, nativeRange.end - video.currentTime * 1000);
     }
 
     return 0;

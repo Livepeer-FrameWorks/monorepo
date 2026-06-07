@@ -27,9 +27,6 @@ export class DashJsPlayerImpl extends BasePlayer {
   private startupAbandonCount = 0;
   private startupAbandonReported = false;
 
-  // Live duration proxy state (ported from reference dashjs.js:81-122)
-  private lastProgress = Date.now();
-  private videoProxy: HTMLVideoElement | null = null;
   private streamType: "live" | "vod" | "unknown" = "unknown";
 
   // Subtitle deferred loading (ported from reference dashjs.js:173-197)
@@ -141,49 +138,6 @@ export class DashJsPlayerImpl extends BasePlayer {
       return true;
     }
     return false;
-  }
-
-  /**
-   * Create a Proxy wrapper for the video element that intercepts duration for live streams.
-   * Ported from reference dashjs.js:81-122.
-   *
-   * For live streams, returns synthetic duration = buffer_end + time_since_last_progress
-   * This makes the seek bar usable for live content.
-   */
-  private createVideoProxy(video: HTMLVideoElement): HTMLVideoElement {
-    if (!("Proxy" in window)) {
-      // Fallback for older browsers
-      return video;
-    }
-
-    // Track buffer progress for duration extrapolation
-    video.addEventListener("progress", () => {
-      this.lastProgress = Date.now();
-    });
-
-    const self = this;
-    return new Proxy(video, {
-      get(target, key) {
-        // Override duration for live streams (reference dashjs.js:108-116)
-        if (key === "duration" && self.isLiveStream()) {
-          const buffered = target.buffered;
-          if (buffered.length > 0) {
-            const bufferEnd = buffered.end(buffered.length - 1);
-            const timeSinceBuffer = (Date.now() - self.lastProgress) / 1000;
-            return bufferEnd + timeSinceBuffer;
-          }
-        }
-        const value = Reflect.get(target, key, target);
-        // Bind functions to the original target
-        if (typeof value === "function") {
-          return value.bind(target);
-        }
-        return value;
-      },
-      set(target, key, value) {
-        return Reflect.set(target, key, value);
-      },
-    }) as HTMLVideoElement;
   }
 
   /**
@@ -367,8 +321,6 @@ export class DashJsPlayerImpl extends BasePlayer {
     if (options.loop && this.streamType !== "live") video.loop = true;
     if (options.poster) video.poster = options.poster;
 
-    // Create proxy for live duration handling (reference dashjs.js:81-122)
-    this.videoProxy = this.createVideoProxy(video);
     this.videoElement = video;
     const markMediaStartup = () => {
       this.sawMediaStartup = true;
@@ -577,18 +529,12 @@ export class DashJsPlayerImpl extends BasePlayer {
     }
   }
 
-  /**
-   * Get duration using proxy for live streams.
-   * Returns synthetic growing duration for live content.
-   */
   getDuration(): number {
-    let sec: number;
-    // Use proxy if available for live duration handling
-    if (this.videoProxy && this.isLiveStream()) {
-      sec = (this.videoProxy as any).duration ?? 0;
-    } else {
-      sec = this.videoElement?.duration ?? 0;
+    if (this.isLiveStream()) {
+      const nativeRange = this.getNativeSeekableRange();
+      if (nativeRange) return nativeRange.end;
     }
+    const sec = this.videoElement?.duration ?? 0;
     if (!Number.isFinite(sec)) return sec;
     return sec * 1000;
   }
@@ -653,7 +599,6 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.destroyed = true;
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
-    this.videoProxy = null;
 
     if (this._rejectionHandler) {
       window.removeEventListener("unhandledrejection", this._rejectionHandler);

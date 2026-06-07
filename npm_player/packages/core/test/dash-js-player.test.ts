@@ -62,28 +62,10 @@ describe("DashJsPlayerImpl", () => {
     dashMocks.reset.mockReset();
   });
 
-  it("reads proxied media properties with the native video element receiver", () => {
-    const player = new DashJsPlayerImpl();
-    const video = document.createElement("video");
-
-    Object.defineProperty(video, "duration", {
-      configurable: true,
-      get() {
-        if (this !== video) {
-          throw new TypeError("duration getter called with wrong receiver");
-        }
-        return 42;
-      },
-    });
-
-    const proxy = (player as any).createVideoProxy(video) as HTMLVideoElement;
-
-    expect(proxy.duration).toBe(42);
-  });
-
   it("keeps native DASH seekable range instead of controller range hints", () => {
     const player = new DashJsPlayerImpl();
     const video = document.createElement("video");
+    Object.defineProperty(video, "duration", { configurable: true, value: Infinity });
     Object.defineProperty(video, "seekable", {
       configurable: true,
       value: { length: 1, start: () => 12, end: () => 72 },
@@ -93,6 +75,7 @@ describe("DashJsPlayerImpl", () => {
     player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
 
     expect(player.getSeekableRange()).toEqual({ start: 12_000, end: 72_000 });
+    expect(player.getDuration()).toBe(72_000);
   });
 
   it("routes dash.js live DVR null-range rejections through onError", () => {
