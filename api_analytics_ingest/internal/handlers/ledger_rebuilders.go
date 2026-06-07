@@ -420,13 +420,13 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			startMS, endMS                                                   int64
 			peakViewers                                                      int64
 		)
-		if err := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers); err != nil {
-			return fmt.Errorf("stream_runtime_5m scan: %w", err)
+		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers); scanErr != nil {
+			return fmt.Errorf("stream_runtime_5m scan: %w", scanErr)
 		}
 		if startMS <= 0 || endMS <= startMS {
-			resolvedStartMS, err := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
-			if err != nil {
-				return err
+			resolvedStartMS, lookupErr := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
+			if lookupErr != nil {
+				return lookupErr
 			}
 			if resolvedStartMS > 0 && resolvedStartMS < endMS {
 				startMS = resolvedStartMS
@@ -447,14 +447,14 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			continue
 		}
 		sourceEventID = streamRuntimeSessionKey(tenantID, nodeID, streamID, startMS)
-		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, endMS, peakViewers, projectionVersionMS)
-		if err != nil {
-			return err
+		emitted, appendErr := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, endMS, peakViewers, projectionVersionMS)
+		if appendErr != nil {
+			return appendErr
 		}
 		rowsEmitted += emitted
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("stream_runtime_5m iterate: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("stream_runtime_5m iterate: %w", rowsErr)
 	}
 
 	liveRows, err := h.clickhouse.Query(ctx, `
