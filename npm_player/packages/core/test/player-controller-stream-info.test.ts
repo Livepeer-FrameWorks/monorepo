@@ -146,6 +146,48 @@ describe("PlayerController Mist edge hydration", () => {
       expect.objectContaining({ assetKey: "asset-1" })
     );
   });
+
+  it("maps API seeks into the Mist metadata timeline", () => {
+    const controller = new PlayerController({
+      contentId: "pb_demo_live_001",
+      contentType: "live",
+      playerManager: {
+        on: vi.fn(() => () => {}),
+      } as any,
+    });
+    const playerSeek = vi.fn();
+    const metadataSeek = vi.fn();
+
+    (controller as any).currentPlayer = {
+      seek: playerSeek,
+      getSeekableRange: () => ({ start: 0, end: 50_000 }),
+    };
+    (controller as any).metaTrackManager = {
+      onSeek: metadataSeek,
+      getServerSeekableRange: () => ({ start: 3_700_000, end: 3_750_000 }),
+    };
+
+    controller.seek(45_000);
+
+    expect(playerSeek).toHaveBeenCalledWith(45_000);
+    expect(metadataSeek).toHaveBeenCalledWith(3745);
+  });
+
+  it("treats Firefox fMP4 decode errors as hard fallback failures", () => {
+    const controller = new PlayerController({
+      contentId: "pb_demo_live_001",
+      contentType: "live",
+      playerManager: {
+        on: vi.fn(() => () => {}),
+      } as any,
+    });
+
+    expect(
+      (controller as any).shouldAttemptFallback(
+        "Media resource could not be decoded: Invalid Top-Level Box"
+      )
+    ).toBe(true);
+  });
 });
 
 describe("buildQualityLevelsFromMistTracks", () => {

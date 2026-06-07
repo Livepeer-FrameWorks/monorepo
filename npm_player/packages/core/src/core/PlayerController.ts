@@ -751,7 +751,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     "fatal",
     "network error",
     "media error",
+    "decode",
     "decode error",
+    "could not be decoded",
+    "invalid top-level box",
     "source not supported",
     "failed to open media",
     "not suitable",
@@ -1658,6 +1661,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   seek(timeMs: number): void {
     this.qualityMonitor?.resetForSeek();
     const targetMs = this.clampSeekTarget(timeMs);
+    this.notifyMetaTrackSeek(targetMs);
 
     // Use player-specific seek if available (for WebCodecs, MEWS, etc.)
     if (this.currentPlayer?.seek) {
@@ -1956,15 +1960,24 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return { start, end };
   }
 
-  private getMistMetadataPlaybackTime(): number {
+  private getMistMetadataPlaybackTime(
+    playerTimeMs: number = this.getEffectiveCurrentTime()
+  ): number {
     return mapPlayerTimeToMistTimeline({
       isLive: this.isEffectivelyLive(),
-      playerTimeMs: this.getEffectiveCurrentTime(),
+      playerTimeMs,
       playerSeekableRange: this.getPlayerSeekableRange() ?? this.getBrowserSeekableRange(),
       // Prefer the metadata socket's live on_time edge; fall back to the HTTP poll until it arrives
       mistSeekableRange:
         this.metaTrackManager?.getServerSeekableRange() ?? this.getMistTrackSeekRange(),
     });
+  }
+
+  private notifyMetaTrackSeek(playerTimeMs: number): void {
+    if (!this.metaTrackManager) return;
+    const mappedTimeSec = this.getMistMetadataPlaybackTime(playerTimeMs) / 1000;
+    if (!Number.isFinite(mappedTimeSec) || mappedTimeSec < 0) return;
+    this.metaTrackManager.onSeek(mappedTimeSec);
   }
 
   private getFrameStepMsFromTracks(): number | undefined {
@@ -4638,24 +4651,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Wire video timeupdate to MetaTrackManager
     // Use player's effective time (includes lastms offset for NativePlayer) so the
     // metadata WebSocket seeks to the correct absolute stream position, not browser-relative 0.
+    // Packaged MSE players emit native `seeking` for their own live-edge/gap handling;
+    // only controller/API seeks call MetaTrackManager.onSeek().
     if (this.videoElement) {
       const handleTimeUpdate = () => {
         if (this.metaTrackManager) {
           this.metaTrackManager.setPlaybackTime(this.getMistMetadataPlaybackTime() / 1000);
         }
       };
-      const handleSeeking = () => {
-        if (this.metaTrackManager) {
-          this.metaTrackManager.onSeek(this.getMistMetadataPlaybackTime() / 1000);
-        }
-      };
 
       this.videoElement.addEventListener("timeupdate", handleTimeUpdate);
-      this.videoElement.addEventListener("seeking", handleSeeking);
 
       this.cleanupFns.push(() => {
         this.videoElement?.removeEventListener("timeupdate", handleTimeUpdate);
-        this.videoElement?.removeEventListener("seeking", handleSeeking);
       });
     }
 

@@ -417,60 +417,11 @@ export class DashJsPlayerImpl extends BasePlayer {
         this.debugLog("[DashJS v5] streamInitialized - isDynamic:", isDynamic);
       });
 
-      // Configure dashjs v5 streaming settings BEFORE initialization
+      // Match MistMetaPlayer's dashjs wrapper: let dashjs follow the MPD for live edge,
+      // buffer, and catch-up behavior unless the caller explicitly overrides it.
       this.dashPlayer.updateSettings({
         streaming: {
-          buffer: {
-            fastSwitchEnabled: true,
-            bufferTimeDefault: 4,
-            bufferTimeAtTopQuality: 8,
-            bufferTimeAtTopQualityLongForm: 15,
-            bufferToKeep: 10,
-            bufferPruningInterval: 10,
-          },
-          gaps: {
-            jumpGaps: true,
-            jumpLargeGaps: true,
-            smallGapLimit: 1.5,
-            threshold: 0.3,
-          },
-          abr: {
-            autoSwitchBitrate: { video: true, audio: true },
-            limitBitrateByPortal: false,
-            initialBitrate: { video: 5_000_000, audio: 128_000 },
-          },
-          liveCatchup: {
-            enabled: true,
-            maxDrift: 1.5,
-            playbackRate: { max: 0.15, min: -0.15 },
-            playbackBufferMin: 0.3,
-            mode: "liveCatchupModeDefault",
-          },
-          retryAttempts: {
-            MPD: 5,
-            MediaSegment: 5,
-            InitializationSegment: 5,
-            BitstreamSwitchingSegment: 5,
-            IndexSegment: 5,
-            XLinkExpansion: 3,
-            other: 3,
-          },
-          retryIntervals: {
-            MPD: 1000,
-            MediaSegment: 1000,
-            InitializationSegment: 1000,
-            BitstreamSwitchingSegment: 1000,
-            IndexSegment: 1000,
-            XLinkExpansion: 1000,
-            other: 1000,
-          },
-          abandonLoadTimeout: 5000,
           text: { defaultEnabled: false },
-          delay: {
-            liveDelay: 8,
-            liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: false,
-          },
         },
         debug: {
           logLevel: 2,

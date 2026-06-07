@@ -132,7 +132,7 @@ describe("DashJsPlayerImpl", () => {
     expect(errors).toEqual([]);
   });
 
-  it("merges caller dashConfig over the hardcoded defaults", async () => {
+  it("applies caller dashConfig after the built-in text default", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
     const dashConfig = { streaming: { delay: { liveDelay: 2 } } };
@@ -144,7 +144,7 @@ describe("DashJsPlayerImpl", () => {
       { source: [], meta: { tracks: [] }, type: "live" }
     );
 
-    // Defaults are applied first, then the caller override (dash.js deep-merges),
+    // The built-in text default is applied first, then the caller override (dash.js deep-merges),
     // so the final updateSettings call carries the caller's dashConfig.
     const calls = dashMocks.updateSettings.mock.calls;
     expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -207,7 +207,7 @@ describe("DashJsPlayerImpl", () => {
     }
   });
 
-  it("uses a conservative live delay for live DASH startup", async () => {
+  it("does not override DASH live-edge and buffer settings by default", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
 
@@ -218,16 +218,14 @@ describe("DashJsPlayerImpl", () => {
       { source: [], meta: { tracks: [] }, type: "live" }
     );
 
-    expect(dashMocks.updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        streaming: expect.objectContaining({
-          delay: {
-            liveDelay: 8,
-            liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: false,
-          },
-        }),
-      })
-    );
+    expect(dashMocks.updateSettings).toHaveBeenCalledTimes(1);
+    expect(dashMocks.updateSettings).toHaveBeenCalledWith({
+      streaming: {
+        text: { defaultEnabled: false },
+      },
+      debug: {
+        logLevel: 2,
+      },
+    });
   });
 });
