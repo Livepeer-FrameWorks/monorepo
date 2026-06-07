@@ -202,13 +202,17 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	}
 	// Uploaded VOD ingest metadata lives in foghorn.vod_metadata, keyed by
 	// the same artifact_hash assigned at multipart-upload finalization.
-	var s3Key sql.NullString
+	var (
+		s3Key     sql.NullString
+		sizeBytes sql.NullInt64
+	)
 	err := db.QueryRowContext(ctx, `
-		SELECT s3_key
-		FROM foghorn.vod_metadata
-		WHERE artifact_hash = $1
+		SELECT vm.s3_key, a.size_bytes
+		FROM foghorn.vod_metadata vm
+		LEFT JOIN foghorn.artifacts a ON a.artifact_hash = vm.artifact_hash
+		WHERE vm.artifact_hash = $1
 		LIMIT 1
-	`, req.GetAssetHash()).Scan(&s3Key)
+	`, req.GetAssetHash()).Scan(&s3Key, &sizeBytes)
 	if errors.Is(err, sql.ErrNoRows) || !s3Key.Valid || s3Key.String == "" {
 		// Direct-dial: no local upload metadata. Source artifact for
 		// the processing input might be on a peer cluster — federate
@@ -231,6 +235,9 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	resp.MediaPresignedUrl = mediaURL
 	resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
 	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_MEM
+	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+		resp.ExpectedSizeBytes = uint64(sizeBytes.Int64)
+	}
 	if putURL, err := s3Client.GeneratePresignedPUT(s3Key.String+".dtsh", relayURLTTL); err == nil {
 		resp.DtshPresignedPut = putURL
 	}
