@@ -334,7 +334,13 @@ function isBrowserWebRTCCodecSupported(type: "video" | "audio", codec: string): 
  * @returns Compatibility assessment
  */
 export function checkWebRTCCodecCompatibility(
-  tracks: Array<{ type: string; codec: string }>
+  tracks: Array<{
+    type: string;
+    codec: string;
+    bframes?: boolean | number;
+    hasBFrames?: boolean;
+    hasBframes?: boolean;
+  }>
 ): WebRTCCodecCompatibility {
   const videoTracks = tracks.filter((t) => t.type === "video");
   const audioTracks = tracks.filter((t) => t.type === "audio");
@@ -345,6 +351,15 @@ export function checkWebRTCCodecCompatibility(
 
   // Check video tracks using dynamic browser detection
   for (const track of videoTracks) {
+    if (
+      track.bframes === true ||
+      track.bframes === 1 ||
+      track.hasBFrames === true ||
+      track.hasBframes === true
+    ) {
+      incompatibleCodecs.push(`video:${track.codec}:bframes`);
+      continue;
+    }
     if (isBrowserWebRTCCodecSupported("video", track.codec)) {
       compatibleVideoCodecs.push(track.codec);
     } else {
@@ -369,10 +384,12 @@ export function checkWebRTCCodecCompatibility(
   // (or no audio tracks at all - video-only streams are fine)
   const audioCompatible = audioTracks.length === 0 || compatibleAudioCodecs.length > 0;
 
+  const hasPlayableTracks = compatibleVideoCodecs.length > 0 || compatibleAudioCodecs.length > 0;
+
   return {
     videoCompatible,
     audioCompatible,
-    compatible: videoCompatible || audioCompatible,
+    compatible: hasPlayableTracks,
     incompatibleCodecs,
     details: {
       videoTracks: videoTracks.length,

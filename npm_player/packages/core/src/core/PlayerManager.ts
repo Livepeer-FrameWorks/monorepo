@@ -199,8 +199,12 @@ export class PlayerManager {
     return JSON.stringify({
       sources: streamInfo.source.map((s) => `${s.type}:${s.url ?? ""}`).sort(),
       tracks:
-        streamInfo.meta?.tracks?.map((t) => `${t.type}:${t.codec}:${t.codecstring ?? ""}`).sort() ??
-        [],
+        streamInfo.meta?.tracks
+          ?.map(
+            (t) =>
+              `${t.type}:${t.codec}:${t.codecstring ?? ""}:${t.bframes === true || t.bframes === 1 || t.hasBFrames === true || t.hasBframes === true ? "bframes" : "nobframes"}`
+          )
+          .sort() ?? [],
       mode,
       forcePlayer: this.options.forcePlayer,
       forceSource: this.options.forceSource,

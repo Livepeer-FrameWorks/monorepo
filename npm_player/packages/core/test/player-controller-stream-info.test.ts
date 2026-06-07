@@ -120,7 +120,7 @@ describe("PlayerController Mist edge hydration", () => {
           ],
           meta: {
             tracks: {
-              video: { type: "video", codec: "H264", width: 800, height: 600, idx: 1 },
+              video: { type: "video", codec: "H264", width: 800, height: 600, idx: 1, bframes: 1 },
               audio: { type: "audio", codec: "AAC", idx: 2 },
             },
           },
@@ -138,6 +138,9 @@ describe("PlayerController Mist edge hydration", () => {
     ]);
     expect((controller as any).streamInfo.source[0].url).toBe(
       "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1"
+    );
+    expect((controller as any).streamInfo.meta.tracks[0]).toEqual(
+      expect.objectContaining({ bframes: 1 })
     );
     expect((controller as any)._thumbnailAssets).toEqual(
       expect.objectContaining({ assetKey: "asset-1" })

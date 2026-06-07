@@ -369,6 +369,29 @@ describe("detector", () => {
       expect(result.incompatibleCodecs).toContain("video:HEVC");
     });
 
+    it("treats B-frame video as incompatible while preserving compatible audio", () => {
+      const result = checkWebRTCCodecCompatibility([
+        { type: "video", codec: "H264", bframes: 1 },
+        { type: "audio", codec: "OPUS" },
+      ]);
+      expect(result.videoCompatible).toBe(false);
+      expect(result.audioCompatible).toBe(true);
+      expect(result.compatible).toBe(true);
+      expect(result.details.compatibleVideoCodecs).toEqual([]);
+      expect(result.details.compatibleAudioCodecs).toEqual(["OPUS"]);
+      expect(result.incompatibleCodecs).toContain("video:H264:bframes");
+    });
+
+    it("rejects video-only WebRTC streams when the only video track has B-frames", () => {
+      const result = checkWebRTCCodecCompatibility([
+        { type: "video", codec: "H264", hasBFrames: true },
+      ]);
+      expect(result.videoCompatible).toBe(false);
+      expect(result.audioCompatible).toBe(true);
+      expect(result.compatible).toBe(false);
+      expect(result.details.compatibleVideoCodecs).toEqual([]);
+    });
+
     it("AAC audio is incompatible but stream is partially compatible", () => {
       const result = checkWebRTCCodecCompatibility([
         { type: "video", codec: "H264" },
