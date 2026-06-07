@@ -382,7 +382,17 @@ func (r *Reader) EnrichEvent(event map[string]interface{}, ipField string) {
 		return
 	}
 
-	// Only add fields that have actual values
+	applyGeoFields(event, geoData)
+}
+
+// applyGeoFields copies the populated fields of geoData onto the event map.
+// Empty strings and non-finite (NaN/Inf) coordinates are skipped so the
+// event never carries a key with a junk value: downstream ClickHouse
+// inserts and routing math treat a missing key and a NaN very differently.
+func applyGeoFields(event map[string]any, geoData *GeoData) {
+	if event == nil || geoData == nil {
+		return
+	}
 	if geoData.CountryCode != "" {
 		event["country_code"] = geoData.CountryCode
 	}
