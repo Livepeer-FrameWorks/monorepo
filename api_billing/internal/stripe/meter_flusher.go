@@ -27,6 +27,9 @@ import (
 type MeterFlusher struct {
 	DB             *sql.DB
 	TenantStripeID func(ctx context.Context, tenantID string) (string, error)
+	// SendMeterEvent delivers one meter event to Stripe. Tests replace this
+	// transport; nil falls back to the Stripe SDK sender.
+	SendMeterEvent func(ctx context.Context, p *stripeapi.BillingMeterEventParams) error
 	MaxAttempts    int
 	BatchSize      int
 }
@@ -40,6 +43,10 @@ func NewMeterFlusher(db *sql.DB) *MeterFlusher {
 		DB:          db,
 		MaxAttempts: 6, // ~ exponential w/ a 5min base ≈ 5 hours of retries
 		BatchSize:   100,
+		SendMeterEvent: func(_ context.Context, p *stripeapi.BillingMeterEventParams) error {
+			_, err := stripemeter.New(p)
+			return err
+		},
 		TenantStripeID: func(ctx context.Context, tenantID string) (string, error) {
 			var customerID sql.NullString
 			err := db.QueryRowContext(ctx, `
@@ -142,7 +149,14 @@ func (f *MeterFlusher) pushOne(ctx context.Context, rowID, tenantID, clusterID, 
 	if clusterID != "" {
 		params.Payload["cluster_id"] = clusterID
 	}
-	if _, sendErr := stripemeter.New(params); sendErr != nil {
+	sendMeterEvent := f.SendMeterEvent
+	if sendMeterEvent == nil {
+		sendMeterEvent = func(_ context.Context, p *stripeapi.BillingMeterEventParams) error {
+			_, err := stripemeter.New(p)
+			return err
+		}
+	}
+	if sendErr := sendMeterEvent(ctx, params); sendErr != nil {
 		return fmt.Errorf("stripe meter event: %w", sendErr)
 	}
 	return nil
