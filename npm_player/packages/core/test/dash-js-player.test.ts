@@ -228,4 +228,29 @@ describe("DashJsPlayerImpl", () => {
       },
     });
   });
+
+  it("reports repeated startup fragment abandonment before playable media", async () => {
+    const player = new DashJsPlayerImpl();
+    const container = document.createElement("div");
+    const onError = vi.fn();
+
+    await player.initialize(
+      container,
+      { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
+      { autoplay: false, muted: true, onError },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    dashMocks.emit("fragmentLoadingAbandoned", {
+      request: { url: "https://edge.example/live/chunk_1.m4s" },
+    });
+    dashMocks.emit("fragmentLoadingAbandoned", {
+      request: { url: "https://edge.example/live/chunk_2.m4s" },
+    });
+    dashMocks.emit("fragmentLoadingAbandoned", {
+      request: { url: "https://edge.example/live/chunk_3.m4s" },
+    });
+
+    expect(onError).toHaveBeenCalledWith("DASH fatal startup fragment abandoned repeatedly");
+  });
 });

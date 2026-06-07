@@ -242,21 +242,39 @@ export class HlsJsPlayerImpl extends BasePlayer {
           startupTimer = setTimeout(() => {
             if (startupSettled) return;
             startupSettled = true;
-            reject(new Error("HLS startup timed out before manifest parsing"));
+            reject(new Error("HLS startup timed out before media became playable"));
           }, startupTimeoutMs);
         });
+        const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
+        let removeStartupListeners = () => {};
         const finishStartup = () => {
           if (startupSettled) return;
           startupSettled = true;
           if (startupTimer !== null) clearTimeout(startupTimer);
+          removeStartupListeners();
           resolveStartup?.();
         };
         const failStartup = (error: Error) => {
           if (startupSettled) return;
           startupSettled = true;
           if (startupTimer !== null) clearTimeout(startupTimer);
+          removeStartupListeners();
           rejectStartup?.(error);
         };
+        const failStartupFromVideo = () => {
+          const message = video.error?.message || "media error before first playable frame";
+          failStartup(new Error(`HLS media startup failed: ${message}`));
+        };
+        removeStartupListeners = () => {
+          for (const event of mediaReadyEvents) {
+            video.removeEventListener(event, finishStartup);
+          }
+          video.removeEventListener("error", failStartupFromVideo);
+        };
+        for (const event of mediaReadyEvents) {
+          video.addEventListener(event, finishStartup, { once: true });
+        }
+        video.addEventListener("error", failStartupFromVideo, { once: true });
 
         this.hls.attachMedia(video);
 
@@ -296,13 +314,12 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
-          finishStartup();
         });
+        this.setupVideoEventListeners(video, options, { readyEvent: "canplay" });
         await hlsStartup;
         if (this.destroyed) {
           throw new Error("HLS player destroyed during initialization");
         }
-        this.setupVideoEventListeners(video, options);
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         if (options.playbackHeaders) {
           throw new Error("Native HLS cannot attach playback Authorization headers");

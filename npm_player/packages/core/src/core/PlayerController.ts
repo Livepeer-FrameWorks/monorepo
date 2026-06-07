@@ -755,6 +755,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     "decode error",
     "could not be decoded",
     "invalid top-level box",
+    "startup fragment abandoned",
     "source not supported",
     "failed to open media",
     "not suitable",

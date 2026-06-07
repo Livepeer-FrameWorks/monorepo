@@ -183,7 +183,7 @@ describe("VideoJsPlayerImpl", () => {
     expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
   });
 
-  it("waits for metadata before emitting ready", async () => {
+  it("waits for playable media before emitting ready", async () => {
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: {
@@ -225,6 +225,9 @@ describe("VideoJsPlayerImpl", () => {
     expect(onReady).not.toHaveBeenCalled();
 
     videoJsState.players[0].emit("loadedmetadata");
+    expect(onReady).not.toHaveBeenCalled();
+
+    videoJsState.players[0].emit("canplay");
     await initialization;
 
     expect(onReady).toHaveBeenCalledTimes(1);

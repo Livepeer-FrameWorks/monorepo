@@ -269,7 +269,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
         startupTimer = setTimeout(() => {
           if (startupSettled) return;
           startupSettled = true;
-          reject(new Error("VideoJS startup timed out before metadata"));
+          reject(new Error("VideoJS startup timed out before media became playable"));
         }, startupTimeoutMs);
       });
       const finishStartup = () => {
@@ -284,6 +284,16 @@ export class VideoJsPlayerImpl extends BasePlayer {
         if (startupTimer !== null) clearTimeout(startupTimer);
         rejectStartup?.(error);
       };
+      const failStartupFromVideo = () => {
+        const message = video.error?.message || "media error before first playable frame";
+        failStartup(new Error(`VideoJS media startup failed: ${message}`));
+      };
+      const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
+      for (const event of mediaReadyEvents) {
+        this.videojsPlayer.on(event, finishStartup);
+        video.addEventListener(event, finishStartup, { once: true });
+      }
+      video.addEventListener("error", failStartupFromVideo, { once: true });
 
       // Hide VideoJS UI completely when using custom controls
       if (!useVideoJsControls) {
@@ -368,7 +378,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
           "videoHeight:",
           video.videoHeight
         );
-        finishStartup();
       });
 
       // Debug: Track VHS (video.js http-streaming) state

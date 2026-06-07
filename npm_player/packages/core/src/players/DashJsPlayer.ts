@@ -23,6 +23,9 @@ export class DashJsPlayerImpl extends BasePlayer {
   private container: HTMLElement | null = null;
   private destroyed = false;
   private debugging = false;
+  private sawMediaStartup = false;
+  private startupAbandonCount = 0;
+  private startupAbandonReported = false;
 
   // Live duration proxy state (ported from reference dashjs.js:81-122)
   private lastProgress = Date.now();
@@ -332,6 +335,9 @@ export class DashJsPlayerImpl extends BasePlayer {
   ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.debugging = options.debug === true;
+    this.sawMediaStartup = false;
+    this.startupAbandonCount = 0;
+    this.startupAbandonReported = false;
     this.container = container;
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
@@ -364,6 +370,12 @@ export class DashJsPlayerImpl extends BasePlayer {
     // Create proxy for live duration handling (reference dashjs.js:81-122)
     this.videoProxy = this.createVideoProxy(video);
     this.videoElement = video;
+    const markMediaStartup = () => {
+      this.sawMediaStartup = true;
+    };
+    video.addEventListener("loadeddata", markMediaStartup, { once: true });
+    video.addEventListener("canplay", markMediaStartup, { once: true });
+    video.addEventListener("playing", markMediaStartup, { once: true });
     container.appendChild(video);
 
     try {
@@ -445,6 +457,13 @@ export class DashJsPlayerImpl extends BasePlayer {
       }
       this.dashPlayer.on("fragmentLoadingAbandoned", (e: any) => {
         console.warn("[DashJS] Fragment loading ABANDONED:", e.request?.url?.split("/").pop(), e);
+        if (!this.sawMediaStartup) {
+          this.startupAbandonCount++;
+          if (this.startupAbandonCount >= 3 && !this.startupAbandonReported) {
+            this.startupAbandonReported = true;
+            this.reportDashFailure("DASH fatal startup fragment abandoned repeatedly", options);
+          }
+        }
       });
       this.dashPlayer.on("fragmentLoadingFailed", (e: any) => {
         console.error("[DashJS] Fragment loading FAILED:", e.request?.url?.split("/").pop(), e);

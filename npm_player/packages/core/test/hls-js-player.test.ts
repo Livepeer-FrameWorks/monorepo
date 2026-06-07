@@ -105,7 +105,7 @@ describe("HlsJsPlayerImpl", () => {
     });
   });
 
-  it("waits for HLS manifest parsing before emitting ready", async () => {
+  it("waits for playable media before completing startup", async () => {
     const player = new HlsJsPlayerImpl();
     const container = document.createElement("div");
     const onReady = vi.fn();
@@ -133,10 +133,13 @@ describe("HlsJsPlayerImpl", () => {
     expect(video.autoplay).toBe(false);
 
     hls.emit("manifestParsed");
-    await initialization;
     expect(onReady).not.toHaveBeenCalled();
 
     video.dispatchEvent(new Event("loadedmetadata"));
+    expect(onReady).not.toHaveBeenCalled();
+
+    video.dispatchEvent(new Event("canplay"));
+    await initialization;
 
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);
