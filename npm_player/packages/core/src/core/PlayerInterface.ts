@@ -313,6 +313,8 @@ export interface IPlayer {
   isMuted?(): boolean;
   /** Optional: provide an override seekable range (milliseconds) */
   getSeekableRange?(): { start: number; end: number } | null;
+  /** Optional: true when controller-provided seekable range hints are part of this player's timeline model */
+  acceptsSeekableRangeHint?(): boolean;
   /** Optional: push authoritative seekable range hints from controller logic (milliseconds) */
   setSeekableRangeHint?(range: { start: number; end: number } | null): void;
   /** Optional: provide buffered ranges override */
@@ -537,6 +539,10 @@ export abstract class BasePlayer implements IPlayer {
     const durationMs = this.getDuration();
     if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
     return { start: Math.max(0, durationMs - this._dvrWidthMs), end: durationMs };
+  }
+
+  acceptsSeekableRangeHint(): boolean {
+    return this.liveSeekEnabled;
   }
 
   protected getNativeSeekableRange(): { start: number; end: number } | null {

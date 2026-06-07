@@ -2227,9 +2227,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     }
 
-    // Push authoritative seek window to the player for anchor-based coordinates.
-    // mistRange already incorporates buffer_window for a stable DVR width.
-    if (this.currentPlayer?.setSeekableRangeHint) {
+    // Push controller-owned seek windows only to players whose timeline model
+    // explicitly accepts them. MSE wrappers own their DASH/HLS/VHS seek windows.
+    if (
+      this.currentPlayer?.acceptsSeekableRangeHint?.() === true &&
+      this.currentPlayer.setSeekableRangeHint
+    ) {
       if (isLive && mistRange && mistRange.end > mistRange.start) {
         this.currentPlayer.setSeekableRangeHint(mistRange);
       } else if (

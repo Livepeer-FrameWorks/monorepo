@@ -32,6 +32,10 @@ class TestPlayer extends BasePlayer {
     this.setupVideoEventListeners(v, o);
   }
 
+  enableLiveSeek(url = "https://edge.example/live.mp4") {
+    this.initLiveSeek(url);
+  }
+
   callEmit(event: string, data: any) {
     this.emit(event as any, data);
   }
@@ -277,6 +281,22 @@ describe("BasePlayer", () => {
     video.seekable = { length: 1, start: () => 0, end: () => 88 } as any;
     player.jumpToLive();
     expect(video.currentTime).toBe(88);
+  });
+
+  it("accepts controller seekable range hints only after live seek is enabled", () => {
+    const player = new TestPlayer();
+    const video = createMockVideo();
+    player.setVideoElement(video);
+
+    expect(player.acceptsSeekableRangeHint()).toBe(false);
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+    expect(player.getSeekableRange()).toBeNull();
+
+    player.enableLiveSeek();
+    expect(player.acceptsSeekableRangeHint()).toBe(true);
+    player.setSeekableRangeHint({ start: 100_000, end: 160_000 });
+
+    expect(player.getSeekableRange()).toEqual({ start: 100_000, end: 160_000 });
   });
 
   it("handles Picture-in-Picture requests", async () => {
