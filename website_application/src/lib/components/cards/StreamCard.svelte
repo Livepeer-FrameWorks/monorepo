@@ -2,19 +2,12 @@
   import { cn } from "$lib/utils";
   import { Badge } from "$lib/components/ui/badge";
   import { StreamStatus } from "$houdini";
+  import type { StreamCoreFields$data, StreamMetricsListFields$data } from "$houdini";
+  import { streamCurrentViewers, streamResolutionLabel } from "$lib/utils/stream-metrics-display";
 
-  interface StreamCardData {
-    id: string;
-    streamId?: string;
-    name: string;
-    metrics?: {
-      status?: string | null;
-      isLive?: boolean | null;
-      currentViewers?: number | null;
-    } | null;
-    viewers?: number;
-    resolution?: string;
-  }
+  type StreamCardData = Pick<StreamCoreFields$data, "id" | "streamId" | "name"> & {
+    metrics: StreamMetricsListFields$data | null;
+  };
 
   let {
     stream,
@@ -32,6 +25,8 @@
   const isLive = $derived(status === StreamStatus.LIVE);
   const displayStreamId = $derived(stream.streamId || stream.id);
   const displayName = $derived(stream.name || `Stream ${displayStreamId.slice(0, 8)}`);
+  const displayViewers = $derived(streamCurrentViewers(stream.metrics));
+  const displayResolution = $derived(streamResolutionLabel(stream.metrics));
 </script>
 
 <div class={cn("slab slab--compact", className)} {...restProps}>
@@ -55,12 +50,12 @@
     <div class="grid grid-cols-2 gap-4 text-sm">
       <div>
         <p class="text-muted-foreground text-xs">Viewers</p>
-        <p class="font-semibold text-foreground">{stream.viewers || 0}</p>
+        <p class="font-semibold text-foreground">{displayViewers}</p>
       </div>
       <div>
         <p class="text-muted-foreground text-xs">Resolution</p>
         <p class="font-semibold text-foreground">
-          {stream.resolution || "Unknown"}
+          {displayResolution}
         </p>
       </div>
     </div>

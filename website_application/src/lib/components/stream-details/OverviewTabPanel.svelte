@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { TrackListUpdates$result } from "$houdini";
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { formatNumber } from "$lib/utils/formatters";
   import { getIconComponent } from "$lib/iconUtils";
@@ -16,25 +17,8 @@
     type TrackLike,
   } from "$lib/utils/track-display";
 
-  // Local interface matching Houdini TrackListUpdates subscription
-  interface StreamTrack {
-    trackName: string;
-    trackType: string;
-    codec?: string | null;
-    resolution?: string | null;
-    width?: number | null;
-    height?: number | null;
-    fps?: number | null;
-    bitrateKbps?: number | null;
-    channels?: number | null;
-    sampleRate?: number | null;
-  }
-
-  interface TrackInfo {
-    streamId: string;
-    totalTracks: number | null;
-    tracks?: StreamTrack[] | null;
-  }
+  type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
+  type StreamTrack = NonNullable<TrackInfo["tracks"]>[number];
 
   interface ViewerMetric {
     timestamp: string;

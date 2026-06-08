@@ -14,7 +14,7 @@
   import { getContentDeliveryUrls, type PrimaryProtocolUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast";
 
-  // Clip type matching Houdini schema
+  // Clip fields required by this modal.
   interface ClipData {
     id: string;
     clipHash?: string | null;

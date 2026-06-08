@@ -4,27 +4,15 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { resolve } from "$app/paths";
   import { StreamStatus } from "$houdini";
+  import type { StreamCoreFields$data, StreamMetricsListFields$data } from "$houdini";
+  import { streamCurrentViewers, streamResolutionLabel } from "$lib/utils/stream-metrics-display";
 
-  // Define stream data interface matching Houdini types
-  export interface PrimaryStreamData {
-    id: string;
-    streamId?: string;
-    name: string;
-    streamKey: string;
-    metrics?: {
-      status?: string | null;
-      isLive?: boolean | null;
-      currentViewers?: number | null;
-      qualityTier?: string | null;
-      primaryWidth?: number | null;
-      primaryHeight?: number | null;
-      primaryFps?: number | null;
-      primaryCodec?: string | null;
-      primaryBitrate?: number | null;
-    } | null;
-    viewers?: number;
-    resolution?: string;
-  }
+  export type PrimaryStreamData = Pick<
+    StreamCoreFields$data,
+    "id" | "streamId" | "name" | "streamKey"
+  > & {
+    metrics: StreamMetricsListFields$data | null;
+  };
 
   interface Props {
     stream: PrimaryStreamData | null;
@@ -38,13 +26,8 @@
   const status = $derived(stream?.metrics?.status);
   const isLive = $derived(stream?.metrics?.isLive || status === StreamStatus.LIVE);
   const displayStreamId = $derived(stream?.streamId || stream?.id || "");
-  const displayViewers = $derived(stream?.metrics?.currentViewers ?? stream?.viewers ?? 0);
-  const displayResolution = $derived.by(() => {
-    const width = stream?.metrics?.primaryWidth;
-    const height = stream?.metrics?.primaryHeight;
-    if (width && height) return `${width}x${height}`;
-    return stream?.resolution || stream?.metrics?.qualityTier || "Unknown";
-  });
+  const displayViewers = $derived(streamCurrentViewers(stream?.metrics));
+  const displayResolution = $derived(streamResolutionLabel(stream?.metrics));
 </script>
 
 {#if stream}

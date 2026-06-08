@@ -3,30 +3,26 @@
   import { getShareUrl } from "$lib/config";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
   import { StreamStatus } from "$houdini";
+  import type { StreamCoreFields$data, StreamMetricsFields$data } from "$houdini";
+  import { streamCurrentViewers } from "$lib/utils/stream-metrics-display";
 
-  // Stream data interface matching Houdini's generated types
-  interface StreamCardData {
-    id: string;
-    streamId?: string;
-    name: string;
-    playbackId?: string | null;
-    metrics?: {
-      status?: string | null;
-      isLive?: boolean | null;
-      currentViewers?: number | null;
-      // Quality metrics (from live_streams table)
-      bufferState?: string | null;
-      qualityTier?: string | null;
-      primaryWidth?: number | null;
-      primaryHeight?: number | null;
-      primaryFps?: number | null;
-      primaryCodec?: string | null;
-      primaryBitrate?: number | null;
-      hasIssues?: boolean | null;
-      issuesDescription?: string | null;
-    } | null;
-    viewers?: number;
-  }
+  type StreamCardData = Pick<StreamCoreFields$data, "id" | "streamId" | "name" | "playbackId"> & {
+    metrics: Pick<
+      StreamMetricsFields$data,
+      | "status"
+      | "isLive"
+      | "currentViewers"
+      | "bufferState"
+      | "qualityTier"
+      | "primaryWidth"
+      | "primaryHeight"
+      | "primaryFps"
+      | "primaryCodec"
+      | "primaryBitrate"
+      | "hasIssues"
+      | "issuesDescription"
+    > | null;
+  };
 
   // Health data from StreamHealthMetric (optional, for detailed health metrics)
   interface HealthData {
@@ -52,7 +48,7 @@
   const status = $derived(stream.metrics?.status);
   const isLive = $derived(status === StreamStatus.LIVE);
   const displayStreamId = $derived(stream.streamId || stream.id);
-  const displayViewers = $derived(stream.metrics?.currentViewers ?? stream.viewers ?? 0);
+  const displayViewers = $derived(streamCurrentViewers(stream.metrics));
 
   // Merge health data: prefer explicit healthData, fall back to stream.metrics
   const effectiveHealthData = $derived.by(() => {

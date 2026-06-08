@@ -59,10 +59,6 @@
     // Bandwidth in bits per second (from ViewerMetrics subscription)
     bandwidthInBps?: number;
     bandwidthOutBps?: number;
-    // Legacy fields (not currently populated)
-    bitrate_kbps?: number;
-    video_codec?: string;
-    audio_codec?: string;
   }
 
   // Real-time dashboard data

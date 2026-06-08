@@ -1,31 +1,21 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge";
-  import type { NodeStatus$options } from "$houdini";
+  import type { NodeListFields$data, NodeStatus$options } from "$houdini";
 
-  // Node data type - fields needed by this component
-  interface NodeCardData {
-    id: string;
-    nodeName: string;
-    nodeType: string;
-    region: string | null;
-    externalIp: string | null;
-    internalIp?: string | null;
-    wireguardIp?: string | null;
-    lastHeartbeat: string | null;
-    cpuCores: number | null;
-    memoryGb: number | null;
-    diskGb: number | null;
-    availabilityZone?: string | null;
-    liveState?: {
-      cpuPercent: number;
-      ramUsedBytes: number;
-      ramTotalBytes: number;
-      diskUsedBytes: number;
-      diskTotalBytes: number;
-      isHealthy: boolean;
-      updatedAt: string;
-    } | null;
-  }
+  type NodeCardData = Pick<
+    NodeListFields$data,
+    | "id"
+    | "nodeName"
+    | "nodeType"
+    | "region"
+    | "externalIp"
+    | "internalIp"
+    | "lastHeartbeat"
+    | "cpuCores"
+    | "memoryGb"
+    | "diskGb"
+    | "liveState"
+  >;
 
   // Real-time system health data structure (includes ts which is computed client-side)
   interface SystemHealthData {
@@ -163,18 +153,6 @@
         <div>
           <p class="text-muted-foreground">Internal IP</p>
           <p class="font-mono text-xs">{node.internalIp}</p>
-        </div>
-      {/if}
-      {#if node.wireguardIp}
-        <div>
-          <p class="text-muted-foreground">WireGuard IP</p>
-          <p class="font-mono text-xs">{node.wireguardIp}</p>
-        </div>
-      {/if}
-      {#if node.availabilityZone}
-        <div>
-          <p class="text-muted-foreground">AZ</p>
-          <p class="text-xs">{node.availabilityZone}</p>
         </div>
       {/if}
       <div>

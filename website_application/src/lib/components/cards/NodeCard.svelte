@@ -2,7 +2,7 @@
   import { cn } from "$lib/utils";
   import { Badge } from "$lib/components/ui/badge";
 
-  // Local interface matching Houdini schema
+  // Minimal node fields required by this reusable card.
   interface NodeCardData {
     id: string;
     nodeName: string;
