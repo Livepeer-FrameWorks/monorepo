@@ -4,6 +4,7 @@ import (
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	qmevents "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -20,14 +21,15 @@ type Metrics struct {
 
 // Dependencies holds all external dependencies for handlers
 type Dependencies struct {
-	Logger          logging.Logger
-	Metrics         *Metrics
-	Quartermaster   *qmclient.GRPCClient
-	Purser          *purserclient.GRPCClient
-	Decklog         *decklogclient.BatchedClient
-	Redis           *redis.Client
-	ChatwootBaseURL string
-	ChatwootToken   string
+	Logger              logging.Logger
+	Metrics             *Metrics
+	Quartermaster       *qmclient.GRPCClient
+	QuartermasterEvents *qmevents.Client
+	Purser              *purserclient.GRPCClient
+	Decklog             *decklogclient.BatchedClient
+	Redis               *redis.Client
+	ChatwootBaseURL     string
+	ChatwootToken       string
 }
 
 var deps Dependencies

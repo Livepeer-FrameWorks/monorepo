@@ -8,9 +8,11 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "common.proto";
 import "shared.proto";
-import "foghorn.proto";
-import "purser.proto";
-import "quartermaster.proto";
+import "foghorn_control.proto";
+import "cluster_peer.proto";
+import "tenant_limits.proto";
+import "metering_contract.proto";
+import "x402.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -132,8 +134,8 @@ service InternalService {
   // forwards to Foghorn (which owns the chapter row + finalization
   // queue). Chapter mode/interval is configured on the Stream and
   // snapshotted at StartDVR — there is no mid-recording policy RPC.
-  rpc RetrieveDVRChapter(foghorn.RetrieveDVRChapterRequest) returns (foghorn.RetrieveDVRChapterResponse);
-  rpc ListDVRChapters(foghorn.ListDVRChaptersRequest) returns (foghorn.ListDVRChaptersResponse);
+  rpc RetrieveDVRChapter(foghorn_control.RetrieveDVRChapterRequest) returns (foghorn_control.RetrieveDVRChapterResponse);
+  rpc ListDVRChapters(foghorn_control.ListDVRChaptersRequest) returns (foghorn_control.ListDVRChaptersResponse);
 
   // ============================================================================
   // CLIP/DVR REGISTRY (Foghorn → Commodore)
@@ -240,14 +242,14 @@ service InternalService {
   // Called when a tenant is suspended due to insufficient prepaid balance.
   // Commodore forwards to Foghorn which stops all sessions on affected nodes.
   // ============================================================================
-  rpc TerminateTenantStreams(foghorn.TerminateTenantStreamsRequest) returns (foghorn.TerminateTenantStreamsResponse);
+  rpc TerminateTenantStreams(foghorn_control.TerminateTenantStreamsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
 
   // ============================================================================
   // TENANT CACHE INVALIDATION (Purser → Commodore → Foghorn)
   // Called when a tenant is reactivated after payment.
   // Commodore forwards to Foghorn which clears cached suspension status.
   // ============================================================================
-  rpc InvalidateTenantCache(foghorn.InvalidateTenantCacheRequest) returns (foghorn.InvalidateTenantCacheResponse);
+  rpc InvalidateTenantCache(foghorn_control.InvalidateTenantCacheRequest) returns (foghorn_control.InvalidateTenantCacheResponse);
 
   // ============================================================================
   // CROSS-SERVICE: BILLING DATA ACCESS
@@ -282,7 +284,7 @@ service InternalService {
   // Dry-run policy evaluation against a caller-supplied JWT or webhook test.
   // Commodore validates tenant ownership of the playback target and forwards
   // to the owning Foghorn — auth logic is NOT reimplemented here.
-  rpc TestPlaybackAccess(foghorn.TestPlaybackAccessRequest) returns (foghorn.TestPlaybackAccessResponse);
+  rpc TestPlaybackAccess(foghorn_control.TestPlaybackAccessRequest) returns (foghorn_control.TestPlaybackAccessResponse);
 
   // Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
   // against a pull+ stream. The list query feeds the webapp's "pull source
@@ -347,7 +349,7 @@ message ValidateStreamKeyResponse {
 
   optional string origin_cluster_id = 11; // Cluster where this stream ingests (for cross-cluster routing)
   optional string official_cluster_id = 12; // Billing-tier cluster providing geographic coverage
-  repeated quartermaster.TenantClusterPeer cluster_peers = 13; // Tenant's full cluster context for demand-driven peering
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 13; // Tenant's full cluster context for demand-driven peering
   string playback_id = 14; // Public playback key (for StreamAdvertisement reverse index)
 
   // ===== MULTISTREAM PUSH TARGETS =====
@@ -374,14 +376,14 @@ message ValidateStreamKeyResponse {
   // Per-meter current-period allowance snapshots forwarded from Purser
   // GetTenantBillingStatus. Foghorn uses these for load-aware admission
   // (free-tier over-allowance rejected only when cluster is under load).
-  repeated purser.MeterAllowance allowances = 18;
+  repeated metering.MeterAllowance allowances = 18;
 
   // ===== RUNTIME RESOURCE CAPS =====
   // Per-tenant concurrent-stream/viewer caps resolved from Purser tier
   // entitlements, optionally overridden by Quartermaster cluster access
   // resource_limits. Forwarded so Foghorn can apply them at trigger time
   // without another RPC. nil or zero-valued fields mean unlimited.
-  optional quartermaster.TenantResourceLimits tenant_resource_limits = 19;
+  optional tenant_limits.TenantResourceLimits tenant_resource_limits = 19;
 }
 
 // ============================================================================
@@ -435,7 +437,7 @@ message ResolveStreamContextResponse {
   // ===== ROUTING =====
   optional string origin_cluster_id = 14;
   optional string official_cluster_id = 15;
-  repeated quartermaster.TenantClusterPeer cluster_peers = 16;
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 16;
 
   // ===== PROCESSING / DVR POLICY =====
   // Same lifecycle-aware resolution path ValidateStreamKey uses. For
@@ -447,10 +449,10 @@ message ResolveStreamContextResponse {
   string dvr_processes_json = 21;
 
   // ===== BILLING ALLOWANCES =====
-  repeated purser.MeterAllowance allowances = 19;
+  repeated metering.MeterAllowance allowances = 19;
 
   // ===== RUNTIME RESOURCE CAPS =====
-  optional quartermaster.TenantResourceLimits tenant_resource_limits = 20;
+  optional tenant_limits.TenantResourceLimits tenant_resource_limits = 20;
 }
 
 // ============================================================================
@@ -527,7 +529,7 @@ message ResolvePlaybackIDResponse {
   bool is_balance_negative = 8;         // true if prepaid balance <= 0
   optional string origin_cluster_id = 9; // Cluster where this stream ingests (for cross-cluster routing)
   optional string official_cluster_id = 10; // Billing-tier cluster providing geographic coverage
-  repeated quartermaster.TenantClusterPeer cluster_peers = 11; // Tenant's full cluster context for demand-driven peering
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 11; // Tenant's full cluster context for demand-driven peering
   // requires_auth is the local marker Foghorn uses for fail-closed playback
   // enforcement during a Commodore outage. true if a non-public playback
   // policy is set on this object (live stream / vod_asset / clip).
@@ -660,7 +662,7 @@ message ResolveInternalNameResponse {
   string user_id = 3;                   // json:"user_id"
   bool is_recording_enabled = 4;        // json:"is_recording_enabled,omitempty"
   string stream_id = 5;                 // Public stream ID (UUID)
-  repeated quartermaster.TenantClusterPeer cluster_peers = 6;
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 6;
   string origin_cluster_id = 7;           // cluster that owns the stream (for federation source lookup)
   bool requires_auth = 8;
 }
@@ -898,7 +900,7 @@ message ResolveIdentifierResponse {
   string identifier_type = 5;           // "stream", "playback_id", "clip", "dvr", "vod"
   bool is_recording_enabled = 6;        // For streams: whether DVR auto-record is enabled
   string stream_id = 7;                 // Public stream ID (UUID) if applicable
-  repeated quartermaster.TenantClusterPeer cluster_peers = 8;
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 8;
   string origin_cluster_id = 9;         // Cluster where this stream ingests (for federation attribution)
   // requires_auth marker for fail-closed playback enforcement.
   // Source: streams.requires_auth, vod_assets.requires_auth, clips.requires_auth.
@@ -949,7 +951,7 @@ message ResolveVodHashResponse {
   string playback_id = 7;               // Public playback key
   string internal_name = 8;    // Artifact routing name (internal)
   string origin_cluster_id = 9;         // Cluster where this VOD was uploaded
-  repeated quartermaster.TenantClusterPeer cluster_peers = 10; // Tenant's authorized cluster peers (cross-cluster federation allowlist)
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 10; // Tenant's authorized cluster peers (cross-cluster federation allowlist)
 }
 
 // Resolve VOD relay ID (commodore.vod_assets.id) to VOD hash + tenant context
@@ -1076,7 +1078,7 @@ message ResolveArtifactPlaybackIDResponse {
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
-  repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
   // requires_auth marker for fail-closed playback enforcement.
   // Clip: from the clip's own playback_policy (snapshotted at creation).
   // DVR: inherited from the source stream's requires_auth at lookup time.
@@ -1098,7 +1100,7 @@ message ResolveArtifactInternalNameResponse {
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
-  repeated quartermaster.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
   bool requires_auth = 10;
 }
 
@@ -1359,7 +1361,7 @@ message WalletLoginRequest {
 // WalletLoginWithX402Request authenticates via x402 payload (EIP-3009)
 // Session token is returned on success. If value>0, the payment is settled and credited.
 message WalletLoginWithX402Request {
-  purser.X402PaymentPayload payment = 1;
+  x402.X402PaymentPayload payment = 1;
   string client_ip = 2;                 // For VAT evidence
   optional string target_tenant_id = 3; // Optional credit target (donations)
   common.SignupAttribution attribution = 4;
@@ -1913,9 +1915,9 @@ service VodService {
 
 service NodeManagementService {
   // Set a node's operational mode (normal, draining, maintenance)
-  rpc SetNodeOperationalMode(foghorn.SetNodeModeRequest) returns (foghorn.SetNodeModeResponse);
+  rpc SetNodeOperationalMode(foghorn_control.SetNodeModeRequest) returns (foghorn_control.SetNodeModeResponse);
   // Get real-time health and routing state for a node
-  rpc GetNodeHealth(foghorn.GetNodeHealthRequest) returns (foghorn.GetNodeHealthResponse);
+  rpc GetNodeHealth(foghorn_control.GetNodeHealthRequest) returns (foghorn_control.GetNodeHealthResponse);
 }
 
 service PlaybackAccessControlService {

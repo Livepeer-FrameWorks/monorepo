@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/clusterurls"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -42,14 +43,17 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 
@@ -189,8 +193,8 @@ type clusterRoute struct {
 	officialClusterName     string
 	officialFoghornGrpcAddr string
 	foghornAddrsByCluster   map[string][]string
-	clusterPeers            []*quartermasterpb.TenantClusterPeer  // full tenant cluster context (includes per-peer foghorn addrs)
-	tenantResourceLimits    *quartermasterpb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
+	clusterPeers            []*clusterpeerpb.TenantClusterPeer   // full tenant cluster context (includes per-peer foghorn addrs)
+	tenantResourceLimits    *tenantlimitspb.TenantResourceLimits // access-specific cap override; nil = use Purser tier entitlement
 	resolvedAt              time.Time
 }
 
@@ -652,7 +656,7 @@ func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, te
 	return out
 }
 
-func findPeerByClusterID(peers []*quartermasterpb.TenantClusterPeer, clusterID string) *quartermasterpb.TenantClusterPeer {
+func findPeerByClusterID(peers []*clusterpeerpb.TenantClusterPeer, clusterID string) *clusterpeerpb.TenantClusterPeer {
 	for _, p := range peers {
 		if p != nil && p.GetClusterId() == clusterID {
 			return p
@@ -678,11 +682,11 @@ func streamOriginRegionForRoute(route *clusterRoute, activeClusterID string) str
 	return ""
 }
 
-func filterPeersByPolicy(peers []*quartermasterpb.TenantClusterPeer, allowedClasses map[string]struct{}) []*quartermasterpb.TenantClusterPeer {
+func filterPeersByPolicy(peers []*clusterpeerpb.TenantClusterPeer, allowedClasses map[string]struct{}) []*clusterpeerpb.TenantClusterPeer {
 	if len(peers) == 0 {
 		return peers
 	}
-	out := make([]*quartermasterpb.TenantClusterPeer, 0, len(peers))
+	out := make([]*clusterpeerpb.TenantClusterPeer, 0, len(peers))
 	for _, peer := range peers {
 		if peer == nil {
 			continue
@@ -702,7 +706,7 @@ func filterPeersByPolicy(peers []*quartermasterpb.TenantClusterPeer, allowedClas
 	return out
 }
 
-func isSelfHostedPeer(peer *quartermasterpb.TenantClusterPeer) bool {
+func isSelfHostedPeer(peer *clusterpeerpb.TenantClusterPeer) bool {
 	if peer == nil {
 		return false
 	}
@@ -1115,7 +1119,7 @@ func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, co
 	return true, tenantID, clusterID, nil
 }
 
-func clusterInPeers(peers []*quartermasterpb.TenantClusterPeer, clusterID string) bool {
+func clusterInPeers(peers []*clusterpeerpb.TenantClusterPeer, clusterID string) bool {
 	for _, p := range peers {
 		if p.ClusterId == clusterID {
 			return true
@@ -1153,18 +1157,18 @@ func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) 
 	return resolvedClusterID
 }
 
-func hasTenantResourceLimits(limits *quartermasterpb.TenantResourceLimits) bool {
+func hasTenantResourceLimits(limits *tenantlimitspb.TenantResourceLimits) bool {
 	return limits != nil && (limits.GetMaxStreams() > 0 || limits.GetMaxViewers() > 0)
 }
 
-func mergeTenantResourceLimits(base, override *quartermasterpb.TenantResourceLimits) *quartermasterpb.TenantResourceLimits {
+func mergeTenantResourceLimits(base, override *tenantlimitspb.TenantResourceLimits) *tenantlimitspb.TenantResourceLimits {
 	if !hasTenantResourceLimits(base) {
 		if hasTenantResourceLimits(override) {
 			return override
 		}
 		return nil
 	}
-	merged := &quartermasterpb.TenantResourceLimits{
+	merged := &tenantlimitspb.TenantResourceLimits{
 		MaxStreams: base.GetMaxStreams(),
 		MaxViewers: base.GetMaxViewers(),
 	}
@@ -1281,8 +1285,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	billingModel := "postpaid"
 	var isSuspended, isBalanceNegative bool
 	var dvrPolicy *sharedpb.DVRPolicy
-	var allowances []*purserpb.MeterAllowance
-	var tenantResourceLimits *quartermasterpb.TenantResourceLimits
+	var allowances []*meteringpb.MeterAllowance
+	var tenantResourceLimits *tenantlimitspb.TenantResourceLimits
 
 	if s.purserClient != nil {
 		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
@@ -3195,7 +3199,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
 }
 
-func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*quartermasterpb.TenantClusterPeer) {
+func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*clusterpeerpb.TenantClusterPeer) {
 	if tenantID == "" || peers == nil {
 		return
 	}
@@ -8990,7 +8994,7 @@ func (s *CommodoreServer) resolveFoghornForNode(ctx context.Context, nodeID, req
 }
 
 // SetNodeOperationalMode proxies mode changes to Foghorn via the node's cluster.
-func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
+func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -9009,7 +9013,7 @@ func (s *CommodoreServer) SetNodeOperationalMode(ctx context.Context, req *fogho
 }
 
 // GetNodeHealth proxies health queries to Foghorn via the node's cluster.
-func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
+func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error) {
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
@@ -10070,7 +10074,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below -$10.
 // Forwards to Foghorn which sends stop_sessions to affected nodes.
-func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *foghornpb.TerminateTenantStreamsRequest) (*foghornpb.TerminateTenantStreamsResponse, error) {
+func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -10136,7 +10140,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 		"clusters_contacted":  len(targets),
 	}).Info("Tenant streams terminated across all clusters")
 
-	return &foghornpb.TerminateTenantStreamsResponse{
+	return &foghorncontrolpb.TerminateTenantStreamsResponse{
 		StreamsTerminated:  totalStreams,
 		SessionsTerminated: totalSessions,
 		StreamNames:        allStreamNames,
@@ -10144,7 +10148,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghornpb.InvalidateTenantCacheRequest) (*foghornpb.InvalidateTenantCacheResponse, error) {
+func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -10206,7 +10210,7 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 		"clusters_contacted":  len(targets),
 	}).Info("Tenant cache invalidated across all clusters")
 
-	return &foghornpb.InvalidateTenantCacheResponse{
+	return &foghorncontrolpb.InvalidateTenantCacheResponse{
 		EntriesInvalidated: totalInvalidated,
 	}, nil
 }

@@ -3451,7 +3451,7 @@ type ServiceRegistryServiceClient interface {
 	// quartermaster.service_event_outbox. Used by stateless producers
 	// (Deckhand) that don't own a local outbox; the row carries the
 	// originating service in event.source so the dispatcher can attribute
-	// correctly. The drain worker dispatches with exponential backoff —
+	// correctly. The drain worker dispatches with exponential backoff;
 	// durability across a Decklog outage matches QM's own service events.
 	EnqueueServiceEvent(ctx context.Context, in *EnqueueServiceEventRequest, opts ...grpc.CallOption) (*EnqueueServiceEventResponse, error)
 }
@@ -3558,7 +3558,7 @@ type ServiceRegistryServiceServer interface {
 	// quartermaster.service_event_outbox. Used by stateless producers
 	// (Deckhand) that don't own a local outbox; the row carries the
 	// originating service in event.source so the dispatcher can attribute
-	// correctly. The drain worker dispatches with exponential backoff —
+	// correctly. The drain worker dispatches with exponential backoff;
 	// durability across a Decklog outage matches QM's own service events.
 	EnqueueServiceEvent(context.Context, *EnqueueServiceEventRequest) (*EnqueueServiceEventResponse, error)
 	mustEmbedUnimplementedServiceRegistryServiceServer()

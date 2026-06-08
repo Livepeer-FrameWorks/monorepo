@@ -12,7 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -24,18 +24,17 @@ const InternalServerName = "foghorn.internal"
 
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
-	conn       *grpc.ClientConn
-	clip       foghornpb.ClipControlServiceClient
-	dvr        foghornpb.DVRControlServiceClient
-	viewer     foghornpb.ViewerControlServiceClient
-	vod        foghornpb.VodControlServiceClient
-	tenant     foghornpb.TenantControlServiceClient
-	edge       foghornpb.EdgeProvisioningServiceClient
-	nodeMgmt   foghornpb.NodeControlServiceClient
-	federation foghornfederationpb.FoghornFederationClient
-	relay      foghornrelaypb.FoghornRelayClient
-	logger     logging.Logger
-	timeout    time.Duration
+	conn     *grpc.ClientConn
+	clip     foghornpb.ClipControlServiceClient
+	dvr      foghornpb.DVRControlServiceClient
+	viewer   foghornpb.ViewerControlServiceClient
+	vod      foghornpb.VodControlServiceClient
+	tenant   foghornpb.TenantControlServiceClient
+	edge     foghornpb.EdgeProvisioningServiceClient
+	nodeMgmt foghornpb.NodeControlServiceClient
+	relay    foghornrelaypb.FoghornRelayClient
+	logger   logging.Logger
+	timeout  time.Duration
 }
 
 // GRPCConfig represents the configuration for the Foghorn gRPC client
@@ -149,18 +148,17 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:       conn,
-		clip:       foghornpb.NewClipControlServiceClient(conn),
-		dvr:        foghornpb.NewDVRControlServiceClient(conn),
-		viewer:     foghornpb.NewViewerControlServiceClient(conn),
-		vod:        foghornpb.NewVodControlServiceClient(conn),
-		tenant:     foghornpb.NewTenantControlServiceClient(conn),
-		edge:       foghornpb.NewEdgeProvisioningServiceClient(conn),
-		nodeMgmt:   foghornpb.NewNodeControlServiceClient(conn),
-		federation: foghornfederationpb.NewFoghornFederationClient(conn),
-		relay:      foghornrelaypb.NewFoghornRelayClient(conn),
-		logger:     config.Logger,
-		timeout:    config.Timeout,
+		conn:     conn,
+		clip:     foghornpb.NewClipControlServiceClient(conn),
+		dvr:      foghornpb.NewDVRControlServiceClient(conn),
+		viewer:   foghornpb.NewViewerControlServiceClient(conn),
+		vod:      foghornpb.NewVodControlServiceClient(conn),
+		tenant:   foghornpb.NewTenantControlServiceClient(conn),
+		edge:     foghornpb.NewEdgeProvisioningServiceClient(conn),
+		nodeMgmt: foghornpb.NewNodeControlServiceClient(conn),
+		relay:    foghornrelaypb.NewFoghornRelayClient(conn),
+		logger:   config.Logger,
+		timeout:  config.Timeout,
 	}, nil
 }
 
@@ -181,12 +179,14 @@ func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
 	return tlsCfg
 }
 
-// Federation returns the FoghornFederation client for cross-cluster RPCs.
-func (c *GRPCClient) Federation() foghornfederationpb.FoghornFederationClient {
-	return c.federation
+// Conn exposes the underlying connection for satellite clients
+// (pkg/clients/foghorn/federation) to share.
+func (c *GRPCClient) Conn() *grpc.ClientConn {
+	return c.conn
 }
 
 // Relay returns the FoghornRelay client for intra-cluster HA command forwarding.
+// Kept here (unlike Federation) because control.CommandRelayClient is built on it.
 func (c *GRPCClient) Relay() foghornrelaypb.FoghornRelayClient {
 	return c.relay
 }
@@ -248,7 +248,7 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest
 
 // RetrieveDVRChapter returns the chapter row, including the canonical
 // VOD playback_id once finalization has completed. UTC-only.
-func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, metadata.MD, error) {
+func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -259,7 +259,7 @@ func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghornpb.Retr
 // ListDVRChapters paginates chapter rows for player navigation. Bounded
 // by page_size (default 200, max 1000) per the bounded-operations
 // invariant for unbounded artifact lifetime.
-func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, metadata.MD, error) {
+func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -282,7 +282,7 @@ func (c *GRPCClient) OverrideArtifactRetention(ctx context.Context, req *foghorn
 // supplied JWT (or webhook test). Webhook mode (req.FireWebhook=true) makes
 // a real outbound HTTPS call to the customer URL — Commodore validates
 // tenant ownership upstream before forwarding here.
-func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, metadata.MD, error) {
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghorncontrolpb.TestPlaybackAccessRequest) (*foghorncontrolpb.TestPlaybackAccessResponse, metadata.MD, error) {
 	// Webhook mode can take up to ~10s if the customer endpoint is slow;
 	// give the call its own headroom rather than tripping the default
 	// client timeout.
@@ -495,12 +495,12 @@ func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenan
 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, metadata.MD, error) {
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.tenant.TerminateTenantStreams(ctx, &foghornpb.TerminateTenantStreamsRequest{
+	resp, err := c.tenant.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	}, grpc.Trailer(&trailers))
@@ -509,12 +509,12 @@ func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reaso
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation).
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, metadata.MD, error) {
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.InvalidateTenantCacheResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var trailers metadata.MD
-	resp, err := c.tenant.InvalidateTenantCache(ctx, &foghornpb.InvalidateTenantCacheRequest{
+	resp, err := c.tenant.InvalidateTenantCache(ctx, &foghorncontrolpb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	}, grpc.Trailer(&trailers))
@@ -537,7 +537,7 @@ func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *foghornpb.PreRegi
 // =============================================================================
 
 // SetNodeMode changes the operational mode of a node (normal, draining, maintenance).
-func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, metadata.MD, error) {
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD
@@ -546,7 +546,7 @@ func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghornpb.SetNodeMode
 }
 
 // GetNodeHealth returns real-time health and routing state for a node.
-func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, metadata.MD, error) {
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	var trailers metadata.MD

@@ -7,11 +7,13 @@
 package commodorepb
 
 import (
+	cluster_peer "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	common "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	foghorn "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	purser "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
-	quartermaster "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	metering_contract "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	tenant_limits "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	x402 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -284,11 +286,11 @@ type ValidateStreamKeyResponse struct {
 	IsSuspended bool `protobuf:"varint,9,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`
 	// is_balance_negative: true if prepaid balance <= 0 (but not yet suspended)
 	// When true, Foghorn should return 402 for new ingests
-	IsBalanceNegative bool                               `protobuf:"varint,10,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
-	OriginClusterId   *string                            `protobuf:"bytes,11,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`       // Cluster where this stream ingests (for cross-cluster routing)
-	OfficialClusterId *string                            `protobuf:"bytes,12,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
-	ClusterPeers      []*quartermaster.TenantClusterPeer `protobuf:"bytes,13,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
-	PlaybackId        string                             `protobuf:"bytes,14,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                              // Public playback key (for StreamAdvertisement reverse index)
+	IsBalanceNegative bool                              `protobuf:"varint,10,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
+	OriginClusterId   *string                           `protobuf:"bytes,11,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`       // Cluster where this stream ingests (for cross-cluster routing)
+	OfficialClusterId *string                           `protobuf:"bytes,12,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
+	ClusterPeers      []*cluster_peer.TenantClusterPeer `protobuf:"bytes,13,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
+	PlaybackId        string                            `protobuf:"bytes,14,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                              // Public playback key (for StreamAdvertisement reverse index)
 	// ===== MULTISTREAM PUSH TARGETS =====
 	// Enabled push targets for this stream (loaded during validation).
 	// Foghorn sends these to Helmsman as ActivatePushTargets when the stream goes live.
@@ -310,13 +312,13 @@ type ValidateStreamKeyResponse struct {
 	// Per-meter current-period allowance snapshots forwarded from Purser
 	// GetTenantBillingStatus. Foghorn uses these for load-aware admission
 	// (free-tier over-allowance rejected only when cluster is under load).
-	Allowances []*purser.MeterAllowance `protobuf:"bytes,18,rep,name=allowances,proto3" json:"allowances,omitempty"`
+	Allowances []*metering_contract.MeterAllowance `protobuf:"bytes,18,rep,name=allowances,proto3" json:"allowances,omitempty"`
 	// ===== RUNTIME RESOURCE CAPS =====
 	// Per-tenant concurrent-stream/viewer caps resolved from Purser tier
 	// entitlements, optionally overridden by Quartermaster cluster access
 	// resource_limits. Forwarded so Foghorn can apply them at trigger time
 	// without another RPC. nil or zero-valued fields mean unlimited.
-	TenantResourceLimits *quartermaster.TenantResourceLimits `protobuf:"bytes,19,opt,name=tenant_resource_limits,json=tenantResourceLimits,proto3,oneof" json:"tenant_resource_limits,omitempty"`
+	TenantResourceLimits *tenant_limits.TenantResourceLimits `protobuf:"bytes,19,opt,name=tenant_resource_limits,json=tenantResourceLimits,proto3,oneof" json:"tenant_resource_limits,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -442,7 +444,7 @@ func (x *ValidateStreamKeyResponse) GetOfficialClusterId() string {
 	return ""
 }
 
-func (x *ValidateStreamKeyResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ValidateStreamKeyResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -484,14 +486,14 @@ func (x *ValidateStreamKeyResponse) GetDvrPolicy() *shared.DVRPolicy {
 	return nil
 }
 
-func (x *ValidateStreamKeyResponse) GetAllowances() []*purser.MeterAllowance {
+func (x *ValidateStreamKeyResponse) GetAllowances() []*metering_contract.MeterAllowance {
 	if x != nil {
 		return x.Allowances
 	}
 	return nil
 }
 
-func (x *ValidateStreamKeyResponse) GetTenantResourceLimits() *quartermaster.TenantResourceLimits {
+func (x *ValidateStreamKeyResponse) GetTenantResourceLimits() *tenant_limits.TenantResourceLimits {
 	if x != nil {
 		return x.TenantResourceLimits
 	}
@@ -626,9 +628,9 @@ type ResolveStreamContextResponse struct {
 	IsSuspended       bool   `protobuf:"varint,12,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`
 	IsBalanceNegative bool   `protobuf:"varint,13,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
 	// ===== ROUTING =====
-	OriginClusterId   *string                            `protobuf:"bytes,14,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
-	OfficialClusterId *string                            `protobuf:"bytes,15,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"`
-	ClusterPeers      []*quartermaster.TenantClusterPeer `protobuf:"bytes,16,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
+	OriginClusterId   *string                           `protobuf:"bytes,14,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
+	OfficialClusterId *string                           `protobuf:"bytes,15,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"`
+	ClusterPeers      []*cluster_peer.TenantClusterPeer `protobuf:"bytes,16,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
 	// ===== PROCESSING / DVR POLICY =====
 	// Same lifecycle-aware resolution path ValidateStreamKey uses. For
 	// mist_native, Foghorn writes processes_json into the streamCache under
@@ -638,9 +640,9 @@ type ResolveStreamContextResponse struct {
 	DvrPolicy        *shared.DVRPolicy `protobuf:"bytes,18,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
 	DvrProcessesJson string            `protobuf:"bytes,21,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
 	// ===== BILLING ALLOWANCES =====
-	Allowances []*purser.MeterAllowance `protobuf:"bytes,19,rep,name=allowances,proto3" json:"allowances,omitempty"`
+	Allowances []*metering_contract.MeterAllowance `protobuf:"bytes,19,rep,name=allowances,proto3" json:"allowances,omitempty"`
 	// ===== RUNTIME RESOURCE CAPS =====
-	TenantResourceLimits *quartermaster.TenantResourceLimits `protobuf:"bytes,20,opt,name=tenant_resource_limits,json=tenantResourceLimits,proto3,oneof" json:"tenant_resource_limits,omitempty"`
+	TenantResourceLimits *tenant_limits.TenantResourceLimits `protobuf:"bytes,20,opt,name=tenant_resource_limits,json=tenantResourceLimits,proto3,oneof" json:"tenant_resource_limits,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -780,7 +782,7 @@ func (x *ResolveStreamContextResponse) GetOfficialClusterId() string {
 	return ""
 }
 
-func (x *ResolveStreamContextResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveStreamContextResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -808,14 +810,14 @@ func (x *ResolveStreamContextResponse) GetDvrProcessesJson() string {
 	return ""
 }
 
-func (x *ResolveStreamContextResponse) GetAllowances() []*purser.MeterAllowance {
+func (x *ResolveStreamContextResponse) GetAllowances() []*metering_contract.MeterAllowance {
 	if x != nil {
 		return x.Allowances
 	}
 	return nil
 }
 
-func (x *ResolveStreamContextResponse) GetTenantResourceLimits() *quartermaster.TenantResourceLimits {
+func (x *ResolveStreamContextResponse) GetTenantResourceLimits() *tenant_limits.TenantResourceLimits {
 	if x != nil {
 		return x.TenantResourceLimits
 	}
@@ -1268,18 +1270,18 @@ func (x *ResolvePlaybackIDRequest) GetPlaybackId() string {
 
 // Matches pkg/api/commodore/types.go:ResolvePlaybackIDResponse exactly
 type ResolvePlaybackIDResponse struct {
-	state             protoimpl.MessageState             `protogen:"open.v1"`
-	InternalName      string                             `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                         // json:"internal_name"
-	TenantId          string                             `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                     // json:"tenant_id"
-	Status            string                             `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`                                                         // json:"status"
-	PlaybackId        string                             `protobuf:"bytes,4,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                               // json:"playbook_id" (note: typo in original)
-	StreamId          string                             `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                     // Public stream ID (UUID)
-	BillingModel      string                             `protobuf:"bytes,6,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`                         // 'postpaid' or 'prepaid'
-	IsSuspended       bool                               `protobuf:"varint,7,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                           // true if tenant suspended
-	IsBalanceNegative bool                               `protobuf:"varint,8,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`       // true if prepaid balance <= 0
-	OriginClusterId   *string                            `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`        // Cluster where this stream ingests (for cross-cluster routing)
-	OfficialClusterId *string                            `protobuf:"bytes,10,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
-	ClusterPeers      []*quartermaster.TenantClusterPeer `protobuf:"bytes,11,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
+	state             protoimpl.MessageState            `protogen:"open.v1"`
+	InternalName      string                            `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                         // json:"internal_name"
+	TenantId          string                            `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                     // json:"tenant_id"
+	Status            string                            `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`                                                         // json:"status"
+	PlaybackId        string                            `protobuf:"bytes,4,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                               // json:"playbook_id" (note: typo in original)
+	StreamId          string                            `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                     // Public stream ID (UUID)
+	BillingModel      string                            `protobuf:"bytes,6,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`                         // 'postpaid' or 'prepaid'
+	IsSuspended       bool                              `protobuf:"varint,7,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                           // true if tenant suspended
+	IsBalanceNegative bool                              `protobuf:"varint,8,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`       // true if prepaid balance <= 0
+	OriginClusterId   *string                           `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`        // Cluster where this stream ingests (for cross-cluster routing)
+	OfficialClusterId *string                           `protobuf:"bytes,10,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
+	ClusterPeers      []*cluster_peer.TenantClusterPeer `protobuf:"bytes,11,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
 	// requires_auth is the local marker Foghorn uses for fail-closed playback
 	// enforcement during a Commodore outage. true if a non-public playback
 	// policy is set on this object (live stream / vod_asset / clip).
@@ -1395,7 +1397,7 @@ func (x *ResolvePlaybackIDResponse) GetOfficialClusterId() string {
 	return ""
 }
 
-func (x *ResolvePlaybackIDResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolvePlaybackIDResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -2167,15 +2169,15 @@ func (x *ResolveInternalNameRequest) GetInternalName() string {
 
 // Matches pkg/api/commodore/types.go:InternalNameResponse exactly
 type ResolveInternalNameResponse struct {
-	state              protoimpl.MessageState             `protogen:"open.v1"`
-	InternalName       string                             `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // json:"internal_name"
-	TenantId           string                             `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // json:"tenant_id"
-	UserId             string                             `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // json:"user_id"
-	IsRecordingEnabled bool                               `protobuf:"varint,4,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // json:"is_recording_enabled,omitempty"
-	StreamId           string                             `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID)
-	ClusterPeers       []*quartermaster.TenantClusterPeer `protobuf:"bytes,6,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
-	OriginClusterId    string                             `protobuf:"bytes,7,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // cluster that owns the stream (for federation source lookup)
-	RequiresAuth       bool                               `protobuf:"varint,8,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
+	state              protoimpl.MessageState            `protogen:"open.v1"`
+	InternalName       string                            `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // json:"internal_name"
+	TenantId           string                            `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // json:"tenant_id"
+	UserId             string                            `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // json:"user_id"
+	IsRecordingEnabled bool                              `protobuf:"varint,4,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // json:"is_recording_enabled,omitempty"
+	StreamId           string                            `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID)
+	ClusterPeers       []*cluster_peer.TenantClusterPeer `protobuf:"bytes,6,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
+	OriginClusterId    string                            `protobuf:"bytes,7,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // cluster that owns the stream (for federation source lookup)
+	RequiresAuth       bool                              `protobuf:"varint,8,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2245,7 +2247,7 @@ func (x *ResolveInternalNameResponse) GetStreamId() string {
 	return ""
 }
 
-func (x *ResolveInternalNameResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveInternalNameResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -3868,16 +3870,16 @@ func (x *ResolveIdentifierRequest) GetIdentifier() string {
 }
 
 type ResolveIdentifierResponse struct {
-	state              protoimpl.MessageState             `protogen:"open.v1"`
-	Found              bool                               `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                       // Whether identifier was resolved
-	TenantId           string                             `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // Tenant context for analytics/billing
-	UserId             string                             `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // Owner (if available)
-	InternalName       string                             `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // Canonical stream name (for streams, or parent for clips/DVR)
-	IdentifierType     string                             `protobuf:"bytes,5,opt,name=identifier_type,json=identifierType,proto3" json:"identifier_type,omitempty"`                // "stream", "playback_id", "clip", "dvr", "vod"
-	IsRecordingEnabled bool                               `protobuf:"varint,6,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // For streams: whether DVR auto-record is enabled
-	StreamId           string                             `protobuf:"bytes,7,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID) if applicable
-	ClusterPeers       []*quartermaster.TenantClusterPeer `protobuf:"bytes,8,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
-	OriginClusterId    string                             `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this stream ingests (for federation attribution)
+	state              protoimpl.MessageState            `protogen:"open.v1"`
+	Found              bool                              `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                                       // Whether identifier was resolved
+	TenantId           string                            `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                  // Tenant context for analytics/billing
+	UserId             string                            `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // Owner (if available)
+	InternalName       string                            `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                      // Canonical stream name (for streams, or parent for clips/DVR)
+	IdentifierType     string                            `protobuf:"bytes,5,opt,name=identifier_type,json=identifierType,proto3" json:"identifier_type,omitempty"`                // "stream", "playback_id", "clip", "dvr", "vod"
+	IsRecordingEnabled bool                              `protobuf:"varint,6,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // For streams: whether DVR auto-record is enabled
+	StreamId           string                            `protobuf:"bytes,7,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID) if applicable
+	ClusterPeers       []*cluster_peer.TenantClusterPeer `protobuf:"bytes,8,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
+	OriginClusterId    string                            `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this stream ingests (for federation attribution)
 	// requires_auth marker for fail-closed playback enforcement.
 	// Source: streams.requires_auth, vod_assets.requires_auth, clips.requires_auth.
 	// For DVR (which has no own column) this reflects the source stream's marker.
@@ -3965,7 +3967,7 @@ func (x *ResolveIdentifierResponse) GetStreamId() string {
 	return ""
 }
 
-func (x *ResolveIdentifierResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveIdentifierResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -4212,17 +4214,17 @@ func (x *ResolveVodHashRequest) GetVodHash() string {
 }
 
 type ResolveVodHashResponse struct {
-	state           protoimpl.MessageState             `protogen:"open.v1"`
-	Found           bool                               `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                             // Whether VOD was found
-	TenantId        string                             `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                        // Tenant context for analytics
-	UserId          string                             `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                              // Owner for authorization
-	Filename        string                             `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`                                        // Original filename
-	Title           string                             `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`                                              // VOD title (if set)
-	Description     string                             `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                                  // VOD description (if set)
-	PlaybackId      string                             `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                  // Public playback key
-	InternalName    string                             `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`            // Artifact routing name (internal)
-	OriginClusterId string                             `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this VOD was uploaded
-	ClusterPeers    []*quartermaster.TenantClusterPeer `protobuf:"bytes,10,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`           // Tenant's authorized cluster peers (cross-cluster federation allowlist)
+	state           protoimpl.MessageState            `protogen:"open.v1"`
+	Found           bool                              `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`                                             // Whether VOD was found
+	TenantId        string                            `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                        // Tenant context for analytics
+	UserId          string                            `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                              // Owner for authorization
+	Filename        string                            `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`                                        // Original filename
+	Title           string                            `protobuf:"bytes,5,opt,name=title,proto3" json:"title,omitempty"`                                              // VOD title (if set)
+	Description     string                            `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                                  // VOD description (if set)
+	PlaybackId      string                            `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                  // Public playback key
+	InternalName    string                            `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`            // Artifact routing name (internal)
+	OriginClusterId string                            `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this VOD was uploaded
+	ClusterPeers    []*cluster_peer.TenantClusterPeer `protobuf:"bytes,10,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`           // Tenant's authorized cluster peers (cross-cluster federation allowlist)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4320,7 +4322,7 @@ func (x *ResolveVodHashResponse) GetOriginClusterId() string {
 	return ""
 }
 
-func (x *ResolveVodHashResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveVodHashResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -5301,16 +5303,16 @@ func (x *ResolveArtifactPlaybackIDRequest) GetPlaybackId() string {
 }
 
 type ResolveArtifactPlaybackIDResponse struct {
-	state           protoimpl.MessageState             `protogen:"open.v1"`
-	Found           bool                               `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	ArtifactHash    string                             `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	InternalName    string                             `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	TenantId        string                             `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId          string                             `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	StreamId        string                             `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType     string                             `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
-	OriginClusterId string                             `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
-	ClusterPeers    []*quartermaster.TenantClusterPeer `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
+	state           protoimpl.MessageState            `protogen:"open.v1"`
+	Found           bool                              `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	ArtifactHash    string                            `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	InternalName    string                            `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	TenantId        string                            `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId          string                            `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	StreamId        string                            `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ContentType     string                            `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId string                            `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
+	ClusterPeers    []*cluster_peer.TenantClusterPeer `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
 	// requires_auth marker for fail-closed playback enforcement.
 	// Clip: from the clip's own playback_policy (snapshotted at creation).
 	// DVR: inherited from the source stream's requires_auth at lookup time.
@@ -5406,7 +5408,7 @@ func (x *ResolveArtifactPlaybackIDResponse) GetOriginClusterId() string {
 	return ""
 }
 
-func (x *ResolveArtifactPlaybackIDResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveArtifactPlaybackIDResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -5466,17 +5468,17 @@ func (x *ResolveArtifactInternalNameRequest) GetInternalName() string {
 }
 
 type ResolveArtifactInternalNameResponse struct {
-	state           protoimpl.MessageState             `protogen:"open.v1"`
-	Found           bool                               `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	ArtifactHash    string                             `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	InternalName    string                             `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	TenantId        string                             `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId          string                             `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	StreamId        string                             `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType     string                             `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
-	OriginClusterId string                             `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
-	ClusterPeers    []*quartermaster.TenantClusterPeer `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
-	RequiresAuth    bool                               `protobuf:"varint,10,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
+	state           protoimpl.MessageState            `protogen:"open.v1"`
+	Found           bool                              `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	ArtifactHash    string                            `protobuf:"bytes,2,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
+	InternalName    string                            `protobuf:"bytes,3,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	TenantId        string                            `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId          string                            `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	StreamId        string                            `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ContentType     string                            `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId string                            `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
+	ClusterPeers    []*cluster_peer.TenantClusterPeer `protobuf:"bytes,9,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`            // Tenant cluster access envelope
+	RequiresAuth    bool                              `protobuf:"varint,10,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -5567,7 +5569,7 @@ func (x *ResolveArtifactInternalNameResponse) GetOriginClusterId() string {
 	return ""
 }
 
-func (x *ResolveArtifactInternalNameResponse) GetClusterPeers() []*quartermaster.TenantClusterPeer {
+func (x *ResolveArtifactInternalNameResponse) GetClusterPeers() []*cluster_peer.TenantClusterPeer {
 	if x != nil {
 		return x.ClusterPeers
 	}
@@ -7331,11 +7333,11 @@ func (x *WalletLoginRequest) GetAttribution() *common.SignupAttribution {
 // WalletLoginWithX402Request authenticates via x402 payload (EIP-3009)
 // Session token is returned on success. If value>0, the payment is settled and credited.
 type WalletLoginWithX402Request struct {
-	state          protoimpl.MessageState     `protogen:"open.v1"`
-	Payment        *purser.X402PaymentPayload `protobuf:"bytes,1,opt,name=payment,proto3" json:"payment,omitempty"`
-	ClientIp       string                     `protobuf:"bytes,2,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`                           // For VAT evidence
-	TargetTenantId *string                    `protobuf:"bytes,3,opt,name=target_tenant_id,json=targetTenantId,proto3,oneof" json:"target_tenant_id,omitempty"` // Optional credit target (donations)
-	Attribution    *common.SignupAttribution  `protobuf:"bytes,4,opt,name=attribution,proto3" json:"attribution,omitempty"`
+	state          protoimpl.MessageState    `protogen:"open.v1"`
+	Payment        *x402.X402PaymentPayload  `protobuf:"bytes,1,opt,name=payment,proto3" json:"payment,omitempty"`
+	ClientIp       string                    `protobuf:"bytes,2,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`                           // For VAT evidence
+	TargetTenantId *string                   `protobuf:"bytes,3,opt,name=target_tenant_id,json=targetTenantId,proto3,oneof" json:"target_tenant_id,omitempty"` // Optional credit target (donations)
+	Attribution    *common.SignupAttribution `protobuf:"bytes,4,opt,name=attribution,proto3" json:"attribution,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -7370,7 +7372,7 @@ func (*WalletLoginWithX402Request) Descriptor() ([]byte, []int) {
 	return file_commodore_proto_rawDescGZIP(), []int{100}
 }
 
-func (x *WalletLoginWithX402Request) GetPayment() *purser.X402PaymentPayload {
+func (x *WalletLoginWithX402Request) GetPayment() *x402.X402PaymentPayload {
 	if x != nil {
 		return x.Payment
 	}
@@ -13136,12 +13138,13 @@ var File_commodore_proto protoreflect.FileDescriptor
 
 const file_commodore_proto_rawDesc = "" +
 	"\n" +
-	"\x0fcommodore.proto\x12\tcommodore\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\rfoghorn.proto\x1a\fpurser.proto\x1a\x13quartermaster.proto\"X\n" +
+	"\x0fcommodore.proto\x12\tcommodore\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\x15foghorn_control.proto\x1a\x12cluster_peer.proto\x1a\x13tenant_limits.proto\x1a\x17metering_contract.proto\x1a\n" +
+	"x402.proto\"X\n" +
 	"\x18ValidateStreamKeyRequest\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\xb1\b\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\"\xb2\b\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -13156,19 +13159,19 @@ const file_commodore_proto_rawDesc = "" +
 	"\x13is_balance_negative\x18\n" +
 	" \x01(\bR\x11isBalanceNegative\x12/\n" +
 	"\x11origin_cluster_id\x18\v \x01(\tH\x00R\x0foriginClusterId\x88\x01\x01\x123\n" +
-	"\x13official_cluster_id\x18\f \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12E\n" +
-	"\rcluster_peers\x18\r \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12\x1f\n" +
+	"\x13official_cluster_id\x18\f \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12D\n" +
+	"\rcluster_peers\x18\r \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12\x1f\n" +
 	"\vplayback_id\x18\x0e \x01(\tR\n" +
 	"playbackId\x12@\n" +
 	"\fpush_targets\x18\x0f \x03(\v2\x1d.commodore.PushTargetInternalR\vpushTargets\x12%\n" +
 	"\x0eprocesses_json\x18\x10 \x01(\tR\rprocessesJson\x12,\n" +
 	"\x12dvr_processes_json\x18\x1f \x01(\tR\x10dvrProcessesJson\x120\n" +
 	"\n" +
-	"dvr_policy\x18\x11 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x126\n" +
+	"dvr_policy\x18\x11 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x128\n" +
 	"\n" +
-	"allowances\x18\x12 \x03(\v2\x16.purser.MeterAllowanceR\n" +
+	"allowances\x18\x12 \x03(\v2\x18.metering.MeterAllowanceR\n" +
 	"allowances\x12^\n" +
-	"\x16tenant_resource_limits\x18\x13 \x01(\v2#.quartermaster.TenantResourceLimitsH\x02R\x14tenantResourceLimits\x88\x01\x01B\x14\n" +
+	"\x16tenant_resource_limits\x18\x13 \x01(\v2#.tenant_limits.TenantResourceLimitsH\x02R\x14tenantResourceLimits\x88\x01\x01B\x14\n" +
 	"\x12_origin_cluster_idB\x16\n" +
 	"\x14_official_cluster_idB\x19\n" +
 	"\x17_tenant_resource_limits\"\xb3\x01\n" +
@@ -13180,7 +13183,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x04 \x01(\tR\tclusterIdB\f\n" +
 	"\n" +
-	"identifier\"\xae\b\n" +
+	"identifier\"\xaf\b\n" +
 	"\x1cResolveStreamContextResponse\x12\x1a\n" +
 	"\badmitted\x18\x01 \x01(\bR\badmitted\x12)\n" +
 	"\x10admission_reason\x18\x02 \x01(\tR\x0fadmissionReason\x12N\n" +
@@ -13199,16 +13202,16 @@ const file_commodore_proto_rawDesc = "" +
 	"\fis_suspended\x18\f \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\r \x01(\bR\x11isBalanceNegative\x12/\n" +
 	"\x11origin_cluster_id\x18\x0e \x01(\tH\x00R\x0foriginClusterId\x88\x01\x01\x123\n" +
-	"\x13official_cluster_id\x18\x0f \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12E\n" +
-	"\rcluster_peers\x18\x10 \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12%\n" +
+	"\x13official_cluster_id\x18\x0f \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12D\n" +
+	"\rcluster_peers\x18\x10 \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12%\n" +
 	"\x0eprocesses_json\x18\x11 \x01(\tR\rprocessesJson\x120\n" +
 	"\n" +
 	"dvr_policy\x18\x12 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12,\n" +
-	"\x12dvr_processes_json\x18\x15 \x01(\tR\x10dvrProcessesJson\x126\n" +
+	"\x12dvr_processes_json\x18\x15 \x01(\tR\x10dvrProcessesJson\x128\n" +
 	"\n" +
-	"allowances\x18\x13 \x03(\v2\x16.purser.MeterAllowanceR\n" +
+	"allowances\x18\x13 \x03(\v2\x18.metering.MeterAllowanceR\n" +
 	"allowances\x12^\n" +
-	"\x16tenant_resource_limits\x18\x14 \x01(\v2#.quartermaster.TenantResourceLimitsH\x02R\x14tenantResourceLimits\x88\x01\x01B\x14\n" +
+	"\x16tenant_resource_limits\x18\x14 \x01(\v2#.tenant_limits.TenantResourceLimitsH\x02R\x14tenantResourceLimits\x88\x01\x01B\x14\n" +
 	"\x12_origin_cluster_idB\x16\n" +
 	"\x14_official_cluster_idB\x19\n" +
 	"\x17_tenant_resource_limits\":\n" +
@@ -13246,7 +13249,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\acleared\x18\x01 \x01(\bR\acleared\";\n" +
 	"\x18ResolvePlaybackIDRequest\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\"\xcc\x04\n" +
+	"playbackId\"\xcb\x04\n" +
 	"\x19ResolvePlaybackIDResponse\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -13259,8 +13262,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\x13is_balance_negative\x18\b \x01(\bR\x11isBalanceNegative\x12/\n" +
 	"\x11origin_cluster_id\x18\t \x01(\tH\x00R\x0foriginClusterId\x88\x01\x01\x123\n" +
 	"\x13official_cluster_id\x18\n" +
-	" \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12E\n" +
-	"\rcluster_peers\x18\v \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12#\n" +
+	" \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12D\n" +
+	"\rcluster_peers\x18\v \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12#\n" +
 	"\rrequires_auth\x18\f \x01(\bR\frequiresAuth\x12\x1f\n" +
 	"\vingest_mode\x18\r \x01(\tR\n" +
 	"ingestModeB\x14\n" +
@@ -13324,14 +13327,14 @@ const file_commodore_proto_rawDesc = "" +
 	"jwt_policy\x18\x03 \x01(\v2\x1c.commodore.PlaybackJwtPolicyR\tjwtPolicy\x12G\n" +
 	"\x0ewebhook_policy\x18\x04 \x01(\v2 .commodore.PlaybackWebhookPolicyR\rwebhookPolicy\"A\n" +
 	"\x1aResolveInternalNameRequest\x12#\n" +
-	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\xdf\x02\n" +
+	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\xde\x02\n" +
 	"\x1bResolveInternalNameResponse\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x120\n" +
 	"\x14is_recording_enabled\x18\x04 \x01(\bR\x12isRecordingEnabled\x12\x1b\n" +
-	"\tstream_id\x18\x05 \x01(\tR\bstreamId\x12E\n" +
-	"\rcluster_peers\x18\x06 \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12*\n" +
+	"\tstream_id\x18\x05 \x01(\tR\bstreamId\x12D\n" +
+	"\rcluster_peers\x18\x06 \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12*\n" +
 	"\x11origin_cluster_id\x18\a \x01(\tR\x0foriginClusterId\x12#\n" +
 	"\rrequires_auth\x18\b \x01(\bR\frequiresAuth\"/\n" +
 	"\x17ValidateAPITokenRequest\x12\x14\n" +
@@ -13469,7 +13472,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x18ResolveIdentifierRequest\x12\x1e\n" +
 	"\n" +
 	"identifier\x18\x01 \x01(\tR\n" +
-	"identifier\"\x9c\x03\n" +
+	"identifier\"\x9b\x03\n" +
 	"\x19ResolveIdentifierResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -13477,8 +13480,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12'\n" +
 	"\x0fidentifier_type\x18\x05 \x01(\tR\x0eidentifierType\x120\n" +
 	"\x14is_recording_enabled\x18\x06 \x01(\bR\x12isRecordingEnabled\x12\x1b\n" +
-	"\tstream_id\x18\a \x01(\tR\bstreamId\x12E\n" +
-	"\rcluster_peers\x18\b \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12*\n" +
+	"\tstream_id\x18\a \x01(\tR\bstreamId\x12D\n" +
+	"\rcluster_peers\x18\b \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12*\n" +
 	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\x12#\n" +
 	"\rrequires_auth\x18\n" +
 	" \x01(\bR\frequiresAuth\"\x88\x03\n" +
@@ -13504,7 +13507,7 @@ const file_commodore_proto_rawDesc = "" +
 	"playbackId\x12#\n" +
 	"\rinternal_name\x18\x04 \x01(\tR\finternalName\"2\n" +
 	"\x15ResolveVodHashRequest\x12\x19\n" +
-	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xf1\x02\n" +
+	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xf0\x02\n" +
 	"\x16ResolveVodHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -13515,9 +13518,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
 	"playbackId\x12#\n" +
 	"\rinternal_name\x18\b \x01(\tR\finternalName\x12*\n" +
-	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\x12E\n" +
+	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\x12D\n" +
 	"\rcluster_peers\x18\n" +
-	" \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\",\n" +
+	" \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\",\n" +
 	"\x13ResolveVodIDRequest\x12\x15\n" +
 	"\x06vod_id\x18\x01 \x01(\tR\x05vodId\"\xc3\x01\n" +
 	"\x14ResolveVodIDResponse\x12\x14\n" +
@@ -13637,7 +13640,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\rhas_next_page\x18\x03 \x01(\bR\vhasNextPage\"C\n" +
 	" ResolveArtifactPlaybackIDRequest\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\"\x91\x03\n" +
+	"playbackId\"\x90\x03\n" +
 	"!ResolveArtifactPlaybackIDResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12#\n" +
@@ -13646,12 +13649,12 @@ const file_commodore_proto_rawDesc = "" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +
 	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12*\n" +
-	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12E\n" +
-	"\rcluster_peers\x18\t \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12#\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12D\n" +
+	"\rcluster_peers\x18\t \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12#\n" +
 	"\rrequires_auth\x18\n" +
 	" \x01(\bR\frequiresAuth\"I\n" +
 	"\"ResolveArtifactInternalNameRequest\x12#\n" +
-	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\x93\x03\n" +
+	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\x92\x03\n" +
 	"#ResolveArtifactInternalNameResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12#\n" +
@@ -13660,8 +13663,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +
 	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12*\n" +
-	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12E\n" +
-	"\rcluster_peers\x18\t \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12#\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12D\n" +
+	"\rcluster_peers\x18\t \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12#\n" +
 	"\rrequires_auth\x18\n" +
 	" \x01(\bR\frequiresAuth\"\xa1\x01\n" +
 	"\x1cGetOrCreateWalletUserRequest\x12\x1d\n" +
@@ -13787,9 +13790,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0ewallet_address\x18\x01 \x01(\tR\rwalletAddress\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\tR\tsignature\x12;\n" +
-	"\vattribution\x18\x04 \x01(\v2\x19.common.SignupAttributionR\vattribution\"\xf0\x01\n" +
-	"\x1aWalletLoginWithX402Request\x124\n" +
-	"\apayment\x18\x01 \x01(\v2\x1a.purser.X402PaymentPayloadR\apayment\x12\x1b\n" +
+	"\vattribution\x18\x04 \x01(\v2\x19.common.SignupAttributionR\vattribution\"\xee\x01\n" +
+	"\x1aWalletLoginWithX402Request\x122\n" +
+	"\apayment\x18\x01 \x01(\v2\x18.x402.X402PaymentPayloadR\apayment\x12\x1b\n" +
 	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\x12-\n" +
 	"\x10target_tenant_id\x18\x03 \x01(\tH\x00R\x0etargetTenantId\x88\x01\x01\x12;\n" +
 	"\vattribution\x18\x04 \x01(\v2\x19.common.SignupAttributionR\vattributionB\x13\n" +
@@ -14383,7 +14386,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\"MEDIA_RETENTION_TARGET_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMEDIA_RETENTION_TARGET_DVR\x10\x01\x12\x1f\n" +
 	"\x1bMEDIA_RETENTION_TARGET_CLIP\x10\x02\x12\x1e\n" +
-	"\x1aMEDIA_RETENTION_TARGET_VOD\x10\x032\xb4'\n" +
+	"\x1aMEDIA_RETENTION_TARGET_VOD\x10\x032\x84(\n" +
 	"\x0fInternalService\x12^\n" +
 	"\x11ValidateStreamKey\x12#.commodore.ValidateStreamKeyRequest\x1a$.commodore.ValidateStreamKeyResponse\x12g\n" +
 	"\x14ResolveStreamContext\x12&.commodore.ResolveStreamContextRequest\x1a'.commodore.ResolveStreamContextResponse\x12a\n" +
@@ -14399,9 +14402,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x10ValidateAPIToken\x12\".commodore.ValidateAPITokenRequest\x1a#.commodore.ValidateAPITokenResponse\x12g\n" +
 	"\x14MintMistAdminSession\x12&.commodore.MintMistAdminSessionRequest\x1a'.commodore.MintMistAdminSessionResponse\x12s\n" +
 	"\x18ValidateMistAdminSession\x12*.commodore.ValidateMistAdminSessionRequest\x1a+.commodore.ValidateMistAdminSessionResponse\x12=\n" +
-	"\bStartDVR\x12\x17.shared.StartDVRRequest\x1a\x18.shared.StartDVRResponse\x12]\n" +
-	"\x12RetrieveDVRChapter\x12\".foghorn.RetrieveDVRChapterRequest\x1a#.foghorn.RetrieveDVRChapterResponse\x12T\n" +
-	"\x0fListDVRChapters\x12\x1f.foghorn.ListDVRChaptersRequest\x1a .foghorn.ListDVRChaptersResponse\x12O\n" +
+	"\bStartDVR\x12\x17.shared.StartDVRRequest\x1a\x18.shared.StartDVRResponse\x12m\n" +
+	"\x12RetrieveDVRChapter\x12*.foghorn_control.RetrieveDVRChapterRequest\x1a+.foghorn_control.RetrieveDVRChapterResponse\x12d\n" +
+	"\x0fListDVRChapters\x12'.foghorn_control.ListDVRChaptersRequest\x1a(.foghorn_control.ListDVRChaptersResponse\x12O\n" +
 	"\fRegisterClip\x12\x1e.commodore.RegisterClipRequest\x1a\x1f.commodore.RegisterClipResponse\x12L\n" +
 	"\vRegisterDVR\x12\x1d.commodore.RegisterDVRRequest\x1a\x1e.commodore.RegisterDVRResponse\x12a\n" +
 	"\x12UpdateDVRRetention\x12$.commodore.UpdateDVRRetentionRequest\x1a%.commodore.UpdateDVRRetentionResponse\x12|\n" +
@@ -14420,9 +14423,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x18ResolveChapterPlaybackID\x12*.commodore.ResolveChapterPlaybackIDRequest\x1a+.commodore.ResolveChapterPlaybackIDResponse\x12m\n" +
 	"\x16GetTenantProcessesJSON\x12(.commodore.GetTenantProcessesJSONRequest\x1a).commodore.GetTenantProcessesJSONResponse\x12g\n" +
 	"\x14ListStorageArtifacts\x12&.commodore.ListStorageArtifactsRequest\x1a'.commodore.ListStorageArtifactsResponse\x12j\n" +
-	"\x15GetOrCreateWalletUser\x12'.commodore.GetOrCreateWalletUserRequest\x1a(.commodore.GetOrCreateWalletUserResponse\x12i\n" +
-	"\x16TerminateTenantStreams\x12&.foghorn.TerminateTenantStreamsRequest\x1a'.foghorn.TerminateTenantStreamsResponse\x12f\n" +
-	"\x15InvalidateTenantCache\x12%.foghorn.InvalidateTenantCacheRequest\x1a&.foghorn.InvalidateTenantCacheResponse\x12a\n" +
+	"\x15GetOrCreateWalletUser\x12'.commodore.GetOrCreateWalletUserRequest\x1a(.commodore.GetOrCreateWalletUserResponse\x12y\n" +
+	"\x16TerminateTenantStreams\x12..foghorn_control.TerminateTenantStreamsRequest\x1a/.foghorn_control.TerminateTenantStreamsResponse\x12v\n" +
+	"\x15InvalidateTenantCache\x12-.foghorn_control.InvalidateTenantCacheRequest\x1a..foghorn_control.InvalidateTenantCacheResponse\x12a\n" +
 	"\x12GetTenantUserCount\x12$.commodore.GetTenantUserCountRequest\x1a%.commodore.GetTenantUserCountResponse\x12g\n" +
 	"\x14GetTenantPrimaryUser\x12&.commodore.GetTenantPrimaryUserRequest\x1a'.commodore.GetTenantPrimaryUserResponse\x12a\n" +
 	"\x12CreateUserInTenant\x12$.commodore.CreateUserInTenantRequest\x1a%.commodore.CreateUserInTenantResponse\x12p\n" +
@@ -14430,8 +14433,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\x17SetMediaRetentionPolicy\x12).commodore.SetMediaRetentionPolicyRequest\x1a*.commodore.SetMediaRetentionPolicyResponse\x12g\n" +
 	"\x14UpdateAssetRetention\x12&.commodore.UpdateAssetRetentionRequest\x1a'.commodore.UpdateAssetRetentionResponse\x12e\n" +
 	"\x13ResetAssetRetention\x12%.commodore.ResetAssetRetentionRequest\x1a'.commodore.UpdateAssetRetentionResponse\x12|\n" +
-	"\x1bSetStreamRetentionOverrides\x12-.commodore.SetStreamRetentionOverridesRequest\x1a..commodore.SetStreamRetentionOverridesResponse\x12]\n" +
-	"\x12TestPlaybackAccess\x12\".foghorn.TestPlaybackAccessRequest\x1a#.foghorn.TestPlaybackAccessResponse\x12X\n" +
+	"\x1bSetStreamRetentionOverrides\x12-.commodore.SetStreamRetentionOverridesRequest\x1a..commodore.SetStreamRetentionOverridesResponse\x12m\n" +
+	"\x12TestPlaybackAccess\x12*.foghorn_control.TestPlaybackAccessRequest\x1a+.foghorn_control.TestPlaybackAccessResponse\x12X\n" +
 	"\x15RecordPullSourceEvent\x12'.commodore.RecordPullSourceEventRequest\x1a\x16.google.protobuf.Empty\x12g\n" +
 	"\x14ListPullSourceEvents\x12&.commodore.ListPullSourceEventsRequest\x1a'.commodore.ListPullSourceEventsResponse2\x91\x10\n" +
 	"\vUserService\x129\n" +
@@ -14506,10 +14509,10 @@ const file_commodore_proto_rawDesc = "" +
 	"\x12GetVodUploadStatus\x12!.shared.GetVodUploadStatusRequest\x1a\".shared.GetVodUploadStatusResponse\x12?\n" +
 	"\vGetVodAsset\x12\x1a.shared.GetVodAssetRequest\x1a\x14.shared.VodAssetInfo\x12L\n" +
 	"\rListVodAssets\x12\x1c.shared.ListVodAssetsRequest\x1a\x1d.shared.ListVodAssetsResponse\x12O\n" +
-	"\x0eDeleteVodAsset\x12\x1d.shared.DeleteVodAssetRequest\x1a\x1e.shared.DeleteVodAssetResponse2\xbc\x01\n" +
-	"\x15NodeManagementService\x12S\n" +
-	"\x16SetNodeOperationalMode\x12\x1b.foghorn.SetNodeModeRequest\x1a\x1c.foghorn.SetNodeModeResponse\x12N\n" +
-	"\rGetNodeHealth\x12\x1d.foghorn.GetNodeHealthRequest\x1a\x1e.foghorn.GetNodeHealthResponse2\xcd\x03\n" +
+	"\x0eDeleteVodAsset\x12\x1d.shared.DeleteVodAssetRequest\x1a\x1e.shared.DeleteVodAssetResponse2\xdc\x01\n" +
+	"\x15NodeManagementService\x12c\n" +
+	"\x16SetNodeOperationalMode\x12#.foghorn_control.SetNodeModeRequest\x1a$.foghorn_control.SetNodeModeResponse\x12^\n" +
+	"\rGetNodeHealth\x12%.foghorn_control.GetNodeHealthRequest\x1a&.foghorn_control.GetNodeHealthResponse2\xcd\x03\n" +
 	"\x1cPlaybackAccessControlService\x12[\n" +
 	"\x10CreateSigningKey\x12\".commodore.CreateSigningKeyRequest\x1a#.commodore.CreateSigningKeyResponse\x12G\n" +
 	"\rGetSigningKey\x12\x1f.commodore.GetSigningKeyRequest\x1a\x15.commodore.SigningKey\x12X\n" +
@@ -14719,81 +14722,81 @@ var file_commodore_proto_goTypes = []any{
 	(*LookupDeviceAuthorizationResponse)(nil),       // 184: commodore.LookupDeviceAuthorizationResponse
 	(*ApproveDeviceAuthorizationRequest)(nil),       // 185: commodore.ApproveDeviceAuthorizationRequest
 	(*ApproveDeviceAuthorizationResponse)(nil),      // 186: commodore.ApproveDeviceAuthorizationResponse
-	nil,                                            // 187: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	(*quartermaster.TenantClusterPeer)(nil),        // 188: quartermaster.TenantClusterPeer
-	(*shared.DVRPolicy)(nil),                       // 189: shared.DVRPolicy
-	(*purser.MeterAllowance)(nil),                  // 190: purser.MeterAllowance
-	(*quartermaster.TenantResourceLimits)(nil),     // 191: quartermaster.TenantResourceLimits
-	(*timestamppb.Timestamp)(nil),                  // 192: google.protobuf.Timestamp
-	(*shared.ThumbnailAssets)(nil),                 // 193: shared.ThumbnailAssets
-	(*common.SignupAttribution)(nil),               // 194: common.SignupAttribution
-	(*purser.X402PaymentPayload)(nil),              // 195: purser.X402PaymentPayload
-	(*common.CursorPaginationRequest)(nil),         // 196: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),        // 197: common.CursorPaginationResponse
-	(*shared.StartDVRRequest)(nil),                 // 198: shared.StartDVRRequest
-	(*foghorn.RetrieveDVRChapterRequest)(nil),      // 199: foghorn.RetrieveDVRChapterRequest
-	(*foghorn.ListDVRChaptersRequest)(nil),         // 200: foghorn.ListDVRChaptersRequest
-	(*foghorn.TerminateTenantStreamsRequest)(nil),  // 201: foghorn.TerminateTenantStreamsRequest
-	(*foghorn.InvalidateTenantCacheRequest)(nil),   // 202: foghorn.InvalidateTenantCacheRequest
-	(*foghorn.TestPlaybackAccessRequest)(nil),      // 203: foghorn.TestPlaybackAccessRequest
-	(*shared.CreateClipRequest)(nil),               // 204: shared.CreateClipRequest
-	(*shared.GetClipsRequest)(nil),                 // 205: shared.GetClipsRequest
-	(*shared.GetClipRequest)(nil),                  // 206: shared.GetClipRequest
-	(*shared.DeleteClipRequest)(nil),               // 207: shared.DeleteClipRequest
-	(*shared.StopDVRRequest)(nil),                  // 208: shared.StopDVRRequest
-	(*shared.DeleteDVRRequest)(nil),                // 209: shared.DeleteDVRRequest
-	(*shared.ListDVRRecordingsRequest)(nil),        // 210: shared.ListDVRRecordingsRequest
-	(*shared.ViewerEndpointRequest)(nil),           // 211: shared.ViewerEndpointRequest
-	(*shared.IngestEndpointRequest)(nil),           // 212: shared.IngestEndpointRequest
-	(*shared.CreateVodUploadRequest)(nil),          // 213: shared.CreateVodUploadRequest
-	(*shared.CompleteVodUploadRequest)(nil),        // 214: shared.CompleteVodUploadRequest
-	(*shared.AbortVodUploadRequest)(nil),           // 215: shared.AbortVodUploadRequest
-	(*shared.GetVodUploadStatusRequest)(nil),       // 216: shared.GetVodUploadStatusRequest
-	(*shared.GetVodAssetRequest)(nil),              // 217: shared.GetVodAssetRequest
-	(*shared.ListVodAssetsRequest)(nil),            // 218: shared.ListVodAssetsRequest
-	(*shared.DeleteVodAssetRequest)(nil),           // 219: shared.DeleteVodAssetRequest
-	(*foghorn.SetNodeModeRequest)(nil),             // 220: foghorn.SetNodeModeRequest
-	(*foghorn.GetNodeHealthRequest)(nil),           // 221: foghorn.GetNodeHealthRequest
-	(*emptypb.Empty)(nil),                          // 222: google.protobuf.Empty
-	(*shared.StartDVRResponse)(nil),                // 223: shared.StartDVRResponse
-	(*foghorn.RetrieveDVRChapterResponse)(nil),     // 224: foghorn.RetrieveDVRChapterResponse
-	(*foghorn.ListDVRChaptersResponse)(nil),        // 225: foghorn.ListDVRChaptersResponse
-	(*foghorn.TerminateTenantStreamsResponse)(nil), // 226: foghorn.TerminateTenantStreamsResponse
-	(*foghorn.InvalidateTenantCacheResponse)(nil),  // 227: foghorn.InvalidateTenantCacheResponse
-	(*foghorn.TestPlaybackAccessResponse)(nil),     // 228: foghorn.TestPlaybackAccessResponse
-	(*shared.CreateClipResponse)(nil),              // 229: shared.CreateClipResponse
-	(*shared.GetClipsResponse)(nil),                // 230: shared.GetClipsResponse
-	(*shared.ClipInfo)(nil),                        // 231: shared.ClipInfo
-	(*shared.DeleteClipResponse)(nil),              // 232: shared.DeleteClipResponse
-	(*shared.StopDVRResponse)(nil),                 // 233: shared.StopDVRResponse
-	(*shared.DeleteDVRResponse)(nil),               // 234: shared.DeleteDVRResponse
-	(*shared.ListDVRRecordingsResponse)(nil),       // 235: shared.ListDVRRecordingsResponse
-	(*shared.ViewerEndpointResponse)(nil),          // 236: shared.ViewerEndpointResponse
-	(*shared.IngestEndpointResponse)(nil),          // 237: shared.IngestEndpointResponse
-	(*shared.CreateVodUploadResponse)(nil),         // 238: shared.CreateVodUploadResponse
-	(*shared.CompleteVodUploadResponse)(nil),       // 239: shared.CompleteVodUploadResponse
-	(*shared.AbortVodUploadResponse)(nil),          // 240: shared.AbortVodUploadResponse
-	(*shared.GetVodUploadStatusResponse)(nil),      // 241: shared.GetVodUploadStatusResponse
-	(*shared.VodAssetInfo)(nil),                    // 242: shared.VodAssetInfo
-	(*shared.ListVodAssetsResponse)(nil),           // 243: shared.ListVodAssetsResponse
-	(*shared.DeleteVodAssetResponse)(nil),          // 244: shared.DeleteVodAssetResponse
-	(*foghorn.SetNodeModeResponse)(nil),            // 245: foghorn.SetNodeModeResponse
-	(*foghorn.GetNodeHealthResponse)(nil),          // 246: foghorn.GetNodeHealthResponse
+	nil,                                                    // 187: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	(*cluster_peer.TenantClusterPeer)(nil),                 // 188: cluster_peer.TenantClusterPeer
+	(*shared.DVRPolicy)(nil),                               // 189: shared.DVRPolicy
+	(*metering_contract.MeterAllowance)(nil),               // 190: metering.MeterAllowance
+	(*tenant_limits.TenantResourceLimits)(nil),             // 191: tenant_limits.TenantResourceLimits
+	(*timestamppb.Timestamp)(nil),                          // 192: google.protobuf.Timestamp
+	(*shared.ThumbnailAssets)(nil),                         // 193: shared.ThumbnailAssets
+	(*common.SignupAttribution)(nil),                       // 194: common.SignupAttribution
+	(*x402.X402PaymentPayload)(nil),                        // 195: x402.X402PaymentPayload
+	(*common.CursorPaginationRequest)(nil),                 // 196: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),                // 197: common.CursorPaginationResponse
+	(*shared.StartDVRRequest)(nil),                         // 198: shared.StartDVRRequest
+	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 199: foghorn_control.RetrieveDVRChapterRequest
+	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 200: foghorn_control.ListDVRChaptersRequest
+	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 201: foghorn_control.TerminateTenantStreamsRequest
+	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 202: foghorn_control.InvalidateTenantCacheRequest
+	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 203: foghorn_control.TestPlaybackAccessRequest
+	(*shared.CreateClipRequest)(nil),                       // 204: shared.CreateClipRequest
+	(*shared.GetClipsRequest)(nil),                         // 205: shared.GetClipsRequest
+	(*shared.GetClipRequest)(nil),                          // 206: shared.GetClipRequest
+	(*shared.DeleteClipRequest)(nil),                       // 207: shared.DeleteClipRequest
+	(*shared.StopDVRRequest)(nil),                          // 208: shared.StopDVRRequest
+	(*shared.DeleteDVRRequest)(nil),                        // 209: shared.DeleteDVRRequest
+	(*shared.ListDVRRecordingsRequest)(nil),                // 210: shared.ListDVRRecordingsRequest
+	(*shared.ViewerEndpointRequest)(nil),                   // 211: shared.ViewerEndpointRequest
+	(*shared.IngestEndpointRequest)(nil),                   // 212: shared.IngestEndpointRequest
+	(*shared.CreateVodUploadRequest)(nil),                  // 213: shared.CreateVodUploadRequest
+	(*shared.CompleteVodUploadRequest)(nil),                // 214: shared.CompleteVodUploadRequest
+	(*shared.AbortVodUploadRequest)(nil),                   // 215: shared.AbortVodUploadRequest
+	(*shared.GetVodUploadStatusRequest)(nil),               // 216: shared.GetVodUploadStatusRequest
+	(*shared.GetVodAssetRequest)(nil),                      // 217: shared.GetVodAssetRequest
+	(*shared.ListVodAssetsRequest)(nil),                    // 218: shared.ListVodAssetsRequest
+	(*shared.DeleteVodAssetRequest)(nil),                   // 219: shared.DeleteVodAssetRequest
+	(*foghorn_control.SetNodeModeRequest)(nil),             // 220: foghorn_control.SetNodeModeRequest
+	(*foghorn_control.GetNodeHealthRequest)(nil),           // 221: foghorn_control.GetNodeHealthRequest
+	(*emptypb.Empty)(nil),                                  // 222: google.protobuf.Empty
+	(*shared.StartDVRResponse)(nil),                        // 223: shared.StartDVRResponse
+	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 224: foghorn_control.RetrieveDVRChapterResponse
+	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 225: foghorn_control.ListDVRChaptersResponse
+	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 226: foghorn_control.TerminateTenantStreamsResponse
+	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 227: foghorn_control.InvalidateTenantCacheResponse
+	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 228: foghorn_control.TestPlaybackAccessResponse
+	(*shared.CreateClipResponse)(nil),                      // 229: shared.CreateClipResponse
+	(*shared.GetClipsResponse)(nil),                        // 230: shared.GetClipsResponse
+	(*shared.ClipInfo)(nil),                                // 231: shared.ClipInfo
+	(*shared.DeleteClipResponse)(nil),                      // 232: shared.DeleteClipResponse
+	(*shared.StopDVRResponse)(nil),                         // 233: shared.StopDVRResponse
+	(*shared.DeleteDVRResponse)(nil),                       // 234: shared.DeleteDVRResponse
+	(*shared.ListDVRRecordingsResponse)(nil),               // 235: shared.ListDVRRecordingsResponse
+	(*shared.ViewerEndpointResponse)(nil),                  // 236: shared.ViewerEndpointResponse
+	(*shared.IngestEndpointResponse)(nil),                  // 237: shared.IngestEndpointResponse
+	(*shared.CreateVodUploadResponse)(nil),                 // 238: shared.CreateVodUploadResponse
+	(*shared.CompleteVodUploadResponse)(nil),               // 239: shared.CompleteVodUploadResponse
+	(*shared.AbortVodUploadResponse)(nil),                  // 240: shared.AbortVodUploadResponse
+	(*shared.GetVodUploadStatusResponse)(nil),              // 241: shared.GetVodUploadStatusResponse
+	(*shared.VodAssetInfo)(nil),                            // 242: shared.VodAssetInfo
+	(*shared.ListVodAssetsResponse)(nil),                   // 243: shared.ListVodAssetsResponse
+	(*shared.DeleteVodAssetResponse)(nil),                  // 244: shared.DeleteVodAssetResponse
+	(*foghorn_control.SetNodeModeResponse)(nil),            // 245: foghorn_control.SetNodeModeResponse
+	(*foghorn_control.GetNodeHealthResponse)(nil),          // 246: foghorn_control.GetNodeHealthResponse
 }
 var file_commodore_proto_depIdxs = []int32{
 	0,   // 0: commodore.ValidateStreamKeyResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	188, // 1: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 1: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	143, // 2: commodore.ValidateStreamKeyResponse.push_targets:type_name -> commodore.PushTargetInternal
 	189, // 3: commodore.ValidateStreamKeyResponse.dvr_policy:type_name -> shared.DVRPolicy
-	190, // 4: commodore.ValidateStreamKeyResponse.allowances:type_name -> purser.MeterAllowance
-	191, // 5: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> quartermaster.TenantResourceLimits
+	190, // 4: commodore.ValidateStreamKeyResponse.allowances:type_name -> metering.MeterAllowance
+	191, // 5: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
 	0,   // 6: commodore.ResolveStreamContextResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	188, // 7: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 7: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	189, // 8: commodore.ResolveStreamContextResponse.dvr_policy:type_name -> shared.DVRPolicy
-	190, // 9: commodore.ResolveStreamContextResponse.allowances:type_name -> purser.MeterAllowance
-	191, // 10: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> quartermaster.TenantResourceLimits
+	190, // 9: commodore.ResolveStreamContextResponse.allowances:type_name -> metering.MeterAllowance
+	191, // 10: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
 	8,   // 11: commodore.ListManagedStreamsResponse.streams:type_name -> commodore.ManagedStreamRow
-	188, // 12: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 12: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	192, // 13: commodore.SignedPolicyBundle.issued_at:type_name -> google.protobuf.Timestamp
 	192, // 14: commodore.SignedPolicyBundle.soft_expires_at:type_name -> google.protobuf.Timestamp
 	192, // 15: commodore.SignedPolicyBundle.expires_at:type_name -> google.protobuf.Timestamp
@@ -14802,22 +14805,22 @@ var file_commodore_proto_depIdxs = []int32{
 	23,  // 18: commodore.PlaybackJwtPolicy.active_keys:type_name -> commodore.PlaybackSigningKey
 	24,  // 19: commodore.ResolvePlaybackPolicyResponse.jwt_policy:type_name -> commodore.PlaybackJwtPolicy
 	25,  // 20: commodore.ResolvePlaybackPolicyResponse.webhook_policy:type_name -> commodore.PlaybackWebhookPolicy
-	188, // 21: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 21: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	192, // 22: commodore.RegisterClipRequest.retention_until:type_name -> google.protobuf.Timestamp
 	192, // 23: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
 	192, // 24: commodore.UpdateDVRRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
 	1,   // 25: commodore.MarkArtifactThumbnailsReadyRequest.asset_type:type_name -> commodore.ArtifactAssetType
 	1,   // 26: commodore.UpdateArtifactStorageClusterRequest.asset_type:type_name -> commodore.ArtifactAssetType
 	1,   // 27: commodore.UpdateArtifactSizeRequest.asset_type:type_name -> commodore.ArtifactAssetType
-	188, // 28: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
-	188, // 29: commodore.ResolveVodHashResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 28: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	188, // 29: commodore.ResolveVodHashResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	192, // 30: commodore.StorageArtifactInfo.created_at:type_name -> google.protobuf.Timestamp
 	192, // 31: commodore.StorageArtifactInfo.updated_at:type_name -> google.protobuf.Timestamp
 	192, // 32: commodore.StorageArtifactInfo.expires_at:type_name -> google.protobuf.Timestamp
 	193, // 33: commodore.StorageArtifactInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	66,  // 34: commodore.ListStorageArtifactsResponse.artifacts:type_name -> commodore.StorageArtifactInfo
-	188, // 35: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
-	188, // 36: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	188, // 35: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	188, // 36: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	194, // 37: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
 	113, // 38: commodore.CreateUserInTenantResponse.user:type_name -> commodore.User
 	81,  // 39: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
@@ -14826,7 +14829,7 @@ var file_commodore_proto_depIdxs = []int32{
 	113, // 42: commodore.AuthResponse.user:type_name -> commodore.User
 	192, // 43: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
 	194, // 44: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
-	195, // 45: commodore.WalletLoginWithX402Request.payment:type_name -> purser.X402PaymentPayload
+	195, // 45: commodore.WalletLoginWithX402Request.payment:type_name -> x402.X402PaymentPayload
 	194, // 46: commodore.WalletLoginWithX402Request.attribution:type_name -> common.SignupAttribution
 	83,  // 47: commodore.WalletLoginWithX402Response.auth:type_name -> commodore.AuthResponse
 	110, // 48: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
@@ -14905,8 +14908,8 @@ var file_commodore_proto_depIdxs = []int32{
 	31,  // 121: commodore.InternalService.MintMistAdminSession:input_type -> commodore.MintMistAdminSessionRequest
 	33,  // 122: commodore.InternalService.ValidateMistAdminSession:input_type -> commodore.ValidateMistAdminSessionRequest
 	198, // 123: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
-	199, // 124: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn.RetrieveDVRChapterRequest
-	200, // 125: commodore.InternalService.ListDVRChapters:input_type -> foghorn.ListDVRChaptersRequest
+	199, // 124: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
+	200, // 125: commodore.InternalService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
 	35,  // 126: commodore.InternalService.RegisterClip:input_type -> commodore.RegisterClipRequest
 	37,  // 127: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
 	39,  // 128: commodore.InternalService.UpdateDVRRetention:input_type -> commodore.UpdateDVRRetentionRequest
@@ -14926,8 +14929,8 @@ var file_commodore_proto_depIdxs = []int32{
 	63,  // 142: commodore.InternalService.GetTenantProcessesJSON:input_type -> commodore.GetTenantProcessesJSONRequest
 	65,  // 143: commodore.InternalService.ListStorageArtifacts:input_type -> commodore.ListStorageArtifactsRequest
 	72,  // 144: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
-	201, // 145: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
-	202, // 146: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
+	201, // 145: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
+	202, // 146: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
 	74,  // 147: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
 	76,  // 148: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
 	78,  // 149: commodore.InternalService.CreateUserInTenant:input_type -> commodore.CreateUserInTenantRequest
@@ -14936,7 +14939,7 @@ var file_commodore_proto_depIdxs = []int32{
 	172, // 152: commodore.InternalService.UpdateAssetRetention:input_type -> commodore.UpdateAssetRetentionRequest
 	173, // 153: commodore.InternalService.ResetAssetRetention:input_type -> commodore.ResetAssetRetentionRequest
 	175, // 154: commodore.InternalService.SetStreamRetentionOverrides:input_type -> commodore.SetStreamRetentionOverridesRequest
-	203, // 155: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn.TestPlaybackAccessRequest
+	203, // 155: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
 	163, // 156: commodore.InternalService.RecordPullSourceEvent:input_type -> commodore.RecordPullSourceEventRequest
 	164, // 157: commodore.InternalService.ListPullSourceEvents:input_type -> commodore.ListPullSourceEventsRequest
 	80,  // 158: commodore.UserService.Login:input_type -> commodore.LoginRequest
@@ -14998,8 +15001,8 @@ var file_commodore_proto_depIdxs = []int32{
 	217, // 214: commodore.VodService.GetVodAsset:input_type -> shared.GetVodAssetRequest
 	218, // 215: commodore.VodService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
 	219, // 216: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	220, // 217: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn.SetNodeModeRequest
-	221, // 218: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn.GetNodeHealthRequest
+	220, // 217: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
+	221, // 218: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
 	155, // 219: commodore.PlaybackAccessControlService.CreateSigningKey:input_type -> commodore.CreateSigningKeyRequest
 	157, // 220: commodore.PlaybackAccessControlService.GetSigningKey:input_type -> commodore.GetSigningKeyRequest
 	158, // 221: commodore.PlaybackAccessControlService.ListSigningKeys:input_type -> commodore.ListSigningKeysRequest
@@ -15020,8 +15023,8 @@ var file_commodore_proto_depIdxs = []int32{
 	32,  // 236: commodore.InternalService.MintMistAdminSession:output_type -> commodore.MintMistAdminSessionResponse
 	34,  // 237: commodore.InternalService.ValidateMistAdminSession:output_type -> commodore.ValidateMistAdminSessionResponse
 	223, // 238: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
-	224, // 239: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn.RetrieveDVRChapterResponse
-	225, // 240: commodore.InternalService.ListDVRChapters:output_type -> foghorn.ListDVRChaptersResponse
+	224, // 239: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
+	225, // 240: commodore.InternalService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
 	36,  // 241: commodore.InternalService.RegisterClip:output_type -> commodore.RegisterClipResponse
 	38,  // 242: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
 	40,  // 243: commodore.InternalService.UpdateDVRRetention:output_type -> commodore.UpdateDVRRetentionResponse
@@ -15041,8 +15044,8 @@ var file_commodore_proto_depIdxs = []int32{
 	64,  // 257: commodore.InternalService.GetTenantProcessesJSON:output_type -> commodore.GetTenantProcessesJSONResponse
 	67,  // 258: commodore.InternalService.ListStorageArtifacts:output_type -> commodore.ListStorageArtifactsResponse
 	73,  // 259: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
-	226, // 260: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
-	227, // 261: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
+	226, // 260: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
+	227, // 261: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
 	75,  // 262: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
 	77,  // 263: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
 	79,  // 264: commodore.InternalService.CreateUserInTenant:output_type -> commodore.CreateUserInTenantResponse
@@ -15051,7 +15054,7 @@ var file_commodore_proto_depIdxs = []int32{
 	174, // 267: commodore.InternalService.UpdateAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
 	174, // 268: commodore.InternalService.ResetAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
 	176, // 269: commodore.InternalService.SetStreamRetentionOverrides:output_type -> commodore.SetStreamRetentionOverridesResponse
-	228, // 270: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn.TestPlaybackAccessResponse
+	228, // 270: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
 	222, // 271: commodore.InternalService.RecordPullSourceEvent:output_type -> google.protobuf.Empty
 	166, // 272: commodore.InternalService.ListPullSourceEvents:output_type -> commodore.ListPullSourceEventsResponse
 	83,  // 273: commodore.UserService.Login:output_type -> commodore.AuthResponse
@@ -15113,8 +15116,8 @@ var file_commodore_proto_depIdxs = []int32{
 	242, // 329: commodore.VodService.GetVodAsset:output_type -> shared.VodAssetInfo
 	243, // 330: commodore.VodService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
 	244, // 331: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	245, // 332: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn.SetNodeModeResponse
-	246, // 333: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn.GetNodeHealthResponse
+	245, // 332: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
+	246, // 333: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
 	156, // 334: commodore.PlaybackAccessControlService.CreateSigningKey:output_type -> commodore.CreateSigningKeyResponse
 	154, // 335: commodore.PlaybackAccessControlService.GetSigningKey:output_type -> commodore.SigningKey
 	159, // 336: commodore.PlaybackAccessControlService.ListSigningKeys:output_type -> commodore.ListSigningKeysResponse

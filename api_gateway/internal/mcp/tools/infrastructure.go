@@ -13,7 +13,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -746,7 +746,7 @@ func handleSetNodeMode(ctx context.Context, args SetNodeModeInput, serviceClient
 		reason = "mcp_tool"
 	}
 
-	resp, err := serviceClients.Commodore.SetNodeMode(ctx, &foghornpb.SetNodeModeRequest{
+	resp, err := serviceClients.Commodore.SetNodeMode(ctx, &foghorncontrolpb.SetNodeModeRequest{
 		NodeId: args.NodeID,
 		Mode:   mode,
 		SetBy:  reason,
@@ -768,7 +768,7 @@ func handleGetNodeHealth(ctx context.Context, args GetNodeHealthInput, serviceCl
 		return toolError("Authentication required")
 	}
 
-	resp, err := serviceClients.Commodore.GetNodeHealth(ctx, &foghornpb.GetNodeHealthRequest{
+	resp, err := serviceClients.Commodore.GetNodeHealth(ctx, &foghorncontrolpb.GetNodeHealthRequest{
 		NodeId: args.NodeID,
 	})
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	stripelib "github.com/stripe/stripe-go/v85"
@@ -204,11 +204,11 @@ func (f *fakeMollieBillingClient) ExtractMandateInfo(*mollielib.Mandate, string)
 
 type fakeCommodorePrimaryUser struct{}
 
-func (f *fakeCommodorePrimaryUser) TerminateTenantStreams(context.Context, string, string) (*foghornpb.TerminateTenantStreamsResponse, error) {
+func (f *fakeCommodorePrimaryUser) TerminateTenantStreams(context.Context, string, string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	panic("unexpected TerminateTenantStreams call")
 }
 
-func (f *fakeCommodorePrimaryUser) InvalidateTenantCache(context.Context, string, string) (*foghornpb.InvalidateTenantCacheResponse, error) {
+func (f *fakeCommodorePrimaryUser) InvalidateTenantCache(context.Context, string, string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 	panic("unexpected InvalidateTenantCache call")
 }
 

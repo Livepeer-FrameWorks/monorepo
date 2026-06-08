@@ -96,6 +96,94 @@ native_binaries:
 	}
 }
 
+// TestPlanHashesDarwinOnlyFiles proves the source closure is the union across
+// produced platforms: for a darwin_binary component, editing a Darwin-only file
+// (absent from the linux/amd64 closure) must change the hash, or the darwin/arm64
+// native binary would be carried forward stale.
+func TestPlanHashesDarwinOnlyFiles(t *testing.T) {
+	files := map[string]string{
+		".github/release-components.json":    `{"services":[{"name":"edge","context":"edge","cmd":"./cmd/edge","cgo":false,"darwin_binary":true}]}`,
+		".go-version":                        "1.26.2",
+		".github/workflows/release.yml":      "name: release\n",
+		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
+		"tools/release-plan/release-plan.go": "package main // stub for HashWorkflowFiles\n",
+		"edge/go.mod":                        "module example.com/edge\n\ngo 1.26.2\n",
+		"edge/cmd/edge/main.go":              "package main\nfunc main() { _ = platformTag }\n",
+		"edge/cmd/edge/tag_darwin.go":        "//go:build darwin\n\npackage main\n\nconst platformTag = \"darwin\"\n",
+		"edge/cmd/edge/tag_linux.go":         "//go:build linux\n\npackage main\n\nconst platformTag = \"linux\"\n",
+	}
+	monorepo := writeFakeMonorepo(t, files)
+	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitopsDir := t.TempDir()
+	if mkErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBaselineFromPlan(t, gitopsDir, plan1, []string{"edge"})
+
+	// Edit the Darwin-only file; it is not in the linux/amd64 closure.
+	if wErr := os.WriteFile(filepath.Join(monorepo, "edge", "cmd", "edge", "tag_darwin.go"), []byte("//go:build darwin\n\npackage main\n\nconst platformTag = \"darwin-v2\"\n"), 0o644); wErr != nil {
+		t.Fatal(wErr)
+	}
+
+	plan2, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := plan2.Decisions["edge"]; d.Action != ActionBuild {
+		t.Fatalf("edge action = %s, want build (darwin-only change must invalidate the hash)", d.Action)
+	}
+}
+
+// TestPlanHashesFileTargetCmd proves a file-target cmd ("cmd/x/main.go", which
+// `go list` reports as the synthetic command-line-arguments package) still has
+// its entrypoint in the hash.
+func TestPlanHashesFileTargetCmd(t *testing.T) {
+	files := map[string]string{
+		".github/release-components.json":    `{"services":[{"name":"toy","context":"toy","cmd":"cmd/toy/main.go","cgo":false,"darwin_binary":false}]}`,
+		".go-version":                        "1.26.2",
+		".github/workflows/release.yml":      "name: release\n",
+		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
+		"tools/release-plan/release-plan.go": "package main // stub for HashWorkflowFiles\n",
+		"toy/go.mod":                         "module example.com/toy\n\ngo 1.26.2\n",
+		"toy/cmd/toy/main.go":                "package main\nfunc main() {}\n",
+	}
+	monorepo := writeFakeMonorepo(t, files)
+	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitopsDir := t.TempDir()
+	if mkErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBaselineFromPlan(t, gitopsDir, plan1, []string{"toy"})
+
+	if wErr := os.WriteFile(filepath.Join(monorepo, "toy", "cmd", "toy", "main.go"), []byte("package main\nfunc main() { _ = 1 }\n"), 0o644); wErr != nil {
+		t.Fatal(wErr)
+	}
+
+	plan2, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := plan2.Decisions["toy"]; d.Action != ActionBuild {
+		t.Fatalf("toy action = %s, want build (file-target main.go change must invalidate the hash)", d.Action)
+	}
+}
+
 func TestPlanCarryForwardBinaryOnlyService(t *testing.T) {
 	monorepo := writeFakeMonorepo(t, map[string]string{
 		".github/release-components.json":    `{"services":[{"name":"toy","context":"toy","cmd":"./cmd/toy","dockerfile":"","cgo":false,"darwin_binary":true}]}`,
@@ -330,67 +418,115 @@ func TestPlanDoesNotBuildUnchangedServicesWhenOneCoreServiceChanges(t *testing.T
 	}
 }
 
-func TestPlanBuildsProtoConsumersWhenProtoDefinitionChanges(t *testing.T) {
+// writeProtoClosureFixture builds a fake monorepo whose services import
+// *distinct* generated proto sub-packages (commonpb/foghornpb/ipcpb), modelling
+// the real pkg/proto layout: a generated <x>/<x>.pb.go carrying a protoc
+// `// source: <x>.proto` header, plus the source <x>.proto. This lets the tests
+// assert that a proto edit only rebuilds services whose Go import closure
+// actually compiles that proto package, not every proto consumer.
+//
+// Import graph:
+//
+//	commonpb            (leaf; common.proto has no imports)
+//	foghornpb -> common (foghorn.proto imports common.proto)
+//	ipcpb     -> common (ipc.proto imports common.proto)
+//
+//	bridge    -> commonpb            (proto closure: common)
+//	foghorn   -> foghornpb           (proto closure: foghorn, common)
+//	signalman -> ipcpb               (proto closure: ipc, common)
+//	commodore -> foghornpb + ipcpb   (proto closure: foghorn, ipc, common)
+//	toy       -> (no proto)
+func writeProtoClosureFixture(t *testing.T) (monorepo, gitopsDir string, components ReleaseComponents) {
+	t.Helper()
+	const pkgImport = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto"
 	componentsJSON := `{"services":[
 		{"name":"bridge","context":"api_gateway","cmd":"./cmd/bridge","cgo":false,"darwin_binary":true},
-		{"name":"quartermaster","context":"api_tenants","cmd":"./cmd/quartermaster","cgo":true,"darwin_binary":false},
-		{"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false,"darwin_binary":true},
 		{"name":"foghorn","context":"api_balancing","cmd":"./cmd/foghorn","cgo":true,"darwin_binary":false},
+		{"name":"signalman","context":"api_realtime","cmd":"./cmd/signalman","cgo":false,"darwin_binary":true},
+		{"name":"commodore","context":"api_control","cmd":"./cmd/commodore","cgo":false,"darwin_binary":true},
 		{"name":"toy","context":"toy","cmd":"./cmd/toy","cgo":false,"darwin_binary":true}
 	]}`
 	files := map[string]string{
 		".github/release-components.json":    componentsJSON,
 		".go-version":                        "1.26.2",
 		".github/workflows/release.yml":      "name: release\n",
-		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
-		"pkg/proto/proto.go":                 "package proto\n",
-		"pkg/proto/foghorn.proto":            "syntax = \"proto3\";\nservice ViewerControlService {}\n",
 		"tools/release-plan/release-plan.go": "package main // stub for HashWorkflowFiles\n",
+		"pkg/go.mod":                         "module github.com/Livepeer-FrameWorks/monorepo/pkg\n\ngo 1.26.2\n",
+
+		// Source protos.
+		"pkg/proto/common.proto":  "syntax = \"proto3\";\npackage common;\n",
+		"pkg/proto/foghorn.proto": "syntax = \"proto3\";\npackage foghorn;\nimport \"common.proto\";\n",
+		"pkg/proto/ipc.proto":     "syntax = \"proto3\";\npackage helmsmancontrol;\nimport \"common.proto\";\n",
+
+		// Generated packages, each with a protoc `// source:` header.
+		"pkg/proto/common/common.pb.go":   "// Code generated by protoc-gen-go. DO NOT EDIT.\n// source: common.proto\n\npackage commonpb\n",
+		"pkg/proto/foghorn/foghorn.pb.go": "// Code generated by protoc-gen-go. DO NOT EDIT.\n// source: foghorn.proto\n\npackage foghornpb\n\nimport _ \"" + pkgImport + "/common\"\n",
+		"pkg/proto/ipc/ipc.pb.go":         "// Code generated by protoc-gen-go. DO NOT EDIT.\n// source: ipc.proto\n\npackage ipcpb\n\nimport _ \"" + pkgImport + "/common\"\n",
 	}
 	for _, svc := range []struct {
 		context string
 		cmd     string
-		proto   bool
+		imports []string
 	}{
-		{context: "api_gateway", cmd: "bridge", proto: true},
-		{context: "api_tenants", cmd: "quartermaster", proto: true},
-		{context: "api_control", cmd: "commodore", proto: true},
-		{context: "api_balancing", cmd: "foghorn", proto: true},
+		{context: "api_gateway", cmd: "bridge", imports: []string{"common"}},
+		{context: "api_balancing", cmd: "foghorn", imports: []string{"foghorn"}},
+		{context: "api_realtime", cmd: "signalman", imports: []string{"ipc"}},
+		{context: "api_control", cmd: "commodore", imports: []string{"foghorn", "ipc"}},
 		{context: "toy", cmd: "toy"},
 	} {
 		files[filepath.Join(svc.context, "go.mod")] = "module example.com/" + svc.context + "\n\ngo 1.26.2\n\nrequire github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0\n\nreplace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg\n"
-		if svc.proto {
-			files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = "package main\nimport _ \"github.com/Livepeer-FrameWorks/monorepo/pkg/proto\"\nfunc main() {}\n"
-		} else {
-			files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = "package main\nfunc main() {}\n"
+		var b strings.Builder
+		b.WriteString("package main\n")
+		for _, imp := range svc.imports {
+			fmt.Fprintf(&b, "import _ %q\n", pkgImport+"/"+imp)
 		}
+		b.WriteString("func main() {}\n")
+		files[filepath.Join(svc.context, "cmd", svc.cmd, "main.go")] = b.String()
 	}
-	monorepo := writeFakeMonorepo(t, files)
 
-	components, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
+	monorepo = writeFakeMonorepo(t, files)
+	loaded, err := LoadComponentsFromFile(filepath.Join(monorepo, ".github", "release-components.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitopsDir := t.TempDir()
+	gitopsDir = t.TempDir()
 	if mkdirErr := os.MkdirAll(filepath.Join(gitopsDir, "releases"), 0o755); mkdirErr != nil {
 		t.Fatal(mkdirErr)
 	}
+	return monorepo, gitopsDir, loaded
+}
 
-	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
-	if err != nil {
-		t.Fatal(err)
-	}
-
+// writeBaselineFromPlan records every decision's source_hash into a v0.2.39
+// baseline manifest so a follow-up plan can carry forward unchanged services.
+func writeBaselineFromPlan(t *testing.T, gitopsDir string, plan *PlanOutput, names []string) {
+	t.Helper()
 	var baseline strings.Builder
 	baseline.WriteString("platform_version: v0.2.39\nservices:\n")
-	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn", "toy"} {
-		hash := plan1.Decisions[name].SourceHash
+	for _, name := range names {
+		hash := plan.Decisions[name].SourceHash
 		fmt.Fprintf(&baseline, "  - name: %s\n    service_version: v0.2.39\n    image: example.com/frameworks-%s:v0.2.39\n    digest: sha256:%s\n    source_hash: %s\n", name, name, name, hash)
 	}
 	if writeErr := os.WriteFile(filepath.Join(gitopsDir, "releases", "v0.2.39.yaml"), []byte(baseline.String()), 0o644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if writeErr := os.WriteFile(filepath.Join(monorepo, "pkg", "proto", "foghorn.proto"), []byte("syntax = \"proto3\";\nservice ViewerControlService { rpc GetNodeHealth(HealthRequest) returns (HealthResponse); }\nmessage HealthRequest {}\nmessage HealthResponse {}\n"), 0o644); writeErr != nil {
+}
+
+// TestPlanProtoEditRebuildsOnlyItsClosure asserts that editing foghorn.proto
+// rebuilds only services whose import closure compiles foghornpb (foghorn,
+// commodore); an IPC-only consumer (signalman) and a common-only consumer
+// (bridge) carry forward.
+func TestPlanProtoEditRebuildsOnlyItsClosure(t *testing.T) {
+	monorepo, gitopsDir, components := writeProtoClosureFixture(t)
+	names := []string{"bridge", "foghorn", "signalman", "commodore", "toy"}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBaselineFromPlan(t, gitopsDir, plan1, names)
+
+	// Edit foghorn.proto only.
+	if writeErr := os.WriteFile(filepath.Join(monorepo, "pkg", "proto", "foghorn.proto"), []byte("syntax = \"proto3\";\npackage foghorn;\nimport \"common.proto\";\nmessage Health {}\n"), 0o644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
 
@@ -398,7 +534,43 @@ func TestPlanBuildsProtoConsumersWhenProtoDefinitionChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"bridge", "quartermaster", "commodore", "foghorn"} {
+	for _, name := range []string{"foghorn", "commodore"} {
+		if d := plan2.Decisions[name]; d.Action != ActionBuild {
+			t.Fatalf("%s action = %s, want build", name, d.Action)
+		}
+	}
+	for _, name := range []string{"bridge", "signalman", "toy"} {
+		if d := plan2.Decisions[name]; d.Action != ActionCarryForward {
+			t.Fatalf("%s action = %s, want carry_forward", name, d.Action)
+		}
+	}
+	if plan2.Summary.BuildCount != 2 || plan2.Summary.CarryForwardCount != 3 {
+		t.Fatalf("summary = %+v, want build=2 carry=3", plan2.Summary)
+	}
+}
+
+// TestPlanProtoTransitiveImportFansOut confirms the closure follows proto
+// imports: editing common.proto (imported by foghorn.proto and ipc.proto)
+// rebuilds every proto consumer, while the non-proto service carries forward.
+func TestPlanProtoTransitiveImportFansOut(t *testing.T) {
+	monorepo, gitopsDir, components := writeProtoClosureFixture(t)
+	names := []string{"bridge", "foghorn", "signalman", "commodore", "toy"}
+
+	plan1, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBaselineFromPlan(t, gitopsDir, plan1, names)
+
+	if writeErr := os.WriteFile(filepath.Join(monorepo, "pkg", "proto", "common.proto"), []byte("syntax = \"proto3\";\npackage common;\nmessage Cursor {}\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	plan2, err := NewPlanner(monorepo, gitopsDir, "v0.2.40", components).Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bridge", "foghorn", "signalman", "commodore"} {
 		if d := plan2.Decisions[name]; d.Action != ActionBuild {
 			t.Fatalf("%s action = %s, want build", name, d.Action)
 		}

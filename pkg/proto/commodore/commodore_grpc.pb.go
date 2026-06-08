@@ -8,7 +8,7 @@ package commodorepb
 
 import (
 	context "context"
-	foghorn "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -171,8 +171,8 @@ type InternalServiceClient interface {
 	// forwards to Foghorn (which owns the chapter row + finalization
 	// queue). Chapter mode/interval is configured on the Stream and
 	// snapshotted at StartDVR — there is no mid-recording policy RPC.
-	RetrieveDVRChapter(ctx context.Context, in *foghorn.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn.RetrieveDVRChapterResponse, error)
-	ListDVRChapters(ctx context.Context, in *foghorn.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn.ListDVRChaptersResponse, error)
+	RetrieveDVRChapter(ctx context.Context, in *foghorn_control.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn_control.RetrieveDVRChapterResponse, error)
+	ListDVRChapters(ctx context.Context, in *foghorn_control.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn_control.ListDVRChaptersResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(ctx context.Context, in *RegisterClipRequest, opts ...grpc.CallOption) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
@@ -236,13 +236,13 @@ type InternalServiceClient interface {
 	// Called when a tenant is suspended due to insufficient prepaid balance.
 	// Commodore forwards to Foghorn which stops all sessions on affected nodes.
 	// ============================================================================
-	TerminateTenantStreams(ctx context.Context, in *foghorn.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn.TerminateTenantStreamsResponse, error)
+	TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// ============================================================================
 	// TENANT CACHE INVALIDATION (Purser → Commodore → Foghorn)
 	// Called when a tenant is reactivated after payment.
 	// Commodore forwards to Foghorn which clears cached suspension status.
 	// ============================================================================
-	InvalidateTenantCache(ctx context.Context, in *foghorn.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn.InvalidateTenantCacheResponse, error)
+	InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// Get active user count for a tenant (for billing calculation)
 	GetTenantUserCount(ctx context.Context, in *GetTenantUserCountRequest, opts ...grpc.CallOption) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
@@ -267,7 +267,7 @@ type InternalServiceClient interface {
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
-	TestPlaybackAccess(ctx context.Context, in *foghorn.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn.TestPlaybackAccessResponse, error)
+	TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error)
 	// Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
 	// against a pull+ stream. The list query feeds the webapp's "pull source
 	// health" view.
@@ -433,9 +433,9 @@ func (c *internalServiceClient) StartDVR(ctx context.Context, in *shared.StartDV
 	return out, nil
 }
 
-func (c *internalServiceClient) RetrieveDVRChapter(ctx context.Context, in *foghorn.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn.RetrieveDVRChapterResponse, error) {
+func (c *internalServiceClient) RetrieveDVRChapter(ctx context.Context, in *foghorn_control.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn_control.RetrieveDVRChapterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.RetrieveDVRChapterResponse)
+	out := new(foghorn_control.RetrieveDVRChapterResponse)
 	err := c.cc.Invoke(ctx, InternalService_RetrieveDVRChapter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -443,9 +443,9 @@ func (c *internalServiceClient) RetrieveDVRChapter(ctx context.Context, in *fogh
 	return out, nil
 }
 
-func (c *internalServiceClient) ListDVRChapters(ctx context.Context, in *foghorn.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn.ListDVRChaptersResponse, error) {
+func (c *internalServiceClient) ListDVRChapters(ctx context.Context, in *foghorn_control.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn_control.ListDVRChaptersResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.ListDVRChaptersResponse)
+	out := new(foghorn_control.ListDVRChaptersResponse)
 	err := c.cc.Invoke(ctx, InternalService_ListDVRChapters_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -643,9 +643,9 @@ func (c *internalServiceClient) GetOrCreateWalletUser(ctx context.Context, in *G
 	return out, nil
 }
 
-func (c *internalServiceClient) TerminateTenantStreams(ctx context.Context, in *foghorn.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn.TerminateTenantStreamsResponse, error) {
+func (c *internalServiceClient) TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.TerminateTenantStreamsResponse)
+	out := new(foghorn_control.TerminateTenantStreamsResponse)
 	err := c.cc.Invoke(ctx, InternalService_TerminateTenantStreams_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -653,9 +653,9 @@ func (c *internalServiceClient) TerminateTenantStreams(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *internalServiceClient) InvalidateTenantCache(ctx context.Context, in *foghorn.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn.InvalidateTenantCacheResponse, error) {
+func (c *internalServiceClient) InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.InvalidateTenantCacheResponse)
+	out := new(foghorn_control.InvalidateTenantCacheResponse)
 	err := c.cc.Invoke(ctx, InternalService_InvalidateTenantCache_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -743,9 +743,9 @@ func (c *internalServiceClient) SetStreamRetentionOverrides(ctx context.Context,
 	return out, nil
 }
 
-func (c *internalServiceClient) TestPlaybackAccess(ctx context.Context, in *foghorn.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn.TestPlaybackAccessResponse, error) {
+func (c *internalServiceClient) TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.TestPlaybackAccessResponse)
+	out := new(foghorn_control.TestPlaybackAccessResponse)
 	err := c.cc.Invoke(ctx, InternalService_TestPlaybackAccess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -871,8 +871,8 @@ type InternalServiceServer interface {
 	// forwards to Foghorn (which owns the chapter row + finalization
 	// queue). Chapter mode/interval is configured on the Stream and
 	// snapshotted at StartDVR — there is no mid-recording policy RPC.
-	RetrieveDVRChapter(context.Context, *foghorn.RetrieveDVRChapterRequest) (*foghorn.RetrieveDVRChapterResponse, error)
-	ListDVRChapters(context.Context, *foghorn.ListDVRChaptersRequest) (*foghorn.ListDVRChaptersResponse, error)
+	RetrieveDVRChapter(context.Context, *foghorn_control.RetrieveDVRChapterRequest) (*foghorn_control.RetrieveDVRChapterResponse, error)
+	ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error)
 	// Register a new clip in the business registry (called by Foghorn during CreateClip)
 	RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error)
 	// Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
@@ -936,13 +936,13 @@ type InternalServiceServer interface {
 	// Called when a tenant is suspended due to insufficient prepaid balance.
 	// Commodore forwards to Foghorn which stops all sessions on affected nodes.
 	// ============================================================================
-	TerminateTenantStreams(context.Context, *foghorn.TerminateTenantStreamsRequest) (*foghorn.TerminateTenantStreamsResponse, error)
+	TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// ============================================================================
 	// TENANT CACHE INVALIDATION (Purser → Commodore → Foghorn)
 	// Called when a tenant is reactivated after payment.
 	// Commodore forwards to Foghorn which clears cached suspension status.
 	// ============================================================================
-	InvalidateTenantCache(context.Context, *foghorn.InvalidateTenantCacheRequest) (*foghorn.InvalidateTenantCacheResponse, error)
+	InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// Get active user count for a tenant (for billing calculation)
 	GetTenantUserCount(context.Context, *GetTenantUserCountRequest) (*GetTenantUserCountResponse, error)
 	// Get primary user info for a tenant (for billing notifications/invoices)
@@ -967,7 +967,7 @@ type InternalServiceServer interface {
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
-	TestPlaybackAccess(context.Context, *foghorn.TestPlaybackAccessRequest) (*foghorn.TestPlaybackAccessResponse, error)
+	TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error)
 	// Foghorn writes one pull_source_events row per STREAM_SOURCE resolution
 	// against a pull+ stream. The list query feeds the webapp's "pull source
 	// health" view.
@@ -1028,10 +1028,10 @@ func (UnimplementedInternalServiceServer) ValidateMistAdminSession(context.Conte
 func (UnimplementedInternalServiceServer) StartDVR(context.Context, *shared.StartDVRRequest) (*shared.StartDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartDVR not implemented")
 }
-func (UnimplementedInternalServiceServer) RetrieveDVRChapter(context.Context, *foghorn.RetrieveDVRChapterRequest) (*foghorn.RetrieveDVRChapterResponse, error) {
+func (UnimplementedInternalServiceServer) RetrieveDVRChapter(context.Context, *foghorn_control.RetrieveDVRChapterRequest) (*foghorn_control.RetrieveDVRChapterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RetrieveDVRChapter not implemented")
 }
-func (UnimplementedInternalServiceServer) ListDVRChapters(context.Context, *foghorn.ListDVRChaptersRequest) (*foghorn.ListDVRChaptersResponse, error) {
+func (UnimplementedInternalServiceServer) ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
 }
 func (UnimplementedInternalServiceServer) RegisterClip(context.Context, *RegisterClipRequest) (*RegisterClipResponse, error) {
@@ -1091,10 +1091,10 @@ func (UnimplementedInternalServiceServer) ListStorageArtifacts(context.Context, 
 func (UnimplementedInternalServiceServer) GetOrCreateWalletUser(context.Context, *GetOrCreateWalletUserRequest) (*GetOrCreateWalletUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetOrCreateWalletUser not implemented")
 }
-func (UnimplementedInternalServiceServer) TerminateTenantStreams(context.Context, *foghorn.TerminateTenantStreamsRequest) (*foghorn.TerminateTenantStreamsResponse, error) {
+func (UnimplementedInternalServiceServer) TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
 }
-func (UnimplementedInternalServiceServer) InvalidateTenantCache(context.Context, *foghorn.InvalidateTenantCacheRequest) (*foghorn.InvalidateTenantCacheResponse, error) {
+func (UnimplementedInternalServiceServer) InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTenantCache not implemented")
 }
 func (UnimplementedInternalServiceServer) GetTenantUserCount(context.Context, *GetTenantUserCountRequest) (*GetTenantUserCountResponse, error) {
@@ -1121,7 +1121,7 @@ func (UnimplementedInternalServiceServer) ResetAssetRetention(context.Context, *
 func (UnimplementedInternalServiceServer) SetStreamRetentionOverrides(context.Context, *SetStreamRetentionOverridesRequest) (*SetStreamRetentionOverridesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetStreamRetentionOverrides not implemented")
 }
-func (UnimplementedInternalServiceServer) TestPlaybackAccess(context.Context, *foghorn.TestPlaybackAccessRequest) (*foghorn.TestPlaybackAccessResponse, error) {
+func (UnimplementedInternalServiceServer) TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
 }
 func (UnimplementedInternalServiceServer) RecordPullSourceEvent(context.Context, *RecordPullSourceEventRequest) (*emptypb.Empty, error) {
@@ -1422,7 +1422,7 @@ func _InternalService_StartDVR_Handler(srv interface{}, ctx context.Context, dec
 }
 
 func _InternalService_RetrieveDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.RetrieveDVRChapterRequest)
+	in := new(foghorn_control.RetrieveDVRChapterRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1434,13 +1434,13 @@ func _InternalService_RetrieveDVRChapter_Handler(srv interface{}, ctx context.Co
 		FullMethod: InternalService_RetrieveDVRChapter_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).RetrieveDVRChapter(ctx, req.(*foghorn.RetrieveDVRChapterRequest))
+		return srv.(InternalServiceServer).RetrieveDVRChapter(ctx, req.(*foghorn_control.RetrieveDVRChapterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _InternalService_ListDVRChapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.ListDVRChaptersRequest)
+	in := new(foghorn_control.ListDVRChaptersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1452,7 +1452,7 @@ func _InternalService_ListDVRChapters_Handler(srv interface{}, ctx context.Conte
 		FullMethod: InternalService_ListDVRChapters_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).ListDVRChapters(ctx, req.(*foghorn.ListDVRChaptersRequest))
+		return srv.(InternalServiceServer).ListDVRChapters(ctx, req.(*foghorn_control.ListDVRChaptersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1800,7 +1800,7 @@ func _InternalService_GetOrCreateWalletUser_Handler(srv interface{}, ctx context
 }
 
 func _InternalService_TerminateTenantStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.TerminateTenantStreamsRequest)
+	in := new(foghorn_control.TerminateTenantStreamsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1812,13 +1812,13 @@ func _InternalService_TerminateTenantStreams_Handler(srv interface{}, ctx contex
 		FullMethod: InternalService_TerminateTenantStreams_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).TerminateTenantStreams(ctx, req.(*foghorn.TerminateTenantStreamsRequest))
+		return srv.(InternalServiceServer).TerminateTenantStreams(ctx, req.(*foghorn_control.TerminateTenantStreamsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _InternalService_InvalidateTenantCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.InvalidateTenantCacheRequest)
+	in := new(foghorn_control.InvalidateTenantCacheRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1830,7 +1830,7 @@ func _InternalService_InvalidateTenantCache_Handler(srv interface{}, ctx context
 		FullMethod: InternalService_InvalidateTenantCache_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).InvalidateTenantCache(ctx, req.(*foghorn.InvalidateTenantCacheRequest))
+		return srv.(InternalServiceServer).InvalidateTenantCache(ctx, req.(*foghorn_control.InvalidateTenantCacheRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1980,7 +1980,7 @@ func _InternalService_SetStreamRetentionOverrides_Handler(srv interface{}, ctx c
 }
 
 func _InternalService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.TestPlaybackAccessRequest)
+	in := new(foghorn_control.TestPlaybackAccessRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1992,7 +1992,7 @@ func _InternalService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Co
 		FullMethod: InternalService_TestPlaybackAccess_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(InternalServiceServer).TestPlaybackAccess(ctx, req.(*foghorn.TestPlaybackAccessRequest))
+		return srv.(InternalServiceServer).TestPlaybackAccess(ctx, req.(*foghorn_control.TestPlaybackAccessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -5123,9 +5123,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeManagementServiceClient interface {
 	// Set a node's operational mode (normal, draining, maintenance)
-	SetNodeOperationalMode(ctx context.Context, in *foghorn.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn.SetNodeModeResponse, error)
+	SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error)
 	// Get real-time health and routing state for a node
-	GetNodeHealth(ctx context.Context, in *foghorn.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn.GetNodeHealthResponse, error)
+	GetNodeHealth(ctx context.Context, in *foghorn_control.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn_control.GetNodeHealthResponse, error)
 }
 
 type nodeManagementServiceClient struct {
@@ -5136,9 +5136,9 @@ func NewNodeManagementServiceClient(cc grpc.ClientConnInterface) NodeManagementS
 	return &nodeManagementServiceClient{cc}
 }
 
-func (c *nodeManagementServiceClient) SetNodeOperationalMode(ctx context.Context, in *foghorn.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn.SetNodeModeResponse, error) {
+func (c *nodeManagementServiceClient) SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.SetNodeModeResponse)
+	out := new(foghorn_control.SetNodeModeResponse)
 	err := c.cc.Invoke(ctx, NodeManagementService_SetNodeOperationalMode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -5146,9 +5146,9 @@ func (c *nodeManagementServiceClient) SetNodeOperationalMode(ctx context.Context
 	return out, nil
 }
 
-func (c *nodeManagementServiceClient) GetNodeHealth(ctx context.Context, in *foghorn.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn.GetNodeHealthResponse, error) {
+func (c *nodeManagementServiceClient) GetNodeHealth(ctx context.Context, in *foghorn_control.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn_control.GetNodeHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(foghorn.GetNodeHealthResponse)
+	out := new(foghorn_control.GetNodeHealthResponse)
 	err := c.cc.Invoke(ctx, NodeManagementService_GetNodeHealth_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -5161,9 +5161,9 @@ func (c *nodeManagementServiceClient) GetNodeHealth(ctx context.Context, in *fog
 // for forward compatibility.
 type NodeManagementServiceServer interface {
 	// Set a node's operational mode (normal, draining, maintenance)
-	SetNodeOperationalMode(context.Context, *foghorn.SetNodeModeRequest) (*foghorn.SetNodeModeResponse, error)
+	SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error)
 	// Get real-time health and routing state for a node
-	GetNodeHealth(context.Context, *foghorn.GetNodeHealthRequest) (*foghorn.GetNodeHealthResponse, error)
+	GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error)
 	mustEmbedUnimplementedNodeManagementServiceServer()
 }
 
@@ -5174,10 +5174,10 @@ type NodeManagementServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeManagementServiceServer struct{}
 
-func (UnimplementedNodeManagementServiceServer) SetNodeOperationalMode(context.Context, *foghorn.SetNodeModeRequest) (*foghorn.SetNodeModeResponse, error) {
+func (UnimplementedNodeManagementServiceServer) SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
 }
-func (UnimplementedNodeManagementServiceServer) GetNodeHealth(context.Context, *foghorn.GetNodeHealthRequest) (*foghorn.GetNodeHealthResponse, error) {
+func (UnimplementedNodeManagementServiceServer) GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeHealth not implemented")
 }
 func (UnimplementedNodeManagementServiceServer) mustEmbedUnimplementedNodeManagementServiceServer() {}
@@ -5202,7 +5202,7 @@ func RegisterNodeManagementServiceServer(s grpc.ServiceRegistrar, srv NodeManage
 }
 
 func _NodeManagementService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.SetNodeModeRequest)
+	in := new(foghorn_control.SetNodeModeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -5214,13 +5214,13 @@ func _NodeManagementService_SetNodeOperationalMode_Handler(srv interface{}, ctx 
 		FullMethod: NodeManagementService_SetNodeOperationalMode_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeManagementServiceServer).SetNodeOperationalMode(ctx, req.(*foghorn.SetNodeModeRequest))
+		return srv.(NodeManagementServiceServer).SetNodeOperationalMode(ctx, req.(*foghorn_control.SetNodeModeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeManagementService_GetNodeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(foghorn.GetNodeHealthRequest)
+	in := new(foghorn_control.GetNodeHealthRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -5232,7 +5232,7 @@ func _NodeManagementService_GetNodeHealth_Handler(srv interface{}, ctx context.C
 		FullMethod: NodeManagementService_GetNodeHealth_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeManagementServiceServer).GetNodeHealth(ctx, req.(*foghorn.GetNodeHealthRequest))
+		return srv.(NodeManagementServiceServer).GetNodeHealth(ctx, req.(*foghorn_control.GetNodeHealthRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

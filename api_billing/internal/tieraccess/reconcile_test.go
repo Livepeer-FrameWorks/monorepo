@@ -11,6 +11,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 )
 
 // fakeQM records the order of mutating Quartermaster calls so tests can assert
@@ -56,7 +57,7 @@ func (f *fakeQM) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTe
 	return &quartermasterpb.Tenant{}, nil
 }
 
-func (f *fakeQM) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, _ *quartermasterpb.TenantResourceLimits) error {
+func (f *fakeQM) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, _ *tenantlimitspb.TenantResourceLimits) error {
 	f.calls = append(f.calls, "grant:"+clusterID)
 	return f.bootstrapErr
 }

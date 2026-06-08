@@ -13,6 +13,7 @@ import (
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	qmevents "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -101,6 +102,10 @@ func main() {
 	}
 	defer func() { _ = qmClient.Close() }()
 
+	// Service-event producer client, sharing the Quartermaster connection.
+	// Kept separate so the base client stays free of ipcpb.
+	qmEventsClient := qmevents.New(qmClient.Conn())
+
 	// Create Purser gRPC client (for billing info)
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
 		GRPCAddr:      purserGRPCAddr,
@@ -156,14 +161,15 @@ func main() {
 
 	// Initialize HTTP handlers
 	deps := handlers.Dependencies{
-		Logger:          logger,
-		Metrics:         handlerMetrics,
-		Quartermaster:   qmClient,
-		Purser:          purserClient,
-		Decklog:         decklogClient,
-		Redis:           redisClient,
-		ChatwootBaseURL: chatwootBaseURL,
-		ChatwootToken:   chatwootAPIToken,
+		Logger:              logger,
+		Metrics:             handlerMetrics,
+		Quartermaster:       qmClient,
+		QuartermasterEvents: qmEventsClient,
+		Purser:              purserClient,
+		Decklog:             decklogClient,
+		Redis:               redisClient,
+		ChatwootBaseURL:     chatwootBaseURL,
+		ChatwootToken:       chatwootAPIToken,
 	}
 	handlers.Init(deps)
 

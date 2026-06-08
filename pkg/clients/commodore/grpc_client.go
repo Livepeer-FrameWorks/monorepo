@@ -13,9 +13,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -504,7 +504,7 @@ func (c *GRPCClient) SetStreamRetentionOverrides(ctx context.Context, req *commo
 // TestPlaybackAccess facades Foghorn's dry-run evaluator. Webhook mode can
 // take up to ~10s for the customer endpoint to respond — keep timeouts
 // generous on the caller side.
-func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, error) {
+func (c *GRPCClient) TestPlaybackAccess(ctx context.Context, req *foghorncontrolpb.TestPlaybackAccessRequest) (*foghorncontrolpb.TestPlaybackAccessResponse, error) {
 	return c.internal.TestPlaybackAccess(ctx, req)
 }
 
@@ -890,7 +890,7 @@ func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signatur
 }
 
 // WalletLoginWithX402 authenticates via x402 payload and returns session token + payment info.
-func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *purserpb.X402PaymentPayload, clientIP, targetTenantID string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletLoginWithX402Response, error) {
+func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *x402pb.X402PaymentPayload, clientIP, targetTenantID string, attribution *commonpb.SignupAttribution) (*commodorepb.WalletLoginWithX402Response, error) {
 	req := &commodorepb.WalletLoginWithX402Request{
 		Payment:     payment,
 		ClientIp:    clientIP,
@@ -1060,12 +1060,12 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
 // RetrieveDVRChapter returns chapter metadata (state, range, public
 // playback_id) for a single chapter. Customer-facing path:
 // api_gateway → Commodore → Foghorn.
-func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, error) {
+func (c *GRPCClient) RetrieveDVRChapter(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, error) {
 	return c.internal.RetrieveDVRChapter(ctx, req)
 }
 
 // ListDVRChapters paginates chapter rows for player navigation.
-func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, error) {
+func (c *GRPCClient) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
 	return c.internal.ListDVRChapters(ctx, req)
 }
 
@@ -1221,8 +1221,8 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below threshold.
-func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, error) {
-	return c.internal.TerminateTenantStreams(ctx, &foghornpb.TerminateTenantStreamsRequest{
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	return c.internal.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1230,8 +1230,8 @@ func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reaso
 
 // InvalidateTenantCache clears cached suspension status for a tenant.
 // Called by Purser when a tenant is reactivated after payment.
-func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, error) {
-	return c.internal.InvalidateTenantCache(ctx, &foghornpb.InvalidateTenantCacheRequest{
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	return c.internal.InvalidateTenantCache(ctx, &foghorncontrolpb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1269,12 +1269,12 @@ func (c *GRPCClient) CreateUserInTenant(ctx context.Context, req *commodorepb.Cr
 // ============================================================================
 
 // SetNodeMode sets a node's operational mode via Foghorn.
-func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
+func (c *GRPCClient) SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
 	return c.nodeMgmt.SetNodeOperationalMode(ctx, req)
 }
 
 // GetNodeHealth returns real-time health for a node via Foghorn.
-func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
+func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error) {
 	return c.nodeMgmt.GetNodeHealth(ctx, req)
 }
 

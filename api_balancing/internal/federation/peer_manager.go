@@ -14,10 +14,13 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -122,7 +125,7 @@ func (a *foghornPoolAdapter) Touch(clusterID string) {
 }
 
 func (c *foghornPeerClient) OpenPeerChannel(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
-	return c.client.Federation().PeerChannel(ctx)
+	return foghornfed.For(c.client).Federation().PeerChannel(ctx)
 }
 
 // PeerManagerConfig holds dependencies for the peer manager.
@@ -306,7 +309,7 @@ func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 // NotifyPeers accepts peer discovery hints from stream validation.
 // All replicas register addresses (so GetPeerAddr works everywhere);
 // only the leader opens PeerChannel connections.
-func (pm *PeerManager) NotifyPeers(peers []*quartermasterpb.TenantClusterPeer, tenantID string) {
+func (pm *PeerManager) NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, tenantID string) {
 	var changed bool
 
 	pm.mu.Lock()

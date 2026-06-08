@@ -47,14 +47,20 @@ type HashInputs struct {
 //   - service go.mod, go.sum.
 //   - pkg/go.mod, pkg/go.sum (required because of the `replace ../pkg`
 //     directive).
-//   - Explicit extra hash paths from release-components.json, used for
-//     non-Go contract inputs such as .proto files.
+//   - The exact .proto source closure: the .proto behind each generated proto
+//     package in the Go import closure, plus their transitive proto imports -
+//     never every .proto under pkg/proto. Committed generated *.pb.go are
+//     already hashed via the Go closure; CI (`make proto` + git diff) keeps
+//     them in sync with source, so this layer is defense-in-depth, not the
+//     sole signal.
+//   - Explicit extra hash paths from release-components.json (other non-Go
+//     contract inputs).
 //   - The service Dockerfile.
 //   - The release-components.json entry (cgo, darwin_binary flags).
 //   - Go toolchain version.
 //   - Workflow salt.
 //
-// Test files (*_test.go) are excluded — they don't affect the binary.
+// Test files (*_test.go) are excluded; they don't affect the binary.
 func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 	h := sha256.New()
 	var contributingFiles []string
@@ -65,16 +71,33 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// 1. Source closure: go list -deps -json $cmd from the service module.
-	files, err := goListDepSources(ctx, inputs.MonorepoRoot, inputs.Component)
-	if err != nil {
-		return "", nil, fmt.Errorf("go list deps for %s: %w", inputs.Component.Name, err)
+	// 1. Source closure: go list -deps -json $cmd from the service module, for
+	// every platform this component actually ships. The release matrix builds
+	// each service native binary for linux/amd64 and linux/arm64, plus
+	// darwin/arm64 when darwin_binary is set. A platform-specific file (e.g.
+	// *_darwin.go) can be absent from another platform's closure, so the hash is
+	// the UNION across platforms, or a platform-only change would be carried
+	// forward incorrectly.
+	platforms := []struct{ goos, goarch string }{{"linux", "amd64"}, {"linux", "arm64"}}
+	if inputs.Component.DarwinBinary {
+		platforms = append(platforms, struct{ goos, goarch string }{"darwin", "arm64"})
 	}
-	usesProtoPackage := false
-	for _, f := range files {
-		if isUnderRelPath(inputs.MonorepoRoot, f, "pkg/proto") {
-			usesProtoPackage = true
+	fileSet := map[string]struct{}{}
+	for _, p := range platforms {
+		platFiles, listErr := goListDepSources(ctx, inputs.MonorepoRoot, inputs.Component, p.goos, p.goarch)
+		if listErr != nil {
+			return "", nil, fmt.Errorf("go list deps for %s (%s/%s): %w", inputs.Component.Name, p.goos, p.goarch, listErr)
 		}
+		for _, f := range platFiles {
+			fileSet[f] = struct{}{}
+		}
+	}
+	files := make([]string, 0, len(fileSet))
+	for f := range fileSet {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
 		if fileErr := hashFileRel(h, inputs.MonorepoRoot, f, &contributingFiles); fileErr != nil {
 			return "", nil, fmt.Errorf("hash %s: %w", f, fileErr)
 		}
@@ -96,20 +119,22 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 		}
 	}
 
-	// 4. Contract/source inputs that are not visible to go list. If the
-	// command imports the monorepo proto package, the .proto definitions are
-	// part of its ABI even before generated .pb.go files are refreshed.
+	// 4. Contract/source inputs that are not visible to go list. The .proto
+	// definitions are part of a service's ABI even before the generated .pb.go
+	// files are refreshed, so we hash the EXACT proto-source closure: only the
+	// .proto files behind the generated proto packages actually in this
+	// service's Go import closure (plus their transitive proto imports), never
+	// every .proto under pkg/proto. This keeps an unrelated proto edit from
+	// invalidating services that don't compile it.
 	extraFiles, err := collectExtraHashFiles(inputs.MonorepoRoot, inputs.Component.ExtraHashPaths)
 	if err != nil {
 		return "", nil, err
 	}
-	if usesProtoPackage {
-		protoFiles, protoErr := collectFilesByExtension(filepath.Join(inputs.MonorepoRoot, "pkg", "proto"), ".proto")
-		if protoErr != nil {
-			return "", nil, protoErr
-		}
-		extraFiles = append(extraFiles, protoFiles...)
+	protoSources, err := collectProtoSourceClosure(inputs.MonorepoRoot, files)
+	if err != nil {
+		return "", nil, err
 	}
+	extraFiles = append(extraFiles, protoSources...)
 	extraFiles = uniqueSortedPaths(extraFiles)
 	for _, f := range extraFiles {
 		if fileErr := hashFileRel(h, inputs.MonorepoRoot, f, &contributingFiles); fileErr != nil {
@@ -125,7 +150,7 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 		}
 	}
 
-	// 6. release-components.json entry — serialized canonically so flag
+	// 6. release-components.json entry, serialized canonically so flag
 	// changes (cgo, darwin_binary) invalidate the hash.
 	entryJSON, err := json.Marshal(inputs.Component)
 	if err != nil {
@@ -142,21 +167,135 @@ func ComputeServiceSourceHash(inputs HashInputs) (string, []string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), contributingFiles, nil
 }
 
-func collectFilesByExtension(root, ext string) ([]string, error) {
-	var out []string
-	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+// collectProtoSourceClosure returns the exact set of pkg/proto/*.proto source
+// files that contribute to a service's binary: the .proto behind every
+// generated proto package in the Go import closure, transitively following each
+// .proto's own `import "...";` statements. Resolution maps a generated package
+// back to its source via the protoc `// source:` header (the authoritative
+// invariant) rather than assuming the directory basename equals the proto stem.
+//
+// closureFiles is the absolute-path Go import closure from goListDepSources;
+// only its pkg/proto/<x>/*.pb.go entries seed the proto closure.
+func collectProtoSourceClosure(monorepoRoot string, closureFiles []string) ([]string, error) {
+	protoDir := filepath.Join(monorepoRoot, "pkg", "proto")
+
+	seeds := map[string]struct{}{}
+	for _, f := range closureFiles {
+		if !isUnderRelPath(monorepoRoot, f, "pkg/proto") {
+			continue
+		}
+		if !strings.HasSuffix(f, ".pb.go") {
+			continue
+		}
+		source, err := readProtoSourceHeader(f)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if d.IsDir() || filepath.Ext(path) != ext {
-			return nil
+		if source == "" {
+			continue
 		}
+		seeds[filepath.Join(protoDir, source)] = struct{}{}
+	}
+
+	// BFS the .proto import graph so a service that compiles package A also
+	// hashes the protos A imports (e.g. ipc.proto -> common.proto).
+	visited := map[string]struct{}{}
+	queue := make([]string, 0, len(seeds))
+	for s := range seeds {
+		queue = append(queue, s)
+	}
+	for len(queue) > 0 {
+		path := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if _, ok := visited[path]; ok {
+			continue
+		}
+		visited[path] = struct{}{}
+
+		imports, err := readProtoImports(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, imp := range imports {
+			// Resolve by presence: an import vendored under pkg/proto (including
+			// the local google/protobuf/*.proto well-known-type fixtures) is a
+			// real source input and is hashed; one that resolves nowhere in the
+			// repo is external (its identity rides in go.sum / the protoc pin).
+			resolved := filepath.Join(protoDir, filepath.FromSlash(imp))
+			if _, statErr := os.Stat(resolved); statErr != nil {
+				if os.IsNotExist(statErr) {
+					continue // external import; identity rides in go.sum / the protoc pin
+				}
+				// Any other stat error (permission, symlink loop, bad path) is
+				// non-deterministic; fail loudly rather than silently dropping.
+				return nil, fmt.Errorf("stat proto import %q: %w", imp, statErr)
+			}
+			queue = append(queue, resolved)
+		}
+	}
+
+	out := make([]string, 0, len(visited))
+	for path := range visited {
 		out = append(out, path)
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("walk %s: %w", root, err)
 	}
 	sort.Strings(out)
+	return out, nil
+}
+
+// readProtoSourceHeader returns the source .proto filename recorded in a
+// protoc-generated file's `// source: <name>.proto` header (e.g. "ipc.proto"),
+// or "" if the file carries no such header.
+func readProtoSourceHeader(pbGoPath string) (string, error) {
+	b, err := os.ReadFile(pbGoPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", pbGoPath, err)
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "// source:"); ok {
+			return strings.TrimSpace(rest), nil
+		}
+		// The header block is at the top of the file; stop once code starts.
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+	}
+	return "", nil
+}
+
+// readProtoImports parses the `import "...";` statements from a .proto file. A
+// missing file is treated as no imports so a stale generated reference never
+// fails the hash (the Go build, not this tool, is the source of truth for
+// existence).
+func readProtoImports(protoPath string) ([]string, error) {
+	b, err := os.ReadFile(protoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", protoPath, err)
+	}
+	var out []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "import ")
+		if !ok {
+			continue
+		}
+		// Skip the optional "public"/"weak" qualifier.
+		rest = strings.TrimSpace(rest)
+		rest = strings.TrimPrefix(rest, "public ")
+		rest = strings.TrimPrefix(rest, "weak ")
+		rest = strings.TrimSpace(rest)
+		if !strings.HasPrefix(rest, `"`) {
+			continue
+		}
+		path, _, ok := strings.Cut(rest[1:], `"`)
+		if !ok {
+			continue
+		}
+		out = append(out, path)
+	}
 	return out, nil
 }
 
@@ -215,6 +354,29 @@ func uniqueSortedPaths(paths []string) []string {
 	return out
 }
 
+// dirWithinRepo reports whether dir is inside root, tolerating symlinked paths
+// (go list canonicalizes Dir, e.g. /var -> /private/var on macOS, while root may
+// not be canonical).
+func dirWithinRepo(root, dir string) bool {
+	if relWithinRoot(root, dir) {
+		return true
+	}
+	cr, e1 := filepath.EvalSymlinks(root)
+	cd, e2 := filepath.EvalSymlinks(dir)
+	if e1 != nil || e2 != nil {
+		return false
+	}
+	return relWithinRoot(cr, cd)
+}
+
+func relWithinRoot(root, dir string) bool {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func isUnderRelPath(root, path, relDir string) bool {
 	if isUnderRelPathRaw(root, path, relDir) {
 		return true
@@ -240,9 +402,9 @@ func isUnderRelPathRaw(root, path, relDir string) bool {
 // goListDeps walks the import closure of the cmd target via `go list -deps
 // -json` and returns the sorted, deduplicated list of source files (no
 // *_test.go) for monorepo-internal packages. Packages from the standard
-// library and third-party modules are excluded — their identity is
+// library and third-party modules are excluded; their identity is
 // captured via go.sum.
-func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComponent) ([]string, error) {
+func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComponent, goos, goarch string) ([]string, error) {
 	moduleDir := filepath.Join(monorepoRoot, comp.Context)
 	target := comp.Cmd
 	if target == "" {
@@ -250,7 +412,7 @@ func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComp
 	}
 	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-json", target)
 	cmd.Dir = moduleDir
-	cmd.Env = canonicalGoListEnv(os.Environ(), comp.CGO)
+	cmd.Env = canonicalGoListEnv(os.Environ(), comp.CGO, goos, goarch)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -275,7 +437,14 @@ func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComp
 		if err := dec.Decode(&pkg); err != nil {
 			return nil, fmt.Errorf("decode go list output: %w", err)
 		}
-		if !isMonorepoPackage(pkg.ImportPath, servicePrefix, pkgPrefix) {
+		internal := isMonorepoPackage(pkg.ImportPath, servicePrefix, pkgPrefix)
+		// A file-target cmd (e.g. "cmd/decklog/main.go") lists as the synthetic
+		// "command-line-arguments" package; accept its files when they live in
+		// the monorepo so the entrypoint isn't silently dropped from the hash.
+		if !internal && pkg.ImportPath == "command-line-arguments" && dirWithinRepo(monorepoRoot, pkg.Dir) {
+			internal = true
+		}
+		if !internal {
 			continue
 		}
 		for _, set := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.HFiles, pkg.EmbedFiles, pkg.SFiles} {
@@ -294,7 +463,7 @@ func goListDepSources(ctx context.Context, monorepoRoot string, comp ReleaseComp
 	return out, nil
 }
 
-func canonicalGoListEnv(base []string, cgo bool) []string {
+func canonicalGoListEnv(base []string, cgo bool, goos, goarch string) []string {
 	out := make([]string, 0, len(base)+4)
 	for _, kv := range base {
 		key, _, ok := strings.Cut(kv, "=")
@@ -314,8 +483,8 @@ func canonicalGoListEnv(base []string, cgo bool) []string {
 	}
 	return append(out,
 		"GOFLAGS=",
-		"GOOS=linux",
-		"GOARCH=amd64",
+		"GOOS="+goos,
+		"GOARCH="+goarch,
 		"CGO_ENABLED="+cgoEnabled,
 	)
 }
@@ -351,7 +520,7 @@ func readModulePath(goModPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", goModPath, err)
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "module ") {
 			continue
@@ -401,7 +570,7 @@ func mustWrite(h hash.Hash, parts ...[]byte) {
 
 // HashWorkflowFiles returns sha256:<hex> over release.yml + the
 // release-plan tool's own source tree (excluding test files). This is
-// the WorkflowSalt — a change to build logic forces all components to
+// the WorkflowSalt; a change to build logic forces all components to
 // rebuild on the next release.
 func HashWorkflowFiles(monorepoRoot string) (string, error) {
 	h := sha256.New()

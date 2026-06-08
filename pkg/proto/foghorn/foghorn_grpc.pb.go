@@ -8,6 +8,7 @@ package foghornpb
 
 import (
 	context "context"
+	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -189,8 +190,8 @@ type DVRControlServiceClient interface {
 	StopDVR(ctx context.Context, in *shared.StopDVRRequest, opts ...grpc.CallOption) (*shared.StopDVRResponse, error)
 	// DeleteDVR deletes a DVR recording and its files
 	DeleteDVR(ctx context.Context, in *shared.DeleteDVRRequest, opts ...grpc.CallOption) (*shared.DeleteDVRResponse, error)
-	RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error)
-	ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error)
+	RetrieveDVRChapter(ctx context.Context, in *foghorn_control.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn_control.RetrieveDVRChapterResponse, error)
+	ListDVRChapters(ctx context.Context, in *foghorn_control.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn_control.ListDVRChaptersResponse, error)
 	// OverrideArtifactRetention pushes a per-asset retention horizon into
 	// foghorn.artifacts so the existing RetentionJob picks up the new value
 	// on its next tick. Called by Commodore.UpdateAssetRetention /
@@ -208,7 +209,7 @@ type DVRControlServiceClient interface {
 	// — Commodore enforces tenant ownership of the playback target before
 	// routing the call here so unauthenticated callers can't use this to
 	// probe arbitrary endpoints.
-	TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error)
+	TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error)
 }
 
 type dVRControlServiceClient struct {
@@ -249,9 +250,9 @@ func (c *dVRControlServiceClient) DeleteDVR(ctx context.Context, in *shared.Dele
 	return out, nil
 }
 
-func (c *dVRControlServiceClient) RetrieveDVRChapter(ctx context.Context, in *RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*RetrieveDVRChapterResponse, error) {
+func (c *dVRControlServiceClient) RetrieveDVRChapter(ctx context.Context, in *foghorn_control.RetrieveDVRChapterRequest, opts ...grpc.CallOption) (*foghorn_control.RetrieveDVRChapterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RetrieveDVRChapterResponse)
+	out := new(foghorn_control.RetrieveDVRChapterResponse)
 	err := c.cc.Invoke(ctx, DVRControlService_RetrieveDVRChapter_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -259,9 +260,9 @@ func (c *dVRControlServiceClient) RetrieveDVRChapter(ctx context.Context, in *Re
 	return out, nil
 }
 
-func (c *dVRControlServiceClient) ListDVRChapters(ctx context.Context, in *ListDVRChaptersRequest, opts ...grpc.CallOption) (*ListDVRChaptersResponse, error) {
+func (c *dVRControlServiceClient) ListDVRChapters(ctx context.Context, in *foghorn_control.ListDVRChaptersRequest, opts ...grpc.CallOption) (*foghorn_control.ListDVRChaptersResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListDVRChaptersResponse)
+	out := new(foghorn_control.ListDVRChaptersResponse)
 	err := c.cc.Invoke(ctx, DVRControlService_ListDVRChapters_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -279,9 +280,9 @@ func (c *dVRControlServiceClient) OverrideArtifactRetention(ctx context.Context,
 	return out, nil
 }
 
-func (c *dVRControlServiceClient) TestPlaybackAccess(ctx context.Context, in *TestPlaybackAccessRequest, opts ...grpc.CallOption) (*TestPlaybackAccessResponse, error) {
+func (c *dVRControlServiceClient) TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TestPlaybackAccessResponse)
+	out := new(foghorn_control.TestPlaybackAccessResponse)
 	err := c.cc.Invoke(ctx, DVRControlService_TestPlaybackAccess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -301,8 +302,8 @@ type DVRControlServiceServer interface {
 	StopDVR(context.Context, *shared.StopDVRRequest) (*shared.StopDVRResponse, error)
 	// DeleteDVR deletes a DVR recording and its files
 	DeleteDVR(context.Context, *shared.DeleteDVRRequest) (*shared.DeleteDVRResponse, error)
-	RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error)
-	ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error)
+	RetrieveDVRChapter(context.Context, *foghorn_control.RetrieveDVRChapterRequest) (*foghorn_control.RetrieveDVRChapterResponse, error)
+	ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error)
 	// OverrideArtifactRetention pushes a per-asset retention horizon into
 	// foghorn.artifacts so the existing RetentionJob picks up the new value
 	// on its next tick. Called by Commodore.UpdateAssetRetention /
@@ -320,7 +321,7 @@ type DVRControlServiceServer interface {
 	// — Commodore enforces tenant ownership of the playback target before
 	// routing the call here so unauthenticated callers can't use this to
 	// probe arbitrary endpoints.
-	TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error)
+	TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error)
 	mustEmbedUnimplementedDVRControlServiceServer()
 }
 
@@ -340,16 +341,16 @@ func (UnimplementedDVRControlServiceServer) StopDVR(context.Context, *shared.Sto
 func (UnimplementedDVRControlServiceServer) DeleteDVR(context.Context, *shared.DeleteDVRRequest) (*shared.DeleteDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteDVR not implemented")
 }
-func (UnimplementedDVRControlServiceServer) RetrieveDVRChapter(context.Context, *RetrieveDVRChapterRequest) (*RetrieveDVRChapterResponse, error) {
+func (UnimplementedDVRControlServiceServer) RetrieveDVRChapter(context.Context, *foghorn_control.RetrieveDVRChapterRequest) (*foghorn_control.RetrieveDVRChapterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RetrieveDVRChapter not implemented")
 }
-func (UnimplementedDVRControlServiceServer) ListDVRChapters(context.Context, *ListDVRChaptersRequest) (*ListDVRChaptersResponse, error) {
+func (UnimplementedDVRControlServiceServer) ListDVRChapters(context.Context, *foghorn_control.ListDVRChaptersRequest) (*foghorn_control.ListDVRChaptersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRChapters not implemented")
 }
 func (UnimplementedDVRControlServiceServer) OverrideArtifactRetention(context.Context, *OverrideArtifactRetentionRequest) (*OverrideArtifactRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OverrideArtifactRetention not implemented")
 }
-func (UnimplementedDVRControlServiceServer) TestPlaybackAccess(context.Context, *TestPlaybackAccessRequest) (*TestPlaybackAccessResponse, error) {
+func (UnimplementedDVRControlServiceServer) TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
 }
 func (UnimplementedDVRControlServiceServer) mustEmbedUnimplementedDVRControlServiceServer() {}
@@ -428,7 +429,7 @@ func _DVRControlService_DeleteDVR_Handler(srv interface{}, ctx context.Context, 
 }
 
 func _DVRControlService_RetrieveDVRChapter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RetrieveDVRChapterRequest)
+	in := new(foghorn_control.RetrieveDVRChapterRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -440,13 +441,13 @@ func _DVRControlService_RetrieveDVRChapter_Handler(srv interface{}, ctx context.
 		FullMethod: DVRControlService_RetrieveDVRChapter_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DVRControlServiceServer).RetrieveDVRChapter(ctx, req.(*RetrieveDVRChapterRequest))
+		return srv.(DVRControlServiceServer).RetrieveDVRChapter(ctx, req.(*foghorn_control.RetrieveDVRChapterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _DVRControlService_ListDVRChapters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListDVRChaptersRequest)
+	in := new(foghorn_control.ListDVRChaptersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -458,7 +459,7 @@ func _DVRControlService_ListDVRChapters_Handler(srv interface{}, ctx context.Con
 		FullMethod: DVRControlService_ListDVRChapters_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DVRControlServiceServer).ListDVRChapters(ctx, req.(*ListDVRChaptersRequest))
+		return srv.(DVRControlServiceServer).ListDVRChapters(ctx, req.(*foghorn_control.ListDVRChaptersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -482,7 +483,7 @@ func _DVRControlService_OverrideArtifactRetention_Handler(srv interface{}, ctx c
 }
 
 func _DVRControlService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TestPlaybackAccessRequest)
+	in := new(foghorn_control.TestPlaybackAccessRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -494,7 +495,7 @@ func _DVRControlService_TestPlaybackAccess_Handler(srv interface{}, ctx context.
 		FullMethod: DVRControlService_TestPlaybackAccess_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DVRControlServiceServer).TestPlaybackAccess(ctx, req.(*TestPlaybackAccessRequest))
+		return srv.(DVRControlServiceServer).TestPlaybackAccess(ctx, req.(*foghorn_control.TestPlaybackAccessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1162,9 +1163,9 @@ const (
 // Commodore proxies this as NodeManagementService for Gateway access.
 type NodeControlServiceClient interface {
 	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
-	SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error)
+	SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
-	GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error)
+	GetNodeHealth(ctx context.Context, in *foghorn_control.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn_control.GetNodeHealthResponse, error)
 }
 
 type nodeControlServiceClient struct {
@@ -1175,9 +1176,9 @@ func NewNodeControlServiceClient(cc grpc.ClientConnInterface) NodeControlService
 	return &nodeControlServiceClient{cc}
 }
 
-func (c *nodeControlServiceClient) SetNodeOperationalMode(ctx context.Context, in *SetNodeModeRequest, opts ...grpc.CallOption) (*SetNodeModeResponse, error) {
+func (c *nodeControlServiceClient) SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetNodeModeResponse)
+	out := new(foghorn_control.SetNodeModeResponse)
 	err := c.cc.Invoke(ctx, NodeControlService_SetNodeOperationalMode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -1185,9 +1186,9 @@ func (c *nodeControlServiceClient) SetNodeOperationalMode(ctx context.Context, i
 	return out, nil
 }
 
-func (c *nodeControlServiceClient) GetNodeHealth(ctx context.Context, in *GetNodeHealthRequest, opts ...grpc.CallOption) (*GetNodeHealthResponse, error) {
+func (c *nodeControlServiceClient) GetNodeHealth(ctx context.Context, in *foghorn_control.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn_control.GetNodeHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetNodeHealthResponse)
+	out := new(foghorn_control.GetNodeHealthResponse)
 	err := c.cc.Invoke(ctx, NodeControlService_GetNodeHealth_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -1204,9 +1205,9 @@ func (c *nodeControlServiceClient) GetNodeHealth(ctx context.Context, in *GetNod
 // Commodore proxies this as NodeManagementService for Gateway access.
 type NodeControlServiceServer interface {
 	// SetNodeOperationalMode changes a node's operational mode (normal, draining, maintenance).
-	SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error)
+	SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
-	GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error)
+	GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error)
 	mustEmbedUnimplementedNodeControlServiceServer()
 }
 
@@ -1217,10 +1218,10 @@ type NodeControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeControlServiceServer struct{}
 
-func (UnimplementedNodeControlServiceServer) SetNodeOperationalMode(context.Context, *SetNodeModeRequest) (*SetNodeModeResponse, error) {
+func (UnimplementedNodeControlServiceServer) SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetNodeOperationalMode not implemented")
 }
-func (UnimplementedNodeControlServiceServer) GetNodeHealth(context.Context, *GetNodeHealthRequest) (*GetNodeHealthResponse, error) {
+func (UnimplementedNodeControlServiceServer) GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeHealth not implemented")
 }
 func (UnimplementedNodeControlServiceServer) mustEmbedUnimplementedNodeControlServiceServer() {}
@@ -1245,7 +1246,7 @@ func RegisterNodeControlServiceServer(s grpc.ServiceRegistrar, srv NodeControlSe
 }
 
 func _NodeControlService_SetNodeOperationalMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetNodeModeRequest)
+	in := new(foghorn_control.SetNodeModeRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1257,13 +1258,13 @@ func _NodeControlService_SetNodeOperationalMode_Handler(srv interface{}, ctx con
 		FullMethod: NodeControlService_SetNodeOperationalMode_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeControlServiceServer).SetNodeOperationalMode(ctx, req.(*SetNodeModeRequest))
+		return srv.(NodeControlServiceServer).SetNodeOperationalMode(ctx, req.(*foghorn_control.SetNodeModeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeControlService_GetNodeHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetNodeHealthRequest)
+	in := new(foghorn_control.GetNodeHealthRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1275,7 +1276,7 @@ func _NodeControlService_GetNodeHealth_Handler(srv interface{}, ctx context.Cont
 		FullMethod: NodeControlService_GetNodeHealth_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeControlServiceServer).GetNodeHealth(ctx, req.(*GetNodeHealthRequest))
+		return srv.(NodeControlServiceServer).GetNodeHealth(ctx, req.(*foghorn_control.GetNodeHealthRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1313,9 +1314,9 @@ const (
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceClient interface {
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
-	TerminateTenantStreams(ctx context.Context, in *TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*TerminateTenantStreamsResponse, error)
+	TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-	InvalidateTenantCache(ctx context.Context, in *InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*InvalidateTenantCacheResponse, error)
+	InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
 	// Helmsman whose nodes hold the listed streams. Called by Commodore after
 	// a playback-policy or signing-key mutation. Does NOT disconnect viewers;
@@ -1331,9 +1332,9 @@ func NewTenantControlServiceClient(cc grpc.ClientConnInterface) TenantControlSer
 	return &tenantControlServiceClient{cc}
 }
 
-func (c *tenantControlServiceClient) TerminateTenantStreams(ctx context.Context, in *TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*TerminateTenantStreamsResponse, error) {
+func (c *tenantControlServiceClient) TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TerminateTenantStreamsResponse)
+	out := new(foghorn_control.TerminateTenantStreamsResponse)
 	err := c.cc.Invoke(ctx, TenantControlService_TerminateTenantStreams_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -1341,9 +1342,9 @@ func (c *tenantControlServiceClient) TerminateTenantStreams(ctx context.Context,
 	return out, nil
 }
 
-func (c *tenantControlServiceClient) InvalidateTenantCache(ctx context.Context, in *InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*InvalidateTenantCacheResponse, error) {
+func (c *tenantControlServiceClient) InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InvalidateTenantCacheResponse)
+	out := new(foghorn_control.InvalidateTenantCacheResponse)
 	err := c.cc.Invoke(ctx, TenantControlService_InvalidateTenantCache_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -1368,9 +1369,9 @@ func (c *tenantControlServiceClient) InvalidatePlaybackAuth(ctx context.Context,
 // TenantControlService handles tenant-level operations called by Purser
 type TenantControlServiceServer interface {
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
-	TerminateTenantStreams(context.Context, *TerminateTenantStreamsRequest) (*TerminateTenantStreamsResponse, error)
+	TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-	InvalidateTenantCache(context.Context, *InvalidateTenantCacheRequest) (*InvalidateTenantCacheResponse, error)
+	InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
 	// Helmsman whose nodes hold the listed streams. Called by Commodore after
 	// a playback-policy or signing-key mutation. Does NOT disconnect viewers;
@@ -1386,10 +1387,10 @@ type TenantControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedTenantControlServiceServer struct{}
 
-func (UnimplementedTenantControlServiceServer) TerminateTenantStreams(context.Context, *TerminateTenantStreamsRequest) (*TerminateTenantStreamsResponse, error) {
+func (UnimplementedTenantControlServiceServer) TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
 }
-func (UnimplementedTenantControlServiceServer) InvalidateTenantCache(context.Context, *InvalidateTenantCacheRequest) (*InvalidateTenantCacheResponse, error) {
+func (UnimplementedTenantControlServiceServer) InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTenantCache not implemented")
 }
 func (UnimplementedTenantControlServiceServer) InvalidatePlaybackAuth(context.Context, *InvalidatePlaybackAuthRequest) (*InvalidatePlaybackAuthResponse, error) {
@@ -1417,7 +1418,7 @@ func RegisterTenantControlServiceServer(s grpc.ServiceRegistrar, srv TenantContr
 }
 
 func _TenantControlService_TerminateTenantStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TerminateTenantStreamsRequest)
+	in := new(foghorn_control.TerminateTenantStreamsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1429,13 +1430,13 @@ func _TenantControlService_TerminateTenantStreams_Handler(srv interface{}, ctx c
 		FullMethod: TenantControlService_TerminateTenantStreams_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantControlServiceServer).TerminateTenantStreams(ctx, req.(*TerminateTenantStreamsRequest))
+		return srv.(TenantControlServiceServer).TerminateTenantStreams(ctx, req.(*foghorn_control.TerminateTenantStreamsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _TenantControlService_InvalidateTenantCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InvalidateTenantCacheRequest)
+	in := new(foghorn_control.InvalidateTenantCacheRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -1447,7 +1448,7 @@ func _TenantControlService_InvalidateTenantCache_Handler(srv interface{}, ctx co
 		FullMethod: TenantControlService_InvalidateTenantCache_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantControlServiceServer).InvalidateTenantCache(ctx, req.(*InvalidateTenantCacheRequest))
+		return srv.(TenantControlServiceServer).InvalidateTenantCache(ctx, req.(*foghorn_control.InvalidateTenantCacheRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

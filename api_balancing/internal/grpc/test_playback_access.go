@@ -5,7 +5,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/triggers"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,7 +29,7 @@ import (
 // fire_webhook=false on a webhook policy returns "webhook-test-skipped"
 // without making the call so an operator can inspect the policy shape
 // before opting in to the side effect.
-func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghornpb.TestPlaybackAccessRequest) (*foghornpb.TestPlaybackAccessResponse, error) {
+func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghorncontrolpb.TestPlaybackAccessRequest) (*foghorncontrolpb.TestPlaybackAccessResponse, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -60,7 +60,7 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghorn
 	// gets the policy shape without paying the outbound HTTP side effect.
 	// Allowed=false here is informational, not a real enforcement deny.
 	if policy.GetType() == "webhook" && !req.GetFireWebhook() {
-		return &foghornpb.TestPlaybackAccessResponse{
+		return &foghorncontrolpb.TestPlaybackAccessResponse{
 			Allowed:              false,
 			PolicyType:           "webhook",
 			Reason:               "webhook-test-skipped",
@@ -85,7 +85,7 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghorn
 	if d == nil {
 		return nil, status.Error(codes.Internal, "evaluator returned nil decision")
 	}
-	return &foghornpb.TestPlaybackAccessResponse{
+	return &foghorncontrolpb.TestPlaybackAccessResponse{
 		Allowed:              d.Allowed,
 		PolicyType:           d.PolicyType,
 		Reason:               d.Reason,

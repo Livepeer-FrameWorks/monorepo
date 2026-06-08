@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/sirupsen/logrus"
 )
 
@@ -360,8 +361,8 @@ func TestListManagedStreams(t *testing.T) {
 
 func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *testing.T) {
 	merged := mergeTenantResourceLimits(
-		&quartermasterpb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},
-		&quartermasterpb.TenantResourceLimits{MaxStreams: 5},
+		&tenantlimitspb.TenantResourceLimits{MaxStreams: 3, MaxViewers: 200},
+		&tenantlimitspb.TenantResourceLimits{MaxStreams: 5},
 	)
 	if merged.GetMaxStreams() != 5 || merged.GetMaxViewers() != 200 {
 		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:5 viewers:200",
@@ -370,7 +371,7 @@ func TestMergeTenantResourceLimitsPreservesPlanCapsWhenOverrideIsPartial(t *test
 }
 
 func TestMergeTenantResourceLimitsAllowsOverrideOnly(t *testing.T) {
-	merged := mergeTenantResourceLimits(nil, &quartermasterpb.TenantResourceLimits{MaxViewers: 50})
+	merged := mergeTenantResourceLimits(nil, &tenantlimitspb.TenantResourceLimits{MaxViewers: 50})
 	if merged.GetMaxStreams() != 0 || merged.GetMaxViewers() != 50 {
 		t.Fatalf("merged limits = streams:%d viewers:%d, want streams:0 viewers:50",
 			merged.GetMaxStreams(), merged.GetMaxViewers())
@@ -489,7 +490,7 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 		routeCacheTTL: 5 * time.Minute,
 	}
 	server.routeCache["tenant-1"] = &clusterRoute{
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
 		resolvedAt:   time.Now(),
 	}
 
@@ -527,7 +528,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		routeCache: map[string]*clusterRoute{
 			"tenant-id": {
 				clusterID: "cluster-primary",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "cluster-primary"},
 					{ClusterId: "cluster-ingest"},
 				},
@@ -571,7 +572,7 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 		routeCache: map[string]*clusterRoute{
 			"tenant-id": {
 				clusterID: "demo-media",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "central-primary", ClusterType: "central"},
 					{ClusterId: "demo-media", ClusterType: "edge"},
 				},

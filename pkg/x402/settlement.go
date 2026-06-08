@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"github.com/google/uuid"
 )
@@ -49,8 +50,8 @@ func (e *SettlementError) Error() string {
 }
 
 type PurserClient interface {
-	VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
-	SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
+	VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 }
 
 type CommodoreClient interface {
@@ -72,7 +73,7 @@ type ResourceResolution struct {
 
 type SettlementOptions struct {
 	PaymentHeader          string
-	Payload                *purserpb.X402PaymentPayload
+	Payload                *x402pb.X402PaymentPayload
 	Resource               string
 	AuthTenantID           string
 	ClientIP               string
@@ -92,7 +93,7 @@ type SettlementResult struct {
 	PayerAddress   string
 }
 
-func IsAuthOnlyPayment(payload *purserpb.X402PaymentPayload) bool {
+func IsAuthOnlyPayment(payload *x402pb.X402PaymentPayload) bool {
 	if payload == nil || payload.Payload == nil || payload.Payload.Authorization == nil {
 		return false
 	}

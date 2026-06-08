@@ -12,6 +12,7 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -610,7 +611,7 @@ func (c *GRPCClient) GetPaymentRequirements(ctx context.Context, tenantID, resou
 
 // VerifyX402Payment verifies an x402 payment payload without settling.
 // Returns validity status, payer address, amount, and whether billing details are required.
-func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
+func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
 	return c.x402.VerifyX402Payment(ctx, &purserpb.VerifyX402PaymentRequest{
 		TenantId: tenantID,
 		Payment:  payment,
@@ -620,7 +621,7 @@ func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, pay
 
 // SettleX402Payment settles an x402 payment on-chain and credits the tenant's balance.
 // Returns transaction hash, credited amount, and new balance.
-func (c *GRPCClient) SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
+func (c *GRPCClient) SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
 	return c.x402.SettleX402Payment(ctx, &purserpb.SettleX402PaymentRequest{
 		TenantId: tenantID,
 		Payment:  payment,

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	"path/filepath"
 )
 
@@ -31,7 +31,7 @@ type DVRArtifactDispatch struct {
 	// Commodore. A cross-cluster DVR arrange must gate the recording peer
 	// against this so a revoked peer can't keep serving rolling DVR off stale
 	// registry state.
-	ClusterPeers []*quartermasterpb.TenantClusterPeer
+	ClusterPeers []*clusterpeerpb.TenantClusterPeer
 }
 
 // ResolveDVRArtifactDispatch maps a DVR artifact internal_name (the token

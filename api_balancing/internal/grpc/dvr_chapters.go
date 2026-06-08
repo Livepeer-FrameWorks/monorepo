@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	"frameworks/api_balancing/internal/control"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -25,7 +25,7 @@ const minAutomaticChapterIntervalSeconds int32 = 3600
 // chapter. The chapter must already exist (the chapter sweeper opens
 // rows at boundary rotation); cache-on-request synthesis is not
 // supported in the new finalization model.
-func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghornpb.RetrieveDVRChapterRequest) (*foghornpb.RetrieveDVRChapterResponse, error) {
+func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, error) {
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
 	}
@@ -73,7 +73,7 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 		s.logger.WithError(err).WithField("chapter_id", chapterID).Error("Failed to read chapter row")
 		return nil, status.Error(codes.Internal, "failed to read chapter")
 	}
-	resp := &foghornpb.RetrieveDVRChapterResponse{
+	resp := &foghorncontrolpb.RetrieveDVRChapterResponse{
 		ChapterId:    row.ChapterID,
 		State:        row.State,
 		IsCurrent:    row.IsCurrent,
@@ -104,7 +104,7 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 // Virtual chapters (computed from the artifact's policy) overlay
 // materialized rows so the player can address future boundaries
 // before the sweeper opens them.
-func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghornpb.ListDVRChaptersRequest) (*foghornpb.ListDVRChaptersResponse, error) {
+func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error) {
 	if req.GetDvrArtifactId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "dvr_artifact_id is required")
 	}
@@ -148,9 +148,9 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghornpb.
 		s.logger.WithError(err).Error("Failed to list chapters")
 		return nil, status.Error(codes.Internal, "failed to list chapters")
 	}
-	out := make([]*foghornpb.ChapterRef, 0, len(rows))
+	out := make([]*foghorncontrolpb.ChapterRef, 0, len(rows))
 	for _, r := range rows {
-		ref := &foghornpb.ChapterRef{
+		ref := &foghorncontrolpb.ChapterRef{
 			ChapterId:       r.ChapterID,
 			Mode:            r.Mode,
 			IntervalSeconds: r.IntervalSeconds.Int32,
@@ -178,7 +178,7 @@ func (s *FoghornGRPCServer) ListDVRChapters(ctx context.Context, req *foghornpb.
 		}
 		out = append(out, ref)
 	}
-	return &foghornpb.ListDVRChaptersResponse{
+	return &foghorncontrolpb.ListDVRChaptersResponse{
 		Chapters:      out,
 		NextPageToken: nextToken,
 	}, nil

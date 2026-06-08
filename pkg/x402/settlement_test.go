@@ -12,23 +12,24 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"github.com/google/uuid"
 )
 
 type mockPurser struct {
-	verifyFn func(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
-	settleFn func(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
+	verifyFn func(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
+	settleFn func(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
 }
 
-func (m *mockPurser) VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
+func (m *mockPurser) VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
 	if m.verifyFn == nil {
 		return nil, nil
 	}
 	return m.verifyFn(ctx, tenantID, payment, clientIP)
 }
 
-func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
+func (m *mockPurser) SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
 	if m.settleFn == nil {
 		return nil, nil
 	}
@@ -97,7 +98,7 @@ func (m *mockCommodore) ValidateStreamKey(ctx context.Context, streamKey string,
 func TestIsAuthOnlyPayment(t *testing.T) {
 	tests := []struct {
 		name    string
-		payload *purserpb.X402PaymentPayload
+		payload *x402pb.X402PaymentPayload
 		want    bool
 	}{
 		{
@@ -107,32 +108,32 @@ func TestIsAuthOnlyPayment(t *testing.T) {
 		},
 		{
 			name:    "nil inner payload",
-			payload: &purserpb.X402PaymentPayload{},
+			payload: &x402pb.X402PaymentPayload{},
 			want:    false,
 		},
 		{
 			name:    "nil authorization",
-			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{}},
+			payload: &x402pb.X402PaymentPayload{Payload: &x402pb.X402ExactPayload{}},
 			want:    false,
 		},
 		{
 			name:    "empty value",
-			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: ""}}},
+			payload: &x402pb.X402PaymentPayload{Payload: &x402pb.X402ExactPayload{Authorization: &x402pb.X402Authorization{Value: ""}}},
 			want:    false,
 		},
 		{
 			name:    "non-numeric",
-			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "abc"}}},
+			payload: &x402pb.X402PaymentPayload{Payload: &x402pb.X402ExactPayload{Authorization: &x402pb.X402Authorization{Value: "abc"}}},
 			want:    false,
 		},
 		{
 			name:    "zero value",
-			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "0"}}},
+			payload: &x402pb.X402PaymentPayload{Payload: &x402pb.X402ExactPayload{Authorization: &x402pb.X402Authorization{Value: "0"}}},
 			want:    true,
 		},
 		{
 			name:    "non-zero value",
-			payload: &purserpb.X402PaymentPayload{Payload: &purserpb.X402ExactPayload{Authorization: &purserpb.X402Authorization{Value: "10"}}},
+			payload: &x402pb.X402PaymentPayload{Payload: &x402pb.X402ExactPayload{Authorization: &x402pb.X402Authorization{Value: "10"}}},
 			want:    false,
 		},
 	}
@@ -407,13 +408,13 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("valid header parses successfully", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, p *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, p *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if p == nil {
 					return nil, errors.New("payload not parsed from header")
 				}
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
@@ -501,13 +502,13 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("viewer fully resolved succeeds", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "viewer-tenant" {
 					t.Errorf("expected tenant viewer-tenant, got %s", tenantID)
 				}
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
@@ -602,13 +603,13 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("unresolved creator allowed with provided resolution", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					t.Errorf("expected tenant tenant-1, got %s", tenantID)
 				}
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
@@ -631,7 +632,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification error", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return nil, errors.New("bad verify")
 			},
 		}
@@ -647,7 +648,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification invalid response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: false, Error: "custom verify error"}, nil
 			},
 		}
@@ -666,7 +667,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verification nil response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return nil, nil
 			},
 		}
@@ -682,7 +683,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("billing details required", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, RequiresBillingDetails: true}, nil
 			},
 		}
@@ -698,7 +699,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("verify auth-only", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, IsAuthOnly: true}, nil
 			},
 		}
@@ -714,10 +715,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle error", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return nil, errors.New("bad settle")
 			},
 		}
@@ -733,10 +734,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle invalid response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: false, Error: "custom settle error"}, nil
 			},
 		}
@@ -755,10 +756,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle nil response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return nil, nil
 			},
 		}
@@ -774,10 +775,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("settle auth-only", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true, IsAuthOnly: true}, nil
 			},
 		}
@@ -798,10 +799,10 @@ func TestSettleX402Payment(t *testing.T) {
 			},
 		}
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 			},
 		}
@@ -823,10 +824,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address from verify response", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify-addr"}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
@@ -845,10 +846,10 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address from payload when responses empty", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
@@ -867,16 +868,16 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("payer address empty when payload missing auth", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
 			},
-			settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				return &purserpb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
 			},
 		}
 		result, err := SettleX402Payment(ctx, SettlementOptions{
 			Purser:       purser,
-			Payload:      &purserpb.X402PaymentPayload{X402Version: 1, Scheme: "exact", Network: "base"},
+			Payload:      &x402pb.X402PaymentPayload{X402Version: 1, Scheme: "exact", Network: "base"},
 			AuthTenantID: "tenant-1",
 		})
 		if err != nil {
@@ -889,7 +890,7 @@ func TestSettleX402Payment(t *testing.T) {
 
 	t.Run("happy path", func(t *testing.T) {
 		purser := &mockPurser{
-			verifyFn: func(_ context.Context, tenantID string, payment *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+			verifyFn: func(_ context.Context, tenantID string, payment *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					return nil, errors.New("unexpected tenant")
 				}
@@ -898,7 +899,7 @@ func TestSettleX402Payment(t *testing.T) {
 				}
 				return &purserpb.VerifyX402PaymentResponse{Valid: true, PayerAddress: "0xverify"}, nil
 			},
-			settleFn: func(_ context.Context, tenantID string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+			settleFn: func(_ context.Context, tenantID string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 				if tenantID != "tenant-1" {
 					return nil, errors.New("unexpected tenant")
 				}
@@ -974,14 +975,14 @@ func TestSettleX402Payment(t *testing.T) {
 	})
 }
 
-func paymentPayload(value string) *purserpb.X402PaymentPayload {
-	return &purserpb.X402PaymentPayload{
+func paymentPayload(value string) *x402pb.X402PaymentPayload {
+	return &x402pb.X402PaymentPayload{
 		X402Version: 1,
 		Scheme:      "exact",
 		Network:     "base",
-		Payload: &purserpb.X402ExactPayload{
+		Payload: &x402pb.X402ExactPayload{
 			Signature: "0xsignature",
-			Authorization: &purserpb.X402Authorization{
+			Authorization: &x402pb.X402Authorization{
 				From:        "0xfrom",
 				To:          "0xto",
 				Value:       value,
@@ -1033,11 +1034,11 @@ func assertCtxTimeout(t *testing.T, ctx context.Context, expected time.Duration)
 
 func TestSettleX402Payment_VerifyTimeout(t *testing.T) {
 	purser := &mockPurser{
-		verifyFn: func(ctx context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+		verifyFn: func(ctx context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 			assertCtxTimeout(t, ctx, 10*time.Second)
 			return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 		},
-		settleFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+		settleFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 			return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 		},
 	}
@@ -1053,10 +1054,10 @@ func TestSettleX402Payment_VerifyTimeout(t *testing.T) {
 
 func TestSettleX402Payment_SettleTimeout(t *testing.T) {
 	purser := &mockPurser{
-		verifyFn: func(_ context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+		verifyFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
 			return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
 		},
-		settleFn: func(ctx context.Context, _ string, _ *purserpb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+		settleFn: func(ctx context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
 			assertCtxTimeout(t, ctx, 30*time.Second)
 			return &purserpb.SettleX402PaymentResponse{Success: true}, nil
 		},

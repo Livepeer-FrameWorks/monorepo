@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package x402;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402;x402pb";
+
+// The x402 client payment payload (X-PAYMENT header), shared by the Gateway
+// (parses the header), Commodore (wallet-login proxy), and Purser
+// (verify/settle). Matches the x402 protocol spec: https://github.com/coinbase/x402
+
+// X-PAYMENT header payload from client
+message X402PaymentPayload {
+  int32 x402_version = 1;
+  string scheme = 2;                    // "exact"
+  string network = 3;                   // "base" or "base-sepolia"
+  X402ExactPayload payload = 4;
+}
+
+message X402ExactPayload {
+  string signature = 5;                 // EIP-712 signature (hex)
+  X402Authorization authorization = 6;
+}
+
+message X402Authorization {
+  string from = 1;                      // Payer address
+  string to = 2;                        // PayTo address (must match ours)
+  string value = 3;                     // Amount in USDC smallest units (6 decimals)
+  string valid_after = 4;               // Unix timestamp (uint256 as string)
+  string valid_before = 5;              // Unix timestamp (uint256 as string)
+  string nonce = 6;                     // Unique nonce (uint256 as hex)
+}

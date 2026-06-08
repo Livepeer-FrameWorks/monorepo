@@ -43,7 +43,7 @@
     {
       "name": "decklog",
       "context": "api_firehose",
-      "cmd": "cmd/decklog/main.go",
+      "cmd": "./cmd/decklog",
       "dockerfile": "api_firehose/Dockerfile",
       "cgo": false,
       "darwin_binary": true

@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"strings"
 	"sync"
+
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 // adoptRemoteArtifactRow upserts the local foghorn.artifacts pointer for a
@@ -117,7 +118,7 @@ type CrossClusterArtifactURL struct {
 // Returns the federation result (format, stream name) for building the relay
 // URL. originClusterID/tenantID/peers come from Commodore's by-internal-name
 // resolve at STREAM_SOURCE time.
-func ResolveAndAdoptRemoteArtifact(ctx context.Context, artifactHash, contentType, internalName, originClusterID, tenantID string, peers []*quartermasterpb.TenantClusterPeer) (*CrossClusterArtifactURL, error) {
+func ResolveAndAdoptRemoteArtifact(ctx context.Context, artifactHash, contentType, internalName, originClusterID, tenantID string, peers []*clusterpeerpb.TenantClusterPeer) (*CrossClusterArtifactURL, error) {
 	if originClusterID == "" || originClusterID == GetLocalClusterID() || isServedCluster(originClusterID) {
 		// Local or also-served by this Foghorn: bytes are servable locally, so
 		// this is not a cross-cluster federate — fail with the sentinel and let

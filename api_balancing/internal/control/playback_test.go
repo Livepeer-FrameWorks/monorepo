@@ -10,9 +10,10 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"frameworks/api_balancing/internal/balancer"
+
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 )
@@ -577,7 +578,7 @@ func TestRemoteArtifactFiltering_ExcludesUnauthorizedPeers(t *testing.T) {
 		{PeerCluster: "authorized-1", BaseURL: "https://a.example.com", GeoLat: 0, GeoLon: 0},
 		{PeerCluster: "unauthorized", BaseURL: "https://b.example.com", GeoLat: 0, GeoLon: 0},
 	}
-	allowedClusters := []*quartermasterpb.TenantClusterPeer{{ClusterId: "authorized-1"}}
+	allowedClusters := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "authorized-1"}}
 
 	var authorizedHits []*RemoteArtifactInfo
 	for _, h := range remoteHits {
@@ -599,7 +600,7 @@ func TestRemoteArtifactFiltering_AllUnauthorizedYieldsNoHits(t *testing.T) {
 		{PeerCluster: "unauthorized-1", BaseURL: "https://a.example.com"},
 		{PeerCluster: "unauthorized-2", BaseURL: "https://b.example.com"},
 	}
-	allowedClusters := []*quartermasterpb.TenantClusterPeer{{ClusterId: "some-other-cluster"}}
+	allowedClusters := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "some-other-cluster"}}
 
 	var authorizedHits []*RemoteArtifactInfo
 	for _, h := range remoteHits {
@@ -630,7 +631,7 @@ func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-other", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}}, nil)
+	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-other", "clip", "tenant-1", []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}}, nil)
 	if err == nil {
 		t.Fatal("expected unauthorized origin cluster error")
 	}
@@ -673,7 +674,7 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 		LocalClusterID: "cluster-local",
 	}
 
-	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
 	if err == nil {
 		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
@@ -721,7 +722,7 @@ func TestResolveRemoteArtifact_PeerRelayAdoptsPendingNotSynced(t *testing.T) {
 	// artifactResp nil makes the post-adoption recursion return immediately
 	// (content not found) instead of needing a full re-query mock — we're
 	// asserting the adoption shape, and that it does NOT loop.
-	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", "clip", "tenant-1", []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
 	if err == nil {
 		t.Fatal("expected error from recursed resolution after adoption (artifactResp nil)")
 	}
@@ -787,7 +788,7 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 
 	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1",
 		"artifact-1", "cluster-origin", "clip", "tenant-1",
-		[]*quartermasterpb.TenantClusterPeer{
+		[]*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-origin"},
 			{ClusterId: "cluster-storage"},
 		}, nil)
@@ -937,7 +938,7 @@ func TestResolveAndAdoptRemoteArtifact_RejectsUnauthorizedOrigin(t *testing.T) {
 		context.Background(),
 		"artifact-1", "clip", "internal-1",
 		"cluster-evil", "tenant-1",
-		[]*quartermasterpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}},
+		[]*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-allowed"}},
 	)
 	if err == nil || !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("expected not-authorized error for origin outside allowlist, got %v", err)

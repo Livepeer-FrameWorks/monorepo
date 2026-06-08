@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -54,7 +55,7 @@ func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr stri
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().QueryStream(ctx, req)
+	return foghornfed.For(client).Federation().QueryStream(ctx, req)
 }
 
 // NotifyOriginPull tells the origin cluster that we intend to pull a stream.
@@ -67,7 +68,7 @@ func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().NotifyOriginPull(ctx, req)
+	return foghornfed.For(client).Federation().NotifyOriginPull(ctx, req)
 }
 
 // PrepareArtifact requests a cross-cluster artifact be made available.
@@ -80,7 +81,7 @@ func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr 
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().PrepareArtifact(ctx, req)
+	return foghornfed.For(client).Federation().PrepareArtifact(ctx, req)
 }
 
 // MintStorageURLs asks the storage-cluster Foghorn pool to issue presigned
@@ -95,7 +96,7 @@ func (c *FederationClient) MintStorageURLs(ctx context.Context, clusterID, addr 
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().MintStorageURLs(ctx, req)
+	return foghornfed.For(client).Federation().MintStorageURLs(ctx, req)
 }
 
 // DeleteStorageObjects asks the storage-cluster Foghorn pool to delete an
@@ -112,7 +113,7 @@ func (c *FederationClient) DeleteStorageObjects(ctx context.Context, clusterID, 
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().DeleteStorageObjects(ctx, req)
+	return foghornfed.For(client).Federation().DeleteStorageObjects(ctx, req)
 }
 
 // CreateRemoteClip requests the origin cluster to create a clip on behalf of this cluster.
@@ -125,7 +126,7 @@ func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().CreateRemoteClip(ctx, req)
+	return foghornfed.For(client).Federation().CreateRemoteClip(ctx, req)
 }
 
 // CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of this cluster.
@@ -138,7 +139,7 @@ func (c *FederationClient) CreateRemoteDVR(ctx context.Context, clusterID, addr 
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return client.Federation().CreateRemoteDVR(ctx, req)
+	return foghornfed.For(client).Federation().CreateRemoteDVR(ctx, req)
 }
 
 // ListTenantArtifacts asks a peer cluster for all artifact metadata belonging to a tenant.
@@ -151,7 +152,7 @@ func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, a
 	ctx, cancel := context.WithTimeout(federationContext(ctx), 30*time.Second) // longer timeout for bulk listing
 	defer cancel()
 
-	return client.Federation().ListTenantArtifacts(ctx, req)
+	return foghornfed.For(client).Federation().ListTenantArtifacts(ctx, req)
 }
 
 // ForwardArtifactCommand forwards an artifact lifecycle command to a peer cluster.
@@ -163,13 +164,13 @@ func (c *FederationClient) ForwardArtifactCommand(ctx context.Context, clusterID
 
 	fedCtx := federationContext(ctx)
 	if _, hasDeadline := fedCtx.Deadline(); hasDeadline {
-		return client.Federation().ForwardArtifactCommand(fedCtx, req)
+		return foghornfed.For(client).Federation().ForwardArtifactCommand(fedCtx, req)
 	}
 
 	ctx, cancel := context.WithTimeout(fedCtx, c.timeout)
 	defer cancel()
 
-	return client.Federation().ForwardArtifactCommand(ctx, req)
+	return foghornfed.For(client).Federation().ForwardArtifactCommand(ctx, req)
 }
 
 // OpenPeerChannel opens a bidirectional PeerChannel stream to a peer cluster.
@@ -180,5 +181,5 @@ func (c *FederationClient) OpenPeerChannel(ctx context.Context, clusterID, addr 
 		return nil, err
 	}
 
-	return client.Federation().PeerChannel(federationContext(ctx))
+	return foghornfed.For(client).Federation().PeerChannel(federationContext(ctx))
 }

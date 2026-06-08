@@ -8,7 +8,8 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
-import "ipc.proto";
+import "cluster_peer.proto";
+import "tenant_limits.proto";
 
 // ============================================================================
 // QUARTERMASTER CONTROL PLANE - TENANT & INFRASTRUCTURE MANAGEMENT
@@ -515,7 +516,7 @@ message ClusterRoutingResponse {
 
   // Full tenant cluster context: all clusters this tenant has access to.
   // Foghorn uses this for demand-driven peer discovery and remote edge scoring.
-  repeated TenantClusterPeer cluster_peers = 19;
+  repeated cluster_peer.TenantClusterPeer cluster_peers = 19;
 
   // Access-specific runtime cap override for this cluster, sourced from
   // tenant_cluster_access.resource_limits. Purser tier entitlements are the
@@ -523,7 +524,7 @@ message ClusterRoutingResponse {
   // override when one exists. Foghorn enforces caps at trigger time
   // (PUSH_REWRITE for max_streams, USER_NEW for max_viewers). nil or zero-valued
   // fields = unlimited.
-  optional TenantResourceLimits tenant_resource_limits = 20;
+  optional tenant_limits.TenantResourceLimits tenant_resource_limits = 20;
 }
 
 // ============================================================================
@@ -748,7 +749,7 @@ message SubscribeToClusterRequest {
 message BootstrapClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
-  optional TenantResourceLimits resource_limits = 3;
+  optional tenant_limits.TenantResourceLimits resource_limits = 3;
 }
 
 message DeactivateClusterAccessRequest {
@@ -770,15 +771,6 @@ message TenantClusterAccessRow {
 
 message ListTenantClusterAccessResponse {
   repeated TenantClusterAccessRow rows = 1;
-}
-
-// TenantResourceLimits is the per-tenant runtime cap used by Foghorn admission.
-// Purser resolves plan-level caps from billing tier entitlements; Quartermaster
-// may also surface access-specific overrides from tenant_cluster_access.
-// 0 in a field means "unlimited" for that dimension.
-message TenantResourceLimits {
-  int32 max_streams = 1;          // concurrent live streams cap
-  int32 max_viewers = 2;          // concurrent viewers cap (sum across streams)
 }
 
 message UnsubscribeFromClusterRequest {
@@ -1544,21 +1536,24 @@ service ServiceRegistryService {
   // quartermaster.service_event_outbox. Used by stateless producers
   // (Deckhand) that don't own a local outbox; the row carries the
   // originating service in event.source so the dispatcher can attribute
-  // correctly. The drain worker dispatches with exponential backoff —
+  // correctly. The drain worker dispatches with exponential backoff;
   // durability across a Decklog outage matches QM's own service events.
   rpc EnqueueServiceEvent(EnqueueServiceEventRequest) returns (EnqueueServiceEventResponse);
 }
 
 message EnqueueServiceEventRequest {
-  // The fully populated service event. event.source must identify the
-  // originating service (e.g. "deckhand"); event.tenant_id is required and
-  // must be a UUID string.
-  helmsmancontrol.ServiceEvent event = 1;
+  // A binary-marshaled helmsmancontrol.ServiceEvent. Carried as bytes (not the
+  // typed message) so this proto does not import ipc.proto. On the binary wire
+  // a length-delimited message and a bytes field are identical, so this is
+  // interchangeable with the typed field over gRPC (binary only; not ProtoJSON).
+  // event.source must identify the originating service (e.g. "deckhand");
+  // event.tenant_id is required and must be a UUID string.
+  bytes event = 1;
 }
 
 message EnqueueServiceEventResponse {
-  // Outbox row id (uuid) returned for observability. Empty on no-op
-  // (nil event or empty tenant_id).
+  // Outbox row id (uuid) returned for observability. An empty/undecodable
+  // event or empty tenant_id is rejected with InvalidArgument, not a no-op.
   string outbox_id = 1;
 }
 
@@ -1912,34 +1907,6 @@ message ListPeersResponse {
   repeated PeerCluster peers = 1;
 }
 
-// Lightweight cluster metadata for tenant-scoped cluster context.
-// Foghorn derives federation address from base_url + cluster_slug convention.
-message TenantClusterPeer {
-  string cluster_id = 1;
-  string cluster_slug = 2;      // DNS-safe label
-  string base_url = 3;          // e.g., "frameworks.cloud"
-  string cluster_name = 4;      // Human label for UX
-  string role = 5;              // "preferred", "official", "subscribed"
-  string cluster_type = 6;      // "shared-community", "shared-lb", "dedicated", "self-hosted"
-  string foghorn_grpc_addr = 7; // Resolved Foghorn gRPC address (host:port) from service_instances
-  string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
-  string s3_endpoint = 21;      // S3 endpoint URL
-  string s3_region = 22;        // S3 region
-
-  // Multi-region routing fields surfaced for Commodore route filtering.
-  // region_id (e.g. "eu-west", "us-east", "ap-tokyo").
-  string region_id = 30;
-  // cell_id (failure-isolation cell; defaults to cluster_id today).
-  string cell_id = 31;
-  // cluster_class: platform_official | tenant_private | third_party_marketplace.
-  // Commodore's plan-aware filter rejects clusters whose class is not allowed
-  // by the tenant's plan tier (free→official only; premium→+marketplace;
-  // enterprise→+private).
-  string cluster_class = 32;
-  // health_status: healthy | degraded | offline. Resolver excludes
-  // non-healthy peers from the candidate set.
-  string health_status = 36;
-}
 
 // ============================================================================
 // SERVICE-CLUSTER ASSIGNMENT MESSAGES

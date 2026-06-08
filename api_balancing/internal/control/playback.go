@@ -16,11 +16,12 @@ import (
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
@@ -35,9 +36,9 @@ type ContentResolution struct {
 	FixedNodeID  string // Storage node ID for VOD content
 	TenantId     string
 	StreamId     string
-	InternalName string                               // Original stream internal name (for clips/DVR: the source stream)
-	IngestMode   string                               // "push" or "pull" for live streams
-	ClusterPeers []*quartermasterpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
+	InternalName string                             // Original stream internal name (for clips/DVR: the source stream)
+	IngestMode   string                             // "push" or "pull" for live streams
+	ClusterPeers []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
 	RequiresAuth bool
 }
 
@@ -1609,7 +1610,7 @@ func DeriveMistHTTPBase(base string) string {
 	return u.Scheme + "://" + hostname + ":" + port
 }
 
-func isAuthorizedPeerCluster(clusterID string, peers []*quartermasterpb.TenantClusterPeer) bool {
+func isAuthorizedPeerCluster(clusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool {
 	if clusterID == "" {
 		return false
 	}
@@ -1634,7 +1635,7 @@ func isAuthorizedPeerCluster(clusterID string, peers []*quartermasterpb.TenantCl
 // STREAM_SOURCE) gate on this before returning any viewer/relay URL, so a
 // peer-allowlist change takes effect on the next resolve — no reconciliation
 // and no per-block policy lookups.
-func AuthoritativeClusterServable(authoritativeCluster string, peers []*quartermasterpb.TenantClusterPeer) bool {
+func AuthoritativeClusterServable(authoritativeCluster string, peers []*clusterpeerpb.TenantClusterPeer) bool {
 	auth := strings.TrimSpace(authoritativeCluster)
 	if auth == "" || auth == GetLocalClusterID() || isServedCluster(auth) {
 		return true
@@ -1672,7 +1673,7 @@ func PlaybackEdgeRedirectURL(baseURL, playbackID string) string {
 // (synced) or the origin node's Helmsman directly via an opaque
 // peer-relay grant the origin Foghorn authorizes online
 // (hot-but-unsynced). No local copy is created.
-func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*quartermasterpb.TenantClusterPeer, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
 	if strings.EqualFold(contentType, "dvr") {
 		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
 	}

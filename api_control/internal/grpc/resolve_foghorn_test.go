@@ -8,7 +8,7 @@ import (
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -204,7 +204,7 @@ func TestResolveFoghornForTenant_EmptyAddr_EvictsAndRetries(t *testing.T) {
 
 func TestNormalizeClusterRoute_FallbacksForLegacyQuartermaster(t *testing.T) {
 	route := &clusterRoute{
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer", FoghornGrpcAddr: "foghorn-peer:50051"},
 		},
 	}
@@ -269,7 +269,7 @@ func TestResolveFoghornForContent_RoutesActiveClusterOnPoolMiss(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "demo-media",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "peer-media", FoghornGrpcAddr: "foghorn-peer:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -402,7 +402,7 @@ func TestResolveAddrFromRoute_PeerCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "foghorn-primary:50051",
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 			{ClusterId: "cluster-peer-2", FoghornGrpcAddr: "foghorn-peer2:50051"},
 		},
@@ -417,7 +417,7 @@ func TestResolveAddrFromRoute_PrimaryWithoutAddrFallsBackToPeers(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "",
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-primary", FoghornGrpcAddr: "foghorn-primary-from-peer:50051"},
 		},
 	}
@@ -431,7 +431,7 @@ func TestResolveAddrFromRoute_UnknownCluster(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: "foghorn-primary:50051",
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 		},
 	}
@@ -450,7 +450,7 @@ func TestResolveFoghornForCluster_CacheHit(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -481,7 +481,7 @@ func TestResolveFoghornForCluster_EvictsOnMiss(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "cluster-peer-1", FoghornGrpcAddr: "foghorn-peer1:50051"},
 				},
 				resolvedAt: time.Now(),
@@ -542,7 +542,7 @@ func TestResolveFoghornForArtifact_RoutesToOriginCluster(t *testing.T) {
 			"tenant-1": {
 				clusterID:   "cluster-primary",
 				foghornAddr: "foghorn-primary:50051",
-				clusterPeers: []*quartermasterpb.TenantClusterPeer{
+				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 					{ClusterId: "cluster-origin", FoghornGrpcAddr: "foghorn-origin:50051"},
 				},
 				resolvedAt: time.Now(),

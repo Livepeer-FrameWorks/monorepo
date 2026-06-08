@@ -15,7 +15,9 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -202,7 +204,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "local-cluster", cache, false)
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
 		{
 			ClusterId:       "remote-cluster",
 			ClusterSlug:     "remote",
@@ -229,7 +231,7 @@ func TestNotifyPeers_NonLeaderRegistersAddressOnly(t *testing.T) {
 func TestNotifyPeers_SkipsSelfAndDuplicate(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	peers := []*quartermasterpb.TenantClusterPeer{
+	peers := []*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "local-cluster", ClusterSlug: "local", BaseUrl: "example.com"},
 		{ClusterId: "", ClusterSlug: "empty", BaseUrl: "example.com"},
 		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.11:18019", Role: "preferred"},
@@ -256,7 +258,7 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 	pm := newTestPeerManager(t, "central-primary-test", nil, false)
 	control.AddServedCluster("demo-media-test")
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "demo-media-test", ClusterSlug: "demo", BaseUrl: "example.com"},
 		{ClusterId: "remote-media-test", ClusterSlug: "remote", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.12:18019"},
 	}, "tenant-a")
@@ -272,7 +274,7 @@ func TestNotifyPeers_SkipsServedVirtualCluster(t *testing.T) {
 func TestNotifyPeers_SkipsPeerWithoutInternalFoghornAddress(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "remote-cluster", ClusterSlug: "remote", BaseUrl: "example.com"},
 	}, "tenant-a")
 
@@ -289,7 +291,7 @@ func TestNotifyPeers_LeaderSyncsToRedis(t *testing.T) {
 	// (we have no real FoghornPool in tests)
 	close(pm.done)
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "remote-1", ClusterSlug: "r1", BaseUrl: "example.com", FoghornGrpcAddr: "10.88.1.13:18019", Role: "official"},
 	}, "tenant-a")
 
@@ -578,7 +580,7 @@ func (s *capturePeerChannelStream) RecvMsg(any) error            { return io.EOF
 func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 	pm := newTestPeerManager(t, "local-cluster", nil, false)
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
 		ClusterId:       "remote-cluster",
 		ClusterSlug:     "remote-old",
 		BaseUrl:         "example.com",
@@ -586,7 +588,7 @@ func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
 		Role:            "subscribed",
 	}}, "tenant-a")
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
 		ClusterId:       "remote-cluster",
 		ClusterSlug:     "remote-new",
 		BaseUrl:         "example.net",
@@ -621,7 +623,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	// Close done so connectPeer goroutines exit immediately
 	close(pm.done)
 
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
 		ClusterId:       "remote-1",
 		ClusterSlug:     "r1",
 		BaseUrl:         "old.example.com",
@@ -630,7 +632,7 @@ func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
 	}}, "tenant-a")
 
 	// Update address for the same peer
-	pm.NotifyPeers([]*quartermasterpb.TenantClusterPeer{{
+	pm.NotifyPeers([]*clusterpeerpb.TenantClusterPeer{{
 		ClusterId:       "remote-1",
 		ClusterSlug:     "r1",
 		BaseUrl:         "new.example.com",

@@ -21,6 +21,7 @@ import (
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/triggers"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -31,6 +32,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -1173,7 +1175,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 
 	// Try cached stream context first (populated from PUSH_REWRITE validation)
 	var tenantID, originClusterID string
-	var clusterPeers []*quartermasterpb.TenantClusterPeer
+	var clusterPeers []*clusterpeerpb.TenantClusterPeer
 	if triggerProcessor != nil {
 		tenantID, originClusterID = triggerProcessor.GetStreamOrigin(internalName)
 	}
@@ -2249,7 +2251,7 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*quartermasterpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2327,7 +2329,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 	return response, nil
 }
 
-func collectRemoteEdges(ctx context.Context, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func collectRemoteEdges(ctx context.Context, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
 		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
@@ -2600,7 +2602,7 @@ func buildLocalEndpointFromReplication(destNodeID, viewKey string) *sharedpb.Vie
 
 // queryStreamFanOut performs cold-start QueryStream fan-out to peer clusters when
 // no EdgeSummary data is cached. Returns RemoteEdgeCandidates for scoring.
-func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	if federationClient == nil || peerManager == nil {
 		return nil
 	}

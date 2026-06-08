@@ -2,11 +2,12 @@ package grpc
 
 import (
 	"database/sql"
-	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"testing"
 	"time"
+
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 func TestValidateBehavior_AllValid(t *testing.T) {
@@ -269,7 +270,7 @@ func TestSelectActiveIngestCluster_NullUpdatedAt(t *testing.T) {
 }
 
 func TestClusterInPeers_Found(t *testing.T) {
-	peers := []*quartermasterpb.TenantClusterPeer{
+	peers := []*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "c1"},
 		{ClusterId: "c2"},
 		{ClusterId: "c3"},
@@ -280,7 +281,7 @@ func TestClusterInPeers_Found(t *testing.T) {
 }
 
 func TestClusterInPeers_NotFound(t *testing.T) {
-	peers := []*quartermasterpb.TenantClusterPeer{
+	peers := []*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "c1"},
 	}
 	if clusterInPeers(peers, "c99") {
@@ -310,7 +311,7 @@ func TestBuildClusterFanoutTargets_Dedup(t *testing.T) {
 		foghornAddrsByCluster: map[string][]string{
 			"c1": []string{"addr1", "addr1b"},
 		},
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "c1", FoghornGrpcAddr: "addr1"},
 			{ClusterId: "c2", FoghornGrpcAddr: "addr2"},
 		},
@@ -328,7 +329,7 @@ func TestFoghornCandidatesFromRoute_DedupesAllSources(t *testing.T) {
 		foghornAddrsByCluster: map[string][]string{
 			"c1": []string{"addr1", "addr2"},
 		},
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "c1", FoghornGrpcAddr: "addr2"},
 			{ClusterId: "c1", FoghornGrpcAddr: "addr3"},
 		},
@@ -369,7 +370,7 @@ func TestBuildClusterFanoutTargets_SkipsEmptyAddr(t *testing.T) {
 	route := &clusterRoute{
 		clusterID:   "c1",
 		foghornAddr: "",
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "c2", FoghornGrpcAddr: "addr2"},
 		},
 	}
@@ -396,7 +397,7 @@ func TestBuildClusterFanoutTargets_DistinctOfficial(t *testing.T) {
 }
 
 func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testing.T) {
-	peers := []*quartermasterpb.TenantClusterPeer{
+	peers := []*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb"},
 		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted"},
 		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated"},
@@ -411,7 +412,7 @@ func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testi
 }
 
 func TestFilterPeersByPolicy_DropsUnhealthySelfHostedPeer(t *testing.T) {
-	peers := []*quartermasterpb.TenantClusterPeer{
+	peers := []*clusterpeerpb.TenantClusterPeer{
 		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "offline"},
 	}
 	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})

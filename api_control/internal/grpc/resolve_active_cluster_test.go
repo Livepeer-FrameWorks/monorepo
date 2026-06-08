@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 )
 
@@ -18,7 +18,7 @@ func preCachedRoute(s *CommodoreServer, tenantID, routeClusterID string) {
 	s.routeCacheTTL = time.Hour
 	s.routeCache[tenantID] = &clusterRoute{
 		clusterID: routeClusterID,
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: routeClusterID, RegionId: "eu-west"},
 		},
 		resolvedAt: time.Now(),

@@ -19,6 +19,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 )
 
 // quartermasterAPI is the subset of the Quartermaster gRPC client that the
@@ -30,7 +31,7 @@ type quartermasterAPI interface {
 	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
 	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
 	UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
-	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *quartermasterpb.TenantResourceLimits) error
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
 	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
 }
 

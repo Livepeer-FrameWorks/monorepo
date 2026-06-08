@@ -10,7 +10,7 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
@@ -38,7 +38,7 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 		reason = callerIdentity(ctx)
 	}
 
-	resp, err := r.Clients.Commodore.SetNodeMode(ctx, &foghornpb.SetNodeModeRequest{
+	resp, err := r.Clients.Commodore.SetNodeMode(ctx, &foghorncontrolpb.SetNodeModeRequest{
 		NodeId: nodeID,
 		Mode:   wire,
 		SetBy:  reason,
@@ -55,9 +55,9 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	}
 
 	switch resp.GetStatus() {
-	case foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_NOT_FOUND:
+	case foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_NOT_FOUND:
 		return &model.NotFoundError{Message: resp.GetMessage()}, nil
-	case foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_INVALID_MODE:
+	case foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_INVALID_MODE:
 		return &model.ValidationError{Message: resp.GetMessage(), Field: strPtr("mode")}, nil
 	}
 
@@ -120,7 +120,7 @@ func nodeSkipsOperationalMode(obj *quartermasterpb.InfrastructureNode) bool {
 // nodeHealthFor returns the GetNodeHealth response for a node, memoised on
 // the request's context so concurrent field resolvers within a single
 // query share one RPC.
-func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghornpb.GetNodeHealthResponse, error) {
+func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghorncontrolpb.GetNodeHealthResponse, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("node id is required")
 	}
@@ -136,7 +136,7 @@ func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghornpb
 	if len(cache.entries) >= maxNodeHealthCacheEntries {
 		return nil, fmt.Errorf("node health cache limit exceeded")
 	}
-	resp, err := r.Clients.Commodore.GetNodeHealth(ctx, &foghornpb.GetNodeHealthRequest{NodeId: nodeID})
+	resp, err := r.Clients.Commodore.GetNodeHealth(ctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: nodeID})
 	cache.entries[nodeID] = nodeHealthEntry{resp: resp, err: err}
 	return resp, err
 }
@@ -144,7 +144,7 @@ func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghornpb
 // ---- per-request memoisation ----
 
 type nodeHealthEntry struct {
-	resp *foghornpb.GetNodeHealthResponse
+	resp *foghorncontrolpb.GetNodeHealthResponse
 	err  error
 }
 

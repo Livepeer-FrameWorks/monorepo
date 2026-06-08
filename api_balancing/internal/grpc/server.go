@@ -26,6 +26,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -38,9 +39,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -75,7 +78,7 @@ type CacheInvalidator interface {
 	InvalidateTenantCache(tenantID string) int
 	InvalidatePlaybackAuthCache(tenantID string, internalNames []string) int
 	GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus
-	GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer
+	GetClusterPeers(internalName, tenantID string) []*clusterpeerpb.TenantClusterPeer
 }
 
 type federationRPC interface {
@@ -2129,7 +2132,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 	return nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*quartermasterpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:             s.db,
@@ -2204,7 +2207,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 
 // collectRemoteEdges queries the federation cache for each peer cluster's edge summary
 // and converts the results to RemoteEdgeCandidates for the load balancer.
-func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	var candidates []balancer.RemoteEdgeCandidate
 	for _, peer := range peers {
 		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
@@ -2489,7 +2492,7 @@ func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, view
 }
 
 // queryStreamFanOut performs cold-start QueryStream to peer clusters when EdgeSummary is empty.
-func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*quartermasterpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
 	if s.federationClient == nil || s.peerManager == nil {
 		return nil
 	}
@@ -4103,7 +4106,7 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 
 // TerminateTenantStreams stops all active streams for a suspended tenant
 // Called by Purser when a tenant's prepaid balance drops below -$10
-func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *foghornpb.TerminateTenantStreamsRequest) (*foghornpb.TerminateTenantStreamsResponse, error) {
+func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
@@ -4117,7 +4120,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *fog
 	streams := s.lb.GetStreamsByTenant(req.TenantId)
 	if len(streams) == 0 {
 		s.logger.WithField("tenant_id", req.TenantId).Debug("No active streams to terminate")
-		return &foghornpb.TerminateTenantStreamsResponse{
+		return &foghorncontrolpb.TerminateTenantStreamsResponse{
 			StreamsTerminated:  0,
 			SessionsTerminated: 0,
 			StreamNames:        []string{},
@@ -4163,7 +4166,7 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *fog
 		"stream_names":        allStreamNames,
 	}).Info("Tenant stream termination completed")
 
-	return &foghornpb.TerminateTenantStreamsResponse{
+	return &foghorncontrolpb.TerminateTenantStreamsResponse{
 		StreamsTerminated:  int32(len(allStreamNames)),
 		SessionsTerminated: sessionsTerminated,
 		StreamNames:        allStreamNames,
@@ -4382,14 +4385,14 @@ func artifactSessionName(internalName string) string {
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *foghornpb.InvalidateTenantCacheRequest) (*foghornpb.InvalidateTenantCacheResponse, error) {
+func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
 	if s.cacheInvalidator == nil {
 		s.logger.WithField("tenant_id", req.TenantId).Warn("Cache invalidator not configured, skipping cache invalidation")
-		return &foghornpb.InvalidateTenantCacheResponse{
+		return &foghorncontrolpb.InvalidateTenantCacheResponse{
 			EntriesInvalidated: 0,
 		}, nil
 	}
@@ -4402,13 +4405,13 @@ func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *fogh
 		"entries_invalidated": entriesInvalidated,
 	}).Info("Invalidated tenant cache entries")
 
-	return &foghornpb.InvalidateTenantCacheResponse{
+	return &foghorncontrolpb.InvalidateTenantCacheResponse{
 		EntriesInvalidated: int32(entriesInvalidated),
 	}, nil
 }
 
 // SetNodeOperationalMode changes a node's operational mode with tenant ownership validation.
-func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *foghornpb.SetNodeModeRequest) (*foghornpb.SetNodeModeResponse, error) {
+func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
@@ -4436,16 +4439,16 @@ func (s *FoghornGRPCServer) SetNodeOperationalMode(ctx context.Context, req *fog
 		}).Warn("Failed to push operational mode to node (may not be connected)")
 	}
 
-	return &foghornpb.SetNodeModeResponse{
+	return &foghorncontrolpb.SetNodeModeResponse{
 		NodeId:  nodeID,
 		Mode:    string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
 		Message: fmt.Sprintf("Node %s set to %s", nodeID, mode),
-		Status:  foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS,
+		Status:  foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS,
 	}, nil
 }
 
 // GetNodeHealth returns real-time health and routing state for a node.
-func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghornpb.GetNodeHealthRequest) (*foghornpb.GetNodeHealthResponse, error) {
+func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error) {
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id is required")
@@ -4464,7 +4467,7 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghornpb.Ge
 		lastHB = ns.LastHeartbeat.UTC().Format(time.RFC3339)
 	}
 
-	resp := &foghornpb.GetNodeHealthResponse{
+	resp := &foghorncontrolpb.GetNodeHealthResponse{
 		NodeId:            nodeID,
 		OperationalMode:   string(state.DefaultManager().GetNodeOperationalMode(nodeID)),
 		IsHealthy:         ns.IsHealthy && !ns.IsStale,
@@ -4493,7 +4496,7 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghornpb.Ge
 	return resp, nil
 }
 
-func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeID string) []*foghornpb.NodeComponentVersion {
+func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeID string) []*foghorncontrolpb.NodeComponentVersion {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -4507,9 +4510,9 @@ func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeI
 		return nil
 	}
 	defer rows.Close()
-	var out []*foghornpb.NodeComponentVersion
+	var out []*foghorncontrolpb.NodeComponentVersion
 	for rows.Next() {
-		v := &foghornpb.NodeComponentVersion{}
+		v := &foghorncontrolpb.NodeComponentVersion{}
 		if err := rows.Scan(&v.Component, &v.Version); err != nil {
 			return nil
 		}

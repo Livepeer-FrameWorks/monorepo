@@ -8,7 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 )
 
 type mockCommodoreClient struct {
@@ -16,14 +16,14 @@ type mockCommodoreClient struct {
 	terminations  int
 }
 
-func (m *mockCommodoreClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghornpb.TerminateTenantStreamsResponse, error) {
+func (m *mockCommodoreClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	m.terminations++
-	return &foghornpb.TerminateTenantStreamsResponse{}, nil
+	return &foghorncontrolpb.TerminateTenantStreamsResponse{}, nil
 }
 
-func (m *mockCommodoreClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghornpb.InvalidateTenantCacheResponse, error) {
+func (m *mockCommodoreClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 	m.invalidations++
-	return &foghornpb.InvalidateTenantCacheResponse{}, nil
+	return &foghorncontrolpb.InvalidateTenantCacheResponse{}, nil
 }
 
 func (m *mockCommodoreClient) GetTenantUserCount(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error) {

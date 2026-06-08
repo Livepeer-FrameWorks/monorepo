@@ -18,6 +18,7 @@ import (
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -25,11 +26,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -47,16 +49,16 @@ type streamContext struct {
 	Source            string
 	UpdatedAt         time.Time
 	LastError         string
-	BillingModel      string                               // "postpaid" or "prepaid" - affects cache TTL
-	IsSuspended       bool                                 // true if tenant is suspended (balance < -$10)
-	IsBalanceNegative bool                                 // true if prepaid balance <= 0 (should return 402)
-	OfficialClusterID string                               // billing-tier cluster for coverage routing
-	OriginClusterID   string                               // cluster where stream was originally ingested (for federation attribution)
-	ClusterPeers      []*quartermasterpb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
-	ProcessesJSON     string                               // MistServer process config for STREAM_PROCESS trigger
-	RequiresAuth      bool                                 // true when this playback object has a protected playback policy
-	RequiresAuthKnown bool                                 // false means the local marker could not be resolved
-	DVRPolicy         *sharedpb.DVRPolicy                  // tier DVR policy bundle (live window, segment, max entries)
+	BillingModel      string                             // "postpaid" or "prepaid" - affects cache TTL
+	IsSuspended       bool                               // true if tenant is suspended (balance < -$10)
+	IsBalanceNegative bool                               // true if prepaid balance <= 0 (should return 402)
+	OfficialClusterID string                             // billing-tier cluster for coverage routing
+	OriginClusterID   string                             // cluster where stream was originally ingested (for federation attribution)
+	ClusterPeers      []*clusterpeerpb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
+	ProcessesJSON     string                             // MistServer process config for STREAM_PROCESS trigger
+	RequiresAuth      bool                               // true when this playback object has a protected playback policy
+	RequiresAuthKnown bool                               // false means the local marker could not be resolved
+	DVRPolicy         *sharedpb.DVRPolicy                // tier DVR policy bundle (live window, segment, max entries)
 	// Broadcaster billing-allowance state, cached at PUSH_REWRITE so USER_NEW
 	// can apply the viewer-side load gate without a fresh Commodore round-trip.
 	// IsFreeTier is the tier-identity flag from Purser (tier_name == 'free'),
@@ -75,7 +77,7 @@ type streamContext struct {
 // Covers peer discovery, stream tracking, and cross-cluster ingest dedup.
 // Implemented by PeerManager which delegates reads to Redis internally.
 type PeerNotifier interface {
-	NotifyPeers(peers []*quartermasterpb.TenantClusterPeer, tenantID string)
+	NotifyPeers(peers []*clusterpeerpb.TenantClusterPeer, tenantID string)
 	TrackStream(streamName string, clusterIDs []string)
 	UntrackStream(streamName string)
 	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
@@ -571,7 +573,7 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 }
 
 // GetClusterPeers returns the cached cluster peers for a stream, if available.
-func (p *Processor) GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer {
+func (p *Processor) GetClusterPeers(internalName, tenantID string) []*clusterpeerpb.TenantClusterPeer {
 	if p.streamCache == nil || internalName == "" || tenantID == "" {
 		return nil
 	}
@@ -2057,7 +2059,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	contentType := ""
 	originClusterID := ""
 	tenantID := ""
-	var clusterPeers []*quartermasterpb.TenantClusterPeer
+	var clusterPeers []*clusterpeerpb.TenantClusterPeer
 	if control.CommodoreClient != nil && artifactInternal != "" {
 		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
 			artifactHash = resp.ArtifactHash
@@ -4544,7 +4546,7 @@ type loadThresholds struct {
 // exhausted any free-tier allowance. IsFreeTier comes from tier-identity in
 // Purser (tier_name == 'free'); a paid tenant with a zero-priced meter is
 // not "free" for admission purposes.
-func freeTierAllowanceState(allowances []*purserpb.MeterAllowance) (isFreeTier, exhausted bool) {
+func freeTierAllowanceState(allowances []*meteringpb.MeterAllowance) (isFreeTier, exhausted bool) {
 	for _, a := range allowances {
 		if a == nil {
 			continue

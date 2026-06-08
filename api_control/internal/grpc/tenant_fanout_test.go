@@ -7,8 +7,9 @@ import (
 	"time"
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -18,15 +19,15 @@ import (
 
 type testTenantControlServer struct {
 	foghornpb.UnimplementedTenantControlServiceServer
-	terminateResp  *foghornpb.TerminateTenantStreamsResponse
-	invalidateResp *foghornpb.InvalidateTenantCacheResponse
+	terminateResp  *foghorncontrolpb.TerminateTenantStreamsResponse
+	invalidateResp *foghorncontrolpb.InvalidateTenantCacheResponse
 }
 
-func (s *testTenantControlServer) TerminateTenantStreams(context.Context, *foghornpb.TerminateTenantStreamsRequest) (*foghornpb.TerminateTenantStreamsResponse, error) {
+func (s *testTenantControlServer) TerminateTenantStreams(context.Context, *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	return s.terminateResp, nil
 }
 
-func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *foghornpb.InvalidateTenantCacheRequest) (*foghornpb.InvalidateTenantCacheResponse, error) {
+func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 	return s.invalidateResp, nil
 }
 
@@ -66,11 +67,11 @@ func newTenantFanoutTestServer(t *testing.T, route *clusterRoute) *CommodoreServ
 
 func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
 	server := newTenantFanoutTestServer(t, &clusterRoute{
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{{ClusterId: "bad-cluster", FoghornGrpcAddr: "bad host:50051"}},
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "bad-cluster", FoghornGrpcAddr: "bad host:50051"}},
 		resolvedAt:   time.Now(),
 	})
 
-	_, err := server.TerminateTenantStreams(context.Background(), &foghornpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	_, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -82,11 +83,11 @@ func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
 
 func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
-		terminateResp: &foghornpb.TerminateTenantStreamsResponse{StreamsTerminated: 2, SessionsTerminated: 3, StreamNames: []string{"a", "b"}},
+		terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 2, SessionsTerminated: 3, StreamNames: []string{"a", "b"}},
 	})
 
 	server := newTenantFanoutTestServer(t, &clusterRoute{
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-ok", FoghornGrpcAddr: goodAddr},
 			{ClusterId: "cluster-down", FoghornGrpcAddr: "127.0.0.1:1"},
 		},
@@ -96,7 +97,7 @@ func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	resp, err := server.TerminateTenantStreams(ctx, &foghornpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	resp, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
 	if err != nil {
 		t.Fatalf("expected success with partial results, got error: %v", err)
 	}
@@ -107,20 +108,20 @@ func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 
 func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
-		invalidateResp: &foghornpb.InvalidateTenantCacheResponse{EntriesInvalidated: 5},
+		invalidateResp: &foghorncontrolpb.InvalidateTenantCacheResponse{EntriesInvalidated: 5},
 	})
 
 	server := newTenantFanoutTestServer(t, &clusterRoute{
 		clusterID:   "cluster-primary",
 		foghornAddr: goodAddr,
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "cluster-primary", FoghornGrpcAddr: goodAddr},
 			{ClusterId: "cluster-primary", FoghornGrpcAddr: goodAddr},
 		},
 		resolvedAt: time.Now(),
 	})
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{TenantId: "tenant-1", Reason: "reactivated"})
+	resp, err := server.InvalidateTenantCache(context.Background(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1", Reason: "reactivated"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,18 +132,18 @@ func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 
 func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testing.T) {
 	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
-		terminateResp: &foghornpb.TerminateTenantStreamsResponse{StreamsTerminated: 7, SessionsTerminated: 9},
+		terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 7, SessionsTerminated: 9},
 	})
 
 	server := newTenantFanoutTestServer(t, &clusterRoute{
-		clusterPeers: []*quartermasterpb.TenantClusterPeer{
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "", FoghornGrpcAddr: goodAddr},
 			{ClusterId: "", FoghornGrpcAddr: goodAddr},
 		},
 		resolvedAt: time.Now(),
 	})
 
-	resp, err := server.TerminateTenantStreams(context.Background(), &foghornpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	resp, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

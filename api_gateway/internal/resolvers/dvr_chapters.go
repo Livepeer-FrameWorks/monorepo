@@ -6,7 +6,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 )
 
 // External path: api_gateway (GraphQL) → Commodore (validates tenant) →
@@ -50,7 +50,7 @@ func (r *Resolver) DoRetrieveDVRChapter(
 			PlayableNow:          false,
 		}, nil
 	}
-	req := &foghornpb.RetrieveDVRChapterRequest{
+	req := &foghorncontrolpb.RetrieveDVRChapterRequest{
 		DvrArtifactId:   dvrHash,
 		Mode:            chapterModeToString(mode),
 		IntervalSeconds: intervalSeconds,
@@ -111,7 +111,7 @@ func (r *Resolver) DoListDVRChapters(
 		r.Logger.Debug("Demo: list DVR chapters")
 		return &model.DVRChaptersPage{Chapters: nil}, nil
 	}
-	req := &foghornpb.ListDVRChaptersRequest{
+	req := &foghorncontrolpb.ListDVRChaptersRequest{
 		DvrArtifactId:   dvrHash,
 		Mode:            chapterModeToString(mode),
 		IntervalSeconds: intervalSeconds,

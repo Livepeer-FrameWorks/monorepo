@@ -21,6 +21,7 @@ import (
 	"time"
 
 	geobucket "frameworks/api_tenants/internal/geo"
+
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -34,10 +35,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 
@@ -51,6 +54,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -522,7 +526,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits); err == nil && len(tenantResourceLimits) > 0 {
 		var limits map[string]any
 		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
-			caps := &quartermasterpb.TenantResourceLimits{}
+			caps := &tenantlimitspb.TenantResourceLimits{}
 			if v, ok := limits["max_streams"].(float64); ok && v > 0 {
 				caps.MaxStreams = int32(v)
 			}
@@ -687,7 +691,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 			default:
 				role = "subscribed"
 			}
-			resp.ClusterPeers = append(resp.ClusterPeers, &quartermasterpb.TenantClusterPeer{
+			resp.ClusterPeers = append(resp.ClusterPeers, &clusterpeerpb.TenantClusterPeer{
 				ClusterId:       cID,
 				ClusterSlug:     dns.SanitizeLabel(cID),
 				BaseUrl:         cBaseURL,
@@ -9272,12 +9276,19 @@ func computeMeshRevision(peers []*quartermasterpb.InfrastructurePeer, serviceEnd
 // (e.g. Deckhand) into quartermaster.service_event_outbox so the drain
 // worker can dispatch it to Decklog with exponential backoff. event.source
 // stays as the originating service's name; the dispatcher routes by
-// payload, not by which service wrote the row. Returns NotFound when the
-// event is nil, InvalidArgument when event.tenant_id is empty.
+// payload, not by which service wrote the row. The event arrives as a
+// binary-marshaled helmsmancontrol.ServiceEvent. Returns InvalidArgument when
+// those bytes are empty, fail to decode, or carry an empty tenant_id.
 func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *quartermasterpb.EnqueueServiceEventRequest) (*quartermasterpb.EnqueueServiceEventResponse, error) {
-	event := req.GetEvent()
-	if event == nil {
+	raw := req.GetEvent()
+	if len(raw) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "event is required")
+	}
+	// The request carries a marshaled helmsmancontrol.ServiceEvent as bytes so
+	// quartermasterpb doesn't depend on ipcpb; decode it here.
+	event := &ipcpb.ServiceEvent{}
+	if err := proto.Unmarshal(raw, event); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "decode service event: %v", err)
 	}
 	if event.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "event.tenant_id is required")

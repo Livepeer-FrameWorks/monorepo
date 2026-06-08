@@ -2,8 +2,10 @@ package x402
 
 import (
 	"context"
+
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 )
 
 type MockPurserClient struct {
@@ -15,11 +17,11 @@ type MockPurserClient struct {
 	VerifyCalled bool
 	SettleCalled bool
 	LastTenantID string
-	LastPayment  *purserpb.X402PaymentPayload
+	LastPayment  *x402pb.X402PaymentPayload
 	LastClientIP string
 }
 
-func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
+func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
 	m.VerifyCalled = true
 	m.LastTenantID = tenantID
 	m.LastPayment = payment
@@ -27,7 +29,7 @@ func (m *MockPurserClient) VerifyX402Payment(ctx context.Context, tenantID strin
 	return m.VerifyResponse, m.VerifyError
 }
 
-func (m *MockPurserClient) SettleX402Payment(ctx context.Context, tenantID string, payment *purserpb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
+func (m *MockPurserClient) SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
 	m.SettleCalled = true
 	m.LastTenantID = tenantID
 	m.LastPayment = payment

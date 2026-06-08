@@ -250,7 +250,7 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 	}
 
 	// Broadcast conversation creation via service_events
-	if deps.Quartermaster != nil {
+	if deps.QuartermasterEvents != nil {
 		ml := &ipcpb.MessageLifecycleData{
 			EventType:      ipcpb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
@@ -267,7 +267,7 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 			TenantId:  tenantID,
 			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
-		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
+		if _, err := deps.QuartermasterEvents.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
 			deps.Logger.WithError(err).Warn("Failed to broadcast conversation_created via Decklog")
 		}
 	}
@@ -333,7 +333,7 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 
 	// Broadcast agent/system messages to webapp via Decklog → Signalman
 	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
-	if tenantID != "" && deps.Quartermaster != nil {
+	if tenantID != "" && deps.QuartermasterEvents != nil {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
 
@@ -354,7 +354,7 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
 
-		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
+		if _, err := deps.QuartermasterEvents.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
 			deps.Logger.WithError(err).Warn("Failed to broadcast message via Decklog")
 			deps.Metrics.MessagesSent.WithLabelValues("error").Inc()
 		} else {
@@ -373,7 +373,7 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 
 func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
-	if tenantID == "" || deps.Quartermaster == nil {
+	if tenantID == "" || deps.QuartermasterEvents == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
@@ -396,7 +396,7 @@ func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 		Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 	}
 
-	if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
+	if _, err := deps.QuartermasterEvents.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
 		deps.Logger.WithError(err).Warn("Failed to broadcast conversation_updated via Decklog")
 	}
 
@@ -424,7 +424,7 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 	}
 
 	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
-	if tenantID != "" && deps.Quartermaster != nil {
+	if tenantID != "" && deps.QuartermasterEvents != nil {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
 
@@ -445,7 +445,7 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 			Payload:   &ipcpb.ServiceEvent_SupportEvent{SupportEvent: ml},
 		}
 
-		if _, err := deps.Quartermaster.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
+		if _, err := deps.QuartermasterEvents.EnqueueServiceEvent(c.Request.Context(), event); err != nil {
 			deps.Logger.WithError(err).Warn("Failed to broadcast message_updated via Decklog")
 		}
 	}

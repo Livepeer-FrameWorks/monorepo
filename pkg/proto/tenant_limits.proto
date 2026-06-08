@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package tenant_limits;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits;tenantlimitspb";
+
+// TenantResourceLimits is the per-tenant runtime cap used by Foghorn admission.
+// Purser resolves plan-level caps from billing tier entitlements; Quartermaster
+// may also surface access-specific overrides from tenant_cluster_access.
+// 0 in a field means "unlimited" for that dimension.
+message TenantResourceLimits {
+  int32 max_streams = 1;          // concurrent live streams cap
+  int32 max_viewers = 2;          // concurrent viewers cap (sum across streams)
+}

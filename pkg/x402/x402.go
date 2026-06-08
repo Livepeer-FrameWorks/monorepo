@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -32,14 +32,14 @@ type paymentHeaderWire struct {
 	Payload     paymentHeaderExactPayloadWire `json:"payload"`
 }
 
-func (w paymentHeaderWire) toProto() *purserpb.X402PaymentPayload {
-	return &purserpb.X402PaymentPayload{
+func (w paymentHeaderWire) toProto() *x402pb.X402PaymentPayload {
+	return &x402pb.X402PaymentPayload{
 		X402Version: int32(w.X402Version),
 		Scheme:      w.Scheme,
 		Network:     w.Network,
-		Payload: &purserpb.X402ExactPayload{
+		Payload: &x402pb.X402ExactPayload{
 			Signature: w.Payload.Signature,
-			Authorization: &purserpb.X402Authorization{
+			Authorization: &x402pb.X402Authorization{
 				From:        w.Payload.Authorization.From,
 				To:          w.Payload.Authorization.To,
 				Value:       w.Payload.Authorization.Value,
@@ -99,7 +99,7 @@ func GetPaymentHeaderFromContext(ctx context.Context) string {
 }
 
 // ParsePaymentHeader decodes and parses an x402 payment header value.
-func ParsePaymentHeader(header string) (*purserpb.X402PaymentPayload, error) {
+func ParsePaymentHeader(header string) (*x402pb.X402PaymentPayload, error) {
 	payloadBytes, err := base64Decode(header)
 	if err != nil {
 		return nil, err

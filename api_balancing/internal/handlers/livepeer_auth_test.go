@@ -10,9 +10,9 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/sirupsen/logrus"
 )
@@ -394,7 +394,7 @@ func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
 	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
 		StreamId: "stream-a",
-		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
@@ -434,7 +434,7 @@ func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
@@ -458,7 +458,7 @@ func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster-a"},
 			{ClusterId: "peer-cluster-b"},
 		},
@@ -489,7 +489,7 @@ func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: "peer-cluster"},
 		},
 	}}
@@ -511,7 +511,7 @@ func TestLivepeerAuth_LocalClusterPeerIsSkipped(t *testing.T) {
 	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
 	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
 		TenantId: "tenant-a",
-		ClusterPeers: []*quartermasterpb.TenantClusterPeer{
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: r.LocalCluster}, // local cluster — must be skipped from fan-out
 			{ClusterId: "peer-cluster"},
 		},

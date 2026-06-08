@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package cluster_peer;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer;clusterpeerpb";
+
+// Lightweight cluster metadata for tenant-scoped cluster context. Foghorn
+// derives federation address from base_url + cluster_slug convention.
+message TenantClusterPeer {
+  string cluster_id = 1;
+  string cluster_slug = 2;      // DNS-safe label
+  string base_url = 3;          // e.g., "frameworks.cloud"
+  string cluster_name = 4;      // Human label for UX
+  string role = 5;              // "preferred", "official", "subscribed"
+  string cluster_type = 6;      // "shared-community", "shared-lb", "dedicated", "self-hosted"
+  string foghorn_grpc_addr = 7; // Resolved Foghorn gRPC address (host:port) from service_instances
+  string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
+  string s3_endpoint = 21;      // S3 endpoint URL
+  string s3_region = 22;        // S3 region
+
+  // Multi-region routing fields surfaced for Commodore route filtering.
+  // region_id (e.g. "eu-west", "us-east", "ap-tokyo").
+  string region_id = 30;
+  // cell_id (failure-isolation cell; defaults to cluster_id today).
+  string cell_id = 31;
+  // cluster_class: platform_official | tenant_private | third_party_marketplace.
+  // Commodore's plan-aware filter rejects clusters whose class is not allowed
+  // by the tenant's plan tier (free -> official only; premium -> +marketplace;
+  // enterprise -> +private).
+  string cluster_class = 32;
+  // health_status: healthy | degraded | offline. Resolver excludes
+  // non-healthy peers from the candidate set.
+  string health_status = 36;
+}

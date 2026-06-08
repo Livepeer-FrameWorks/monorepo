@@ -18,6 +18,7 @@ import (
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/tieraccess"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -29,9 +30,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
@@ -728,7 +731,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		v := retentionDays
 		dvrPolicy.RecordingRetentionDays = &v
 	}
-	var allowances []*purserpb.MeterAllowance
+	var allowances []*meteringpb.MeterAllowance
 	var storagePricing *purserpb.StoragePricing
 	if tierID.Valid && tierID.String != "" {
 		periodStart, periodEnd := resolveCurrentPeriod(billingPeriodStart, billingPeriodEnd, time.Now().UTC())
@@ -811,7 +814,7 @@ func parseStorageLimitBytes(raw sql.NullString) int64 {
 // parseTenantResourceLimits decodes Free-plan fair-use entitlements into the
 // wire shape Foghorn already consumes. These values are tenant-plan policy, not
 // cluster capacity; paid tiers normally omit the keys and therefore return nil.
-func parseTenantResourceLimits(raw sql.NullString) *quartermasterpb.TenantResourceLimits {
+func parseTenantResourceLimits(raw sql.NullString) *tenantlimitspb.TenantResourceLimits {
 	if !raw.Valid || raw.String == "" {
 		return nil
 	}
@@ -819,7 +822,7 @@ func parseTenantResourceLimits(raw sql.NullString) *quartermasterpb.TenantResour
 	if err := json.Unmarshal([]byte(raw.String), &entitlements); err != nil {
 		return nil
 	}
-	limits := &quartermasterpb.TenantResourceLimits{
+	limits := &tenantlimitspb.TenantResourceLimits{
 		MaxStreams: parsePositiveInt32(entitlements["max_concurrent_streams"]),
 		MaxViewers: parsePositiveInt32(entitlements["max_concurrent_viewers"]),
 	}
@@ -862,7 +865,7 @@ func resolveCurrentPeriod(start, end sql.NullTime, now time.Time) (time.Time, ti
 //
 // Surfaced via GetTenantBillingStatusResponse.Allowances so Foghorn
 // PUSH_REWRITE can apply load-aware admission without a second RPC.
-func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*purserpb.MeterAllowance {
+func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID string, periodStart, periodEnd time.Time) []*meteringpb.MeterAllowance {
 	const meter = "delivered_minutes"
 
 	var included, unitPrice float64
@@ -931,7 +934,7 @@ func (s *PurserServer) computeAllowances(ctx context.Context, tenantID, tierID s
 		remaining = 0
 	}
 
-	return []*purserpb.MeterAllowance{
+	return []*meteringpb.MeterAllowance{
 		{
 			Meter:      meter,
 			Included:   included,

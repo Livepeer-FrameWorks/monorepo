@@ -10,8 +10,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -143,6 +143,12 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}, nil
 }
 
+// Conn exposes the underlying connection for satellite clients (e.g. the
+// service-event producer in pkg/clients/quartermaster/events) to share.
+func (c *GRPCClient) Conn() *grpc.ClientConn {
+	return c.conn
+}
+
 // Close closes the gRPC connection
 func (c *GRPCClient) Close() error {
 	if c.conn != nil {
@@ -206,7 +212,7 @@ func (c *GRPCClient) ResolveTenantAliases(ctx context.Context, aliases []string)
 // access-specific override onto tenant_cluster_access.resource_limits via
 // COALESCE. Plan-level Free caps are resolved by Purser tier entitlements, so
 // normal platform bootstrap passes nil.
-func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *quartermasterpb.TenantResourceLimits) error {
+func (c *GRPCClient) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error {
 	_, err := c.cluster.BootstrapClusterAccess(ctx, &quartermasterpb.BootstrapClusterAccessRequest{
 		TenantId:       tenantID,
 		ClusterId:      clusterID,
@@ -769,19 +775,4 @@ func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*q
 	return c.serviceRegistry.GetServiceHealth(ctx, &quartermasterpb.GetServiceHealthRequest{
 		ServiceId: serviceID,
 	})
-}
-
-// EnqueueServiceEvent hands a ServiceEvent to Quartermaster's
-// service_event_outbox for asynchronous Decklog dispatch. Used by
-// stateless producers (Deckhand) that don't own a local outbox; durability
-// then matches the QM-originated event path. event.source must identify
-// the originating service so the dispatcher attributes correctly.
-func (c *GRPCClient) EnqueueServiceEvent(ctx context.Context, event *ipcpb.ServiceEvent) (string, error) {
-	resp, err := c.serviceRegistry.EnqueueServiceEvent(ctx, &quartermasterpb.EnqueueServiceEventRequest{
-		Event: event,
-	})
-	if err != nil {
-		return "", err
-	}
-	return resp.GetOutboxId(), nil
 }

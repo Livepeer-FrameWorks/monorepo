@@ -6,9 +6,10 @@ import (
 
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -35,7 +36,7 @@ func (m *mockCacheInvalidator) GetBillingStatus(ctx context.Context, internalNam
 	return nil
 }
 
-func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*quartermasterpb.TenantClusterPeer {
+func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*clusterpeerpb.TenantClusterPeer {
 	return nil
 }
 
@@ -58,7 +59,7 @@ func TestResolveVodStorageClusterUsesConfiguredLocalCluster(t *testing.T) {
 func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
-	_, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{})
+	_, err := server.InvalidateTenantCache(context.Background(), &foghorncontrolpb.InvalidateTenantCacheRequest{})
 	if err == nil {
 		t.Fatal("expected error for missing tenant id")
 	}
@@ -75,7 +76,7 @@ func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 func TestInvalidateTenantCacheNoInvalidatorConfigured(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{
+	resp, err := server.InvalidateTenantCache(context.Background(), &foghorncontrolpb.InvalidateTenantCacheRequest{
 		TenantId: "tenant-1",
 		Reason:   "reactivate",
 	})
@@ -92,7 +93,7 @@ func TestInvalidateTenantCacheUsesInvalidator(t *testing.T) {
 	invalidator := &mockCacheInvalidator{entries: 3}
 	server.SetCacheInvalidator(invalidator)
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &foghornpb.InvalidateTenantCacheRequest{
+	resp, err := server.InvalidateTenantCache(context.Background(), &foghorncontrolpb.InvalidateTenantCacheRequest{
 		TenantId: "tenant-2",
 		Reason:   "reactivate",
 	})

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package metering;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract;meteringpb";
+
+// Per-meter allowance snapshot for the tenant's current billing period.
+// Surfaced through GetTenantBillingStatusResponse so admission paths (Foghorn
+// PUSH_REWRITE via Commodore ValidateStreamKey) can apply load-aware policy
+// without a second RPC.
+message MeterAllowance {
+  string meter = 1;          // e.g. "delivered_minutes"
+  double included = 2;       // included_quantity from the tier rule
+  double used = 3;           // current-period accumulated usage
+  double remaining = 4;      // max(0, included - used)
+  bool exhausted = 5;        // used >= included
+  bool is_free_tier = 6;     // unit_price == 0 in this rule (free or zero-priced overage)
+}
