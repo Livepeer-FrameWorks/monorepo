@@ -25,7 +25,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/mattn/go-isatty"
@@ -382,7 +382,7 @@ func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVers
 	defer fhCleanup()
 	defer func() { _ = fh.Close() }()
 	hctx, hcancel := clusterNodesRPCContext(cmd.Context(), fhCtxCfg, 5*time.Second)
-	health, _, err := fh.GetNodeHealth(hctx, &foghornpb.GetNodeHealthRequest{NodeId: registered.GetNodeId()})
+	health, _, err := fh.GetNodeHealth(hctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: registered.GetNodeId()})
 	hcancel()
 	if err != nil {
 		return fmt.Errorf("same-cluster node %s is registered but not reporting health through Foghorn: %w", registered.GetNodeId(), err)
@@ -671,7 +671,7 @@ func newClusterNodesListCmd() *cobra.Command {
 				return enc.Encode(resp)
 			}
 
-			var health map[string]*foghornpb.GetNodeHealthResponse
+			var health map[string]*foghorncontrolpb.GetNodeHealthResponse
 			if withHealth {
 				health = loadNodeHealth(cmd, resp.GetNodes())
 			}
@@ -705,7 +705,7 @@ func newClusterNodesListCmd() *cobra.Command {
 	return cmd
 }
 
-func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghornpb.GetNodeHealthResponse {
+func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse {
 	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", err)
@@ -714,10 +714,10 @@ func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureN
 	defer cleanup()
 	defer func() { _ = fh.Close() }()
 
-	out := make(map[string]*foghornpb.GetNodeHealthResponse, len(nodes))
+	out := make(map[string]*foghorncontrolpb.GetNodeHealthResponse, len(nodes))
 	for _, n := range nodes {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 5*time.Second)
-		resp, _, err := fh.GetNodeHealth(cctx, &foghornpb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
+		resp, _, err := fh.GetNodeHealth(cctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
 		cancel()
 		if err == nil {
 			out[n.GetNodeId()] = resp
@@ -726,7 +726,7 @@ func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureN
 	return out
 }
 
-func nodeComponentVersions(versions []*foghornpb.NodeComponentVersion) string {
+func nodeComponentVersions(versions []*foghorncontrolpb.NodeComponentVersion) string {
 	if len(versions) == 0 {
 		return "-"
 	}
@@ -975,7 +975,7 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	defer func() { _ = fh.Close() }()
 	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 	defer cancel()
-	resp, _, err := fh.SetNodeMode(cctx, &foghornpb.SetNodeModeRequest{
+	resp, _, err := fh.SetNodeMode(cctx, &foghorncontrolpb.SetNodeModeRequest{
 		NodeId: nodeID,
 		Mode:   mode,
 		SetBy:  "frameworks-cli",
@@ -985,7 +985,7 @@ func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
 	}
 	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
 		Key:    "mode",
-		OK:     resp.GetStatus() == foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS || resp.GetStatus() == foghornpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_ALREADY_IN_MODE,
+		OK:     resp.GetStatus() == foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_SUCCESS || resp.GetStatus() == foghorncontrolpb.SetNodeModeStatus_SET_NODE_MODE_STATUS_ALREADY_IN_MODE,
 		Detail: fmt.Sprintf("%s: %s", resp.GetMode(), resp.GetMessage()),
 	}})
 	return nil
@@ -1001,7 +1001,7 @@ func waitForNodeStreams(cmd *cobra.Command, nodeID string, timeout time.Duration
 	deadline := time.Now().Add(timeout)
 	for {
 		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 5*time.Second)
-		resp, _, err := fh.GetNodeHealth(cctx, &foghornpb.GetNodeHealthRequest{NodeId: nodeID})
+		resp, _, err := fh.GetNodeHealth(cctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: nodeID})
 		cancel()
 		if err != nil {
 			return err

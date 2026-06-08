@@ -19,6 +19,7 @@ import (
 	"frameworks/cli/internal/ux"
 	commodore "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -2599,7 +2600,7 @@ func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
 			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
-		resp, err := fh.Federation().MigrateArtifactMetadata(cctx, &foghornfederationpb.MigrateArtifactMetadataRequest{
+		resp, err := foghornfed.For(fh).Federation().MigrateArtifactMetadata(cctx, &foghornfederationpb.MigrateArtifactMetadataRequest{
 			TenantId:        tenantID,
 			SourceClusterId: fromCluster,
 		})
