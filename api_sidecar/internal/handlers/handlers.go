@@ -755,6 +755,12 @@ func HandlePlayRewrite(c *gin.Context) {
 
 	if play := mistTrigger.GetPlayRewrite(); play != nil {
 		requested := play.GetRequestedStream()
+		if _, ok := getProcessingSourceOverride(requested); ok {
+			logger.WithField("stream_name", requested).Info("PLAY_REWRITE resolved local source override")
+			incMistWebhook("PLAY_REWRITE", "success")
+			c.String(http.StatusOK, requested)
+			return
+		}
 		if strings.HasPrefix(requested, "processing+") && HasPendingJob(requested) {
 			logger.WithField("stream_name", requested).Info("PLAY_REWRITE resolved local processing stream")
 			incMistWebhook("PLAY_REWRITE", "success")

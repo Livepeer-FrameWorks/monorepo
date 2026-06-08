@@ -550,10 +550,16 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 		t.Fatal("expected renditions within the resolution rounding tolerance to pass")
 	}
 
-	// No independent source span: even a "complete-looking" set must fail closed,
-	// because uniform truncation cannot be ruled out without a pre-transcode span.
-	if renditionsCompleteFromTracks(entry, expected, full, source, 0) {
-		t.Fatal("expected missing source span to be treated as incomplete (fail closed)")
+	// No independent source span: verify the requested rendition tracks by
+	// height. This is the normalized-output case where the source passthrough is
+	// intentionally absent from the final artifact.
+	if !renditionsCompleteFromTracks(entry, expected, full, source, 0) {
+		t.Fatal("expected complete rendition set to pass without an independent source span")
+	}
+
+	noSourceOutput := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, noSourceOutput, mist.SourceMediaInfo{}, 0) {
+		t.Fatal("expected no-source output to validate by requested rendition heights")
 	}
 
 	// A height that cannot be determined for a requested profile fails closed.
@@ -704,6 +710,14 @@ func TestProcessingMuxTargetURIWithVideoSelector(t *testing.T) {
 	}
 }
 
+func TestProcessingMuxTargetURIWithThumbnailSelectors(t *testing.T) {
+	got := processingMuxTargetURIWithSelectors("/var/lib/mistserver/recordings/clips/hash.mkv", "i7,JPEG", "all,thumbvtt")
+	want := "/var/lib/mistserver/recordings/clips/hash.mkv#audio=all&video=i7,JPEG&meta=all,thumbvtt&subtitle=all"
+	if got != want {
+		t.Fatalf("target URI = %q, want %q", got, want)
+	}
+}
+
 func TestChooseProcessingVideoSelectorSelectsCompleteRenditions(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
@@ -718,6 +732,18 @@ func TestChooseProcessingVideoSelectorSelectsCompleteRenditions(t *testing.T) {
 	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
 	if got != "i2,i3" {
 		t.Fatalf("selector = %q, want rendition tracks", got)
+	}
+}
+
+func TestAppendAuxiliaryVideoSelectorsRequestsCurrentJPEGTracks(t *testing.T) {
+	if got := appendAuxiliaryVideoSelectors("i1", false); got != "i1" {
+		t.Fatalf("selector = %q, want playable source only", got)
+	}
+	if got := appendAuxiliaryVideoSelectors("i1", true); got != "i1,JPEG" {
+		t.Fatalf("selector = %q, want playable source plus current JPEG tracks", got)
+	}
+	if got := appendAuxiliaryVideoSelectors("all", true); got != "all" {
+		t.Fatalf("all selector = %q, want all", got)
 	}
 }
 
@@ -962,6 +988,11 @@ func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 	}
 	if !strings.Contains(got, "duration=30") {
 		t.Fatalf("source URL = %q, want duration query", got)
+	}
+	for _, want := range []string{"audio=all", "video=all%2C%21JPEG", "meta=all%2C%21thumbvtt", "subtitle=all"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source URL = %q, want %s query", got, want)
+		}
 	}
 }
 

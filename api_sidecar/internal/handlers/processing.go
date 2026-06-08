@@ -922,20 +922,14 @@ type processingTrackPresence struct {
 }
 
 // waitForProcessingStreamReady boots the processing+ wildcard stream and waits
-// until Mist has exposed source media, any requested Livepeer rendition tracks,
-// and final PROCESS_AV video output for local AV configs. Mist's file-output
-// path pins the selected track set when push_start opens, so starting before
-// generated video tracks exist records a source-only artifact.
+// until Mist has exposed source media. The file-output path owns the
+// process-output wait before writing the recording header; holding the push here
+// lets short VOD inputs reach EOF and tear down before any file output exists.
 func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, livepeerSegmentCh <-chan LivepeerSegmentCompleteEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(processesJSON)
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
 	var lastErr error
-	sourceReadyLogged := false
-	var missingLivepeerHeights []int
-	var livepeerHeightErr error
-	localAVVideoProcesses := expectedLocalAVVideoProcesses(processesJSON)
-	localAVFinalVideoCount := 0
 	bootTicker := time.NewTicker(500 * time.Millisecond)
 	defer bootTicker.Stop()
 
@@ -966,13 +960,10 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				deadline = time.Now().Add(45 * time.Second)
 			}
 			if processAVFinalVideoReady(evt) {
-				localAVFinalVideoCount++
 				log.WithFields(logrus.Fields{
 					"output_codec":  evt.OutputCodec,
 					"output_width":  evt.OutputWidth,
 					"output_height": evt.OutputHeight,
-					"final_videos":  localAVFinalVideoCount,
-					"want_videos":   localAVVideoProcesses,
 				}).Info("Local MistProcAV video output finalized during readiness")
 			}
 		}
@@ -1003,23 +994,12 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 		} else {
 			lastPresence = inspectProcessingActiveStream(streamData)
 			if lastPresence.sourceMedia {
-				if !sourceReadyLogged {
-					log.WithFields(logrus.Fields{
-						"audio_codecs": mapKeys(lastPresence.audioCodecs),
-						"video_codecs": mapKeys(lastPresence.videoCodecs),
-						"meta_codecs":  mapKeys(lastPresence.metaCodecs),
-					}).Info("Processing source stream ready")
-					sourceReadyLogged = true
-				}
-				livepeerReady, missing, err := processingLivepeerRenditionsReady(lastPresence, processesJSON)
-				missingLivepeerHeights = missing
-				livepeerHeightErr = err
-				if err != nil {
-					return nil, 0, err
-				}
-				if livepeerReady && localAVFinalVideoCount >= localAVVideoProcesses && visibleProcessingVideoTracksReady(lastPresence, localAVVideoProcesses) {
-					return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
-				}
+				log.WithFields(logrus.Fields{
+					"audio_codecs": mapKeys(lastPresence.audioCodecs),
+					"video_codecs": mapKeys(lastPresence.videoCodecs),
+					"meta_codecs":  mapKeys(lastPresence.metaCodecs),
+				}).Info("Processing source stream ready")
+				return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
 			}
 		}
 
@@ -1031,23 +1011,6 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
 					mapKeys(lastPresence.audioCodecs), mapKeys(lastPresence.videoCodecs), mapKeys(lastPresence.metaCodecs),
 					mapKeys(requirements.requiredAudioCodecs), mapKeys(requirements.requiredVideoCodecs), requirements.requireThumbs)
-			}
-			if livepeerHeightErr != nil {
-				return nil, 0, livepeerHeightErr
-			}
-			if localAVFinalVideoCount < localAVVideoProcesses {
-				return nil, 0, fmt.Errorf("local AV video transcodes not final before push: have %d final video tracks, want %d", localAVFinalVideoCount, localAVVideoProcesses)
-			}
-			if !visibleProcessingVideoTracksReady(lastPresence, localAVVideoProcesses) {
-				return nil, 0, fmt.Errorf("processing stream missing finalized local AV video tracks before push: have %d video tracks, want %d", visibleProcessingVideoTrackCount(lastPresence), localAVVideoProcesses)
-			}
-			if len(missingLivepeerHeights) > 0 {
-				return nil, 0, &livepeerReadinessFallbackError{evt: ProcessExitEvent{
-					StreamName:  streamName,
-					ProcessType: "Livepeer",
-					Status:      "unrecoverable",
-					Reason:      fmt.Sprintf("renditions not ready before push: missing heights %v", missingLivepeerHeights),
-				}}
 			}
 			missing := missingProcessingTracks(lastPresence, requirements)
 			outputs := cloneStringMap(lastPresence.outputs)
@@ -1116,11 +1079,19 @@ func processingMuxTargetURI(outputPath string) string {
 }
 
 func processingMuxTargetURIWithVideo(outputPath, videoSelector string) string {
+	return processingMuxTargetURIWithSelectors(outputPath, videoSelector, "all")
+}
+
+func processingMuxTargetURIWithSelectors(outputPath, videoSelector, metaSelector string) string {
 	videoSelector = strings.TrimSpace(videoSelector)
 	if videoSelector == "" {
 		videoSelector = "all"
 	}
-	return outputPath + "#audio=all&video=" + videoSelector + "&meta=all&subtitle=all"
+	metaSelector = strings.TrimSpace(metaSelector)
+	if metaSelector == "" {
+		metaSelector = "all"
+	}
+	return outputPath + "#audio=all&video=" + videoSelector + "&meta=" + metaSelector + "&subtitle=all"
 }
 
 func expectedProcessingTracks(processesJSON string) processingTrackRequirements {
@@ -1398,25 +1369,21 @@ func mapInt64(values map[string]interface{}, keys ...string) (int64, bool) {
 }
 
 // livepeerRenditionsComplete fetches the finished processing stream's JSON
-// metadata and reports whether the Livepeer renditions are complete enough to
-// publish. The caller supplies the source dims + a readiness span LOWER BOUND;
-// the span baseline is then raised to the longest source-height passthrough track
-// (authoritative once the source ran to EOF). The baseline is never derived from a
-// transcode RENDITION track, so the check is not self-referential against the
-// rendition output.
+// metadata and reports whether the requested renditions are present enough to
+// publish. The caller supplies source dims + a readiness span lower bound when
+// available; outputs that intentionally hide the source track still validate by
+// the requested rendition heights.
 //
 // Two failure modes are caught:
 //   - missing/wrong renditions: a requested target-profile resolution has no
-//     DISTINCT matching OUTPUT track (the source track is excluded first, and
-//     each track satisfies at most one profile);
+//     distinct matching output track (a known source track is excluded first,
+//     and each track satisfies at most one profile);
 //   - truncated renditions: a matched track whose span falls more than
-//     maxRenditionSpanShortfallMs below the source span (the EOF-race symptom).
+//     maxRenditionSpanShortfallMs below a known source span.
 //
-// It does NOT fail open: when completeness cannot be proven from the final
-// RECORDING_END track summary (missing/short/wrong tracks), it returns false so
-// the caller runs the one local-MistProcAV fallback rather than publishing a
-// possibly-incomplete Livepeer output. "No renditions requested" returns true
-// because there is nothing to prove.
+// Missing/wrong tracks return false so the caller can run the one
+// local-MistProcAV fallback rather than publishing an incomplete Livepeer output.
+// "No renditions requested" returns true because there is nothing to prove.
 func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON string, tracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
 	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
 	if err != nil {
@@ -1431,43 +1398,27 @@ func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON strin
 
 // renditionsCompleteFromTracks is the pure rendition-completeness decision,
 // split out so it can be unit-tested without a MistServer. It takes the requested
-// ladder INTENT as raw heights (the dimension a Livepeer profile actually
+// ladder intent as raw heights (the dimension a Livepeer profile actually
 // specifies; width follows the source aspect and is Mist's authority), so the
 // check never depends on Mist's normalized pixel math. Each requested height must
-// map to a DISTINCT output track (one source-height track excluded) whose span
-// covers the source within maxRenditionSpanShortfallMs.
+// map to a distinct output track. When a source passthrough track can be
+// identified, it is excluded from the candidate pool and its span tightens the
+// truncation check.
 //
-// It fails CLOSED on uncertainty: no tracks, no independent source span, a
-// requested height that cannot be determined (<= 0), or a missing/short track all
-// return false so the caller runs the local-MistProcAV fallback rather than
-// publishing.
+// It fails closed on missing/invalid heights and missing tracks. Span validation
+// is applied only when a source-span baseline is known; a normalized output that
+// omits the source track should not be rejected solely because there is no
+// separate source track in the final artifact.
 func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
 	if len(videoTracks) == 0 {
 		log.Warn("Finished processing stream exposes no video tracks; renditions incomplete")
 		return false
 	}
 
-	// Source height for exclusion: the readiness baseline when known, otherwise
-	// the tallest output track (the un-downscaled source).
-	srcHeight := source.Height
-	if srcHeight <= 0 {
-		for _, t := range videoTracks {
-			if t.height > srcHeight {
-				srcHeight = t.height
-			}
-		}
+	srcIdx := -1
+	if source.Height > 0 {
+		srcIdx = sourceVideoTrackIndex(videoTracks, source)
 	}
-
-	// Pick the source passthrough deterministically: the LONGEST source-height
-	// track. videoTracks comes from a Go map range, so order is nondeterministic —
-	// excluding the FIRST source-height track could exclude a truncated same-height
-	// rendition (e.g. a short 720p transcode of a 720p source) and then let the full
-	// source track satisfy that requested 720p rendition, publishing a short same-
-	// height output. The source ran to EOF (PUSH_END), so its passthrough is the
-	// longest track at the source height; excluding exactly it leaves any short
-	// same-height rendition in the pool to fail coverage, and its span is the
-	// authoritative full source duration.
-	srcIdx := sourceVideoTrackIndex(videoTracks, mist.SourceMediaInfo{Height: srcHeight})
 	var sourceTrackSpanMs float64
 	if srcIdx >= 0 {
 		sourceTrackSpanMs = videoTracks[srcIdx].spanMs()
@@ -1480,22 +1431,11 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, vide
 		pool = append(pool, t)
 	}
 
-	// Span baseline must be INDEPENDENT of the transcode renditions. Deriving it
-	// from a rendition track would hide a uniform truncation where every produced
-	// rendition is short. The readiness duration (captured before transcode)
-	// qualifies, but it is only a snapshot — readiness can fire before a VOD input
-	// runs to EOF, understating a source whose true length is longer. So raise it to
-	// the source passthrough track's own span, which at PUSH_END reflects the whole
-	// source and is not a rendition output. Without any source span we cannot prove
-	// non-truncation, so fail closed.
-	if sourceSpanMs <= 0 {
-		log.Warn("No independent source span to validate rendition length; treating renditions as incomplete")
-		return false
-	}
 	baseline := sourceSpanMs
 	if sourceTrackSpanMs > baseline {
 		baseline = sourceTrackSpanMs
 	}
+	spanBaselineKnown := baseline > 0
 
 	consumed := make([]bool, len(pool))
 	for _, eh := range expectedHeights {
@@ -1520,7 +1460,7 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, vide
 			return false
 		}
 		consumed[idx] = true
-		if baseline-pool[idx].spanMs() > maxRenditionSpanShortfallMs {
+		if spanBaselineKnown && baseline-pool[idx].spanMs() > maxRenditionSpanShortfallMs {
 			log.WithFields(logrus.Fields{
 				"rendition_height": eh,
 				"track_span_ms":    int64(pool[idx].spanMs()),

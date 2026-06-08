@@ -230,6 +230,27 @@ func TestHandleStreamSourceUsesLocalSourceOverride(t *testing.T) {
 	}
 }
 
+func TestHandlePlayRewriteUsesLocalSourceOverride(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+	setProcessingSourceOverride("vod+clip-runtime", "/var/lib/frameworks/edge-storage/clips/stream/hash.mkv")
+	t.Cleanup(func() { clearProcessingSourceOverride("vod+clip-runtime") })
+
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		t.Fatalf("local source override should be resolved locally, forwarded trigger: %+v", trigger)
+		return nil, nil
+	})
+
+	ctx, recorder := newWebhookContext("vod+clip-runtime\n::1\nHTTP\nhttp://localhost/json_vod+clip-runtime.js")
+	HandlePlayRewrite(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if got := recorder.Body.String(); got != "vod+clip-runtime" {
+		t.Fatalf("expected local play rewrite response, got %q", got)
+	}
+}
+
 func TestTriggerHandlersRejectMalformedPayloads(t *testing.T) {
 	setupTriggerTest(t, "tenant-39b")
 

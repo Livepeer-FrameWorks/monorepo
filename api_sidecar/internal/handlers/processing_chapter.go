@@ -192,7 +192,7 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	chapterVideoSelector := h.processingVideoSelector(log, mistClient, streamName, originalProcessesJSON, streamOutputs, chapterSpanMs)
 
 	currentPushStartedAt := time.Now().Unix()
-	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, chapterVideoSelector)
+	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, chapterVideoSelector, originalProcessesJSON)
 	if pushErr != nil {
 		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)

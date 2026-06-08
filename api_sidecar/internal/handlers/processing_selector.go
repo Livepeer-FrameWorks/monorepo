@@ -37,7 +37,11 @@ func (h *ProcessingJobHandler) processingVideoSelector(log *logrus.Entry, mistCl
 	if source.Height <= 0 {
 		source, _ = sourceFromReadinessOutputs(readinessOutputs)
 	}
-	return chooseProcessingVideoSelector(log, processesJSON, presence.videoTracks, source, spanMs)
+	requirements := expectedProcessingTracks(processesJSON)
+	return appendAuxiliaryVideoSelectors(
+		chooseProcessingVideoSelector(log, processesJSON, presence.videoTracks, source, spanMs),
+		requirements.expectThumbs,
+	)
 }
 
 // chooseProcessingVideoSelector is the pure selection decision: the complete
@@ -103,6 +107,41 @@ func processingSourceVideoSelector(videoTracks []processingMetaVideoTrack, sourc
 	return "source"
 }
 
+func appendAuxiliaryVideoSelectors(videoSelector string, expectThumbs bool) string {
+	videoSelector = strings.TrimSpace(videoSelector)
+	if videoSelector == "" || videoSelector == "all" {
+		if videoSelector == "" {
+			return "all"
+		}
+		return videoSelector
+	}
+	parts := strings.Split(videoSelector, ",")
+	seen := make(map[string]bool, len(parts)+1)
+	out := make([]string, 0, len(parts)+1)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	if expectThumbs && !seen["JPEG"] {
+		out = append(out, "JPEG")
+	}
+	if len(out) == 0 {
+		return "all"
+	}
+	return strings.Join(out, ",")
+}
+
+func processingMetaSelector(processesJSON string) string {
+	if expectedProcessingTracks(processesJSON).expectThumbs {
+		return "all,thumbvtt"
+	}
+	return "all"
+}
+
 // completeRenditionTracks returns the tracks satisfying every requested height
 // (each by a distinct track covering the span within tolerance), and false if
 // the set is not fully satisfiable — so the caller never publishes a partial
@@ -152,8 +191,8 @@ func completeRenditionTracks(expectedHeights []int, videoTracks []processingMeta
 
 // startProcessingSelectorPush starts the local-disk push for a selection-based
 // output (clip / DVR chapter) using the chosen video selector.
-func (h *ProcessingJobHandler) startProcessingSelectorPush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath, videoSelector string) (int, error) {
-	targetURI := processingMuxTargetURIWithVideo(outputPath, videoSelector)
+func (h *ProcessingJobHandler) startProcessingSelectorPush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath, videoSelector, processesJSON string) (int, error) {
+	targetURI := processingMuxTargetURIWithSelectors(outputPath, videoSelector, processingMetaSelector(processesJSON))
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		return 0, err
 	}

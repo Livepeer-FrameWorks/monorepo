@@ -60,6 +60,10 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.Processi
 	}
 
 	query := url.Values{}
+	query.Set("audio", "all")
+	query.Set("video", "all,!JPEG")
+	query.Set("meta", "all,!thumbvtt")
+	query.Set("subtitle", "all")
 	if params["source_kind"] == "live" {
 		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
 		query.Set("duration", strconv.FormatInt(stopUnix-startUnix, 10))

@@ -120,7 +120,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	// generation id, so a delayed event from a retired push is rejected by
 	// comparing its TimeStarted against this.
 	currentPushStartedAt := time.Now().Unix()
-	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, videoSelector)
+	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, videoSelector, req.GetProcessesJson())
 	if pushErr != nil {
 		log.WithError(pushErr).Error("Clip: push_start failed")
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
