@@ -173,11 +173,12 @@ func main() {
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
 
-	// Add query complexity limit to prevent expensive queries
-	// Default 1000 matches Shopify's per-query limit with pagination-aware complexity
+	// Add query complexity limit to prevent expensive queries. Cost is computed with
+	// scalar/enum leaves valued at zero, so it reflects object structure and per-row
+	// fetch work rather than how many cheap scalars a row projects (see graph package).
 	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 1000)
 	if complexityLimit > 0 {
-		gqlHandler.Use(&extension.ComplexityLimit{
+		gqlHandler.Use(&graph.ScalarFreeComplexityLimit{
 			Func: func(_ context.Context, opCtx *graphql.OperationContext) int {
 				if isIntrospectionOperation(opCtx.Operation) {
 					return math.MaxInt

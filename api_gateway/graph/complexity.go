@@ -21,8 +21,16 @@ const HeavyFieldCost = 10
 
 // ConnectionMetaOverhead accounts for per-connection fields (pageInfo, totalCount,
 // __typename) that gqlgen includes in childComplexity but should not be multiplied
-// by the page size. Relay connections always carry these alongside edges.
-const ConnectionMetaOverhead = 8
+// by the page size. With scalar/enum cost zeroed (see complexity_extension.go), the
+// only non-multiplied children left are the edges wrapper (+1) and pageInfo (+1);
+// totalCount and all scalar leaves cost 0.
+const ConnectionMetaOverhead = 2
+
+// PerItemFetchCost weights a field whose resolver does one network/DB round-trip per
+// parent row (an N+1 fetch). Inside a connection it is multiplied by the page size, so
+// the cost tracks the real per-row fan-out rather than the cheap scalars projected
+// alongside it. Scalar projections off the already-loaded row cost nothing.
+const PerItemFetchCost = 5
 
 // getPageMultiplier extracts the pagination size from ConnectionInput.
 // Returns DefaultPageSize if page is nil or neither first/last is set.
@@ -50,10 +58,7 @@ func getPageMultiplier(page *model.ConnectionInput) int {
 // (pageInfo, totalCount) are added once.
 func connectionComplexity(childComplexity int, page *model.ConnectionInput) int {
 	multiplier := getPageMultiplier(page)
-	perItemCost := childComplexity - ConnectionMetaOverhead
-	if perItemCost < 1 {
-		perItemCost = 1
-	}
+	perItemCost := max(childComplexity-ConnectionMetaOverhead, 1)
 	return ConnectionBaseCost + ConnectionMetaOverhead + (multiplier * perItemCost)
 }
 
@@ -271,5 +276,22 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	}
 	c.InfrastructureNode.MetricsConnection = func(childComplexity int, page *model.ConnectionInput, _ *model.TimeRangeInput) int {
 		return connectionComplexity(childComplexity, page)
+	}
+
+	// Stream per-item fetch fields: each resolver does one cross-service round-trip per
+	// row, so they carry PerItemFetchCost which the enclosing connection multiplies by
+	// the page size. Scalar/struct-projection fields (pullSource, thumbnailAssets,
+	// retentionOverrides) have no resolver I/O and keep the default object cost.
+	c.Stream.Metrics = func(childComplexity int) int {
+		return PerItemFetchCost + childComplexity
+	}
+	c.Stream.PushTargets = func(childComplexity int) int {
+		return PerItemFetchCost + childComplexity
+	}
+	c.Stream.PlaybackPolicy = func(childComplexity int) int {
+		return PerItemFetchCost + childComplexity
+	}
+	c.Stream.RecentPullSourceEvents = func(childComplexity int, _ *int) int {
+		return PerItemFetchCost + childComplexity
 	}
 }

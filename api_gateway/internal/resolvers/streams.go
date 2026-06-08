@@ -19,7 +19,9 @@ import (
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/google/uuid"
+	"github.com/vektah/gqlparser/v2/ast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1174,9 +1176,62 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 	if l := loaders.FromContext(ctx); l != nil && l.Stream != nil {
 		tenantID := ctxkeys.GetTenantID(ctx)
 		l.Stream.PrimeMany(tenantID, resp.GetStreams())
+
+		// Warm the metrics cache in one batched Periscope call when the page actually
+		// requests metrics, so the per-row Stream.metrics resolver doesn't fan out into
+		// an N+1 GetStreamStatus per stream. Gated on selection so pages that omit
+		// metrics don't pay an extra round-trip.
+		if l.StreamMetrics != nil && selectionContainsField(ctx, "metrics") {
+			names := make([]string, 0, len(resp.GetStreams()))
+			for _, s := range resp.GetStreams() {
+				if id := s.GetStreamId(); id != "" {
+					names = append(names, id)
+				}
+			}
+			if len(names) > 0 {
+				if _, err := l.StreamMetrics.LoadMany(ctx, tenantID, names); err != nil {
+					r.Logger.WithError(err).Warn("Failed to batch-prime stream metrics; per-row load will retry")
+				}
+			}
+		}
 	}
 
 	return r.buildStreamsConnectionFromResponse(resp), nil
+}
+
+// selectionContainsField reports whether the current resolver's GraphQL selection set
+// requests a field with the given name anywhere beneath it (descending through nested
+// fields, inline fragments, and fragment spreads). Used to decide whether expensive
+// per-row enrichment is worth pre-fetching for the whole page.
+func selectionContainsField(ctx context.Context, name string) bool {
+	fc := graphql.GetFieldContext(ctx)
+	if fc == nil {
+		return false
+	}
+	return selectionSetContainsField(fc.Field.SelectionSet, name)
+}
+
+func selectionSetContainsField(set ast.SelectionSet, name string) bool {
+	for _, sel := range set {
+		switch s := sel.(type) {
+		case *ast.Field:
+			if s.Name == name {
+				return true
+			}
+			if selectionSetContainsField(s.SelectionSet, name) {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionSetContainsField(s.SelectionSet, name) {
+				return true
+			}
+		case *ast.FragmentSpread:
+			if s.Definition != nil && selectionSetContainsField(s.Definition.SelectionSet, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildStreamsPaginationRequest creates a proto pagination request from GraphQL params
