@@ -489,7 +489,7 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 		inst.RawDetails = details
 
 		// Extract issues
-		if issues, ok := details["issues"].(string); ok {
+		if issues, ok := detailString(details, "issues", "stream"); ok {
 			state.Issues = issues
 			state.HasIssues = true
 		} else {
@@ -613,62 +613,109 @@ func extractTracksFromDetails(details map[string]any) []StreamTrack {
 			continue // Skip issues field
 		}
 
-		if track, ok := trackData.(map[string]any); ok {
-			streamTrack := StreamTrack{
-				TrackID: trackID,
-			}
+		track, ok := trackData.(map[string]any)
+		if !ok {
+			// A non-"issues" top-level key whose value is not a track object is
+			// malformed MistServer data; surface it rather than dropping silently.
+			warnMalformedDetail("track", trackID, "object", trackData)
+			continue
+		}
 
-			// Extract codec
-			if codec, ok := track["codec"].(string); ok {
-				streamTrack.Codec = codec
+		streamTrack := StreamTrack{
+			TrackID: trackID,
+		}
 
-				// Determine track type from codec
-				switch codec {
-				case "H264", "HEVC", "VP8", "VP9", "AV1":
+		// Extract codec
+		if codec, ok := detailString(track, "codec", trackID); ok {
+			streamTrack.Codec = codec
+
+			// Determine track type from codec
+			switch codec {
+			case "H264", "HEVC", "VP8", "VP9", "AV1":
+				streamTrack.Type = "video"
+			case "AAC", "MP3", "Opus", "AC3":
+				streamTrack.Type = "audio"
+			default:
+				// Try to infer from other fields
+				if _, hasWidth := track["width"]; hasWidth {
 					streamTrack.Type = "video"
-				case "AAC", "MP3", "Opus", "AC3":
+				} else if _, hasChannels := track["channels"]; hasChannels {
 					streamTrack.Type = "audio"
-				default:
-					// Try to infer from other fields
-					if _, hasWidth := track["width"]; hasWidth {
-						streamTrack.Type = "video"
-					} else if _, hasChannels := track["channels"]; hasChannels {
-						streamTrack.Type = "audio"
-					}
 				}
 			}
-
-			// Extract bitrate
-			if kbits, ok := track["kbits"].(float64); ok {
-				streamTrack.Bitrate = int(kbits)
-			}
-
-			// Extract FPS
-			if fpks, ok := track["fpks"].(float64); ok {
-				streamTrack.FPS = fpks / 1000.0 // Convert from fpks to fps
-			}
-
-			// Extract video dimensions
-			if height, ok := track["height"].(float64); ok {
-				streamTrack.Height = int(height)
-			}
-			if width, ok := track["width"].(float64); ok {
-				streamTrack.Width = int(width)
-			}
-
-			// Extract audio properties
-			if channels, ok := track["channels"].(float64); ok {
-				streamTrack.Channels = int(channels)
-			}
-			if rate, ok := track["rate"].(float64); ok {
-				streamTrack.SampleRate = int(rate)
-			}
-
-			tracks = append(tracks, streamTrack)
 		}
+
+		// Extract bitrate
+		if kbits, ok := detailFloat64(track, "kbits", trackID); ok {
+			streamTrack.Bitrate = int(kbits)
+		}
+
+		// Extract FPS
+		if fpks, ok := detailFloat64(track, "fpks", trackID); ok {
+			streamTrack.FPS = fpks / 1000.0 // Convert from fpks to fps
+		}
+
+		// Extract video dimensions
+		if height, ok := detailFloat64(track, "height", trackID); ok {
+			streamTrack.Height = int(height)
+		}
+		if width, ok := detailFloat64(track, "width", trackID); ok {
+			streamTrack.Width = int(width)
+		}
+
+		// Extract audio properties
+		if channels, ok := detailFloat64(track, "channels", trackID); ok {
+			streamTrack.Channels = int(channels)
+		}
+		if rate, ok := detailFloat64(track, "rate", trackID); ok {
+			streamTrack.SampleRate = int(rate)
+		}
+
+		tracks = append(tracks, streamTrack)
 	}
 
 	return tracks
+}
+
+// detailString / detailFloat64 read a typed field out of a raw MistServer
+// details map. An absent key returns ok=false silently (the field is optional);
+// a key that is present but of the wrong type returns ok=false AND emits a
+// warning via warnMalformedDetail, so malformed payloads are visible instead of
+// being silently dropped. `where` identifies the track (or "stream") for logs.
+func detailString(m map[string]any, key, where string) (string, bool) {
+	raw, present := m[key]
+	if !present {
+		return "", false
+	}
+	if s, ok := raw.(string); ok {
+		return s, true
+	}
+	warnMalformedDetail(where, key, "string", raw)
+	return "", false
+}
+
+func detailFloat64(m map[string]any, key, where string) (float64, bool) {
+	raw, present := m[key]
+	if !present {
+		return 0, false
+	}
+	if f, ok := raw.(float64); ok {
+		return f, true
+	}
+	warnMalformedDetail(where, key, "float64", raw)
+	return 0, false
+}
+
+func warnMalformedDetail(where, key, wantType string, got any) {
+	if stateLogger == nil {
+		return
+	}
+	stateLogger.WithFields(logging.Fields{
+		"where":     where,
+		"field":     key,
+		"want_type": wantType,
+		"got_type":  fmt.Sprintf("%T", got),
+	}).Warn("Dropping malformed MistServer detail field")
 }
 
 // Default manager and extra mutation helpers
@@ -3853,41 +3900,54 @@ func (sm *StreamStateManager) clampBandwidth(bw uint64) uint64 {
 }
 
 // GetVirtualViewerStats returns statistics about virtual viewers for observability
-func (sm *StreamStateManager) GetVirtualViewerStats() map[string]any {
+// VirtualViewerStats is the typed snapshot of virtual-viewer tracking returned
+// by GetVirtualViewerStats. EstPendingBandwidth is bytes/sec, summed across
+// nodes as PendingRedirects × EstBandwidthPerUser.
+type VirtualViewerStats struct {
+	TotalViewers        int
+	Pending             int
+	Active              int
+	Abandoned           int
+	Disconnected        int
+	PendingByNode       map[string]int
+	DriftByNode         map[string]int
+	EstPendingBandwidth uint64
+}
+
+func (sm *StreamStateManager) GetVirtualViewerStats() VirtualViewerStats {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	stats := map[string]any{
-		"total_viewers": len(sm.virtualViewers),
+	stats := VirtualViewerStats{
+		TotalViewers:  len(sm.virtualViewers),
+		PendingByNode: make(map[string]int),
+		DriftByNode:   make(map[string]int),
 	}
 
 	// Count by state
-	pending, active, abandoned, disconnected := 0, 0, 0, 0
 	for _, viewer := range sm.virtualViewers {
 		switch viewer.State {
 		case VirtualViewerPending:
-			pending++
+			stats.Pending++
 		case VirtualViewerActive:
-			active++
+			stats.Active++
 		case VirtualViewerAbandoned:
-			abandoned++
+			stats.Abandoned++
 		case VirtualViewerDisconnected:
-			disconnected++
+			stats.Disconnected++
 		}
 	}
-	stats["pending"] = pending
-	stats["active"] = active
-	stats["abandoned"] = abandoned
-	stats["disconnected"] = disconnected
 
-	// Per-node pending counts
-	nodeStats := make(map[string]int)
+	// Per-node pending counts and estimated pending bandwidth.
 	for nodeID, node := range sm.nodes {
-		if node != nil {
-			nodeStats[nodeID] = node.PendingRedirects
+		if node == nil {
+			continue
+		}
+		stats.PendingByNode[nodeID] = node.PendingRedirects
+		if node.PendingRedirects > 0 {
+			stats.EstPendingBandwidth += uint64(node.PendingRedirects) * node.EstBandwidthPerUser
 		}
 	}
-	stats["pending_by_node"] = nodeStats
 
 	// Drift: virtual ACTIVE count vs Helmsman real count per node
 	activeByNode := make(map[string]int)
@@ -3904,11 +3964,9 @@ func (sm *StreamStateManager) GetVirtualViewerStats() map[string]any {
 			}
 		}
 	}
-	driftByNode := make(map[string]int)
 	for nodeID := range sm.nodes {
-		driftByNode[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
+		stats.DriftByNode[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
 	}
-	stats["drift_by_node"] = driftByNode
 
 	return stats
 }

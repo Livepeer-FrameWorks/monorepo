@@ -114,20 +114,7 @@ func TestParsePlaybackPath(t *testing.T) {
 	}
 }
 
-func TestNormalizeProtocol(t *testing.T) {
-	cases := map[string]string{
-		"m3u8": "hls", "hls": "hls",
-		"mpd": "dash", "dash": "dash",
-		"cmaf": "cmaf", "llhls": "cmaf", "ll-hls": "cmaf",
-		"whep": "webrtc", "webrtc": "webrtc",
-		"mp4": "mp4", "progressive": "mp4",
-	}
-	for in, want := range cases {
-		if got := normalizeProtocol(in); got != want {
-			t.Errorf("normalizeProtocol(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
+// normalizeProtocol is covered comprehensively in routing_helpers_test.go.
 
 func TestFindProtocolURL(t *testing.T) {
 	outputs := map[string]*sharedpb.OutputEndpoint{

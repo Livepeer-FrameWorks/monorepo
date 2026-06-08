@@ -39,8 +39,8 @@ func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
 
 	// Verify viewer exists before reconciliation
 	stats := sm.GetVirtualViewerStats()
-	if stats["abandoned"].(int) != 1 {
-		t.Fatalf("expected 1 abandoned viewer, got %v", stats["abandoned"])
+	if stats.Abandoned != 1 {
+		t.Fatalf("expected 1 abandoned viewer, got %v", stats.Abandoned)
 	}
 
 	// Call ReconcileVirtualViewers - this should clean up the old abandoned viewer
@@ -48,11 +48,11 @@ func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
 
 	// Verify viewer was cleaned up
 	stats = sm.GetVirtualViewerStats()
-	if stats["abandoned"].(int) != 0 {
-		t.Fatalf("expected 0 abandoned viewers after cleanup, got %v", stats["abandoned"])
+	if stats.Abandoned != 0 {
+		t.Fatalf("expected 0 abandoned viewers after cleanup, got %v", stats.Abandoned)
 	}
-	if stats["total_viewers"].(int) != 0 {
-		t.Fatalf("expected 0 total viewers after cleanup, got %v", stats["total_viewers"])
+	if stats.TotalViewers != 0 {
+		t.Fatalf("expected 0 total viewers after cleanup, got %v", stats.TotalViewers)
 	}
 }
 
@@ -159,8 +159,8 @@ func TestReconcileVirtualViewers_KeepsRecentAbandonedViewers(t *testing.T) {
 
 	// Verify viewer was NOT cleaned up (too recent)
 	stats := sm.GetVirtualViewerStats()
-	if stats["abandoned"].(int) != 1 {
-		t.Fatalf("expected 1 abandoned viewer (recent), got %v", stats["abandoned"])
+	if stats.Abandoned != 1 {
+		t.Fatalf("expected 1 abandoned viewer (recent), got %v", stats.Abandoned)
 	}
 }
 
@@ -184,8 +184,8 @@ func TestReconcileVirtualViewers_TimeoutsPendingViewers(t *testing.T) {
 
 	// Verify viewer is PENDING before reconciliation
 	stats := sm.GetVirtualViewerStats()
-	if stats["pending"].(int) != 1 {
-		t.Fatalf("expected 1 pending viewer, got %v", stats["pending"])
+	if stats.Pending != 1 {
+		t.Fatalf("expected 1 pending viewer, got %v", stats.Pending)
 	}
 
 	// Call ReconcileVirtualViewers - this should timeout the pending viewer
@@ -193,11 +193,11 @@ func TestReconcileVirtualViewers_TimeoutsPendingViewers(t *testing.T) {
 
 	// Verify viewer was marked as ABANDONED
 	stats = sm.GetVirtualViewerStats()
-	if stats["pending"].(int) != 0 {
-		t.Fatalf("expected 0 pending viewers after timeout, got %v", stats["pending"])
+	if stats.Pending != 0 {
+		t.Fatalf("expected 0 pending viewers after timeout, got %v", stats.Pending)
 	}
-	if stats["abandoned"].(int) != 1 {
-		t.Fatalf("expected 1 abandoned viewer after timeout, got %v", stats["abandoned"])
+	if stats.Abandoned != 1 {
+		t.Fatalf("expected 1 abandoned viewer after timeout, got %v", stats.Abandoned)
 	}
 }
 

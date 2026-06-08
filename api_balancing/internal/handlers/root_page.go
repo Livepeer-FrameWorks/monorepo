@@ -64,18 +64,6 @@ func formatBytesPerSec(bytesPerSec uint64) string {
 	return formatBitsPerSec(bytesPerSec * 8)
 }
 
-// safeInt extracts int from interface, returns 0 if invalid
-func safeInt(v interface{}) int {
-	val, _ := toInt(v)
-	return val
-}
-
-// safeUint64 extracts uint64 from interface, returns 0 if invalid
-func safeUint64(v interface{}) uint64 {
-	val, _ := toInt64(v)
-	return uint64(val)
-}
-
 func findStreamSourceNodeID(stream *state.StreamState, instances map[string]map[string]state.StreamInstanceState) string {
 	if stream != nil && stream.NodeID != "" {
 		return stream.NodeID
@@ -1390,12 +1378,12 @@ func HandleRootPage(c *gin.Context) {
 	}
 
 	vvStats := VirtualViewerStatsData{
-		TotalViewers:        safeInt(virtualViewerStats["total_viewers"]),
-		TotalPending:        safeInt(virtualViewerStats["pending"]),
-		TotalActive:         safeInt(virtualViewerStats["active"]),
-		TotalAbandoned:      safeInt(virtualViewerStats["abandoned"]),
-		TotalDisconnected:   safeInt(virtualViewerStats["disconnected"]),
-		EstPendingBandwidth: formatBytesPerSec(safeUint64(virtualViewerStats["est_pending_bandwidth"])),
+		TotalViewers:        virtualViewerStats.TotalViewers,
+		TotalPending:        virtualViewerStats.Pending,
+		TotalActive:         virtualViewerStats.Active,
+		TotalAbandoned:      virtualViewerStats.Abandoned,
+		TotalDisconnected:   virtualViewerStats.Disconnected,
+		EstPendingBandwidth: formatBytesPerSec(virtualViewerStats.EstPendingBandwidth),
 	}
 
 	type StreamContextCacheEntryData struct {

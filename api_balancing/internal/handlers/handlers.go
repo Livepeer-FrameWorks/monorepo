@@ -2248,30 +2248,6 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 	return total
 }
 
-func toInt(v interface{}) (int, bool) {
-	switch x := v.(type) {
-	case float64:
-		return int(x), true
-	case int:
-		return x, true
-	default:
-		return 0, false
-	}
-}
-
-func toInt64(v interface{}) (int64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return int64(x), true
-	case int64:
-		return x, true
-	case int:
-		return int64(x), true
-	default:
-		return 0, false
-	}
-}
-
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
 func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*quartermasterpb.TenantClusterPeer) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
