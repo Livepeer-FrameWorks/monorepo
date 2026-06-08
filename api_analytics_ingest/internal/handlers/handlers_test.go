@@ -2494,6 +2494,7 @@ type fakeClickhouseConn struct {
 	batches    map[string]*fakeBatch
 	duplicates map[string]map[uuid.UUID]bool
 	queries    []fakeQuery
+	execs      []fakeQuery
 	queryRows  map[string][][]any
 }
 
@@ -2557,6 +2558,7 @@ func (f *fakeClickhouseConn) PrepareBatch(ctx context.Context, query string, opt
 	return batch, nil
 }
 func (f *fakeClickhouseConn) Exec(ctx context.Context, query string, args ...any) error {
+	f.execs = append(f.execs, fakeQuery{table: tableFromQuery(query, "into"), query: query, args: append([]any(nil), args...)})
 	return nil
 }
 func (f *fakeClickhouseConn) AsyncInsert(ctx context.Context, query string, wait bool, args ...any) error {
@@ -2621,6 +2623,10 @@ func (f *fakeRows) Scan(dest ...any) error {
 			}
 		case *uint64:
 			if v, ok := values[i].(uint64); ok {
+				*d = v
+			}
+		case *float64:
+			if v, ok := values[i].(float64); ok {
 				*d = v
 			}
 		case *string:
