@@ -469,8 +469,8 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 	if got := env["HOME"]; got != "/var/lib/frameworks/livepeer-gateway" {
 		t.Fatalf("HOME got %v", got)
 	}
-	if got := vars["go_service_validate_timeout"]; got != 120 {
-		t.Fatalf("go_service_validate_timeout got %v, want 120", got)
+	if got := vars["go_service_validate_timeout"]; got != 300 {
+		t.Fatalf("go_service_validate_timeout got %v, want 300", got)
 	}
 	assertStringSlice(t, vars["go_service_args"], []string{
 		"-gateway",

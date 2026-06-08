@@ -349,7 +349,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	}
 	validateTimeout := 15
 	if cfg.ServiceName == "livepeer-gateway" {
-		validateTimeout = 120
+		validateTimeout = 300
 	}
 	vars := map[string]any{
 		"go_service_name":                             cfg.ServiceName,
