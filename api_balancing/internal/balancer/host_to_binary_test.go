@@ -45,4 +45,17 @@ func TestHostToBinaryIPLiteral(t *testing.T) {
 			t.Fatalf("hostToBinary(\"\") = % x, want zero-filled", got)
 		}
 	})
+
+	// A non-IP hostname takes the DNS-resolution branch. "localhost" resolves
+	// deterministically via the system hosts file (no network), so it yields a
+	// populated key. We assert only non-zero — whether it lands on 127.0.0.1 or
+	// ::1 is platform-dependent (resolver order), and the branch's job is just
+	// to encode whatever it resolved.
+	t.Run("resolvable hostname -> non-zero key", func(t *testing.T) {
+		got := lb.hostToBinary(context.Background(), "localhost")
+		var zero [16]byte
+		if bytes.Equal(got[:], zero[:]) {
+			t.Fatal("hostToBinary(localhost) returned zero key; expected a resolved address")
+		}
+	})
 }
