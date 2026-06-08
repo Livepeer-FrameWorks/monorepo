@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 func preferred(nodeID string) *processingJob {
@@ -72,18 +73,18 @@ func TestRouteProcessingJob(t *testing.T) {
 		setNodeProcessing(sm, "idle", true, 8, 1) // fewest in-flight
 		sm.TouchNode("mid", true)
 		setNodeProcessing(sm, "mid", true, 8, 3)
-		if id, reason := routeProcessingJob(nil); id != "idle" || reason != "lowest_transcode_load" {
-			t.Errorf("got (%q,%q), want (\"idle\",\"lowest_transcode_load\")", id, reason)
+		if id, reason := routeProcessingJob(nil); id != "idle" || reason != "lowest_load:video_transcode" {
+			t.Errorf("got (%q,%q), want (\"idle\",\"lowest_load:video_transcode\")", id, reason)
 		}
 	})
 
-	t.Run("MaxTranscodes 0 is unbounded and eligible", func(t *testing.T) {
+	t.Run("slots_total 0 is unbounded and eligible", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
 		sm.TouchNode("unbounded", true)
 		setNodeProcessing(sm, "unbounded", true, 0, 99) // 99 in-flight but no cap
-		if id, reason := routeProcessingJob(nil); id != "unbounded" || reason != "lowest_transcode_load" {
-			t.Errorf("got (%q,%q), want (\"unbounded\",\"lowest_transcode_load\")", id, reason)
+		if id, reason := routeProcessingJob(nil); id != "unbounded" || reason != "lowest_load:video_transcode" {
+			t.Errorf("got (%q,%q), want (\"unbounded\",\"lowest_load:video_transcode\")", id, reason)
 		}
 	})
 
@@ -92,8 +93,22 @@ func TestRouteProcessingJob(t *testing.T) {
 		t.Cleanup(sm.Shutdown)
 		sm.TouchNode("full", true)
 		setNodeProcessing(sm, "full", true, 2, 2) // at capacity
-		if id, reason := routeProcessingJob(nil); id != "" || reason != "no processing-capable nodes available" {
-			t.Errorf("got (%q,%q), want (\"\",\"no processing-capable nodes available\")", id, reason)
+		if id, reason := routeProcessingJob(nil); id != "" || reason != "no nodes with capacity for class video_transcode" {
+			t.Errorf("got (%q,%q), want (\"\",\"no nodes with capacity for class video_transcode\")", id, reason)
+		}
+	})
+
+	t.Run("node advertising a different class is not eligible", func(t *testing.T) {
+		sm := state.ResetDefaultManagerForTests()
+		t.Cleanup(sm.Shutdown)
+		// Processing-capable, but only advertises ai_inference capacity — a
+		// video_transcode job must not land here.
+		sm.TouchNode("infer", true)
+		setNodeClassCapacity(sm, "infer", map[string]state.ClassCapacity{
+			mist.ProcessingClassAIInference: {Total: 4, Used: 0},
+		})
+		if id, reason := routeProcessingJob(nil); id != "" || reason != "no nodes with capacity for class video_transcode" {
+			t.Errorf("got (%q,%q), want (\"\",\"no nodes with capacity for class video_transcode\")", id, reason)
 		}
 	})
 }

@@ -312,8 +312,7 @@ func TestMetricsUpdateDoesNotPreventStaleness(t *testing.T) {
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{
 		CPU:                  10,
 		RAMMax:               1024,
@@ -328,8 +327,9 @@ func TestMetricsUpdateDoesNotPreventStaleness(t *testing.T) {
 		Roles:                []string{"edge"},
 		StorageCapacityBytes: 1024,
 		StorageUsedBytes:     256,
-		MaxTranscodes:        1,
-		CurrentTranscodes:    0,
+		ProcessingClasses: map[string]ClassCapacity{
+			"video_transcode": {Total: 1, Used: 0},
+		},
 	})
 
 	sm.checkStaleNodes()

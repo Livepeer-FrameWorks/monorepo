@@ -380,8 +380,7 @@ func seedClusterNode(sm *state.StreamStateManager, nodeID, clusterID string, cpu
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{CPU: cpuPercent})
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, "", "", clusterID, nil)
 	// TouchNode refreshes LastHeartbeat and clears IsStale so the node passes

@@ -2267,10 +2267,30 @@ message StorageInfo {
   string s3_prefix = 3;
 }
 
+// ProcessingClassCapacity is one node's capacity for a single class of
+// processing work. A transcode slot is not comparable to an inference slot
+// (different GPU type, different concurrency, and inference is gated by which
+// models are loaded), so capacity is reported per class rather than as one
+// scalar. slots_total is the configured ceiling (0 = unbounded); slots_used is
+// the live in-flight count; ready carries class-specific readiness (e.g. loaded
+// model ids for ai_inference).
+message ProcessingClassCapacity {
+  string class = 1;            // "video_transcode" | "ai_inference" | "cpu_heavy"
+  int32 slots_total = 2;
+  int32 slots_used = 3;
+  repeated string ready = 4;
+}
+
 message NodeLimits {
-  int32 max_transcodes = 1;
+  reserved 1;
+  reserved "max_transcodes";
   uint64 storage_capacity_bytes = 2;
   uint64 storage_used_bytes = 3;
+
+  // Per-class processing capacity, the scheduler's source of truth for
+  // load-aware routing of processing jobs. A processing-capable node reports
+  // one entry per class it can run (video_transcode, ai_inference, cpu_heavy).
+  repeated ProcessingClassCapacity processing_classes = 4;
 }
 
 message StreamData {
@@ -2525,6 +2545,11 @@ message ProcessingJobRequest {
   // max(2*chapter_duration, 30min) capped at 24h; missing/zero means
   // Helmsman applies its own default.
   int64 deadline_unix_ms = 10;
+
+  // Processing class this job needs, matched against a node's
+  // ProcessingClassCapacity during routing. Empty defaults to
+  // "video_transcode" (VOD/clip/DVR).
+  string processing_class = 11;
 
   // DVR chapter finalization specifics. Only populated when
   // job_type == "dvr_chapter_finalize".

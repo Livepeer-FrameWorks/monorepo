@@ -294,8 +294,7 @@ func TestFindNodeByArtifactInternalName_PicksLowestScore(t *testing.T) {
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{CPU: 90})
 
 	host, _ := sm.FindNodeByArtifactInternalName("shared")

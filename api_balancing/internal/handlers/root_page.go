@@ -11,8 +11,25 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/gin-gonic/gin"
 )
+
+// nodeClassUsed / nodeClassTotal read a node's per-class processing capacity
+// for display. Total 0 means unbounded.
+func nodeClassUsed(node state.EnhancedBalancerNodeSnapshot, class string) int {
+	if c, ok := node.ProcessingClasses[class]; ok {
+		return c.Used
+	}
+	return 0
+}
+
+func nodeClassTotal(node state.EnhancedBalancerNodeSnapshot, class string) int {
+	if c, ok := node.ProcessingClasses[class]; ok {
+		return c.Total
+	}
+	return 0
+}
 
 func formatBytes(bytes uint64) string {
 	const unit = 1024
@@ -498,7 +515,7 @@ func HandleRootPage(c *gin.Context) {
                 <!-- Transcodes -->
                 <div class="detail-row">
                     <span class="label">Transcodes</span>
-                    <span class="value">{{.CurrentTranscodes}} / {{.MaxTranscodes}}</span>
+                    <span class="value">{{.TranscodeUsed}} / {{.TranscodeTotal}}</span>
                 </div>
 
                 <!-- Config Streams -->
@@ -863,8 +880,8 @@ func HandleRootPage(c *gin.Context) {
 		GPUCount            int
 		GPUMemMB            int
 		GPUCC               string
-		MaxTranscodes       int
-		CurrentTranscodes   int
+		TranscodeUsed       int
+		TranscodeTotal      int
 		UpSpeed             uint64
 		UpSpeedStr          string
 		DownSpeed           uint64
@@ -1076,8 +1093,8 @@ func HandleRootPage(c *gin.Context) {
 			GPUCount:            node.GPUCount,
 			GPUMemMB:            node.GPUMemMB,
 			GPUCC:               node.GPUCC,
-			MaxTranscodes:       node.MaxTranscodes,
-			CurrentTranscodes:   node.CurrentTranscodes,
+			TranscodeUsed:       nodeClassUsed(node, mist.ProcessingClassVideoTranscode),
+			TranscodeTotal:      nodeClassTotal(node, mist.ProcessingClassVideoTranscode),
 			UpSpeed:             uint64(node.UpSpeed),
 			UpSpeedStr:          formatBytesPerSec(uint64(node.UpSpeed)),
 			DownSpeed:           uint64(node.DownSpeed),

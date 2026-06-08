@@ -745,7 +745,7 @@ func clipProcessingPreferredNode(nodeID string) string {
 	if node == nil || !node.CapProcessing || !node.IsHealthy {
 		return ""
 	}
-	if node.MaxTranscodes > 0 && node.CurrentTranscodes >= node.MaxTranscodes {
+	if !node.CanRunClass(mist.ProcessingClassVideoTranscode) {
 		return ""
 	}
 	return nodeID

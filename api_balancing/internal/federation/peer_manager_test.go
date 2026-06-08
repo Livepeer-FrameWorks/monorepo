@@ -890,8 +890,7 @@ func seedFederationNodeAndStream(t *testing.T, sm *state.StreamStateManager, nod
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{
 		CPU:        15,
 		RAMMax:     2048,

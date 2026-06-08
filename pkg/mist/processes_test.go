@@ -427,3 +427,237 @@ func TestInfrastructureMistServerConfProcessShapes(t *testing.T) {
 		}
 	}
 }
+
+// TestLivepeerProfileFloatCoercesEveryJSONNumericEncoding pins the numeric-read
+// contract every profile dimension/fps lookup is built on: heterogeneous JSON
+// encodings (native float, Go ints, json.Number) all decode to float64, and any
+// non-numeric or unparseable value reports absence via ok=false rather than a
+// silent zero. The ok flag is load-bearing — callers distinguish "field is 0"
+// from "field is missing/garbage" to decide whether to apply a default.
+func TestLivepeerProfileFloatCoercesEveryJSONNumericEncoding(t *testing.T) {
+	cases := []struct {
+		name   string
+		value  any
+		want   float64
+		wantOK bool
+	}{
+		{"float64", float64(360), 360, true},
+		{"int", int(360), 360, true},
+		{"int64", int64(360), 360, true},
+		{"json.Number integer", json.Number("720"), 720, true},
+		{"json.Number float", json.Number("29.97"), 29.97, true},
+		{"json.Number malformed", json.Number("not-a-number"), 0, false},
+		{"explicit zero stays present", float64(0), 0, true},
+		{"string is not numeric", "360", 0, false},
+		{"bool is not numeric", true, 0, false},
+		{"nil/absent", nil, 0, false},
+		{"nested map is not numeric", map[string]any{}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := livepeerProfileFloat(LivepeerJSONProfile{"height": tc.value}, "height")
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("livepeerProfileFloat(%v) = (%v, %v), want (%v, %v)", tc.value, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+	// A key that is entirely absent must also report not-present (default path).
+	if got, ok := livepeerProfileFloat(LivepeerJSONProfile{}, "height"); ok || got != 0 {
+		t.Fatalf("absent key = (%v, %v), want (0, false)", got, ok)
+	}
+}
+
+// TestRequestedRenditionHeightFallbackChain covers the two ladder-intent
+// fallback branches not already exercised through RequestedRenditionHeights:
+// a profile with no dimensions passes the source height through, while a
+// width-only request against an unknown source fails closed at 0 so the
+// validator never treats an underivable rendition as satisfied.
+func TestRequestedRenditionHeightFallbackChain(t *testing.T) {
+	src := SourceMediaInfo{Width: 1280, Height: 720}
+
+	if got := requestedRenditionHeight(LivepeerJSONProfile{"name": "src", "bitrate": 900000}, src); got != 720 {
+		t.Fatalf("no-dimensions profile = %d, want source passthrough 720", got)
+	}
+	// height:0 is "absent", not a real request — must fall through to source.
+	if got := requestedRenditionHeight(LivepeerJSONProfile{"height": 0}, src); got != 720 {
+		t.Fatalf("height:0 = %d, want source passthrough 720", got)
+	}
+	// Width-only with unknown source aspect cannot be resolved -> 0 (fail closed).
+	if got := requestedRenditionHeight(LivepeerJSONProfile{"width": 640}, SourceMediaInfo{}); got != 0 {
+		t.Fatalf("width-only unknown source = %d, want 0 (fail closed)", got)
+	}
+}
+
+// TestNormalizeLivepeerProfilesDefaultsAndCompletion pins the remaining
+// MistProcLivepeer-mirroring branches: missing fps/gop/profile are filled,
+// a bare profile inherits both source dimensions, a width-only profile derives
+// its height from the source aspect, and an empty input is nil (not []).
+func TestNormalizeLivepeerProfilesDefaultsAndCompletion(t *testing.T) {
+	if got := NormalizeLivepeerProfiles(nil, SourceMediaInfo{Width: 1280, Height: 720}); got != nil {
+		t.Fatalf("empty input = %#v, want nil", got)
+	}
+
+	t.Run("bare profile gets defaults and both source dims", func(t *testing.T) {
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"name": "src", "bitrate": 900000}}, SourceMediaInfo{Width: 1280, Height: 720, FPS: 30})
+		if len(got) != 1 {
+			t.Fatalf("expected one profile, got %#v", got)
+		}
+		p := got[0]
+		if p["gop"] != "0.0" {
+			t.Errorf("gop default = %#v, want \"0.0\"", p["gop"])
+		}
+		if p["profile"] != "H264High" {
+			t.Errorf("profile default = %#v, want H264High", p["profile"])
+		}
+		if p["fps"] != 30000 || p["fpsDen"] != 1000 {
+			t.Errorf("fps default = %#v/%#v, want 30000/1000 (source fps in millihertz)", p["fps"], p["fpsDen"])
+		}
+		if p["width"] != 1280 || p["height"] != 720 {
+			t.Errorf("dims = %#v x %#v, want full source 1280x720", p["width"], p["height"])
+		}
+	})
+
+	t.Run("zero source fps falls back to 25fps", func(t *testing.T) {
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"height": 360}}, SourceMediaInfo{Width: 1280, Height: 720})
+		if got[0]["fps"] != 25000 {
+			t.Fatalf("fps with zero source = %#v, want 25000 default", got[0]["fps"])
+		}
+	})
+
+	t.Run("width-only derives height from landscape aspect", func(t *testing.T) {
+		// 640 wide off a 1280x720 source -> 360 high (even).
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"width": 640}}, SourceMediaInfo{Width: 1280, Height: 720, FPS: 30})
+		if got[0]["width"] != 640 || got[0]["height"] != 360 {
+			t.Fatalf("width-only completion = %#v x %#v, want 640x360", got[0]["width"], got[0]["height"])
+		}
+	})
+
+	t.Run("all profiles inhibited collapses to nil", func(t *testing.T) {
+		// Source smaller than the inhibit threshold -> profile dropped -> nil,
+		// the signal callers read as "no Livepeer renditions for this source".
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"height": 360, "track_inhibit": "video=<640x360"}}, SourceMediaInfo{Width: 320, Height: 240})
+		if got != nil {
+			t.Fatalf("all-inhibited = %#v, want nil", got)
+		}
+	})
+
+	t.Run("surviving profile has track_inhibit stripped", func(t *testing.T) {
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"height": 360, "track_inhibit": "video=<640x360"}}, SourceMediaInfo{Width: 1280, Height: 720, FPS: 30})
+		if len(got) != 1 {
+			t.Fatalf("expected surviving profile, got %#v", got)
+		}
+		if _, ok := got[0]["track_inhibit"]; ok {
+			t.Fatal("track_inhibit must be stripped from the normalized output")
+		}
+	})
+
+	// Characterization of the portrait-source branch (source.Width < source.Height):
+	// a height-only request is reinterpreted as the target width, and the height is
+	// recomputed to preserve the source aspect. Pins current behavior; flagged for
+	// review if the width/height swap is ever questioned.
+	t.Run("portrait source height-only swap preserves aspect", func(t *testing.T) {
+		got := NormalizeLivepeerProfiles([]LivepeerJSONProfile{{"height": 480}}, SourceMediaInfo{Width: 720, Height: 1280, FPS: 30})
+		if got[0]["width"] != 480 || got[0]["height"] != 854 {
+			t.Fatalf("portrait height-only = %#v x %#v, want 480x854", got[0]["width"], got[0]["height"])
+		}
+	})
+}
+
+// TestLivepeerProfileResolutionNeitherDimensionIsEmpty closes the one remaining
+// branch: with no usable width or height the resolution string is empty so the
+// generated MistProcAV config omits the option entirely (passthrough) rather
+// than emitting a malformed "x".
+func TestLivepeerProfileResolutionNeitherDimensionIsEmpty(t *testing.T) {
+	for _, prof := range []map[string]any{
+		{},
+		{"width": float64(0), "height": float64(0)},
+		{"width": "garbage"},
+	} {
+		if got := livepeerProfileResolution(prof); got != "" {
+			t.Fatalf("resolution(%#v) = %q, want empty", prof, got)
+		}
+	}
+}
+
+// TestLivepeerProfileToAVProfileMapping pins the Livepeer->MistProcAV profile-name
+// map, including the default: an unrecognized name maps to "" (omitted) so a
+// local AV process never inherits a profile string MistProcAV cannot parse. The
+// match is substring-based and case-sensitive.
+func TestLivepeerProfileToAVProfileMapping(t *testing.T) {
+	cases := map[string]string{
+		"H264ConstrainedHigh":     "high",
+		"H264High":                "high",
+		"H264Main":                "main",
+		"H264ConstrainedBaseline": "baseline",
+		"H264Baseline":            "baseline",
+		"H264Extended":            "", // unmapped -> omitted
+		"":                        "",
+		"h264high":                "", // case-sensitive: lowercase does not match
+	}
+	for in, want := range cases {
+		if got := livepeerProfileToAVProfile(in); got != want {
+			t.Fatalf("livepeerProfileToAVProfile(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// processNames extracts the "process" field from a process-config JSON array so
+// tests can assert which entries survived a transform without depending on
+// re-marshaled key ordering or whitespace.
+func processNames(t *testing.T, processesJSON string) []string {
+	t.Helper()
+	var procs []map[string]any
+	if err := json.Unmarshal([]byte(processesJSON), &procs); err != nil {
+		t.Fatalf("unmarshal %q: %v", processesJSON, err)
+	}
+	names := make([]string, 0, len(procs))
+	for _, p := range procs {
+		name, _ := p["process"].(string)
+		names = append(names, name)
+	}
+	return names
+}
+
+// TestStripLivepeerProcesses pins the self-hosted-without-transcoding path:
+// Livepeer entries are dropped while audio/thumbnail processes are kept, and
+// the function fails open (returns the input unchanged) on malformed JSON
+// rather than discarding a config it could not parse.
+func TestStripLivepeerProcesses(t *testing.T) {
+	t.Run("drops only livepeer entries", func(t *testing.T) {
+		input := `[
+			{"process":"AV","codec":"AAC"},
+			{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]},
+			{"process":"FFMPEG","track_select":"video=all"}
+		]`
+		got := processNames(t, StripLivepeerProcesses(input))
+		want := []string{"AV", "FFMPEG"}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("surviving processes = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("all livepeer marshals to null", func(t *testing.T) {
+		// filtered stays a nil slice, which json.Marshal renders as "null".
+		// Callers treat that as "no processes" — pin it so a change to "[]"
+		// (which some consumers parse differently) is a deliberate decision.
+		input := `[{"process":"Livepeer","target_profiles":[{"height":720}]}]`
+		if got := StripLivepeerProcesses(input); got != "null" {
+			t.Fatalf("all-Livepeer strip = %q, want \"null\"", got)
+		}
+	})
+
+	t.Run("no livepeer keeps every entry", func(t *testing.T) {
+		input := `[{"process":"AV","codec":"AAC"},{"process":"FFMPEG"}]`
+		got := processNames(t, StripLivepeerProcesses(input))
+		if len(got) != 2 || got[0] != "AV" || got[1] != "FFMPEG" {
+			t.Fatalf("surviving processes = %v, want [AV FFMPEG]", got)
+		}
+	})
+
+	t.Run("malformed json fails open", func(t *testing.T) {
+		input := `{not valid json`
+		if got := StripLivepeerProcesses(input); got != input {
+			t.Fatalf("malformed input should be returned verbatim, got %q", got)
+		}
+	})
+}

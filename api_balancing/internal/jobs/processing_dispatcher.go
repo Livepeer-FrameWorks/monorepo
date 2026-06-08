@@ -323,13 +323,14 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}
 
 	req := &ipcpb.ProcessingJobRequest{
-		JobId:        job.JobID,
-		TenantId:     job.TenantID,
-		ArtifactHash: artifactHash,
-		SourceUrl:    sourceURL,
-		JobType:      job.JobType,
-		Params:       params,
-		InternalName: internalName,
+		JobId:           job.JobID,
+		TenantId:        job.TenantID,
+		ArtifactHash:    artifactHash,
+		SourceUrl:       sourceURL,
+		JobType:         job.JobType,
+		Params:          params,
+		InternalName:    internalName,
+		ProcessingClass: mist.ProcessingClassVideoTranscode,
 	}
 	// Foghorn-authoritative runtime name for the processed OUTPUT
 	// artifact's DTSH boot post-transcode. Outputs are always vod+.

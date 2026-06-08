@@ -20,6 +20,15 @@ const (
 	WorkloadVOD  = "vod"
 )
 
+// Processing classes name the kind of processing capacity a job needs and a
+// node advertises (see ipc.ProcessingClassCapacity). A transcode slot is not
+// comparable to an inference slot, so the scheduler routes per class.
+const (
+	ProcessingClassVideoTranscode = "video_transcode"
+	ProcessingClassAIInference    = "ai_inference"
+	ProcessingClassCPUHeavy       = "cpu_heavy"
+)
+
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
 // budget for VOD/processing transcodes. It is generous versus realtime so a slow
 // first segment or a momentarily-loaded orchestrator does not trip the client,

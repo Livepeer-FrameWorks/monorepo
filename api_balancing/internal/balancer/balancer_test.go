@@ -28,8 +28,7 @@ func seedNode(sm *state.StreamStateManager, nodeID string, capEdge bool, roles [
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{
 		CPU:                  10,
 		RAMMax:               1024,
@@ -44,8 +43,6 @@ func seedNode(sm *state.StreamStateManager, nodeID string, capEdge bool, roles [
 		Roles:                roles,
 		StorageCapacityBytes: 0,
 		StorageUsedBytes:     0,
-		MaxTranscodes:        0,
-		CurrentTranscodes:    0,
 	})
 }
 
@@ -73,8 +70,7 @@ func addTestNode(t *testing.T, sm *state.StreamStateManager, nodeID, baseURL str
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{
 		CPU:        0,
 		RAMMax:     1024,

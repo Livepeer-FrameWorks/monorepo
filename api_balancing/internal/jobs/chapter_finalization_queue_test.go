@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -271,7 +272,7 @@ func TestNodeAliveAndProcessingCapable(t *testing.T) {
 // setNodeProcessing sets the processing capability + transcode slot fields the
 // eligibility check reads. The metrics struct is anonymous, so the literal is
 // repeated here verbatim.
-func setNodeProcessing(sm *state.StreamStateManager, nodeID string, capProcessing bool, maxTranscodes, currentTranscodes int) {
+func pushNodeMetrics(sm *state.StreamStateManager, nodeID string, capProcessing bool, classes map[string]state.ClassCapacity) {
 	sm.UpdateNodeMetrics(nodeID, struct {
 		CPU                  float64
 		RAMMax               float64
@@ -286,11 +287,28 @@ func setNodeProcessing(sm *state.StreamStateManager, nodeID string, capProcessin
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{
 		CapProcessing:     capProcessing,
-		MaxTranscodes:     maxTranscodes,
-		CurrentTranscodes: currentTranscodes,
+		ProcessingClasses: classes,
 	})
+}
+
+func setNodeProcessing(sm *state.StreamStateManager, nodeID string, capProcessing bool, maxTranscodes, currentTranscodes int) {
+	// A processing-capable node advertises a video_transcode class with the given
+	// ceiling (0 = unbounded) and in-flight count; a non-capable node advertises
+	// no class at all.
+	var classes map[string]state.ClassCapacity
+	if capProcessing {
+		classes = map[string]state.ClassCapacity{
+			mist.ProcessingClassVideoTranscode: {Total: maxTranscodes, Used: currentTranscodes},
+		}
+	}
+	pushNodeMetrics(sm, nodeID, capProcessing, classes)
+}
+
+// setNodeClassCapacity advertises an arbitrary set of processing classes on a
+// processing-capable node (used to exercise class-aware routing).
+func setNodeClassCapacity(sm *state.StreamStateManager, nodeID string, classes map[string]state.ClassCapacity) {
+	pushNodeMetrics(sm, nodeID, true, classes)
 }

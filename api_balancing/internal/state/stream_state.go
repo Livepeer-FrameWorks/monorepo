@@ -178,6 +178,58 @@ func (v *VirtualViewer) removeMistSessionID(sessionID string) bool {
 	return v.MistSessionID == "" && len(v.MistSessionIDs) == 0
 }
 
+// ClassCapacity is a node's capacity for one processing class (mirrors
+// ipc.ProcessingClassCapacity). Total 0 means unbounded; Ready holds
+// class-specific readiness such as loaded model ids for ai_inference.
+type ClassCapacity struct {
+	Total int      `json:"total"`
+	Used  int      `json:"used"`
+	Ready []string `json:"ready,omitempty"`
+}
+
+// CanRunClass reports whether the node currently has free capacity for the
+// given processing class. A node that has not advertised the class cannot run
+// it. Total 0 means unbounded.
+func (n *NodeState) CanRunClass(class string) bool {
+	c, ok := n.ProcessingClasses[class]
+	if !ok {
+		return false
+	}
+	return c.Total == 0 || c.Used < c.Total
+}
+
+// ClassLoad returns the node's in-flight job count for the class and whether
+// the class is advertised at all (used for lowest-load ordering).
+func (n *NodeState) ClassLoad(class string) (used int, ok bool) {
+	c, ok := n.ProcessingClasses[class]
+	return c.Used, ok
+}
+
+// ProcessingClassesFromLimits converts a node's reported NodeLimits into the
+// per-class capacity map. Returns nil when no classes are advertised. Exported
+// so both lifecycle ingestion sites (state + triggers) share one converter.
+func ProcessingClassesFromLimits(limits *ipcpb.NodeLimits) map[string]ClassCapacity {
+	if limits == nil {
+		return nil
+	}
+	reported := limits.GetProcessingClasses()
+	if len(reported) == 0 {
+		return nil
+	}
+	out := make(map[string]ClassCapacity, len(reported))
+	for _, c := range reported {
+		if c == nil || c.GetClass() == "" {
+			continue
+		}
+		out[c.GetClass()] = ClassCapacity{
+			Total: int(c.GetSlotsTotal()),
+			Used:  int(c.GetSlotsUsed()),
+			Ready: append([]string(nil), c.GetReady()...),
+		}
+	}
+	return out
+}
+
 // NodeState captures per-node state
 type NodeState struct {
 	NodeID               string              `json:"node_id"`
@@ -208,12 +260,15 @@ type NodeState struct {
 	Roles                []string            `json:"roles,omitempty"`
 	StorageCapacityBytes uint64              `json:"storage_capacity_bytes,omitempty"`
 	StorageUsedBytes     uint64              `json:"storage_used_bytes,omitempty"`
-	MaxTranscodes        int                 `json:"max_transcodes,omitempty"`
-	CurrentTranscodes    int                 `json:"current_transcodes,omitempty"`
-	DiskTotalBytes       uint64              `json:"disk_total_bytes,omitempty"`
-	DiskUsedBytes        uint64              `json:"disk_used_bytes,omitempty"`
-	LastUpdate           time.Time           `json:"last_update"`
-	LastHeartbeat        time.Time           `json:"last_heartbeat"`
+	// ProcessingClasses is the scheduler's source of truth for load-aware
+	// routing: per-class capacity keyed by class name ("video_transcode", ...).
+	// Routing matches a job's processing_class against this; there is no flat
+	// transcode counter.
+	ProcessingClasses map[string]ClassCapacity `json:"processing_classes,omitempty"`
+	DiskTotalBytes    uint64                   `json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes     uint64                   `json:"disk_used_bytes,omitempty"`
+	LastUpdate        time.Time                `json:"last_update"`
+	LastHeartbeat     time.Time                `json:"last_heartbeat"`
 
 	// GPU information
 	GPUVendor string `json:"gpu_vendor,omitempty"`
@@ -1271,8 +1326,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	Roles                []string
 	StorageCapacityBytes uint64
 	StorageUsedBytes     uint64
-	MaxTranscodes        int
-	CurrentTranscodes    int
+	ProcessingClasses    map[string]ClassCapacity
 }) {
 	sm.mu.Lock()
 	n := sm.nodes[nodeID]
@@ -1293,8 +1347,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	n.Roles = append([]string(nil), metrics.Roles...)
 	n.StorageCapacityBytes = metrics.StorageCapacityBytes
 	n.StorageUsedBytes = metrics.StorageUsedBytes
-	n.MaxTranscodes = metrics.MaxTranscodes
-	n.CurrentTranscodes = metrics.CurrentTranscodes
+	n.ProcessingClasses = metrics.ProcessingClasses
 	n.LastUpdate = time.Now()
 
 	// Recompute cached scores
@@ -2282,9 +2335,8 @@ type EnhancedBalancerNodeSnapshot struct {
 	DiskTotalBytes uint64 `json:"disk_total_bytes"`
 	DiskUsedBytes  uint64 `json:"disk_used_bytes"`
 
-	// Transcoding info
-	MaxTranscodes     int `json:"max_transcodes"`
-	CurrentTranscodes int `json:"current_transcodes"`
+	// Per-class processing capacity (video_transcode today)
+	ProcessingClasses map[string]ClassCapacity `json:"processing_classes,omitempty"`
 
 	// Artifacts stored on this node
 	Artifacts []*ipcpb.StoredArtifact `json:"artifacts"`
@@ -2438,8 +2490,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			DiskUsedBytes:  n.DiskUsedBytes,
 
 			// Transcoding info
-			MaxTranscodes:     n.MaxTranscodes,
-			CurrentTranscodes: n.CurrentTranscodes,
+			ProcessingClasses: n.ProcessingClasses,
 
 			// Artifacts stored on this node
 			Artifacts: append([]*ipcpb.StoredArtifact(nil), n.Artifacts...),
@@ -2947,8 +2998,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{
 		CPU:        float64(update.GetCpuTenths()) / 10.0,
 		RAMMax:     float64(update.GetRamMax()),
@@ -2983,13 +3033,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 			}
 			return update.GetLimits().GetStorageUsedBytes()
 		}(),
-		MaxTranscodes: func() int {
-			if update.GetLimits() == nil {
-				return 0
-			}
-			return int(update.GetLimits().GetMaxTranscodes())
-		}(),
-		CurrentTranscodes: 0,
+		ProcessingClasses: ProcessingClassesFromLimits(update.GetLimits()),
 	})
 
 	// Update disk usage directly

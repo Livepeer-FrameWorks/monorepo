@@ -119,8 +119,7 @@ func setMetrics(sm *StreamStateManager, nodeID string, cpu, upSpeed, bwLimit flo
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{CPU: cpu, UpSpeed: upSpeed, BWLimit: bwLimit})
 }
 

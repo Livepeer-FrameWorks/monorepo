@@ -28,8 +28,7 @@ func configureTestNode(sm *StreamStateManager, nodeID string) {
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{
 		CPU:        0,
 		RAMMax:     1024,
@@ -164,8 +163,7 @@ func TestUpdateUserConnection_ClampsBandwidthPenalty(t *testing.T) {
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]ClassCapacity
 	}{
 		UpSpeed: 10 * 1024 * 1024,
 	})

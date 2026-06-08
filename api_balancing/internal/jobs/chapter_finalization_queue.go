@@ -585,7 +585,7 @@ func nodeAliveAndProcessingCapable(nodeID string) bool {
 		if n == nil || !n.IsHealthy || !n.CapProcessing {
 			return false
 		}
-		if n.MaxTranscodes > 0 && n.CurrentTranscodes >= n.MaxTranscodes {
+		if !n.CanRunClass(mist.ProcessingClassVideoTranscode) {
 			return false
 		}
 		return true

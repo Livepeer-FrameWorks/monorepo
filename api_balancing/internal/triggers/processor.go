@@ -3500,8 +3500,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		Roles                []string
 		StorageCapacityBytes uint64
 		StorageUsedBytes     uint64
-		MaxTranscodes        int
-		CurrentTranscodes    int
+		ProcessingClasses    map[string]state.ClassCapacity
 	}{
 		CPU:           float64(nu.GetCpuTenths()) / 10.0,
 		RAMMax:        float64(nu.GetRamMax()),
@@ -3531,13 +3530,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 			}
 			return nu.GetLimits().GetStorageUsedBytes()
 		}(),
-		MaxTranscodes: func() int {
-			if nu.GetLimits() == nil {
-				return 0
-			}
-			return int(nu.GetLimits().GetMaxTranscodes())
-		}(),
-		CurrentTranscodes: 0,
+		ProcessingClasses: state.ProcessingClassesFromLimits(nu.GetLimits()),
 	})
 
 	// Update storage paths if present

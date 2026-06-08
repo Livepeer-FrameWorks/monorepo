@@ -637,8 +637,7 @@ func HandleNodesOverview(c *gin.Context) {
 				"disk_total_bytes": n.DiskTotalBytes,
 				"disk_used_bytes":  n.DiskUsedBytes,
 				// limits and artifacts
-				"max_transcodes":         n.MaxTranscodes,
-				"current_transcodes":     n.CurrentTranscodes,
+				"processing_classes":     n.ProcessingClasses,
 				"storage_capacity_bytes": n.StorageCapacityBytes,
 				"storage_used_bytes":     n.StorageUsedBytes,
 				"artifacts":              n.Artifacts,

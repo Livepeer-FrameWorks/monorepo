@@ -661,7 +661,7 @@ func TestProcessingMuxTargetURIWithVideoSelector(t *testing.T) {
 	}
 }
 
-func TestChapterFinalizeVideoSelectorSelectsCompleteRenditions(t *testing.T) {
+func TestChooseProcessingVideoSelectorSelectsCompleteRenditions(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
 	entry := logrus.NewEntry(log)
@@ -672,13 +672,13 @@ func TestChapterFinalizeVideoSelectorSelectsCompleteRenditions(t *testing.T) {
 		chapterTrack(2, 1280, 720, 30000),
 		chapterTrack(3, 640, 360, 30000),
 	}
-	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
 	if got != "i2,i3" {
 		t.Fatalf("selector = %q, want rendition tracks", got)
 	}
 }
 
-func TestChapterFinalizeVideoSelectorFallsBackToSourceWhenRenditionIncomplete(t *testing.T) {
+func TestChooseProcessingVideoSelectorFallsBackToSourceWhenRenditionIncomplete(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
 	entry := logrus.NewEntry(log)
@@ -689,13 +689,13 @@ func TestChapterFinalizeVideoSelectorFallsBackToSourceWhenRenditionIncomplete(t 
 		chapterTrack(2, 1280, 720, 30000),
 		chapterTrack(3, 640, 360, 1000),
 	}
-	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
 	if got != "i1" {
 		t.Fatalf("selector = %q, want source track", got)
 	}
 }
 
-func TestChapterFinalizeVideoSelectorSameHeightSourceAndRendition(t *testing.T) {
+func TestChooseProcessingVideoSelectorSameHeightSourceAndRendition(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
 	entry := logrus.NewEntry(log)
@@ -708,7 +708,7 @@ func TestChapterFinalizeVideoSelectorSameHeightSourceAndRendition(t *testing.T) 
 	}
 	tracks[0].source = "video_1"
 	tracks[2].source = "video_1"
-	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
 	if got != "i9,i3" {
 		t.Fatalf("selector = %q, want same-height rendition plus 360p", got)
 	}
@@ -723,6 +723,41 @@ func chapterTrack(id int64, width, height int, span float64) processingMetaVideo
 		lastms:     span,
 		trackID:    id,
 		hasTrackID: true,
+	}
+}
+
+// Source-only material (a clip cut from an untranscoded stream): renditions are
+// requested but only the source track exists, so the selector publishes source.
+func TestChooseProcessingVideoSelectorSourceOnlyMaterial(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720}]}]`
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	tracks := []processingMetaVideoTrack{chapterTrack(1, 1920, 1080, 30000)}
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
+	if got != "i1" {
+		t.Fatalf("selector = %q, want source track", got)
+	}
+}
+
+func TestClipRequestedSpanMs(t *testing.T) {
+	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+		"source_start_unix": "1000",
+		"source_stop_unix":  "1030",
+	}}
+	if got := clipRequestedSpanMs(req); got != 30000 {
+		t.Fatalf("span = %v, want 30000", got)
+	}
+	if got := clipRequestedSpanMs(&ipcpb.ProcessingJobRequest{}); got != 0 {
+		t.Fatalf("empty span = %v, want 0", got)
+	}
+	inverted := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+		"source_start_unix": "1030",
+		"source_stop_unix":  "1000",
+	}}
+	if got := clipRequestedSpanMs(inverted); got != 0 {
+		t.Fatalf("inverted span = %v, want 0", got)
 	}
 }
 

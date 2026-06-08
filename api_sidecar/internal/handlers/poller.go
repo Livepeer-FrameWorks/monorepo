@@ -2172,11 +2172,24 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 			S3Prefix:  os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
 		}
 
-		// Add limits from environment
+		// Add limits from environment + live processing capacity.
 		limits := &ipcpb.NodeLimits{}
 		hasLimits := false
-		if maxT, err := strconv.Atoi(os.Getenv("HELMSMAN_MAX_TRANSCODES")); err == nil && maxT > 0 {
-			limits.MaxTranscodes = safeInt32(maxT)
+		// A processing-capable node always advertises its video_transcode class so
+		// Foghorn can route VOD/clip/DVR jobs to it and balance by live load.
+		// slots_total is the configured ceiling (0 = unbounded, from
+		// HELMSMAN_MAX_TRANSCODES); slots_used is the live in-flight job count.
+		capProc := capProcessing == "" || capProcessing == "1" || strings.ToLower(capProcessing) == "true"
+		if capProc {
+			total := 0
+			if maxT, err := strconv.Atoi(os.Getenv("HELMSMAN_MAX_TRANSCODES")); err == nil && maxT > 0 {
+				total = maxT
+			}
+			limits.ProcessingClasses = []*ipcpb.ProcessingClassCapacity{{
+				Class:      mist.ProcessingClassVideoTranscode,
+				SlotsTotal: safeInt32(total),
+				SlotsUsed:  safeInt32(CountPendingJobs()),
+			}}
 			hasLimits = true
 		}
 		if capBytes, err := strconv.ParseUint(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"), 10, 64); err == nil && capBytes > 0 {

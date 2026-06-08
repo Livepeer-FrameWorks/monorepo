@@ -159,3 +159,31 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestExtractHLSTagURI covers the pure HLS-tag URI extractor used to find
+// embedded resources (#EXT-X-KEY, #EXT-X-MAP, …) that need presigning. It must
+// return the quoted URI when present and an empty string for every shape that
+// has no extractable URI, so the caller skips non-URI tags rather than
+// presigning garbage.
+func TestExtractHLSTagURI(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"map tag", `#EXT-X-MAP:URI="init.mp4"`, "init.mp4"},
+		{"key tag with trailing attrs", `#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x1`, "key.bin"},
+		{"uri after another quoted attr", `#EXT-X-FOO:NAME="hi",URI="seg.ts"`, "seg.ts"},
+		{"no uri attribute", `#EXT-X-ENDLIST`, ""},
+		{"empty uri value", `#EXT-X-MAP:URI=""`, ""},
+		{"unterminated quote", `#EXT-X-MAP:URI="oops`, ""},
+		{"plain segment line", `seg-0.ts`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractHLSTagURI(tc.line); got != tc.want {
+				t.Fatalf("extractHLSTagURI(%q) = %q, want %q", tc.line, got, tc.want)
+			}
+		})
+	}
+}

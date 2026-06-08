@@ -93,6 +93,17 @@ func HasPendingJob(streamName string) bool {
 	return ok
 }
 
+// CountPendingJobs returns the number of processing jobs currently in-flight on
+// this node (VOD, clip, and DVR finalize alike, since they all register here).
+// Reported to Foghorn as the live processing-slot usage that drives load-aware
+// job routing.
+func CountPendingJobs() int {
+	pendingJobsMu.Lock()
+	n := len(pendingJobs)
+	pendingJobsMu.Unlock()
+	return n
+}
+
 // SignalProcessingComplete is called from HandlePushEnd when a processing+ push ends.
 func SignalProcessingComplete(streamName string) {
 	SignalProcessingPushEnd(ProcessingPushEndEvent{StreamName: streamName, PushStatus: "0"})
@@ -377,6 +388,15 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		return
 	}
 
+	// Clips are live artifacts: complete renditions already present or source
+	// passthrough, never a fresh transcode. Handled separately so the VOD path
+	// below stays transcode-only.
+	if isClipProcessingSource(req) {
+		log.Info("Processing job received (clip)")
+		h.handleClip(req, send)
+		return
+	}
+
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
 	defer clearProcessingProcessOverride(streamName)
@@ -399,46 +419,30 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	if sourceURL == "" {
 		sourceURL = h.buildLocalProcessingSourceURL(req)
 	}
-	clipSource := isClipProcessingSource(req)
 	var stagedSourcePath string
 	defer func() {
 		cleanupProcessingStagePath(log, stagedSourcePath)
 	}()
-	if clipSource {
-		if sourceURL == "" {
-			h.sendResult(send, req.GetJobId(), "failed", "clip processing source URL unavailable", nil, "", 0)
-			return
-		}
-		path, err := h.stageProcessingSource(log, req, sourceURL)
-		if err != nil {
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip source stage failed: %v", err), nil, "", 0)
-			return
-		}
-		stagedSourcePath = path
-		setProcessingSourceOverride(streamName, path)
-		log.WithField("staged_path", path).Info("Staged clip source for processing")
-	} else if sourceURL != "" && req.GetSourceUrl() == "" {
+	if sourceURL != "" && req.GetSourceUrl() == "" {
 		setProcessingSourceOverride(streamName, sourceURL)
 		log.WithField("source_url", sourceURL).Info("Registered local processing source override")
 	} else if sourceURL == "" {
 		log.Warn("Processing job has no source URL or local source parameters")
 	}
 
-	if !clipSource {
-		if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
-			path, err := h.stageUnsafeWrapper(log, req, ext)
-			if err != nil {
-				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
-				return
-			}
-			stagedSourcePath = path
-			log.WithField("staged_path", path).Info("Staged unsafe-wrapper source locally")
+	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {
+		path, err := h.stageUnsafeWrapper(log, req, ext)
+		if err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("unsafe-wrapper stage failed: %v", err), nil, "", 0)
+			return
 		}
+		stagedSourcePath = path
+		log.WithField("staged_path", path).Info("Staged unsafe-wrapper source locally")
 	}
 
 	// For segmented (HLS) sources, rewrite manifest with presigned segment URLs
 	var hlsManifestPath string
-	if !clipSource && isHLSSource(req.GetSourceUrl(), req.GetParams()) {
+	if isHLSSource(req.GetSourceUrl(), req.GetParams()) {
 		var err error
 		hlsManifestPath, err = h.rewriteHLSManifest(log, req)
 		if err != nil {
@@ -476,10 +480,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	}
 
 	// MKV is the processing output container MistServer can push and
-	// re-ingest across the codec set we use. Clips land in the same
-	// stream-scoped clips/ namespace Foghorn registered for playback;
-	// VOD and upload processing land in vod/.
-	outputDir, outputPath, outputErr := h.processingOutputPath(req, clipSource)
+	// re-ingest across the codec set we use. VOD and upload processing
+	// land in vod/.
+	outputDir, outputPath, outputErr := h.processingOutputPath(req, false)
 	if outputErr != nil {
 		h.sendResult(send, req.GetJobId(), "failed", outputErr.Error(), nil, "", 0)
 		return
@@ -819,12 +822,6 @@ loop:
 		err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
 		clearProcessingSourceOverride(vodStreamName)
 		if err != nil {
-			if clipSource {
-				log.WithError(err).Error("Clip DTSH generation failed before publication")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip dtsh generation failed: %v", err), nil, "", 0)
-				return
-			}
 			log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
 		}
 	}
