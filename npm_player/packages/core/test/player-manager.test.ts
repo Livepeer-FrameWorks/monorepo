@@ -436,6 +436,44 @@ describe("PlayerManager", () => {
       const mgr = new PlayerManager({ maxFallbackAttempts: 5 });
       expect(mgr.getRemainingFallbackAttempts()).toBe(5);
     });
+
+    it("destroys a failed initialization attempt before trying fallback", async () => {
+      const mgr = new PlayerManager({ debug: false, maxFallbackAttempts: 2 });
+      const failing = makePlayer({
+        shortname: "dash",
+        mimes: ["dash/video/mp4"],
+        priority: 1,
+      });
+      const fallback = makePlayer({
+        shortname: "hls",
+        mimes: ["application/x-mpegURL"],
+        priority: 2,
+      });
+      (failing.initialize as any).mockRejectedValueOnce(new Error("protocol unsupported"));
+
+      mgr.registerPlayer(failing);
+      mgr.registerPlayer(fallback);
+
+      const container = { innerHTML: "", classList: { add: vi.fn() } } as any;
+      const streamInfo = makeStreamInfo([
+        { url: "https://cdn.example.com/live.mpd", type: "dash/video/mp4" },
+        { url: "https://cdn.example.com/live.m3u8", type: "application/x-mpegURL" },
+      ]);
+
+      await mgr.initializePlayer(
+        container,
+        streamInfo,
+        {},
+        {
+          forcePlayer: "dash",
+          forceType: "dash/video/mp4",
+        }
+      );
+
+      expect(failing.destroy).toHaveBeenCalled();
+      expect(fallback.initialize).toHaveBeenCalled();
+      expect(mgr.getCurrentPlayer()).toBe(fallback);
+    });
   });
 
   // ===========================================================================

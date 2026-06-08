@@ -111,7 +111,7 @@ describe("HlsJsPlayerImpl", () => {
     });
   });
 
-  it("waits for playable media before completing startup", async () => {
+  it("returns the video element after HLS is attached and emits ready immediately", async () => {
     const player = new HlsJsPlayerImpl();
     const container = document.createElement("div");
     const onReady = vi.fn();
@@ -133,30 +133,25 @@ describe("HlsJsPlayerImpl", () => {
     await vi.waitFor(() =>
       expect(hlsState.loadSource).toHaveBeenCalledWith("https://edge.example/live/index.m3u8")
     );
-    expect(onReady).not.toHaveBeenCalled();
-
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.autoplay).toBe(false);
 
-    hls.emit("manifestParsed");
-    expect(onReady).not.toHaveBeenCalled();
+    const initializedVideo = await initialization;
 
-    video.dispatchEvent(new Event("loadedmetadata"));
-    expect(onReady).not.toHaveBeenCalled();
-
-    video.dispatchEvent(new Event("loadeddata"));
-    await initialization;
-
+    expect(initializedVideo).toBe(video);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);
+    await player.destroy();
   });
 
   it("only recovers fatal HLS media errors when the media element is in error", async () => {
     const player = new HlsJsPlayerImpl();
     const container = document.createElement("div");
     const onError = vi.fn();
+    const playerErrors: string[] = [];
+    player.on("error", (error) => playerErrors.push(String(error)));
 
-    const initialization = player.initialize(
+    await player.initialize(
       container,
       {
         type: "html5/application/vnd.apple.mpegurl;version=7",
@@ -178,8 +173,9 @@ describe("HlsJsPlayerImpl", () => {
 
     hls.emit("error", { fatal: true, type: "mediaError", details: "bufferAppendError" });
 
-    await expect(initialization).rejects.toThrow("HLS fatal error: mediaError:bufferAppendError");
+    expect(playerErrors).toContain("HLS fatal error: mediaError:bufferAppendError");
     expect(onError).not.toHaveBeenCalled();
+    await player.destroy();
   });
 
   it("keeps native HLS seekable range instead of controller range hints", () => {
@@ -211,7 +207,7 @@ describe("HlsJsPlayerImpl", () => {
     const player = new HlsJsPlayerImpl();
     const container = document.createElement("div");
 
-    const initialization = player.initialize(
+    await player.initialize(
       container,
       {
         type: "html5/application/vnd.apple.mpegurl;version=7",
@@ -224,9 +220,6 @@ describe("HlsJsPlayerImpl", () => {
     await vi.waitFor(() => expect(hlsState.instances).toHaveLength(1));
     const hls = hlsState.instances[0];
     hls.emit("mediaAttached");
-    const video = container.querySelector("video") as HTMLVideoElement;
-    video.dispatchEvent(new Event("loadeddata"));
-    await initialization;
 
     expect(hls.config).toEqual(
       expect.objectContaining({
@@ -238,5 +231,6 @@ describe("HlsJsPlayerImpl", () => {
     expect(hls.config).not.toHaveProperty("liveMaxLatencyDuration");
     expect(hls.config).not.toHaveProperty("maxBufferLength");
     expect(hls.config).not.toHaveProperty("maxMaxBufferLength");
+    await player.destroy();
   });
 });

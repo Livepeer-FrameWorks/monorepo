@@ -393,25 +393,35 @@ export class ErrorClassifier {
       return ErrorCode.NETWORK_TIMEOUT;
     }
 
-    // Stream state - check before segment errors (404 can mean offline)
-    if (
-      lowerMessage.includes("offline") ||
-      lowerMessage.includes("not found") ||
-      lowerMessage.includes("stream not found")
-    ) {
-      return ErrorCode.STREAM_OFFLINE;
-    }
+    const mentionsSegmentResource =
+      lowerMessage.includes("segment") ||
+      lowerMessage.includes("fragment") ||
+      lowerMessage.includes("chunk_") ||
+      lowerMessage.includes(".m4s") ||
+      lowerMessage.includes(".cmfv") ||
+      lowerMessage.includes(".cmfa");
+    const mentionsManifestResource =
+      lowerMessage.includes("manifest") ||
+      lowerMessage.includes("playlist") ||
+      lowerMessage.includes(".mpd") ||
+      lowerMessage.includes(".m3u8");
 
-    // Segment/manifest errors (only if not a stream-level 404)
-    if (lowerMessage.includes("segment")) {
+    // Media-resource failures are not stream-level offline state. A live stream can
+    // be online while one DASH/CMAF segment has expired or fallen outside the window.
+    if (mentionsSegmentResource) {
       return ErrorCode.SEGMENT_LOAD_ERROR;
     }
-    if (lowerMessage.includes("manifest") || lowerMessage.includes("playlist")) {
-      // Manifest 404 = stream offline, not stale
-      if (lowerMessage.includes("404")) {
-        return ErrorCode.STREAM_OFFLINE;
-      }
+    if (mentionsManifestResource) {
       return ErrorCode.MANIFEST_STALE;
+    }
+
+    // Stream state - only after media-resource checks.
+    if (
+      lowerMessage.includes("offline") ||
+      lowerMessage.includes("stream not found") ||
+      lowerMessage.includes("not found")
+    ) {
+      return ErrorCode.STREAM_OFFLINE;
     }
 
     // ICE/WebRTC errors

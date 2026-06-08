@@ -188,12 +188,12 @@ describe("DashJsPlayerImpl", () => {
     expect(calls[calls.length - 1][0]).toEqual(dashConfig);
   });
 
-  it("emits ready after dash.js initializes the stream", async () => {
+  it("returns the video element after dash.js source attachment and emits ready immediately", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
     const onReady = vi.fn();
 
-    await player.initialize(
+    const initializedVideo = await player.initialize(
       container,
       { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
       { autoplay: true, muted: true, onReady },
@@ -205,41 +205,36 @@ describe("DashJsPlayerImpl", () => {
       "https://edge.example/live/index.mpd",
       false
     );
-    expect(onReady).not.toHaveBeenCalled();
-
     const video = container.querySelector("video") as HTMLVideoElement;
-    video.dispatchEvent(new Event("loadedmetadata"));
-
+    expect(initializedVideo).toBe(video);
     expect(onReady).toHaveBeenCalledWith(video);
-    expect(dashMocks.initialize.mock.invocationCallOrder[0]).toBeLessThan(
-      onReady.mock.invocationCallOrder[0]
-    );
+    await player.destroy();
   });
 
-  it("rejects initialization instead of emitting ready when dash.js never starts", async () => {
+  it("reports a player error when dash.js never starts after source attachment", async () => {
     vi.useFakeTimers();
     dashMocks.state.startupEvent = null;
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
     const onReady = vi.fn();
+    const errors: string[] = [];
+    player.on("error", (error) => errors.push(String(error)));
 
     try {
-      const initialization = player.initialize(
+      const initializedVideo = await player.initialize(
         container,
         { type: "dash/video/mp4", url: "https://edge.example/live/index.mpd" },
         { autoplay: true, muted: true, onReady },
         { source: [], meta: { tracks: [] }, type: "live" }
       );
-      const expectedFailure = expect(initialization).rejects.toThrow(
-        "DASH startup failed: DASH startup timed out before stream initialization"
-      );
 
-      await vi.waitFor(() => expect(dashMocks.initialize).toHaveBeenCalled());
+      expect(initializedVideo).toBe(container.querySelector("video"));
+      expect(onReady).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(3000);
 
-      await expectedFailure;
-      expect(onReady).not.toHaveBeenCalled();
+      expect(errors).toContain("DASH fatal startup timed out before stream initialization");
     } finally {
+      await player.destroy();
       vi.useRealTimers();
     }
   });

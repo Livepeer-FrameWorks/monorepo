@@ -196,7 +196,7 @@ describe("VideoJsPlayerImpl", () => {
     expect(canPlayType).not.toHaveBeenCalledWith('video/mp4;codecs="H264"');
   });
 
-  it("waits for playable media before emitting ready", async () => {
+  it("returns the video element after VideoJS setup and emits ready immediately", async () => {
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: {
@@ -208,7 +208,7 @@ describe("VideoJsPlayerImpl", () => {
     const container = document.createElement("div");
     const onReady = vi.fn();
 
-    const initialization = player.initialize(
+    const initializedVideo = await player.initialize(
       container,
       {
         type: "html5/application/vnd.apple.mpegurl;version=7",
@@ -219,7 +219,6 @@ describe("VideoJsPlayerImpl", () => {
     );
 
     await vi.waitFor(() => expect(videoJsState.players).toHaveLength(1));
-    expect(onReady).not.toHaveBeenCalled();
     expect(videoJsState.factory.mock.calls[0][1]).toEqual(
       expect.objectContaining({ autoplay: false })
     );
@@ -243,16 +242,9 @@ describe("VideoJsPlayerImpl", () => {
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.autoplay).toBe(false);
 
-    videoJsState.players[0].emitReady();
-    expect(onReady).not.toHaveBeenCalled();
-
-    videoJsState.players[0].emit("loadedmetadata");
-    expect(onReady).not.toHaveBeenCalled();
-
-    videoJsState.players[0].emit("canplay");
-    await initialization;
-
+    expect(initializedVideo).toBe(video);
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(onReady).toHaveBeenCalledWith(video);
+    await player.destroy();
   });
 });

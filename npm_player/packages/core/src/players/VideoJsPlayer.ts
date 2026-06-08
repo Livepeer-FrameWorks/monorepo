@@ -40,6 +40,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
   private videojsPlayer: any = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
+  private cleanupStartupWatchdog: (() => void) | null = null;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
@@ -164,6 +165,58 @@ export class VideoJsPlayerImpl extends BasePlayer {
     return playableTracks.length > 0 ? playableTracks : false;
   }
 
+  private clearStartupWatchdog(): void {
+    this.cleanupStartupWatchdog?.();
+    this.cleanupStartupWatchdog = null;
+  }
+
+  private armStartupWatchdog(
+    video: HTMLVideoElement,
+    timeoutMs: number,
+    reportFailure: (error: Error) => void
+  ): void {
+    this.clearStartupWatchdog();
+
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      for (const event of mediaReadyEvents) {
+        this.videojsPlayer?.off?.(event, cleanup);
+        video.removeEventListener(event, cleanup);
+      }
+      video.removeEventListener("error", failFromVideo);
+      if (this.cleanupStartupWatchdog === cleanup) {
+        this.cleanupStartupWatchdog = null;
+      }
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      cleanup();
+      if (!this.destroyed) reportFailure(error);
+    };
+
+    const failFromVideo = () => {
+      const message = video.error?.message || "media error before first playable frame";
+      fail(new Error(`VideoJS media startup failed: ${message}`));
+    };
+
+    for (const event of mediaReadyEvents) {
+      this.videojsPlayer?.on?.(event, cleanup);
+      video.addEventListener(event, cleanup, { once: true });
+    }
+    video.addEventListener("error", failFromVideo, { once: true });
+    timeoutId = setTimeout(() => {
+      fail(new Error("VideoJS fatal startup timed out before media became playable"));
+    }, timeoutMs);
+    this.cleanupStartupWatchdog = cleanup;
+  }
+
   async initialize(
     container: HTMLElement,
     source: StreamSource,
@@ -246,52 +299,9 @@ export class VideoJsPlayerImpl extends BasePlayer {
       console.debug("[VideoJS] Player created");
 
       const startupTimeoutMs = getVhsStartupTimeoutMs(options.vhsConfig);
-      let startupSettled = false;
-      let startupTimer: ReturnType<typeof setTimeout> | null = null;
-      let resolveStartup: (() => void) | null = null;
-      let rejectStartup: ((error: Error) => void) | null = null;
-      const videoJsStartup = new Promise<void>((resolve, reject) => {
-        resolveStartup = resolve;
-        rejectStartup = reject;
-        startupTimer = setTimeout(() => {
-          if (startupSettled) return;
-          startupSettled = true;
-          removeStartupListeners();
-          reject(new Error("VideoJS startup timed out before media became playable"));
-        }, startupTimeoutMs);
+      this.armStartupWatchdog(video, startupTimeoutMs, (error) => {
+        this.emit("error", error.message);
       });
-      let removeStartupListeners = () => {};
-      const finishStartup = () => {
-        if (startupSettled) return;
-        startupSettled = true;
-        if (startupTimer !== null) clearTimeout(startupTimer);
-        removeStartupListeners();
-        resolveStartup?.();
-      };
-      const failStartup = (error: Error) => {
-        if (startupSettled) return;
-        startupSettled = true;
-        if (startupTimer !== null) clearTimeout(startupTimer);
-        removeStartupListeners();
-        rejectStartup?.(error);
-      };
-      const failStartupFromVideo = () => {
-        const message = video.error?.message || "media error before first playable frame";
-        failStartup(new Error(`VideoJS media startup failed: ${message}`));
-      };
-      const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
-      removeStartupListeners = () => {
-        for (const event of mediaReadyEvents) {
-          this.videojsPlayer?.off?.(event, finishStartup);
-          video.removeEventListener(event, finishStartup);
-        }
-        video.removeEventListener("error", failStartupFromVideo);
-      };
-      for (const event of mediaReadyEvents) {
-        this.videojsPlayer.on(event, finishStartup);
-        video.addEventListener(event, finishStartup, { once: true });
-      }
-      video.addEventListener("error", failStartupFromVideo, { once: true });
 
       // Hide VideoJS UI completely when using custom controls
       if (!useVideoJsControls) {
@@ -308,11 +318,11 @@ export class VideoJsPlayerImpl extends BasePlayer {
         const action = VideoJsPlayerImpl.classifyError(this.videojsPlayer?.error());
         if (action.log) console.warn("[VideoJS]", action.log);
         if (action.kind === "reload") {
-          failStartup(new Error(action.reason));
+          this.clearStartupWatchdog();
           this.emit("reloadrequested", { reason: action.reason });
           return;
         }
-        failStartup(new Error(action.message));
+        this.clearStartupWatchdog();
         this.emit("error", action.message);
       });
 
@@ -419,7 +429,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
         );
       });
 
-      await videoJsStartup;
       if (this.destroyed) {
         throw new Error("VideoJS player destroyed during initialization");
       }
@@ -561,6 +570,7 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    this.clearStartupWatchdog();
 
     if (this.videojsPlayer) {
       try {

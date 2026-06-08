@@ -829,6 +829,11 @@ export class PlayerManager {
       this.emit("playerInitialized", { player, videoElement });
       return videoElement;
     } catch (error: unknown) {
+      try {
+        await Promise.resolve(player.destroy());
+      } catch (destroyError) {
+        this.log(`Failed to destroy failed player ${selection.player}: ${destroyError}`);
+      }
       this.currentPlayer = previousPlayer;
       return this.handleInitError(
         error,

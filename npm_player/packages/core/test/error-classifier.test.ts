@@ -33,7 +33,9 @@ describe("ErrorClassifier", () => {
       ["segment load failed", ErrorCode.SEGMENT_LOAD_ERROR],
       ["manifest parse error", ErrorCode.MANIFEST_STALE],
       ["playlist error", ErrorCode.MANIFEST_STALE],
-      ["manifest 404", ErrorCode.STREAM_OFFLINE],
+      ["manifest 404", ErrorCode.MANIFEST_STALE],
+      ["chunk_123.m4s not found", ErrorCode.SEGMENT_LOAD_ERROR],
+      ["fragment out of range", ErrorCode.SEGMENT_LOAD_ERROR],
       ["ICE disconnect", ErrorCode.ICE_DISCONNECTED],
       ["ICE failure", ErrorCode.ICE_FAILED],
       ["codec error", ErrorCode.CODEC_DECODE_ERROR],
@@ -71,9 +73,11 @@ describe("ErrorClassifier", () => {
       expect(ErrorClassifier.mapErrorToCode("something weird")).toBe(ErrorCode.UNKNOWN);
     });
 
-    it("offline check has higher priority than segment", () => {
-      // "not found" should be STREAM_OFFLINE, not SEGMENT_LOAD_ERROR
+    it("keeps generic not found as offline but classifies media resources separately", () => {
       expect(ErrorClassifier.mapErrorToCode("resource not found")).toBe(ErrorCode.STREAM_OFFLINE);
+      expect(ErrorClassifier.mapErrorToCode("segment not found")).toBe(
+        ErrorCode.SEGMENT_LOAD_ERROR
+      );
     });
   });
 

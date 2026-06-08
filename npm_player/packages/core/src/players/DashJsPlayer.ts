@@ -26,6 +26,7 @@ export class DashJsPlayerImpl extends BasePlayer {
   private sawMediaStartup = false;
   private startupAbandonCount = 0;
   private startupAbandonReported = false;
+  private cleanupStartupWatchdog: (() => void) | null = null;
 
   private streamType: "live" | "vod" | "unknown" = "unknown";
 
@@ -199,46 +200,39 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.emit("error", message);
   }
 
-  private waitForDashStartup(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!this.dashPlayer) {
-        resolve();
-        return;
+  private clearStartupWatchdog(): void {
+    this.cleanupStartupWatchdog?.();
+    this.cleanupStartupWatchdog = null;
+  }
+
+  private armStartupWatchdog(): void {
+    if (!this.dashPlayer) return;
+    this.clearStartupWatchdog();
+
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      this.dashPlayer?.off?.("streamInitialized", cleanup);
+      this.dashPlayer?.off?.("canPlay", cleanup);
+      this.dashPlayer?.off?.("error", cleanup);
+      if (this.cleanupStartupWatchdog === cleanup) {
+        this.cleanupStartupWatchdog = null;
       }
+    };
 
-      let settled = false;
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-      const cleanup = () => {
-        if (timeoutId !== null) clearTimeout(timeoutId);
-        this.dashPlayer?.off?.("streamInitialized", succeed);
-        this.dashPlayer?.off?.("canPlay", succeed);
-        this.dashPlayer?.off?.("error", fail);
-      };
-
-      const succeed = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-
-      const fail = (event?: any) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        const message =
-          event?.event?.message ||
-          event?.message ||
-          "DASH startup timed out before stream initialization";
-        reject(new Error(`DASH startup failed: ${message}`));
-      };
-
-      this.dashPlayer.on("streamInitialized", succeed);
-      this.dashPlayer.on("canPlay", succeed);
-      this.dashPlayer.on("error", fail);
-      timeoutId = setTimeout(fail, 3000);
-    });
+    this.dashPlayer.on("streamInitialized", cleanup);
+    this.dashPlayer.on("canPlay", cleanup);
+    this.dashPlayer.on("error", cleanup);
+    timeoutId = setTimeout(() => {
+      if (settled || this.destroyed) return;
+      cleanup();
+      this.reportDashFailure("DASH fatal startup timed out before stream initialization");
+    }, 3000);
+    this.cleanupStartupWatchdog = cleanup;
   }
 
   private debugLog(...args: unknown[]): void {
@@ -420,18 +414,16 @@ export class DashJsPlayerImpl extends BasePlayer {
 
       // dashjs v5: Initialize with URL
       this.debugLog("[DashJS v5] Initializing with URL:", source.url);
-      const dashStartup = this.waitForDashStartup();
+      this.armStartupWatchdog();
       this.dashPlayer.initialize(video, source.url, false);
       this.debugLog("[DashJS v5] Initialize called");
-      await dashStartup;
       if (this.destroyed) {
         throw new Error("DASH player destroyed during initialization");
       }
 
-      // Emit ready only after dash.js has initialized the dynamic stream.
-      // PlayerController owns autoplay; dash.js autoplay races with MSE attachment
+      // The controller owns autoplay; dash.js autoplay races with MSE attachment
       // and can leave the video element paused=false but still buffering.
-      this.setupVideoEventListeners(video, options);
+      this.setupVideoEventListeners(video, options, { readyEvent: "immediate" });
       this.setupStalledHandling();
 
       // Optional subtitle tracks helper from source extras (external tracks)
@@ -636,6 +628,7 @@ export class DashJsPlayerImpl extends BasePlayer {
     this.destroyed = true;
     this.subsLoaded = false;
     this.pendingSubtitleId = null;
+    this.clearStartupWatchdog();
 
     if (this._rejectionHandler) {
       window.removeEventListener("unhandledrejection", this._rejectionHandler);

@@ -29,6 +29,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
   private container: HTMLElement | null = null;
   private failureCount = 0;
   private destroyed = false;
+  private cleanupStartupWatchdog: (() => void) | null = null;
 
   isMimeSupported(mimetype: string): boolean {
     return this.capability.mimes.includes(mimetype);
@@ -138,6 +139,56 @@ export class HlsJsPlayerImpl extends BasePlayer {
     return playableTracks.length > 0 ? playableTracks : false;
   }
 
+  private clearStartupWatchdog(): void {
+    this.cleanupStartupWatchdog?.();
+    this.cleanupStartupWatchdog = null;
+  }
+
+  private armStartupWatchdog(
+    video: HTMLVideoElement,
+    timeoutMs: number,
+    reportFailure: (error: Error) => void
+  ): void {
+    this.clearStartupWatchdog();
+
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      for (const event of mediaReadyEvents) {
+        video.removeEventListener(event, cleanup);
+      }
+      video.removeEventListener("error", failFromVideo);
+      if (this.cleanupStartupWatchdog === cleanup) {
+        this.cleanupStartupWatchdog = null;
+      }
+    };
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      cleanup();
+      if (!this.destroyed) reportFailure(error);
+    };
+
+    const failFromVideo = () => {
+      const message = video.error?.message || "media error before first playable frame";
+      fail(new Error(`HLS media startup failed: ${message}`));
+    };
+
+    for (const event of mediaReadyEvents) {
+      video.addEventListener(event, cleanup, { once: true });
+    }
+    video.addEventListener("error", failFromVideo, { once: true });
+    timeoutId = setTimeout(() => {
+      fail(new Error("HLS fatal startup timed out before media became playable"));
+    }, timeoutMs);
+    this.cleanupStartupWatchdog = cleanup;
+  }
+
   async initialize(
     container: HTMLElement,
     source: StreamSource,
@@ -217,49 +268,9 @@ export class HlsJsPlayerImpl extends BasePlayer {
         this.hls = new Hls(hlsConfig);
         const startupTimeoutMs =
           positiveNumber(hlsConfig.manifestLoadingTimeOut) ?? DEFAULT_HLS_STARTUP_TIMEOUT_MS;
-        let startupSettled = false;
-        let startupTimer: ReturnType<typeof setTimeout> | null = null;
-        let resolveStartup: (() => void) | null = null;
-        let rejectStartup: ((error: Error) => void) | null = null;
-        const hlsStartup = new Promise<void>((resolve, reject) => {
-          resolveStartup = resolve;
-          rejectStartup = reject;
-          startupTimer = setTimeout(() => {
-            if (startupSettled) return;
-            startupSettled = true;
-            reject(new Error("HLS startup timed out before media became playable"));
-          }, startupTimeoutMs);
+        this.armStartupWatchdog(video, startupTimeoutMs, (error) => {
+          this.emit("error", error.message);
         });
-        const mediaReadyEvents = ["loadeddata", "canplay", "playing"] as const;
-        let removeStartupListeners = () => {};
-        const finishStartup = () => {
-          if (startupSettled) return;
-          startupSettled = true;
-          if (startupTimer !== null) clearTimeout(startupTimer);
-          removeStartupListeners();
-          resolveStartup?.();
-        };
-        const failStartup = (error: Error) => {
-          if (startupSettled) return;
-          startupSettled = true;
-          if (startupTimer !== null) clearTimeout(startupTimer);
-          removeStartupListeners();
-          rejectStartup?.(error);
-        };
-        const failStartupFromVideo = () => {
-          const message = video.error?.message || "media error before first playable frame";
-          failStartup(new Error(`HLS media startup failed: ${message}`));
-        };
-        removeStartupListeners = () => {
-          for (const event of mediaReadyEvents) {
-            video.removeEventListener(event, finishStartup);
-          }
-          video.removeEventListener("error", failStartupFromVideo);
-        };
-        for (const event of mediaReadyEvents) {
-          video.addEventListener(event, finishStartup, { once: true });
-        }
-        video.addEventListener("error", failStartupFromVideo, { once: true });
 
         this.hls.attachMedia(video);
 
@@ -282,7 +293,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
               } catch {}
               return;
             }
-            failStartup(new Error(error));
+            this.clearStartupWatchdog();
             this.emit("error", error);
           }
         });
@@ -293,7 +304,6 @@ export class HlsJsPlayerImpl extends BasePlayer {
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
         });
-        await hlsStartup;
         if (this.destroyed) {
           throw new Error("HLS player destroyed during initialization");
         }
@@ -359,6 +369,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     this.videoElement = null;
     this.container = null;
+    this.clearStartupWatchdog();
     this.cleanupLiveSeek();
     this.listeners.clear();
   }
