@@ -8,6 +8,16 @@ codecov:
     # frontend jobs run, and avoids waiting forever when one is skipped.
     manual_trigger: true
 
+# Exclude code with no unit-testable logic so the percentage reflects testable
+# surface rather than irreducible scaffolding. Generated code (*.pb.go, gqlgen
+# output) is already stripped from the profile by the `coverage` make target.
+# Kept IN deliberately: demo generators, resolvers, and MCP tools all carry real
+# logic and are covered by tests instead of ignored.
+ignore:
+  - "**/cmd/*/main.go" # service entrypoints: flag parsing, wiring, signal handling
+  - "cli/main.go" # CLI entrypoint
+  - "pkg/testutil" # test-only helpers (mocks, fixtures, JWT/WS test rigs)
+
 coverage:
   status:
     default_rules:
