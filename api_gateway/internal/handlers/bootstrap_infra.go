@@ -24,11 +24,11 @@ import (
 // Quartermaster via its normal BootstrapInfrastructureNode flow. Bridge is a
 // pure pass-through; it does not itself inspect the token.
 type InfrastructureBootstrapHandler struct {
-	qm     *qmclient.GRPCClient
+	qm     qmclient.Interface
 	logger logging.Logger
 }
 
-func NewInfrastructureBootstrapHandler(qm *qmclient.GRPCClient, logger logging.Logger) *InfrastructureBootstrapHandler {
+func NewInfrastructureBootstrapHandler(qm qmclient.Interface, logger logging.Logger) *InfrastructureBootstrapHandler {
 	return &InfrastructureBootstrapHandler{qm: qm, logger: logger}
 }
 

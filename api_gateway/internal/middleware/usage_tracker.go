@@ -20,7 +20,7 @@ import (
 // UsageTrackerConfig configures the usage tracker
 type UsageTrackerConfig struct {
 	// Decklog client for sending batches
-	Decklog *decklog.BatchedClient
+	Decklog decklog.Interface
 	// Logger for usage tracking events
 	Logger logging.Logger
 	// FlushInterval is how often to flush aggregates (default: 30 seconds)

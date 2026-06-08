@@ -277,6 +277,11 @@ func (r *analyticsInfraResolver) ServiceInstancesConnection(ctx context.Context,
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
 func (r *analyticsInfraResolver) ServiceInstancesHealth(ctx context.Context, obj *markers.AnalyticsInfra, serviceID *string) ([]*quartermasterpb.ServiceInstanceHealth, error) {
+	// No demo representation for cluster-operator infra health; return an empty
+	// list so the analytics namespace still resolves cleanly in demo mode.
+	if middleware.IsDemoMode(ctx) {
+		return []*quartermasterpb.ServiceInstanceHealth{}, nil
+	}
 	if err := r.RequireClusterOperatorTenant(ctx); err != nil {
 		return nil, err
 	}
@@ -4033,6 +4038,11 @@ func (r *queryResolver) MySubscriptionsConnection(ctx context.Context, page *mod
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
 func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *string) ([]*quartermasterpb.ServiceInstanceHealth, error) {
+	// Cluster-operator infra health has no demo representation; return an empty
+	// list so demo mode fails clean instead of querying real cluster state.
+	if middleware.IsDemoMode(ctx) {
+		return []*quartermasterpb.ServiceInstanceHealth{}, nil
+	}
 	if err := r.RequireClusterOperatorTenant(ctx); err != nil {
 		return nil, err
 	}

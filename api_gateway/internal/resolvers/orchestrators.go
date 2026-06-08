@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
@@ -24,6 +25,12 @@ func isLivepeerGatewayService(serviceID string) bool {
 // networkOrchestratorOwnerTenants derives public orchestrator scope from
 // public topology gateway clusters plus signed-in tenant accessible clusters.
 func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]string, error) {
+	// Every orchestrator root resolver funnels through here, so this is the one
+	// place to fail demo requests closed: orchestrator data is real network
+	// state with no demo representation.
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Orchestrator data")
+	}
 	tenantID := tenantIDFromContext(ctx)
 	cacheParts := []string{"public"}
 	if tenantID != "" {

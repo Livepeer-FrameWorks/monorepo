@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
@@ -31,6 +32,9 @@ import (
 // Commodore is the authority; this resolver fails closed when it can't
 // reach the same conclusion.
 func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenMistAdminSessionInput) (model.OpenMistAdminSessionResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Mist admin sessions")
+	}
 	nodeID := strings.TrimSpace(input.NodeID)
 	if nodeID == "" {
 		return &model.ValidationError{Message: "nodeId is required", Field: strPtr("nodeId")}, nil

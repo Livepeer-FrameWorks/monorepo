@@ -215,6 +215,9 @@ func (r *Resolver) DoGetSigningKey(ctx context.Context, id string) (*commodorepb
 	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
 		return nil, err
 	}
+	if middleware.IsDemoMode(ctx) {
+		return demoSigningKey("demo-player", "active"), nil
+	}
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, nil

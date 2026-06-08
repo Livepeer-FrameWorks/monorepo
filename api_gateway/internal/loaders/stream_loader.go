@@ -11,13 +11,13 @@ import (
 // StreamLoader loads streams with request-scoped caching.
 // Used by GraphQL field resolvers to efficiently batch-fetch streams from Commodore.
 type StreamLoader struct {
-	client *commodore.GRPCClient
+	client commodore.Interface
 	mu     sync.Mutex
 	cache  map[string]*commodorepb.Stream // key: "tenantID:streamID"
 }
 
 // NewStreamLoader creates a new stream loader
-func NewStreamLoader(client *commodore.GRPCClient) *StreamLoader {
+func NewStreamLoader(client commodore.Interface) *StreamLoader {
 	return &StreamLoader{
 		client: client,
 		cache:  make(map[string]*commodorepb.Stream),

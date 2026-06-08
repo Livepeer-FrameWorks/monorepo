@@ -334,6 +334,12 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, erro
 
 // DoGetInvoice returns a specific invoice by ID
 func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoice, error) {
+	if middleware.IsDemoMode(ctx) {
+		if invoices := demo.GenerateInvoices(); len(invoices) > 0 {
+			return invoices[0], nil
+		}
+		return nil, errDemoUnavailable("Invoices")
+	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")

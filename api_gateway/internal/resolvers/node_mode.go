@@ -25,6 +25,9 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 	if err := middleware.RequirePermission(ctx, "infrastructure:write"); err != nil {
 		return nil, err
 	}
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Node mode changes")
+	}
 	nodeID, validationErr := normalizeNodeModeID(input.NodeID)
 	if validationErr != nil {
 		return validationErr, nil

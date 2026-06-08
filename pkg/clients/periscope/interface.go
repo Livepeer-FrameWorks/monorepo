@@ -1,0 +1,73 @@
+package periscope
+
+import (
+	"context"
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+)
+
+// Interface is the full method surface of the concrete client, extracted so
+// that api_gateway can inject fakes for resolver real-path tests. The concrete
+// client satisfies it (asserted below).
+type Interface interface {
+	Close() error
+	GetStreamAnalyticsSummary(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts) (*periscopepb.GetStreamAnalyticsSummaryResponse, error)
+	GetLiveUsageSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetLiveUsageSummaryResponse, error)
+	GetStreamEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamEventsResponse, error)
+	GetBufferEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetBufferEventsResponse, error)
+	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error)
+	GetStreamStatus(ctx context.Context, tenantID string, streamID string) (*periscopepb.StreamStatusResponse, error)
+	GetStreamsStatus(ctx context.Context, tenantID string, streamIDs []string) (*periscopepb.StreamsStatusResponse, error)
+	GetViewerMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetViewerMetricsResponse, error)
+	GetViewerCountTimeSeries(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetViewerCountTimeSeriesResponse, error)
+	GetGeographicDistribution(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, topN int32) (*periscopepb.GetGeographicDistributionResponse, error)
+	GetTrackListEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetTrackListEventsResponse, error)
+	GetConnectionEvents(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetConnectionEventsResponse, error)
+	GetNodeMetrics(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetNodeMetricsResponse, error)
+	GetNodeMetrics1H(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetNodeMetrics1HResponse, error)
+	GetNodeMetricsAggregated(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts) (*periscopepb.GetNodeMetricsAggregatedResponse, error)
+	GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*periscopepb.GetLiveNodesResponse, error)
+	GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error)
+	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetPlatformOverviewResponse, error)
+	GetNetworkLiveStats(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error)
+	GetClipEvents(ctx context.Context, tenantID string, streamID *string, stage *string, contentType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetClipEventsResponse, error)
+	GetArtifactState(ctx context.Context, tenantID string, requestID string) (*periscopepb.GetArtifactStateResponse, error)
+	GetArtifactStates(ctx context.Context, tenantID string, streamID *string, contentType *string, stage *string, opts *CursorPaginationOpts) (*periscopepb.GetArtifactStatesResponse, error)
+	GetArtifactStatesByIDs(ctx context.Context, tenantID string, requestIDs []string, contentType *string) (*periscopepb.GetArtifactStatesResponse, error)
+	GetStreamConnectionHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamConnectionHourlyResponse, error)
+	GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetClientMetrics5MResponse, error)
+	GetQualityTierDaily(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetQualityTierDailyResponse, error)
+	GetStorageUsage(ctx context.Context, tenantID string, nodeID *string, storageScope *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStorageUsageResponse, error)
+	GetStorageEvents(ctx context.Context, tenantID string, streamID *string, assetType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStorageEventsResponse, error)
+	GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamHealth5MResponse, error)
+	GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetNodePerformance5MResponse, error)
+	GetViewerHoursHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetViewerHoursHourlyResponse, error)
+	GetViewerGeoHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetViewerGeoHourlyResponse, error)
+	GetTenantDailyStats(ctx context.Context, tenantID string, days int32) (*periscopepb.GetTenantDailyStatsResponse, error)
+	GetProcessingUsage(ctx context.Context, tenantID string, streamID *string, processType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*periscopepb.GetProcessingUsageResponse, error)
+	GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetRebufferingEventsResponse, error)
+	GetTenantAnalyticsDaily(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetTenantAnalyticsDailyResponse, error)
+	GetStreamAnalyticsDaily(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.GetStreamAnalyticsDailyResponse, error)
+	GetStreamAnalyticsSummaries(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, sortBy StreamSummarySortField, sortOrder SortOrder, opts *CursorPaginationOpts) (*periscopepb.GetStreamAnalyticsSummariesResponse, error)
+	GetAPIUsage(ctx context.Context, tenantID string, authType *string, operationType *string, operationName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*periscopepb.GetAPIUsageResponse, error)
+	GetClusterTrafficMatrix(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterTrafficMatrixResponse, error)
+	GetFederationEvents(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, eventType *string, limit int32) (*periscopepb.GetFederationEventsResponse, error)
+	GetFederationSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*periscopepb.GetFederationSummaryResponse, error)
+	GetRoutingEfficiency(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*periscopepb.GetRoutingEfficiencyResponse, error)
+	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error)
+	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error)
+	GetPlayerBootSummary(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts) (*periscopepb.GetPlayerBootSummaryResponse, error)
+	GetClusterBootOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterBootOpsResponse, error)
+	GetSessionQoeSummary(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts) (*periscopepb.GetSessionQoeSummaryResponse, error)
+	GetClusterQoeOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterQoeOpsResponse, error)
+	GetVodRetention(ctx context.Context, tenantID string, artifactHash string, timeRange *TimeRangeOpts) (*periscopepb.GetVodRetentionResponse, error)
+	GetPlayerBootTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetPlayerBootTimeSeriesResponse, error)
+	GetSessionQoeTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetSessionQoeTimeSeriesResponse, error)
+	ListVodRetentionAssets(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*periscopepb.ListVodRetentionAssetsResponse, error)
+	ListOrchestrators(ctx context.Context, tenantID string, orchAddr *string, opts *CursorPaginationOpts) (*periscopepb.ListOrchestratorsResponse, error)
+	GetOrchestrator(ctx context.Context, tenantID, orchAddr string) (*periscopepb.GetOrchestratorResponse, error)
+	ListOrchestratorInstances(ctx context.Context, tenantID string, orchAddr *string) (*periscopepb.ListOrchestratorInstancesResponse, error)
+	ListOrchestratorVantages(ctx context.Context, tenantID string, orchAddr *string) (*periscopepb.ListOrchestratorVantagesResponse, error)
+	GetOrchestratorPerformanceSeries(ctx context.Context, tenantID, orchAddr string, timeRange *TimeRangeOpts, interval *string, gatewayID, resolvedIP *string) (*periscopepb.GetOrchestratorPerformanceSeriesResponse, error)
+}
+
+var _ Interface = (*GRPCClient)(nil)

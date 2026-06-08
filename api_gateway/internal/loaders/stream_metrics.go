@@ -11,13 +11,13 @@ import (
 // StreamMetricsLoader loads stream metrics with request-scoped caching.
 // Uses batch fetch when multiple streams are requested.
 type StreamMetricsLoader struct {
-	client *periscope.GRPCClient
+	client periscope.Interface
 	mu     sync.Mutex
 	cache  map[string]*periscopepb.StreamStatusResponse // key: "tenantID:internalName"
 }
 
 // NewStreamMetricsLoader creates a new stream metrics loader
-func NewStreamMetricsLoader(client *periscope.GRPCClient) *StreamMetricsLoader {
+func NewStreamMetricsLoader(client periscope.Interface) *StreamMetricsLoader {
 	return &StreamMetricsLoader{
 		client: client,
 		cache:  make(map[string]*periscopepb.StreamStatusResponse),

@@ -3245,6 +3245,9 @@ func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string,
 	}
 
 	s := resp.GetSummary()
+	if s == nil {
+		return &model.RoutingEfficiency{}, nil
+	}
 	countries := make([]*model.RoutingCountryStat, 0, len(s.GetTopCountries()))
 	for _, c := range s.GetTopCountries() {
 		countries = append(countries, &model.RoutingCountryStat{
@@ -3298,6 +3301,11 @@ func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *strin
 	}
 
 	s := resp.GetSummary()
+	if s == nil {
+		// No health data for the window (e.g. empty backend response) — return a
+		// zero summary rather than nil-dereferencing the absent message.
+		return &model.StreamHealthSummary{}, nil
+	}
 	var tier *string
 	if s.CurrentQualityTier != "" {
 		tier = &s.CurrentQualityTier
@@ -3350,6 +3358,9 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	}
 
 	s := resp.GetSummary()
+	if s == nil {
+		return &model.ClientQoeSummary{}, nil
+	}
 	return &model.ClientQoeSummary{
 		AvgPacketLossRate:   s.AvgPacketLossRate,
 		PeakPacketLossRate:  s.PeakPacketLossRate,

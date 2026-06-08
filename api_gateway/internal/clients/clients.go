@@ -18,17 +18,19 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
-// ServiceClients holds all downstream service gRPC clients
+// ServiceClients holds all downstream service gRPC clients. Fields are interfaces
+// (satisfied by the concrete *GRPCClient/*Client) so tests can inject fakes and
+// exercise resolver real paths without a live backend.
 type ServiceClients struct {
-	Commodore     *commodore.GRPCClient
-	Deckhand      *deckhand.GRPCClient
-	Decklog       *decklog.BatchedClient
-	Navigator     *navclient.Client
-	Periscope     *periscope.GRPCClient
-	Purser        *purser.GRPCClient
-	Quartermaster *quartermaster.GRPCClient
-	Signalman     *signalman.GRPCClient
-	Skipper       *skipperclient.GRPCClient
+	Commodore     commodore.Interface
+	Deckhand      deckhand.Interface
+	Decklog       decklog.Interface
+	Navigator     navclient.Interface
+	Periscope     periscope.Interface
+	Purser        purser.Interface
+	Quartermaster quartermaster.Interface
+	Signalman     signalman.Interface
+	Skipper       skipperclient.Interface
 }
 
 // Config represents the configuration for all service clients

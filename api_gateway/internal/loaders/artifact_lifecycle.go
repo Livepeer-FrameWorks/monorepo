@@ -11,13 +11,13 @@ import (
 // ArtifactLifecycleLoader loads artifact lifecycle data with request-scoped caching.
 // Used by GraphQL field resolvers to efficiently batch-fetch lifecycle data from Periscope.
 type ArtifactLifecycleLoader struct {
-	client *periscope.GRPCClient
+	client periscope.Interface
 	mu     sync.Mutex
 	cache  map[string]*periscopepb.ArtifactState // key: "tenantID:requestID"
 }
 
 // NewArtifactLifecycleLoader creates a new artifact lifecycle loader
-func NewArtifactLifecycleLoader(client *periscope.GRPCClient) *ArtifactLifecycleLoader {
+func NewArtifactLifecycleLoader(client periscope.Interface) *ArtifactLifecycleLoader {
 	return &ArtifactLifecycleLoader{
 		client: client,
 		cache:  make(map[string]*periscopepb.ArtifactState),

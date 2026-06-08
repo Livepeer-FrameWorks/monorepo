@@ -1105,6 +1105,9 @@ func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*quarter
 // "status:..." prefixes so the UI can switch on them. A typed payload
 // would be cleaner but requires a coordinated GraphQL/Houdini change.
 func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		return false, errDemoUnavailable("Cluster subscriptions")
+	}
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
@@ -1144,6 +1147,9 @@ func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (
 
 // DoUnsubscribeFromCluster unsubscribes a tenant from a cluster
 func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		return false, errDemoUnavailable("Cluster subscriptions")
+	}
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID

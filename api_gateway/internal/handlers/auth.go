@@ -96,7 +96,7 @@ func parseBehavior(behaviorStr string) *commodorepb.BehaviorData {
 
 // AuthHandlers handles authentication requests using gRPC client
 type AuthHandlers struct {
-	commodore    *commodore.GRPCClient
+	commodore    commodore.Interface
 	logger       logging.Logger
 	cookieDomain string
 }
@@ -105,7 +105,7 @@ type AuthHandlers struct {
 // COOKIE_DOMAIN controls the Domain attribute on auth cookies.
 // Leave empty for single-domain deployments (default).
 // Set to ".example.com" for cross-subdomain cookie sharing (e.g. docs site).
-func NewAuthHandlers(commodoreClient *commodore.GRPCClient, logger logging.Logger) *AuthHandlers {
+func NewAuthHandlers(commodoreClient commodore.Interface, logger logging.Logger) *AuthHandlers {
 	return &AuthHandlers{
 		commodore:    commodoreClient,
 		logger:       logger,

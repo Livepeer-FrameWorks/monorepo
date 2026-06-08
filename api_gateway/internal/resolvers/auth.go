@@ -125,6 +125,10 @@ func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInp
 		}
 	}()
 
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Wallet login")
+	}
+
 	// Call Commodore wallet login
 	authResp, err := r.Clients.Commodore.WalletLogin(ctx, input.Address, input.Message, input.Signature, nil)
 	if err != nil {
@@ -164,6 +168,10 @@ func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInpu
 			r.Metrics.Duration.WithLabelValues("linkWallet").Observe(time.Since(start).Seconds())
 		}
 	}()
+
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Wallet linking")
+	}
 
 	// Requires authenticated user
 	if ctxkeys.GetUserID(ctx) == "" {
@@ -207,6 +215,10 @@ func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.U
 			r.Metrics.Duration.WithLabelValues("unlinkWallet").Observe(time.Since(start).Seconds())
 		}
 	}()
+
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Wallet linking")
+	}
 
 	// Requires authenticated user
 	if ctxkeys.GetUserID(ctx) == "" {
@@ -252,6 +264,10 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 			r.Metrics.Duration.WithLabelValues("linkEmail").Observe(time.Since(start).Seconds())
 		}
 	}()
+
+	if middleware.IsDemoMode(ctx) {
+		return nil, errDemoUnavailable("Email linking")
+	}
 
 	// Requires authenticated user
 	if ctxkeys.GetUserID(ctx) == "" {

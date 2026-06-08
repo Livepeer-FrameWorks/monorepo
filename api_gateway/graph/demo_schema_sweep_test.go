@@ -29,7 +29,9 @@ var mustSucceedQueries = []string{
 	"streamsConnection",
 	"stream",
 	"billingTiers",
+	"invoice",
 	"invoicesConnection",
+	"signingKey",
 	"billingStatus",
 	"usageRecordsConnection",
 	"usageAggregates",
@@ -48,6 +50,7 @@ var mustSucceedQueries = []string{
 	"mediaRetentionPolicy",
 	"networkStatus",
 	"mollieMandates",
+	"serviceInstancesHealth",
 }
 
 // mustSucceedMutations are mutation fields whose demo path returns synthesized
