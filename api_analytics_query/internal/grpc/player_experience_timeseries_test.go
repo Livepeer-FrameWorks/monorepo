@@ -130,6 +130,12 @@ func TestListVodRetentionAssetsEligibilityGate(t *testing.T) {
 	if resp.GetPagination().GetTotalCount() != 1 {
 		t.Fatalf("totalCount = %d, want 1", resp.GetPagination().GetTotalCount())
 	}
+	if resp.GetPagination().GetHasPreviousPage() {
+		t.Fatal("hasPreviousPage = true on first page, want false")
+	}
+	if resp.GetPagination().GetHasNextPage() {
+		t.Fatal("hasNextPage = true for single-row page, want false")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
 	}

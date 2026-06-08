@@ -5418,9 +5418,17 @@ func (s *PeriscopeServer) ListVodRetentionAssets(ctx context.Context, req *peris
 		startCursor = pagination.EncodeCursor(assets[0].LastSeen.AsTime(), assets[0].ArtifactHash)
 		endCursor = pagination.EncodeCursor(assets[len(assets)-1].LastSeen.AsTime(), assets[len(assets)-1].ArtifactHash)
 	}
+	page := buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor)
+	if params.Cursor == nil {
+		if params.Direction == pagination.Forward {
+			page.HasPreviousPage = false
+		} else {
+			page.HasNextPage = false
+		}
+	}
 
 	return &periscopepb.ListVodRetentionAssetsResponse{
-		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+		Pagination: page,
 		Assets:     assets,
 	}, nil
 }

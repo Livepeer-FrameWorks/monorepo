@@ -27,6 +27,61 @@ func TestGRPCServicesIncludeRuntimeDependencyEndpoints(t *testing.T) {
 	}
 }
 
+// TestLookupAndDefaultPort pins the registry-lookup contract that manifest
+// rendering and service discovery depend on: a known ID returns its definition
+// and port, and an unknown ID returns the zero value with ok=false (never a
+// silent zero-port that would point a consumer at port 0).
+func TestLookupAndDefaultPort(t *testing.T) {
+	t.Run("known service resolves port", func(t *testing.T) {
+		svc, ok := Lookup("foghorn")
+		if !ok {
+			t.Fatal("Lookup(foghorn) ok=false, want true")
+		}
+		if svc.DefaultPort != 18008 {
+			t.Fatalf("foghorn DefaultPort = %d, want 18008", svc.DefaultPort)
+		}
+		port, ok := DefaultPort("foghorn")
+		if !ok || port != 18008 {
+			t.Fatalf("DefaultPort(foghorn) = (%d, %v), want (18008, true)", port, ok)
+		}
+	})
+
+	t.Run("unknown service is not ok", func(t *testing.T) {
+		if _, ok := Lookup("does-not-exist"); ok {
+			t.Fatal("Lookup(unknown) ok=true, want false")
+		}
+		port, ok := DefaultPort("does-not-exist")
+		if ok || port != 0 {
+			t.Fatalf("DefaultPort(unknown) = (%d, %v), want (0, false)", port, ok)
+		}
+	})
+}
+
+// TestSupportsSIGHUPReload pins the safe-default behavior of the reload gate:
+// services that have wired a reload callback report true, services that have
+// not (and unknown IDs) report false. A false default is what keeps an
+// unrecognized manifest entry from rendering ExecReload= and reload-firing a
+// process that never registered a callback.
+func TestSupportsSIGHUPReload(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"bridge", true},          // control-plane service with a registered callback
+		{"foghorn", true},         // media-plane service with a registered callback
+		{"mistserver", false},     // third-party binary, no callback
+		{"privateer", false},      // opted out
+		{"does-not-exist", false}, // unknown → never accidentally reload-enabled
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			if got := SupportsSIGHUPReload(tc.id); got != tc.want {
+				t.Fatalf("SupportsSIGHUPReload(%s) = %v, want %v", tc.id, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNavigatorRequiresExplicitACMEEmail(t *testing.T) {
 	for _, req := range RequiredExternalEnv("navigator") {
 		if req.Key == "ACME_EMAIL" {

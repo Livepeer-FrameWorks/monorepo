@@ -204,3 +204,29 @@ func TestBlockersRejectNilCompare(t *testing.T) {
 		t.Error("nil semverCompare must error")
 	}
 }
+
+// TestLiveStatusReportable pins the classifier every gate consults to decide
+// whether a migration's state was actually retrieved. Only a clean response
+// (no FetchError, registered, adopted) is reportable; each of the three
+// failure flags independently makes it unreportable so the gate treats it as a
+// blocker rather than silently passing on absent state. The resolved Status
+// value is irrelevant to reportability — only retrievability is.
+func TestLiveStatusReportable(t *testing.T) {
+	cases := []struct {
+		name string
+		live LiveStatus
+		want bool
+	}{
+		{"clean response is reportable", LiveStatus{ID: "m1", Service: "svc"}, true},
+		{"fetch error is unreportable", LiveStatus{FetchError: errors.New("dial timeout")}, false},
+		{"not registered is unreportable", LiveStatus{NotRegistered: true}, false},
+		{"not adopted is unreportable", LiveStatus{NotAdopted: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.live.Reportable(); got != tc.want {
+				t.Fatalf("Reportable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
