@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,6 +236,20 @@ func TestStreamRuntimeRebuilderEmitsLiveStateWindow(t *testing.T) {
 
 	if err := handler.rebuildStreamRuntime5m(context.Background(), windowStart, windowEnd); err != nil {
 		t.Fatalf("rebuildStreamRuntime5m: %v", err)
+	}
+
+	var liveSourceQuery string
+	for _, q := range conn.queries {
+		if q.table == "periscope.stream_state_current" {
+			liveSourceQuery = q.query
+			break
+		}
+	}
+	if !strings.Contains(liveSourceQuery, "FROM periscope.stream_state_current AS s FINAL") {
+		t.Fatalf("live source query must alias stream_state_current before FINAL; got:\n%s", liveSourceQuery)
+	}
+	if strings.Contains(liveSourceQuery, "stream_state_current FINAL AS") {
+		t.Fatalf("live source query uses invalid ClickHouse FINAL alias order:\n%s", liveSourceQuery)
 	}
 
 	batch := conn.batches["periscope.stream_runtime_5m"]

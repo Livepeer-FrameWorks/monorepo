@@ -466,7 +466,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			s.internal_name AS stream_name,
 			ifNull(s.started_at, s.updated_at) AS started_at,
 			toInt64(s.current_viewers) AS peak_viewers
-		FROM periscope.stream_state_current FINAL AS s
+		FROM periscope.stream_state_current AS s FINAL
 		LEFT JOIN (
 			SELECT
 				tenant_id,
