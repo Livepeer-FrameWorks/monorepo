@@ -780,7 +780,10 @@ func (h *X402Handler) recoverEIP3009Signer(payload *X402PaymentPayload, network 
 
 	// Build the TransferWithAuthorization struct hash
 	auth := payload.Payload.Authorization
-	structHash := h.hashTransferWithAuthorization(auth)
+	structHash, err := h.hashTransferWithAuthorization(auth)
+	if err != nil {
+		return "", fmt.Errorf("encode authorization: %w", err)
+	}
 
 	// EIP-712 hash: keccak256("\x19\x01" + domainSeparator + structHash)
 	messageHash := keccak256(
@@ -852,17 +855,38 @@ func (h *X402Handler) getUSDCDomainSeparator(network NetworkConfig) []byte {
 	)
 }
 
-// hashTransferWithAuthorization computes the EIP-712 struct hash for TransferWithAuthorization
-func (h *X402Handler) hashTransferWithAuthorization(auth *X402Authorization) []byte {
+// hashTransferWithAuthorization computes the EIP-712 struct hash for
+// TransferWithAuthorization. It returns an error rather than panicking or
+// silently zero-padding when a field is not a valid address / uint256 / bytes32,
+// so a malformed authorization can never be signed or replayed as a valid one.
+func (h *X402Handler) hashTransferWithAuthorization(auth *X402Authorization) ([]byte, error) {
 	// keccak256("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)")
 	typeHash := keccak256([]byte("TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"))
 
-	from := padAddress(auth.From)
-	to := padAddress(auth.To)
-	value := padUint256(auth.Value)
-	validAfter := padUint256(auth.ValidAfter)
-	validBefore := padUint256(auth.ValidBefore)
-	nonce := padBytes32(auth.Nonce)
+	from, err := padAddress(auth.From)
+	if err != nil {
+		return nil, fmt.Errorf("from: %w", err)
+	}
+	to, err := padAddress(auth.To)
+	if err != nil {
+		return nil, fmt.Errorf("to: %w", err)
+	}
+	value, err := padUint256(auth.Value)
+	if err != nil {
+		return nil, fmt.Errorf("value: %w", err)
+	}
+	validAfter, err := padUint256(auth.ValidAfter)
+	if err != nil {
+		return nil, fmt.Errorf("validAfter: %w", err)
+	}
+	validBefore, err := padUint256(auth.ValidBefore)
+	if err != nil {
+		return nil, fmt.Errorf("validBefore: %w", err)
+	}
+	nonce, err := padBytes32(auth.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
 
 	return keccak256(
 		typeHash,
@@ -872,7 +896,7 @@ func (h *X402Handler) hashTransferWithAuthorization(auth *X402Authorization) []b
 		validAfter,
 		validBefore,
 		nonce,
-	)
+	), nil
 }
 
 // submitTransferWithAuthorization submits the settlement tx to the specified network
@@ -912,13 +936,38 @@ func (h *X402Handler) submitTransferWithAuthorization(ctx context.Context, paylo
 	// )
 	methodID := keccak256([]byte("transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"))[0:4]
 
+	from, err := padAddress(auth.From)
+	if err != nil {
+		return "", fmt.Errorf("from: %w", err)
+	}
+	to, err := padAddress(auth.To)
+	if err != nil {
+		return "", fmt.Errorf("to: %w", err)
+	}
+	value, err := padUint256(auth.Value)
+	if err != nil {
+		return "", fmt.Errorf("value: %w", err)
+	}
+	validAfter, err := padUint256(auth.ValidAfter)
+	if err != nil {
+		return "", fmt.Errorf("validAfter: %w", err)
+	}
+	validBefore, err := padUint256(auth.ValidBefore)
+	if err != nil {
+		return "", fmt.Errorf("validBefore: %w", err)
+	}
+	nonceBytes, err := padBytes32(auth.Nonce)
+	if err != nil {
+		return "", fmt.Errorf("nonce: %w", err)
+	}
+
 	callData := methodID
-	callData = append(callData, padAddress(auth.From)...)
-	callData = append(callData, padAddress(auth.To)...)
-	callData = append(callData, padUint256(auth.Value)...)
-	callData = append(callData, padUint256(auth.ValidAfter)...)
-	callData = append(callData, padUint256(auth.ValidBefore)...)
-	callData = append(callData, padBytes32(auth.Nonce)...)
+	callData = append(callData, from...)
+	callData = append(callData, to...)
+	callData = append(callData, value...)
+	callData = append(callData, validAfter...)
+	callData = append(callData, validBefore...)
+	callData = append(callData, nonceBytes...)
 	callData = append(callData, padUint8(v)...)
 	callData = append(callData, padBytes32Bytes(r)...)
 	callData = append(callData, padBytes32Bytes(s)...)
@@ -1144,12 +1193,20 @@ func (h *X402Handler) checkNonceUsed(ctx context.Context, network NetworkConfig,
 	// Call USDC contract to check nonce status
 	// authorizationState(address authorizer, bytes32 nonce) returns (bool)
 	methodID := keccak256([]byte("authorizationState(address,bytes32)"))[0:4]
+	ownerBytes, err := padAddress(owner)
+	if err != nil {
+		return false, fmt.Errorf("owner: %w", err)
+	}
+	nonceBytes, err := padBytes32(nonce)
+	if err != nil {
+		return false, fmt.Errorf("nonce: %w", err)
+	}
 	callData := methodID
-	callData = append(callData, padAddress(owner)...)
-	callData = append(callData, padBytes32(nonce)...)
+	callData = append(callData, ownerBytes...)
+	callData = append(callData, nonceBytes...)
 
 	var result string
-	err := h.rpc.Call(ctx, network, "eth_call", []any{
+	err = h.rpc.Call(ctx, network, "eth_call", []any{
 		map[string]string{
 			"to":   network.USDCContract,
 			"data": "0x" + hex.EncodeToString(callData),
@@ -1167,10 +1224,14 @@ func (h *X402Handler) checkNonceUsed(ctx context.Context, network NetworkConfig,
 func (h *X402Handler) getUSDCBalance(ctx context.Context, network NetworkConfig, address string) (*big.Int, error) {
 	// balanceOf(address) returns (uint256)
 	methodID := keccak256([]byte("balanceOf(address)"))[0:4]
-	callData := append(methodID, padAddress(address)...)
+	addrBytes, err := padAddress(address)
+	if err != nil {
+		return nil, fmt.Errorf("address: %w", err)
+	}
+	callData := append(methodID, addrBytes...)
 
 	var result string
-	err := h.rpc.Call(ctx, network, "eth_call", []any{
+	err = h.rpc.Call(ctx, network, "eth_call", []any{
 		map[string]string{
 			"to":   network.USDCContract,
 			"data": "0x" + hex.EncodeToString(callData),
@@ -1494,18 +1555,33 @@ func keccak256(data ...[]byte) []byte {
 	return hasher.Sum(nil)
 }
 
-func padAddress(addr string) []byte {
-	addrBytes, _ := hex.DecodeString(strings.TrimPrefix(addr, "0x"))
+func padAddress(addr string) ([]byte, error) {
+	addrBytes, err := hex.DecodeString(strings.TrimPrefix(addr, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid address hex %q: %w", addr, err)
+	}
+	if len(addrBytes) != 20 {
+		return nil, fmt.Errorf("address must be 20 bytes, got %d", len(addrBytes))
+	}
 	padded := make([]byte, 32)
 	copy(padded[12:], addrBytes)
-	return padded
+	return padded, nil
 }
 
-func padUint256(value string) []byte {
-	v, _ := new(big.Int).SetString(value, 10)
+func padUint256(value string) ([]byte, error) {
+	v, ok := new(big.Int).SetString(value, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid uint256 %q", value)
+	}
+	if v.Sign() < 0 {
+		return nil, fmt.Errorf("uint256 cannot be negative: %q", value)
+	}
+	if v.BitLen() > 256 {
+		return nil, fmt.Errorf("uint256 overflow: %q", value)
+	}
 	padded := make([]byte, 32)
 	v.FillBytes(padded)
-	return padded
+	return padded, nil
 }
 
 func padUint8(v uint8) []byte {
@@ -1514,12 +1590,18 @@ func padUint8(v uint8) []byte {
 	return padded
 }
 
-func padBytes32(value string) []byte {
+func padBytes32(value string) ([]byte, error) {
 	// nonce is already bytes32 as hex string
-	b, _ := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	b, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid bytes32 hex %q: %w", value, err)
+	}
+	if len(b) > 32 {
+		return nil, fmt.Errorf("bytes32 too long: %d bytes", len(b))
+	}
 	padded := make([]byte, 32)
 	copy(padded, b)
-	return padded
+	return padded, nil
 }
 
 func padBytes32Bytes(b []byte) []byte {

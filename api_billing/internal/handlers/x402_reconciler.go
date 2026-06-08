@@ -280,9 +280,17 @@ func (r *X402Reconciler) callAuthorizationState(ctx context.Context, network Net
 	}
 
 	methodID := keccak256([]byte("authorizationState(address,bytes32)"))[0:4]
+	payerBytes, err := padAddress(payer)
+	if err != nil {
+		return false, fmt.Errorf("payer: %w", err)
+	}
+	nonceBytes, err := padBytes32(nonce)
+	if err != nil {
+		return false, fmt.Errorf("nonce: %w", err)
+	}
 	callData := methodID
-	callData = append(callData, padAddress(payer)...)
-	callData = append(callData, padBytes32(nonce)...)
+	callData = append(callData, payerBytes...)
+	callData = append(callData, nonceBytes...)
 
 	reqBody := map[string]any{
 		"jsonrpc": "2.0",

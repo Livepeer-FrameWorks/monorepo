@@ -292,6 +292,32 @@ func TestMollieAmountToCentsExact(t *testing.T) {
 	}
 }
 
+// TestIntPow10 pins the integer 10^n divisor used to render minor units back to
+// a major-unit float for invoice display (amountCents / 10^exponent). It must
+// agree exactly with the currency minor-unit exponents, or displayed invoice
+// amounts are off by orders of magnitude.
+func TestIntPow10(t *testing.T) {
+	cases := map[int]int64{0: 1, 1: 10, 2: 100, 3: 1000}
+	for n, want := range cases {
+		if got := intPow10(n); got != want {
+			t.Fatalf("intPow10(%d) = %d, want %d", n, got, want)
+		}
+	}
+
+	// The divisor must match the exponent each currency class declares.
+	for _, currency := range []string{"JPY", "EUR", "USD", "BHD"} {
+		exp := currencyMinorUnitExponent(currency)
+		got := intPow10(exp)
+		want := int64(1)
+		for i := 0; i < exp; i++ {
+			want *= 10
+		}
+		if got != want {
+			t.Fatalf("intPow10(exponent of %s=%d) = %d, want %d", currency, exp, got, want)
+		}
+	}
+}
+
 func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
