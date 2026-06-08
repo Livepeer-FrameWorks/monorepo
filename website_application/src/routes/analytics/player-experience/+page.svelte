@@ -96,6 +96,10 @@
   let qoeClusterRows = $state<QoeClusterRows>([]);
   let assetsConn = $state<AssetsConnection | null>(null);
   let assets = $derived(assetsConn?.nodes ?? []);
+  let hasVisitedRetentionAssetPage = $derived(Boolean(assetCursor.after || assetCursor.before));
+  let canPageRetentionAssetsBackward = $derived(
+    hasVisitedRetentionAssetPage && (assetsConn?.pageInfo?.hasPreviousPage ?? false)
+  );
   let retention = $state<Retention | null>(null);
 
   const RocketIcon = getIconComponent("Rocket");
@@ -665,7 +669,7 @@
                   loading={assetsLoading}
                   totalCount={assetsConn?.totalCount ?? 0}
                   hasNextPage={assetsConn?.pageInfo?.hasNextPage ?? false}
-                  hasPreviousPage={assetsConn?.pageInfo?.hasPreviousPage ?? false}
+                  hasPreviousPage={canPageRetentionAssetsBackward}
                   onSelect={selectAsset}
                   onNext={nextAssetPage}
                   onPrev={prevAssetPage}

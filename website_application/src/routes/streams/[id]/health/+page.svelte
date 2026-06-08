@@ -525,7 +525,7 @@
             variables: {
               streamId: analyticsStreamId,
               timeRange,
-              first: 50,
+              first: 25,
             },
           })
           .catch(() => null),

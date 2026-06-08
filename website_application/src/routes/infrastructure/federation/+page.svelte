@@ -291,7 +291,7 @@
         await Promise.all([
           trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
           summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
-          eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 50 } }),
+          eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 25 } }),
         ]);
       }
 

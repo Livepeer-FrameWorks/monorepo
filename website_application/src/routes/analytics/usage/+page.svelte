@@ -424,7 +424,7 @@
           })
           .catch(() => null),
         processingUsageStore
-          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 50 } })
+          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 25 } })
           .catch(() => null),
         apiUsageStore
           .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 100 } })

@@ -78,7 +78,7 @@
   async function loadConversations() {
     try {
       await conversationsStore.fetch({
-        variables: { first: 50 },
+        variables: { first: 25 },
         policy: "NetworkOnly",
       });
     } catch (error) {

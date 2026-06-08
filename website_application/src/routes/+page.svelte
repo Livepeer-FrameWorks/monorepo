@@ -237,7 +237,7 @@
           },
         }),
         billingStatusStore.fetch(),
-        streamsConnectionStore.fetch({ variables: { first: 50 } }),
+        streamsConnectionStore.fetch({ variables: { first: 25 } }),
       ]);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);

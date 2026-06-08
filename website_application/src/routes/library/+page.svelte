@@ -577,12 +577,12 @@
           .fetch({
             variables: {
               timeRange: { start: lifecycleRangeResolved.start, end: lifecycleRangeResolved.end },
-              first: 50,
+              first: 25,
             },
           })
           .catch(() => null),
         // Fetch current artifact states for in-progress operations
-        artifactStatesStore.fetch({ variables: { first: 50 } }).catch(() => null),
+        artifactStatesStore.fetch({ variables: { first: 25 } }).catch(() => null),
         // Fetch storage events (freeze + relay cache fills)
         storageEventsStore
           .fetch({
@@ -618,18 +618,18 @@
       if (typeFilter === "clips" || typeFilter === "all") {
         if (clipsPageInfo?.hasNextPage && clipsPageInfo.endCursor) {
           promises.push(
-            clipsStore.fetch({ variables: { first: 50, after: clipsPageInfo.endCursor } })
+            clipsStore.fetch({ variables: { first: 25, after: clipsPageInfo.endCursor } })
           );
         }
       }
       if (typeFilter === "dvr" || typeFilter === "all") {
         if (dvrPageInfo?.hasNextPage && dvrPageInfo.endCursor) {
-          promises.push(dvrStore.fetch({ variables: { first: 50, after: dvrPageInfo.endCursor } }));
+          promises.push(dvrStore.fetch({ variables: { first: 25, after: dvrPageInfo.endCursor } }));
         }
       }
       if (typeFilter === "vod" || typeFilter === "all") {
         if (vodPageInfo?.hasNextPage && vodPageInfo.endCursor) {
-          promises.push(vodStore.fetch({ variables: { first: 50, after: vodPageInfo.endCursor } }));
+          promises.push(vodStore.fetch({ variables: { first: 25, after: vodPageInfo.endCursor } }));
         }
       }
 

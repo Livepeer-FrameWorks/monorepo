@@ -295,7 +295,7 @@
           variables: {
             streamId: resolvedOperationalStreamId,
             timeRange: { start: range.start, end: range.end },
-            first: 50,
+            first: 25,
           },
         }),
       ]);

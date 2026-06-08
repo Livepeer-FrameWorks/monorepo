@@ -42,6 +42,8 @@
     onPrev,
   }: Props = $props();
 
+  const hasPageControls = $derived(hasNextPage || hasPreviousPage);
+
   function shortHash(hash: string): string {
     return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash;
   }
@@ -119,11 +121,11 @@
       </TableBody>
     </Table>
 
-    {#if hasNextPage || hasPreviousPage}
-      <div class="flex items-center justify-between">
-        <span class="text-xs text-muted-foreground"
-          >{totalCount} asset{totalCount === 1 ? "" : "s"}</span
-        >
+    <div class="flex items-center justify-between">
+      <span class="text-xs text-muted-foreground"
+        >{totalCount} asset{totalCount === 1 ? "" : "s"}</span
+      >
+      {#if hasPageControls}
         <div class="flex gap-2">
           <Button
             variant="outline"
@@ -142,7 +144,7 @@
             Next
           </Button>
         </div>
-      </div>
-    {/if}
+      {/if}
+    </div>
   {/if}
 </div>

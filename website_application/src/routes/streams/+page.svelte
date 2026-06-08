@@ -251,7 +251,7 @@
   async function loadStreams() {
     try {
       await streamsConnectionStore.fetch({
-        variables: { first: 50 },
+        variables: { first: 25 },
         policy: "NetworkOnly",
       });
     } catch (error) {
@@ -333,7 +333,7 @@
         // Refresh list to keep pagination/pageInfo in sync (non-blocking)
         try {
           await streamsConnectionStore.fetch({
-            variables: { first: 50 },
+            variables: { first: 25 },
             policy: "NetworkOnly",
           });
         } catch (refreshErr) {
@@ -369,7 +369,7 @@
         streams = streams.filter((s) => s.id !== idToDelete);
 
         // Refresh list and total counts from server
-        streamsConnectionStore.fetch({ policy: "NetworkOnly", variables: { first: 50 } });
+        streamsConnectionStore.fetch({ policy: "NetworkOnly", variables: { first: 25 } });
 
         // Close modal
         showDeleteModal = false;
@@ -380,7 +380,7 @@
         // Refresh list and total counts from server (non-blocking)
         try {
           await streamsConnectionStore.fetch({
-            variables: { first: 50 },
+            variables: { first: 25 },
             policy: "NetworkOnly",
           });
         } catch (refreshErr) {
