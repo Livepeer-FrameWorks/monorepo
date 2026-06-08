@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 User={{ helmsman_user }}
 Group={{ helmsman_group }}
+{% if helmsman_extra_groups is defined and (helmsman_extra_groups | string | length) > 0 %}
+SupplementaryGroups={{ helmsman_extra_groups }}
+{% endif %}
 WorkingDirectory={{ helmsman_install_dir }}
 EnvironmentFile={{ helmsman_env_file }}
 ExecStart={{ helmsman_install_dir }}/helmsman

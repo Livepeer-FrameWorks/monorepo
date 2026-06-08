@@ -436,7 +436,11 @@ func (m *Manager) applyTelemetryConfig(cfg *commonpb.EdgeTelemetryConfig) bool {
 		m.logger.WithError(err).Warn("Failed to create edge telemetry token directory")
 		return false
 	}
-	if err := atomicWriteFile(tokenPath, []byte(cfg.GetBearerToken()+"\n"), 0o600); err != nil {
+	tokenContent := []byte(cfg.GetBearerToken() + "\n")
+	if existing, err := os.ReadFile(tokenPath); err == nil && bytes.Equal(existing, tokenContent) {
+		return false
+	}
+	if err := atomicWriteFile(tokenPath, tokenContent, 0o600); err != nil {
 		m.logger.WithError(err).WithField("path", tokenPath).Warn("Failed to write edge telemetry token")
 		return false
 	}

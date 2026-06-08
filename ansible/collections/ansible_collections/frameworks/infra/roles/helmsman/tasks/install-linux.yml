@@ -8,9 +8,12 @@
   ansible.builtin.user:
     name: "{{ helmsman_user }}"
     group: "{{ helmsman_group }}"
+    groups: "{{ helmsman_extra_groups | default(omit) }}"
+    append: "{{ helmsman_extra_groups is defined and (helmsman_extra_groups | string | length) > 0 }}"
     system: true
     shell: /usr/sbin/nologin
     create_home: false
+  notify: helmsman restart
 
 - name: Ensure directories
   ansible.builtin.file:
