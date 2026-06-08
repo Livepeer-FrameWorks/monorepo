@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
@@ -100,6 +101,124 @@ func TestProcessMistTrigger_DurableAckReportsProcessorError(t *testing.T) {
 	}
 	if ack.GetRequestId() != "req-failed" {
 		t.Fatalf("expected request id req-failed, got %q", ack.GetRequestId())
+	}
+}
+
+func TestProcessMistTrigger_PushInputCloseGetsDurableAck(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevLocalClusterID := localClusterID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localClusterID = prevLocalClusterID
+	})
+
+	mistTriggerProcessor = &captureMistTriggerProcessor{}
+	localClusterID = "cluster-local"
+	stream := &captureStream{}
+
+	trigger := &ipcpb.MistTrigger{
+		TriggerType: "PUSH_INPUT_CLOSE",
+		Blocking:    false,
+		RequestId:   "req-push-input-close",
+		TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
+			PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+abc"},
+		},
+	}
+
+	processMistTrigger(trigger, "node-1", stream, logging.Logger(logrus.New()))
+
+	msg := stream.lastSent()
+	if msg == nil {
+		t.Fatal("expected durable ack")
+	}
+	ack := msg.GetMistTriggerAck()
+	if ack == nil {
+		t.Fatalf("expected MistTriggerAck, got %T", msg.GetPayload())
+	}
+	if !ack.GetSuccess() {
+		t.Fatalf("expected positive ack, got code=%s retryable=%v err=%q", ack.GetErrorCode(), ack.GetRetryable(), ack.GetErrorMessage())
+	}
+	if ack.GetRequestId() != "req-push-input-close" {
+		t.Fatalf("expected request id req-push-input-close, got %q", ack.GetRequestId())
+	}
+}
+
+func TestProcessMistTrigger_AllDurableTypesGetAck(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevLocalClusterID := localClusterID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localClusterID = prevLocalClusterID
+	})
+
+	mistTriggerProcessor = &captureMistTriggerProcessor{}
+	localClusterID = "cluster-local"
+
+	durableTypes := []mist.TriggerType{
+		mist.TriggerUserEnd,
+		mist.TriggerStreamEnd,
+		mist.TriggerPushEnd,
+		mist.TriggerPushInputClose,
+		mist.TriggerRecordingEnd,
+		mist.TriggerRecordingSegment,
+		mist.TriggerLivepeerSegmentComplete,
+		mist.TriggerProcessAVSegmentComplete,
+	}
+	for _, triggerType := range durableTypes {
+		triggerType := triggerType
+		t.Run(string(triggerType), func(t *testing.T) {
+			stream := &captureStream{}
+			requestID := "req-" + string(triggerType)
+			processMistTrigger(&ipcpb.MistTrigger{
+				TriggerType: string(triggerType),
+				Blocking:    false,
+				RequestId:   requestID,
+				TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
+					RawMistWebhook: &ipcpb.RawMistWebhookTrigger{PayloadRaw: []byte("raw")},
+				},
+			}, "node-1", stream, logging.Logger(logrus.New()))
+
+			msg := stream.lastSent()
+			if msg == nil {
+				t.Fatal("expected durable ack")
+			}
+			ack := msg.GetMistTriggerAck()
+			if ack == nil {
+				t.Fatalf("expected MistTriggerAck, got %T", msg.GetPayload())
+			}
+			if !ack.GetSuccess() || ack.GetRetryable() || ack.GetErrorCode() != ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_NONE {
+				t.Fatalf("unexpected ack: success=%v retryable=%v code=%s message=%q", ack.GetSuccess(), ack.GetRetryable(), ack.GetErrorCode(), ack.GetErrorMessage())
+			}
+			if ack.GetRequestId() != requestID {
+				t.Fatalf("expected request id %q, got %q", requestID, ack.GetRequestId())
+			}
+		})
+	}
+}
+
+func TestProcessMistTrigger_NonDurableAsyncGetsNoAck(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevLocalClusterID := localClusterID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localClusterID = prevLocalClusterID
+	})
+
+	mistTriggerProcessor = &captureMistTriggerProcessor{}
+	localClusterID = "cluster-local"
+	stream := &captureStream{}
+
+	processMistTrigger(&ipcpb.MistTrigger{
+		TriggerType: string(mist.TriggerThumbnailUpdated),
+		Blocking:    false,
+		RequestId:   "req-thumbnail",
+		TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
+			RawMistWebhook: &ipcpb.RawMistWebhookTrigger{PayloadRaw: []byte("raw")},
+		},
+	}, "node-1", stream, logging.Logger(logrus.New()))
+
+	if msg := stream.lastSent(); msg != nil {
+		t.Fatalf("non-durable async trigger should not receive a control-stream ack, got %T", msg.GetPayload())
 	}
 }
 

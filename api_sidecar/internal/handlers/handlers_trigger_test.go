@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +49,73 @@ func stubSendMistTrigger(t *testing.T, fn func(*ipcpb.MistTrigger) (*control.Mis
 		sendMistTrigger = originalSend
 		sendDurableMistTrigger = originalDurable
 	})
+}
+
+func TestForwardDurableRejectsUnregisteredTriggerType(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	called := false
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		called = true
+		return &control.MistTriggerResult{}, nil
+	})
+
+	_, err := forwardDurable(string(mist.TriggerThumbnailUpdated), []byte("payload"), &ipcpb.MistTrigger{
+		TriggerType: string(mist.TriggerThumbnailUpdated),
+	})
+	if err == nil {
+		t.Fatal("expected unregistered durable trigger to fail")
+	}
+	if !strings.Contains(err.Error(), "not registered durable") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Fatal("unregistered durable trigger reached WAL sender")
+	}
+}
+
+func TestForwardDurableAcceptsRegisteredTriggerTypes(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+
+	var sent *ipcpb.MistTrigger
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		sent = trigger
+		return &control.MistTriggerResult{}, nil
+	})
+
+	durableTypes := []mist.TriggerType{
+		mist.TriggerUserEnd,
+		mist.TriggerStreamEnd,
+		mist.TriggerPushEnd,
+		mist.TriggerPushInputClose,
+		mist.TriggerRecordingEnd,
+		mist.TriggerRecordingSegment,
+		mist.TriggerLivepeerSegmentComplete,
+		mist.TriggerProcessAVSegmentComplete,
+	}
+	for _, triggerType := range durableTypes {
+		triggerType := triggerType
+		t.Run(string(triggerType), func(t *testing.T) {
+			sent = nil
+			trigger := &ipcpb.MistTrigger{TriggerType: string(triggerType)}
+			sourceEventID, err := forwardDurable(string(triggerType), []byte("payload:"+string(triggerType)), trigger)
+			if err != nil {
+				t.Fatalf("forwardDurable: %v", err)
+			}
+			if sourceEventID == "" {
+				t.Fatal("source_event_id is empty")
+			}
+			if sent == nil {
+				t.Fatal("expected WAL sender call")
+			}
+			if sent.GetRequestId() != sourceEventID {
+				t.Fatalf("request_id = %q, want %q", sent.GetRequestId(), sourceEventID)
+			}
+			if sent.GetEventId() == "" {
+				t.Fatal("event_id is empty")
+			}
+		})
+	}
 }
 
 func TestTriggerHandlersApplyTenantContext(t *testing.T) {

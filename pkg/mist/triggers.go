@@ -42,6 +42,24 @@ const (
 	TriggerNodeLifecycle   TriggerType = "NODE_LIFECYCLE_UPDATE"
 )
 
+var durableTriggerTypes = map[TriggerType]struct{}{
+	TriggerUserEnd:                  {},
+	TriggerStreamEnd:                {},
+	TriggerPushEnd:                  {},
+	TriggerPushInputClose:           {},
+	TriggerRecordingEnd:             {},
+	TriggerRecordingSegment:         {},
+	TriggerLivepeerSegmentComplete:  {},
+	TriggerProcessAVSegmentComplete: {},
+}
+
+// IsDurableTriggerType reports whether Helmsman must persist this trigger
+// locally and Foghorn must return a MistTriggerAck for it.
+func IsDurableTriggerType(triggerType string) bool {
+	_, ok := durableTriggerTypes[TriggerType(triggerType)]
+	return ok
+}
+
 // CleanExitReasonPrefix is the namespace Mist gives every clean machine exit
 // reason (mRExitReason). lib/defines.h enumerates CLEAN_EOF,
 // CLEAN_INTENDED_STOP, CLEAN_REMOTE_CLOSE, etc.; any reason without this prefix

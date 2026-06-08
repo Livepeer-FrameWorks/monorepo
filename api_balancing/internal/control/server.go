@@ -41,6 +41,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
@@ -2598,22 +2599,6 @@ type MistTriggerProcessor interface {
 	ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, bool, error)
 }
 
-// triggerTypesNeedingDurableAck enumerates final/accounting Mist triggers
-// that Helmsman persists to a local WAL before acking Mist. Foghorn must
-// emit a MistTriggerAck for these whether or not they are blocking, so
-// the WAL can be truncated. Any trigger type not in this set follows the
-// pre-existing flow (blocking → MistTriggerResponse; non-blocking → no
-// ack).
-var triggerTypesNeedingDurableAck = map[string]struct{}{
-	"USER_END":                            {},
-	"STREAM_END":                          {},
-	"PUSH_END":                            {},
-	"RECORDING_END":                       {},
-	"RECORDING_SEGMENT":                   {},
-	"LIVEPEER_SEGMENT_COMPLETE":           {},
-	"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {},
-}
-
 // classifyTriggerError maps a processor error to the ack error_code and
 // retryable flag Helmsman uses to decide between backoff-and-resend vs
 // dead-letter.
@@ -2644,8 +2629,8 @@ func classifyTriggerError(err error) (ipcpb.TriggerAckErrorCode, bool) {
 }
 
 // sendMistTriggerAck delivers the durable ack back to Helmsman on the
-// same control stream. Caller invokes for any trigger in
-// triggerTypesNeedingDurableAck regardless of blocking flag.
+// same control stream. Caller invokes for any mist.IsDurableTriggerType
+// trigger regardless of blocking flag.
 func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID string, err error, logger logging.Logger) {
 	if stream == nil {
 		return
@@ -2687,7 +2672,7 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, nodeID string, stream ipcpb.
 	triggerType := trigger.GetTriggerType()
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()
-	_, needsDurableAck := triggerTypesNeedingDurableAck[triggerType]
+	needsDurableAck := mist.IsDurableTriggerType(triggerType)
 
 	if !controlStreamIsCurrentOrUntracked(nodeID, stream) {
 		incMistTrigger(triggerType, blocking, "stale_connection")

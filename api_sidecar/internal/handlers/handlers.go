@@ -75,13 +75,16 @@ func applyTenantContext(trigger *ipcpb.MistTrigger) {
 	}
 }
 
-// forwardDurable persists a final/accounting trigger to the local WAL
+// forwardDurable persists a registered durable trigger to the local WAL
 // after stamping the stable source_event_id on RequestId for Foghorn ack
 // correlation and a deterministic UUID on EventId for downstream Periscope
 // dedupe. Returns the stable id so callers can include it in structured logs.
 func forwardDurable(triggerType string, body []byte, mistTrigger *ipcpb.MistTrigger) (string, error) {
 	nodeID := control.GetCurrentNodeID()
 	sourceEventID := storage.ComputeSourceEventID(nodeID, triggerType, body)
+	if !mist.IsDurableTriggerType(triggerType) {
+		return sourceEventID, fmt.Errorf("trigger type %s is not registered durable", triggerType)
+	}
 	mistTrigger.RequestId = sourceEventID
 	mistTrigger.EventId = storage.ComputeTypedEventID(sourceEventID)
 	return sourceEventID, sendDurableMistTrigger(mistTrigger)

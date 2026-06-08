@@ -26,6 +26,44 @@ func TestExtractInternalName(t *testing.T) {
 	}
 }
 
+func TestIsDurableTriggerType(t *testing.T) {
+	durable := []TriggerType{
+		TriggerUserEnd,
+		TriggerStreamEnd,
+		TriggerPushEnd,
+		TriggerPushInputClose,
+		TriggerRecordingEnd,
+		TriggerRecordingSegment,
+		TriggerLivepeerSegmentComplete,
+		TriggerProcessAVSegmentComplete,
+	}
+	for _, triggerType := range durable {
+		if !IsDurableTriggerType(string(triggerType)) {
+			t.Fatalf("%s should be registered durable", triggerType)
+		}
+	}
+
+	nonDurable := []TriggerType{
+		TriggerPushRewrite,
+		TriggerPlayRewrite,
+		TriggerStreamSource,
+		TriggerPushOutStart,
+		TriggerStreamBuffer,
+		TriggerUserNew,
+		TriggerLiveTrackList,
+		TriggerStreamProcess,
+		TriggerThumbnailUpdated,
+		TriggerStreamLifecycle,
+		TriggerClientLifecycle,
+		TriggerNodeLifecycle,
+	}
+	for _, triggerType := range nonDurable {
+		if IsDurableTriggerType(string(triggerType)) {
+			t.Fatalf("%s should not be registered durable", triggerType)
+		}
+	}
+}
+
 func TestIsPlaybackViewerConnector(t *testing.T) {
 	cases := []struct {
 		name      string

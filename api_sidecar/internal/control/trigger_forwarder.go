@@ -12,13 +12,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Durable forwarding for final-event Mist triggers (USER_END, STREAM_END,
-// PUSH_END, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE,
-// PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE). Helmsman persists each such
-// trigger to a local WAL before responding 200 OK to Mist, then forwards
-// asynchronously via the existing HelmsmanControl bidi stream and waits
-// for Foghorn's MistTriggerAck before truncating the WAL row. See
-// docs/architecture/trigger-durability.md.
+// Durable forwarding for final-event and source-presence Mist triggers.
+// Helmsman persists each such trigger to a local WAL before responding
+// 200 OK to Mist, then forwards asynchronously via the existing
+// HelmsmanControl bidi stream and waits for Foghorn's MistTriggerAck
+// before truncating the WAL row. See docs/architecture/trigger-durability.md.
 
 const (
 	// triggerAckTimeout bounds how long a single forwarder pass waits for
