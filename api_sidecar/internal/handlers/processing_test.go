@@ -247,6 +247,49 @@ func TestProcessingTracksReadyRequiresExplicitRequiredTracks(t *testing.T) {
 	}
 }
 
+func TestExpectedLocalAVVideoProcessesCountsVideoOnly(t *testing.T) {
+	processes := `[
+		{"process":"AV","codec":"h264","track_select":"video=maxbps&audio=none"},
+		{"process":"AV","codec":"opus","track_select":"audio=all&video=none"},
+		{"process":"AV","codec":"h265"},
+		{"process":"Thumbs","track_select":"video=lowres"}
+	]`
+	if got := expectedLocalAVVideoProcesses(processes); got != 2 {
+		t.Fatalf("expected %d local AV video processes, got %d", 2, got)
+	}
+}
+
+func TestProcessAVFinalVideoReadyRequiresFinalVideoOutput(t *testing.T) {
+	ready := ProcessAVSegmentCompleteEvent{
+		TrackType:    "video",
+		OutputCodec:  "libx264",
+		OutputWidth:  640,
+		OutputHeight: 360,
+		OutputFrames: 100,
+		IsFinal:      true,
+	}
+	if !processAVFinalVideoReady(ready) {
+		t.Fatal("expected final video output to be ready")
+	}
+	if !processAVVideoProgress(ready) {
+		t.Fatal("expected video output frames to count as progress")
+	}
+
+	for name, evt := range map[string]ProcessAVSegmentCompleteEvent{
+		"non_final": {TrackType: "video", OutputCodec: "libx264", OutputWidth: 640, OutputHeight: 360, OutputFrames: 100},
+		"audio":     {TrackType: "audio", OutputCodec: "libx264", OutputWidth: 640, OutputHeight: 360, OutputFrames: 100, IsFinal: true},
+		"no_frames": {TrackType: "video", OutputCodec: "libx264", OutputWidth: 640, OutputHeight: 360, IsFinal: true},
+		"no_dims":   {TrackType: "video", OutputCodec: "libx264", OutputFrames: 100, IsFinal: true},
+	} {
+		if processAVFinalVideoReady(evt) {
+			t.Fatalf("%s should not count as ready", name)
+		}
+	}
+	if processAVVideoProgress(ProcessAVSegmentCompleteEvent{TrackType: "audio", OutputFrames: 100}) {
+		t.Fatal("audio output must not count as video progress")
+	}
+}
+
 func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	presence := inspectProcessingActiveStream(map[string]interface{}{
 		"lastms": float64(33000),
@@ -1044,7 +1087,7 @@ func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testin
 		Reason:      "too many upload failures",
 	}
 
-	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", req.GetProcessesJson(), processExitCh, map[string]int{})
+	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", req.GetProcessesJson(), processExitCh, nil, nil, map[string]int{})
 	var fallbackErr *livepeerReadinessFallbackError
 	if !errors.As(err, &fallbackErr) {
 		t.Fatalf("expected livepeer readiness fallback error, got %v", err)
@@ -1067,6 +1110,31 @@ func TestNextProcessExitEventSkipsRetiredGenerations(t *testing.T) {
 	}
 	if evt.BootCount != 3 {
 		t.Fatalf("boot count = %d, want 3", evt.BootCount)
+	}
+}
+
+func TestProcessSegmentCompleteListenersRouteByStream(t *testing.T) {
+	avCh := RegisterProcessAVSegmentCompleteListener("processing+target")
+	defer UnregisterProcessAVSegmentCompleteListener("processing+target")
+	lpCh := RegisterLivepeerSegmentCompleteListener("processing+target")
+	defer UnregisterLivepeerSegmentCompleteListener("processing+target")
+
+	RouteProcessAVSegmentComplete(ProcessAVSegmentCompleteEvent{StreamName: "processing+other", IsFinal: true})
+	RouteLivepeerSegmentComplete(LivepeerSegmentCompleteEvent{StreamName: "processing+other", RenditionCount: 4})
+	if _, ok := nextProcessAVSegmentCompleteEvent(avCh); ok {
+		t.Fatal("unexpected AV event for different stream")
+	}
+	if _, ok := nextLivepeerSegmentCompleteEvent(lpCh); ok {
+		t.Fatal("unexpected Livepeer event for different stream")
+	}
+
+	RouteProcessAVSegmentComplete(ProcessAVSegmentCompleteEvent{StreamName: "processing+target", IsFinal: true})
+	RouteLivepeerSegmentComplete(LivepeerSegmentCompleteEvent{StreamName: "processing+target", RenditionCount: 4})
+	if _, ok := nextProcessAVSegmentCompleteEvent(avCh); !ok {
+		t.Fatal("expected AV event for target stream")
+	}
+	if _, ok := nextLivepeerSegmentCompleteEvent(lpCh); !ok {
+		t.Fatal("expected Livepeer event for target stream")
 	}
 }
 

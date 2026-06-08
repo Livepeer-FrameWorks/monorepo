@@ -2208,6 +2208,14 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	attemptCountInt, _ := strconv.Atoi(attemptCount)
 	turnaroundMsInt, _ := strconv.ParseInt(turnaroundMs, 10, 64)
 	speedFactorFloat, _ := strconv.ParseFloat(speedFactor, 64)
+	RouteLivepeerSegmentComplete(LivepeerSegmentCompleteEvent{
+		StreamName:        streamName,
+		LivepeerSessionID: livepeerSessionId,
+		SegmentNumber:     segmentNumInt,
+		RenditionCount:    renditionCountInt,
+		TurnaroundMs:      turnaroundMsInt,
+		SpeedFactor:       speedFactorFloat,
+	})
 
 	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:      nodeName,
@@ -2380,6 +2388,15 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	pipelineLagMsInt, _ := strconv.ParseInt(pipelineLagMs, 10, 64)
 	outputBitrateBpsInt, _ := strconv.ParseInt(outputBitrateBps, 10, 64)
 	isFinalBool := isFinal == "1"
+	RouteProcessAVSegmentComplete(ProcessAVSegmentCompleteEvent{
+		StreamName:   streamName,
+		TrackType:    trackType,
+		OutputCodec:  outputCodec,
+		OutputWidth:  outputWidthInt,
+		OutputHeight: outputHeightInt,
+		OutputFrames: outputFramesInt,
+		IsFinal:      isFinalBool,
+	})
 
 	durationMs := secondsSinceLastInt * 1000
 

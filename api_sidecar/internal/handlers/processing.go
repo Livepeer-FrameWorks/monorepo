@@ -473,6 +473,10 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// failure cannot race past the listener setup.
 	processExitCh := RegisterProcessExitListener(streamName)
 	defer UnregisterProcessExitListener(streamName)
+	processAVCh := RegisterProcessAVSegmentCompleteListener(streamName)
+	defer UnregisterProcessAVSegmentCompleteListener(streamName)
+	livepeerSegmentCh := RegisterLivepeerSegmentCompleteListener(streamName)
+	defer UnregisterLivepeerSegmentCompleteListener(streamName)
 
 	mistClient := mist.NewClient(h.logger)
 	if h.mistServerURL != "" {
@@ -499,7 +503,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	activePushID := 0
 	effectiveProcessesJSON := req.GetProcessesJson()
 
-	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
+	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
 		var livepeerBootErr *livepeerReadinessFallbackError
 		if errors.As(waitErr, &livepeerBootErr) && !fallbackAttempted {
@@ -519,7 +523,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
 			recordingEndCh = registerProcessingRecordingEndListener(streamName)
-			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
+			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 			if waitErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -585,7 +589,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
 		var waitErr error
-		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
+		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -918,11 +922,11 @@ type processingTrackPresence struct {
 }
 
 // waitForProcessingStreamReady boots the processing+ wildcard stream and waits
-// until Mist has exposed source media and any requested Livepeer rendition
-// tracks. Mist's file-output path pins the selected track set when push_start
-// opens, so starting before generated video tracks exist records a source-only
-// artifact.
-func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
+// until Mist has exposed source media, any requested Livepeer rendition tracks,
+// and final PROCESS_AV video output for local AV configs. Mist's file-output
+// path pins the selected track set when push_start opens, so starting before
+// generated video tracks exist records a source-only artifact.
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, livepeerSegmentCh <-chan LivepeerSegmentCompleteEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(processesJSON)
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
@@ -930,6 +934,8 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 	sourceReadyLogged := false
 	var missingLivepeerHeights []int
 	var livepeerHeightErr error
+	localAVVideoProcesses := expectedLocalAVVideoProcesses(processesJSON)
+	localAVFinalVideoCount := 0
 	bootTicker := time.NewTicker(500 * time.Millisecond)
 	defer bootTicker.Stop()
 
@@ -949,6 +955,41 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				log.WithFields(evtFields).Info("Process retrying while waiting for processing readiness")
 			case evt.Status == "clean":
 				log.WithFields(evtFields).Info("Process exited cleanly while waiting for processing readiness")
+			}
+		}
+		for {
+			evt, ok := nextProcessAVSegmentCompleteEvent(processAVCh)
+			if !ok {
+				break
+			}
+			if processAVVideoProgress(evt) {
+				deadline = time.Now().Add(45 * time.Second)
+			}
+			if processAVFinalVideoReady(evt) {
+				localAVFinalVideoCount++
+				log.WithFields(logrus.Fields{
+					"output_codec":  evt.OutputCodec,
+					"output_width":  evt.OutputWidth,
+					"output_height": evt.OutputHeight,
+					"final_videos":  localAVFinalVideoCount,
+					"want_videos":   localAVVideoProcesses,
+				}).Info("Local MistProcAV video output finalized during readiness")
+			}
+		}
+		for {
+			evt, ok := nextLivepeerSegmentCompleteEvent(livepeerSegmentCh)
+			if !ok {
+				break
+			}
+			if evt.RenditionCount > 0 {
+				deadline = time.Now().Add(45 * time.Second)
+				log.WithFields(logrus.Fields{
+					"livepeer_session_id": evt.LivepeerSessionID,
+					"segment_num":         evt.SegmentNumber,
+					"rendition_count":     evt.RenditionCount,
+					"turnaround_ms":       evt.TurnaroundMs,
+					"speed_factor":        evt.SpeedFactor,
+				}).Info("Livepeer segment output observed during readiness")
 			}
 		}
 
@@ -976,7 +1017,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				if err != nil {
 					return nil, 0, err
 				}
-				if livepeerReady {
+				if livepeerReady && localAVFinalVideoCount >= localAVVideoProcesses && visibleProcessingVideoTracksReady(lastPresence, localAVVideoProcesses) {
 					return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
 				}
 			}
@@ -993,6 +1034,12 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			}
 			if livepeerHeightErr != nil {
 				return nil, 0, livepeerHeightErr
+			}
+			if localAVFinalVideoCount < localAVVideoProcesses {
+				return nil, 0, fmt.Errorf("local AV video transcodes not final before push: have %d final video tracks, want %d", localAVFinalVideoCount, localAVVideoProcesses)
+			}
+			if !visibleProcessingVideoTracksReady(lastPresence, localAVVideoProcesses) {
+				return nil, 0, fmt.Errorf("processing stream missing finalized local AV video tracks before push: have %d video tracks, want %d", visibleProcessingVideoTrackCount(lastPresence), localAVVideoProcesses)
 			}
 			if len(missingLivepeerHeights) > 0 {
 				return nil, 0, &livepeerReadinessFallbackError{evt: ProcessExitEvent{
@@ -1119,6 +1166,60 @@ func expectedProcessingTracks(processesJSON string) processingTrackRequirements 
 		}
 	}
 	return req
+}
+
+func expectedLocalAVVideoProcesses(processesJSON string) int {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return 0
+	}
+	count := 0
+	for _, proc := range processes {
+		processName, processOK := proc["process"].(string)
+		if !processOK || processName != "AV" {
+			continue
+		}
+		codec, codecOK := proc["codec"].(string)
+		if !codecOK || isAudioCodec(normalizeTrackCodec(codec)) {
+			continue
+		}
+		if trackSelect, ok := proc["track_select"].(string); ok && strings.Contains(strings.ToLower(trackSelect), "video=none") {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func processAVFinalVideoReady(evt ProcessAVSegmentCompleteEvent) bool {
+	if !evt.IsFinal || strings.ToLower(evt.TrackType) != "video" {
+		return false
+	}
+	return evt.OutputFrames > 0 && evt.OutputWidth > 0 && evt.OutputHeight > 0
+}
+
+func processAVVideoProgress(evt ProcessAVSegmentCompleteEvent) bool {
+	return strings.ToLower(evt.TrackType) == "video" && evt.OutputFrames > 0
+}
+
+func visibleProcessingVideoTracksReady(p processingTrackPresence, want int) bool {
+	if want <= 0 {
+		return true
+	}
+	return visibleProcessingVideoTrackCount(p) >= want
+}
+
+func visibleProcessingVideoTrackCount(p processingTrackPresence) int {
+	if len(p.videoTracks) > 0 {
+		return len(p.videoTracks)
+	}
+	count := 0
+	for codec := range p.videoCodecs {
+		if codec != "JPEG" {
+			count++
+		}
+	}
+	return count
 }
 
 func processRequired(proc map[string]interface{}) bool {
@@ -1934,6 +2035,25 @@ type ProcessExitEvent struct {
 	Reason      string // human-readable
 }
 
+type ProcessAVSegmentCompleteEvent struct {
+	StreamName   string
+	TrackType    string
+	OutputCodec  string
+	OutputWidth  int
+	OutputHeight int
+	OutputFrames int64
+	IsFinal      bool
+}
+
+type LivepeerSegmentCompleteEvent struct {
+	StreamName        string
+	LivepeerSessionID string
+	SegmentNumber     int
+	RenditionCount    int
+	TurnaroundMs      int64
+	SpeedFactor       float64
+}
+
 const ignoreAllProcessExitBootCounts = -1
 
 type livepeerReadinessFallbackError struct {
@@ -1951,6 +2071,16 @@ func (e *livepeerReadinessFallbackError) Error() string {
 var (
 	processExitListeners   = map[string]chan ProcessExitEvent{}
 	processExitListenersMu sync.Mutex
+)
+
+var (
+	processAVSegmentCompleteListeners   = map[string]chan ProcessAVSegmentCompleteEvent{}
+	processAVSegmentCompleteListenersMu sync.Mutex
+)
+
+var (
+	livepeerSegmentCompleteListeners   = map[string]chan LivepeerSegmentCompleteEvent{}
+	livepeerSegmentCompleteListenersMu sync.Mutex
 )
 
 func ignoreProcessExitThrough(ignored map[string]int, processType string, bootCount int) {
@@ -2010,6 +2140,30 @@ func nextProcessExitEvent(processExitCh <-chan ProcessExitEvent, ignored map[str
 	}
 }
 
+func nextProcessAVSegmentCompleteEvent(processAVCh <-chan ProcessAVSegmentCompleteEvent) (ProcessAVSegmentCompleteEvent, bool) {
+	if processAVCh == nil {
+		return ProcessAVSegmentCompleteEvent{}, false
+	}
+	select {
+	case evt := <-processAVCh:
+		return evt, true
+	default:
+		return ProcessAVSegmentCompleteEvent{}, false
+	}
+}
+
+func nextLivepeerSegmentCompleteEvent(livepeerCh <-chan LivepeerSegmentCompleteEvent) (LivepeerSegmentCompleteEvent, bool) {
+	if livepeerCh == nil {
+		return LivepeerSegmentCompleteEvent{}, false
+	}
+	select {
+	case evt := <-livepeerCh:
+		return evt, true
+	default:
+		return LivepeerSegmentCompleteEvent{}, false
+	}
+}
+
 func RegisterProcessExitListener(streamName string) chan ProcessExitEvent {
 	processExitListenersMu.Lock()
 	defer processExitListenersMu.Unlock()
@@ -2030,6 +2184,58 @@ func RouteProcessExit(evt ProcessExitEvent) {
 	processExitListenersMu.Lock()
 	ch, ok := processExitListeners[evt.StreamName]
 	processExitListenersMu.Unlock()
+	if ok {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+func RegisterProcessAVSegmentCompleteListener(streamName string) chan ProcessAVSegmentCompleteEvent {
+	processAVSegmentCompleteListenersMu.Lock()
+	defer processAVSegmentCompleteListenersMu.Unlock()
+	ch := make(chan ProcessAVSegmentCompleteEvent, 16)
+	processAVSegmentCompleteListeners[streamName] = ch
+	return ch
+}
+
+func UnregisterProcessAVSegmentCompleteListener(streamName string) {
+	processAVSegmentCompleteListenersMu.Lock()
+	defer processAVSegmentCompleteListenersMu.Unlock()
+	delete(processAVSegmentCompleteListeners, streamName)
+}
+
+func RouteProcessAVSegmentComplete(evt ProcessAVSegmentCompleteEvent) {
+	processAVSegmentCompleteListenersMu.Lock()
+	ch, ok := processAVSegmentCompleteListeners[evt.StreamName]
+	processAVSegmentCompleteListenersMu.Unlock()
+	if ok {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+func RegisterLivepeerSegmentCompleteListener(streamName string) chan LivepeerSegmentCompleteEvent {
+	livepeerSegmentCompleteListenersMu.Lock()
+	defer livepeerSegmentCompleteListenersMu.Unlock()
+	ch := make(chan LivepeerSegmentCompleteEvent, 16)
+	livepeerSegmentCompleteListeners[streamName] = ch
+	return ch
+}
+
+func UnregisterLivepeerSegmentCompleteListener(streamName string) {
+	livepeerSegmentCompleteListenersMu.Lock()
+	defer livepeerSegmentCompleteListenersMu.Unlock()
+	delete(livepeerSegmentCompleteListeners, streamName)
+}
+
+func RouteLivepeerSegmentComplete(evt LivepeerSegmentCompleteEvent) {
+	livepeerSegmentCompleteListenersMu.Lock()
+	ch, ok := livepeerSegmentCompleteListeners[evt.StreamName]
+	livepeerSegmentCompleteListenersMu.Unlock()
 	if ok {
 		select {
 		case ch <- evt:

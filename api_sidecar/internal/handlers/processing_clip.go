@@ -99,7 +99,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	}
 
 	ignoredProcessExitBootCounts := map[string]int{}
-	streamOutputs, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
+	streamOutputs, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip readiness failed: %v", readinessErr), nil, "", 0)
