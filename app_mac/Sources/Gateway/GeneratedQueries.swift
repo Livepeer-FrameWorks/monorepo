@@ -423,6 +423,7 @@ enum GQL {
     recordingSizeBytes
     clipSource
     createdAt
+    telemetryToken
     thumbnailAssets {
       posterUrl
       spriteVttUrl
@@ -579,6 +580,11 @@ enum GQL {
     currentViewers
     bufferState
     qualityTier
+    primaryWidth
+    primaryHeight
+    primaryFps
+    primaryCodec
+    primaryBitrate
     startedAt
   }
   """
