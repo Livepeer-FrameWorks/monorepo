@@ -52,6 +52,7 @@
   const status = $derived(stream.metrics?.status);
   const isLive = $derived(status === StreamStatus.LIVE);
   const displayStreamId = $derived(stream.streamId || stream.id);
+  const displayViewers = $derived(stream.metrics?.currentViewers ?? stream.viewers ?? 0);
 
   // Merge health data: prefer explicit healthData, fall back to stream.metrics
   const effectiveHealthData = $derived.by(() => {
@@ -134,7 +135,7 @@
       <div>
         <p class="text-xs text-muted-foreground uppercase tracking-wider mb-1">Viewers</p>
         <p class="font-medium text-foreground">
-          {stream.viewers || 0}
+          {displayViewers}
         </p>
       </div>
     </div>

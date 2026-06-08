@@ -38,6 +38,15 @@
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { resolveOperationalStreamId } from "$lib/route-ids";
+  import {
+    formatTrackBitrate,
+    trackCodec,
+    trackDisplayName,
+    trackFps,
+    trackKindLabel,
+    trackResolution,
+    type TrackLike,
+  } from "$lib/utils/track-display";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
@@ -614,19 +623,23 @@
 
   // Parse tracks from trackList JSON string if tracks array is empty/malformed
   function getTracksForEvent(event: TrackListEventType) {
-    // If tracks array has valid data, use it
-    if (event.tracks && event.tracks.length > 0 && event.tracks[0]?.trackName) {
+    if (event.tracks && event.tracks.length > 0) {
       return event.tracks;
     }
-    // Otherwise try to parse from trackList JSON string
     if (event.trackList) {
       try {
         const parsed = JSON.parse(event.trackList);
         if (Array.isArray(parsed)) {
           return parsed;
         }
+        if (parsed && typeof parsed === "object") {
+          return Object.entries(parsed as Record<string, TrackLike>).map(([name, track]) => ({
+            ...track,
+            name,
+          }));
+        }
       } catch {
-        // Not valid JSON, ignore
+        return [];
       }
     }
     return [];
@@ -654,19 +667,24 @@
     track:
       | {
           trackName?: string | null;
+          track_name?: string | null;
+          name?: string | null;
           trackType?: string | null;
+          track_type?: string | null;
+          type?: string | null;
           codec?: string | null;
           bitrateKbps?: number | null;
+          bitrate_kbps?: number | null;
         }
       | null
       | undefined,
     index: number
   ): string {
     return [
-      track?.trackName ?? "track",
-      track?.trackType ?? "type",
-      track?.codec ?? "codec",
-      track?.bitrateKbps ?? "bitrate",
+      trackDisplayName(track, index),
+      trackKindLabel(track),
+      trackCodec(track),
+      formatTrackBitrate(track) ?? "bitrate",
       index,
     ].join(":");
   }
@@ -1381,38 +1399,40 @@
                           <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
                               <span class="text-foreground font-medium text-sm"
-                                >{track?.trackName || "Unknown"}</span
+                                >{trackDisplayName(track, i)}</span
                               >
                               <span
                                 class="text-xs px-1.5 py-0.5 bg-accent-purple/20 text-accent-purple"
                               >
-                                {track?.trackType || "N/A"}
+                                {trackKindLabel(track)}
                               </span>
-                              {#if track?.codec}
+                              {#if trackCodec(track)}
                                 <span class="text-xs px-1.5 py-0.5 bg-info/20 text-info">
-                                  {track.codec}
+                                  {trackCodec(track)}
                                 </span>
                               {/if}
                             </div>
-                            {#if track?.bitrateKbps}
+                            {#if formatTrackBitrate(track)}
                               <span class="text-xs font-mono text-success"
-                                >{track.bitrateKbps} kbps</span
+                                >{formatTrackBitrate(track)}</span
                               >
                             {/if}
                           </div>
                           <div class="grid grid-cols-4 gap-2 text-xs">
-                            {#if track?.width && track?.height}
+                            {#if trackResolution(track)}
                               <div>
                                 <span class="text-muted-foreground">Resolution</span>
                                 <p class="font-mono text-foreground">
-                                  {track.width}x{track.height}
+                                  {trackResolution(track)}
                                 </p>
                               </div>
                             {/if}
-                            {#if track?.fps}
+                            {#if trackFps(track)}
                               <div>
                                 <span class="text-muted-foreground">FPS</span>
-                                <p class="font-mono text-foreground">{track.fps.toFixed(1)}</p>
+                                <p class="font-mono text-foreground">
+                                  {trackFps(track)?.toFixed(1)}
+                                </p>
                               </div>
                             {/if}
                             {#if track?.buffer !== undefined && track?.buffer !== null}

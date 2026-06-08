@@ -1570,22 +1570,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *periscope
 		event.TrackList = trackListJSON
 		event.StreamId = streamID
 
-		var tracks []map[string]any
-		if err := json.Unmarshal([]byte(trackListJSON), &tracks); err == nil {
-			for _, t := range tracks {
-				track := &ipcpb.StreamTrack{}
-				if name, ok := t["name"].(string); ok {
-					track.TrackName = name
-				}
-				if typ, ok := t["type"].(string); ok {
-					track.TrackType = typ
-				}
-				if codec, ok := t["codec"].(string); ok {
-					track.Codec = codec
-				}
-				event.Tracks = append(event.Tracks, track)
-			}
-		}
+		event.Tracks = decodeStoredStreamTracks(trackListJSON)
 
 		events = append(events, &event)
 	}

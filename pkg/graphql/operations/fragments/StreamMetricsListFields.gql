@@ -4,5 +4,10 @@ fragment StreamMetricsListFields on StreamMetrics {
   currentViewers
   bufferState
   qualityTier
+  primaryWidth
+  primaryHeight
+  primaryFps
+  primaryCodec
+  primaryBitrate
   startedAt
 }

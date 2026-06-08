@@ -15,6 +15,12 @@
       status?: string | null;
       isLive?: boolean | null;
       currentViewers?: number | null;
+      qualityTier?: string | null;
+      primaryWidth?: number | null;
+      primaryHeight?: number | null;
+      primaryFps?: number | null;
+      primaryCodec?: string | null;
+      primaryBitrate?: number | null;
     } | null;
     viewers?: number;
     resolution?: string;
@@ -30,8 +36,15 @@
 
   // Derive status from metrics edge
   const status = $derived(stream?.metrics?.status);
-  const isLive = $derived(status === StreamStatus.LIVE);
+  const isLive = $derived(stream?.metrics?.isLive || status === StreamStatus.LIVE);
   const displayStreamId = $derived(stream?.streamId || stream?.id || "");
+  const displayViewers = $derived(stream?.metrics?.currentViewers ?? stream?.viewers ?? 0);
+  const displayResolution = $derived.by(() => {
+    const width = stream?.metrics?.primaryWidth;
+    const height = stream?.metrics?.primaryHeight;
+    if (width && height) return `${width}x${height}`;
+    return stream?.resolution || stream?.metrics?.qualityTier || "Unknown";
+  });
 </script>
 
 {#if stream}
@@ -66,13 +79,13 @@
       <div>
         <p class="text-muted-foreground">Viewers</p>
         <p class="font-semibold text-foreground">
-          {stream.viewers || 0}
+          {displayViewers}
         </p>
       </div>
       <div>
         <p class="text-muted-foreground">Resolution</p>
         <p class="font-semibold text-foreground">
-          {stream.resolution || "Unknown"}
+          {displayResolution}
         </p>
       </div>
     </div>

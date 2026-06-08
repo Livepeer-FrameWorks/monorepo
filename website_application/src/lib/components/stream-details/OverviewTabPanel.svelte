@@ -6,6 +6,15 @@
   import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
   import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import {
+    classifyTrack,
+    formatTrackBitrate,
+    trackCodec,
+    trackDisplayName,
+    trackFps,
+    trackResolution,
+    type TrackLike,
+  } from "$lib/utils/track-display";
 
   // Local interface matching Houdini TrackListUpdates subscription
   interface StreamTrack {
@@ -105,12 +114,18 @@
     codecDistribution?: CodecData[];
   } = $props();
 
-  // Separate video and audio tracks
+  // Separate source media tracks from generated thumbnail/sprite outputs.
   const videoTracks = $derived(
-    tracks?.tracks?.filter((t: StreamTrack) => t.trackType === "video") || []
+    tracks?.tracks?.filter((t: StreamTrack) => classifyTrack(t) === "video") || []
   );
   const audioTracks = $derived(
-    tracks?.tracks?.filter((t: StreamTrack) => t.trackType === "audio") || []
+    tracks?.tracks?.filter((t: StreamTrack) => classifyTrack(t) === "audio") || []
+  );
+  const generatedTracks = $derived(
+    tracks?.tracks?.filter((t: StreamTrack) => classifyTrack(t) === "generated") || []
+  );
+  const displayedTrackCount = $derived(
+    videoTracks.length + audioTracks.length + generatedTracks.length
   );
 
   // Map viewer metrics for the chart
@@ -130,6 +145,10 @@
     if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`;
     return `${Math.round(minutes)}m`;
   }
+
+  function trackKey(track: TrackLike, index: number): string {
+    return `${trackDisplayName(track, index)}:${trackCodec(track)}:${index}`;
+  }
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -139,50 +158,48 @@
       <div class="slab-header flex items-center gap-2">
         <ActivityIcon class="w-5 h-5 text-success animate-pulse" />
         <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Live Encoding
+          Live Tracks
         </h3>
         <span class="text-xs text-muted-foreground ml-auto">
-          {tracks.totalTracks ?? 0} track{(tracks.totalTracks ?? 0) !== 1 ? "s" : ""} active
+          {displayedTrackCount} track{displayedTrackCount !== 1 ? "s" : ""} active
         </span>
       </div>
 
       <div class="slab-body--padded grid grid-cols-1 md:grid-cols-2 gap-4">
         <!-- Video Tracks -->
-        {#each videoTracks as track (track.trackName)}
+        {#each videoTracks as track, i (trackKey(track, i))}
           <div class="p-4 bg-muted/20">
             <div class="flex items-center gap-2 mb-3">
               <VideoIcon class="w-4 h-4 text-accent-purple" />
-              <span class="font-medium text-foreground">{track.trackName}</span>
-              {#if track.codec}
+              <span class="font-medium text-foreground">{trackDisplayName(track, i)}</span>
+              {#if trackCodec(track)}
                 <span
                   class="px-2 py-0.5 text-xs font-mono bg-accent-purple/10 text-accent-purple rounded"
                 >
-                  {track.codec}
+                  {trackCodec(track)}
                 </span>
               {/if}
             </div>
             <div class="grid grid-cols-2 gap-2 text-sm">
-              {#if track.resolution || (track.width && track.height)}
+              {#if trackResolution(track)}
                 <div>
                   <span class="text-muted-foreground">Resolution</span>
                   <p class="font-mono text-success">
-                    {track.resolution || `${track.width}x${track.height}`}
+                    {trackResolution(track)}
                   </p>
                 </div>
               {/if}
-              {#if track.fps}
+              {#if trackFps(track)}
                 <div>
                   <span class="text-muted-foreground">Frame Rate</span>
-                  <p class="font-mono text-warning-alt">{track.fps.toFixed(1)} fps</p>
+                  <p class="font-mono text-warning-alt">{trackFps(track)?.toFixed(1)} fps</p>
                 </div>
               {/if}
-              {#if track.bitrateKbps}
+              {#if formatTrackBitrate(track)}
                 <div>
                   <span class="text-muted-foreground">Bitrate</span>
                   <p class="font-mono text-primary">
-                    {track.bitrateKbps >= 1000
-                      ? `${(track.bitrateKbps / 1000).toFixed(1)} Mbps`
-                      : `${track.bitrateKbps} kbps`}
+                    {formatTrackBitrate(track)}
                   </p>
                 </div>
               {/if}
@@ -191,14 +208,14 @@
         {/each}
 
         <!-- Audio Tracks -->
-        {#each audioTracks as track (track.trackName)}
+        {#each audioTracks as track, i (trackKey(track, i))}
           <div class="p-4 bg-muted/20">
             <div class="flex items-center gap-2 mb-3">
               <MicIcon class="w-4 h-4 text-info" />
-              <span class="font-medium text-foreground">{track.trackName}</span>
-              {#if track.codec}
+              <span class="font-medium text-foreground">{trackDisplayName(track, i)}</span>
+              {#if trackCodec(track)}
                 <span class="px-2 py-0.5 text-xs font-mono bg-info/10 text-info rounded">
-                  {track.codec}
+                  {trackCodec(track)}
                 </span>
               {/if}
             </div>
@@ -223,15 +240,42 @@
                   </p>
                 </div>
               {/if}
-              {#if track.bitrateKbps}
+              {#if formatTrackBitrate(track)}
                 <div>
                   <span class="text-muted-foreground">Bitrate</span>
-                  <p class="font-mono text-primary">{track.bitrateKbps} kbps</p>
+                  <p class="font-mono text-primary">{formatTrackBitrate(track)}</p>
                 </div>
               {/if}
             </div>
           </div>
         {/each}
+
+        {#if generatedTracks.length > 0}
+          <div class="p-4 bg-muted/20 md:col-span-2">
+            <div class="flex items-center gap-2 mb-3">
+              <VideoIcon class="w-4 h-4 text-muted-foreground" />
+              <span class="font-medium text-foreground">Generated Outputs</span>
+              <span class="text-xs text-muted-foreground">
+                {generatedTracks.length} track{generatedTracks.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              {#each generatedTracks as track, i (trackKey(track, i))}
+                <span
+                  class="px-2 py-1 text-xs bg-muted/40 text-muted-foreground border border-border/30"
+                >
+                  {trackDisplayName(track, i)}
+                  {#if trackCodec(track)}
+                    <span class="font-mono text-foreground ml-1">{trackCodec(track)}</span>
+                  {/if}
+                  {#if trackResolution(track)}
+                    <span class="font-mono ml-1">{trackResolution(track)}</span>
+                  {/if}
+                </span>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {:else if stream.metrics?.isLive}
@@ -241,7 +285,7 @@
         <ActivityIcon class="w-8 h-8 text-warning mb-2" />
         <h4 class="text-warning font-medium">Waiting for track information...</h4>
         <p class="text-sm text-muted-foreground mt-1">
-          Track details will appear once the encoder starts sending data.
+          Track details will appear once live inventory arrives.
         </p>
       </div>
     </div>
