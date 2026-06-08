@@ -7,6 +7,7 @@ const hlsState = vi.hoisted(() => ({
   isSupported: vi.fn(() => true),
   loadSource: vi.fn(),
   recoverMediaError: vi.fn(),
+  startLoad: vi.fn(),
 }));
 
 vi.mock("hls.js", () => {
@@ -35,6 +36,10 @@ vi.mock("hls.js", () => {
       hlsState.recoverMediaError();
     }
 
+    startLoad(position?: number): void {
+      hlsState.startLoad(position);
+    }
+
     on(event: string, handler: (event: string, data?: unknown) => void): void {
       const handlers = this.handlers.get(event) ?? [];
       handlers.push(handler);
@@ -61,6 +66,7 @@ describe("HlsJsPlayerImpl", () => {
     hlsState.isSupported.mockReturnValue(true);
     hlsState.loadSource.mockClear();
     hlsState.recoverMediaError.mockClear();
+    hlsState.startLoad.mockClear();
 
     Object.defineProperty(globalThis, "document", {
       configurable: true,
@@ -175,6 +181,38 @@ describe("HlsJsPlayerImpl", () => {
 
     expect(playerErrors).toContain("HLS fatal error: mediaError:bufferAppendError");
     expect(onError).not.toHaveBeenCalled();
+    await player.destroy();
+  });
+
+  it("restarts hls.js loading for transient fatal network errors before surfacing an error", async () => {
+    const player = new HlsJsPlayerImpl();
+    const container = document.createElement("div");
+    const playerErrors: string[] = [];
+    player.on("error", (error) => playerErrors.push(String(error)));
+
+    await player.initialize(
+      container,
+      {
+        type: "html5/application/vnd.apple.mpegurl;version=7",
+        url: "https://edge.example/live/index.m3u8",
+      },
+      { autoplay: true, muted: true },
+      { source: [], meta: { tracks: [] }, type: "live" }
+    );
+
+    await vi.waitFor(() => expect(hlsState.instances).toHaveLength(1));
+    const hls = hlsState.instances[0];
+
+    hls.emit("error", { fatal: true, type: "networkError", details: "fragLoadError" });
+    hls.emit("error", { fatal: true, type: "networkError", details: "fragLoadError" });
+
+    expect(hlsState.startLoad).toHaveBeenCalledTimes(2);
+    expect(hlsState.startLoad).toHaveBeenCalledWith(-1);
+    expect(playerErrors).toEqual([]);
+
+    hls.emit("error", { fatal: true, type: "networkError", details: "fragLoadError" });
+
+    expect(playerErrors).toContain("HLS fatal error: networkError:fragLoadError");
     await player.destroy();
   });
 

@@ -28,6 +28,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
   private hls: any = null;
   private container: HTMLElement | null = null;
   private failureCount = 0;
+  private networkFailureCount = 0;
   private destroyed = false;
   private cleanupStartupWatchdog: (() => void) | null = null;
 
@@ -196,6 +197,8 @@ export class HlsJsPlayerImpl extends BasePlayer {
   ): Promise<HTMLVideoElement> {
     console.log("[HLS.js] initialize() starting for", source.url.slice(0, 60) + "...");
     this.destroyed = false;
+    this.failureCount = 0;
+    this.networkFailureCount = 0;
     this.container = container;
     container.classList.add("fw-player-container");
 
@@ -286,6 +289,15 @@ export class HlsJsPlayerImpl extends BasePlayer {
             }`;
             const isMediaError =
               data?.type === Hls.ErrorTypes?.MEDIA_ERROR || data?.type === "mediaError";
+            const isNetworkError =
+              data?.type === Hls.ErrorTypes?.NETWORK_ERROR || data?.type === "networkError";
+            if (isNetworkError && this.networkFailureCount < 2) {
+              this.networkFailureCount++;
+              try {
+                this.hls.startLoad?.(-1);
+              } catch {}
+              return;
+            }
             if (isMediaError && video.error && this.failureCount < 1) {
               this.failureCount++;
               try {
@@ -300,6 +312,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (this.destroyed) return; // Guard against zombie callbacks
+          this.networkFailureCount = 0;
 
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).

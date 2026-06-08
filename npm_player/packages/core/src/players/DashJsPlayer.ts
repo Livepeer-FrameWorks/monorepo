@@ -377,6 +377,7 @@ export class DashJsPlayerImpl extends BasePlayer {
       this.dashPlayer.updateSettings({
         streaming: {
           text: { defaultEnabled: false },
+          delay: { useSuggestedPresentationDelay: true },
         },
         debug: {
           logLevel: 2,

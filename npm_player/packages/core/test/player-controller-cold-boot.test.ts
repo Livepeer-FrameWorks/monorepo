@@ -126,8 +126,9 @@ describe("PlayerController cold boot recovery", () => {
     (controller as any).cleanup();
   });
 
-  it("routes wrapped reload requests through fallback when available", async () => {
+  it("retries the selected wrapper before escalating reload requests to fallback", async () => {
     const { controller, player } = makeInitializingController();
+    const retry = vi.spyOn(controller as any, "retry").mockResolvedValue(undefined);
     const retryWithFallback = vi
       .spyOn(controller as any, "retryWithFallback")
       .mockResolvedValue(true);
@@ -135,6 +136,24 @@ describe("PlayerController cold boot recovery", () => {
     await (controller as any).initializePlayer();
     player.emit("reloadrequested", { reason: "segment decode overflow" });
 
+    expect(retry).toHaveBeenCalledOnce();
+    expect(retryWithFallback).not.toHaveBeenCalled();
+    (controller as any).cleanup();
+  });
+
+  it("escalates repeated wrapper reload requests to fallback", async () => {
+    const { controller, player } = makeInitializingController();
+    const retry = vi.spyOn(controller as any, "retry").mockResolvedValue(undefined);
+    const retryWithFallback = vi
+      .spyOn(controller as any, "retryWithFallback")
+      .mockResolvedValue(true);
+
+    await (controller as any).initializePlayer();
+    player.emit("reloadrequested", { reason: "segment decode overflow" });
+    player.emit("reloadrequested", { reason: "segment decode overflow" });
+    player.emit("reloadrequested", { reason: "segment decode overflow" });
+
+    expect(retry).toHaveBeenCalledTimes(2);
     expect(retryWithFallback).toHaveBeenCalledOnce();
     (controller as any).cleanup();
   });

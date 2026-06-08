@@ -690,6 +690,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _qualityFallbackLastAt: number = 0;
   private _errorCount: number = 0;
   private _lastErrorTime: number = 0;
+  private _reloadRequestCount: number = 0;
+  private _reloadRequestWindowStartedAt: number = 0;
   private _retrySuppressUntil: number = 0;
   private _playbackResumedSinceError: boolean = false;
 
@@ -748,6 +750,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private static readonly AUTO_CLEAR_ERROR_DELAY_MS = 2000;
   private static readonly HARD_FAILURE_ERROR_THRESHOLD = 5;
   private static readonly HARD_FAILURE_ERROR_WINDOW_MS = 60000;
+  private static readonly RELOAD_REQUEST_FALLBACK_THRESHOLD = 3;
+  private static readonly RELOAD_REQUEST_WINDOW_MS = 30000;
   private static readonly QUALITY_FALLBACK_COOLDOWN_MS = 15000;
   private static readonly FATAL_ERROR_KEYWORDS = [
     "fatal",
@@ -943,6 +947,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._autoplayAttemptInFlight = false;
     this._lastAutoplayAttemptAt = 0;
     this._qualityFallbackInProgress = false;
+    this._reloadRequestCount = 0;
+    this._reloadRequestWindowStartedAt = 0;
   }
 
   /**
@@ -1469,6 +1475,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this._hasPlaybackStarted = true;
     this._isBuffering = false;
+    this._reloadRequestCount = 0;
+    this._reloadRequestWindowStartedAt = 0;
 
     if (this._stallStartTime > 0) {
       this.log(`Stall cleared after ${Date.now() - this._stallStartTime}ms`);
@@ -1499,7 +1507,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const onReloadRequested = ({ reason }: { reason: string }) => {
       if (this.isDestroyed || this._isTransitioning) return;
       this.log(`[player:reloadrequested] ${reason}`);
-      if (this.playerManager.canAttemptFallback()) {
+      if (this.shouldEscalateReloadRequest() && this.playerManager.canAttemptFallback()) {
         void this.retryWithFallback();
       } else {
         void this.retry();
@@ -1537,6 +1545,20 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.playerEventsBoundFor = null;
       }
     });
+  }
+
+  private shouldEscalateReloadRequest(): boolean {
+    const now = Date.now();
+    if (
+      this._reloadRequestWindowStartedAt === 0 ||
+      now - this._reloadRequestWindowStartedAt > PlayerController.RELOAD_REQUEST_WINDOW_MS
+    ) {
+      this._reloadRequestWindowStartedAt = now;
+      this._reloadRequestCount = 0;
+    }
+
+    this._reloadRequestCount++;
+    return this._reloadRequestCount >= PlayerController.RELOAD_REQUEST_FALLBACK_THRESHOLD;
   }
 
   private ensurePlayerSelectedListener(): void {

@@ -169,7 +169,7 @@ describe("DashJsPlayerImpl", () => {
     expect(errors).toEqual([]);
   });
 
-  it("applies caller dashConfig after the built-in text default", async () => {
+  it("uses MPD suggested presentation delay and applies caller dashConfig last", async () => {
     const player = new DashJsPlayerImpl();
     const container = document.createElement("div");
     const dashConfig = { streaming: { delay: { liveDelay: 2 } } };
@@ -181,9 +181,16 @@ describe("DashJsPlayerImpl", () => {
       { source: [], meta: { tracks: [] }, type: "live" }
     );
 
-    // The built-in text default is applied first, then the caller override (dash.js deep-merges),
-    // so the final updateSettings call carries the caller's dashConfig.
     const calls = dashMocks.updateSettings.mock.calls;
+    expect(calls[0][0]).toEqual({
+      streaming: {
+        text: { defaultEnabled: false },
+        delay: { useSuggestedPresentationDelay: true },
+      },
+      debug: { logLevel: 2 },
+    });
+    // The built-in defaults are applied first, then the caller override (dash.js deep-merges),
+    // so the final updateSettings call carries the caller's dashConfig.
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls[calls.length - 1][0]).toEqual(dashConfig);
   });
@@ -254,6 +261,7 @@ describe("DashJsPlayerImpl", () => {
     expect(dashMocks.updateSettings).toHaveBeenCalledWith({
       streaming: {
         text: { defaultEnabled: false },
+        delay: { useSuggestedPresentationDelay: true },
       },
       debug: {
         logLevel: 2,
