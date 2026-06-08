@@ -296,6 +296,70 @@ func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	if got := presence.outputs["resolution"]; got != "640x360" {
 		t.Fatalf("resolution = %q, want 640x360", got)
 	}
+	if len(presence.videoTracks) != 1 || presence.videoTracks[0].height != 360 {
+		t.Fatalf("videoTracks = %+v, want one 360p source track", presence.videoTracks)
+	}
+}
+
+func TestProcessingLivepeerRenditionsReadyBlocksUntilRequestedTracksExist(t *testing.T) {
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]}]`
+	sourceOutputs := map[string]string{
+		"width":       "1920",
+		"height":      "1080",
+		"duration_ms": "9000",
+	}
+
+	ready, missing, err := processingLivepeerRenditionsReady(processingTrackPresence{
+		outputs:     sourceOutputs,
+		sourceMedia: true,
+		videoTracks: []processingMetaVideoTrack{{codec: "H264", width: 1920, height: 1080}},
+	}, processesJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ready {
+		t.Fatal("expected Livepeer readiness to block while requested rendition is absent")
+	}
+	if len(missing) != 1 || missing[0] != 360 {
+		t.Fatalf("missing = %v, want [360]", missing)
+	}
+
+	ready, missing, err = processingLivepeerRenditionsReady(processingTrackPresence{
+		outputs:     sourceOutputs,
+		sourceMedia: true,
+		videoTracks: []processingMetaVideoTrack{
+			{codec: "H264", width: 1920, height: 1080},
+			{codec: "H264", width: 640, height: 360},
+		},
+	}, processesJSON)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ready || len(missing) != 0 {
+		t.Fatalf("ready=%v missing=%v, want ready with no missing heights", ready, missing)
+	}
+}
+
+func TestExtractActiveStreamMetadataUsesLargestVideoAsSource(t *testing.T) {
+	got := extractActiveStreamMetadata(map[string]interface{}{
+		"lastms": float64(9000),
+		"health": map[string]interface{}{
+			"video_H264_640x360_0": map[string]interface{}{
+				"codec":  "H264",
+				"width":  float64(640),
+				"height": float64(360),
+			},
+			"video_H264_2720x1750_1": map[string]interface{}{
+				"codec":  "H264",
+				"width":  float64(2720),
+				"height": float64(1750),
+			},
+		},
+	})
+
+	if got["resolution"] != "2720x1750" {
+		t.Fatalf("resolution = %q, want source-sized 2720x1750", got["resolution"])
+	}
 }
 
 func TestParseProcessingMetaVideoTracksExcludesThumbnailsAndCarriesSpan(t *testing.T) {
@@ -306,11 +370,13 @@ func TestParseProcessingMetaVideoTracksExcludesThumbnailsAndCarriesSpan(t *testi
 					"codec": "H264", "type": "video",
 					"width": float64(1280), "height": float64(720),
 					"firstms": float64(0), "lastms": float64(9000),
+					"id": float64(7), "idx": float64(1),
 				},
 				"video_H264_640x360_1": map[string]interface{}{
 					"codec": "H264", "type": "video",
 					"width": float64(640), "height": float64(360),
 					"firstms": float64(0), "lastms": float64(1700), // truncated
+					"source": "video_1",
 				},
 				"video_JPEG_160x90_2":   map[string]interface{}{"codec": "JPEG", "type": "video"}, // thumbnail, excluded
 				"audio_AAC_2ch_48000_3": map[string]interface{}{"codec": "AAC", "type": "audio"},
@@ -334,6 +400,11 @@ func TestParseProcessingMetaVideoTracksExcludesThumbnailsAndCarriesSpan(t *testi
 	if maxSpan != 9000 || minSpan != 1700 {
 		t.Fatalf("spans = max %v min %v, want max 9000 (source) min 1700 (truncated rendition)", maxSpan, minSpan)
 	}
+	for _, tr := range tracks {
+		if tr.height == 720 && (!tr.hasTrackID || tr.trackID != 7 || !tr.hasTrackIndex || tr.trackIndex != 1) {
+			t.Fatalf("720p parsed track did not carry identity: %+v", tr)
+		}
+	}
 	if got := parseProcessingMetaVideoTracks(map[string]interface{}{}); len(got) != 0 {
 		t.Fatalf("parseProcessingMetaVideoTracks(empty) = %d, want 0", len(got))
 	}
@@ -344,19 +415,26 @@ func TestProcessingTracksFromProtoCarriesRecordingEndSpan(t *testing.T) {
 	height := int32(720)
 	firstMs := int64(0)
 	lastMs := int64(30000)
+	trackID := int64(42)
+	trackIndex := int32(3)
 	tracks := processingTracksFromProto([]*ipcpb.StreamTrack{{
-		TrackType: "video",
-		Codec:     "H264",
-		Width:     &width,
-		Height:    &height,
-		FirstMs:   &firstMs,
-		LastMs:    &lastMs,
+		TrackType:  "video",
+		Codec:      "H264",
+		Width:      &width,
+		Height:     &height,
+		FirstMs:    &firstMs,
+		LastMs:     &lastMs,
+		TrackId:    &trackID,
+		TrackIndex: &trackIndex,
 	}})
 	if len(tracks) != 1 {
 		t.Fatalf("tracks=%d, want 1", len(tracks))
 	}
 	if tracks[0].height != 720 || tracks[0].spanMs() != 30000 {
 		t.Fatalf("unexpected track: %+v span=%v", tracks[0], tracks[0].spanMs())
+	}
+	if tracks[0].selector() != "i42" {
+		t.Fatalf("selector = %q, want i42", tracks[0].selector())
 	}
 }
 
@@ -572,6 +650,79 @@ func TestProcessingMuxTargetURISelectsAllTracks(t *testing.T) {
 	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=all&meta=all&subtitle=all"
 	if got != want {
 		t.Fatalf("target URI = %q, want %q", got, want)
+	}
+}
+
+func TestProcessingMuxTargetURIWithVideoSelector(t *testing.T) {
+	got := processingMuxTargetURIWithVideo("/var/lib/mistserver/recordings/vod/hash.mkv", "i7,i8")
+	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=i7,i8&meta=all&subtitle=all"
+	if got != want {
+		t.Fatalf("target URI = %q, want %q", got, want)
+	}
+}
+
+func TestChapterFinalizeVideoSelectorSelectsCompleteRenditions(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720},{"name":"360p","height":360}]}]`
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	tracks := []processingMetaVideoTrack{
+		chapterTrack(1, 1920, 1080, 30000),
+		chapterTrack(2, 1280, 720, 30000),
+		chapterTrack(3, 640, 360, 30000),
+	}
+	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	if got != "i2,i3" {
+		t.Fatalf("selector = %q, want rendition tracks", got)
+	}
+}
+
+func TestChapterFinalizeVideoSelectorFallsBackToSourceWhenRenditionIncomplete(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720},{"name":"360p","height":360}]}]`
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	tracks := []processingMetaVideoTrack{
+		chapterTrack(1, 1920, 1080, 30000),
+		chapterTrack(2, 1280, 720, 30000),
+		chapterTrack(3, 640, 360, 1000),
+	}
+	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	if got != "i1" {
+		t.Fatalf("selector = %q, want source track", got)
+	}
+}
+
+func TestChapterFinalizeVideoSelectorSameHeightSourceAndRendition(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720},{"name":"360p","height":360}]}]`
+	source := mist.SourceMediaInfo{Width: 1280, Height: 720}
+	tracks := []processingMetaVideoTrack{
+		chapterTrack(9, 1280, 720, 30000),
+		chapterTrack(1, 1280, 720, 30000),
+		chapterTrack(3, 640, 360, 30000),
+	}
+	tracks[0].source = "video_1"
+	tracks[2].source = "video_1"
+	got := chooseChapterFinalizeVideoSelector(entry, processes, tracks, source, 30000)
+	if got != "i9,i3" {
+		t.Fatalf("selector = %q, want same-height rendition plus 360p", got)
+	}
+}
+
+func chapterTrack(id int64, width, height int, span float64) processingMetaVideoTrack {
+	return processingMetaVideoTrack{
+		codec:      "H264",
+		width:      width,
+		height:     height,
+		firstms:    0,
+		lastms:     span,
+		trackID:    id,
+		hasTrackID: true,
 	}
 }
 
@@ -858,7 +1009,7 @@ func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testin
 		Reason:      "too many upload failures",
 	}
 
-	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", processExitCh, map[string]int{})
+	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", req.GetProcessesJson(), processExitCh, map[string]int{})
 	var fallbackErr *livepeerReadinessFallbackError
 	if !errors.As(err, &fallbackErr) {
 		t.Fatalf("expected livepeer readiness fallback error, got %v", err)

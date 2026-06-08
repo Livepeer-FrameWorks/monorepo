@@ -335,8 +335,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	}
 	// Fill the Livepeer broadcaster list so Helmsman sees concrete gateway
 	// addresses. Commodore returns the config without broadcasters by design
-	// (the resolver runs in the local cluster's context); mirror the
-	// dispatcher's behavior so chapter jobs match the VOD upload flow exactly.
+	// (the resolver runs in the local cluster's context).
 	if q.gatewayResolver != nil && processesJSON != "" {
 		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
 		processesJSON = q.gatewayResolver.ApplyLivepeerWorkload(processesJSON, mist.WorkloadVOD)

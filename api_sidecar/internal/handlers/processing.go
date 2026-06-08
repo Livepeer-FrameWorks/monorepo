@@ -494,8 +494,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
 	ignoredProcessExitBootCounts := map[string]int{}
 	activePushID := 0
+	effectiveProcessesJSON := req.GetProcessesJson()
 
-	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
 		var livepeerBootErr *livepeerReadinessFallbackError
 		if errors.As(waitErr, &livepeerBootErr) && !fallbackAttempted {
@@ -503,6 +504,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 			setProcessingProcessOverride(streamName, localConfig)
+			effectiveProcessesJSON = localConfig
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
 			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -514,7 +516,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			pendingJobs[streamName] = doneCh
 			pendingJobsMu.Unlock()
 			recordingEndCh = registerProcessingRecordingEndListener(streamName)
-			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
 			if waitErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -561,6 +563,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		ignoreProcessExitThrough(ignoredProcessExitBootCounts, ignoreType, ignoreBoot)
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
 		setProcessingProcessOverride(streamName, localConfig)
+		effectiveProcessesJSON = localConfig
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
 		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -579,7 +582,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
 		var waitErr error
-		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -912,19 +915,24 @@ type processingTrackPresence struct {
 	audioCodecs map[string]bool
 	videoCodecs map[string]bool
 	metaCodecs  map[string]bool
+	videoTracks []processingMetaVideoTrack
 	outputs     map[string]string
 	sourceMedia bool
 }
 
 // waitForProcessingStreamReady boots the processing+ wildcard stream and waits
-// until Mist has exposed source media. Mist's file-output path owns the
-// generated-track/header gate, so push_start can pin the stream before short
-// VOD inputs run to EOF.
-func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
-	requirements := expectedProcessingTracks(req.GetProcessesJson())
+// until Mist has exposed source media and any requested Livepeer rendition
+// tracks. Mist's file-output path pins the selected track set when push_start
+// opens, so starting before generated video tracks exist records a source-only
+// artifact.
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
+	requirements := expectedProcessingTracks(processesJSON)
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
 	var lastErr error
+	sourceReadyLogged := false
+	var missingLivepeerHeights []int
+	var livepeerHeightErr error
 	bootTicker := time.NewTicker(500 * time.Millisecond)
 	defer bootTicker.Stop()
 
@@ -957,12 +965,23 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 		} else {
 			lastPresence = inspectProcessingActiveStream(streamData)
 			if lastPresence.sourceMedia {
-				log.WithFields(logrus.Fields{
-					"audio_codecs": mapKeys(lastPresence.audioCodecs),
-					"video_codecs": mapKeys(lastPresence.videoCodecs),
-					"meta_codecs":  mapKeys(lastPresence.metaCodecs),
-				}).Info("Processing source stream ready for muxed output")
-				return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
+				if !sourceReadyLogged {
+					log.WithFields(logrus.Fields{
+						"audio_codecs": mapKeys(lastPresence.audioCodecs),
+						"video_codecs": mapKeys(lastPresence.videoCodecs),
+						"meta_codecs":  mapKeys(lastPresence.metaCodecs),
+					}).Info("Processing source stream ready")
+					sourceReadyLogged = true
+				}
+				livepeerReady, missing, err := processingLivepeerRenditionsReady(lastPresence, processesJSON)
+				missingLivepeerHeights = missing
+				livepeerHeightErr = err
+				if err != nil {
+					return nil, 0, err
+				}
+				if livepeerReady {
+					return lastPresence.outputs, sourceDurationFromOutputs(lastPresence.outputs), nil
+				}
 			}
 		}
 
@@ -974,6 +993,17 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 				return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
 					mapKeys(lastPresence.audioCodecs), mapKeys(lastPresence.videoCodecs), mapKeys(lastPresence.metaCodecs),
 					mapKeys(requirements.requiredAudioCodecs), mapKeys(requirements.requiredVideoCodecs), requirements.requireThumbs)
+			}
+			if livepeerHeightErr != nil {
+				return nil, 0, livepeerHeightErr
+			}
+			if len(missingLivepeerHeights) > 0 {
+				return nil, 0, &livepeerReadinessFallbackError{evt: ProcessExitEvent{
+					StreamName:  streamName,
+					ProcessType: "Livepeer",
+					Status:      "unrecoverable",
+					Reason:      fmt.Sprintf("renditions not ready before push: missing heights %v", missingLivepeerHeights),
+				}}
 			}
 			missing := missingProcessingTracks(lastPresence, requirements)
 			outputs := cloneStringMap(lastPresence.outputs)
@@ -1038,7 +1068,15 @@ func mistJSONURL(mistServerURL, streamName, rawQuery string) string {
 }
 
 func processingMuxTargetURI(outputPath string) string {
-	return outputPath + "#audio=all&video=all&meta=all&subtitle=all"
+	return processingMuxTargetURIWithVideo(outputPath, "all")
+}
+
+func processingMuxTargetURIWithVideo(outputPath, videoSelector string) string {
+	videoSelector = strings.TrimSpace(videoSelector)
+	if videoSelector == "" {
+		videoSelector = "all"
+	}
+	return outputPath + "#audio=all&video=" + videoSelector + "&meta=all&subtitle=all"
 }
 
 func expectedProcessingTracks(processesJSON string) processingTrackRequirements {
@@ -1136,6 +1174,34 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 			if codec != "" {
 				p.videoCodecs[codec] = true
 				p.sourceMedia = true
+				t := processingMetaVideoTrack{codec: codec, name: name}
+				if v, ok := track["width"].(float64); ok {
+					t.width = int(v)
+				}
+				if v, ok := track["height"].(float64); ok {
+					t.height = int(v)
+				}
+				if v, ok := track["source"].(string); ok {
+					t.source = v
+				}
+				if id, ok := mapInt64(track, "id", "track_id"); ok {
+					t.trackID = id
+					t.hasTrackID = true
+				}
+				if idx, ok := mapInt64(track, "idx", "track_index"); ok {
+					t.trackIndex = int(idx)
+					t.hasTrackIndex = true
+				}
+				p.videoTracks = append(p.videoTracks, t)
+			}
+		}
+	}
+	if metaTracks := parseProcessingMetaVideoTracks(streamData); len(metaTracks) > 0 {
+		p.videoTracks = metaTracks
+		for _, t := range metaTracks {
+			if t.codec != "" {
+				p.videoCodecs[t.codec] = true
+				p.sourceMedia = true
 			}
 		}
 	}
@@ -1182,14 +1248,56 @@ func videoTrackHeights(tracks []processingMetaVideoTrack) []int {
 // metadata, carrying the per-track span (firstms/lastms) MistServer emits in
 // DTSC::Meta::toJSON.
 type processingMetaVideoTrack struct {
-	codec   string
-	width   int
-	height  int
-	firstms float64
-	lastms  float64
+	codec         string
+	name          string
+	source        string
+	width         int
+	height        int
+	firstms       float64
+	lastms        float64
+	trackID       int64
+	hasTrackID    bool
+	trackIndex    int
+	hasTrackIndex bool
 }
 
 func (t processingMetaVideoTrack) spanMs() float64 { return t.lastms - t.firstms }
+
+func (t processingMetaVideoTrack) selector() string {
+	if t.hasTrackID {
+		return "i" + strconv.FormatInt(t.trackID, 10)
+	}
+	if t.hasTrackIndex {
+		return strconv.Itoa(t.trackIndex)
+	}
+	return ""
+}
+
+func mapInt64(values map[string]interface{}, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch v := raw.(type) {
+		case float64:
+			return int64(v), true
+		case int:
+			return int64(v), true
+		case int64:
+			return v, true
+		case json.Number:
+			if i, err := v.Int64(); err == nil {
+				return i, true
+			}
+		case string:
+			if i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+				return i, true
+			}
+		}
+	}
+	return 0, false
+}
 
 // livepeerRenditionsComplete fetches the finished processing stream's JSON
 // metadata and reports whether the Livepeer renditions are complete enough to
@@ -1261,14 +1369,7 @@ func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, vide
 	// longest track at the source height; excluding exactly it leaves any short
 	// same-height rendition in the pool to fail coverage, and its span is the
 	// authoritative full source duration.
-	srcIdx := -1
-	for i, t := range videoTracks {
-		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
-			if srcIdx < 0 || t.spanMs() > videoTracks[srcIdx].spanMs() {
-				srcIdx = i
-			}
-		}
-	}
+	srcIdx := sourceVideoTrackIndex(videoTracks, mist.SourceMediaInfo{Height: srcHeight})
 	var sourceTrackSpanMs float64
 	if srcIdx >= 0 {
 		sourceTrackSpanMs = videoTracks[srcIdx].spanMs()
@@ -1382,6 +1483,28 @@ func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMet
 	return sourceTrackSpanMs, true
 }
 
+func sourceVideoTrackIndex(videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) int {
+	srcHeight := source.Height
+	if srcHeight <= 0 {
+		for _, t := range videoTracks {
+			if t.height > srcHeight {
+				srcHeight = t.height
+			}
+		}
+	}
+	srcIdx := -1
+	for i, t := range videoTracks {
+		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
+			if srcIdx < 0 ||
+				(t.source == "" && videoTracks[srcIdx].source != "") ||
+				(t.source == videoTracks[srcIdx].source && t.spanMs() > videoTracks[srcIdx].spanMs()) {
+				srcIdx = i
+			}
+		}
+	}
+	return srcIdx
+}
+
 // parseProcessingMetaVideoTracks extracts renderable video tracks (excluding
 // thumbnail JPEG tracks) from Mist stream JSON metadata.
 func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMetaVideoTrack {
@@ -1415,7 +1538,7 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		if typ != "video" && !strings.HasPrefix(name, "video") {
 			continue
 		}
-		t := processingMetaVideoTrack{codec: codec}
+		t := processingMetaVideoTrack{codec: codec, name: name}
 		if v, ok := track["width"].(float64); ok {
 			t.width = int(v)
 		}
@@ -1427,6 +1550,17 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		}
 		if v, ok := track["lastms"].(float64); ok {
 			t.lastms = v
+		}
+		if v, ok := track["source"].(string); ok {
+			t.source = v
+		}
+		if id, ok := mapInt64(track, "id", "track_id"); ok {
+			t.trackID = id
+			t.hasTrackID = true
+		}
+		if idx, ok := mapInt64(track, "idx", "track_index"); ok {
+			t.trackIndex = int(idx)
+			t.hasTrackIndex = true
 		}
 		out = append(out, t)
 	}
@@ -1447,11 +1581,16 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 			continue
 		}
 		out = append(out, processingMetaVideoTrack{
-			codec:   codec,
-			width:   int(track.GetWidth()),
-			height:  int(track.GetHeight()),
-			firstms: float64(track.GetFirstMs()),
-			lastms:  float64(track.GetLastMs()),
+			codec:         codec,
+			name:          track.GetTrackName(),
+			width:         int(track.GetWidth()),
+			height:        int(track.GetHeight()),
+			firstms:       float64(track.GetFirstMs()),
+			lastms:        float64(track.GetLastMs()),
+			trackID:       track.GetTrackId(),
+			hasTrackID:    track.TrackId != nil,
+			trackIndex:    int(track.GetTrackIndex()),
+			hasTrackIndex: track.TrackIndex != nil,
 		})
 	}
 	return out
@@ -1479,6 +1618,57 @@ func processingRequiredTracksReady(p processingTrackPresence, req processingTrac
 
 func processingTracksComplete(p processingTrackPresence, req processingTrackRequirements) bool {
 	return processingRequiredTracksReady(p, req) && len(missingProcessingTracks(p, req)) == 0
+}
+
+func processingLivepeerRenditionsReady(p processingTrackPresence, processesJSON string) (bool, []int, error) {
+	source, _ := sourceFromReadinessOutputs(p.outputs)
+	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(expectedHeights) == 0 {
+		return true, nil, nil
+	}
+	missing := missingRenditionHeightsForPush(expectedHeights, p.videoTracks, source)
+	return len(missing) == 0, missing, nil
+}
+
+func missingRenditionHeightsForPush(expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) []int {
+	srcHeight := source.Height
+	if srcHeight <= 0 {
+		for _, t := range videoTracks {
+			if t.height > srcHeight {
+				srcHeight = t.height
+			}
+		}
+	}
+
+	srcIdx := sourceVideoTrackIndex(videoTracks, mist.SourceMediaInfo{Height: srcHeight})
+
+	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
+	for i, t := range videoTracks {
+		if i == srcIdx {
+			continue
+		}
+		pool = append(pool, t)
+	}
+
+	consumed := make([]bool, len(pool))
+	var missing []int
+	for _, expected := range expectedHeights {
+		found := false
+		for i, track := range pool {
+			if !consumed[i] && renditionHeightsClose(track.height, expected) {
+				consumed[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, expected)
+		}
+	}
+	return missing
 }
 
 func missingProcessingTracks(p processingTrackPresence, req processingTrackRequirements) []string {
@@ -1673,6 +1863,8 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 	if !ok {
 		return outputs
 	}
+	bestVideo := map[string]string{}
+	bestVideoHeight := -1
 	for name, trackRaw := range health {
 		track, ok := trackRaw.(map[string]interface{})
 		if !ok {
@@ -1683,28 +1875,32 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 			codec = normalizeTrackCodec(v)
 		}
 		if strings.HasPrefix(name, "video_") && codec != "JPEG" {
-			if _, exists := outputs["video_codec"]; exists {
-				continue
-			}
+			candidate := map[string]string{}
 			if codec != "" {
-				outputs["video_codec"] = codec
+				candidate["video_codec"] = codec
 			}
+			height := 0
 			if v, ok := track["width"].(float64); ok {
-				outputs["width"] = strconv.Itoa(int(v))
+				candidate["width"] = strconv.Itoa(int(v))
 			}
 			if v, ok := track["height"].(float64); ok {
-				outputs["height"] = strconv.Itoa(int(v))
+				height = int(v)
+				candidate["height"] = strconv.Itoa(height)
 			}
-			if w, ok := outputs["width"]; ok {
-				if ht, ok := outputs["height"]; ok {
-					outputs["resolution"] = w + "x" + ht
+			if w, ok := candidate["width"]; ok {
+				if ht, ok := candidate["height"]; ok {
+					candidate["resolution"] = w + "x" + ht
 				}
 			}
 			if v, ok := track["fpks"].(float64); ok && v > 0 {
-				outputs["fps"] = fmt.Sprintf("%.2f", v/1000.0)
+				candidate["fps"] = fmt.Sprintf("%.2f", v/1000.0)
 			}
 			if v, ok := track["kbits"].(float64); ok && v > 0 {
-				outputs["bitrate_kbps"] = strconv.Itoa(int(v))
+				candidate["bitrate_kbps"] = strconv.Itoa(int(v))
+			}
+			if height > bestVideoHeight {
+				bestVideoHeight = height
+				bestVideo = candidate
 			}
 		}
 		if strings.HasPrefix(name, "audio_") {
@@ -1721,6 +1917,9 @@ func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]s
 	}
 	if v, ok := streamData["lastms"].(float64); ok && v > 0 {
 		outputs["duration_ms"] = strconv.Itoa(int(v))
+	}
+	for k, v := range bestVideo {
+		outputs[k] = v
 	}
 	return outputs
 }

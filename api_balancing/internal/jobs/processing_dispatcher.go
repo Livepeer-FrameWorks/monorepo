@@ -338,6 +338,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}
 	if job.ProcessesJSON.Valid {
 		resolved := job.ProcessesJSON.String
+		resolved = mist.MaskLivepeerSourceForVOD(resolved)
 		if d.gatewayResolver != nil {
 			// Queue jobs do not carry origin/official cluster IDs; nil candidates
 			// resolves against the resolver's local cluster.

@@ -2619,6 +2619,7 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 	if cfg == "" {
 		return ""
 	}
+	cfg = mist.MaskLivepeerSourceForVOD(cfg)
 	cfg = p.ApplyLivepeerBroadcasters(cfg, nil)
 	cfg = p.ApplyLivepeerWorkload(cfg, mist.WorkloadVOD)
 	p.CacheProcessConfig(artifactHash, cfg)

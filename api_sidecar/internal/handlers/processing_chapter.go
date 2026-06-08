@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -151,60 +150,31 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 			return
 		}
 	}
+	originalProcessesJSON := req.GetProcessesJson()
+	effectiveProcessesJSON := mist.StripLivepeerProcesses(originalProcessesJSON)
+	if mist.HasLivepeerProcesses(effectiveProcessesJSON) {
+		log.Warn("Chapter finalize: ignoring Livepeer process config for DVR finalization")
+		effectiveProcessesJSON = "[]"
+	}
 	// Register the tenant's MistServer process config so the
 	// STREAM_PROCESS trigger that fires when the processing+<hash>
-	// stream boots picks up Thumbs / sprite / Livepeer the same way
-	// user-initiated VOD processing does. Missing config (empty
-	// processes_json) leaves the stream booting with no MistProc
-	// pipeline — the .mkv still gets produced via the direct push.
-	if pj := req.GetProcessesJson(); pj != "" {
-		setProcessingProcessOverride(streamName, pj)
+	// stream boots picks up side work such as thumbnails. DVR
+	// finalization does not start a fresh Livepeer transcode here; the
+	// push below selects either already-complete rendition tracks from
+	// the recorded input or the source passthrough.
+	if effectiveProcessesJSON != "" {
+		setProcessingProcessOverride(streamName, effectiveProcessesJSON)
 		defer clearProcessingProcessOverride(streamName)
 	}
 
-	fallbackAttempted := false
-	hasLivepeer := mist.HasLivepeerProcesses(req.GetProcessesJson())
 	ignoredProcessExitBootCounts := map[string]int{}
-	activePushID := 0
 
-	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
+	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
-		var livepeerBootErr *livepeerReadinessFallbackError
-		if errors.As(readinessErr, &livepeerBootErr) && !fallbackAttempted {
-			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Chapter finalize: Livepeer unrecoverable during readiness, falling back to local MistProcAV")
-			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
-			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
-			setProcessingProcessOverride(streamName, localConfig)
-			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-			// Stop + nuke + drain the retired generation, then clear its artifact,
-			// before rebooting (mirrors the main fallback) so the old Livepeer boot
-			// can't race the restart or keep writing the cleared output.
-			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed",
-					fmt.Sprintf("chapter finalize livepeer fallback teardown: %v", teardownErr), nil, "", 0)
-				return
-			}
-			doneCh = make(chan ProcessingPushEndEvent, 1)
-			pendingJobsMu.Lock()
-			pendingJobs[streamName] = doneCh
-			pendingJobsMu.Unlock()
-			recordingEndCh = registerProcessingRecordingEndListener(streamName)
-			streamOutputs, _, readinessErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
-			if readinessErr != nil {
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed",
-					fmt.Sprintf("chapter finalize livepeer fallback readiness: %v", readinessErr), nil, "", 0)
-				return
-			}
-			fallbackAttempted = true
-			hasLivepeer = false
-		} else {
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed",
-				fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
-			return
-		}
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed",
+			fmt.Sprintf("chapter finalize readiness failed: %v", readinessErr), nil, "", 0)
+		return
 	}
 
 	// Unix-seconds start of the current push attempt. RECORDING_END is keyed only
@@ -212,8 +182,17 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	// on restart narrows but does not close the window where a late event from the
 	// retired push lands in the fresh channel, so it is rejected by comparing its
 	// TimeStarted against this.
+	chapterSpanMs := float64(0)
+	if mediaEndMs > mediaStartMs {
+		chapterSpanMs = float64(mediaEndMs - mediaStartMs)
+	}
+	if chapterSpanMs <= 0 {
+		_, chapterSpanMs = sourceFromReadinessOutputs(streamOutputs)
+	}
+	chapterVideoSelector := h.chapterFinalizeVideoSelector(log, mistClient, streamName, originalProcessesJSON, streamOutputs, chapterSpanMs)
+
 	currentPushStartedAt := time.Now().Unix()
-	activePushID, pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath)
+	_, pushErr := h.startChapterFinalizePush(log, mistClient, streamName, outputPath, chapterVideoSelector)
 	if pushErr != nil {
 		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)
@@ -227,61 +206,11 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	var recordingEnd *ProcessingRecordingEndEvent
 	const stallTimeout = 3 * time.Minute
 
-	restartWithLocalMistProc := func(reason string) error {
-		ignoreProcessExitThrough(ignoredProcessExitBootCounts, "Livepeer", 0)
-		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
-		setProcessingProcessOverride(streamName, localConfig)
-		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
-		// Stop + nuke + DRAIN the retired generation, then clear its artifact, before
-		// rebooting, so the old Livepeer generation can't race the restarted local-AV
-		// push or keep writing the cleared output.
-		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
-			return fmt.Errorf("%s fallback teardown: %w", reason, teardownErr)
-		}
-		doneCh = make(chan ProcessingPushEndEvent, 1)
-		pendingJobsMu.Lock()
-		pendingJobs[streamName] = doneCh
-		pendingJobsMu.Unlock()
-		recordingEndCh = registerProcessingRecordingEndListener(streamName)
-		// Discard any RECORDING_END captured from the retired push; the
-		// restarted push produces a fresh one. Otherwise the post-loop
-		// validation would run against the old push's bytes/duration.
-		recordingEnd = nil
-		var waitErr error
-		streamOutputs, _, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, processExitCh, ignoredProcessExitBootCounts)
-		if waitErr != nil {
-			return fmt.Errorf("%s fallback readiness: %w", reason, waitErr)
-		}
-		currentPushStartedAt = time.Now().Unix()
-		activePushID, pushErr = h.startChapterFinalizePush(log, mistClient, streamName, outputPath)
-		if pushErr != nil {
-			return fmt.Errorf("%s fallback restart: %w", reason, pushErr)
-		}
-		lastMs = 0
-		lastAdvance = time.Now()
-		fallbackAttempted = true
-		hasLivepeer = false
-		return nil
-	}
-
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
 	}
 	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
-		if recordingEnd == nil {
-			return false, false
-		}
-		srcInfo, srcSpan := sourceFromReadinessOutputs(streamOutputs)
-		if hasLivepeer && !fallbackAttempted && !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, srcSpan) {
-			log.Warn("Chapter finalize: Livepeer produced an incomplete rendition set, falling back to local MistProcAV before publish")
-			if restartErr := restartWithLocalMistProc("rendition_incomplete"); restartErr != nil {
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
-				return false, true
-			}
-			return false, false
-		}
-		return true, false
+		return recordingEnd != nil, false
 	}
 
 loop:
@@ -336,13 +265,6 @@ loop:
 				continue
 			}
 			switch {
-			case evt.Status == "unrecoverable" && evt.ProcessType == "Livepeer" && !fallbackAttempted:
-				log.WithFields(evtFields).Warn("Chapter finalize: Livepeer unrecoverable, falling back to local MistProcAV")
-				if restartErr := restartWithLocalMistProc("livepeer"); restartErr != nil {
-					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
-					return
-				}
 			case evt.Status == "unrecoverable" && isCriticalProcess(evt):
 				log.WithFields(evtFields).Error("Chapter finalize: critical process unrecoverable")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -363,15 +285,6 @@ loop:
 				lastAdvance = time.Now()
 			}
 			if time.Since(lastAdvance) >= stallTimeout {
-				if hasLivepeer && !fallbackAttempted {
-					log.WithField("last_ms", lastMs).Warn("Chapter finalize: Livepeer stalled, falling back to local MistProcAV")
-					if restartErr := restartWithLocalMistProc("stall"); restartErr != nil {
-						h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-						h.sendResult(send, req.GetJobId(), "failed", restartErr.Error(), nil, "", 0)
-						return
-					}
-					continue loop
-				}
 				log.WithField("last_ms", lastMs).Warn("Chapter finalize: push stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
@@ -415,32 +328,11 @@ loop:
 		return
 	}
 
-	// Final whole-output completeness gate. The chapter's authoritative span is its
-	// media bounds (mediaEndMs-mediaStartMs), always known for a valid chapter — so
-	// this does not fail open when readiness lacked duration_ms; the readiness span
-	// is only a fallback. After a Livepeer→local fallback the per-rendition check no
-	// longer runs and the accepted RECORDING_END may be a stale event from the
-	// retired push (keyed only by stream name), so validate the produced rendition
-	// tracks directly (the local AV output mirrors the original target_profiles 1:1;
-	// livepeerRenditionsComplete excludes one source-height track so a full-length
-	// source passthrough cannot vouch for a short transcode). Pre-fallback there is a
-	// single generation, so the validated RECORDING_END duration is authoritative.
-	chapterSpanMs := float64(0)
-	if mediaEndMs > mediaStartMs {
-		chapterSpanMs = float64(mediaEndMs - mediaStartMs)
-	}
-	if chapterSpanMs <= 0 {
-		_, chapterSpanMs = sourceFromReadinessOutputs(streamOutputs)
-	}
-	if fallbackAttempted {
-		srcInfo, _ := sourceFromReadinessOutputs(streamOutputs)
-		if !livepeerRenditionsCompleteFromTracks(log, req.GetProcessesJson(), recordingEnd.Tracks, srcInfo, chapterSpanMs) {
-			log.Error("Chapter finalize: post-fallback local output is missing or has truncated renditions; refusing to publish")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", "post-fallback output renditions incomplete", nil, "", 0)
-			return
-		}
-	} else if recordingEnd != nil && chapterSpanMs > 0 &&
+	// The chapter's authoritative span is its media bounds
+	// (mediaEndMs-mediaStartMs). Track selection already picked complete
+	// renditions or source passthrough before push_start; this final gate
+	// verifies the selected output covers the chapter.
+	if recordingEnd != nil && chapterSpanMs > 0 &&
 		chapterSpanMs-float64(recordingEnd.MediaDurationMs) > maxRenditionSpanShortfallMs {
 		log.WithFields(logging.Fields{
 			"media_duration_ms":  recordingEnd.MediaDurationMs,
@@ -514,8 +406,127 @@ func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, 
 	log.Warn("Chapter finalize: DTSH generation exhausted retries; chapter remains finalized pending operator triage")
 }
 
-func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath string) (int, error) {
-	targetURI := processingMuxTargetURI(outputPath)
+func (h *ProcessingJobHandler) chapterFinalizeVideoSelector(log *logrus.Entry, mistClient *mist.Client, streamName, processesJSON string, readinessOutputs map[string]string, chapterSpanMs float64) string {
+	presence := processingTrackPresence{outputs: readinessOutputs}
+	if mistClient != nil {
+		streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
+		if err != nil {
+			log.WithError(err).Warn("Chapter finalize: could not inspect tracks before push; using source video")
+		} else {
+			presence = inspectProcessingActiveStream(streamData)
+			if len(presence.outputs) == 0 {
+				presence.outputs = readinessOutputs
+			}
+		}
+	}
+	source, _ := sourceFromReadinessOutputs(presence.outputs)
+	if source.Height <= 0 {
+		source, _ = sourceFromReadinessOutputs(readinessOutputs)
+	}
+	return chooseChapterFinalizeVideoSelector(log, processesJSON, presence.videoTracks, source, chapterSpanMs)
+}
+
+func chooseChapterFinalizeVideoSelector(log *logrus.Entry, processesJSON string, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, chapterSpanMs float64) string {
+	sourceSelector := chapterSourceVideoSelector(videoTracks, source)
+	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
+	if err != nil {
+		log.WithError(err).Warn("Chapter finalize: cannot determine requested rendition ladder; using source video")
+		return sourceSelector
+	}
+	if len(expectedHeights) == 0 {
+		return sourceSelector
+	}
+	if chapterSpanMs <= 0 {
+		log.Warn("Chapter finalize: chapter span unavailable before push; using source video")
+		return sourceSelector
+	}
+	selected, ok := completeChapterRenditionTracks(expectedHeights, videoTracks, source, chapterSpanMs)
+	if !ok {
+		log.WithFields(logrus.Fields{
+			"requested_heights": expectedHeights,
+			"available_heights": videoTrackHeights(videoTracks),
+		}).Info("Chapter finalize: complete rendition set unavailable; using source video")
+		return sourceSelector
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		if selected[i].height == selected[j].height {
+			return selected[i].selector() < selected[j].selector()
+		}
+		return selected[i].height > selected[j].height
+	})
+	parts := make([]string, 0, len(selected))
+	for _, t := range selected {
+		sel := t.selector()
+		if sel == "" {
+			log.WithField("height", t.height).Warn("Chapter finalize: complete rendition lacks track identity; using source video")
+			return sourceSelector
+		}
+		parts = append(parts, sel)
+	}
+	selector := strings.Join(parts, ",")
+	log.WithFields(logrus.Fields{
+		"video_selector":     selector,
+		"requested_heights":  expectedHeights,
+		"chapter_span_ms":    int64(chapterSpanMs),
+		"selected_rendition": true,
+	}).Info("Chapter finalize: selecting complete rendition tracks")
+	return selector
+}
+
+func chapterSourceVideoSelector(videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) string {
+	if idx := sourceVideoTrackIndex(videoTracks, source); idx >= 0 {
+		if sel := videoTracks[idx].selector(); sel != "" {
+			return sel
+		}
+	}
+	return "source"
+}
+
+func completeChapterRenditionTracks(expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, chapterSpanMs float64) ([]processingMetaVideoTrack, bool) {
+	if len(videoTracks) == 0 {
+		return nil, false
+	}
+	sourceIdx := sourceVideoTrackIndex(videoTracks, source)
+	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
+	for i, track := range videoTracks {
+		if i == sourceIdx {
+			continue
+		}
+		pool = append(pool, track)
+	}
+
+	consumed := make([]bool, len(pool))
+	selected := make([]processingMetaVideoTrack, 0, len(expectedHeights))
+	for _, expected := range expectedHeights {
+		if expected <= 0 {
+			return nil, false
+		}
+		matchIdx := -1
+		for i, track := range pool {
+			if consumed[i] || !renditionHeightsClose(track.height, expected) {
+				continue
+			}
+			if chapterSpanMs-track.spanMs() > maxRenditionSpanShortfallMs {
+				continue
+			}
+			if track.selector() == "" {
+				continue
+			}
+			if matchIdx < 0 || track.spanMs() > pool[matchIdx].spanMs() {
+				matchIdx = i
+			}
+		}
+		if matchIdx < 0 {
+			return nil, false
+		}
+		consumed[matchIdx] = true
+		selected = append(selected, pool[matchIdx])
+	}
+	return selected, true
+}
+
+func (h *ProcessingJobHandler) startChapterFinalizePush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath, videoSelector string) (int, error) {
+	targetURI := processingMuxTargetURIWithVideo(outputPath, videoSelector)
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
 		return 0, err
 	}

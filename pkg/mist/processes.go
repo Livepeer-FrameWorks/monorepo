@@ -125,11 +125,13 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			}
 			if inhibit, ok := prof["track_inhibit"].(string); ok {
 				av["track_inhibit"] = inhibit
+			} else if inhibit, ok := p["track_inhibit"].(string); ok {
+				av["track_inhibit"] = inhibit
 			}
 			copyProcessOption(av, prof, "inconsequential")
 			copyProcessOption(av, prof, "exit_unmask")
-			copyProcessOption(av, prof, "source_mask")
-			copyProcessOption(av, prof, "target_mask")
+			copyProcessOptionWithFallback(av, prof, p, "source_mask")
+			copyProcessOptionWithFallback(av, prof, p, "target_mask")
 			copyProcessOption(av, prof, "source_track")
 			copyProcessOption(av, prof, "gopsize")
 			if name, ok := prof["name"].(string); ok {
@@ -140,6 +142,32 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 	}
 
 	out, err := json.Marshal(result)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+// MaskLivepeerSourceForVOD hides the source video track from processing output
+// recordings while keeping it readable by Mist processes. The mask is attached
+// to Livepeer process entries only; if a gateway is unavailable,
+// ReplaceLivepeerWithLocal inherits it into the generated MistProcAV entries.
+func MaskLivepeerSourceForVOD(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if procType, ok := proc["process"].(string); ok && procType == "Livepeer" {
+			proc["source_mask"] = 4
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
 	if err != nil {
 		return processesJSON
 	}
@@ -545,6 +573,16 @@ func numberAsInt(v interface{}) (int, bool) {
 
 func copyProcessOption(dst, src map[string]interface{}, key string) {
 	if value, ok := src[key]; ok {
+		dst[key] = value
+	}
+}
+
+func copyProcessOptionWithFallback(dst, primary, fallback map[string]interface{}, key string) {
+	if value, ok := primary[key]; ok {
+		dst[key] = value
+		return
+	}
+	if value, ok := fallback[key]; ok {
 		dst[key] = value
 	}
 }

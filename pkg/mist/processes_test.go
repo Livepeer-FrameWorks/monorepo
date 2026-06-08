@@ -250,6 +250,33 @@ func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	}
 }
 
+func TestReplaceLivepeerWithLocalInheritsProcessSourceMask(t *testing.T) {
+	input := `[{"process":"Livepeer","source_mask":4,"target_mask":2,"track_select":"video=maxbps","track_inhibit":"video=<640x360","target_profiles":[{"name":"360p","profile":"H264Main","height":360,"bitrate":900000}]}]`
+
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &got); err != nil {
+		t.Fatalf("unmarshal local processes: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 process, got %d", len(got))
+	}
+	proc := got[0]
+	checks := map[string]any{
+		"process":       "AV",
+		"codec":         "H264",
+		"resolution":    "x360",
+		"source_mask":   float64(4),
+		"target_mask":   float64(2),
+		"track_select":  "video=maxbps&audio=none&subtitle=none",
+		"track_inhibit": "video=<640x360",
+	}
+	for key, want := range checks {
+		if got := proc[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) {
 	input := `[{"process":"Livepeer","target_profiles":[{"name":"source","profile":"H264Baseline","bitrate":500000,"width":1024,"height":576,"resolution":"960x540","track_select":"video=0","inconsequential":true,"exit_unmask":true,"source_mask":"v","target_mask":"t","source_track":"1","gopsize":60}]}]`
 
@@ -276,6 +303,22 @@ func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) 
 		if got := proc[key]; got != want {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
 		}
+	}
+}
+
+func TestMaskLivepeerSourceForVOD(t *testing.T) {
+	input := `[{"process":"AV","codec":"H264"},{"process":"Livepeer","target_profiles":[{"height":360}]}]`
+	out := MaskLivepeerSourceForVOD(input)
+
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal masked config: %v", err)
+	}
+	if _, ok := got[0]["source_mask"]; ok {
+		t.Fatal("AV-only entry should not be masked by the Livepeer VOD helper")
+	}
+	if got[1]["source_mask"] != float64(4) {
+		t.Fatalf("Livepeer source_mask = %#v, want 4", got[1]["source_mask"])
 	}
 }
 
