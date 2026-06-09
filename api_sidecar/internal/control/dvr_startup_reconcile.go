@@ -97,6 +97,63 @@ func ReconcileDVRDirectoriesAtStartup(ctx context.Context, basePath string, logg
 	return nil
 }
 
+// reconcileAction is the decision the startup matrix reaches for one segment,
+// computed purely from ledger status, on-disk presence, and playlist timing.
+type reconcileAction int
+
+const (
+	reconcileNoop           reconcileAction = iota // ledger and reality already agree
+	reconcileDeleteOrphan                          // orphan_unreachable + present: delete + Dropped(was_uploaded=true)
+	reconcileUpload                                // pending|failed_upload + present: (re)upload existing
+	reconcileDropPreUpload                         // pending|failed_upload + missing: Dropped(was_uploaded=false)
+	reconcileHeal                                  // lost_local + present + matching PDT: heal + upload
+	reconcileSkipUnhealable                        // lost_local + present + (no PDT | mismatch): cannot heal
+	reconcileInsertUpload                          // no row + present + PDT: rebuild ledger + upload
+	reconcileInsertDrop                            // no row + missing + PDT: tombstone
+	reconcileSkipNoPDT                             // no row + no PDT: cannot fabricate a row
+)
+
+// decideReconcileAction encodes the documented startup reconciliation matrix.
+// Critical invariants it preserves:
+//   - uploaded/deleted_local are never transitioned (S3 authoritative; eviction
+//     is normal) regardless of on-disk presence.
+//   - lost_local heals ONLY when the playlist timing exactly matches the ledger
+//     row; otherwise it is left untouched.
+//   - a row is fabricated (insert/tombstone) ONLY when the playlist supplies
+//     trustworthy PDT timing.
+func decideReconcileAction(status string, present, hasPDT, pdtMatches bool) reconcileAction {
+	switch status {
+	case "uploaded", "deleted_local":
+		return reconcileNoop
+	case "orphan_unreachable":
+		if present {
+			return reconcileDeleteOrphan
+		}
+		return reconcileNoop
+	case "pending", "failed_upload":
+		if present {
+			return reconcileUpload
+		}
+		return reconcileDropPreUpload
+	case "lost_local":
+		if !present {
+			return reconcileNoop
+		}
+		if !hasPDT || !pdtMatches {
+			return reconcileSkipUnhealable
+		}
+		return reconcileHeal
+	default: // no ledger row
+		if !hasPDT {
+			return reconcileSkipNoPDT
+		}
+		if present {
+			return reconcileInsertUpload
+		}
+		return reconcileInsertDrop
+	}
+}
+
 // reconcileSingleDVR runs the matrix against one DVR artifact directory.
 func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logging.Logger) error {
 	segmentsDir := filepath.Join(dvrDir, "segments")
@@ -202,92 +259,79 @@ func reconcileSingleDVR(ctx context.Context, dvrHash, dvrDir string, logger logg
 			status = lr.GetStatus()
 		}
 
-		switch status {
-		case "uploaded", "deleted_local":
-			// uploaded: S3 is authoritative; no transition.
-			// deleted_local: Helmsman previously acknowledged the local
-			// delete. No further action needed at startup.
+		// The decision matrix is computed purely from (status, file present,
+		// playlist timing) so it can be exhaustively tested; the side effects
+		// below execute the chosen action.
+		hasPDT := pePresent && pe.hasPDT
+		pdtMatches := hasPDT &&
+			pe.mediaStartMs == lr.GetMediaStartMs() &&
+			pe.mediaEndMs == lr.GetMediaEndMs() &&
+			pe.durationMs == lr.GetDurationMs()
+
+		switch decideReconcileAction(status, d.present, hasPDT, pdtMatches) {
+		case reconcileNoop:
+			// uploaded: S3 is authoritative. deleted_local: Helmsman already
+			// acknowledged the delete. orphan_unreachable + missing / lost_local
+			// + missing: ledger declaration already matches reality.
 			continue
-		case "orphan_unreachable":
-			// Foghorn declared the local file presumed-gone while this
-			// node was absent past the chapter-reclaim grace. We've now
-			// rejoined and the file may or may not still be on disk. If
-			// it is, reconcile to the ledger by deleting + emitting
-			// DVRSegmentDropped(was_uploaded=true) so the row flips to
-			// deleted_local (Helmsman ack landed) and Phase B can finish
-			// the S3 cleanup. If the file is gone, the ledger declaration
-			// already matches reality.
-			if d.present {
-				if err := os.Remove(d.path); err != nil && !os.IsNotExist(err) {
-					logger.WithError(err).WithFields(logging.Fields{
-						"dvr_hash": dvrHash,
-						"segment":  name,
-					}).Warn("Startup reconcile: failed to delete orphan_unreachable segment file")
-					continue
-				}
-				if dropErr := SendDVRSegmentDropped(dvrHash, name, "orphan_reconciled",
-					d.path, lr.GetMediaStartMs(), lr.GetMediaEndMs(), lr.GetDurationMs(), uint64(d.size), true); dropErr != nil {
-					logger.WithError(dropErr).WithFields(logging.Fields{
-						"dvr_hash": dvrHash, "segment": name,
-					}).Warn("Startup reconcile: DVRSegmentDropped(orphan_reconciled) emit failed")
-				}
-			}
-			continue
-		case "pending", "failed_upload":
-			if d.present {
-				// Try the upload path. RecordDVRSegment will reuse the
-				// existing sequence (strict timing match) and the upload
-				// can proceed.
-				reconcileUploadExisting(ctx, dvrHash, name, d.path, d.size, lr, logger)
-			} else {
-				// Pre-upload data loss → lost_local.
-				if err := SendDVRSegmentDropped(dvrHash, name, "missing_pre_upload", "",
-					lr.GetMediaStartMs(), lr.GetMediaEndMs(), lr.GetDurationMs(), 0, false); err != nil {
-					logger.WithError(err).WithFields(logging.Fields{
-						"dvr_hash": dvrHash, "segment": name,
-					}).Warn("Startup reconcile: DVRSegmentDropped(lost_local) emit failed")
-				}
-			}
-		case "lost_local":
-			if !d.present {
+		case reconcileDeleteOrphan:
+			// Foghorn declared the file presumed-gone while this node was absent
+			// past the chapter-reclaim grace, but it's still on disk. Reconcile
+			// to the ledger by deleting + emitting DVRSegmentDropped(was_uploaded
+			// =true) so the row flips to deleted_local and Phase B finishes S3
+			// cleanup.
+			if err := os.Remove(d.path); err != nil && !os.IsNotExist(err) {
+				logger.WithError(err).WithFields(logging.Fields{
+					"dvr_hash": dvrHash,
+					"segment":  name,
+				}).Warn("Startup reconcile: failed to delete orphan_unreachable segment file")
 				continue
 			}
-			// Heal only if timing matches. The RecordDVRSegment path is the
-			// only sanctioned entry — InsertDVRSegment validates timing
-			// before flipping lost_local -> pending.
-			if !pePresent || !pe.hasPDT {
+			if dropErr := SendDVRSegmentDropped(dvrHash, name, "orphan_reconciled",
+				d.path, lr.GetMediaStartMs(), lr.GetMediaEndMs(), lr.GetDurationMs(), uint64(d.size), true); dropErr != nil {
+				logger.WithError(dropErr).WithFields(logging.Fields{
+					"dvr_hash": dvrHash, "segment": name,
+				}).Warn("Startup reconcile: DVRSegmentDropped(orphan_reconciled) emit failed")
+			}
+		case reconcileUpload:
+			// RecordDVRSegment reuses the existing sequence (strict timing match)
+			// and the upload proceeds.
+			reconcileUploadExisting(ctx, dvrHash, name, d.path, d.size, lr, logger)
+		case reconcileDropPreUpload:
+			// Pre-upload data loss → lost_local.
+			if err := SendDVRSegmentDropped(dvrHash, name, "missing_pre_upload", "",
+				lr.GetMediaStartMs(), lr.GetMediaEndMs(), lr.GetDurationMs(), 0, false); err != nil {
+				logger.WithError(err).WithFields(logging.Fields{
+					"dvr_hash": dvrHash, "segment": name,
+				}).Warn("Startup reconcile: DVRSegmentDropped(lost_local) emit failed")
+			}
+		case reconcileHeal:
+			// RecordDVRSegment is the only sanctioned entry — InsertDVRSegment
+			// validates timing before flipping lost_local -> pending.
+			reconcileHealAndUpload(ctx, dvrHash, name, d.path, d.size, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
+		case reconcileSkipUnhealable:
+			if !hasPDT {
 				logger.WithFields(logging.Fields{
 					"dvr_hash": dvrHash,
 					"segment":  name,
 				}).Warn("Cannot heal lost_local segment: no playlist PDT timing")
-				continue
-			}
-			if pe.mediaStartMs != lr.GetMediaStartMs() ||
-				pe.mediaEndMs != lr.GetMediaEndMs() ||
-				pe.durationMs != lr.GetDurationMs() {
+			} else {
 				logger.WithFields(logging.Fields{
 					"dvr_hash": dvrHash,
 					"segment":  name,
 				}).Warn("Cannot heal lost_local segment: playlist timing does not match ledger row")
-				continue
 			}
-			reconcileHealAndUpload(ctx, dvrHash, name, d.path, d.size, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
-		default:
-			// No ledger row.
+		case reconcileInsertUpload:
+			reconcileInsertAndUpload(ctx, dvrHash, name, d.path, d.size, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
+		case reconcileInsertDrop:
+			// File missing AND no ledger row: tombstone, since the playlist
+			// gives us trustworthy timing.
+			reconcileInsertAndDrop(ctx, dvrHash, name, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
+		case reconcileSkipNoPDT:
 			if d.present {
-				if !pePresent || !pe.hasPDT {
-					untrackedNoPDTSkipped++
-					continue
-				}
-				reconcileInsertAndUpload(ctx, dvrHash, name, d.path, d.size, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
+				untrackedNoPDTSkipped++
 			} else {
-				// File missing AND no ledger row. Only tombstone if the
-				// playlist gives us trustworthy timing.
-				if !pePresent || !pe.hasPDT {
-					missingNoPDTSkipped++
-					continue
-				}
-				reconcileInsertAndDrop(ctx, dvrHash, name, pe.mediaStartMs, pe.mediaEndMs, pe.durationMs, logger)
+				missingNoPDTSkipped++
 			}
 		}
 	}

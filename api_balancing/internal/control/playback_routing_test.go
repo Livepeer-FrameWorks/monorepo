@@ -34,7 +34,8 @@ func TestRankArtifactNodes(t *testing.T) {
 	})
 
 	t.Run("no viewer geo sorts by score then nodeID", func(t *testing.T) {
-		// viewer (0,0) disables geo ranking; ordering is Score asc, then NodeID.
+		// viewer (0,0) disables geo ranking; ordering is Score desc (higher =
+		// idler = better, balancer direction), then NodeID.
 		in := []state.ArtifactNodeInfo{
 			{NodeID: "c", Score: 5},
 			{NodeID: "a", Score: 10},
@@ -42,8 +43,8 @@ func TestRankArtifactNodes(t *testing.T) {
 		}
 		got := rankArtifactNodes(in, 0, 0, 0)
 		order := []string{got[0].NodeID, got[1].NodeID, got[2].NodeID}
-		// Score 5 (b,c by nodeID) before score 10 (a).
-		want := []string{"b", "c", "a"}
+		// Score 10 (a) before score 5 (b,c by nodeID).
+		want := []string{"a", "b", "c"}
 		for i := range want {
 			if order[i] != want[i] {
 				t.Fatalf("order = %v, want %v", order, want)
@@ -102,9 +103,10 @@ func TestRankNodeScoresForArtifact(t *testing.T) {
 			t.Fatal("remote-cluster node leaked into ranking")
 		}
 	}
-	// local-2 (score 1) ranks before local-1 (score 3); fields mapped through.
-	if got[0].NodeID != "local-2" || got[0].Score != 1 || got[0].Host != "h3" {
-		t.Errorf("first ranked = %+v, want local-2/score1/h3", got[0])
+	// local-1 (score 3, higher = better) ranks before local-2 (score 1) —
+	// preserving the balancer's best-first order; fields mapped through.
+	if got[0].NodeID != "local-1" || got[0].Score != 3 || got[0].Host != "h1" {
+		t.Errorf("first ranked = %+v, want local-1/score3/h1", got[0])
 	}
 }
 

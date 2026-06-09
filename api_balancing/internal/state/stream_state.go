@@ -1833,7 +1833,7 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(ctx context.Context, nodeID 
 type ArtifactNodeInfo struct {
 	NodeID       string
 	Host         string // Base URL
-	Score        int64  // Load balancing score (lower is better)
+	Score        int64  // Load balancing score (higher is better — idleness scale, same direction as the balancer's rate())
 	Artifact     *ipcpb.StoredArtifact
 	GeoLatitude  float64
 	GeoLongitude float64
@@ -1855,7 +1855,7 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 		}
 		for _, artifact := range node.Artifacts {
 			if artifact.GetClipHash() == hash {
-				// Combine CPU and RAM scores for load balancing (lower is better)
+				// Combine CPU and RAM scores for load balancing (higher is better)
 				combinedScore := int64(node.CPUScore + node.RAMScore)
 				nodes = append(nodes, ArtifactNodeInfo{
 					NodeID:       node.NodeID,
@@ -1881,10 +1881,10 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *ipcp
 		return "", nil
 	}
 
-	// If multiple nodes have the artifact, pick the one with the best (lowest) score
+	// If multiple nodes have the artifact, pick the one with the best (highest) score
 	best := nodes[0]
 	for _, n := range nodes[1:] {
-		if n.Score < best.Score {
+		if n.Score > best.Score {
 			best = n
 		}
 	}
@@ -1902,7 +1902,7 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 
 	var bestHost string
 	var bestArtifact *ipcpb.StoredArtifact
-	bestScore := int64(1<<63 - 1)
+	bestScore := int64(-1)
 
 	for _, node := range snapshot.Nodes {
 		if !node.IsActive {
@@ -1911,7 +1911,7 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 		for _, artifact := range node.Artifacts {
 			if _, after, found := strings.Cut(artifact.GetStreamName(), "+"); found && after == internalName {
 				score := int64(node.CPUScore + node.RAMScore)
-				if score < bestScore {
+				if score > bestScore {
 					bestScore = score
 					bestHost = node.Host
 					bestArtifact = artifact

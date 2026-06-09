@@ -2440,34 +2440,29 @@ func isHLSSource(sourceURL string, params map[string]string) bool {
 
 // rewriteHLSManifest downloads the HLS manifest, rewrites segment paths
 // to presigned HTTPS URLs, and saves to local disk for MistServer to read.
-func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *ipcpb.ProcessingJobRequest) (string, error) {
-	params := req.GetParams()
-	manifestURL := req.GetSourceUrl()
-
-	httpReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, manifestURL, nil)
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("download manifest: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("manifest download returned %d", resp.StatusCode)
-	}
-
-	// segment_urls: newline-separated "relative_path=presigned_url" pairs
+// parseSegmentURLs decodes the segment_urls param: newline-separated
+// "relative_path=presigned_url" pairs. Malformed lines (no "=") are skipped.
+func parseSegmentURLs(raw string) map[string]string {
 	segmentURLs := map[string]string{}
-	if raw, ok := params["segment_urls"]; ok {
-		for _, pair := range strings.Split(raw, "\n") {
-			parts := strings.SplitN(pair, "=", 2)
-			if len(parts) == 2 {
-				segmentURLs[parts[0]] = parts[1]
-			}
+	if raw == "" {
+		return segmentURLs
+	}
+	for _, pair := range strings.Split(raw, "\n") {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) == 2 {
+			segmentURLs[parts[0]] = parts[1]
 		}
 	}
+	return segmentURLs
+}
 
+// rewriteHLSManifestBody remaps every segment and tag-URI reference in an HLS
+// manifest to its presigned URL. A reference with no mapping is left verbatim;
+// any reference that should be remapped but isn't would break playback, so this
+// is the load-bearing correctness core, kept pure for exhaustive testing.
+func rewriteHLSManifestBody(body string, segmentURLs map[string]string) string {
 	var rewritten strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "#") {
@@ -2490,16 +2485,41 @@ func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *ipcpb.
 		}
 		rewritten.WriteString("\n")
 	}
-	if err := scanner.Err(); err != nil {
+	return rewritten.String()
+}
+
+func (h *ProcessingJobHandler) rewriteHLSManifest(log *logrus.Entry, req *ipcpb.ProcessingJobRequest) (string, error) {
+	params := req.GetParams()
+	manifestURL := req.GetSourceUrl()
+
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, manifestURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build manifest request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("download manifest: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("manifest download returned %d", resp.StatusCode)
+	}
+
+	segmentURLs := parseSegmentURLs(params["segment_urls"])
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return "", fmt.Errorf("reading manifest: %w", err)
 	}
+	rewrittenBody := rewriteHLSManifestBody(string(body), segmentURLs)
 
 	procDir := filepath.Join(h.storagePath, "processing")
 	if err := os.MkdirAll(procDir, 0755); err != nil {
 		return "", fmt.Errorf("create processing dir: %w", err)
 	}
 	localPath := filepath.Join(procDir, req.GetArtifactHash()+".m3u8")
-	if err := os.WriteFile(localPath, []byte(rewritten.String()), 0644); err != nil {
+	if err := os.WriteFile(localPath, []byte(rewrittenBody), 0644); err != nil {
 		return "", fmt.Errorf("write rewritten manifest: %w", err)
 	}
 

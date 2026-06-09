@@ -88,8 +88,14 @@ func TestEffectiveDiskSpace(t *testing.T) {
 		if eff.TotalBytes != raw.TotalBytes {
 			t.Fatalf("TotalBytes = %d, want filesystem total %d", eff.TotalBytes, raw.TotalBytes)
 		}
-		if eff.AvailableBytes > raw.AvailableBytes {
-			t.Fatalf("AvailableBytes = %d exceeds filesystem available %d", eff.AvailableBytes, raw.AvailableBytes)
+		// Available disk is non-monotonic between the raw snapshot above and
+		// this call, so a strict <= would flake. The invariant under test is
+		// that a huge cap does not balloon available toward the cap; tolerate
+		// ordinary fluctuation while still catching that (a regression would
+		// report ~1<<60, dwarfing any tolerance).
+		const fluctuationTol = uint64(64 << 20)
+		if eff.AvailableBytes > raw.AvailableBytes+fluctuationTol {
+			t.Fatalf("AvailableBytes = %d exceeds filesystem available %d (+tol)", eff.AvailableBytes, raw.AvailableBytes)
 		}
 	})
 }

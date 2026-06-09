@@ -1,6 +1,14 @@
 package handlers
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+	"time"
+
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+)
 
 // extractHLSTagURI pulls the URI="..." value out of an HLS tag line. It is used
 // while rewriting manifests to remap segment/key references.
@@ -113,5 +121,212 @@ func TestVisibleProcessingVideoTracksReady(t *testing.T) {
 	}
 	if visibleProcessingVideoTracksReady(p, 2) {
 		t.Fatal("one visible track should not satisfy want=2")
+	}
+}
+
+// completeRenditionTracks is the load-bearing guard for the "complete ladder or
+// source passthrough — never a partial rendition set" invariant. These exercise
+// the matching algorithm directly (the selector tests only cover it indirectly).
+func TestCompleteRenditionTracks(t *testing.T) {
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+
+	t.Run("zero requested height is unsatisfiable", func(t *testing.T) {
+		tracks := []processingMetaVideoTrack{chapterTrack(2, 1280, 720, 30000)}
+		if _, ok := completeRenditionTracks([]int{0}, tracks, source, 30000); ok {
+			t.Fatal("a zero/negative requested height must fail closed")
+		}
+	})
+
+	t.Run("duplicate heights consume distinct tracks", func(t *testing.T) {
+		tracks := []processingMetaVideoTrack{
+			chapterTrack(2, 1280, 720, 30000),
+			chapterTrack(3, 1280, 720, 30000),
+		}
+		got, ok := completeRenditionTracks([]int{720, 720}, tracks, source, 30000)
+		if !ok || len(got) != 2 {
+			t.Fatalf("two 720 requests should consume two distinct 720 tracks: ok=%v n=%d", ok, len(got))
+		}
+		if got[0].trackID == got[1].trackID {
+			t.Fatal("the same track was matched twice")
+		}
+	})
+
+	t.Run("duplicate heights with only one track fails", func(t *testing.T) {
+		tracks := []processingMetaVideoTrack{chapterTrack(2, 1280, 720, 30000)}
+		if _, ok := completeRenditionTracks([]int{720, 720}, tracks, source, 30000); ok {
+			t.Fatal("two 720 requests cannot be satisfied by one track")
+		}
+	})
+
+	t.Run("track without identity cannot satisfy a height", func(t *testing.T) {
+		noID := chapterTrack(0, 1280, 720, 30000)
+		noID.hasTrackID = false
+		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{noID}, source, 30000); ok {
+			t.Fatal("a track with no selector identity must not satisfy a rendition")
+		}
+	})
+
+	t.Run("span shortfall rejects a truncated rendition", func(t *testing.T) {
+		short := chapterTrack(2, 1280, 720, 1000) // 29s short of a 30s span
+		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{short}, source, 30000); ok {
+			t.Fatal("a rendition far short of the source span must be rejected")
+		}
+	})
+
+	t.Run("source track is excluded from the candidate pool", func(t *testing.T) {
+		// The only 1080 track is the source itself; a 1080 rendition request
+		// must not be satisfiable by reusing the source track.
+		src := chapterTrack(1, 1920, 1080, 30000)
+		if _, ok := completeRenditionTracks([]int{1080}, []processingMetaVideoTrack{src}, source, 30000); ok {
+			t.Fatal("the source track must not double as a rendition")
+		}
+	})
+
+	t.Run("empty track list fails", func(t *testing.T) {
+		if _, ok := completeRenditionTracks([]int{720}, nil, source, 30000); ok {
+			t.Fatal("no tracks cannot satisfy any rendition")
+		}
+	})
+}
+
+func TestProcessingSourceVideoSelector(t *testing.T) {
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+
+	withID := []processingMetaVideoTrack{chapterTrack(7, 1920, 1080, 30000)}
+	if got := processingSourceVideoSelector(withID, source); got != "i7" {
+		t.Errorf("source with identity = %q, want i7", got)
+	}
+
+	noID := chapterTrack(0, 1920, 1080, 30000)
+	noID.hasTrackID = false
+	if got := processingSourceVideoSelector([]processingMetaVideoTrack{noID}, source); got != "source" {
+		t.Errorf("source without identity = %q, want \"source\"", got)
+	}
+
+	if got := processingSourceVideoSelector(nil, source); got != "source" {
+		t.Errorf("no tracks = %q, want \"source\"", got)
+	}
+}
+
+func TestProcessingMetaSelector(t *testing.T) {
+	if got := processingMetaSelector(""); got != "all" {
+		t.Errorf("no processes = %q, want all", got)
+	}
+	if got := processingMetaSelector(`[{"process":"AV","codec":"H264"}]`); got != "all" {
+		t.Errorf("no thumbs = %q, want all", got)
+	}
+	if got := processingMetaSelector(`[{"process":"Thumbs"}]`); got != "all,thumbvtt" {
+		t.Errorf("with thumbs = %q, want all,thumbvtt", got)
+	}
+}
+
+// unsafeWrapperExt identifies wrapper formats Mist cannot open over HTTP, gating
+// the local-staging download path.
+func TestUnsafeWrapperExt(t *testing.T) {
+	cases := map[string]string{
+		"http://h/clip.avi":       ".avi",
+		"http://h/clip.flv":       ".flv",
+		"http://h/clip.m4v":       ".m4v",
+		"http://h/clip.AVI":       ".avi",
+		"http://h/clip.mp4":       "",
+		"http://h/clip.mkv":       "",
+		"http://h/clip":           "",
+		"":                        "",
+		"http://h/a.avi?x=1#frag": ".avi",
+		"://bad url with spaces":  "",
+	}
+	for in, want := range cases {
+		if got := unsafeWrapperExt(in); got != want {
+			t.Errorf("unsafeWrapperExt(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// deriveProcessingMistHTTPBase normalises any configured Mist URL to the HTTP
+// API base, mapping the controller port (4242) to the HTTP port (8080).
+func TestDeriveProcessingMistHTTPBase(t *testing.T) {
+	cases := map[string]string{
+		"http://localhost:4242": "http://localhost:8080",
+		"http://localhost:8080": "http://localhost:8080",
+		"https://mist:9000":     "https://mist:9000",
+		"http://mist":           "http://mist:8080",
+		"mist-host":             "http://mist-host:8080",
+		"mist-host/extra/path":  "http://mist-host:8080",
+	}
+	for in, want := range cases {
+		if got := deriveProcessingMistHTTPBase(in); got != want {
+			t.Errorf("deriveProcessingMistHTTPBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestProcessingSourceExt(t *testing.T) {
+	cases := map[string]string{
+		"mp4":  ".mp4",
+		"MOV":  ".mov",
+		".mkv": ".mkv",
+		"webm": ".webm",
+		"ts":   ".ts",
+		"avi":  ".mkv", // unknown/unsafe normalises to the safe default
+		"":     ".mkv",
+	}
+	for format, want := range cases {
+		req := &ipcpb.ProcessingJobRequest{Params: map[string]string{"source_format": format}}
+		if got := processingSourceExt(req); got != want {
+			t.Errorf("processingSourceExt(source_format=%q) = %q, want %q", format, got, want)
+		}
+	}
+}
+
+func TestIsClipProcessingSource(t *testing.T) {
+	cases := []struct {
+		kind, stream string
+		want         bool
+	}{
+		{"live", "live+s", true},
+		{"dvr_rolling", "dvr+s", true},
+		{"chapter", "live+s", true},
+		{"live", "", false},     // clip kinds require a source stream
+		{"vod", "vod+s", false}, // VOD is not a live-artifact clip source
+		{"", "live+s", false},
+	}
+	for _, tc := range cases {
+		req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+			"source_kind":        tc.kind,
+			"source_stream_name": tc.stream,
+		}}
+		if got := isClipProcessingSource(req); got != tc.want {
+			t.Errorf("isClipProcessingSource(kind=%q,stream=%q) = %v, want %v", tc.kind, tc.stream, got, tc.want)
+		}
+	}
+}
+
+// processingSourceStageTimeout scales the staging download budget to the clip
+// span (clamped 2–15m) and uses a fixed 30m budget for full VOD sources.
+func TestProcessingSourceStageTimeout(t *testing.T) {
+	clip := func(start, stop int64) *ipcpb.ProcessingJobRequest {
+		return &ipcpb.ProcessingJobRequest{Params: map[string]string{
+			"source_kind":        "live",
+			"source_stream_name": "live+s",
+			"source_start_unix":  strconv.FormatInt(start, 10),
+			"source_stop_unix":   strconv.FormatInt(stop, 10),
+		}}
+	}
+	// 60s span + 30s headroom = 90s, below the 2m floor.
+	if got := processingSourceStageTimeout(clip(1000, 1060)); got != 2*time.Minute {
+		t.Errorf("short clip = %v, want 2m floor", got)
+	}
+	// 5m span + 30s headroom = 5m30s, between the bounds.
+	if got := processingSourceStageTimeout(clip(1000, 1300)); got != 5*time.Minute+30*time.Second {
+		t.Errorf("mid clip = %v, want 5m30s", got)
+	}
+	// 30m span exceeds the 15m ceiling.
+	if got := processingSourceStageTimeout(clip(0, 1800)); got != 15*time.Minute {
+		t.Errorf("long clip = %v, want 15m ceiling", got)
+	}
+	// Non-clip (VOD) source uses the fixed 30m budget.
+	vod := &ipcpb.ProcessingJobRequest{Params: map[string]string{"source_kind": "vod"}}
+	if got := processingSourceStageTimeout(vod); got != 30*time.Minute {
+		t.Errorf("vod = %v, want 30m", got)
 	}
 }

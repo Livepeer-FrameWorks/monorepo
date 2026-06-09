@@ -323,7 +323,7 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 		if len(nodes) > 0 {
 			best := nodes[0]
 			for _, n := range nodes[1:] {
-				if n.Score < best.Score {
+				if n.Score > best.Score {
 					best = n
 				}
 			}

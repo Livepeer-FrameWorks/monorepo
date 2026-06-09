@@ -428,6 +428,55 @@ func TestInfrastructureMistServerConfProcessShapes(t *testing.T) {
 	}
 }
 
+func TestInfrastructureMistServerConfProtocolOptions(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "infrastructure", "mistserver.conf"))
+	if err != nil {
+		t.Fatalf("read mistserver.conf: %v", err)
+	}
+	var cfg struct {
+		Config struct {
+			Protocols []map[string]any `json:"protocols"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse mistserver.conf: %v", err)
+	}
+
+	findProtocol := func(connector string) map[string]any {
+		t.Helper()
+		for _, protocol := range cfg.Config.Protocols {
+			if protocol["connector"] == connector {
+				return protocol
+			}
+		}
+		t.Fatalf("missing protocol %q", connector)
+		return nil
+	}
+	requireBool := func(protocol map[string]any, key string) {
+		t.Helper()
+		if got := protocol[key]; got != true {
+			t.Fatalf("%s %s = %v, want true", protocol["connector"], key, got)
+		}
+	}
+	requireAbsent := func(protocol map[string]any, key string) {
+		t.Helper()
+		if got, ok := protocol[key]; ok {
+			t.Fatalf("%s %s = %v, want unset", protocol["connector"], key, got)
+		}
+	}
+
+	cmaf := findProtocol("CMAF")
+	requireBool(cmaf, "mergesessions")
+	requireAbsent(cmaf, "dashllchunked")
+	requireAbsent(cmaf, "dashlowlatency")
+	requireAbsent(cmaf, "nonchunked")
+	requireAbsent(cmaf, "chunkedsegments")
+
+	hls := findProtocol("HLS")
+	requireAbsent(hls, "nonchunked")
+	requireAbsent(hls, "chunkedsegments")
+}
+
 // TestLivepeerProfileFloatCoercesEveryJSONNumericEncoding pins the numeric-read
 // contract every profile dimension/fps lookup is built on: heterogeneous JSON
 // encodings (native float, Go ints, json.Number) all decode to float64, and any

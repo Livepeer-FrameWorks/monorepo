@@ -41,3 +41,73 @@ func TestTriggerForwarderLogFieldsIncludeTriggerContext(t *testing.T) {
 		t.Fatalf("missing wal_age_ms: %#v", fields)
 	}
 }
+
+// TriggerSummaryFields is the incident-response logging contract Foghorn relies
+// on to correlate a durable trigger. Each payload variant carries a different
+// set of stable fields; a regression that drops a switch arm silently loses
+// that correlation, so every arm is asserted.
+func TestTriggerSummaryFieldsPerPayloadVariant(t *testing.T) {
+	t.Run("nil trigger keeps only request id", func(t *testing.T) {
+		fields := TriggerSummaryFields(nil, "evt-nil")
+		if fields["source_event_id"] != "evt-nil" {
+			t.Fatalf("source_event_id = %#v", fields["source_event_id"])
+		}
+		if _, ok := fields["trigger_type"]; ok {
+			t.Fatalf("nil trigger must not carry trigger fields: %#v", fields)
+		}
+	})
+
+	cases := []struct {
+		name     string
+		trigger  *ipcpb.MistTrigger
+		wantKeys map[string]any
+	}{
+		{
+			name: "stream end",
+			trigger: &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_StreamEnd{
+				StreamEnd: &ipcpb.StreamEndTrigger{StreamName: "live+s"},
+			}},
+			wantKeys: map[string]any{"stream_name": "live+s"},
+		},
+		{
+			name: "push end",
+			trigger: &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_PushEnd{
+				PushEnd: &ipcpb.PushEndTrigger{StreamName: "live+s", PushId: 42},
+			}},
+			wantKeys: map[string]any{"stream_name": "live+s", "push_id": int64(42)},
+		},
+		{
+			name: "recording complete",
+			trigger: &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_RecordingComplete{
+				RecordingComplete: &ipcpb.RecordingCompleteTrigger{StreamName: "live+s"},
+			}},
+			wantKeys: map[string]any{"stream_name": "live+s"},
+		},
+		{
+			name: "recording segment",
+			trigger: &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
+				RecordingSegment: &ipcpb.RecordingSegmentTrigger{StreamName: "live+s", DurationMs: 6000},
+			}},
+			wantKeys: map[string]any{"stream_name": "live+s", "duration_ms": int64(6000)},
+		},
+		{
+			name: "process billing",
+			trigger: &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+				ProcessBilling: &ipcpb.ProcessBillingEvent{StreamName: "live+s", ProcessType: "Livepeer"},
+			}},
+			wantKeys: map[string]any{"stream_name": "live+s", "process_type": "Livepeer"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.trigger.RequestId = "evt-1"
+			tc.trigger.TriggerType = "TEST"
+			fields := TriggerSummaryFields(tc.trigger, "evt-1")
+			for k, want := range tc.wantKeys {
+				if got := fields[k]; got != want {
+					t.Errorf("%s = %#v, want %#v; fields=%#v", k, got, want, fields)
+				}
+			}
+		})
+	}
+}

@@ -893,7 +893,7 @@ func rankArtifactNodes(nodes []state.ArtifactNodeInfo, viewerLat, viewerLon floa
 			}
 		}
 		if ranked[i].Score != ranked[j].Score {
-			return ranked[i].Score < ranked[j].Score
+			return ranked[i].Score > ranked[j].Score
 		}
 		return ranked[i].NodeID < ranked[j].NodeID
 	})

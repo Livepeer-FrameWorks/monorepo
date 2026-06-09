@@ -7,8 +7,9 @@ import (
 )
 
 type recordingMistAPI struct {
-	addedProtocols []map[string]interface{}
-	updatedConfigs []map[string]interface{}
+	addedProtocols  []map[string]interface{}
+	protocolUpdates []protocolUpdate
+	updatedConfigs  []map[string]interface{}
 }
 
 func (m *recordingMistAPI) ConfigBackup() (map[string]interface{}, error) {
@@ -29,7 +30,8 @@ func (m *recordingMistAPI) AddProtocols(protocols []map[string]interface{}) erro
 	return nil
 }
 
-func (m *recordingMistAPI) UpdateProtocol(map[string]interface{}, map[string]interface{}) error {
+func (m *recordingMistAPI) UpdateProtocol(oldConfig, newConfig map[string]interface{}) error {
+	m.protocolUpdates = append(m.protocolUpdates, protocolUpdate{old: oldConfig, new: newConfig})
 	return nil
 }
 
@@ -88,8 +90,17 @@ func TestEnsureProtocolsAddsRTMP(t *testing.T) {
 	if got := cmaf["mergesessions"]; got != true {
 		t.Fatalf("CMAF mergesessions = %v, want true", got)
 	}
-	if got := cmaf["nonchunked"]; got != true {
-		t.Fatalf("CMAF nonchunked = %v, want true", got)
+	for _, oldName := range []string{"nonchunked", "dashllchunked", "dashlowlatency", "chunkedsegments"} {
+		if got, ok := cmaf[oldName]; ok {
+			t.Fatalf("CMAF %s = %v, want unset", oldName, got)
+		}
+	}
+
+	hls := findAddedProtocol(t, mist.addedProtocols, "HLS")
+	for _, oldName := range []string{"nonchunked", "chunkedsegments"} {
+		if got, ok := hls[oldName]; ok {
+			t.Fatalf("HLS %s = %v, want unset", oldName, got)
+		}
 	}
 }
 
@@ -115,6 +126,37 @@ func TestEnsureProtocolsDoesNotDuplicateExistingRTMP(t *testing.T) {
 	}
 }
 
+func TestEnsureProtocolsUpdatesRenamedMistProtocolOptions(t *testing.T) {
+	mist := &recordingMistAPI{}
+	manager := &Manager{mistClient: mist, logger: logging.NewLogger()}
+	current := map[string]any{
+		"config": map[string]any{
+			"protocols": []any{
+				map[string]any{"connector": "CMAF", "mergesessions": true, "dashllchunked": true, "dashlowlatency": true, "chunkedsegments": true},
+				map[string]any{"connector": "HLS", "nonchunked": false, "chunkedsegments": true},
+			},
+		},
+	}
+
+	if err := manager.ensureProtocols(current); err != nil {
+		t.Fatalf("ensureProtocols() error = %v", err)
+	}
+
+	cmaf := findProtocolUpdate(t, mist.protocolUpdates, "CMAF").new
+	for _, oldName := range []string{"dashllchunked", "dashlowlatency", "nonchunked", "chunkedsegments"} {
+		if got, ok := cmaf[oldName]; ok {
+			t.Fatalf("CMAF update kept stale %s = %v", oldName, got)
+		}
+	}
+
+	hls := findProtocolUpdate(t, mist.protocolUpdates, "HLS").new
+	for _, oldName := range []string{"nonchunked", "chunkedsegments"} {
+		if got, ok := hls[oldName]; ok {
+			t.Fatalf("HLS update kept stale %s = %v", oldName, got)
+		}
+	}
+}
+
 func findAddedProtocol(t *testing.T, protocols []map[string]interface{}, connector string) map[string]interface{} {
 	t.Helper()
 	for _, protocol := range protocols {
@@ -124,6 +166,17 @@ func findAddedProtocol(t *testing.T, protocols []map[string]interface{}, connect
 	}
 	t.Fatalf("missing added protocol %q in %#v", connector, protocols)
 	return nil
+}
+
+func findProtocolUpdate(t *testing.T, updates []protocolUpdate, connector string) protocolUpdate {
+	t.Helper()
+	for _, update := range updates {
+		if update.old["connector"] == connector {
+			return update
+		}
+	}
+	t.Fatalf("missing protocol update %q in %#v", connector, updates)
+	return protocolUpdate{}
 }
 
 func stringSlicesEqual(got any, want []string) bool {

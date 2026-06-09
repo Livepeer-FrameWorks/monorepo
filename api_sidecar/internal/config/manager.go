@@ -1255,11 +1255,14 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 			continue
 		}
 
-		if protocolUpdateNeeded(existing, desired) {
+		if protocolUpdateNeeded(existing, desired, connector) {
 			m.logger.WithFields(logging.Fields{
 				"connector": connector,
 			}).Info("Mist protocol settings need update")
 			updated := cloneStringAnyMap(existing)
+			for _, key := range obsoleteManagedProtocolOptions(connector) {
+				delete(updated, key)
+			}
 			for key, value := range desired {
 				updated[key] = value
 			}
@@ -1323,7 +1326,7 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 
 	return []map[string]any{
 		{"connector": "AAC"},
-		{"connector": "CMAF", "mergesessions": true, "nonchunked": true},
+		{"connector": "CMAF", "mergesessions": true},
 		{"connector": "DTSC"},
 		{"connector": "EBML"},
 		{"connector": "FLAC"},
@@ -1350,13 +1353,29 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 	}
 }
 
-func protocolUpdateNeeded(existing, desired map[string]any) bool {
+func protocolUpdateNeeded(existing, desired map[string]any, connector string) bool {
 	for key, desiredValue := range desired {
 		if !protocolValuesEqual(existing[key], desiredValue) {
 			return true
 		}
 	}
+	for _, key := range obsoleteManagedProtocolOptions(connector) {
+		if _, ok := existing[key]; ok {
+			return true
+		}
+	}
 	return false
+}
+
+func obsoleteManagedProtocolOptions(connector string) []string {
+	switch connector {
+	case "CMAF":
+		return []string{"dashllchunked", "dashlowlatency", "nonchunked", "chunkedsegments"}
+	case "HLS":
+		return []string{"nonchunked", "chunkedsegments"}
+	default:
+		return nil
+	}
 }
 
 func protocolValuesEqual(existing, desired any) bool {

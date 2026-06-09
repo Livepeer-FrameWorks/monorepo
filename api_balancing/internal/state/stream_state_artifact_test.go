@@ -265,41 +265,48 @@ func TestFindNodeByArtifactInternalName_SkipsInactive(t *testing.T) {
 	}
 }
 
-func TestFindNodeByArtifactInternalName_PicksLowestScore(t *testing.T) {
+// Score is an idleness scale (CPUScore = WeightCPU - load term), so the idler
+// node has the HIGHER combined score and must win — same direction as the
+// balancer's rate(). Both nodes get explicit metrics so neither rides the
+// zero-value default (score 0 means saturated, not unknown-and-preferred).
+func TestFindNodeByArtifactInternalName_PicksIdlestNode(t *testing.T) {
 	sm := ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 
-	sm.SetNodeArtifacts("node-high", []*ipcpb.StoredArtifact{
+	sm.SetNodeArtifacts("node-busy", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+shared", FilePath: "/data/h1.mp4"},
 	})
-	sm.SetNodeArtifacts("node-low", []*ipcpb.StoredArtifact{
+	sm.SetNodeArtifacts("node-idle", []*ipcpb.StoredArtifact{
 		{ClipHash: "h1", StreamName: "vod+shared", FilePath: "/data/h1.mp4"},
 	})
 
-	sm.SetNodeInfo("node-high", "http://host-high:8080", true, nil, nil, "", "", nil)
-	sm.SetNodeInfo("node-low", "http://host-low:8080", true, nil, nil, "", "", nil)
+	sm.SetNodeInfo("node-busy", "http://host-busy:8080", true, nil, nil, "", "", nil)
+	sm.SetNodeInfo("node-idle", "http://host-idle:8080", true, nil, nil, "", "", nil)
 
-	// Give node-high a higher CPU score so node-low wins
-	sm.UpdateNodeMetrics("node-high", struct {
-		CPU                  float64
-		RAMMax               float64
-		RAMCurrent           float64
-		UpSpeed              float64
-		DownSpeed            float64
-		BWLimit              float64
-		CapIngest            bool
-		CapEdge              bool
-		CapStorage           bool
-		CapProcessing        bool
-		Roles                []string
-		StorageCapacityBytes uint64
-		StorageUsedBytes     uint64
-		ProcessingClasses    map[string]ClassCapacity
-	}{CPU: 90})
+	setArtifactNodeCPU := func(nodeID string, cpu float64) {
+		sm.UpdateNodeMetrics(nodeID, struct {
+			CPU                  float64
+			RAMMax               float64
+			RAMCurrent           float64
+			UpSpeed              float64
+			DownSpeed            float64
+			BWLimit              float64
+			CapIngest            bool
+			CapEdge              bool
+			CapStorage           bool
+			CapProcessing        bool
+			Roles                []string
+			StorageCapacityBytes uint64
+			StorageUsedBytes     uint64
+			ProcessingClasses    map[string]ClassCapacity
+		}{CPU: cpu})
+	}
+	setArtifactNodeCPU("node-busy", 90) // CPUScore ≈ 50
+	setArtifactNodeCPU("node-idle", 10) // CPUScore ≈ 450
 
 	host, _ := sm.FindNodeByArtifactInternalName("shared")
-	if host != "http://host-low:8080" {
-		t.Fatalf("expected host-low (lower score), got %s", host)
+	if host != "http://host-idle:8080" {
+		t.Fatalf("expected host-idle (higher idleness score), got %s", host)
 	}
 }
 

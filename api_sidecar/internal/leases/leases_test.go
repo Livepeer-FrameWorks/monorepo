@@ -1,6 +1,9 @@
 package leases
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -201,5 +204,120 @@ func TestDegradedDvr_PausesUntilRelease(t *testing.T) {
 	tr.ReleaseSource("dvr+x")
 	if tr.DegradedDvrCleanupActive() {
 		t.Fatalf("expected non-degraded after release")
+	}
+}
+
+func TestHasSourceLease(t *testing.T) {
+	tr := NewTracker(nil, NewHeatTracker())
+	if tr.HasSourceLease("vod+abc") {
+		t.Fatal("expected no lease before acquire")
+	}
+	tr.AcquireSource("vod+abc", []string{"/data/vod/abc.mp4"}, AssetKey{Type: "vod", Hash: "abc"}, nil, false)
+	if !tr.HasSourceLease("vod+abc") {
+		t.Fatal("expected lease after acquire")
+	}
+	if tr.HasSourceLease("") {
+		t.Fatal("empty stream name must never report a lease")
+	}
+	var nilTr *Tracker
+	if nilTr.HasSourceLease("vod+abc") {
+		t.Fatal("nil tracker must report no lease")
+	}
+}
+
+func TestDegradedVodCleanupActive(t *testing.T) {
+	tr := NewTracker(nil, NewHeatTracker())
+	if tr.DegradedVodCleanupActive() {
+		t.Fatal("expected non-degraded at start")
+	}
+	tr.AcquireSource("vod+x", []string{"/x.mp4"}, AssetKey{Type: "vod", Hash: "h"}, nil, true)
+	if !tr.DegradedVodCleanupActive() {
+		t.Fatal("expected degraded after acquiring a degraded VOD source")
+	}
+	tr.ReleaseSource("vod+x")
+	if tr.DegradedVodCleanupActive() {
+		t.Fatal("expected non-degraded after release")
+	}
+}
+
+func TestViewerCount(t *testing.T) {
+	tr := NewTracker(nil, NewHeatTracker())
+	if tr.ViewerCount() != 0 {
+		t.Fatalf("expected 0 viewers initially, got %d", tr.ViewerCount())
+	}
+	tr.AcquireViewer("s1", "live+stream", "/data/vod/abc.mp4")
+	tr.AcquireViewer("s2", "live+stream", "/data/vod/abc.mp4")
+	if tr.ViewerCount() != 2 {
+		t.Fatalf("expected 2 viewers, got %d", tr.ViewerCount())
+	}
+	tr.ReleaseViewer("s1")
+	if tr.ViewerCount() != 1 {
+		t.Fatalf("expected 1 viewer after release, got %d", tr.ViewerCount())
+	}
+}
+
+// DeletePathIfUnleased is the TOCTOU-safe unlink: it must refuse while a source
+// or viewer lease pins the path, and unlink the real file once unleased.
+func TestDeletePathIfUnleased(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "abc.mp4")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr := NewTracker(nil, NewHeatTracker())
+	tr.AcquireSource("vod+abc", []string{path}, AssetKey{Type: "vod", Hash: "abc"}, nil, false)
+
+	if err := tr.DeletePathIfUnleased(path); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("expected ErrLeaseHeld while leased, got %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("file must survive a refused delete")
+	}
+
+	tr.ReleaseSource("vod+abc")
+	if err := tr.DeletePathIfUnleased(path); err != nil {
+		t.Fatalf("delete after release failed: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("file must be gone after a successful delete")
+	}
+
+	if err := tr.DeletePathIfUnleased(""); err == nil {
+		t.Fatal("empty path must error")
+	}
+}
+
+// DeleteDVRDirIfUnleased must refuse while a matching DVR asset lease is held
+// or degraded-cleanup is active, and recursively remove the tree once clear.
+func TestDeleteDVRDirIfUnleased(t *testing.T) {
+	base := t.TempDir()
+	dvrDir := filepath.Join(base, "dvr", "stream", "h")
+	if err := os.MkdirAll(filepath.Join(dvrDir, "segments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dvrDir, "segments", "seg.ts"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := NewTracker(nil, NewHeatTracker())
+	tr.AcquireSource("dvr+rolling", []string{filepath.Join(dvrDir, "h.m3u8")}, AssetKey{Type: "dvr", Hash: "h"}, nil, false)
+
+	if err := tr.DeleteDVRDirIfUnleased(dvrDir, "h"); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("expected ErrLeaseHeld while DVR asset leased, got %v", err)
+	}
+	if _, err := os.Stat(dvrDir); err != nil {
+		t.Fatal("dir must survive a refused delete")
+	}
+
+	tr.ReleaseSource("dvr+rolling")
+	if err := tr.DeleteDVRDirIfUnleased(dvrDir, "h"); err != nil {
+		t.Fatalf("delete after release failed: %v", err)
+	}
+	if _, err := os.Stat(dvrDir); !os.IsNotExist(err) {
+		t.Fatal("dir must be gone after a successful delete")
+	}
+
+	if err := tr.DeleteDVRDirIfUnleased("", "h"); err == nil {
+		t.Fatal("empty dvr dir must error")
 	}
 }
