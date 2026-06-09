@@ -15,6 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // resetReloadFnsForTest restores the package-level callback list to empty.
@@ -30,7 +31,7 @@ func resetReloadFnsForTest(t *testing.T) {
 func TestSetupServiceRouter(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-setup", "v1")
-	mc := monitoring.NewMetricsCollector("svc-setup", "v1", "abc")
+	mc := monitoring.NewMetricsCollectorWithRegistry("svc-setup", "v1", "abc", prometheus.NewRegistry())
 	r := SetupServiceRouter(logger, "svc", hc, mc)
 	r.GET("/ping", func(c *gin.Context) { c.String(200, "pong") })
 
@@ -45,7 +46,7 @@ func TestSetupServiceRouter(t *testing.T) {
 func TestSetupServiceRouterHandlesAlternateTrailingSlash(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-slash", "v1")
-	mc := monitoring.NewMetricsCollector("svc-slash", "v1", "abc")
+	mc := monitoring.NewMetricsCollectorWithRegistry("svc-slash", "v1", "abc", prometheus.NewRegistry())
 	r := SetupServiceRouter(logger, "svc", hc, mc)
 	r.POST("/api/action", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
@@ -207,7 +208,7 @@ func TestStartReloadListener_CallbackErrorDoesNotAbortSubsequent(t *testing.T) {
 func TestSetupServiceRouterAlternateTrailingSlashDefaultsToOK(t *testing.T) {
 	logger := logging.NewLogger()
 	hc := monitoring.NewHealthChecker("svc-slash-default", "v1")
-	mc := monitoring.NewMetricsCollector("svc-slash-default", "v1", "abc")
+	mc := monitoring.NewMetricsCollectorWithRegistry("svc-slash-default", "v1", "abc", prometheus.NewRegistry())
 	r := SetupServiceRouter(logger, "svc", hc, mc)
 	r.POST("/graphql", func(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte(`{"data":{"__typename":"Query"}}`))

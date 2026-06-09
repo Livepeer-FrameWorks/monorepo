@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,158 @@ func TestComputeBackoffNegativeAttemptsTreatedAsZero(t *testing.T) {
 	cfg := Config{BaseBackoff: 2 * time.Second, MaxBackoff: 1 * time.Hour}
 	if got := ComputeBackoff(cfg, -5); got != cfg.BaseBackoff {
 		t.Errorf("got %v, want %v", got, cfg.BaseBackoff)
+	}
+}
+
+func TestComputeBackoffNonPositiveBaseReturnsMax(t *testing.T) {
+	// BaseBackoff <= 0 short-circuits to MaxBackoff regardless of attempts.
+	for _, base := range []time.Duration{0, -1 * time.Second} {
+		cfg := Config{BaseBackoff: base, MaxBackoff: 1 * time.Hour}
+		if got := ComputeBackoff(cfg, 3); got != cfg.MaxBackoff {
+			t.Errorf("base=%v: got %v, want %v", base, got, cfg.MaxBackoff)
+		}
+	}
+}
+
+// captureHook records emitted log entries so tests can assert on the worker's
+// alert/warn behaviour (output is discarded; hooks fire regardless).
+type captureHook struct{ entries []*logrus.Entry }
+
+func (h *captureHook) Levels() []logrus.Level { return logrus.AllLevels }
+func (h *captureHook) Fire(e *logrus.Entry) error {
+	h.entries = append(h.entries, e)
+	return nil
+}
+func (h *captureHook) count(level logrus.Level, substr string) int {
+	n := 0
+	for _, e := range h.entries {
+		if e.Level == level && strings.Contains(e.Message, substr) {
+			n++
+		}
+	}
+	return n
+}
+func (h *captureHook) firstError(substr string) *logrus.Entry {
+	for _, e := range h.entries {
+		if e.Level == logrus.ErrorLevel && strings.Contains(e.Message, substr) {
+			return e
+		}
+	}
+	return nil
+}
+
+func newCapturingWorker(store Store[string], disp Dispatcher[string], alertAfter int) (*Worker[string], *captureHook) {
+	logger := logrus.New()
+	logger.Out = io.Discard
+	hook := &captureHook{}
+	logger.AddHook(hook)
+	return &Worker[string]{
+		Config: Config{
+			BaseBackoff:        2 * time.Second,
+			MaxBackoff:         1 * time.Hour,
+			BatchSize:          16,
+			PollPeriod:         30 * time.Second,
+			Lease:              60 * time.Second,
+			AlertAfterAttempts: alertAfter,
+		},
+		Store:      store,
+		Dispatcher: disp,
+		Logger:     logger,
+		AlertLabel: "test outbox",
+	}, hook
+}
+
+const alertMsg = "failing for many attempts"
+
+func TestRecordFailureAlertsAtThreshold(t *testing.T) {
+	// AlertAfterAttempts=3, nextAttempts = currentAttempts+1.
+	// currentAttempts=2 → nextAttempts=3 → alert fires with attempts=3.
+	w, hook := newCapturingWorker(&fakeStore{}, &fakeDispatcher{err: errors.New("boom")}, 3)
+	w.TryDispatch(context.Background(), "o1", 2, "p1")
+
+	if n := hook.count(logrus.ErrorLevel, alertMsg); n != 1 {
+		t.Fatalf("expected exactly 1 alert at threshold, got %d", n)
+	}
+	e := hook.firstError(alertMsg)
+	if e == nil {
+		t.Fatal("alert entry not captured")
+	}
+	if got := e.Data["attempts"]; got != 3 {
+		t.Errorf("alert attempts field: got %v, want 3", got)
+	}
+	// cause is carried into the alert so on-call sees why it is failing.
+	if got := e.Data["cause"]; got != "boom" {
+		t.Errorf("alert cause field: got %v, want %q", got, "boom")
+	}
+	// The configured AlertLabel prefixes the message for alert routing.
+	if !strings.Contains(e.Message, "test outbox") {
+		t.Errorf("alert message should carry AlertLabel, got %q", e.Message)
+	}
+}
+
+func TestRecordFailureAlertDefaultsLabelWhenEmpty(t *testing.T) {
+	// Empty AlertLabel falls back to the "outbox" prefix.
+	w, hook := newCapturingWorker(&fakeStore{}, &fakeDispatcher{err: errors.New("boom")}, 1)
+	w.AlertLabel = ""
+	w.TryDispatch(context.Background(), "o1", 0, "p1")
+
+	e := hook.firstError(alertMsg)
+	if e == nil {
+		t.Fatal("alert entry not captured")
+	}
+	if !strings.HasPrefix(e.Message, "outbox ") {
+		t.Errorf("empty label should default to %q prefix, got %q", "outbox", e.Message)
+	}
+}
+
+func TestRecordFailureNoAlertBelowThreshold(t *testing.T) {
+	// currentAttempts=1 → nextAttempts=2 < AlertAfterAttempts=3 → no alert.
+	w, hook := newCapturingWorker(&fakeStore{}, &fakeDispatcher{err: errors.New("boom")}, 3)
+	w.TryDispatch(context.Background(), "o1", 1, "p1")
+
+	if n := hook.count(logrus.ErrorLevel, alertMsg); n != 0 {
+		t.Fatalf("expected no alert below threshold, got %d", n)
+	}
+}
+
+func TestRecordFailureNoAlertWhenDisabled(t *testing.T) {
+	// AlertAfterAttempts=0 disables alerting even at high attempt counts.
+	w, hook := newCapturingWorker(&fakeStore{}, &fakeDispatcher{err: errors.New("boom")}, 0)
+	w.TryDispatch(context.Background(), "o1", 100, "p1")
+
+	if n := hook.count(logrus.ErrorLevel, alertMsg); n != 0 {
+		t.Fatalf("alert must not fire when AlertAfterAttempts=0, got %d", n)
+	}
+}
+
+func TestProcessBatchLogsWarnOnClaimError(t *testing.T) {
+	w, hook := newCapturingWorker(&fakeStore{claimErr: errors.New("db down")}, &fakeDispatcher{}, 12)
+	w.ProcessBatch(context.Background())
+
+	if n := hook.count(logrus.WarnLevel, "claim outbox batch failed"); n != 1 {
+		t.Fatalf("expected claim-failure warn, got %d", n)
+	}
+}
+
+func TestProcessBatchLogsWarnOnCompletionError(t *testing.T) {
+	store := &fakeStore{
+		claims:       []Claim[string]{{ID: "o1", Payload: "p1"}},
+		completedErr: errors.New("disk full"),
+	}
+	w, hook := newCapturingWorker(store, &fakeDispatcher{}, 12)
+	w.ProcessBatch(context.Background())
+
+	if n := hook.count(logrus.WarnLevel, "mark outbox completed failed"); n != 1 {
+		t.Fatalf("expected completion-failure warn, got %d", n)
+	}
+}
+
+func TestTryDispatchLogsWarnOnCompletionError(t *testing.T) {
+	w, hook := newCapturingWorker(&fakeStore{completedErr: errors.New("disk full")}, &fakeDispatcher{}, 12)
+	w.TryDispatch(context.Background(), "o1", 0, "p1")
+
+	if n := hook.count(logrus.WarnLevel, "mark outbox completed failed"); n != 1 {
+		t.Fatalf("expected completion-failure warn, got %d", n)
 	}
 }
 

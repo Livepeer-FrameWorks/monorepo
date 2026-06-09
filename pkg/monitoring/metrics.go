@@ -23,16 +23,36 @@ type MetricsCollector struct {
 
 	// Custom metrics registry
 	customMetrics map[string]prometheus.Collector
+
+	// Backing Prometheus registry. Defaults to the process-global default so
+	// production behaviour is unchanged; tests can inject an isolated registry.
+	registerer prometheus.Registerer
+	gatherer   prometheus.Gatherer
 }
 
-// NewMetricsCollector creates a new metrics collector for a service
+// NewMetricsCollector creates a new metrics collector for a service, registered
+// on the global default Prometheus registry.
 func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector {
+	return newMetricsCollector(serviceName, version, commit, prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+}
+
+// NewMetricsCollectorWithRegistry builds a collector backed by an isolated
+// registry instead of the global default. Tests need this: the global registry
+// rejects duplicate metric names, so a test that constructs a collector cannot
+// be run twice (e.g. under -count) against the global registry.
+func NewMetricsCollectorWithRegistry(serviceName, version, commit string, reg *prometheus.Registry) *MetricsCollector {
+	return newMetricsCollector(serviceName, version, commit, reg, reg)
+}
+
+func newMetricsCollector(serviceName, version, commit string, registerer prometheus.Registerer, gatherer prometheus.Gatherer) *MetricsCollector {
 	// Sanitize service name for Prometheus (replace hyphens with underscores)
 	sanitizedServiceName := strings.ReplaceAll(serviceName, "-", "_")
 
 	mc := &MetricsCollector{
 		serviceName:   sanitizedServiceName,
 		customMetrics: make(map[string]prometheus.Collector),
+		registerer:    registerer,
+		gatherer:      gatherer,
 	}
 
 	// Standard HTTP metrics
@@ -69,10 +89,10 @@ func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector 
 	)
 
 	// Register standard metrics
-	prometheus.MustRegister(mc.httpRequestsTotal)
-	prometheus.MustRegister(mc.httpRequestDuration)
-	prometheus.MustRegister(mc.activeConnections)
-	prometheus.MustRegister(mc.serviceInfo)
+	mc.registerer.MustRegister(mc.httpRequestsTotal)
+	mc.registerer.MustRegister(mc.httpRequestDuration)
+	mc.registerer.MustRegister(mc.activeConnections)
+	mc.registerer.MustRegister(mc.serviceInfo)
 
 	// Set service info
 	mc.serviceInfo.WithLabelValues(version, commit).Set(1)
@@ -83,7 +103,7 @@ func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector 
 // RegisterCustomMetric registers a custom Prometheus metric
 func (mc *MetricsCollector) RegisterCustomMetric(name string, metric prometheus.Collector) {
 	mc.customMetrics[name] = metric
-	prometheus.MustRegister(metric)
+	mc.registerer.MustRegister(metric)
 }
 
 // MetricsMiddleware returns middleware that collects HTTP metrics
@@ -114,7 +134,7 @@ func (mc *MetricsCollector) MetricsMiddleware() gin.HandlerFunc {
 
 // Handler returns the Prometheus metrics HTTP handler
 func (mc *MetricsCollector) Handler() gin.HandlerFunc {
-	handler := promhttp.Handler()
+	handler := promhttp.HandlerFor(mc.gatherer, promhttp.HandlerOpts{})
 	return func(c *gin.Context) {
 		handler.ServeHTTP(c.Writer, c.Request)
 	}
